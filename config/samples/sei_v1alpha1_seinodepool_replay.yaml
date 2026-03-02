@@ -1,0 +1,28 @@
+apiVersion: sei.sei.io/v1alpha1
+kind: SeiNodePool
+metadata:
+  labels:
+    app.kubernetes.io/name: platform
+    app.kubernetes.io/managed-by: kustomize
+  name: pacific-replay
+spec:
+  nodeConfigurations:
+    - name: node-0
+      image: ghcr.io/sei-protocol/sei-box:v1.0.0
+      entrypoint:
+        command: ["sei-box"]
+        args: ["start"]
+    - name: node-1
+      image: ghcr.io/sei-protocol/sei-box:v1.0.0
+      entrypoint:
+        command: ["sei-box"]
+        args: ["start"]
+  genesis:
+    chainId: pacific-1
+    stateSource:
+      ebs:
+        chainId: pacific-1
+  storage:
+    size: "500Gi"
+    storageClass: gp3
+    retainOnDelete: true

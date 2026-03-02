@@ -1,0 +1,478 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: seinodes.sei.io
+spec:
+  group: sei.io
+  names:
+    kind: SeiNode
+    listKind: SeiNodeList
+    plural: seinodes
+    shortNames:
+    - snode
+    singular: seinode
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SeiNode is the Schema for the seinodes API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SeiNodeSpec defines the desired state of a standalone Sei
+              node.
+            properties:
+              chainId:
+                description: |-
+                  ChainID of the chain this node belongs to.
+                  Deprecated: use Genesis.ChainID. Kept for backward compatibility.
+                minLength: 1
+                type: string
+              entrypoint:
+                description: Entrypoint overrides the image command for the running
+                  node process.
+                properties:
+                  args:
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                  command:
+                    items:
+                      type: string
+                    maxItems: 16
+                    minItems: 1
+                    type: array
+                required:
+                - command
+                type: object
+              genesis:
+                description: |-
+                  Genesis configures the chain's genesis identity and where the
+                  genesis configuration is sourced from.
+                properties:
+                  chainId:
+                    description: ChainID is the canonical chain identifier for this
+                      node.
+                    minLength: 1
+                    type: string
+                  fresh:
+                    description: |-
+                      Fresh indicates this is a brand new chain that starts from height 1.
+                      When true, the node does not need state sync or a snapshot to bootstrap.
+                    type: boolean
+                  pvc:
+                    description: |-
+                      PVC references a pre-provisioned PVC populated by SeiNodePool's genesis ceremony.
+                      The controller mounts this PVC directly; no sidecar task runs.
+                    properties:
+                      dataPVC:
+                        description: DataPVC is the name of the pre-populated PVC
+                          in the same namespace.
+                        minLength: 1
+                        type: string
+                    required:
+                    - dataPVC
+                    type: object
+                  s3:
+                    description: S3 configures the sidecar to download genesis.json
+                      from an S3 bucket.
+                    properties:
+                      region:
+                        description: Region is the AWS region for S3 access.
+                        type: string
+                      uri:
+                        description: URI is the S3 URI of the genesis.json file (s3://bucket/key
+                          format).
+                        minLength: 1
+                        type: string
+                    required:
+                    - uri
+                    type: object
+                required:
+                - chainId
+                type: object
+                x-kubernetes-validations:
+                - message: at most one of pvc or s3 may be set
+                  rule: '(has(self.pvc) ? 1 : 0) + (has(self.s3) ? 1 : 0) <= 1'
+              image:
+                description: Image is the seid container image.
+                maxLength: 512
+                minLength: 1
+                type: string
+              peers:
+                description: |-
+                  Peers configures how this node discovers and connects to peers.
+                  When set, the sidecar resolves all configured sources during bootstrap.
+                properties:
+                  sources:
+                    description: |-
+                      Sources is an ordered list of peer sources. The sidecar iterates
+                      all sources, unions and deduplicates the results.
+                    items:
+                      description: PeerSource is a union type — exactly one field
+                        must be set.
+                      properties:
+                        ec2Tags:
+                          description: |-
+                            EC2Tags discovers peers by querying EC2 for running instances
+                            matching the specified tags.
+                          properties:
+                            region:
+                              description: Region is the AWS region to query for EC2
+                                instances.
+                              minLength: 1
+                              type: string
+                            tags:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                Tags are the EC2 instance tags to filter on.
+                                All specified tags must match (AND logic).
+                              minProperties: 1
+                              type: object
+                          required:
+                          - region
+                          - tags
+                          type: object
+                        static:
+                          description: Static provides a fixed list of peer addresses.
+                          properties:
+                            addresses:
+                              description: Addresses is a list of peer addresses in
+                                "nodeId@host:port" format.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - addresses
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of ec2Tags or static must be set
+                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
+                          : 0) == 1'
+                    minItems: 1
+                    type: array
+                required:
+                - sources
+                type: object
+              scheduledUpgrades:
+                description: |-
+                  ScheduledUpgrades is a list of pending binary upgrades ordered by block height.
+                  The controller issues schedule-upgrade tasks to the sidecar for each entry.
+                  Entries are pruned after the controller successfully updates the StatefulSet image.
+                items:
+                  description: ScheduledUpgrade declares a binary upgrade at a specific
+                    block height.
+                  properties:
+                    height:
+                      description: Height is the block height at which to apply the
+                        upgrade.
+                      format: int64
+                      type: integer
+                    image:
+                      description: Image is the new seid container image after the
+                        upgrade.
+                      minLength: 1
+                      type: string
+                  required:
+                  - height
+                  - image
+                  type: object
+                type: array
+              sidecar:
+                description: |-
+                  Sidecar configures the sei-sidecar sidecar.
+                  When set, seid-init and snapshot-restore init containers are replaced by the sidecar.
+                properties:
+                  image:
+                    description: Image is the sei-sidecar container image.
+                    minLength: 1
+                    type: string
+                  port:
+                    default: 7777
+                    description: Port is the HTTP port the sidecar listens on.
+                    format: int32
+                    type: integer
+                  resources:
+                    description: Resources defines CPU/memory requests and limits
+                      for the sidecar container.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                required:
+                - image
+                type: object
+              snapshot:
+                description: |-
+                  Snapshot configures snapshot-based state restoration from S3.
+                  When nil the node either mounts a genesis PVC or does a fresh seid init.
+                properties:
+                  bucket:
+                    description: Bucket is the S3 snapshot archive to restore from.
+                    properties:
+                      uri:
+                        description: URI of the snapshot archive in s3://bucket/prefix
+                          format.
+                        minLength: 1
+                        type: string
+                    required:
+                    - uri
+                    type: object
+                  region:
+                    default: eu-central-1
+                    description: Region is the AWS region for S3 access.
+                    type: string
+                required:
+                - bucket
+                type: object
+              snapshotGeneration:
+                description: |-
+                  SnapshotGeneration configures the node to produce Tendermint state-sync
+                  snapshots. When set, the sidecar patches app.toml during bootstrap to
+                  enable archival pruning and periodic snapshot creation.
+                properties:
+                  destination:
+                    description: |-
+                      Destination configures where generated snapshots are uploaded.
+                      When set, the controller periodically submits upload tasks to the sidecar
+                      which tar, compress, and push completed snapshots to the destination.
+                    properties:
+                      s3:
+                        description: S3 uploads snapshots to an S3 bucket.
+                        properties:
+                          bucket:
+                            description: Bucket is the S3 bucket name.
+                            minLength: 1
+                            type: string
+                          prefix:
+                            description: |-
+                              Prefix is an optional key prefix within the bucket (e.g. "state-sync/").
+                              A trailing slash is added automatically if missing.
+                            type: string
+                          region:
+                            description: Region is the AWS region of the bucket.
+                            minLength: 1
+                            type: string
+                        required:
+                        - bucket
+                        - region
+                        type: object
+                    required:
+                    - s3
+                    type: object
+                  interval:
+                    description: |-
+                      Interval is the block interval between snapshots (maps to snapshot-interval
+                      in app.toml). For example, 2000 means a snapshot is taken every 2000 blocks.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  keepRecent:
+                    default: 5
+                    description: |-
+                      KeepRecent is the number of recent snapshots to retain on disk.
+                      Older snapshots are pruned automatically by Tendermint.
+                    format: int32
+                    type: integer
+                required:
+                - interval
+                type: object
+              storage:
+                description: Storage controls PVC lifecycle.
+                properties:
+                  retainOnDelete:
+                    default: false
+                    description: |-
+                      RetainOnDelete prevents the data PVC from being deleted when the
+                      SeiNode is deleted — useful for post-mortem inspection of chain state.
+                    type: boolean
+                type: object
+            required:
+            - chainId
+            - genesis
+            - image
+            type: object
+          status:
+            description: SeiNodeStatus defines the observed state of a SeiNode.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              phase:
+                description: Phase is the high-level lifecycle state.
+                enum:
+                - Pending
+                - Running
+                - Failed
+                - Terminating
+                type: string
+              sidecarCurrentTask:
+                description: SidecarCurrentTask is the task currently being executed
+                  by the sidecar, written by the controller.
+                type: string
+              sidecarLastTask:
+                description: SidecarLastTask is the last task that completed execution,
+                  written by the controller.
+                type: string
+              sidecarLastTaskResult:
+                description: SidecarLastTaskResult is "success" or "error" for the
+                  last completed task, written by the controller.
+                type: string
+              sidecarPhase:
+                description: SidecarPhase is the current lifecycle phase of the sidecar,
+                  written by the controller.
+                type: string
+              submittedUpgradeHeights:
+                description: |-
+                  SubmittedUpgradeHeights tracks which scheduled upgrade heights have been
+                  submitted to the sidecar, preventing duplicate submissions.
+                items:
+                  format: int64
+                  type: integer
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

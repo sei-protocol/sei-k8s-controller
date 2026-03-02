@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- sei_v1alpha1_seinodepool_fresh.yaml
+- sei_v1alpha1_seinodepool_replay.yaml
+- sei_v1alpha1_seinodepool_heterogeneous.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

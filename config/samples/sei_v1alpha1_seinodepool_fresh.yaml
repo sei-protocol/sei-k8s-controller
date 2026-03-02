@@ -1,0 +1,34 @@
+apiVersion: sei.sei.io/v1alpha1
+kind: SeiNodePool
+metadata:
+  labels:
+    app.kubernetes.io/name: platform
+    app.kubernetes.io/managed-by: kustomize
+  name: devnet-fresh
+spec:
+  nodeConfigurations:
+    - name: validator-0
+      image: ghcr.io/sei-protocol/sei-box:v1.0.0
+      entrypoint:
+        command: ["sei-box"]
+        args: ["start"]
+    - name: validator-1
+      image: ghcr.io/sei-protocol/sei-box:v1.0.0
+      entrypoint:
+        command: ["sei-box"]
+        args: ["start"]
+    - name: full-node-0
+      image: ghcr.io/sei-protocol/sei-box:v1.0.0
+      entrypoint:
+        command: ["sei-box"]
+        args: ["start"]
+  genesis:
+    chainId: sei-devnet
+    validators:
+      - name: validator-0
+        power: 100
+      - name: validator-1
+        power: 100
+  storage:
+    size: "50Gi"
+    storageClass: gp3

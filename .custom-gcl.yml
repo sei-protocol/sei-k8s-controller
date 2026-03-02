@@ -1,0 +1,5 @@
+version: v2.8.0
+plugins:
+  - module: "sigs.k8s.io/logtools"
+    import: "sigs.k8s.io/logtools/logcheck/gclplugin"
+    version: latest

@@ -1,0 +1,26 @@
+IMG ?= sei-node-controller:latest
+
+.PHONY: build test lint manifests generate ci docker-build docker-push
+
+build: ## Build manager binary.
+	go build -o bin/manager cmd/main.go
+
+test: ## Run tests.
+	go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+
+lint: ## Run golangci-lint.
+	golangci-lint run
+
+manifests: ## Generate CRD and RBAC manifests.
+	controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+
+generate: ## Generate DeepCopy implementations.
+	controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
+
+ci: lint test build ## Run lint, test, and build.
+
+docker-build: ## Build docker image.
+	docker build --platform linux/amd64 -t ${IMG} .
+
+docker-push: ## Push docker image.
+	docker push ${IMG}
