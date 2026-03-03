@@ -12,7 +12,6 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-node-controller/api/v1alpha1"
 )
 
-
 func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	g := NewGomegaWithT(t)
 	node := snapshotNode()
@@ -274,4 +273,3 @@ func TestIntegrationBootstrapFailureRetry(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(result.RequeueAfter).To(Equal(5 * time.Second))
 }
-

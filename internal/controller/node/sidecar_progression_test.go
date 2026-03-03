@@ -973,7 +973,6 @@ func TestConfigPatchParams_SnapshotGenerationDefaultKeepRecent(t *testing.T) {
 	}
 }
 
-
 func TestSnapshotUploadParams_NoSnapshotGeneration(t *testing.T) {
 	node := snapshotNode()
 	if params := snapshotUploadParams(node); params != nil {

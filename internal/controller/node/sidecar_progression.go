@@ -28,9 +28,9 @@ const (
 	taskSnapshotUpload     = "snapshot-upload"
 	taskUpdatePeers        = "update-peers"
 
-	sidecarInitializing  = "Initializing"
-	sidecarRunning       = "Running"
-	sidecarReady         = "Ready"
+	sidecarInitializing = "Initializing"
+	sidecarRunning      = "Running"
+	sidecarReady        = "Ready"
 
 	bootstrapPollInterval = 5 * time.Second
 	defaultMaxRetries     = 3
