@@ -15,17 +15,14 @@ const defaultSidecarPort int32 = 7777
 // StatusResponse mirrors the sidecar's GET /status JSON shape.
 // Defined here to avoid importing the sidecar module.
 type StatusResponse struct {
-	Phase           string `json:"phase"`
-	CurrentTask     string `json:"currentTask,omitempty"`
-	LastTask        string `json:"lastTask,omitempty"`
-	LastTaskResult  string `json:"lastTaskResult,omitempty"`
-	BlockHeight     int64  `json:"blockHeight,omitempty"`
-	CatchingUp      bool   `json:"catchingUp,omitempty"`
-	PeerCount       int    `json:"peerCount,omitempty"`
-	NodeID          string `json:"nodeID,omitempty"`
-	UpgradeHeight   int64  `json:"upgradeHeight,omitempty"`
-	UpgradeImage    string `json:"upgradeImage,omitempty"`
-	PendingUpgrades int    `json:"pendingUpgrades,omitempty"`
+	Status   string      `json:"status"`
+	LastTask *TaskResult `json:"lastTask,omitempty"`
+}
+
+// TaskResult records the outcome of a non-scheduled task.
+type TaskResult struct {
+	Type  string `json:"type"`
+	Error string `json:"error,omitempty"`
 }
 
 // TaskRequest is the JSON body for POST /task.

@@ -8,7 +8,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -64,43 +63,18 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// Sidecar mode: the sidecar handles bootstrap and runtime tasks.
-	// Still need to ensure infrastructure (PVC, StatefulSet, Service).
-	if node.Spec.Sidecar != nil {
-		if !hasGenesisPVC(node) {
-			if err := r.ensureNodeDataPVC(ctx, node); err != nil {
-				return ctrl.Result{}, fmt.Errorf("ensuring data PVC: %w", err)
-			}
-		}
-		if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
-		}
-		if err := r.reconcileNodeService(ctx, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
-		}
-		return r.reconcileSidecarProgression(ctx, node)
-	}
-
-	// Non-sidecar snapshot mode: ensure the data PVC exists.
-	if hasSnapshot(node) {
+	if !hasGenesisPVC(node) {
 		if err := r.ensureNodeDataPVC(ctx, node); err != nil {
 			return ctrl.Result{}, fmt.Errorf("ensuring data PVC: %w", err)
 		}
 	}
-
 	if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
 	}
-
 	if err := r.reconcileNodeService(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
 	}
-
-	if err := r.updateNodeStatus(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
-	}
-
-	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
+	return r.reconcileSidecarProgression(ctx, node)
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -188,54 +162,6 @@ func (r *SeiNodeReconciler) reconcileNodeService(ctx context.Context, node *seiv
 	}
 	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
 	return r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
-}
-
-func (r *SeiNodeReconciler) updateNodeStatus(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	patch := client.MergeFrom(node.DeepCopy())
-
-	podList := &corev1.PodList{}
-	if err := r.List(ctx, podList,
-		client.InNamespace(node.Namespace),
-		client.MatchingLabels(resourceLabelsForNode(node)),
-	); err != nil {
-		return fmt.Errorf("listing pods: %w", err)
-	}
-
-	node.Status.Phase = nodePhase(podList)
-	applyNodeStatusConditions(node)
-
-	return r.Status().Patch(ctx, node, patch)
-}
-
-func nodePhase(podList *corev1.PodList) string {
-	for i := range podList.Items {
-		pod := &podList.Items[i]
-		if isPodReady(pod) {
-			return "Running"
-		}
-		if pod.Status.Phase == corev1.PodFailed {
-			return "Failed"
-		}
-	}
-	return "Pending"
-}
-
-func applyNodeStatusConditions(node *seiv1alpha1.SeiNode) {
-	switch node.Status.Phase {
-	case "Running":
-		setNodeCondition(node, ConditionTypeReady, metav1.ConditionTrue, ReasonAllPodsReady, "Node is ready and healthy")
-		setNodeCondition(node, ConditionTypeProgressing, metav1.ConditionFalse, ReasonReconcileSucceeded, "Reconciliation complete")
-	case "Failed":
-		setNodeCondition(node, ConditionTypeReady, metav1.ConditionFalse, ReasonPodsNotReady, "Node has failed")
-		setNodeCondition(node, ConditionTypeDegraded, metav1.ConditionTrue, ReasonPodsNotReady, "Node has failed")
-	default:
-		setNodeCondition(node, ConditionTypeReady, metav1.ConditionFalse, ReasonPodsNotReady, "Node is not yet ready")
-		setNodeCondition(node, ConditionTypeProgressing, metav1.ConditionTrue, ReasonPodsNotReady, "Waiting for node to become ready")
-	}
-}
-
-func hasSnapshot(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.Snapshot != nil
 }
 
 func hasGenesisPVC(node *seiv1alpha1.SeiNode) bool {

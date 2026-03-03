@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -19,10 +17,6 @@ import (
 )
 
 const testUpgradeImageV2 = "sei:v2"
-
-// ---------------------------------------------------------------------------
-// Mock sidecar client
-// ---------------------------------------------------------------------------
 
 type mockSidecarClient struct {
 	status    *StatusResponse
@@ -39,10 +33,6 @@ func (m *mockSidecarClient) SubmitTask(_ context.Context, task TaskRequest) erro
 	m.submitted = append(m.submitted, task)
 	return m.submitErr
 }
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
 
 func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...client.Object) (*SeiNodeReconciler, client.Client) {
 	t.Helper()
@@ -138,10 +128,6 @@ func genesisNode() *seiv1alpha1.SeiNode {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: bootstrapMode
-// ---------------------------------------------------------------------------
-
 func TestBootstrapMode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -161,12 +147,8 @@ func TestBootstrapMode(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: per-mode task ordering
-// ---------------------------------------------------------------------------
-
 func TestSnapshotMode_TaskOrdering(t *testing.T) {
-	mock := &mockSidecarClient{status: &StatusResponse{Phase: phaseInitialized}}
+	mock := &mockSidecarClient{status: &StatusResponse{Status: sidecarInitializing}}
 	r, _ := newProgressionReconciler(t, mock, snapshotNode())
 
 	_, err := r.reconcileSidecarProgression(context.Background(), snapshotNode())
@@ -182,7 +164,7 @@ func TestSnapshotMode_TaskOrdering(t *testing.T) {
 }
 
 func TestPeerSyncMode_TaskOrdering(t *testing.T) {
-	mock := &mockSidecarClient{status: &StatusResponse{Phase: phaseInitialized}}
+	mock := &mockSidecarClient{status: &StatusResponse{Status: sidecarInitializing}}
 	r, _ := newProgressionReconciler(t, mock, peerSyncNode())
 
 	_, err := r.reconcileSidecarProgression(context.Background(), peerSyncNode())
@@ -198,7 +180,7 @@ func TestPeerSyncMode_TaskOrdering(t *testing.T) {
 }
 
 func TestGenesisMode_TaskOrdering(t *testing.T) {
-	mock := &mockSidecarClient{status: &StatusResponse{Phase: phaseInitialized}}
+	mock := &mockSidecarClient{status: &StatusResponse{Status: sidecarInitializing}}
 	r, _ := newProgressionReconciler(t, mock, genesisNode())
 
 	_, err := r.reconcileSidecarProgression(context.Background(), genesisNode())
@@ -212,10 +194,6 @@ func TestGenesisMode_TaskOrdering(t *testing.T) {
 		t.Errorf("first task = %q, want %q", mock.submitted[0].Type, taskConfigPatch)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: taskProgressionForNode — dynamic peer injection
-// ---------------------------------------------------------------------------
 
 func TestTaskProgressionForNode_GenesisWithPeers_InsertsDiscoverPeers(t *testing.T) {
 	node := genesisNode()
@@ -283,7 +261,7 @@ func TestGenesisMode_WithPeers_FirstTaskIsDiscoverPeers(t *testing.T) {
 		},
 	}
 
-	mock := &mockSidecarClient{status: &StatusResponse{Phase: phaseInitialized}}
+	mock := &mockSidecarClient{status: &StatusResponse{Status: sidecarInitializing}}
 	r, _ := newProgressionReconciler(t, mock, node)
 
 	_, err := r.reconcileSidecarProgression(context.Background(), node)
@@ -297,10 +275,6 @@ func TestGenesisMode_WithPeers_FirstTaskIsDiscoverPeers(t *testing.T) {
 		t.Errorf("first task = %q, want %q", mock.submitted[0].Type, taskDiscoverPeers)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: issueNextTask progression
-// ---------------------------------------------------------------------------
 
 func TestIssueNextTask_SnapshotProgression(t *testing.T) {
 	expected := []string{taskDiscoverPeers, taskConfigPatch, taskMarkReady}
@@ -339,14 +313,10 @@ func TestIssueNextTask_LastTask_SwitchesToSteadyState(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: phase regression handling (Initialized resets retry state)
-// ---------------------------------------------------------------------------
-
 func TestPhaseRegression_ResetsRetryState(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseTaskComplete, LastTask: taskSnapshotRestore, LastTaskResult: "error"},
+		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: taskSnapshotRestore, Error: "failed"}},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -359,8 +329,8 @@ func TestPhaseRegression_ResetsRetryState(t *testing.T) {
 		t.Fatal("expected retry count > 0 after failure")
 	}
 
-	// Sidecar restarts → Initialized phase.
-	mock.status = &StatusResponse{Phase: phaseInitialized}
+	// Sidecar restarts → Initializing with no lastTask.
+	mock.status = &StatusResponse{Status: sidecarInitializing}
 	_, _ = r.reconcileSidecarProgression(context.Background(), node)
 
 	// Retry state should be reset.
@@ -370,19 +340,10 @@ func TestPhaseRegression_ResetsRetryState(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: status writing to SeiNodeStatus
-// ---------------------------------------------------------------------------
-
 func TestReconcileSidecarProgression_WritesStatusToNode(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{
-			Phase:          phaseTaskRunning,
-			CurrentTask:    taskSnapshotRestore,
-			LastTask:       "",
-			LastTaskResult: "",
-		},
+		status: &StatusResponse{Status: sidecarRunning},
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
@@ -395,22 +356,15 @@ func TestReconcileSidecarProgression_WritesStatusToNode(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, updated); err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if updated.Status.SidecarPhase != phaseTaskRunning {
-		t.Errorf("SidecarPhase = %q, want %q", updated.Status.SidecarPhase, phaseTaskRunning)
-	}
-	if updated.Status.SidecarCurrentTask != taskSnapshotRestore {
-		t.Errorf("SidecarCurrentTask = %q, want %q", updated.Status.SidecarCurrentTask, taskSnapshotRestore)
+	if updated.Status.SidecarPhase != sidecarRunning {
+		t.Errorf("SidecarPhase = %q, want %q", updated.Status.SidecarPhase, sidecarRunning)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: bootstrap failure retry with backoff
-// ---------------------------------------------------------------------------
 
 func TestHandleTaskFailure_BootstrapRetryWithBackoff(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseTaskComplete, LastTask: taskSnapshotRestore, LastTaskResult: "error"},
+		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: taskSnapshotRestore, Error: "failed"}},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -442,14 +396,10 @@ func TestHandleTaskFailure_BootstrapRetryWithBackoff(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: max retries sets Degraded condition
-// ---------------------------------------------------------------------------
-
 func TestHandleTaskFailure_MaxRetries_SetsDegradedCondition(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseTaskComplete, LastTask: taskSnapshotRestore, LastTaskResult: "error"},
+		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: taskSnapshotRestore, Error: "failed"}},
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
@@ -486,15 +436,11 @@ func TestHandleTaskFailure_MaxRetries_SetsDegradedCondition(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: runtime failure requeues at 30s
-// ---------------------------------------------------------------------------
-
 func TestHandleTaskFailure_RuntimeFailure_RequeuesAt30s(t *testing.T) {
 	node := snapshotNode()
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseTaskComplete, LastTask: "update-peers", LastTaskResult: "error"},
+		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: "update-peers", Error: "failed"}},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -507,16 +453,12 @@ func TestHandleTaskFailure_RuntimeFailure_RequeuesAt30s(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: retry counter reset on sidecar restart
-// ---------------------------------------------------------------------------
-
 func TestRetryCounterReset_OnSidecarRestart(t *testing.T) {
 	node := snapshotNode()
 	key := types.NamespacedName{Name: node.Name, Namespace: node.Namespace}
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseTaskComplete, LastTask: taskSnapshotRestore, LastTaskResult: "error"},
+		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: taskSnapshotRestore, Error: "failed"}},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -530,7 +472,7 @@ func TestRetryCounterReset_OnSidecarRestart(t *testing.T) {
 	}
 
 	// Sidecar restarts.
-	mock.status = &StatusResponse{Phase: phaseInitialized}
+	mock.status = &StatusResponse{Status: sidecarInitializing}
 	_, _ = r.reconcileSidecarProgression(context.Background(), node)
 
 	// All retry counters for this node should be cleared.
@@ -539,10 +481,6 @@ func TestRetryCounterReset_OnSidecarRestart(t *testing.T) {
 		t.Errorf("retry count after restart = %d, want 0", state.Count)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: sidecar status error → requeue without error
-// ---------------------------------------------------------------------------
 
 func TestReconcileSidecarProgression_StatusError_Requeues(t *testing.T) {
 	node := snapshotNode()
@@ -688,14 +626,10 @@ func TestParamsForTask_MarkReady(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: TaskRunning phase → requeue at 5s
-// ---------------------------------------------------------------------------
-
 func TestReconcileSidecarProgression_TaskRunning_Requeues(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseTaskRunning, CurrentTask: taskSnapshotRestore},
+		status: &StatusResponse{Status: sidecarRunning},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -710,10 +644,6 @@ func TestReconcileSidecarProgression_TaskRunning_Requeues(t *testing.T) {
 		t.Errorf("expected no tasks submitted during TaskRunning, got %d", len(mock.submitted))
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: nextPendingUpgrade — lowest-height-first ordering
-// ---------------------------------------------------------------------------
 
 func TestNextPendingUpgrade_ReturnsLowestHeight(t *testing.T) {
 	node := snapshotNode()
@@ -785,7 +715,7 @@ func TestReconcileRuntimeTasks_SubmitsScheduleUpgrade(t *testing.T) {
 	}
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseReady},
+		status: &StatusResponse{Status: sidecarReady},
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
@@ -827,7 +757,7 @@ func TestReconcileRuntimeTasks_DuplicatePrevention(t *testing.T) {
 	node.Status.SubmittedUpgradeHeights = []int64{500000}
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseReady},
+		status: &StatusResponse{Status: sidecarReady},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -846,7 +776,7 @@ func TestReconcileRuntimeTasks_DuplicatePrevention(t *testing.T) {
 func TestReconcileRuntimeTasks_NoUpgrades_RequeuesAtSteadyState(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseReady},
+		status: &StatusResponse{Status: sidecarReady},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -869,7 +799,7 @@ func TestReconcileRuntimeTasks_SubmitError_RequeuesGracefully(t *testing.T) {
 	}
 
 	mock := &mockSidecarClient{
-		status:    &StatusResponse{Phase: phaseReady},
+		status:    &StatusResponse{Status: sidecarReady},
 		submitErr: fmt.Errorf("connection refused"),
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
@@ -883,178 +813,6 @@ func TestReconcileRuntimeTasks_SubmitError_RequeuesGracefully(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: handleUpgradeHalt — StatefulSet image patch and prune
-// ---------------------------------------------------------------------------
-
-func testStatefulSet(node *seiv1alpha1.SeiNode) *appsv1.StatefulSet {
-	one := int32(1)
-	return &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      node.Name,
-			Namespace: node.Namespace,
-		},
-		Spec: appsv1.StatefulSetSpec{
-			Replicas:    &one,
-			ServiceName: node.Name,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": node.Name},
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": node.Name}},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{Name: "seid", Image: node.Spec.Image},
-					},
-				},
-			},
-		},
-	}
-}
-
-func TestHandleUpgradeHalt_PatchesImageAndPrunes(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 196000000, Image: testUpgradeImageV2},
-	}
-	node.Status.SubmittedUpgradeHeights = []int64{196000000}
-
-	sts := testStatefulSet(node)
-	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseUpgradeHalted},
-	}
-	r, c := newProgressionReconciler(t, mock, node, sts)
-
-	status := &StatusResponse{
-		Phase:         phaseUpgradeHalted,
-		UpgradeHeight: 196000000,
-		UpgradeImage:  testUpgradeImageV2,
-	}
-
-	result, err := r.handleUpgradeHalt(context.Background(), node, status)
-	if err != nil {
-		t.Fatalf("handleUpgradeHalt() error = %v", err)
-	}
-	// Successful halt returns zero result (pod will restart).
-	if result.RequeueAfter != 0 {
-		t.Errorf("RequeueAfter = %v, want 0", result.RequeueAfter)
-	}
-
-	// Verify StatefulSet image was patched.
-	updatedSts := &appsv1.StatefulSet{}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, updatedSts); err != nil {
-		t.Fatalf("Get StatefulSet error = %v", err)
-	}
-	seidImage := updatedSts.Spec.Template.Spec.Containers[0].Image
-	if seidImage != testUpgradeImageV2 {
-		t.Errorf("seid container image = %q, want %q", seidImage, testUpgradeImageV2)
-	}
-
-	// Verify the upgrade was pruned from spec.scheduledUpgrades.
-	updatedNode := &seiv1alpha1.SeiNode{}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, updatedNode); err != nil {
-		t.Fatalf("Get SeiNode error = %v", err)
-	}
-	if len(updatedNode.Spec.ScheduledUpgrades) != 0 {
-		t.Errorf("ScheduledUpgrades = %v, want empty", updatedNode.Spec.ScheduledUpgrades)
-	}
-
-	// Verify the height was pruned from status.submittedUpgradeHeights.
-	if len(updatedNode.Status.SubmittedUpgradeHeights) != 0 {
-		t.Errorf("SubmittedUpgradeHeights = %v, want empty", updatedNode.Status.SubmittedUpgradeHeights)
-	}
-}
-
-func TestHandleUpgradeHalt_EmptyImage_Requeues(t *testing.T) {
-	node := snapshotNode()
-	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseUpgradeHalted},
-	}
-	r, _ := newProgressionReconciler(t, mock, node)
-
-	status := &StatusResponse{
-		Phase:        phaseUpgradeHalted,
-		UpgradeImage: "",
-	}
-
-	result, err := r.handleUpgradeHalt(context.Background(), node, status)
-	if err != nil {
-		t.Fatalf("handleUpgradeHalt() error = %v", err)
-	}
-	if result.RequeueAfter != bootstrapPollInterval {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, bootstrapPollInterval)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests: full upgrade lifecycle via reconcileSidecarProgression
-// ---------------------------------------------------------------------------
-
-func TestUpgradeLifecycle_ScheduleHaltPatchPrune(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 196000000, Image: testUpgradeImageV2},
-	}
-	sts := testStatefulSet(node)
-
-	// Phase 1: sidecar is Ready, controller submits schedule-upgrade.
-	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseReady},
-	}
-	r, c := newProgressionReconciler(t, mock, node, sts)
-
-	_, err := r.reconcileSidecarProgression(context.Background(), node)
-	if err != nil {
-		t.Fatalf("phase 1: error = %v", err)
-	}
-	if len(mock.submitted) != 1 || mock.submitted[0].Type != taskScheduleUpgrade {
-		t.Fatalf("phase 1: expected schedule-upgrade submission, got %v", mock.submitted)
-	}
-
-	// Re-fetch node to get updated status (submittedUpgradeHeights).
-	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, node); err != nil {
-		t.Fatalf("re-fetch node: %v", err)
-	}
-
-	// Phase 2: sidecar transitions to UpgradeHalted.
-	mock.status = &StatusResponse{
-		Phase:         phaseUpgradeHalted,
-		UpgradeHeight: 196000000,
-		UpgradeImage:  testUpgradeImageV2,
-	}
-	mock.submitted = nil
-
-	_, err = r.reconcileSidecarProgression(context.Background(), node)
-	if err != nil {
-		t.Fatalf("phase 2: error = %v", err)
-	}
-
-	// Verify StatefulSet image was patched.
-	updatedSts := &appsv1.StatefulSet{}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, updatedSts); err != nil {
-		t.Fatalf("Get StatefulSet: %v", err)
-	}
-	if updatedSts.Spec.Template.Spec.Containers[0].Image != testUpgradeImageV2 {
-		t.Errorf("seid image = %q, want %q", updatedSts.Spec.Template.Spec.Containers[0].Image, testUpgradeImageV2)
-	}
-
-	// Verify upgrade was pruned from spec and status.
-	updatedNode := &seiv1alpha1.SeiNode{}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, updatedNode); err != nil {
-		t.Fatalf("Get SeiNode: %v", err)
-	}
-	if len(updatedNode.Spec.ScheduledUpgrades) != 0 {
-		t.Errorf("ScheduledUpgrades not pruned: %v", updatedNode.Spec.ScheduledUpgrades)
-	}
-	if len(updatedNode.Status.SubmittedUpgradeHeights) != 0 {
-		t.Errorf("SubmittedUpgradeHeights not pruned: %v", updatedNode.Status.SubmittedUpgradeHeights)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Tests: lowest-height-first upgrade ordering via reconcileRuntimeTasks
-// ---------------------------------------------------------------------------
-
 func TestReconcileRuntimeTasks_LowestHeightFirst(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
@@ -1064,7 +822,7 @@ func TestReconcileRuntimeTasks_LowestHeightFirst(t *testing.T) {
 	}
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseReady},
+		status: &StatusResponse{Status: sidecarReady},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -1079,10 +837,6 @@ func TestReconcileRuntimeTasks_LowestHeightFirst(t *testing.T) {
 		t.Errorf("submitted height = %v, want 100 (lowest first)", mock.submitted[0].Params["height"])
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: configureGenesisParams
-// ---------------------------------------------------------------------------
 
 func TestConfigureGenesisParams_WithS3(t *testing.T) {
 	node := peerSyncNode()
@@ -1105,10 +859,6 @@ func TestConfigureGenesisParams_WithoutS3(t *testing.T) {
 		t.Errorf("expected nil params when Genesis.S3 is nil, got %v", params)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: taskProgressionForNode — configure-genesis injection
-// ---------------------------------------------------------------------------
 
 func TestTaskProgressionForNode_PeerSyncWithS3_InsertsConfigureGenesis(t *testing.T) {
 	node := peerSyncNode()
@@ -1141,10 +891,6 @@ func TestTaskProgressionForNode_PeerSyncWithStateSync_InsertsConfigureStateSync(
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: needsStateSync
-// ---------------------------------------------------------------------------
-
 func TestNeedsStateSync_NotFreshNoSnapshot(t *testing.T) {
 	node := peerSyncNode()
 	if !needsStateSync(node) {
@@ -1176,10 +922,6 @@ func TestNeedsStateSync_FreshWithSnapshot(t *testing.T) {
 		t.Error("needsStateSync() = true, want false (fresh, has snapshot)")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Tests: configPatchParams returns nil
-// ---------------------------------------------------------------------------
 
 func TestConfigPatchParams_ReturnsNil(t *testing.T) {
 	for _, node := range []*seiv1alpha1.SeiNode{snapshotNode(), peerSyncNode(), genesisNode()} {
@@ -1231,9 +973,6 @@ func TestConfigPatchParams_SnapshotGenerationDefaultKeepRecent(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: snapshotUploadParams
-// ---------------------------------------------------------------------------
 
 func TestSnapshotUploadParams_NoSnapshotGeneration(t *testing.T) {
 	node := snapshotNode()
@@ -1280,10 +1019,6 @@ func TestSnapshotUploadParams_WithS3Destination(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: reconcileRuntimeTasks submits snapshot-upload
-// ---------------------------------------------------------------------------
-
 func snapshotterNode() *seiv1alpha1.SeiNode {
 	node := snapshotNode()
 	node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{
@@ -1303,7 +1038,7 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 func TestReconcileRuntimeTasks_SubmitsSnapshotUpload(t *testing.T) {
 	node := snapshotterNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseReady},
+		status: &StatusResponse{Status: sidecarReady},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -1331,7 +1066,7 @@ func TestReconcileRuntimeTasks_UpgradesTakePriorityOverUpload(t *testing.T) {
 		{Height: 500000, Image: testUpgradeImageV2},
 	}
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseReady},
+		status: &StatusResponse{Status: sidecarReady},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -1353,7 +1088,7 @@ func TestReconcileRuntimeTasks_NoDestination_NoUploadSubmitted(t *testing.T) {
 		Interval: 2000,
 	}
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Phase: phaseReady},
+		status: &StatusResponse{Status: sidecarReady},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 

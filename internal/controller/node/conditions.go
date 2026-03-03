@@ -1,7 +1,6 @@
 package node
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -30,13 +29,4 @@ func setNodeCondition(node *seiv1alpha1.SeiNode, conditionType string, status me
 		ObservedGeneration: node.Generation,
 		Message:            message,
 	})
-}
-
-func isPodReady(pod *corev1.Pod) bool {
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
-			return true
-		}
-	}
-	return false
 }

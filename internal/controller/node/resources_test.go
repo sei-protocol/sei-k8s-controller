@@ -11,16 +11,6 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-node-controller/api/v1alpha1"
 )
 
-const (
-	phaseRunning = "Running"
-	phaseFailed  = "Failed"
-	phasePending = "Pending"
-)
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unparam // test helper designed for reuse
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
@@ -65,10 +55,6 @@ func findCondition(conditions []metav1.Condition, condType string) *metav1.Condi
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// generateNodeStatefulSet
-// ---------------------------------------------------------------------------
-
 func TestGenerateNodeStatefulSet_BasicFields(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
@@ -103,10 +89,6 @@ func TestGenerateNodeStatefulSet_Snapshot_HasInitContainer(t *testing.T) {
 	g.Expect(sts.Spec.Template.Spec.InitContainers[1].Name).To(Equal("snapshot-restore"))
 }
 
-// ---------------------------------------------------------------------------
-// buildNodePodSpec
-// ---------------------------------------------------------------------------
-
 func TestBuildNodePodSpec_Genesis_MountsExistingPVC(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
@@ -127,10 +109,6 @@ func TestBuildNodePodSpec_Snapshot_MountsNodePVC(t *testing.T) {
 	g.Expect(spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal("data-snap-0"))
 }
 
-// ---------------------------------------------------------------------------
-// nodeDataPVCClaimName
-// ---------------------------------------------------------------------------
-
 func TestNodeDataPVCClaimName_Genesis(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
@@ -142,10 +120,6 @@ func TestNodeDataPVCClaimName_Snapshot(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	g.Expect(nodeDataPVCClaimName(node)).To(Equal("data-snap-0"))
 }
-
-// ---------------------------------------------------------------------------
-// buildNodeMainContainer
-// ---------------------------------------------------------------------------
 
 func TestBuildNodeMainContainer_ImageAndEnv(t *testing.T) {
 	g := NewWithT(t)
@@ -208,10 +182,6 @@ func TestBuildNodeMainContainer_NoEntrypoint(t *testing.T) {
 	g.Expect(c.Args).To(BeNil())
 }
 
-// ---------------------------------------------------------------------------
-// buildSnapshotInitContainer
-// ---------------------------------------------------------------------------
-
 func TestBuildSnapshotInitContainer_EnvVars(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
@@ -249,10 +219,6 @@ func TestBuildSnapshotInitContainer_DataVolumeMount(t *testing.T) {
 	g.Expect(c.VolumeMounts[0].MountPath).To(Equal(dataDir))
 }
 
-// ---------------------------------------------------------------------------
-// generateNodeHeadlessService
-// ---------------------------------------------------------------------------
-
 func TestGenerateNodeHeadlessService(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "ns1")
@@ -285,10 +251,6 @@ func TestContainerPorts_SixExpectedPorts(t *testing.T) {
 	g.Expect(ports).To(HaveLen(6))
 }
 
-// ---------------------------------------------------------------------------
-// generateNodeDataPVC
-// ---------------------------------------------------------------------------
-
 func TestGenerateNodeDataPVC(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "ns1")
@@ -303,10 +265,6 @@ func TestGenerateNodeDataPVC(t *testing.T) {
 	storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 	g.Expect(storage.String()).To(Equal("1000Gi"))
 }
-
-// ---------------------------------------------------------------------------
-// parseS3URI
-// ---------------------------------------------------------------------------
 
 func TestParseS3URI(t *testing.T) {
 	tests := []struct {
@@ -329,160 +287,6 @@ func TestParseS3URI(t *testing.T) {
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// isPodReady
-// ---------------------------------------------------------------------------
-
-func TestIsPodReady(t *testing.T) {
-	tests := []struct {
-		name string
-		pod  corev1.Pod
-		want bool
-	}{
-		{
-			name: "ready",
-			pod: corev1.Pod{Status: corev1.PodStatus{
-				Conditions: []corev1.PodCondition{
-					{Type: corev1.PodReady, Status: corev1.ConditionTrue},
-				},
-			}},
-			want: true,
-		},
-		{
-			name: "not ready",
-			pod: corev1.Pod{Status: corev1.PodStatus{
-				Conditions: []corev1.PodCondition{
-					{Type: corev1.PodReady, Status: corev1.ConditionFalse},
-				},
-			}},
-			want: false,
-		},
-		{
-			name: "no conditions",
-			pod:  corev1.Pod{},
-			want: false,
-		},
-		{
-			name: "other condition only",
-			pod: corev1.Pod{Status: corev1.PodStatus{
-				Conditions: []corev1.PodCondition{
-					{Type: corev1.PodScheduled, Status: corev1.ConditionTrue},
-				},
-			}},
-			want: false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			g := NewWithT(t)
-			g.Expect(isPodReady(&tc.pod)).To(Equal(tc.want))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// nodePhase
-// ---------------------------------------------------------------------------
-
-func TestNodePhase(t *testing.T) {
-	tests := []struct {
-		name      string
-		pods      []corev1.Pod
-		wantPhase string
-	}{
-		{name: "empty list", pods: nil, wantPhase: phasePending},
-		{
-			name: "pod ready",
-			pods: []corev1.Pod{
-				{Status: corev1.PodStatus{
-					Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-				}},
-			},
-			wantPhase: phaseRunning,
-		},
-		{
-			name: "pod failed",
-			pods: []corev1.Pod{
-				{Status: corev1.PodStatus{Phase: corev1.PodFailed}},
-			},
-			wantPhase: phaseFailed,
-		},
-		{
-			name: "pod not ready",
-			pods: []corev1.Pod{
-				{Status: corev1.PodStatus{
-					Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}},
-					Phase:      corev1.PodRunning,
-				}},
-			},
-			wantPhase: phasePending,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			g := NewWithT(t)
-			podList := &corev1.PodList{Items: tc.pods}
-			g.Expect(nodePhase(podList)).To(Equal(tc.wantPhase))
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// applyNodeStatusConditions
-// ---------------------------------------------------------------------------
-
-func TestApplyNodeStatusConditions_Running(t *testing.T) {
-	g := NewWithT(t)
-	node := &seiv1alpha1.SeiNode{}
-	node.Status.Phase = phaseRunning
-
-	applyNodeStatusConditions(node)
-
-	ready := findCondition(node.Status.Conditions, ConditionTypeReady)
-	g.Expect(ready).NotTo(BeNil())
-	g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(ready.Reason).To(Equal(ReasonAllPodsReady))
-
-	prog := findCondition(node.Status.Conditions, ConditionTypeProgressing)
-	g.Expect(prog).NotTo(BeNil())
-	g.Expect(prog.Status).To(Equal(metav1.ConditionFalse))
-}
-
-func TestApplyNodeStatusConditions_Failed(t *testing.T) {
-	g := NewWithT(t)
-	node := &seiv1alpha1.SeiNode{}
-	node.Status.Phase = phaseFailed
-
-	applyNodeStatusConditions(node)
-
-	ready := findCondition(node.Status.Conditions, ConditionTypeReady)
-	g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-
-	degraded := findCondition(node.Status.Conditions, ConditionTypeDegraded)
-	g.Expect(degraded).NotTo(BeNil())
-	g.Expect(degraded.Status).To(Equal(metav1.ConditionTrue))
-}
-
-func TestApplyNodeStatusConditions_Pending(t *testing.T) {
-	g := NewWithT(t)
-	node := &seiv1alpha1.SeiNode{}
-	node.Status.Phase = phasePending
-
-	applyNodeStatusConditions(node)
-
-	ready := findCondition(node.Status.Conditions, ConditionTypeReady)
-	g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-
-	prog := findCondition(node.Status.Conditions, ConditionTypeProgressing)
-	g.Expect(prog.Status).To(Equal(metav1.ConditionTrue))
-}
-
-// ---------------------------------------------------------------------------
-// setNodeCondition
-// ---------------------------------------------------------------------------
 
 func TestSetNodeCondition_ObservedGeneration(t *testing.T) {
 	g := NewWithT(t)
@@ -514,10 +318,6 @@ func TestSetNodeCondition_UpdatesExistingInPlace(t *testing.T) {
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 }
 
-// ---------------------------------------------------------------------------
-// Sidecar test helpers
-// ---------------------------------------------------------------------------
-
 func withSidecar(node *seiv1alpha1.SeiNode, port int32) *seiv1alpha1.SeiNode {
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{
 		Image: "ghcr.io/sei/sidecar:v1",
@@ -543,10 +343,6 @@ func findContainer(containers []corev1.Container, name string) *corev1.Container
 	}
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// StatefulSet generation WITH sidecar
-// ---------------------------------------------------------------------------
 
 func TestSidecarEnabled_SharedPIDNamespace(t *testing.T) {
 	g := NewWithT(t)
@@ -645,10 +441,6 @@ func TestSidecarEnabled_StartupProbeTargetsSidecarHealthz(t *testing.T) {
 	g.Expect(probe.FailureThreshold).To(Equal(int32(86400)))
 }
 
-// ---------------------------------------------------------------------------
-// StatefulSet generation WITHOUT sidecar (unchanged behavior)
-// ---------------------------------------------------------------------------
-
 func TestSidecarDisabled_NoSharedPIDNamespace(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
@@ -682,10 +474,6 @@ func TestSidecarDisabled_StartupProbeUsesTCPSocket(t *testing.T) {
 	g.Expect(seid.StartupProbe.TCPSocket.Port.IntValue()).To(Equal(26657))
 	g.Expect(seid.StartupProbe.HTTPGet).To(BeNil())
 }
-
-// ---------------------------------------------------------------------------
-// Sidecar container with custom resources
-// ---------------------------------------------------------------------------
 
 func TestSidecarEnabled_CustomResources(t *testing.T) {
 	g := NewWithT(t)
@@ -721,10 +509,6 @@ func TestSidecarEnabled_NoResources_DefaultsToEmpty(t *testing.T) {
 	g.Expect(sc.Resources.Limits).To(BeNil())
 }
 
-// ---------------------------------------------------------------------------
-// Sidecar with genesis mode (no snapshot init containers)
-// ---------------------------------------------------------------------------
-
 func TestSidecarEnabled_GenesisMode_SidecarPresent(t *testing.T) {
 	g := NewWithT(t)
 	node := withSidecar(newGenesisNode("gen-0", "default"), 7777)
@@ -757,10 +541,6 @@ func TestSidecarEnabled_GenesisMode_SharedPIDNamespace(t *testing.T) {
 	g.Expect(sts.Spec.Template.Spec.ShareProcessNamespace).NotTo(BeNil())
 	g.Expect(*sts.Spec.Template.Spec.ShareProcessNamespace).To(BeTrue())
 }
-
-// ---------------------------------------------------------------------------
-// CRD validation: GenesisConfiguration at-most-one-of PVC/S3
-// ---------------------------------------------------------------------------
 
 func TestGenesisConfiguration_PVCOnly(t *testing.T) {
 	g := NewWithT(t)
@@ -813,10 +593,6 @@ func genesisSourceCount(gc seiv1alpha1.GenesisConfiguration) int {
 	return count
 }
 
-// ---------------------------------------------------------------------------
-// Sidecar startup probe uses custom port
-// ---------------------------------------------------------------------------
-
 func TestSidecarEnabled_StartupProbeUsesCustomPort(t *testing.T) {
 	g := NewWithT(t)
 	node := withSidecar(newSnapshotNode("sc-0", "default"), 9999)
@@ -827,10 +603,6 @@ func TestSidecarEnabled_StartupProbeUsesCustomPort(t *testing.T) {
 	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(9999),
 		"startup probe should target the configured sidecar port")
 }
-
-// ---------------------------------------------------------------------------
-// Sidecar wait wrapper wraps seid entrypoint in a healthz polling loop
-// ---------------------------------------------------------------------------
 
 func TestSidecarEnabled_WaitWrapper_PollsHealthzBeforeExec(t *testing.T) {
 	g := NewWithT(t)
@@ -880,10 +652,6 @@ func TestSidecarEnabled_WaitWrapper_UsesCustomPort(t *testing.T) {
 
 	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/9999"))
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func envValue(envs []corev1.EnvVar, name string) string {
 	for _, e := range envs {

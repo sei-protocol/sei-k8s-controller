@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,13 +28,9 @@ const (
 	taskSnapshotUpload     = "snapshot-upload"
 	taskUpdatePeers        = "update-peers"
 
-	seidContainerName = "seid"
-
-	phaseInitialized   = "Initialized"
-	phaseTaskRunning   = "TaskRunning"
-	phaseTaskComplete  = "TaskComplete"
-	phaseReady         = "Ready"
-	phaseUpgradeHalted = "UpgradeHalted"
+	sidecarInitializing  = "Initializing"
+	sidecarRunning       = "Running"
+	sidecarReady         = "Ready"
 
 	bootstrapPollInterval = 5 * time.Second
 	defaultMaxRetries     = 3
@@ -124,18 +119,34 @@ func (r *SeiNodeReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) Sideca
 	return NewSidecarClient(node.Name, node.Namespace, port)
 }
 
-// writeSidecarStatus patches the sidecar-related fields on SeiNodeStatus.
+// writeSidecarStatus patches the sidecar-related fields on SeiNodeStatus,
+// deriving CRD-friendly values from the sidecar's status + lastTask.
 func (r *SeiNodeReconciler) writeSidecarStatus(ctx context.Context, node *seiv1alpha1.SeiNode, status *StatusResponse) error {
 	patch := client.MergeFrom(node.DeepCopy())
-	node.Status.SidecarPhase = status.Phase
-	node.Status.SidecarCurrentTask = status.CurrentTask
-	node.Status.SidecarLastTask = status.LastTask
-	node.Status.SidecarLastTaskResult = status.LastTaskResult
+	node.Status.SidecarPhase = status.Status
+	node.Status.SidecarCurrentTask = ""
+	if status.LastTask != nil {
+		node.Status.SidecarLastTask = status.LastTask.Type
+		if status.LastTask.Error != "" {
+			node.Status.SidecarLastTaskResult = "error"
+		} else {
+			node.Status.SidecarLastTaskResult = "success"
+		}
+	} else {
+		node.Status.SidecarLastTask = ""
+		node.Status.SidecarLastTaskResult = ""
+	}
 	return r.Status().Patch(ctx, node, patch)
 }
 
 // reconcileSidecarProgression polls the sidecar and drives bootstrap/runtime
-// task progression. Not wired into the main Reconcile method yet (Task 10.5).
+// task progression. The controller derives its phase model from the sidecar's
+// status + lastTask fields:
+//
+//	Initializing + nil lastTask  → fresh start, issue first task
+//	Running                      → task in flight, requeue
+//	Initializing + lastTask set  → task complete, check error / issue next
+//	Ready                        → bootstrap done, runtime tasks
 func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
 	sc := r.buildSidecarClient(node)
 
@@ -148,28 +159,23 @@ func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, nod
 		return ctrl.Result{}, fmt.Errorf("writing sidecar status: %w", writeErr)
 	}
 
-	switch status.Phase {
-	case phaseInitialized:
+	switch {
+	case status.Status == sidecarInitializing && status.LastTask == nil:
 		key := types.NamespacedName{Name: node.Name, Namespace: node.Namespace}
 		r.resetRetryState(key)
 		return r.issueFirstTask(ctx, node, sc)
 
-	case phaseTaskRunning:
+	case status.Status == sidecarRunning:
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
 
-	case phaseTaskComplete:
-		if status.LastTaskResult != "success" {
+	case status.Status == sidecarInitializing && status.LastTask != nil:
+		if status.LastTask.Error != "" {
 			return r.handleTaskFailure(ctx, node, status)
 		}
-		return r.issueNextTask(ctx, node, sc, status.LastTask)
+		return r.issueNextTask(ctx, node, sc, status.LastTask.Type)
 
-	case phaseReady:
-		// Implemented in Task 9.
+	case status.Status == sidecarReady:
 		return r.reconcileRuntimeTasks(ctx, node, sc)
-
-	case phaseUpgradeHalted:
-		// Implemented in Task 9.
-		return r.handleUpgradeHalt(ctx, node, status)
 
 	default:
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
@@ -240,71 +246,6 @@ func nextPendingUpgrade(node *seiv1alpha1.SeiNode) *seiv1alpha1.ScheduledUpgrade
 func (r *SeiNodeReconciler) trackSubmittedUpgrade(ctx context.Context, node *seiv1alpha1.SeiNode, height int64) error {
 	patch := client.MergeFrom(node.DeepCopy())
 	node.Status.SubmittedUpgradeHeights = append(node.Status.SubmittedUpgradeHeights, height)
-	return r.Status().Patch(ctx, node, patch)
-}
-
-// handleUpgradeHalt reads the upgrade details from the sidecar's status,
-// patches the StatefulSet's seid container image, and prunes the completed
-// upgrade from spec.scheduledUpgrades and status.submittedUpgradeHeights.
-func (r *SeiNodeReconciler) handleUpgradeHalt(ctx context.Context, node *seiv1alpha1.SeiNode, status *StatusResponse) (ctrl.Result, error) {
-	if status.UpgradeImage == "" {
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
-	}
-
-	if err := r.patchStatefulSetImage(ctx, node, status.UpgradeImage); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patching StatefulSet image: %w", err)
-	}
-
-	if err := r.pruneScheduledUpgrade(ctx, node, status.UpgradeHeight); err != nil {
-		return ctrl.Result{}, fmt.Errorf("pruning scheduled upgrade: %w", err)
-	}
-
-	return ctrl.Result{}, nil
-}
-
-// patchStatefulSetImage finds the StatefulSet for the node, locates the seid
-// container, and updates its image. The pod will restart with the new image.
-func (r *SeiNodeReconciler) patchStatefulSetImage(ctx context.Context, node *seiv1alpha1.SeiNode, image string) error {
-	sts := &appsv1.StatefulSet{}
-	if err := r.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, sts); err != nil {
-		return fmt.Errorf("getting StatefulSet: %w", err)
-	}
-
-	patch := client.MergeFrom(sts.DeepCopy())
-	containers := sts.Spec.Template.Spec.Containers
-	for i := range containers {
-		if containers[i].Name == seidContainerName {
-			containers[i].Image = image
-			return r.Patch(ctx, sts, patch)
-		}
-	}
-	return fmt.Errorf("container %q not found in StatefulSet %s", seidContainerName, node.Name)
-}
-
-// pruneScheduledUpgrade removes the completed upgrade from both
-// spec.scheduledUpgrades and status.submittedUpgradeHeights.
-func (r *SeiNodeReconciler) pruneScheduledUpgrade(ctx context.Context, node *seiv1alpha1.SeiNode, height int64) error {
-	// Prune from spec.scheduledUpgrades.
-	var remaining []seiv1alpha1.ScheduledUpgrade
-	for _, u := range node.Spec.ScheduledUpgrades {
-		if u.Height != height {
-			remaining = append(remaining, u)
-		}
-	}
-	node.Spec.ScheduledUpgrades = remaining
-	if err := r.Update(ctx, node); err != nil {
-		return fmt.Errorf("updating spec after prune: %w", err)
-	}
-
-	// Prune from status.submittedUpgradeHeights.
-	var remainingHeights []int64
-	for _, h := range node.Status.SubmittedUpgradeHeights {
-		if h != height {
-			remainingHeights = append(remainingHeights, h)
-		}
-	}
-	patch := client.MergeFrom(node.DeepCopy())
-	node.Status.SubmittedUpgradeHeights = remainingHeights
 	return r.Status().Patch(ctx, node, patch)
 }
 
@@ -401,17 +342,16 @@ func (r *SeiNodeReconciler) handleTaskFailure(
 	status *StatusResponse,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	taskType := status.LastTask.Type
 
-	// Runtime failure: log and requeue at normal interval.
-	if isRuntimeTask(node, status.LastTask) {
+	if isRuntimeTask(node, taskType) {
 		logger.Info("runtime task failed, will re-evaluate on next reconcile",
-			"task", status.LastTask)
+			"task", taskType)
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 
-	// Bootstrap failure: retry with exponential backoff.
 	key := types.NamespacedName{Name: node.Name, Namespace: node.Namespace}
-	state := r.getRetryState(key, status.LastTask)
+	state := r.getRetryState(key, taskType)
 	state.Count++
 
 	if state.Count > r.maxBootstrapRetries() {
@@ -421,20 +361,19 @@ func (r *SeiNodeReconciler) handleTaskFailure(
 			Status:             metav1.ConditionTrue,
 			Reason:             reasonBootstrapTaskFailed,
 			ObservedGeneration: node.Generation,
-			Message:            fmt.Sprintf("task %s failed after %d retries", status.LastTask, state.Count-1),
+			Message:            fmt.Sprintf("task %s failed after %d retries", taskType, state.Count-1),
 		})
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patching Degraded condition: %w", err)
 		}
 		logger.Error(fmt.Errorf("bootstrap task exhausted retries"), "manual intervention required",
-			"task", status.LastTask, "retries", state.Count-1)
+			"task", taskType, "retries", state.Count-1)
 		return ctrl.Result{}, nil
 	}
 
-	// Exponential backoff: 5s, 10s, 20s
 	backoff := baseRetryBackoff * (1 << (state.Count - 1))
 	logger.Info("bootstrap task failed, retrying with backoff",
-		"task", status.LastTask, "retry", state.Count, "backoff", backoff)
+		"task", taskType, "retry", state.Count, "backoff", backoff)
 	return ctrl.Result{RequeueAfter: backoff}, nil
 }
 

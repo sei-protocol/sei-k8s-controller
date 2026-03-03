@@ -46,17 +46,8 @@ func TestNewSidecarClient_URLConstruction(t *testing.T) {
 
 func TestSidecarClient_Status(t *testing.T) {
 	want := StatusResponse{
-		Phase:           "Ready",
-		CurrentTask:     "",
-		LastTask:        "mark-ready",
-		LastTaskResult:  "success",
-		BlockHeight:     195826001,
-		CatchingUp:      false,
-		PeerCount:       12,
-		NodeID:          "abc123",
-		UpgradeHeight:   0,
-		UpgradeImage:    "",
-		PendingUpgrades: 1,
+		Status:   "Ready",
+		LastTask: &TaskResult{Type: "mark-ready"},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,8 +65,11 @@ func TestSidecarClient_Status(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if *got != want {
-		t.Errorf("Status() = %+v, want %+v", *got, want)
+	if got.Status != want.Status {
+		t.Errorf("Status = %q, want %q", got.Status, want.Status)
+	}
+	if got.LastTask == nil || got.LastTask.Type != want.LastTask.Type {
+		t.Errorf("LastTask = %+v, want %+v", got.LastTask, want.LastTask)
 	}
 }
 

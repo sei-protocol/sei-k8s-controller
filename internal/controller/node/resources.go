@@ -97,6 +97,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	c := corev1.Container{
 		Name:          "sei-sidecar",
 		Image:         node.Spec.Sidecar.Image,
+		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env: []corev1.EnvVar{
 			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", node.Spec.Sidecar.Port)},
@@ -323,4 +324,8 @@ func parseS3URI(uri string) (bucket, prefix string) {
 	bucket = u.Host
 	prefix = strings.TrimPrefix(u.Path, "/")
 	return bucket, prefix
+}
+
+func hasSnapshot(node *seiv1alpha1.SeiNode) bool {
+	return node.Spec.Snapshot != nil
 }
