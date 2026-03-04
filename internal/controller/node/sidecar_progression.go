@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	sidecar "github.com/sei-protocol/sei-sidecar-client-go"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -18,19 +19,19 @@ import (
 )
 
 const (
-	taskSnapshotRestore    = "snapshot-restore"
-	taskDiscoverPeers      = "discover-peers"
-	taskConfigureGenesis   = "configure-genesis"
-	taskConfigureStateSync = "configure-state-sync"
-	taskConfigPatch        = "config-patch"
-	taskMarkReady          = "mark-ready"
+	taskSnapshotRestore    = sidecar.TaskTypeSnapshotRestore
+	taskDiscoverPeers      = sidecar.TaskTypeDiscoverPeers
+	taskConfigureGenesis   = sidecar.TaskTypeConfigureGenesis
+	taskConfigureStateSync = sidecar.TaskTypeConfigureStateSync
+	taskConfigPatch        = sidecar.TaskTypeConfigPatch
+	taskMarkReady          = sidecar.TaskTypeMarkReady
 	taskScheduleUpgrade    = "schedule-upgrade"
-	taskSnapshotUpload     = "snapshot-upload"
-	taskUpdatePeers        = "update-peers"
+	taskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
+	taskUpdatePeers        = sidecar.TaskTypeUpdatePeers
 
-	sidecarInitializing = "Initializing"
-	sidecarRunning      = "Running"
-	sidecarReady        = "Ready"
+	sidecarInitializing = string(sidecar.Initializing)
+	sidecarRunning      = string(sidecar.Running)
+	sidecarReady        = string(sidecar.Ready)
 
 	bootstrapPollInterval = 5 * time.Second
 	defaultMaxRetries     = 3
@@ -103,8 +104,8 @@ type retryInfo struct {
 
 // SidecarStatusClient abstracts the sidecar HTTP API for testability.
 type SidecarStatusClient interface {
-	Status(ctx context.Context) (*StatusResponse, error)
-	SubmitTask(ctx context.Context, task TaskRequest) error
+	Status(ctx context.Context) (*sidecar.StatusResponse, error)
+	SubmitTask(ctx context.Context, task sidecar.TaskBuilder) error
 }
 
 // buildSidecarClient constructs a SidecarClient from the node's sidecar config.
@@ -114,20 +115,24 @@ func (r *SeiNodeReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) Sideca
 	}
 	port := node.Spec.Sidecar.Port
 	if port == 0 {
-		port = defaultSidecarPort
+		port = sidecar.DefaultPort
 	}
-	return NewSidecarClient(node.Name, node.Namespace, port)
+	c, err := sidecar.NewSidecarClientFromPodDNS(node.Name, node.Namespace, port)
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
 // writeSidecarStatus patches the sidecar-related fields on SeiNodeStatus,
 // deriving CRD-friendly values from the sidecar's status + lastTask.
-func (r *SeiNodeReconciler) writeSidecarStatus(ctx context.Context, node *seiv1alpha1.SeiNode, status *StatusResponse) error {
+func (r *SeiNodeReconciler) writeSidecarStatus(ctx context.Context, node *seiv1alpha1.SeiNode, status *sidecar.StatusResponse) error {
 	patch := client.MergeFrom(node.DeepCopy())
-	node.Status.SidecarPhase = status.Status
+	node.Status.SidecarPhase = string(status.Status)
 	node.Status.SidecarCurrentTask = ""
 	if status.LastTask != nil {
 		node.Status.SidecarLastTask = status.LastTask.Type
-		if status.LastTask.Error != "" {
+		if status.LastTask.Error != nil && *status.LastTask.Error != "" {
 			node.Status.SidecarLastTaskResult = "error"
 		} else {
 			node.Status.SidecarLastTaskResult = "success"
@@ -159,22 +164,24 @@ func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, nod
 		return ctrl.Result{}, fmt.Errorf("writing sidecar status: %w", writeErr)
 	}
 
+	statusStr := string(status.Status)
+
 	switch {
-	case status.Status == sidecarInitializing && status.LastTask == nil:
+	case statusStr == sidecarInitializing && status.LastTask == nil:
 		key := types.NamespacedName{Name: node.Name, Namespace: node.Namespace}
 		r.resetRetryState(key)
 		return r.issueFirstTask(ctx, node, sc)
 
-	case status.Status == sidecarRunning:
+	case statusStr == sidecarRunning:
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
 
-	case status.Status == sidecarInitializing && status.LastTask != nil:
-		if status.LastTask.Error != "" {
+	case statusStr == sidecarInitializing && status.LastTask != nil:
+		if status.LastTask.Error != nil && *status.LastTask.Error != "" {
 			return r.handleTaskFailure(ctx, node, status)
 		}
 		return r.issueNextTask(ctx, node, sc, status.LastTask.Type)
 
-	case status.Status == sidecarReady:
+	case statusStr == sidecarReady:
 		return r.reconcileRuntimeTasks(ctx, node, sc)
 
 	default:
@@ -189,12 +196,9 @@ func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, nod
 // and no-ops when there is no new snapshot to upload.
 func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient) (ctrl.Result, error) {
 	if upgrade := nextPendingUpgrade(node); upgrade != nil {
-		if err := sc.SubmitTask(ctx, TaskRequest{
-			Type: taskScheduleUpgrade,
-			Params: map[string]any{
-				"height": upgrade.Height,
-				"image":  upgrade.Image,
-			},
+		if err := sc.SubmitTask(ctx, scheduleUpgradeTask{
+			Height: upgrade.Height,
+			Image:  upgrade.Image,
 		}); err != nil {
 			return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 		}
@@ -204,11 +208,8 @@ func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *sei
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 
-	if params := snapshotUploadParams(node); params != nil {
-		if err := sc.SubmitTask(ctx, TaskRequest{
-			Type:   taskSnapshotUpload,
-			Params: params,
-		}); err != nil {
+	if task := snapshotUploadTask(node); task != nil {
+		if err := sc.SubmitTask(ctx, task); err != nil {
 			log.FromContext(ctx).Info("snapshot-upload submission failed, will retry", "error", err)
 		}
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
@@ -293,16 +294,12 @@ func (r *SeiNodeReconciler) issueFirstTask(ctx context.Context, node *seiv1alpha
 	}
 
 	first := progression[0]
-	return r.issueTask(ctx, sc, first, paramsForTask(node, first))
+	return r.issueTask(ctx, sc, taskBuilderForNode(node, first))
 }
 
 // issueTask submits a task to the sidecar and requeues for polling.
-func (r *SeiNodeReconciler) issueTask(ctx context.Context, sc SidecarStatusClient, taskType string, params map[string]any) (ctrl.Result, error) {
-	err := sc.SubmitTask(ctx, TaskRequest{
-		Type:   taskType,
-		Params: params,
-	})
-	if err != nil {
+func (r *SeiNodeReconciler) issueTask(ctx context.Context, sc SidecarStatusClient, task sidecar.TaskBuilder) (ctrl.Result, error) {
+	if err := sc.SubmitTask(ctx, task); err != nil {
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
@@ -322,7 +319,7 @@ func (r *SeiNodeReconciler) issueNextTask(
 	for i, t := range progression {
 		if t == completedTask && i+1 < len(progression) {
 			next := progression[i+1]
-			return r.issueTask(ctx, sc, next, paramsForTask(node, next))
+			return r.issueTask(ctx, sc, taskBuilderForNode(node, next))
 		}
 	}
 
@@ -339,7 +336,7 @@ func (r *SeiNodeReconciler) issueNextTask(
 func (r *SeiNodeReconciler) handleTaskFailure(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
-	status *StatusResponse,
+	status *sidecar.StatusResponse,
 ) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	taskType := status.LastTask.Type
@@ -383,101 +380,119 @@ func isRuntimeTask(node *seiv1alpha1.SeiNode, task string) bool {
 	return !slices.Contains(taskProgressionForNode(node), task)
 }
 
-// paramsForTask builds the task-specific parameter map from the SeiNodeSpec.
-func paramsForTask(node *seiv1alpha1.SeiNode, taskType string) map[string]any {
+// taskBuilderForNode maps a task type string to a typed TaskBuilder
+// populated from the SeiNodeSpec.
+func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
 	switch taskType {
 	case taskSnapshotRestore:
-		return snapshotRestoreParams(node)
+		return snapshotRestoreBuilder(node)
 	case taskDiscoverPeers:
-		return discoverPeersParams(node)
+		return discoverPeersBuilder(node)
 	case taskConfigureGenesis:
-		return configureGenesisParams(node)
+		return configureGenesisBuilder(node)
 	case taskConfigureStateSync:
-		return nil
+		return sidecar.ConfigureStateSyncTask{}
 	case taskConfigPatch:
-		return configPatchParams(node)
+		return configPatchBuilder(node)
 	case taskMarkReady:
-		return nil
+		return sidecar.MarkReadyTask{}
 	default:
-		return nil
+		return sidecar.MarkReadyTask{}
 	}
 }
 
-func snapshotRestoreParams(node *seiv1alpha1.SeiNode) map[string]any {
+func snapshotRestoreBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	snap := node.Spec.Snapshot
 	if snap == nil {
-		return nil
+		return sidecar.SnapshotRestoreTask{}
 	}
 	bucket, prefix := parseS3URI(snap.Bucket.URI)
-	return map[string]any{
-		"bucket":  bucket,
-		"prefix":  prefix,
-		"region":  snap.Region,
-		"chainId": node.Spec.ChainID,
+	return sidecar.SnapshotRestoreTask{
+		Bucket:  bucket,
+		Prefix:  prefix,
+		Region:  snap.Region,
+		ChainID: node.Spec.ChainID,
 	}
 }
 
-func discoverPeersParams(node *seiv1alpha1.SeiNode) map[string]any {
+func discoverPeersBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	if node.Spec.Peers == nil {
-		return nil
+		return sidecar.DiscoverPeersTask{}
 	}
-	sources := make([]map[string]any, 0, len(node.Spec.Peers.Sources))
+	var sources []sidecar.PeerSource
 	for _, s := range node.Spec.Peers.Sources {
 		if s.EC2Tags != nil {
-			sources = append(sources, map[string]any{
-				"type":   "ec2Tags",
-				"region": s.EC2Tags.Region,
-				"tags":   s.EC2Tags.Tags,
+			sources = append(sources, sidecar.PeerSource{
+				Type:   sidecar.PeerSourceEC2Tags,
+				Region: s.EC2Tags.Region,
+				Tags:   s.EC2Tags.Tags,
 			})
 		}
 		if s.Static != nil {
-			sources = append(sources, map[string]any{
-				"type":      "static",
-				"addresses": s.Static.Addresses,
+			sources = append(sources, sidecar.PeerSource{
+				Type:      sidecar.PeerSourceStatic,
+				Addresses: s.Static.Addresses,
 			})
 		}
 	}
-	return map[string]any{"sources": sources}
+	return sidecar.DiscoverPeersTask{Sources: sources}
 }
 
-func configureGenesisParams(node *seiv1alpha1.SeiNode) map[string]any {
+func configureGenesisBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	if node.Spec.Genesis.S3 == nil {
-		return nil
+		return sidecar.ConfigureGenesisTask{}
 	}
-	return map[string]any{
-		"uri":    node.Spec.Genesis.S3.URI,
-		"region": node.Spec.Genesis.S3.Region,
+	return sidecar.ConfigureGenesisTask{
+		URI:    node.Spec.Genesis.S3.URI,
+		Region: node.Spec.Genesis.S3.Region,
 	}
 }
 
-func configPatchParams(node *seiv1alpha1.SeiNode) map[string]any {
+func configPatchBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	if node.Spec.SnapshotGeneration == nil {
-		return nil
+		return sidecar.ConfigPatchTask{}
 	}
 	sg := node.Spec.SnapshotGeneration
 	keepRecent := sg.KeepRecent
 	if keepRecent == 0 {
 		keepRecent = 5
 	}
-	return map[string]any{
-		"snapshotGeneration": map[string]any{
-			"interval":   sg.Interval,
-			"keepRecent": keepRecent,
+	return sidecar.ConfigPatchTask{
+		SnapshotGeneration: &sidecar.SnapshotGenerationPatch{
+			Interval:   sg.Interval,
+			KeepRecent: keepRecent,
 		},
 	}
 }
 
-// snapshotUploadParams builds the params for a snapshot-upload task.
-// Returns nil when no snapshot destination is configured (caller skips submission).
-func snapshotUploadParams(node *seiv1alpha1.SeiNode) map[string]any {
+// scheduleUpgradeTask is a controller-only task type that doesn't exist in
+// the sidecar client package (upgrade handling is controller-specific).
+type scheduleUpgradeTask struct {
+	Height int64
+	Image  string
+}
+
+func (t scheduleUpgradeTask) TaskType() string { return taskScheduleUpgrade }
+func (t scheduleUpgradeTask) Validate() error  { return nil }
+func (t scheduleUpgradeTask) ToTaskRequest() sidecar.TaskRequest {
+	p := map[string]interface{}{
+		"height": t.Height,
+		"image":  t.Image,
+	}
+	return sidecar.TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// snapshotUploadTask builds a typed SnapshotUploadTask from the node spec.
+// Returns nil when no snapshot destination is configured.
+func snapshotUploadTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	sg := node.Spec.SnapshotGeneration
 	if sg == nil || sg.Destination == nil || sg.Destination.S3 == nil {
 		return nil
 	}
 	dest := sg.Destination.S3
-	return map[string]any{
-		"bucket": dest.Bucket,
-		"prefix": dest.Prefix,
-		"region": dest.Region,
+	return sidecar.SnapshotUploadTask{
+		Bucket: dest.Bucket,
+		Prefix: dest.Prefix,
+		Region: dest.Region,
 	}
 }

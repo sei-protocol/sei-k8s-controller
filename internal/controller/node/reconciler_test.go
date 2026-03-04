@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	sidecar "github.com/sei-protocol/sei-sidecar-client-go"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -18,9 +19,9 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-node-controller/api/v1alpha1"
 )
 
-func newNodeTestScheme(t *testing.T) *runtime.Scheme {
+func newNodeTestScheme(t *testing.T) *k8sruntime.Scheme {
 	t.Helper()
-	s := runtime.NewScheme()
+	s := k8sruntime.NewScheme()
 	if err := clientgoscheme.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		Client: c,
 		Scheme: s,
 		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) SidecarStatusClient {
-			return &mockSidecarClient{status: &StatusResponse{Status: sidecarInitializing}}
+			return &mockSidecarClient{status: &sidecar.StatusResponse{Status: sidecar.Initializing}}
 		},
 	}
 	return r, c

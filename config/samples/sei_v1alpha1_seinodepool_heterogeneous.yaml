@@ -1,4 +1,4 @@
-apiVersion: sei.sei.io/v1alpha1
+apiVersion: sei.io/v1alpha1
 kind: SeiNodePool
 metadata:
   labels:

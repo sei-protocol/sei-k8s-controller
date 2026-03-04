@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
+	sidecar "github.com/sei-protocol/sei-sidecar-client-go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -18,25 +19,27 @@ import (
 
 const testUpgradeImageV2 = "sei:v2"
 
+func strPtr(s string) *string { return &s }
+
 type mockSidecarClient struct {
-	status    *StatusResponse
+	status    *sidecar.StatusResponse
 	statusErr error
-	submitted []TaskRequest
+	submitted []sidecar.TaskBuilder
 	submitErr error
 }
 
-func (m *mockSidecarClient) Status(_ context.Context) (*StatusResponse, error) {
+func (m *mockSidecarClient) Status(_ context.Context) (*sidecar.StatusResponse, error) {
 	return m.status, m.statusErr
 }
 
-func (m *mockSidecarClient) SubmitTask(_ context.Context, task TaskRequest) error {
+func (m *mockSidecarClient) SubmitTask(_ context.Context, task sidecar.TaskBuilder) error {
 	m.submitted = append(m.submitted, task)
 	return m.submitErr
 }
 
 func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...client.Object) (*SeiNodeReconciler, client.Client) {
 	t.Helper()
-	s := runtime.NewScheme()
+	s := k8sruntime.NewScheme()
 	if err := clientgoscheme.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +151,7 @@ func TestBootstrapMode(t *testing.T) {
 }
 
 func TestSnapshotMode_TaskOrdering(t *testing.T) {
-	mock := &mockSidecarClient{status: &StatusResponse{Status: sidecarInitializing}}
+	mock := &mockSidecarClient{status: &sidecar.StatusResponse{Status: sidecar.Initializing}}
 	r, _ := newProgressionReconciler(t, mock, snapshotNode())
 
 	_, err := r.reconcileSidecarProgression(context.Background(), snapshotNode())
@@ -158,13 +161,13 @@ func TestSnapshotMode_TaskOrdering(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].Type != taskSnapshotRestore {
-		t.Errorf("first task = %q, want %q", mock.submitted[0].Type, taskSnapshotRestore)
+	if mock.submitted[0].TaskType() != taskSnapshotRestore {
+		t.Errorf("first task = %q, want %q", mock.submitted[0].TaskType(), taskSnapshotRestore)
 	}
 }
 
 func TestPeerSyncMode_TaskOrdering(t *testing.T) {
-	mock := &mockSidecarClient{status: &StatusResponse{Status: sidecarInitializing}}
+	mock := &mockSidecarClient{status: &sidecar.StatusResponse{Status: sidecar.Initializing}}
 	r, _ := newProgressionReconciler(t, mock, peerSyncNode())
 
 	_, err := r.reconcileSidecarProgression(context.Background(), peerSyncNode())
@@ -174,13 +177,13 @@ func TestPeerSyncMode_TaskOrdering(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].Type != taskDiscoverPeers {
-		t.Errorf("first task = %q, want %q", mock.submitted[0].Type, taskDiscoverPeers)
+	if mock.submitted[0].TaskType() != taskDiscoverPeers {
+		t.Errorf("first task = %q, want %q", mock.submitted[0].TaskType(), taskDiscoverPeers)
 	}
 }
 
 func TestGenesisMode_TaskOrdering(t *testing.T) {
-	mock := &mockSidecarClient{status: &StatusResponse{Status: sidecarInitializing}}
+	mock := &mockSidecarClient{status: &sidecar.StatusResponse{Status: sidecar.Initializing}}
 	r, _ := newProgressionReconciler(t, mock, genesisNode())
 
 	_, err := r.reconcileSidecarProgression(context.Background(), genesisNode())
@@ -190,8 +193,8 @@ func TestGenesisMode_TaskOrdering(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].Type != taskConfigPatch {
-		t.Errorf("first task = %q, want %q", mock.submitted[0].Type, taskConfigPatch)
+	if mock.submitted[0].TaskType() != taskConfigPatch {
+		t.Errorf("first task = %q, want %q", mock.submitted[0].TaskType(), taskConfigPatch)
 	}
 }
 
@@ -261,7 +264,7 @@ func TestGenesisMode_WithPeers_FirstTaskIsDiscoverPeers(t *testing.T) {
 		},
 	}
 
-	mock := &mockSidecarClient{status: &StatusResponse{Status: sidecarInitializing}}
+	mock := &mockSidecarClient{status: &sidecar.StatusResponse{Status: sidecar.Initializing}}
 	r, _ := newProgressionReconciler(t, mock, node)
 
 	_, err := r.reconcileSidecarProgression(context.Background(), node)
@@ -271,8 +274,8 @@ func TestGenesisMode_WithPeers_FirstTaskIsDiscoverPeers(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].Type != taskDiscoverPeers {
-		t.Errorf("first task = %q, want %q", mock.submitted[0].Type, taskDiscoverPeers)
+	if mock.submitted[0].TaskType() != taskDiscoverPeers {
+		t.Errorf("first task = %q, want %q", mock.submitted[0].TaskType(), taskDiscoverPeers)
 	}
 }
 
@@ -291,8 +294,8 @@ func TestIssueNextTask_SnapshotProgression(t *testing.T) {
 		if len(mock.submitted) != 1 {
 			t.Fatalf("after %q: expected 1 submitted task, got %d", completedTask, len(mock.submitted))
 		}
-		if mock.submitted[0].Type != expected[i] {
-			t.Errorf("after %q: next task = %q, want %q", completedTask, mock.submitted[0].Type, expected[i])
+		if mock.submitted[0].TaskType() != expected[i] {
+			t.Errorf("after %q: next task = %q, want %q", completedTask, mock.submitted[0].TaskType(), expected[i])
 		}
 	}
 }
@@ -316,7 +319,7 @@ func TestIssueNextTask_LastTask_SwitchesToSteadyState(t *testing.T) {
 func TestPhaseRegression_ResetsRetryState(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: taskSnapshotRestore, Error: "failed"}},
+		status: &sidecar.StatusResponse{Status: sidecar.Initializing, LastTask: &sidecar.TaskResult{Type: taskSnapshotRestore, Error: strPtr("failed")}},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -330,7 +333,7 @@ func TestPhaseRegression_ResetsRetryState(t *testing.T) {
 	}
 
 	// Sidecar restarts → Initializing with no lastTask.
-	mock.status = &StatusResponse{Status: sidecarInitializing}
+	mock.status = &sidecar.StatusResponse{Status: sidecar.Initializing}
 	_, _ = r.reconcileSidecarProgression(context.Background(), node)
 
 	// Retry state should be reset.
@@ -343,7 +346,7 @@ func TestPhaseRegression_ResetsRetryState(t *testing.T) {
 func TestReconcileSidecarProgression_WritesStatusToNode(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarRunning},
+		status: &sidecar.StatusResponse{Status: sidecar.Running},
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
@@ -364,7 +367,7 @@ func TestReconcileSidecarProgression_WritesStatusToNode(t *testing.T) {
 func TestHandleTaskFailure_BootstrapRetryWithBackoff(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: taskSnapshotRestore, Error: "failed"}},
+		status: &sidecar.StatusResponse{Status: sidecar.Initializing, LastTask: &sidecar.TaskResult{Type: taskSnapshotRestore, Error: strPtr("failed")}},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -399,7 +402,7 @@ func TestHandleTaskFailure_BootstrapRetryWithBackoff(t *testing.T) {
 func TestHandleTaskFailure_MaxRetries_SetsDegradedCondition(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: taskSnapshotRestore, Error: "failed"}},
+		status: &sidecar.StatusResponse{Status: sidecar.Initializing, LastTask: &sidecar.TaskResult{Type: taskSnapshotRestore, Error: strPtr("failed")}},
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
@@ -440,7 +443,7 @@ func TestHandleTaskFailure_RuntimeFailure_RequeuesAt30s(t *testing.T) {
 	node := snapshotNode()
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: "update-peers", Error: "failed"}},
+		status: &sidecar.StatusResponse{Status: sidecar.Initializing, LastTask: &sidecar.TaskResult{Type: "update-peers", Error: strPtr("failed")}},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -458,7 +461,7 @@ func TestRetryCounterReset_OnSidecarRestart(t *testing.T) {
 	key := types.NamespacedName{Name: node.Name, Namespace: node.Namespace}
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarInitializing, LastTask: &TaskResult{Type: taskSnapshotRestore, Error: "failed"}},
+		status: &sidecar.StatusResponse{Status: sidecar.Initializing, LastTask: &sidecar.TaskResult{Type: taskSnapshotRestore, Error: strPtr("failed")}},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -472,7 +475,7 @@ func TestRetryCounterReset_OnSidecarRestart(t *testing.T) {
 	}
 
 	// Sidecar restarts.
-	mock.status = &StatusResponse{Status: sidecarInitializing}
+	mock.status = &sidecar.StatusResponse{Status: sidecar.Initializing}
 	_, _ = r.reconcileSidecarProgression(context.Background(), node)
 
 	// All retry counters for this node should be cleared.
@@ -498,33 +501,37 @@ func TestReconcileSidecarProgression_StatusError_Requeues(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: paramsForTask
-// ---------------------------------------------------------------------------
-
-func TestParamsForTask_SnapshotRestore(t *testing.T) {
+func TestTaskBuilderForNode_SnapshotRestore(t *testing.T) {
 	node := snapshotNode()
-	params := paramsForTask(node, taskSnapshotRestore)
-	if params["bucket"] != "my-bucket" {
-		t.Errorf("bucket = %v, want %q", params["bucket"], "my-bucket")
+	b := taskBuilderForNode(node, taskSnapshotRestore)
+	task, ok := b.(sidecar.SnapshotRestoreTask)
+	if !ok {
+		t.Fatalf("expected SnapshotRestoreTask, got %T", b)
 	}
-	if params["prefix"] != "snapshots/latest.tar" {
-		t.Errorf("prefix = %v, want %q", params["prefix"], "snapshots/latest.tar")
+	if task.Bucket != "my-bucket" {
+		t.Errorf("Bucket = %q, want %q", task.Bucket, "my-bucket")
 	}
-	if params["region"] != "us-east-1" {
-		t.Errorf("region = %v, want %q", params["region"], "us-east-1")
+	if task.Prefix != "snapshots/latest.tar" {
+		t.Errorf("Prefix = %q, want %q", task.Prefix, "snapshots/latest.tar")
+	}
+	if task.Region != "us-east-1" {
+		t.Errorf("Region = %q, want %q", task.Region, "us-east-1")
 	}
 }
 
-func TestParamsForTask_DiscoverPeers_NoPeerConfig(t *testing.T) {
+func TestTaskBuilderForNode_DiscoverPeers_NoPeerConfig(t *testing.T) {
 	node := snapshotNode()
-	params := paramsForTask(node, taskDiscoverPeers)
-	if params != nil {
-		t.Errorf("expected nil params when no PeerConfig, got %v", params)
+	b := taskBuilderForNode(node, taskDiscoverPeers)
+	task, ok := b.(sidecar.DiscoverPeersTask)
+	if !ok {
+		t.Fatalf("expected DiscoverPeersTask, got %T", b)
+	}
+	if len(task.Sources) != 0 {
+		t.Errorf("expected empty sources when no PeerConfig, got %d", len(task.Sources))
 	}
 }
 
-func TestParamsForTask_DiscoverPeers_EC2Tags(t *testing.T) {
+func TestTaskBuilderForNode_DiscoverPeers_EC2Tags(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.Peers = &seiv1alpha1.PeerConfig{
 		Sources: []seiv1alpha1.PeerSource{
@@ -534,31 +541,26 @@ func TestParamsForTask_DiscoverPeers_EC2Tags(t *testing.T) {
 			}},
 		},
 	}
-	params := paramsForTask(node, taskDiscoverPeers)
-
-	sources, ok := params["sources"].([]map[string]any)
+	b := taskBuilderForNode(node, taskDiscoverPeers)
+	task, ok := b.(sidecar.DiscoverPeersTask)
 	if !ok {
-		t.Fatalf("sources is not []map[string]any: %T", params["sources"])
+		t.Fatalf("expected DiscoverPeersTask, got %T", b)
 	}
-	if len(sources) != 1 {
-		t.Fatalf("expected 1 source, got %d", len(sources))
+	if len(task.Sources) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(task.Sources))
 	}
-	if sources[0]["type"] != "ec2Tags" {
-		t.Errorf("type = %v, want ec2Tags", sources[0]["type"])
+	if task.Sources[0].Type != sidecar.PeerSourceEC2Tags {
+		t.Errorf("type = %v, want ec2Tags", task.Sources[0].Type)
 	}
-	if sources[0]["region"] != "eu-central-1" {
-		t.Errorf("region = %v, want eu-central-1", sources[0]["region"])
+	if task.Sources[0].Region != "eu-central-1" {
+		t.Errorf("region = %v, want eu-central-1", task.Sources[0].Region)
 	}
-	tags, ok := sources[0]["tags"].(map[string]string)
-	if !ok {
-		t.Fatalf("tags is not map[string]string: %T", sources[0]["tags"])
-	}
-	if tags["ChainIdentifier"] != "atlantic-2" {
-		t.Errorf("ChainIdentifier = %v, want atlantic-2", tags["ChainIdentifier"])
+	if task.Sources[0].Tags["ChainIdentifier"] != "atlantic-2" {
+		t.Errorf("ChainIdentifier = %v, want atlantic-2", task.Sources[0].Tags["ChainIdentifier"])
 	}
 }
 
-func TestParamsForTask_DiscoverPeers_Static(t *testing.T) {
+func TestTaskBuilderForNode_DiscoverPeers_Static(t *testing.T) {
 	node := peerSyncNode()
 	node.Spec.Peers = &seiv1alpha1.PeerConfig{
 		Sources: []seiv1alpha1.PeerSource{
@@ -567,28 +569,23 @@ func TestParamsForTask_DiscoverPeers_Static(t *testing.T) {
 			}},
 		},
 	}
-	params := paramsForTask(node, taskDiscoverPeers)
-
-	sources, ok := params["sources"].([]map[string]any)
+	b := taskBuilderForNode(node, taskDiscoverPeers)
+	task, ok := b.(sidecar.DiscoverPeersTask)
 	if !ok {
-		t.Fatalf("sources is not []map[string]any: %T", params["sources"])
+		t.Fatalf("expected DiscoverPeersTask, got %T", b)
 	}
-	if len(sources) != 1 {
-		t.Fatalf("expected 1 source, got %d", len(sources))
+	if len(task.Sources) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(task.Sources))
 	}
-	if sources[0]["type"] != "static" {
-		t.Errorf("type = %v, want static", sources[0]["type"])
+	if task.Sources[0].Type != sidecar.PeerSourceStatic {
+		t.Errorf("type = %v, want static", task.Sources[0].Type)
 	}
-	addrs, ok := sources[0]["addresses"].([]string)
-	if !ok {
-		t.Fatalf("addresses is not []string: %T", sources[0]["addresses"])
-	}
-	if len(addrs) != 1 || addrs[0] != "abc@1.2.3.4:26656" {
-		t.Errorf("addresses = %v, want [abc@1.2.3.4:26656]", addrs)
+	if len(task.Sources[0].Addresses) != 1 || task.Sources[0].Addresses[0] != "abc@1.2.3.4:26656" {
+		t.Errorf("addresses = %v, want [abc@1.2.3.4:26656]", task.Sources[0].Addresses)
 	}
 }
 
-func TestParamsForTask_DiscoverPeers_MultipleSources(t *testing.T) {
+func TestTaskBuilderForNode_DiscoverPeers_MultipleSources(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.Peers = &seiv1alpha1.PeerConfig{
 		Sources: []seiv1alpha1.PeerSource{
@@ -601,35 +598,38 @@ func TestParamsForTask_DiscoverPeers_MultipleSources(t *testing.T) {
 			}},
 		},
 	}
-	params := paramsForTask(node, taskDiscoverPeers)
-
-	sources, ok := params["sources"].([]map[string]any)
+	b := taskBuilderForNode(node, taskDiscoverPeers)
+	task, ok := b.(sidecar.DiscoverPeersTask)
 	if !ok {
-		t.Fatalf("sources is not []map[string]any: %T", params["sources"])
+		t.Fatalf("expected DiscoverPeersTask, got %T", b)
 	}
-	if len(sources) != 2 {
-		t.Fatalf("expected 2 sources, got %d", len(sources))
+	if len(task.Sources) != 2 {
+		t.Fatalf("expected 2 sources, got %d", len(task.Sources))
 	}
-	if sources[0]["type"] != "ec2Tags" {
-		t.Errorf("sources[0].type = %v, want ec2Tags", sources[0]["type"])
+	if task.Sources[0].Type != sidecar.PeerSourceEC2Tags {
+		t.Errorf("sources[0].type = %v, want ec2Tags", task.Sources[0].Type)
 	}
-	if sources[1]["type"] != "static" {
-		t.Errorf("sources[1].type = %v, want static", sources[1]["type"])
+	if task.Sources[1].Type != sidecar.PeerSourceStatic {
+		t.Errorf("sources[1].type = %v, want static", task.Sources[1].Type)
 	}
 }
 
-func TestParamsForTask_MarkReady(t *testing.T) {
+func TestTaskBuilderForNode_MarkReady(t *testing.T) {
 	node := snapshotNode()
-	params := paramsForTask(node, taskMarkReady)
-	if params != nil {
-		t.Errorf("mark-ready params = %v, want nil", params)
+	b := taskBuilderForNode(node, taskMarkReady)
+	if _, ok := b.(sidecar.MarkReadyTask); !ok {
+		t.Errorf("expected MarkReadyTask, got %T", b)
+	}
+	req := b.ToTaskRequest()
+	if req.Params != nil {
+		t.Errorf("mark-ready Params = %v, want nil", req.Params)
 	}
 }
 
 func TestReconcileSidecarProgression_TaskRunning_Requeues(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarRunning},
+		status: &sidecar.StatusResponse{Status: sidecar.Running},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -704,10 +704,6 @@ func TestNextPendingUpgrade_NoUpgrades_ReturnsNil(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests: reconcileRuntimeTasks — schedule-upgrade submission
-// ---------------------------------------------------------------------------
-
 func TestReconcileRuntimeTasks_SubmitsScheduleUpgrade(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
@@ -715,7 +711,7 @@ func TestReconcileRuntimeTasks_SubmitsScheduleUpgrade(t *testing.T) {
 	}
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarReady},
+		status: &sidecar.StatusResponse{Status: sidecar.Ready},
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
@@ -729,14 +725,15 @@ func TestReconcileRuntimeTasks_SubmitsScheduleUpgrade(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].Type != taskScheduleUpgrade {
-		t.Errorf("task type = %q, want %q", mock.submitted[0].Type, taskScheduleUpgrade)
+	if mock.submitted[0].TaskType() != taskScheduleUpgrade {
+		t.Errorf("task type = %q, want %q", mock.submitted[0].TaskType(), taskScheduleUpgrade)
 	}
-	if mock.submitted[0].Params["height"] != int64(500000) {
-		t.Errorf("height = %v, want 500000", mock.submitted[0].Params["height"])
+	req := mock.submitted[0].ToTaskRequest()
+	if req.Params == nil || (*req.Params)["height"] != int64(500000) {
+		t.Errorf("height = %v, want 500000", (*req.Params)["height"])
 	}
-	if mock.submitted[0].Params["image"] != testUpgradeImageV2 {
-		t.Errorf("image = %v, want %q", mock.submitted[0].Params["image"], testUpgradeImageV2)
+	if req.Params == nil || (*req.Params)["image"] != testUpgradeImageV2 {
+		t.Errorf("image = %v, want %q", (*req.Params)["image"], testUpgradeImageV2)
 	}
 
 	// Verify the height was tracked in status.
@@ -757,7 +754,7 @@ func TestReconcileRuntimeTasks_DuplicatePrevention(t *testing.T) {
 	node.Status.SubmittedUpgradeHeights = []int64{500000}
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarReady},
+		status: &sidecar.StatusResponse{Status: sidecar.Ready},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -776,7 +773,7 @@ func TestReconcileRuntimeTasks_DuplicatePrevention(t *testing.T) {
 func TestReconcileRuntimeTasks_NoUpgrades_RequeuesAtSteadyState(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarReady},
+		status: &sidecar.StatusResponse{Status: sidecar.Ready},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -799,7 +796,7 @@ func TestReconcileRuntimeTasks_SubmitError_RequeuesGracefully(t *testing.T) {
 	}
 
 	mock := &mockSidecarClient{
-		status:    &StatusResponse{Status: sidecarReady},
+		status:    &sidecar.StatusResponse{Status: sidecar.Ready},
 		submitErr: fmt.Errorf("connection refused"),
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
@@ -822,7 +819,7 @@ func TestReconcileRuntimeTasks_LowestHeightFirst(t *testing.T) {
 	}
 
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarReady},
+		status: &sidecar.StatusResponse{Status: sidecar.Ready},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -833,30 +830,36 @@ func TestReconcileRuntimeTasks_LowestHeightFirst(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].Params["height"] != int64(100) {
-		t.Errorf("submitted height = %v, want 100 (lowest first)", mock.submitted[0].Params["height"])
+	req := mock.submitted[0].ToTaskRequest()
+	if req.Params == nil || (*req.Params)["height"] != int64(100) {
+		t.Errorf("submitted height = %v, want 100 (lowest first)", (*req.Params)["height"])
 	}
 }
 
-func TestConfigureGenesisParams_WithS3(t *testing.T) {
+func TestConfigureGenesisBuilder_WithS3(t *testing.T) {
 	node := peerSyncNode()
-	params := configureGenesisParams(node)
-	if params == nil {
-		t.Fatal("expected non-nil params when Genesis.S3 is set")
+	b := configureGenesisBuilder(node)
+	task, ok := b.(sidecar.ConfigureGenesisTask)
+	if !ok {
+		t.Fatalf("expected ConfigureGenesisTask, got %T", b)
 	}
-	if params["uri"] != "s3://sei-testnet-genesis-config/atlantic-2/genesis.json" {
-		t.Errorf("uri = %v, want %q", params["uri"], "s3://sei-testnet-genesis-config/atlantic-2/genesis.json")
+	if task.URI != "s3://sei-testnet-genesis-config/atlantic-2/genesis.json" {
+		t.Errorf("URI = %q, want %q", task.URI, "s3://sei-testnet-genesis-config/atlantic-2/genesis.json")
 	}
-	if params["region"] != "us-east-2" {
-		t.Errorf("region = %v, want %q", params["region"], "us-east-2")
+	if task.Region != "us-east-2" {
+		t.Errorf("Region = %q, want %q", task.Region, "us-east-2")
 	}
 }
 
-func TestConfigureGenesisParams_WithoutS3(t *testing.T) {
+func TestConfigureGenesisBuilder_WithoutS3(t *testing.T) {
 	node := snapshotNode()
-	params := configureGenesisParams(node)
-	if params != nil {
-		t.Errorf("expected nil params when Genesis.S3 is nil, got %v", params)
+	b := configureGenesisBuilder(node)
+	task, ok := b.(sidecar.ConfigureGenesisTask)
+	if !ok {
+		t.Fatalf("expected ConfigureGenesisTask, got %T", b)
+	}
+	if task.URI != "" || task.Region != "" {
+		t.Errorf("expected empty fields when Genesis.S3 is nil, got URI=%q Region=%q", task.URI, task.Region)
 	}
 }
 
@@ -923,74 +926,73 @@ func TestNeedsStateSync_FreshWithSnapshot(t *testing.T) {
 	}
 }
 
-func TestConfigPatchParams_ReturnsNil(t *testing.T) {
+func TestConfigPatchBuilder_NoSnapshotGeneration(t *testing.T) {
 	for _, node := range []*seiv1alpha1.SeiNode{snapshotNode(), peerSyncNode(), genesisNode()} {
-		params := configPatchParams(node)
-		if params != nil {
-			t.Errorf("configPatchParams() = %v, want nil", params)
+		b := configPatchBuilder(node)
+		task, ok := b.(sidecar.ConfigPatchTask)
+		if !ok {
+			t.Fatalf("expected ConfigPatchTask, got %T", b)
+		}
+		if task.SnapshotGeneration != nil {
+			t.Errorf("expected nil SnapshotGeneration, got %+v", task.SnapshotGeneration)
 		}
 	}
 }
 
-func TestConfigPatchParams_WithSnapshotGeneration(t *testing.T) {
+func TestConfigPatchBuilder_WithSnapshotGeneration(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{
 		Interval:   2000,
 		KeepRecent: 10,
 	}
 
-	params := configPatchParams(node)
-	if params == nil {
-		t.Fatal("expected non-nil params with SnapshotGeneration configured")
-	}
-
-	sg, ok := params["snapshotGeneration"].(map[string]any)
+	b := configPatchBuilder(node)
+	task, ok := b.(sidecar.ConfigPatchTask)
 	if !ok {
-		t.Fatalf("snapshotGeneration is not map[string]any: %T", params["snapshotGeneration"])
+		t.Fatalf("expected ConfigPatchTask, got %T", b)
 	}
-	if sg["interval"] != int64(2000) {
-		t.Errorf("interval = %v, want 2000", sg["interval"])
+	if task.SnapshotGeneration == nil {
+		t.Fatal("expected non-nil SnapshotGeneration")
 	}
-	if sg["keepRecent"] != int32(10) {
-		t.Errorf("keepRecent = %v, want 10", sg["keepRecent"])
+	if task.SnapshotGeneration.Interval != 2000 {
+		t.Errorf("Interval = %v, want 2000", task.SnapshotGeneration.Interval)
+	}
+	if task.SnapshotGeneration.KeepRecent != 10 {
+		t.Errorf("KeepRecent = %v, want 10", task.SnapshotGeneration.KeepRecent)
 	}
 }
 
-func TestConfigPatchParams_SnapshotGenerationDefaultKeepRecent(t *testing.T) {
+func TestConfigPatchBuilder_SnapshotGenerationDefaultKeepRecent(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{
 		Interval: 1000,
 	}
 
-	params := configPatchParams(node)
-	if params == nil {
-		t.Fatal("expected non-nil params")
-	}
-
-	sg := params["snapshotGeneration"].(map[string]any)
-	if sg["keepRecent"] != int32(5) {
-		t.Errorf("keepRecent = %v, want 5 (default)", sg["keepRecent"])
+	b := configPatchBuilder(node)
+	task := b.(sidecar.ConfigPatchTask)
+	if task.SnapshotGeneration.KeepRecent != 5 {
+		t.Errorf("KeepRecent = %v, want 5 (default)", task.SnapshotGeneration.KeepRecent)
 	}
 }
 
-func TestSnapshotUploadParams_NoSnapshotGeneration(t *testing.T) {
+func TestSnapshotUploadTask_NoSnapshotGeneration(t *testing.T) {
 	node := snapshotNode()
-	if params := snapshotUploadParams(node); params != nil {
-		t.Errorf("expected nil, got %v", params)
+	if task := snapshotUploadTask(node); task != nil {
+		t.Errorf("expected nil, got %v", task)
 	}
 }
 
-func TestSnapshotUploadParams_NoDestination(t *testing.T) {
+func TestSnapshotUploadTask_NoDestination(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{
 		Interval: 2000,
 	}
-	if params := snapshotUploadParams(node); params != nil {
-		t.Errorf("expected nil, got %v", params)
+	if task := snapshotUploadTask(node); task != nil {
+		t.Errorf("expected nil, got %v", task)
 	}
 }
 
-func TestSnapshotUploadParams_WithS3Destination(t *testing.T) {
+func TestSnapshotUploadTask_WithS3Destination(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{
 		Interval: 2000,
@@ -1003,18 +1005,22 @@ func TestSnapshotUploadParams_WithS3Destination(t *testing.T) {
 		},
 	}
 
-	params := snapshotUploadParams(node)
-	if params == nil {
-		t.Fatal("expected non-nil params")
+	b := snapshotUploadTask(node)
+	if b == nil {
+		t.Fatal("expected non-nil task")
 	}
-	if params["bucket"] != "atlantic-2-snapshots" {
-		t.Errorf("bucket = %v, want %q", params["bucket"], "atlantic-2-snapshots")
+	task, ok := b.(sidecar.SnapshotUploadTask)
+	if !ok {
+		t.Fatalf("expected SnapshotUploadTask, got %T", b)
 	}
-	if params["prefix"] != "state-sync" {
-		t.Errorf("prefix = %v, want %q", params["prefix"], "state-sync")
+	if task.Bucket != "atlantic-2-snapshots" {
+		t.Errorf("Bucket = %q, want %q", task.Bucket, "atlantic-2-snapshots")
 	}
-	if params["region"] != "eu-central-1" {
-		t.Errorf("region = %v, want %q", params["region"], "eu-central-1")
+	if task.Prefix != "state-sync" {
+		t.Errorf("Prefix = %q, want %q", task.Prefix, "state-sync")
+	}
+	if task.Region != "eu-central-1" {
+		t.Errorf("Region = %q, want %q", task.Region, "eu-central-1")
 	}
 }
 
@@ -1037,7 +1043,7 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 func TestReconcileRuntimeTasks_SubmitsSnapshotUpload(t *testing.T) {
 	node := snapshotterNode()
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarReady},
+		status: &sidecar.StatusResponse{Status: sidecar.Ready},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -1051,11 +1057,12 @@ func TestReconcileRuntimeTasks_SubmitsSnapshotUpload(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].Type != taskSnapshotUpload {
-		t.Errorf("task type = %q, want %q", mock.submitted[0].Type, taskSnapshotUpload)
+	if mock.submitted[0].TaskType() != taskSnapshotUpload {
+		t.Errorf("task type = %q, want %q", mock.submitted[0].TaskType(), taskSnapshotUpload)
 	}
-	if mock.submitted[0].Params["bucket"] != "atlantic-2-snapshots" {
-		t.Errorf("bucket = %v, want %q", mock.submitted[0].Params["bucket"], "atlantic-2-snapshots")
+	req := mock.submitted[0].ToTaskRequest()
+	if req.Params == nil || (*req.Params)["bucket"] != "atlantic-2-snapshots" {
+		t.Errorf("bucket = %v, want %q", (*req.Params)["bucket"], "atlantic-2-snapshots")
 	}
 }
 
@@ -1065,7 +1072,7 @@ func TestReconcileRuntimeTasks_UpgradesTakePriorityOverUpload(t *testing.T) {
 		{Height: 500000, Image: testUpgradeImageV2},
 	}
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarReady},
+		status: &sidecar.StatusResponse{Status: sidecar.Ready},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -1076,8 +1083,8 @@ func TestReconcileRuntimeTasks_UpgradesTakePriorityOverUpload(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].Type != taskScheduleUpgrade {
-		t.Errorf("task type = %q, want %q (upgrades should take priority)", mock.submitted[0].Type, taskScheduleUpgrade)
+	if mock.submitted[0].TaskType() != taskScheduleUpgrade {
+		t.Errorf("task type = %q, want %q (upgrades should take priority)", mock.submitted[0].TaskType(), taskScheduleUpgrade)
 	}
 }
 
@@ -1087,7 +1094,7 @@ func TestReconcileRuntimeTasks_NoDestination_NoUploadSubmitted(t *testing.T) {
 		Interval: 2000,
 	}
 	mock := &mockSidecarClient{
-		status: &StatusResponse{Status: sidecarReady},
+		status: &sidecar.StatusResponse{Status: sidecar.Ready},
 	}
 	r, _ := newProgressionReconciler(t, mock, node)
 
