@@ -1,4 +1,5 @@
 IMG ?= sei-node-controller:latest
+GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null || echo $(HOME)/go/bin/golangci-lint)
 
 .PHONY: build test lint manifests generate ci docker-build docker-push
 
@@ -9,7 +10,7 @@ test: ## Run tests.
 	go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 lint: ## Run golangci-lint.
-	golangci-lint run
+	$(GOLANGCI_LINT) run
 
 manifests: ## Generate CRD and RBAC manifests.
 	controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases

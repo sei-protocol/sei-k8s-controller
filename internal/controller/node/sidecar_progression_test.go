@@ -17,8 +17,6 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-node-controller/api/v1alpha1"
 )
 
-const testUpgradeImageV2 = "sei:v2"
-
 func strPtr(s string) *string { return &s }
 
 type mockSidecarClient struct {
@@ -645,132 +643,7 @@ func TestReconcileSidecarProgression_TaskRunning_Requeues(t *testing.T) {
 	}
 }
 
-func TestNextPendingUpgrade_ReturnsLowestHeight(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 300, Image: "sei:v3"},
-		{Height: 100, Image: "sei:v1"},
-		{Height: 200, Image: testUpgradeImageV2},
-	}
-
-	got := nextPendingUpgrade(node)
-	if got == nil {
-		t.Fatal("expected a pending upgrade, got nil")
-	}
-	if got.Height != 100 {
-		t.Errorf("Height = %d, want 100", got.Height)
-	}
-	if got.Image != "sei:v1" {
-		t.Errorf("Image = %q, want %q", got.Image, "sei:v1")
-	}
-}
-
-func TestNextPendingUpgrade_SkipsAlreadySubmitted(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 100, Image: "sei:v1"},
-		{Height: 200, Image: testUpgradeImageV2},
-		{Height: 300, Image: "sei:v3"},
-	}
-	node.Status.SubmittedUpgradeHeights = []int64{100, 200}
-
-	got := nextPendingUpgrade(node)
-	if got == nil {
-		t.Fatal("expected a pending upgrade, got nil")
-	}
-	if got.Height != 300 {
-		t.Errorf("Height = %d, want 300", got.Height)
-	}
-}
-
-func TestNextPendingUpgrade_AllSubmitted_ReturnsNil(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 100, Image: "sei:v1"},
-	}
-	node.Status.SubmittedUpgradeHeights = []int64{100}
-
-	got := nextPendingUpgrade(node)
-	if got != nil {
-		t.Errorf("expected nil, got upgrade at height %d", got.Height)
-	}
-}
-
-func TestNextPendingUpgrade_NoUpgrades_ReturnsNil(t *testing.T) {
-	node := snapshotNode()
-	got := nextPendingUpgrade(node)
-	if got != nil {
-		t.Errorf("expected nil, got upgrade at height %d", got.Height)
-	}
-}
-
-func TestReconcileRuntimeTasks_SubmitsScheduleUpgrade(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 500000, Image: testUpgradeImageV2},
-	}
-
-	mock := &mockSidecarClient{
-		status: &sidecar.StatusResponse{Status: sidecar.Ready},
-	}
-	r, c := newProgressionReconciler(t, mock, node)
-
-	result, err := r.reconcileRuntimeTasks(context.Background(), node, mock)
-	if err != nil {
-		t.Fatalf("reconcileRuntimeTasks() error = %v", err)
-	}
-	if result.RequeueAfter != statusPollInterval {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, statusPollInterval)
-	}
-	if len(mock.submitted) != 1 {
-		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
-	}
-	if mock.submitted[0].TaskType() != taskScheduleUpgrade {
-		t.Errorf("task type = %q, want %q", mock.submitted[0].TaskType(), taskScheduleUpgrade)
-	}
-	req := mock.submitted[0].ToTaskRequest()
-	if req.Params == nil || (*req.Params)["height"] != int64(500000) {
-		t.Errorf("height = %v, want 500000", (*req.Params)["height"])
-	}
-	if req.Params == nil || (*req.Params)["image"] != testUpgradeImageV2 {
-		t.Errorf("image = %v, want %q", (*req.Params)["image"], testUpgradeImageV2)
-	}
-
-	// Verify the height was tracked in status.
-	updated := &seiv1alpha1.SeiNode{}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, updated); err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if len(updated.Status.SubmittedUpgradeHeights) != 1 || updated.Status.SubmittedUpgradeHeights[0] != 500000 {
-		t.Errorf("SubmittedUpgradeHeights = %v, want [500000]", updated.Status.SubmittedUpgradeHeights)
-	}
-}
-
-func TestReconcileRuntimeTasks_DuplicatePrevention(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 500000, Image: testUpgradeImageV2},
-	}
-	node.Status.SubmittedUpgradeHeights = []int64{500000}
-
-	mock := &mockSidecarClient{
-		status: &sidecar.StatusResponse{Status: sidecar.Ready},
-	}
-	r, _ := newProgressionReconciler(t, mock, node)
-
-	result, err := r.reconcileRuntimeTasks(context.Background(), node, mock)
-	if err != nil {
-		t.Fatalf("reconcileRuntimeTasks() error = %v", err)
-	}
-	if result.RequeueAfter != statusPollInterval {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, statusPollInterval)
-	}
-	if len(mock.submitted) != 0 {
-		t.Errorf("expected no tasks submitted (duplicate), got %d", len(mock.submitted))
-	}
-}
-
-func TestReconcileRuntimeTasks_NoUpgrades_RequeuesAtSteadyState(t *testing.T) {
+func TestReconcileRuntimeTasks_NoTasks_RequeuesAtSteadyState(t *testing.T) {
 	node := snapshotNode()
 	mock := &mockSidecarClient{
 		status: &sidecar.StatusResponse{Status: sidecar.Ready},
@@ -790,10 +663,7 @@ func TestReconcileRuntimeTasks_NoUpgrades_RequeuesAtSteadyState(t *testing.T) {
 }
 
 func TestReconcileRuntimeTasks_SubmitError_RequeuesGracefully(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 500000, Image: testUpgradeImageV2},
-	}
+	node := snapshotterNode()
 
 	mock := &mockSidecarClient{
 		status:    &sidecar.StatusResponse{Status: sidecar.Ready},
@@ -807,32 +677,6 @@ func TestReconcileRuntimeTasks_SubmitError_RequeuesGracefully(t *testing.T) {
 	}
 	if result.RequeueAfter != statusPollInterval {
 		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, statusPollInterval)
-	}
-}
-
-func TestReconcileRuntimeTasks_LowestHeightFirst(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 300, Image: "sei:v3"},
-		{Height: 100, Image: "sei:v1"},
-		{Height: 200, Image: testUpgradeImageV2},
-	}
-
-	mock := &mockSidecarClient{
-		status: &sidecar.StatusResponse{Status: sidecar.Ready},
-	}
-	r, _ := newProgressionReconciler(t, mock, node)
-
-	_, err := r.reconcileRuntimeTasks(context.Background(), node, mock)
-	if err != nil {
-		t.Fatalf("reconcileRuntimeTasks() error = %v", err)
-	}
-	if len(mock.submitted) != 1 {
-		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
-	}
-	req := mock.submitted[0].ToTaskRequest()
-	if req.Params == nil || (*req.Params)["height"] != int64(100) {
-		t.Errorf("submitted height = %v, want 100 (lowest first)", (*req.Params)["height"])
 	}
 }
 
@@ -1063,28 +907,6 @@ func TestReconcileRuntimeTasks_SubmitsSnapshotUpload(t *testing.T) {
 	req := mock.submitted[0].ToTaskRequest()
 	if req.Params == nil || (*req.Params)["bucket"] != "atlantic-2-snapshots" {
 		t.Errorf("bucket = %v, want %q", (*req.Params)["bucket"], "atlantic-2-snapshots")
-	}
-}
-
-func TestReconcileRuntimeTasks_UpgradesTakePriorityOverUpload(t *testing.T) {
-	node := snapshotterNode()
-	node.Spec.ScheduledUpgrades = []seiv1alpha1.ScheduledUpgrade{
-		{Height: 500000, Image: testUpgradeImageV2},
-	}
-	mock := &mockSidecarClient{
-		status: &sidecar.StatusResponse{Status: sidecar.Ready},
-	}
-	r, _ := newProgressionReconciler(t, mock, node)
-
-	_, err := r.reconcileRuntimeTasks(context.Background(), node, mock)
-	if err != nil {
-		t.Fatalf("reconcileRuntimeTasks() error = %v", err)
-	}
-	if len(mock.submitted) != 1 {
-		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
-	}
-	if mock.submitted[0].TaskType() != taskScheduleUpgrade {
-		t.Errorf("task type = %q, want %q (upgrades should take priority)", mock.submitted[0].TaskType(), taskScheduleUpgrade)
 	}
 }
 

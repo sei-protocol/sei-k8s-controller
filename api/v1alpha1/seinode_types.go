@@ -49,12 +49,6 @@ type SeiNodeSpec struct {
 	// enable archival pruning and periodic snapshot creation.
 	// +optional
 	SnapshotGeneration *SnapshotGenerationConfig `json:"snapshotGeneration,omitempty"`
-
-	// ScheduledUpgrades is a list of pending binary upgrades ordered by block height.
-	// The controller issues schedule-upgrade tasks to the sidecar for each entry.
-	// Entries are pruned after the controller successfully updates the StatefulSet image.
-	// +optional
-	ScheduledUpgrades []ScheduledUpgrade `json:"scheduledUpgrades,omitempty"`
 }
 
 // SnapshotGenerationConfig configures a node to produce Tendermint state-sync
@@ -186,16 +180,6 @@ type SidecarConfig struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
-// ScheduledUpgrade declares a binary upgrade at a specific block height.
-type ScheduledUpgrade struct {
-	// Height is the block height at which to apply the upgrade.
-	Height int64 `json:"height"`
-
-	// Image is the new seid container image after the upgrade.
-	// +kubebuilder:validation:MinLength=1
-	Image string `json:"image"`
-}
-
 // PeerConfig configures how a node discovers and connects to peers.
 type PeerConfig struct {
 	// Sources is an ordered list of peer sources. The sidecar iterates
@@ -262,11 +246,6 @@ type SeiNodeStatus struct {
 	// SidecarLastTaskResult is "success" or "error" for the last completed task, written by the controller.
 	// +optional
 	SidecarLastTaskResult string `json:"sidecarLastTaskResult,omitempty"`
-
-	// SubmittedUpgradeHeights tracks which scheduled upgrade heights have been
-	// submitted to the sidecar, preventing duplicate submissions.
-	// +optional
-	SubmittedUpgradeHeights []int64 `json:"submittedUpgradeHeights,omitempty"`
 }
 
 // +kubebuilder:object:root=true

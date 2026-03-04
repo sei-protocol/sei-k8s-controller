@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"time"
 
 	sidecar "github.com/sei-protocol/sei-sidecar-client-go"
@@ -25,7 +24,6 @@ const (
 	taskConfigureStateSync = sidecar.TaskTypeConfigureStateSync
 	taskConfigPatch        = sidecar.TaskTypeConfigPatch
 	taskMarkReady          = sidecar.TaskTypeMarkReady
-	taskScheduleUpgrade    = "schedule-upgrade"
 	taskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
 	taskUpdatePeers        = sidecar.TaskTypeUpdatePeers
 
@@ -190,24 +188,9 @@ func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, nod
 }
 
 // reconcileRuntimeTasks handles post-bootstrap runtime tasks.
-// Checks for unsubmitted scheduled upgrades (lowest height first) and
-// issues schedule-upgrade tasks to the sidecar. When a snapshot destination
-// is configured, submits snapshot-upload tasks — the sidecar is idempotent
-// and no-ops when there is no new snapshot to upload.
+// When a snapshot destination is configured, submits snapshot-upload tasks --
+// the sidecar is idempotent and no-ops when there is no new snapshot to upload.
 func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient) (ctrl.Result, error) {
-	if upgrade := nextPendingUpgrade(node); upgrade != nil {
-		if err := sc.SubmitTask(ctx, scheduleUpgradeTask{
-			Height: upgrade.Height,
-			Image:  upgrade.Image,
-		}); err != nil {
-			return ctrl.Result{RequeueAfter: statusPollInterval}, nil
-		}
-		if err := r.trackSubmittedUpgrade(ctx, node, upgrade.Height); err != nil {
-			return ctrl.Result{}, fmt.Errorf("tracking submitted upgrade: %w", err)
-		}
-		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
-	}
-
 	if task := snapshotUploadTask(node); task != nil {
 		if err := sc.SubmitTask(ctx, task); err != nil {
 			log.FromContext(ctx).Info("snapshot-upload submission failed, will retry", "error", err)
@@ -216,38 +199,6 @@ func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *sei
 	}
 
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
-}
-
-// nextPendingUpgrade returns the lowest-height scheduled upgrade that has not
-// yet been submitted to the sidecar. Returns nil when all upgrades are tracked.
-func nextPendingUpgrade(node *seiv1alpha1.SeiNode) *seiv1alpha1.ScheduledUpgrade {
-	submitted := make(map[int64]bool, len(node.Status.SubmittedUpgradeHeights))
-	for _, h := range node.Status.SubmittedUpgradeHeights {
-		submitted[h] = true
-	}
-
-	// Collect unsubmitted upgrades and return the one with the lowest height.
-	var candidates []seiv1alpha1.ScheduledUpgrade
-	for _, u := range node.Spec.ScheduledUpgrades {
-		if !submitted[u.Height] {
-			candidates = append(candidates, u)
-		}
-	}
-	if len(candidates) == 0 {
-		return nil
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Height < candidates[j].Height
-	})
-	return &candidates[0]
-}
-
-// trackSubmittedUpgrade appends the height to status.submittedUpgradeHeights
-// to prevent duplicate submissions on subsequent reconciles.
-func (r *SeiNodeReconciler) trackSubmittedUpgrade(ctx context.Context, node *seiv1alpha1.SeiNode, height int64) error {
-	patch := client.MergeFrom(node.DeepCopy())
-	node.Status.SubmittedUpgradeHeights = append(node.Status.SubmittedUpgradeHeights, height)
-	return r.Status().Patch(ctx, node, patch)
 }
 
 // getRetryState returns the retry info for a specific node+task combination.
@@ -463,23 +414,6 @@ func configPatchBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 			KeepRecent: keepRecent,
 		},
 	}
-}
-
-// scheduleUpgradeTask is a controller-only task type that doesn't exist in
-// the sidecar client package (upgrade handling is controller-specific).
-type scheduleUpgradeTask struct {
-	Height int64
-	Image  string
-}
-
-func (t scheduleUpgradeTask) TaskType() string { return taskScheduleUpgrade }
-func (t scheduleUpgradeTask) Validate() error  { return nil }
-func (t scheduleUpgradeTask) ToTaskRequest() sidecar.TaskRequest {
-	p := map[string]interface{}{
-		"height": t.Height,
-		"image":  t.Image,
-	}
-	return sidecar.TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
 // snapshotUploadTask builds a typed SnapshotUploadTask from the node spec.
