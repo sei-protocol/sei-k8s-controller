@@ -1,4 +1,4 @@
-# sei-node-controller
+# sei-k8s-controller
 
 Kubernetes operator for managing Sei blockchain nodes. Single binary, two controllers: `SeiNodePool` (genesis network orchestration) and `SeiNode` (individual node lifecycle).
 
@@ -22,7 +22,7 @@ Always use the available subagents for relevant work:
 - Follow idiomatic Go. No unnecessary abstractions — three similar lines are better than a premature helper.
 - Use `controller-runtime` patterns: every controller exports a reconciler struct with `SetupWithManager(mgr)`.
 - All code must pass `golangci-lint` (config in `.golangci.yml`). Fix lint issues, don't suppress them.
-- Imports must be grouped: stdlib, external, then `github.com/sei-protocol/sei-node-controller` (enforced by goimports).
+- Imports must be grouped: stdlib, external, then `github.com/sei-protocol/sei-k8s-controller` (enforced by goimports).
 - No `panic` in controller code. Return errors and let the reconciler retry.
 - Keep reconcile loops idempotent — every reconcile should converge toward desired state regardless of current state.
 

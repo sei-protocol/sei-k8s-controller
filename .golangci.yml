@@ -56,7 +56,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/sei-protocol/sei-node-controller
+        - github.com/sei-protocol/sei-k8s-controller
   exclusions:
     generated: lax
     paths:

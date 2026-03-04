@@ -1,4 +1,4 @@
-module github.com/sei-protocol/sei-node-controller
+module github.com/sei-protocol/sei-k8s-controller
 
 go 1.25.6
 

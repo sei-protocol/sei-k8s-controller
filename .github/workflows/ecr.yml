@@ -35,6 +35,6 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64
-          tags: ${{ steps.ecr-login.outputs.registry }}/sei/sei-node-controller:${{ inputs.tag || github.sha }}
+          tags: ${{ steps.ecr-login.outputs.registry }}/sei/sei-k8s-controller:${{ inputs.tag || github.sha }}
           cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max

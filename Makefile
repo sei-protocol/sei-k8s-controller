@@ -1,4 +1,4 @@
-IMG ?= sei-node-controller:latest
+IMG ?= sei-k8s-controller:latest
 GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null || echo $(HOME)/go/bin/golangci-lint)
 
 .PHONY: build test lint manifests generate ci docker-build docker-push

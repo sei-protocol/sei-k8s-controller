@@ -3,7 +3,7 @@ package nodepool
 import (
 	"fmt"
 
-	seiv1alpha1 "github.com/sei-protocol/sei-node-controller/api/v1alpha1"
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 const (

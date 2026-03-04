@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
-	seiv1alpha1 "github.com/sei-protocol/sei-node-controller/api/v1alpha1"
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 func generateNodeStatefulSet(node *seiv1alpha1.SeiNode) *appsv1.StatefulSet {

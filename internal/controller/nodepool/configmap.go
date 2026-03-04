@@ -4,7 +4,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	seiv1alpha1 "github.com/sei-protocol/sei-node-controller/api/v1alpha1"
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 func genesisScriptConfigMapName(sn *seiv1alpha1.SeiNodePool) string {
