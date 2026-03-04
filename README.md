@@ -1,6 +1,6 @@
-# sei-node-controller
+# sei-k8s-controller
 
-A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) blockchain nodes. It defines two CRDs — `SeiNodePool` and `SeiNode` — under the `sei.io/v1alpha1` API group.
+A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) blockchain infrastructure. It defines two CRDs — `SeiNodePool` and `SeiNode` — under the `sei.io/v1alpha1` API group.
 
 ## Overview
 
