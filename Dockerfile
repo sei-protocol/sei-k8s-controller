@@ -5,7 +5,9 @@ ARG TARGETARCH
 WORKDIR /workspace
 COPY go.mod go.mod
 COPY go.sum go.sum
-RUN go mod download
+RUN --mount=type=secret,id=github_token \
+    git config --global url."https://$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/" && \
+    go mod download
 
 COPY . .
 

@@ -38,3 +38,5 @@ jobs:
           tags: ${{ steps.ecr-login.outputs.registry }}/sei/sei-node-controller:${{ inputs.tag || github.sha }}
           cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
+          secrets: |
+            github_token=${{ secrets.SIDECAR_CLIENT_READ_ONLY_PRIVATE_TOKEN }}

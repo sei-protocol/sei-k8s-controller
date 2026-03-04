@@ -14,6 +14,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Configure private Go modules
+        run: git config --global url."https://${{ secrets.SIDECAR_CLIENT_READ_ONLY_PRIVATE_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        env:
+          GOPRIVATE: github.com/sei-protocol/*
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.8.0
@@ -25,4 +29,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Configure private Go modules
+        run: git config --global url."https://${{ secrets.SIDECAR_CLIENT_READ_ONLY_PRIVATE_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        env:
+          GOPRIVATE: github.com/sei-protocol/*
       - run: make test
