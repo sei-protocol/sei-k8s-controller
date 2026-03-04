@@ -1,0 +1,52 @@
+# SeiNode — Snapshotter
+#
+# Runs a full node that produces Tendermint state-sync snapshots and uploads
+# them to S3.  The sidecar handles genesis download, peer discovery, config
+# patching for archival pruning, and periodic snapshot uploads.
+#
+# Typical deployment: one per chain / region to keep a fresh snapshot archive
+# that peer-sync nodes can restore from.
+apiVersion: sei.io/v1alpha1
+kind: SeiNode
+metadata:
+  name: atlantic-2-snapshotter
+  namespace: default
+spec:
+  chainId: atlantic-2
+  image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:latest
+
+  entrypoint:
+    command: ["seid"]
+    args: ["start", "--home", "/sei"]
+
+  genesis:
+    chainId: atlantic-2
+    s3:
+      uri: s3://sei-testnet-genesis-config/atlantic-2/genesis.json
+      region: us-east-2
+
+  # Discover peers via EC2 instance tags in the same region.
+  peers:
+    sources:
+      - ec2Tags:
+          region: eu-central-1
+          tags:
+            ChainIdentifier: atlantic-2
+            Component: snapshotter
+
+  storage:
+    retainOnDelete: true
+
+  sidecar:
+    image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei-sidecar:latest
+
+  # Produce a snapshot every 2000 blocks, keep the 5 most recent on disk,
+  # and upload each one to the S3 bucket under the state-sync/ prefix.
+  snapshotGeneration:
+    interval: 2000
+    keepRecent: 5
+    destination:
+      s3:
+        bucket: atlantic-2-snapshots
+        prefix: state-sync/
+        region: eu-central-1
