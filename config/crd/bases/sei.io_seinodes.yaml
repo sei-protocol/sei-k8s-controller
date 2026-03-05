@@ -193,7 +193,7 @@ spec:
                   image:
                     description: |-
                       Image overrides the sidecar container image. When empty the controller
-                      uses the default seictl image (ghcr.io/sei-protocol/seictl:latest).
+                      uses the default seictl image (ghcr.io/sei-protocol/seictl:main).
                     type: string
                   port:
                     default: 7777
