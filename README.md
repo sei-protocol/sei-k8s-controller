@@ -4,14 +4,15 @@ A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) b
 
 ## Overview
 
-`SeiNodePool` orchestrates multi-node genesis networks from scratch: it runs a genesis ceremony, distributes validator configs to per-node volumes, then creates individual `SeiNode` resources. `SeiNode` manages a single Sei node — its PVC, StatefulSet, headless Service, and optional sidecar-driven bootstrap.
+`SeiNodePool` orchestrates multi-node genesis networks from scratch: it runs a genesis ceremony, distributes validator configs to per-node volumes, then creates individual `SeiNode` resources. `SeiNode` manages a single Sei node — its PVC, StatefulSet, headless Service, and sidecar-driven bootstrap.
 
 ### Key design decisions
 
 - **One StatefulSet per node** — each `SeiNode` gets its own single-replica StatefulSet rather than pooling nodes into a single StatefulSet. The pool abstraction exists only for genesis orchestration.
 - **EFS for genesis sharing** — `SeiNodePool` uses a `ReadWriteMany` EFS volume so the genesis ceremony Job and per-node prep Jobs can share data concurrently. Individual node data PVCs use gp3 (`ReadWriteOnce`).
 - **Dedicated node scheduling** — pods require `karpenter.sh/nodepool=sei-node` and tolerate `sei.io/workload=sei-node:NoSchedule`, keeping blockchain workloads off general-purpose nodes.
-- **Sidecar as restartable init container** — when configured, a sidecar runs for the pod's entire lifetime via Kubernetes native sidecar support (`restartPolicy: Always` on an init container), driving bootstrap tasks before seid starts.
+- **Sidecar architecture** — every node runs a [seictl](https://github.com/sei-protocol/seictl) sidecar as a restartable init container (`restartPolicy: Always`) that drives bootstrap tasks before seid starts and handles runtime operations afterward. The default sidecar image is `ghcr.io/sei-protocol/seictl:latest`.
+- **InitPlan model** — bootstrap is driven by a `TaskPlan` stored in `status.initPlan`. The controller builds a task sequence based on the node's spec, submits tasks to the sidecar one at a time, and advances through the plan. A single task failure marks the entire plan as Failed with no retries.
 
 ## CRDs
 
@@ -53,6 +54,7 @@ kind: SeiNode
 metadata:
   name: mainnet-0
 spec:
+  chainId: pacific-1
   image: sei-protocol/seid:v5.0.0
   genesis:
     chainId: pacific-1
@@ -64,30 +66,40 @@ spec:
     region: us-east-2
   peers:
     sources:
-      - type: ec2Tags
+      - ec2Tags:
+          region: us-east-2
+          tags:
+            Network: pacific-1
+  snapshotGeneration:
+    interval: 2000
+    keepRecent: 5
+    destination:
+      s3:
+        bucket: sei-snapshots
+        prefix: state-sync/
         region: us-east-2
-        tags:
-          Network: pacific-1
+```
+
+The `sidecar` field is optional — when omitted the controller uses the default seictl image (`ghcr.io/sei-protocol/seictl:latest`). To override:
+
+```yaml
   sidecar:
-    image: sei-protocol/sei-sidecar:latest
-  scheduledUpgrades:
-    - height: 100000
-      image: sei-protocol/seid:v6.0.0
+    image: ghcr.io/sei-protocol/seictl:v1.2.3
+    port: 7777
 ```
 
 **Bootstrap modes** (determined by spec):
 
 | Mode | Condition | Task sequence |
 |------|-----------|---------------|
-| Snapshot | `spec.snapshot` set | `snapshot-restore` > `discover-peers` > `config-patch` > `mark-ready` |
+| Snapshot | `spec.snapshot` set | `snapshot-restore` > `config-patch` > `mark-ready` |
 | Genesis PVC | `spec.genesis.pvc` set | `config-patch` > `mark-ready` |
-| Peer sync | Default | `discover-peers` > `config-patch` > `mark-ready` |
+| Peer sync | Default | `config-patch` > `mark-ready` |
 
-Additional tasks are inserted dynamically: `configure-genesis` (S3 genesis download), `configure-state-sync` (Tendermint state sync), and `discover-peers` (EC2 tag or static peer discovery).
+Additional tasks are inserted dynamically before `config-patch`: `discover-peers` (when `spec.peers` is set), `configure-genesis` (when `spec.genesis.s3` is set), and `configure-state-sync` (for Tendermint state sync).
 
 **Runtime operations** (after bootstrap):
-- **Scheduled upgrades** — the controller submits `schedule-upgrade` tasks to the sidecar. When the chain halts at the upgrade height, the controller patches the StatefulSet image and Kubernetes restarts the pod with the new binary.
-- **Snapshot generation** — periodic Tendermint snapshots can be uploaded to S3 via `snapshot-upload` tasks.
+- **Snapshot generation** — when `spec.snapshotGeneration` is configured, the sidecar patches `app.toml` for archival pruning and the controller periodically submits `snapshot-upload` tasks to push completed snapshots to S3.
 
 ## Development
 
@@ -101,16 +113,6 @@ make generate    # Regenerate DeepCopy implementations
 
 ## Deployment
 
-The controller is deployed via [Flux CD](https://fluxcd.io). The platform repo contains a Flux `Kustomization` that points at `config/overlays/dev/` and overrides the controller image tag.
+The controller image is built from a multi-stage Dockerfile (Go build + `distroless/static:nonroot` runtime) and pushed to ECR by the `ecr.yml` GitHub Actions workflow on every push to `main`.
 
-```
-config/
-├── crd/           # Generated CRD manifests
-├── manager/       # Controller Deployment + Namespace
-├── rbac/          # ClusterRole, bindings, ServiceAccount
-├── default/       # Base kustomize overlay (crd + rbac + manager)
-└── overlays/
-    └── dev/       # Dev cluster overlay with resource limits
-```
-
-The container image is built from a multi-stage Dockerfile (Go build + `distroless/static:nonroot` runtime) and pushed to ECR by the `ecr.yml` GitHub Actions workflow on every push to `main`.
+CRD manifests are generated into `config/crd/bases/` and consumed by the platform deployment repo, which deploys the controller via [Flux CD](https://fluxcd.io).
