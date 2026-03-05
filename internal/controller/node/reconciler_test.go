@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
-	sidecar "github.com/sei-protocol/sei-sidecar-client-go"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,7 +42,7 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		Client: c,
 		Scheme: s,
 		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) SidecarStatusClient {
-			return &mockSidecarClient{status: &sidecar.StatusResponse{Status: sidecar.Initializing}}
+			return &mockSidecarClient{}
 		},
 	}
 	return r, c

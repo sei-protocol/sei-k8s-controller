@@ -9,7 +9,6 @@ import (
 
 const (
 	ConditionTypeReady       = "Ready"
-	ConditionTypeDegraded    = "Degraded"
 	ConditionTypeProgressing = "Progressing"
 )
 

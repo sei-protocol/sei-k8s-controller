@@ -30,12 +30,6 @@ type SeiNodeReconciler struct {
 	Scheme *runtime.Scheme
 	// BuildSidecarClientFn overrides sidecar client construction for testing.
 	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) SidecarStatusClient
-	// MaxBootstrapRetries overrides the default retry limit (3) for testing.
-	MaxBootstrapRetries int
-	// retryState tracks per-node, per-task retry counts in memory.
-	// Controller-runtime guarantees serial reconciliation per object,
-	// so no mutex is needed.
-	retryState map[types.NamespacedName]map[string]*retryInfo
 }
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete

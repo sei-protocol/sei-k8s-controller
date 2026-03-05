@@ -220,6 +220,55 @@ type StaticPeerSource struct {
 	Addresses []string `json:"addresses"`
 }
 
+// TaskPlanPhase represents the overall state of an initialization plan.
+// +kubebuilder:validation:Enum=Active;Complete;Failed
+type TaskPlanPhase string
+
+const (
+	TaskPlanActive   TaskPlanPhase = "Active"
+	TaskPlanComplete TaskPlanPhase = "Complete"
+	TaskPlanFailed   TaskPlanPhase = "Failed"
+)
+
+// PlannedTaskStatus represents the state of an individual task within a plan.
+// +kubebuilder:validation:Enum=Pending;Submitted;Complete;Failed
+type PlannedTaskStatus string
+
+const (
+	PlannedTaskPending   PlannedTaskStatus = "Pending"
+	PlannedTaskSubmitted PlannedTaskStatus = "Submitted"
+	PlannedTaskComplete  PlannedTaskStatus = "Complete"
+	PlannedTaskFailed    PlannedTaskStatus = "Failed"
+)
+
+// PlannedTask is a single task within a TaskPlan.
+type PlannedTask struct {
+	// Type identifies the sidecar task (e.g. "snapshot-restore", "config-patch").
+	Type string `json:"type"`
+
+	// TaskID is the UUID assigned by the sidecar when the task was submitted.
+	// +optional
+	TaskID string `json:"taskID,omitempty"`
+
+	// Status is the current state of this task.
+	Status PlannedTaskStatus `json:"status"`
+
+	// Error is the error message if the task failed.
+	// +optional
+	Error string `json:"error,omitempty"`
+}
+
+// TaskPlan tracks an ordered sequence of sidecar tasks that the controller
+// executes to initialize a node. It serves as both the execution plan and
+// the historical log of what happened.
+type TaskPlan struct {
+	// Phase is the overall state of the plan.
+	Phase TaskPlanPhase `json:"phase"`
+
+	// Tasks is the ordered list of tasks to execute.
+	Tasks []PlannedTask `json:"tasks"`
+}
+
 // SeiNodeStatus defines the observed state of a SeiNode.
 type SeiNodeStatus struct {
 	// Phase is the high-level lifecycle state.
@@ -231,21 +280,10 @@ type SeiNodeStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// SidecarPhase is the current lifecycle phase of the sidecar, written by the controller.
+	// InitPlan tracks the initialization task sequence for this node.
+	// Built once from the node's bootstrap mode, then reconciled to completion.
 	// +optional
-	SidecarPhase string `json:"sidecarPhase,omitempty"`
-
-	// SidecarCurrentTask is the task currently being executed by the sidecar, written by the controller.
-	// +optional
-	SidecarCurrentTask string `json:"sidecarCurrentTask,omitempty"`
-
-	// SidecarLastTask is the last task that completed execution, written by the controller.
-	// +optional
-	SidecarLastTask string `json:"sidecarLastTask,omitempty"`
-
-	// SidecarLastTaskResult is "success" or "error" for the last completed task, written by the controller.
-	// +optional
-	SidecarLastTaskResult string `json:"sidecarLastTaskResult,omitempty"`
+	InitPlan *TaskPlan `json:"initPlan,omitempty"`
 }
 
 // +kubebuilder:object:root=true
