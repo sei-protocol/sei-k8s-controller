@@ -94,11 +94,7 @@ func (r *SeiNodeReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) Sideca
 	if r.BuildSidecarClientFn != nil {
 		return r.BuildSidecarClientFn(node)
 	}
-	port := node.Spec.Sidecar.Port
-	if port == 0 {
-		port = sidecar.DefaultPort
-	}
-	c, err := sidecar.NewSidecarClientFromPodDNS(node.Name, node.Namespace, port)
+	c, err := sidecar.NewSidecarClientFromPodDNS(node.Name, node.Namespace, sidecarPort(node))
 	if err != nil {
 		return nil
 	}
@@ -231,7 +227,7 @@ func (r *SeiNodeReconciler) pollTask(
 		return ctrl.Result{}, fmt.Errorf("marking task complete: %w", err)
 	}
 
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: 1}, nil
 }
 
 // failTask marks an individual task and the overall plan as Failed.

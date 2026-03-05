@@ -191,8 +191,9 @@ spec:
                   When set, seid-init and snapshot-restore init containers are replaced by the sidecar.
                 properties:
                   image:
-                    description: Image is the sei-sidecar container image.
-                    minLength: 1
+                    description: |-
+                      Image overrides the sidecar container image. When empty the controller
+                      uses the default seictl image (ghcr.io/sei-protocol/seictl:latest).
                     type: string
                   port:
                     default: 7777
@@ -259,8 +260,6 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
-                required:
-                - image
                 type: object
               snapshot:
                 description: |-
@@ -414,6 +413,51 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              initPlan:
+                description: |-
+                  InitPlan tracks the initialization task sequence for this node.
+                  Built once from the node's bootstrap mode, then reconciled to completion.
+                properties:
+                  phase:
+                    description: Phase is the overall state of the plan.
+                    enum:
+                    - Active
+                    - Complete
+                    - Failed
+                    type: string
+                  tasks:
+                    description: Tasks is the ordered list of tasks to execute.
+                    items:
+                      description: PlannedTask is a single task within a TaskPlan.
+                      properties:
+                        error:
+                          description: Error is the error message if the task failed.
+                          type: string
+                        status:
+                          description: Status is the current state of this task.
+                          enum:
+                          - Pending
+                          - Submitted
+                          - Complete
+                          - Failed
+                          type: string
+                        taskID:
+                          description: TaskID is the UUID assigned by the sidecar
+                            when the task was submitted.
+                          type: string
+                        type:
+                          description: Type identifies the sidecar task (e.g. "snapshot-restore",
+                            "config-patch").
+                          type: string
+                      required:
+                      - status
+                      - type
+                      type: object
+                    type: array
+                required:
+                - phase
+                - tasks
+                type: object
               phase:
                 description: Phase is the high-level lifecycle state.
                 enum:
@@ -421,22 +465,6 @@ spec:
                 - Running
                 - Failed
                 - Terminating
-                type: string
-              sidecarCurrentTask:
-                description: SidecarCurrentTask is the task currently being executed
-                  by the sidecar, written by the controller.
-                type: string
-              sidecarLastTask:
-                description: SidecarLastTask is the last task that completed execution,
-                  written by the controller.
-                type: string
-              sidecarLastTaskResult:
-                description: SidecarLastTaskResult is "success" or "error" for the
-                  last completed task, written by the controller.
-                type: string
-              sidecarPhase:
-                description: SidecarPhase is the current lifecycle phase of the sidecar,
-                  written by the controller.
                 type: string
             type: object
         type: object

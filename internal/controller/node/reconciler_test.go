@@ -75,7 +75,7 @@ func TestNodeReconcile_GenesisNode_CreateStatefulSetAndService(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := withSidecar(newGenesisNode("mynet-0", "default"), 7777)
+	node := newGenesisNode("mynet-0", "default")
 	r, c := newNodeReconciler(t, node)
 
 	_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
@@ -96,7 +96,7 @@ func TestNodeReconcile_GenesisNode_NoPVCCreated(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := withSidecar(newGenesisNode("mynet-0", "default"), 7777)
+	node := newGenesisNode("mynet-0", "default")
 	r, c := newNodeReconciler(t, node)
 
 	_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
@@ -111,7 +111,7 @@ func TestNodeReconcile_GenesisNode_AddsFinalizer(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := withSidecar(newGenesisNode("mynet-0", "default"), 7777)
+	node := newGenesisNode("mynet-0", "default")
 	r, c := newNodeReconciler(t, node)
 
 	_, _ = r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
@@ -124,7 +124,7 @@ func TestNodeReconcile_StatefulSet_Idempotent(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := withSidecar(newGenesisNode("mynet-0", "default"), 7777)
+	node := newGenesisNode("mynet-0", "default")
 	r, c := newNodeReconciler(t, node)
 
 	_, _ = r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
@@ -140,7 +140,7 @@ func TestNodeReconcile_SnapshotNode_CreatesPVC(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := withSidecar(newSnapshotNode("snap-0", "default"), 7777)
+	node := newSnapshotNode("snap-0", "default")
 	r, c := newNodeReconciler(t, node)
 
 	_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
@@ -155,7 +155,7 @@ func TestNodeReconcile_SnapshotNode_StatefulSetHasInitContainers(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := withSidecar(newSnapshotNode("snap-0", "default"), 7777)
+	node := newSnapshotNode("snap-0", "default")
 	r, c := newNodeReconciler(t, node)
 
 	_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))

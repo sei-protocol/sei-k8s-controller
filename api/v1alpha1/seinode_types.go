@@ -166,9 +166,10 @@ type SeiNodeStorageConfig struct {
 
 // SidecarConfig configures the sei-sidecar sidecar.
 type SidecarConfig struct {
-	// Image is the sei-sidecar container image.
-	// +kubebuilder:validation:MinLength=1
-	Image string `json:"image"`
+	// Image overrides the sidecar container image. When empty the controller
+	// uses the default seictl image (ghcr.io/sei-protocol/seictl:latest).
+	// +optional
+	Image string `json:"image,omitempty"`
 
 	// Port is the HTTP port the sidecar listens on.
 	// +optional

@@ -7,12 +7,12 @@ import (
 )
 
 const (
-	nodeLabel                  = "sei.io/node"
-	dataDir                    = "/sei"
-	nodeServiceAccount         = "seid-node"
-	defaultStorageSize         = "1000Gi"
-	defaultStorageClass        = ""
-	snapshotSyncContainerImage = "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/snapshot-sync:latest"
+	nodeLabel           = "sei.io/node"
+	dataDir             = "/sei"
+	nodeServiceAccount  = "seid-node"
+	defaultStorageSize  = "1000Gi"
+	defaultStorageClass = ""
+	defaultSidecarImage = "ghcr.io/sei-protocol/seictl:latest"
 )
 
 func resourceLabelsForNode(node *seiv1alpha1.SeiNode) map[string]string {

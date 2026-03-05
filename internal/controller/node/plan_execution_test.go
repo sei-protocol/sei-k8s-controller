@@ -353,7 +353,7 @@ func TestReconcile_PollsSubmittedTask_Completed_AdvancesToNext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if !result.Requeue {
+	if result.RequeueAfter == 0 {
 		t.Error("expected immediate requeue after task completion")
 	}
 
@@ -381,7 +381,7 @@ func TestReconcile_PollsSubmittedTask_Failed_FailsPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if result.RequeueAfter != 0 && !result.Requeue {
+	if result.RequeueAfter != 0 {
 		t.Errorf("expected no requeue on failure, got %v", result)
 	}
 
@@ -434,7 +434,7 @@ func TestReconcile_FailedPlan_NoOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if result.Requeue || result.RequeueAfter != 0 {
+	if result.RequeueAfter != 0 {
 		t.Errorf("expected no requeue for failed plan, got %v", result)
 	}
 	if len(mock.submitted) != 0 {

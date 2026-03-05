@@ -15,6 +15,8 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
+const defaultSidecarPort int32 = 7777
+
 func generateNodeStatefulSet(node *seiv1alpha1.SeiNode) *appsv1.StatefulSet {
 	one := int32(1)
 	labels := resourceLabelsForNode(node)
@@ -70,47 +72,51 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode) corev1.PodSpec {
 		Volumes: []corev1.Volume{dataVolume},
 	}
 
-	if node.Spec.Sidecar != nil {
-		spec.ShareProcessNamespace = ptr.To(true)
-		spec.InitContainers = []corev1.Container{
-			buildSeidInitContainer(node),
-			buildSidecarContainer(node),
-		}
-		spec.Containers = []corev1.Container{buildSidecarMainContainer(node)}
-		return spec
+	spec.ShareProcessNamespace = ptr.To(true)
+	spec.InitContainers = []corev1.Container{
+		buildSeidInitContainer(node),
+		buildSidecarContainer(node),
 	}
-
-	spec.Containers = []corev1.Container{buildNodeMainContainer(node)}
-	if hasSnapshot(node) {
-		spec.InitContainers = []corev1.Container{
-			buildSeidInitContainer(node),
-			buildSnapshotInitContainer(node),
-		}
-	}
+	spec.Containers = []corev1.Container{buildSidecarMainContainer(node)}
 
 	return spec
+}
+
+func sidecarImage(node *seiv1alpha1.SeiNode) string {
+	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Image != "" {
+		return node.Spec.Sidecar.Image
+	}
+	return defaultSidecarImage
+}
+
+func sidecarPort(node *seiv1alpha1.SeiNode) int32 {
+	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
+		return node.Spec.Sidecar.Port
+	}
+	return defaultSidecarPort
 }
 
 // buildSidecarContainer constructs the sei-sidecar as a restartable init
 // container that runs alongside seid for the pod's lifetime.
 func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
+	port := sidecarPort(node)
 	c := corev1.Container{
 		Name:          "sei-sidecar",
-		Image:         node.Spec.Sidecar.Image,
+		Image:         sidecarImage(node),
 		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env: []corev1.EnvVar{
-			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", node.Spec.Sidecar.Port)},
+			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
 			{Name: "SEI_HOME", Value: dataDir},
 		},
 		Ports: []corev1.ContainerPort{
-			{Name: "sidecar", ContainerPort: node.Spec.Sidecar.Port, Protocol: corev1.ProtocolTCP},
+			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
 		},
 	}
-	if node.Spec.Sidecar.Resources != nil {
+	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Resources != nil {
 		c.Resources = *node.Spec.Sidecar.Resources
 	}
 	return c
@@ -163,7 +169,7 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 			`exec 3>&-; `+
 			`echo "sidecar ready, starting seid"; `+
 			`exec %s`,
-		node.Spec.Sidecar.Port, b.String(),
+		sidecarPort(node), b.String(),
 	)
 
 	return []string{"/bin/bash", "-c"}, []string{script}
@@ -224,26 +230,6 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 			"/bin/sh", "-c",
 			fmt.Sprintf("seid init %s --chain-id %s --home %s --overwrite && mkdir -p %s/tmp",
 				node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir),
-		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataDir},
-		},
-	}
-}
-
-func buildSnapshotInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
-	snap := node.Spec.Snapshot
-	bucket, prefix := parseS3URI(snap.Bucket.URI)
-
-	return corev1.Container{
-		Name:    "snapshot-restore",
-		Image:   snapshotSyncContainerImage,
-		Command: []string{"/scripts/snapshot_sync.sh"},
-		Env: []corev1.EnvVar{
-			{Name: "S3_BUCKET", Value: bucket},
-			{Name: "S3_PREFIX", Value: prefix},
-			{Name: "S3_REGION", Value: snap.Region},
-			{Name: "CHAIN_ID", Value: node.Spec.ChainID},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
