@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	sidecar "github.com/sei-protocol/sei-sidecar-client-go"
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"

@@ -1,7 +1,7 @@
 package node
 
 import (
-	sidecar "github.com/sei-protocol/sei-sidecar-client-go"
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )

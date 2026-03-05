@@ -446,6 +446,22 @@ func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeid(t *testing.T
 	g.Expect(seid.Args[0]).To(HaveSuffix("exec seid"))
 }
 
+func TestSidecarMainContainer_NilSidecarConfig_UsesDefaults(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("sc-0", "default")
+	node.Spec.Sidecar = nil
+
+	sts := generateNodeStatefulSet(node)
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+
+	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(int(defaultSidecarPort)))
+	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/7777"))
+
+	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+	g.Expect(sc.Image).To(Equal(defaultSidecarImage))
+	g.Expect(sc.Ports[0].ContainerPort).To(Equal(defaultSidecarPort))
+}
+
 func TestSidecarMainContainer_WaitWrapper_UsesCustomPort(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")

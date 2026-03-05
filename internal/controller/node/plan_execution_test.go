@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	sidecar "github.com/sei-protocol/sei-sidecar-client-go"
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"

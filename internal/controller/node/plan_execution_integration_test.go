@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
-	sidecar "github.com/sei-protocol/sei-sidecar-client-go"
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	"k8s.io/apimachinery/pkg/types"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"

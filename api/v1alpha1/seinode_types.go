@@ -167,7 +167,7 @@ type SeiNodeStorageConfig struct {
 // SidecarConfig configures the sei-sidecar sidecar.
 type SidecarConfig struct {
 	// Image overrides the sidecar container image. When empty the controller
-	// uses the default seictl image (ghcr.io/sei-protocol/seictl:latest).
+	// uses the default seictl image (ghcr.io/sei-protocol/seictl:main).
 	// +optional
 	Image string `json:"image,omitempty"`
 

@@ -133,7 +133,7 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: "/healthz",
-				Port: intstr.FromInt32(node.Spec.Sidecar.Port),
+				Port: intstr.FromInt32(sidecarPort(node)),
 			},
 		},
 		InitialDelaySeconds: 5,
