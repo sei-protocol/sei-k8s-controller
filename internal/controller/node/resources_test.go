@@ -390,7 +390,7 @@ func TestSidecarMainContainer_StartupProbeTargetsHealthz(t *testing.T) {
 	probe := seid.StartupProbe
 	g.Expect(probe).NotTo(BeNil())
 	g.Expect(probe.HTTPGet).NotTo(BeNil())
-	g.Expect(probe.HTTPGet.Path).To(Equal("/healthz"))
+	g.Expect(probe.HTTPGet.Path).To(Equal("/v0/healthz"))
 	g.Expect(probe.HTTPGet.Port.IntValue()).To(Equal(7777))
 	g.Expect(probe.InitialDelaySeconds).To(Equal(int32(5)))
 	g.Expect(probe.PeriodSeconds).To(Equal(int32(5)))
@@ -418,6 +418,7 @@ func TestSidecarMainContainer_WaitWrapper_PollsHealthzBeforeExec(t *testing.T) {
 	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
 	g.Expect(seid.Args).To(HaveLen(1))
 	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/7777"))
+	g.Expect(seid.Args[0]).To(ContainSubstring("/v0/healthz"))
 	g.Expect(seid.Args[0]).To(ContainSubstring("exec seid"))
 }
 

@@ -1,0 +1,38 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNode
+metadata:
+  name: pacific-1-snapshotter
+  namespace: default
+spec:
+  chainId: pacific-1
+  image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:6a57c4d27e472d2072193e9abcbab33c14a0fdbd
+
+  entrypoint:
+    command: ["seid"]
+    args: ["start", "--home", "/sei"]
+
+  genesis:
+    chainId: pacific-1
+    s3:
+      uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
+      region: us-east-2
+
+  peers:
+    sources:
+      - ec2Tags:
+          region: eu-central-1
+          tags:
+            ChainIdentifier: pacific-1
+            Component: snapshotter
+
+  storage:
+    retainOnDelete: true
+
+  snapshotGeneration:
+    interval: 2000
+    keepRecent: 5
+    destination:
+      s3:
+        bucket: sei-node-mvp
+        prefix: snapshot/
+        region: eu-central-1
