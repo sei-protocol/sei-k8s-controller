@@ -83,6 +83,7 @@ func configPatchBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 
 	if node.Spec.Snapshot != nil {
 		configPatch["statesync"] = map[string]any{
+			"enable":             true,
 			"use-local-snapshot": true,
 			"backfill-blocks":    int64(0),
 			"trust-period":       snapshotTrustPeriod,

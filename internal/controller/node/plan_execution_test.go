@@ -559,6 +559,9 @@ func TestConfigPatchBuilder(t *testing.T) {
 		if !ok {
 			t.Fatal("expected statesync section")
 		}
+		if ss["enable"] != true {
+			t.Errorf("enable = %v, want true", ss["enable"])
+		}
 		if ss["use-local-snapshot"] != true {
 			t.Errorf("use-local-snapshot = %v, want true", ss["use-local-snapshot"])
 		}
