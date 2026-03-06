@@ -62,10 +62,9 @@ func TestGenerateSeiNode(t *testing.T) {
 	g.Expect(node.Spec.Entrypoint).NotTo(BeNil())
 	g.Expect(node.Spec.Entrypoint.Command).To(Equal([]string{"seid"}))
 	g.Expect(node.Spec.Entrypoint.Args).To(Equal([]string{"start"}))
-	g.Expect(node.Spec.Genesis.Fresh).To(BeTrue())
 	g.Expect(node.Spec.Genesis.PVC).NotTo(BeNil())
 	g.Expect(node.Spec.Genesis.PVC.DataPVC).To(Equal("data-my-net-1"))
-	g.Expect(node.Spec.Snapshot).To(BeNil())
+	g.Expect(node.Spec.StateSync).To(BeNil())
 }
 
 func TestGenerateSeiNode_RetainOnDeletePropagated(t *testing.T) {

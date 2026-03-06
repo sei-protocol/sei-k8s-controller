@@ -25,11 +25,14 @@ spec:
       uri: s3://sei-testnet-genesis-config/atlantic-2/genesis.json
       region: us-east-2
 
-  # Restore chain state from a snapshot archive in S3.
-  snapshot:
-    region: eu-central-1
-    bucket:
-      uri: s3://atlantic-2-snapshots/state-sync/
+  # State sync from a pre-fetched S3 snapshot.
+  stateSync:
+    trustPeriod: "9999h0m0s"
+    backfillBlocks: 0
+    snapshot:
+      region: eu-central-1
+      bucket:
+        uri: s3://atlantic-2-snapshots/state-sync/
 
   # Discover peers from multiple sources.  The sidecar unions and deduplicates
   # results across all sources before patching config.toml.

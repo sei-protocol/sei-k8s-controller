@@ -213,9 +213,9 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		container.Args = node.Spec.Entrypoint.Args
 	}
 
-	// Snapshot nodes must replay blocks from the snapshot height to the chain tip after
-	// state-sync completes. This can take several hours on a live chain.
-	if hasSnapshot(node) {
+	// State-synced nodes replay blocks from the snapshot/sync height to the chain tip.
+	// This can take several hours on a live chain.
+	if needsStateSync(node) {
 		container.StartupProbe.FailureThreshold = 1800
 	}
 
@@ -312,6 +312,3 @@ func parseS3URI(uri string) (bucket, prefix string) {
 	return bucket, prefix
 }
 
-func hasSnapshot(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.Snapshot != nil
-}

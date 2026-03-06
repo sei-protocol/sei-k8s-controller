@@ -271,7 +271,6 @@ func generateSeiNode(sn *seiv1alpha1.SeiNodePool, ordinal int) *seiv1alpha1.SeiN
 			Entrypoint: &entrypoint,
 			Genesis: seiv1alpha1.GenesisConfiguration{
 				ChainID: sn.Spec.ChainID,
-				Fresh:   true,
 				PVC: &seiv1alpha1.GenesisPVCSource{
 					DataPVC: dataPVCName(sn, ordinal),
 				},

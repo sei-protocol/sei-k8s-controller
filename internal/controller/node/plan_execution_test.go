@@ -112,9 +112,13 @@ func snapshotNode() *seiv1alpha1.SeiNode {
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "atlantic-2"},
-			Snapshot: &seiv1alpha1.SnapshotSource{
-				Region: "us-east-1",
-				Bucket: seiv1alpha1.BucketSnapshot{URI: "s3://my-bucket/snapshots/latest.tar"},
+			StateSync: &seiv1alpha1.StateSyncConfig{
+				Snapshot: &seiv1alpha1.SnapshotSource{
+					Region: "us-east-1",
+					Bucket: seiv1alpha1.BucketSnapshot{URI: "s3://my-bucket/snapshots/latest.tar"},
+				},
+				TrustPeriod:    "9999h0m0s",
+				BackfillBlocks: 0,
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
 		},
@@ -130,6 +134,10 @@ func peerSyncNode() *seiv1alpha1.SeiNode {
 			Genesis: seiv1alpha1.GenesisConfiguration{
 				ChainID: "atlantic-2",
 				S3:      &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/atlantic-2/genesis.json", Region: "us-east-2"},
+			},
+			StateSync: &seiv1alpha1.StateSyncConfig{
+				TrustPeriod:    "168h0m0s",
+				BackfillBlocks: 0,
 			},
 			Peers: &seiv1alpha1.PeerConfig{
 				Sources: []seiv1alpha1.PeerSource{
@@ -149,7 +157,6 @@ func genesisNode() *seiv1alpha1.SeiNode {
 			Image:   "sei:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{
 				ChainID: "arctic-1",
-				Fresh:   true,
 				PVC:     &seiv1alpha1.GenesisPVCSource{DataPVC: "data-pvc"},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
@@ -189,7 +196,7 @@ func TestBootstrapMode(t *testing.T) {
 
 func TestTaskProgressionForNode_Snapshot(t *testing.T) {
 	got := taskProgressionForNode(snapshotNode())
-	want := []string{taskSnapshotRestore, taskDiscoverPeers, taskConfigPatch, taskMarkReady}
+	want := []string{taskSnapshotRestore, taskDiscoverPeers, taskConfigureStateSync, taskConfigPatch, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -234,8 +241,8 @@ func TestBuildTaskPlan(t *testing.T) {
 	if plan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", plan.Phase)
 	}
-	if len(plan.Tasks) != 4 {
-		t.Fatalf("expected 4 tasks, got %d", len(plan.Tasks))
+	if len(plan.Tasks) != 5 {
+		t.Fatalf("expected 5 tasks, got %d", len(plan.Tasks))
 	}
 	for _, task := range plan.Tasks {
 		if task.Status != seiv1alpha1.PlannedTaskPending {
@@ -565,8 +572,11 @@ func TestConfigPatchBuilder(t *testing.T) {
 		if ss["use-local-snapshot"] != true {
 			t.Errorf("use-local-snapshot = %v, want true", ss["use-local-snapshot"])
 		}
-		if ss["trust-period"] != snapshotTrustPeriod {
-			t.Errorf("trust-period = %v, want %s", ss["trust-period"], snapshotTrustPeriod)
+		if ss["trust-period"] != "9999h0m0s" {
+			t.Errorf("trust-period = %v, want 9999h0m0s", ss["trust-period"])
+		}
+		if ss["backfill-blocks"] != int64(0) {
+			t.Errorf("backfill-blocks = %v, want 0", ss["backfill-blocks"])
 		}
 	})
 
@@ -643,12 +653,12 @@ func TestSnapshotUploadTask_NoDestination(t *testing.T) {
 
 func TestNeedsStateSync(t *testing.T) {
 	if !needsStateSync(peerSyncNode()) {
-		t.Error("peerSyncNode: want true")
+		t.Error("peerSyncNode: want true (StateSync set)")
 	}
 	if needsStateSync(genesisNode()) {
-		t.Error("genesisNode: want false (fresh)")
+		t.Error("genesisNode: want false (StateSync nil)")
 	}
-	if needsStateSync(snapshotNode()) {
-		t.Error("snapshotNode: want false (has snapshot)")
+	if !needsStateSync(snapshotNode()) {
+		t.Error("snapshotNode: want true (StateSync set with snapshot)")
 	}
 }

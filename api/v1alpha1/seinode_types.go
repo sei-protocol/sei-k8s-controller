@@ -25,10 +25,11 @@ type SeiNodeSpec struct {
 	// genesis configuration is sourced from.
 	Genesis GenesisConfiguration `json:"genesis"`
 
-	// Snapshot configures snapshot-based state restoration from S3.
-	// When nil the node either mounts a genesis PVC or does a fresh seid init.
+	// StateSync configures how this node bootstraps into an existing chain
+	// using CometBFT state sync. When nil, the node is treated as a fresh
+	// genesis node that starts from height 1 with no state to sync.
 	// +optional
-	Snapshot *SnapshotSource `json:"snapshot,omitempty"`
+	StateSync *StateSyncConfig `json:"stateSync,omitempty"`
 
 	// Peers configures how this node discovers and connects to peers.
 	// When set, the sidecar resolves all configured sources during bootstrap.
@@ -104,11 +105,6 @@ type GenesisConfiguration struct {
 	// +kubebuilder:validation:MinLength=1
 	ChainID string `json:"chainId"`
 
-	// Fresh indicates this is a brand new chain that starts from height 1.
-	// When true, the node does not need state sync or a snapshot to bootstrap.
-	// +optional
-	Fresh bool `json:"fresh,omitempty"`
-
 	// PVC references a pre-provisioned PVC populated by SeiNodePool's genesis ceremony.
 	// The controller mounts this PVC directly; no sidecar task runs.
 	// +optional
@@ -135,6 +131,27 @@ type GenesisS3Source struct {
 	// Region is the AWS region for S3 access.
 	// +optional
 	Region string `json:"region,omitempty"`
+}
+
+// StateSyncConfig configures how a node bootstraps into an existing chain
+// using CometBFT state sync.
+type StateSyncConfig struct {
+	// Snapshot configures the node to restore from a pre-fetched S3 snapshot
+	// instead of fetching state from peers over the network.
+	// +optional
+	Snapshot *SnapshotSource `json:"snapshot,omitempty"`
+
+	// TrustPeriod is the window during which the snapshot's block validators
+	// are considered trustworthy. Snapshots whose block timestamps fall outside
+	// this window are rejected. Must be set long enough to cover the age of
+	// the snapshot being restored (e.g. "9999h0m0s" for old S3 snapshots,
+	// "168h0m0s" for recent peer state).
+	// +kubebuilder:validation:MinLength=1
+	TrustPeriod string `json:"trustPeriod"`
+
+	// BackfillBlocks is the number of historical blocks to fetch from peers
+	// after snapshot restore. Set to 0 if no block history is needed.
+	BackfillBlocks int64 `json:"backfillBlocks"`
 }
 
 // SnapshotSource configures snapshot-based state restoration from S3.

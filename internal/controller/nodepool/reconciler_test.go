@@ -233,7 +233,6 @@ func TestReconcile_AllJobsComplete_CreatesSeiNodes(t *testing.T) {
 		node := &seiv1alpha1.SeiNode{}
 		g.Expect(c.Get(ctx, types.NamespacedName{Name: seiNodeName(sn, i), Namespace: "default"}, node)).To(Succeed())
 		g.Expect(node.Spec.ChainID).To(Equal("sei-test"))
-		g.Expect(node.Spec.Genesis.Fresh).To(BeTrue())
 		g.Expect(node.Spec.Genesis.PVC).NotTo(BeNil())
 		g.Expect(node.Spec.Genesis.PVC.DataPVC).To(Equal(dataPVCName(sn, i)))
 	}

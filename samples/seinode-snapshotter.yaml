@@ -25,6 +25,11 @@ spec:
       uri: s3://sei-testnet-genesis-config/atlantic-2/genesis.json
       region: us-east-2
 
+  # State sync from peers (no local snapshot).
+  stateSync:
+    trustPeriod: "168h0m0s"
+    backfillBlocks: 0
+
   # Discover peers via EC2 instance tags in the same region.
   peers:
     sources:
@@ -36,9 +41,6 @@ spec:
 
   storage:
     retainOnDelete: true
-
-  sidecar:
-    image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei-sidecar:latest
 
   # Produce a snapshot every 2000 blocks, keep the 5 most recent on disk,
   # and upload each one to the S3 bucket under the state-sync/ prefix.

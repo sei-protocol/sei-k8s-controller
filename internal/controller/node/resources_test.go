@@ -37,12 +37,16 @@ func newSnapshotNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unp
 			ChainID: "sei-test",
 			Image:   "ghcr.io/sei-protocol/seid:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "sei-test"},
+		StateSync: &seiv1alpha1.StateSyncConfig{
 			Snapshot: &seiv1alpha1.SnapshotSource{
 				Region: "eu-central-1",
 				Bucket: seiv1alpha1.BucketSnapshot{
 					URI: "s3://sei-snapshots/pacific-1/",
 				},
 			},
+			TrustPeriod:    "9999h0m0s",
+			BackfillBlocks: 0,
+		},
 			Sidecar: &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
 	}

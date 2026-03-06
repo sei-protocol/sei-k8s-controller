@@ -70,6 +70,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 
 	// Drive remaining tasks through.
 	driveTask(t, g, r, mock, fetch, taskDiscoverPeers)
+	driveTask(t, g, r, mock, fetch, taskConfigureStateSync)
 	driveTask(t, g, r, mock, fetch, taskConfigPatch)
 	driveTask(t, g, r, mock, fetch, taskMarkReady)
 

@@ -75,18 +75,22 @@ func taskProgressionForNode(node *seiv1alpha1.SeiNode) []string {
 }
 
 func needsStateSync(node *seiv1alpha1.SeiNode) bool {
-	return !node.Spec.Genesis.Fresh && node.Spec.Snapshot == nil
+	return node.Spec.StateSync != nil
 }
 
 func bootstrapMode(node *seiv1alpha1.SeiNode) string {
 	switch {
-	case node.Spec.Snapshot != nil:
+	case hasLocalSnapshot(node):
 		return "snapshot"
 	case node.Spec.Genesis.PVC != nil:
 		return "genesis"
 	default:
 		return "peer-sync"
 	}
+}
+
+func hasLocalSnapshot(node *seiv1alpha1.SeiNode) bool {
+	return node.Spec.StateSync != nil && node.Spec.StateSync.Snapshot != nil
 }
 
 // buildSidecarClient constructs a SidecarClient from the node's sidecar config.

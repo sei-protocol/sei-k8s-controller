@@ -14,6 +14,9 @@ spec:
     s3:
       uri: s3://sei-testnet-genesis-config/atlantic-2/genesis.json
       region: us-east-2
+  stateSync:
+    trustPeriod: "168h0m0s"
+    backfillBlocks: 0
   peers:
     sources:
       - ec2Tags:

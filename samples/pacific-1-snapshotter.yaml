@@ -17,11 +17,6 @@ spec:
       uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
       region: us-east-2
 
-  snapshot:
-    region: eu-central-1
-    bucket:
-      uri: s3://pacific-1-snapshots/state-sync/
-
   peers:
     sources:
       - ec2Tags:
@@ -29,6 +24,14 @@ spec:
           tags:
             ChainIdentifier: pacific-1
             Component: snapshotter
+
+  stateSync:
+    trustPeriod: "9999h0m0s"
+    backfillBlocks: 0
+    snapshot:
+      bucket:
+        uri: s3://pacific-1-snapshots/state-sync/
+      region: eu-central-1
 
   storage:
     retainOnDelete: true

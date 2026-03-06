@@ -83,11 +83,6 @@ spec:
                       node.
                     minLength: 1
                     type: string
-                  fresh:
-                    description: |-
-                      Fresh indicates this is a brand new chain that starts from height 1.
-                      When true, the node does not need state sync or a snapshot to bootstrap.
-                    type: boolean
                   pvc:
                     description: |-
                       PVC references a pre-provisioned PVC populated by SeiNodePool's genesis ceremony.
@@ -261,29 +256,6 @@ spec:
                         type: object
                     type: object
                 type: object
-              snapshot:
-                description: |-
-                  Snapshot configures snapshot-based state restoration from S3.
-                  When nil the node either mounts a genesis PVC or does a fresh seid init.
-                properties:
-                  bucket:
-                    description: Bucket is the S3 snapshot archive to restore from.
-                    properties:
-                      uri:
-                        description: URI of the snapshot archive in s3://bucket/prefix
-                          format.
-                        minLength: 1
-                        type: string
-                    required:
-                    - uri
-                    type: object
-                  region:
-                    default: eu-central-1
-                    description: Region is the AWS region for S3 access.
-                    type: string
-                required:
-                - bucket
-                type: object
               snapshotGeneration:
                 description: |-
                   SnapshotGeneration configures the node to produce Tendermint state-sync
@@ -335,6 +307,55 @@ spec:
                     type: integer
                 required:
                 - interval
+                type: object
+              stateSync:
+                description: |-
+                  StateSync configures how this node bootstraps into an existing chain
+                  using CometBFT state sync. When nil, the node is treated as a fresh
+                  genesis node that starts from height 1 with no state to sync.
+                properties:
+                  backfillBlocks:
+                    description: |-
+                      BackfillBlocks is the number of historical blocks to fetch from peers
+                      after snapshot restore. Set to 0 if no block history is needed.
+                    format: int64
+                    type: integer
+                  snapshot:
+                    description: |-
+                      Snapshot configures the node to restore from a pre-fetched S3 snapshot
+                      instead of fetching state from peers over the network.
+                    properties:
+                      bucket:
+                        description: Bucket is the S3 snapshot archive to restore
+                          from.
+                        properties:
+                          uri:
+                            description: URI of the snapshot archive in s3://bucket/prefix
+                              format.
+                            minLength: 1
+                            type: string
+                        required:
+                        - uri
+                        type: object
+                      region:
+                        default: eu-central-1
+                        description: Region is the AWS region for S3 access.
+                        type: string
+                    required:
+                    - bucket
+                    type: object
+                  trustPeriod:
+                    description: |-
+                      TrustPeriod is the window during which the snapshot's block validators
+                      are considered trustworthy. Snapshots whose block timestamps fall outside
+                      this window are rejected. Must be set long enough to cover the age of
+                      the snapshot being restored (e.g. "9999h0m0s" for old S3 snapshots,
+                      "168h0m0s" for recent peer state).
+                    minLength: 1
+                    type: string
+                required:
+                - backfillBlocks
+                - trustPeriod
                 type: object
               storage:
                 description: Storage controls PVC lifecycle.

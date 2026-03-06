@@ -6,10 +6,6 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// snapshotTrustPeriod is set effectively infinite so Tendermint accepts the
-// local snapshot regardless of how old its block timestamps are.
-const snapshotTrustPeriod = "9999h0m0s"
-
 func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
 	switch taskType {
 	case taskSnapshotRestore:
@@ -30,10 +26,10 @@ func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.Task
 }
 
 func snapshotRestoreBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
-	snap := node.Spec.Snapshot
-	if snap == nil {
+	if !hasLocalSnapshot(node) {
 		return sidecar.SnapshotRestoreTask{}
 	}
+	snap := node.Spec.StateSync.Snapshot
 	bucket, prefix := parseS3URI(snap.Bucket.URI)
 	return sidecar.SnapshotRestoreTask{
 		Bucket:  bucket,
@@ -81,12 +77,12 @@ func configPatchBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 
 	configPatch := make(map[string]any)
 
-	if node.Spec.Snapshot != nil {
+	if hasLocalSnapshot(node) {
 		configPatch["statesync"] = map[string]any{
 			"enable":             true,
 			"use-local-snapshot": true,
-			"backfill-blocks":    int64(0),
-			"trust-period":       snapshotTrustPeriod,
+			"trust-period":       node.Spec.StateSync.TrustPeriod,
+			"backfill-blocks":    node.Spec.StateSync.BackfillBlocks,
 		}
 	}
 
