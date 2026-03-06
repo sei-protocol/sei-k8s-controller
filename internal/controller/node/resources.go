@@ -311,4 +311,3 @@ func parseS3URI(uri string) (bucket, prefix string) {
 	prefix = strings.TrimPrefix(u.Path, "/")
 	return bucket, prefix
 }
-
