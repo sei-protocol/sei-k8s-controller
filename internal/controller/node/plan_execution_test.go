@@ -18,8 +18,6 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// --- Mock ---
-
 type mockSidecarClient struct {
 	submitted []sidecar.TaskBuilder
 	submitErr error
@@ -52,8 +50,6 @@ func (m *mockSidecarClient) GetTask(_ context.Context, id uuid.UUID) (*sidecar.T
 	}
 	return nil, sidecar.ErrNotFound
 }
-
-// --- Helpers ---
 
 func strPtr(s string) *string { return &s }
 
@@ -108,8 +104,6 @@ func fetchNode(t *testing.T, c client.Client, name, namespace string) *seiv1alph
 	}
 	return n
 }
-
-// --- Test node fixtures ---
 
 func snapshotNode() *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
@@ -174,8 +168,6 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 	return node
 }
 
-// --- Bootstrap mode and progression tests ---
-
 func TestBootstrapMode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -236,8 +228,6 @@ func assertProgression(t *testing.T, got, want []string) {
 		}
 	}
 }
-
-// --- Plan lifecycle tests ---
 
 func TestBuildTaskPlan(t *testing.T) {
 	plan := buildTaskPlan(snapshotNode())
@@ -558,14 +548,77 @@ func TestTaskBuilderForNode_MarkReady(t *testing.T) {
 	}
 }
 
-func TestConfigPatchBuilder_WithSnapshotGeneration(t *testing.T) {
-	node := snapshotNode()
-	node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{Interval: 2000, KeepRecent: 10}
-	b := configPatchBuilder(node)
-	task := b.(sidecar.ConfigPatchTask)
-	if task.SnapshotGeneration == nil || task.SnapshotGeneration.Interval != 2000 {
-		t.Errorf("expected Interval=2000, got %+v", task.SnapshotGeneration)
-	}
+func TestConfigPatchBuilder(t *testing.T) {
+	t.Run("snapshot restore adds config.toml statesync patch", func(t *testing.T) {
+		task := configPatchBuilder(snapshotNode()).(sidecar.ConfigPatchTask)
+		configPatch, ok := task.Files["config.toml"]
+		if !ok {
+			t.Fatal("expected config.toml patch for snapshot node")
+		}
+		ss, ok := configPatch["statesync"].(map[string]any)
+		if !ok {
+			t.Fatal("expected statesync section")
+		}
+		if ss["use-local-snapshot"] != true {
+			t.Errorf("use-local-snapshot = %v, want true", ss["use-local-snapshot"])
+		}
+		if ss["trust-period"] != snapshotTrustPeriod {
+			t.Errorf("trust-period = %v, want %s", ss["trust-period"], snapshotTrustPeriod)
+		}
+	})
+
+	t.Run("snapshot generation adds app.toml patch", func(t *testing.T) {
+		node := snapshotNode()
+		node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{Interval: 2000, KeepRecent: 10}
+		task := configPatchBuilder(node).(sidecar.ConfigPatchTask)
+		appPatch, ok := task.Files["app.toml"]
+		if !ok {
+			t.Fatal("expected app.toml patch")
+		}
+		if appPatch["snapshot-interval"] != int64(2000) {
+			t.Errorf("snapshot-interval = %v, want 2000", appPatch["snapshot-interval"])
+		}
+		if appPatch["pruning"] != "nothing" {
+			t.Errorf("pruning = %v, want nothing", appPatch["pruning"])
+		}
+		if appPatch["snapshot-keep-recent"] != int64(10) {
+			t.Errorf("snapshot-keep-recent = %v, want 10", appPatch["snapshot-keep-recent"])
+		}
+	})
+
+	t.Run("snapshot generation defaults KeepRecent to 5", func(t *testing.T) {
+		node := snapshotNode()
+		node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{Interval: 1000}
+		task := configPatchBuilder(node).(sidecar.ConfigPatchTask)
+		if task.Files["app.toml"]["snapshot-keep-recent"] != int64(5) {
+			t.Errorf("snapshot-keep-recent = %v, want 5", task.Files["app.toml"]["snapshot-keep-recent"])
+		}
+	})
+
+	t.Run("snapshot + snapshot generation produces both files", func(t *testing.T) {
+		node := snapshotterNode()
+		task := configPatchBuilder(node).(sidecar.ConfigPatchTask)
+		if _, ok := task.Files["config.toml"]; !ok {
+			t.Error("expected config.toml patch")
+		}
+		if _, ok := task.Files["app.toml"]; !ok {
+			t.Error("expected app.toml patch")
+		}
+	})
+
+	t.Run("no snapshot produces no config.toml", func(t *testing.T) {
+		task := configPatchBuilder(peerSyncNode()).(sidecar.ConfigPatchTask)
+		if _, ok := task.Files["config.toml"]; ok {
+			t.Error("expected no config.toml patch for non-snapshot node")
+		}
+	})
+
+	t.Run("genesis node produces empty Files", func(t *testing.T) {
+		task := configPatchBuilder(genesisNode()).(sidecar.ConfigPatchTask)
+		if len(task.Files) != 0 {
+			t.Errorf("expected empty Files for genesis node, got %d entries", len(task.Files))
+		}
+	})
 }
 
 func TestSnapshotUploadTask_WithDestination(t *testing.T) {
@@ -584,8 +637,6 @@ func TestSnapshotUploadTask_NoDestination(t *testing.T) {
 		t.Errorf("expected nil, got %v", task)
 	}
 }
-
-// --- NeedsStateSync tests ---
 
 func TestNeedsStateSync(t *testing.T) {
 	if !needsStateSync(peerSyncNode()) {

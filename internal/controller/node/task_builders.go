@@ -6,6 +6,10 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
+// snapshotTrustPeriod is set effectively infinite so Tendermint accepts the
+// local snapshot regardless of how old its block timestamps are.
+const snapshotTrustPeriod = "9999h0m0s"
+
 func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
 	switch taskType {
 	case taskSnapshotRestore:
@@ -73,20 +77,36 @@ func configureGenesisBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 }
 
 func configPatchBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
-	if node.Spec.SnapshotGeneration == nil {
-		return sidecar.ConfigPatchTask{}
+	files := make(map[string]map[string]any)
+
+	configPatch := make(map[string]any)
+
+	if node.Spec.Snapshot != nil {
+		configPatch["statesync"] = map[string]any{
+			"use-local-snapshot": true,
+			"backfill-blocks":    int64(0),
+			"trust-period":       snapshotTrustPeriod,
+		}
 	}
-	sg := node.Spec.SnapshotGeneration
-	keepRecent := sg.KeepRecent
-	if keepRecent == 0 {
-		keepRecent = 5
+
+	if len(configPatch) > 0 {
+		files["config.toml"] = configPatch
 	}
-	return sidecar.ConfigPatchTask{
-		SnapshotGeneration: &sidecar.SnapshotGenerationPatch{
-			Interval:   sg.Interval,
-			KeepRecent: keepRecent,
-		},
+
+	if node.Spec.SnapshotGeneration != nil {
+		sg := node.Spec.SnapshotGeneration
+		keepRecent := sg.KeepRecent
+		if keepRecent == 0 {
+			keepRecent = 5
+		}
+		files["app.toml"] = map[string]any{
+			"pruning":              "nothing",
+			"snapshot-interval":    sg.Interval,
+			"snapshot-keep-recent": int64(keepRecent),
+		}
 	}
+
+	return sidecar.ConfigPatchTask{Files: files}
 }
 
 func snapshotUploadTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {

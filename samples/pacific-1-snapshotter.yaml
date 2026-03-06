@@ -17,6 +17,11 @@ spec:
       uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
       region: us-east-2
 
+  snapshot:
+    region: eu-central-1
+    bucket:
+      uri: s3://pacific-1-snapshots/state-sync/
+
   peers:
     sources:
       - ec2Tags:
