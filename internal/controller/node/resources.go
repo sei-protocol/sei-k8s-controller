@@ -222,14 +222,23 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	return container
 }
 
+// buildSeidInitContainer creates the init container that bootstraps the seid
+// home directory. When a SeiNodePool prep job has already populated the PVC
+// (genesis.json, validator keys, config, etc.), running "seid init --overwrite"
+// would destroy that state and produce an empty genesis with no validators.
+// The genesis.json guard below is a stopgap; ideally the SeiNode spec should
+// carry an explicit field (e.g. spec.skipInit) so the controller can
+// distinguish pre-populated volumes from fresh ones without filesystem probes.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
+	script := fmt.Sprintf(
+		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
+		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
+	)
 	return corev1.Container{
 		Name:  "seid-init",
 		Image: node.Spec.Image,
 		Command: []string{
-			"/bin/sh", "-c",
-			fmt.Sprintf("seid init %s --chain-id %s --home %s --overwrite && mkdir -p %s/tmp",
-				node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir),
+			"/bin/sh", "-c", script,
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
