@@ -6,6 +6,11 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
+const (
+	defaultSnapshotUploadCron = "0 0 * * *"
+	defaultSnapshotInterval   = int64(2000)
+)
+
 func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
 	switch taskType {
 	case taskSnapshotRestore:
@@ -91,15 +96,10 @@ func configPatchBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	}
 
 	if node.Spec.SnapshotGeneration != nil {
-		sg := node.Spec.SnapshotGeneration
-		keepRecent := sg.KeepRecent
-		if keepRecent == 0 {
-			keepRecent = 5
-		}
 		files["app.toml"] = map[string]any{
 			"pruning":              "nothing",
-			"snapshot-interval":    sg.Interval,
-			"snapshot-keep-recent": int64(keepRecent),
+			"snapshot-interval":    defaultSnapshotInterval,
+			"snapshot-keep-recent": int64(node.Spec.SnapshotGeneration.KeepRecent),
 		}
 	}
 
@@ -116,5 +116,6 @@ func snapshotUploadTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 		Bucket: dest.Bucket,
 		Prefix: dest.Prefix,
 		Region: dest.Region,
+		Cron:   defaultSnapshotUploadCron,
 	}
 }

@@ -167,7 +167,7 @@ func genesisNode() *seiv1alpha1.SeiNode {
 func snapshotterNode() *seiv1alpha1.SeiNode {
 	node := snapshotNode()
 	node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{
-		Interval: 2000, KeepRecent: 5,
+		KeepRecent: 5,
 		Destination: &seiv1alpha1.SnapshotDestination{
 			S3: &seiv1alpha1.S3SnapshotDestination{Bucket: "atlantic-2-snapshots", Prefix: "state-sync", Region: "eu-central-1"},
 		},
@@ -439,12 +439,13 @@ func TestReconcile_FailedPlan_NoOps(t *testing.T) {
 	}
 }
 
-func TestReconcile_CompletePlan_RunsRuntimeTasks(t *testing.T) {
-	mock := &mockSidecarClient{}
+func TestReconcile_CompletePlan_SubmitsScheduledTask(t *testing.T) {
+	taskID := uuid.New()
+	mock := &mockSidecarClient{submitID: taskID}
 	node := snapshotterNode()
 	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 
-	r, _ := newProgressionReconciler(t, mock, node)
+	r, c := newProgressionReconciler(t, mock, node)
 
 	result, err := r.reconcileSidecarProgression(context.Background(), node)
 	if err != nil {
@@ -454,10 +455,37 @@ func TestReconcile_CompletePlan_RunsRuntimeTasks(t *testing.T) {
 		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, statusPollInterval)
 	}
 	if len(mock.submitted) != 1 {
-		t.Fatalf("expected 1 runtime task submitted, got %d", len(mock.submitted))
+		t.Fatalf("expected 1 scheduled task submitted, got %d", len(mock.submitted))
 	}
 	if mock.submitted[0].TaskType() != taskSnapshotUpload {
 		t.Errorf("task type = %q, want %q", mock.submitted[0].TaskType(), taskSnapshotUpload)
+	}
+
+	updated := fetchNode(t, c, node.Name, node.Namespace)
+	if updated.Status.ScheduledTasks == nil {
+		t.Fatal("expected ScheduledTasks to be set")
+	}
+	if got := updated.Status.ScheduledTasks[taskSnapshotUpload]; got != taskID.String() {
+		t.Errorf("ScheduledTasks[%s] = %q, want %q", taskSnapshotUpload, got, taskID.String())
+	}
+}
+
+func TestReconcile_CompletePlan_SkipsAlreadyScheduled(t *testing.T) {
+	mock := &mockSidecarClient{}
+	node := snapshotterNode()
+	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.ScheduledTasks = map[string]string{
+		taskSnapshotUpload: uuid.New().String(),
+	}
+
+	r, _ := newProgressionReconciler(t, mock, node)
+
+	_, err := r.reconcileSidecarProgression(context.Background(), node)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(mock.submitted) != 0 {
+		t.Errorf("expected no submissions for already-scheduled task, got %d", len(mock.submitted))
 	}
 }
 
@@ -582,29 +610,29 @@ func TestConfigPatchBuilder(t *testing.T) {
 
 	t.Run("snapshot generation adds app.toml patch", func(t *testing.T) {
 		node := snapshotNode()
-		node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{Interval: 2000, KeepRecent: 10}
+		node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{KeepRecent: 5}
 		task := configPatchBuilder(node).(sidecar.ConfigPatchTask)
 		appPatch, ok := task.Files["app.toml"]
 		if !ok {
 			t.Fatal("expected app.toml patch")
 		}
-		if appPatch["snapshot-interval"] != int64(2000) {
-			t.Errorf("snapshot-interval = %v, want 2000", appPatch["snapshot-interval"])
+		if appPatch["snapshot-interval"] != defaultSnapshotInterval {
+			t.Errorf("snapshot-interval = %v, want %d", appPatch["snapshot-interval"], defaultSnapshotInterval)
 		}
 		if appPatch["pruning"] != "nothing" {
 			t.Errorf("pruning = %v, want nothing", appPatch["pruning"])
 		}
-		if appPatch["snapshot-keep-recent"] != int64(10) {
-			t.Errorf("snapshot-keep-recent = %v, want 10", appPatch["snapshot-keep-recent"])
+		if appPatch["snapshot-keep-recent"] != int64(5) {
+			t.Errorf("snapshot-keep-recent = %v, want 5", appPatch["snapshot-keep-recent"])
 		}
 	})
 
-	t.Run("snapshot generation defaults KeepRecent to 5", func(t *testing.T) {
+	t.Run("snapshot generation passes through KeepRecent", func(t *testing.T) {
 		node := snapshotNode()
-		node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{Interval: 1000}
+		node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{KeepRecent: 20}
 		task := configPatchBuilder(node).(sidecar.ConfigPatchTask)
-		if task.Files["app.toml"]["snapshot-keep-recent"] != int64(5) {
-			t.Errorf("snapshot-keep-recent = %v, want 5", task.Files["app.toml"]["snapshot-keep-recent"])
+		if task.Files["app.toml"]["snapshot-keep-recent"] != int64(20) {
+			t.Errorf("snapshot-keep-recent = %v, want 20", task.Files["app.toml"]["snapshot-keep-recent"])
 		}
 	})
 
@@ -642,6 +670,9 @@ func TestSnapshotUploadTask_WithDestination(t *testing.T) {
 	task := b.(sidecar.SnapshotUploadTask)
 	if task.Bucket != "atlantic-2-snapshots" {
 		t.Errorf("Bucket = %q, want %q", task.Bucket, "atlantic-2-snapshots")
+	}
+	if task.Cron != defaultSnapshotUploadCron {
+		t.Errorf("Cron = %q, want %q", task.Cron, defaultSnapshotUploadCron)
 	}
 }
 

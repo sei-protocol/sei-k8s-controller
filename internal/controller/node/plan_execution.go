@@ -263,13 +263,34 @@ func (r *SeiNodeReconciler) markPlanComplete(ctx context.Context, node *seiv1alp
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
 
-// reconcileRuntimeTasks handles post-bootstrap runtime tasks.
+// reconcileRuntimeTasks ensures all scheduled tasks are submitted exactly once.
+// The sidecar owns execution cadence after that.
 func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient) (ctrl.Result, error) {
 	if task := snapshotUploadTask(node); task != nil {
-		if _, err := sc.SubmitTask(ctx, task); err != nil {
-			log.FromContext(ctx).Info("snapshot-upload submission failed, will retry", "error", err)
+		if err := r.ensureScheduledTask(ctx, node, sc, task); err != nil {
+			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", task.TaskType(), "error", err)
 		}
-		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
+}
+
+func (r *SeiNodeReconciler) ensureScheduledTask(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient, task sidecar.TaskBuilder) error {
+	taskType := task.TaskType()
+	if node.Status.ScheduledTasks != nil {
+		if _, ok := node.Status.ScheduledTasks[taskType]; ok {
+			return nil
+		}
+	}
+
+	id, err := sc.SubmitTask(ctx, task)
+	if err != nil {
+		return err
+	}
+
+	patch := client.MergeFrom(node.DeepCopy())
+	if node.Status.ScheduledTasks == nil {
+		node.Status.ScheduledTasks = make(map[string]string)
+	}
+	node.Status.ScheduledTasks[taskType] = id.String()
+	return r.Status().Patch(ctx, node, patch)
 }

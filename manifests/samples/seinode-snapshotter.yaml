@@ -42,10 +42,10 @@ spec:
   storage:
     retainOnDelete: true
 
-  # Produce a snapshot every 2000 blocks, keep the 5 most recent on disk,
-  # and upload each one to the S3 bucket under the state-sync/ prefix.
+  # Enable snapshot generation and upload each snapshot to the S3 bucket
+  # under the state-sync/ prefix. The controller applies a system default
+  # for snapshot-interval in app.toml.
   snapshotGeneration:
-    interval: 2000
     keepRecent: 5
     destination:
       s3:

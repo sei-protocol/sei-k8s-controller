@@ -37,7 +37,6 @@ spec:
     retainOnDelete: true
 
   snapshotGeneration:
-    interval: 2000
     keepRecent: 5
     destination:
       s3:

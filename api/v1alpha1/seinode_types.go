@@ -53,21 +53,17 @@ type SeiNodeSpec struct {
 }
 
 // SnapshotGenerationConfig configures a node to produce Tendermint state-sync
-// snapshots by setting archival pruning and a snapshot interval in app.toml.
+// snapshots and optionally upload them to remote storage. The controller sets
+// archival pruning and a system-default snapshot-interval in app.toml.
 type SnapshotGenerationConfig struct {
-	// Interval is the block interval between snapshots (maps to snapshot-interval
-	// in app.toml). For example, 2000 means a snapshot is taken every 2000 blocks.
-	// +kubebuilder:validation:Minimum=1
-	Interval int64 `json:"interval"`
-
 	// KeepRecent is the number of recent snapshots to retain on disk.
-	// Older snapshots are pruned automatically by Tendermint.
-	// +optional
-	// +kubebuilder:default=5
-	KeepRecent int32 `json:"keepRecent,omitempty"`
+	// Must be at least 2 so the upload algorithm can select the
+	// second-to-latest completed snapshot.
+	// +kubebuilder:validation:Minimum=2
+	KeepRecent int32 `json:"keepRecent"`
 
 	// Destination configures where generated snapshots are uploaded.
-	// When set, the controller periodically submits upload tasks to the sidecar
+	// When set, the controller submits a scheduled upload task to the sidecar
 	// which tar, compress, and push completed snapshots to the destination.
 	// +optional
 	Destination *SnapshotDestination `json:"destination,omitempty"`
@@ -302,6 +298,12 @@ type SeiNodeStatus struct {
 	// Built once from the node's bootstrap mode, then reconciled to completion.
 	// +optional
 	InitPlan *TaskPlan `json:"initPlan,omitempty"`
+
+	// ScheduledTasks maps task type to the sidecar-assigned UUID of its
+	// scheduled task. Set once when the controller creates each schedule;
+	// prevents duplicate submissions on subsequent reconciles.
+	// +optional
+	ScheduledTasks map[string]string `json:"scheduledTasks,omitempty"`
 }
 
 // +kubebuilder:object:root=true
