@@ -34,11 +34,11 @@ Always use the available subagents for relevant work:
 ### CRD Changes
 - Edit types in `api/v1alpha1/` (e.g., `seinode_types.go`, `seinodepool_types.go`).
 - After any type change, run `make manifests generate` to regenerate CRD YAML and DeepCopy methods.
-- Never hand-edit files in `config/crd/bases/` or `zz_generated.deepcopy.go`.
+- Never hand-edit files in `manifests/` or `zz_generated.deepcopy.go`.
 
 ### RBAC
 - RBAC is generated from `// +kubebuilder:rbac:` markers on controller files.
-- After changing markers, run `make manifests` to regenerate `config/rbac/role.yaml`.
+- After changing markers, run `make manifests` to regenerate `manifests/role.yaml`.
 
 ## Build & Deploy
 

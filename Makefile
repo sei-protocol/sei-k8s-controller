@@ -13,7 +13,7 @@ lint: ## Run golangci-lint.
 	$(GOLANGCI_LINT) run
 
 manifests: ## Generate CRD and RBAC manifests.
-	controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=manifests output:rbac:artifacts:config=manifests
 
 generate: ## Generate DeepCopy implementations.
 	controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."

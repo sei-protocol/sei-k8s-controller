@@ -115,4 +115,4 @@ make generate    # Regenerate DeepCopy implementations
 
 The controller image is built from a multi-stage Dockerfile (Go build + `distroless/static:nonroot` runtime) and pushed to ECR by the `ecr.yml` GitHub Actions workflow on every push to `main`.
 
-CRD manifests are generated into `config/crd/bases/` and consumed by the platform deployment repo, which deploys the controller via [Flux CD](https://fluxcd.io).
+CRD manifests are generated into `manifests/` and consumed by the platform deployment repo, which deploys the controller via [Flux CD](https://fluxcd.io).
