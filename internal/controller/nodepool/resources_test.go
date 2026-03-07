@@ -14,10 +14,6 @@ import (
 
 const genesisDataVolumeName = "genesis-data"
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 func newSeiNodePool(name, namespace string, nodeCount int32) *seiv1alpha1.SeiNodePool {
 	return &seiv1alpha1.SeiNodePool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
@@ -43,10 +39,6 @@ func findCondition(conditions []metav1.Condition, condType string) *metav1.Condi
 	}
 	return nil
 }
-
-// ---------------------------------------------------------------------------
-// generateSeiNode
-// ---------------------------------------------------------------------------
 
 func TestGenerateSeiNode(t *testing.T) {
 	g := NewWithT(t)
@@ -76,10 +68,6 @@ func TestGenerateSeiNode_RetainOnDeletePropagated(t *testing.T) {
 	g.Expect(node.Spec.Storage.RetainOnDelete).To(BeTrue())
 }
 
-// ---------------------------------------------------------------------------
-// generateDataPVC
-// ---------------------------------------------------------------------------
-
 func TestGenerateDataPVC(t *testing.T) {
 	g := NewWithT(t)
 	sn := newSeiNodePool("testnet", "ns1", 2)
@@ -105,10 +93,6 @@ func TestGenerateDataPVC_OrdinalInName(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// generateGenesisPVC
-// ---------------------------------------------------------------------------
-
 func TestGenerateGenesisPVC(t *testing.T) {
 	g := NewWithT(t)
 	sn := newSeiNodePool("testnet", "ns1", 1)
@@ -122,10 +106,6 @@ func TestGenerateGenesisPVC(t *testing.T) {
 	g.Expect(pvc.Spec.StorageClassName).NotTo(BeNil())
 	g.Expect(*pvc.Spec.StorageClassName).To(Equal(efsStorageClass))
 }
-
-// ---------------------------------------------------------------------------
-// generateGenesisJob
-// ---------------------------------------------------------------------------
 
 func TestGenerateGenesisJob(t *testing.T) {
 	g := NewWithT(t)
@@ -171,7 +151,6 @@ func TestGenerateGenesisJob_MountsGenesisAndScripts(t *testing.T) {
 	g.Expect(scriptsMount.ReadOnly).To(BeTrue())
 	g.Expect(scriptsMount.MountPath).To(Equal("/scripts"))
 
-	// Scripts volume comes from the genesis-script ConfigMap.
 	var scriptVol *corev1.Volume
 	for i := range job.Spec.Template.Spec.Volumes {
 		if job.Spec.Template.Spec.Volumes[i].Name == "scripts" {
@@ -182,10 +161,6 @@ func TestGenerateGenesisJob_MountsGenesisAndScripts(t *testing.T) {
 	g.Expect(scriptVol).NotTo(BeNil())
 	g.Expect(scriptVol.ConfigMap.Name).To(Equal("testnet-genesis-script"))
 }
-
-// ---------------------------------------------------------------------------
-// generatePrepJob
-// ---------------------------------------------------------------------------
 
 func TestGeneratePrepJob(t *testing.T) {
 	g := NewWithT(t)
@@ -244,10 +219,6 @@ func TestGeneratePrepJob_VolumesCorrect(t *testing.T) {
 	g.Expect(genesisvol.PersistentVolumeClaim.ReadOnly).To(BeTrue())
 }
 
-// ---------------------------------------------------------------------------
-// generateGenesisScriptConfigMap
-// ---------------------------------------------------------------------------
-
 func TestGenerateGenesisScriptConfigMap(t *testing.T) {
 	g := NewWithT(t)
 	sn := newSeiNodePool("my-net", "ns1", 1)
@@ -266,10 +237,6 @@ func TestGenesisScript_ContainsExpectedVariables(t *testing.T) {
 	g.Expect(genesisScript).To(ContainSubstring("NUM_NODES"))
 	g.Expect(genesisScript).To(ContainSubstring("CHAIN_ID"))
 }
-
-// ---------------------------------------------------------------------------
-// generateNetworkPolicy
-// ---------------------------------------------------------------------------
 
 func TestGenerateNetworkPolicy(t *testing.T) {
 	g := NewWithT(t)
@@ -307,10 +274,6 @@ func TestNetworkPolicyPorts_FivePorts(t *testing.T) {
 	g.Expect(nums).To(ConsistOf(int32(8545), int32(8546), int32(26656), int32(26657), int32(26660)))
 }
 
-// ---------------------------------------------------------------------------
-// isJobComplete / isJobFailed
-// ---------------------------------------------------------------------------
-
 func TestIsJobComplete(t *testing.T) {
 	g := NewWithT(t)
 
@@ -342,10 +305,6 @@ func TestIsJobFailed(t *testing.T) {
 	}
 	g.Expect(isJobFailed(failed)).To(BeTrue())
 }
-
-// ---------------------------------------------------------------------------
-// nodepoolPhase
-// ---------------------------------------------------------------------------
 
 func TestNodepoolPhase(t *testing.T) {
 	tests := []struct {
@@ -404,10 +363,6 @@ func TestNodepoolPhase(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// applyStatusConditions
-// ---------------------------------------------------------------------------
-
 func TestApplyStatusConditions_AllReady(t *testing.T) {
 	g := NewWithT(t)
 	sn := &seiv1alpha1.SeiNodePool{}
@@ -455,10 +410,6 @@ func TestApplyStatusConditions_NoneReady(t *testing.T) {
 	g.Expect(prog.Status).To(Equal(metav1.ConditionTrue))
 }
 
-// ---------------------------------------------------------------------------
-// setCondition
-// ---------------------------------------------------------------------------
-
 func TestSetCondition_SetsObservedGeneration(t *testing.T) {
 	g := NewWithT(t)
 	sn := &seiv1alpha1.SeiNodePool{}
@@ -491,10 +442,6 @@ func TestSetCondition_UpdatesExistingInPlace(t *testing.T) {
 	g.Expect(cond.Reason).To(Equal(ReasonAllPodsReady))
 }
 
-// ---------------------------------------------------------------------------
-// Naming helpers
-// ---------------------------------------------------------------------------
-
 func TestNamingHelpers(t *testing.T) {
 	g := NewWithT(t)
 	sn := newSeiNodePool("mynet", "default", 1)
@@ -505,10 +452,6 @@ func TestNamingHelpers(t *testing.T) {
 	g.Expect(prepJobName(sn, 1)).To(Equal("mynet-prep-1"))
 	g.Expect(genesisPVCName(sn)).To(Equal("mynet-genesis-data"))
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 func envValue(envs []corev1.EnvVar, name string) string {
 	for _, e := range envs {

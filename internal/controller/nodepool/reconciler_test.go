@@ -19,10 +19,6 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
 func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
@@ -50,7 +46,6 @@ func reqFor(name, namespace string) ctrl.Request { //nolint:unparam // test help
 	return ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: namespace}}
 }
 
-// markJobComplete patches a Job's status to Complete in the fake client.
 func markJobComplete(t *testing.T, ctx context.Context, c client.Client, name, namespace string) { //nolint:unparam // test helper designed for reuse
 	t.Helper()
 	job := &batchv1.Job{}
@@ -66,7 +61,6 @@ func markJobComplete(t *testing.T, ctx context.Context, c client.Client, name, n
 	}
 }
 
-// markJobFailed patches a Job's status to Failed in the fake client.
 func markJobFailed(t *testing.T, ctx context.Context, c client.Client, name, namespace string) {
 	t.Helper()
 	job := &batchv1.Job{}
@@ -91,10 +85,6 @@ func getSeiNodePool(t *testing.T, ctx context.Context, c client.Client, name, na
 	}
 	return sn
 }
-
-// ---------------------------------------------------------------------------
-// Basic reconcile scenarios
-// ---------------------------------------------------------------------------
 
 func TestReconcile_NotFound(t *testing.T) {
 	g := NewWithT(t)
@@ -160,10 +150,6 @@ func TestReconcile_FirstCall_NoSeiNodesYet(t *testing.T) {
 	g.Expect(c.List(ctx, nodeList)).To(Succeed())
 	g.Expect(nodeList.Items).To(BeEmpty())
 }
-
-// ---------------------------------------------------------------------------
-// Genesis job progression
-// ---------------------------------------------------------------------------
 
 func TestReconcile_GenesisJobPending_DoesNotCreatePrepJobs(t *testing.T) {
 	g := NewWithT(t)
@@ -280,10 +266,6 @@ func TestReconcile_AllJobsComplete_SeiNodesIdempotent(t *testing.T) {
 	g.Expect(nodeList.Items).To(HaveLen(1))
 }
 
-// ---------------------------------------------------------------------------
-// Job failure paths
-// ---------------------------------------------------------------------------
-
 func TestReconcile_GenesisJobFailed_SetsFailedStatus(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
@@ -325,10 +307,6 @@ func TestReconcile_PrepJobFailed_SetsFailedStatus(t *testing.T) {
 	g.Expect(cond.Reason).To(Equal(ReasonPrepJobFailed))
 }
 
-// ---------------------------------------------------------------------------
-// updateStatus — aggregates SeiNode phases
-// ---------------------------------------------------------------------------
-
 func TestUpdateStatus_AggregatesSeiNodePhases(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
@@ -360,9 +338,7 @@ func TestUpdateStatus_AggregatesSeiNodePhases(t *testing.T) {
 	n1.Status.Phase = "Pending"
 	g.Expect(c.Status().Update(ctx, n1)).To(Succeed())
 
-	patch := client.MergeFrom(sn.DeepCopy())
 	g.Expect(r.updateStatus(ctx, sn)).To(Succeed())
-	_ = patch // suppress unused warning
 
 	fetched := getSeiNodePool(t, ctx, c, "testnet", "default")
 	g.Expect(fetched.Status.TotalNodes).To(Equal(int32(2)))
@@ -400,10 +376,6 @@ func TestUpdateStatus_AllNodesRunning(t *testing.T) {
 	g.Expect(fetched.Status.Phase).To(Equal("Running"))
 	g.Expect(fetched.Status.ReadyNodes).To(Equal(int32(2)))
 }
-
-// ---------------------------------------------------------------------------
-// Deletion handling
-// ---------------------------------------------------------------------------
 
 func TestHandleDeletion_WithoutRetain_DeletesPVCs(t *testing.T) {
 	g := NewWithT(t)

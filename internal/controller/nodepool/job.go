@@ -118,8 +118,6 @@ func generateGenesisJob(sn *seiv1alpha1.SeiNodePool) *batchv1.Job {
 	}
 }
 
-// generatePrepJob generates the genesis-copy prep Job for a single node.
-// It copies the node's genesis data from the shared genesis PVC to the node's data PVC.
 func generatePrepJob(sn *seiv1alpha1.SeiNodePool, ordinal int) *batchv1.Job {
 	labels := resourceLabels(sn)
 	backoffLimit := int32(3)
@@ -127,26 +125,13 @@ func generatePrepJob(sn *seiv1alpha1.SeiNodePool, ordinal int) *batchv1.Job {
 	mainContainer := corev1.Container{
 		Name:    "genesis-copy",
 		Image:   sn.Spec.NodeConfiguration.Image,
-		Command: []string{"sh", "-c"},
-		Args: []string{fmt.Sprintf(
-			`cp -a %s/node${NODE_INDEX}/. %s/ && `+
-				`if [ -f %s/persistent_peers.txt ]; then `+
-				`PEERS=$(sed 's|@node\([0-9]*\):|@%s-\1-0.%s-\1.%s.svc.cluster.local:|g' %s/persistent_peers.txt | tr '\n' ',' | sed 's/,$//'); `+
-				`sed -i "s|^persistent-peers *=.*|persistent-peers = \"${PEERS}\"|" %s/config/config.toml; `+
-				`fi && `+
-				`sed -i "s|^mode *=.*|mode = \"validator\"|" %s/config/config.toml && `+
-				`sed -i "s|^queue-type *=.*|queue-type = \"fifo\"|" %s/config/config.toml && `+
-				`sed -i "s|^slow *=.*|slow = true|" %s/config/app.toml`,
-			genesisNodesDir(sn), dataDir,
-			genesisNodesDir(sn),
-			sn.Name, sn.Name, sn.Namespace, genesisNodesDir(sn),
-			dataDir,
-			dataDir,
-			dataDir,
-			dataDir,
-		)},
+		Command: []string{"sh", "-c", prepNodeScript},
 		Env: []corev1.EnvVar{
 			{Name: "NODE_INDEX", Value: fmt.Sprintf("%d", ordinal)},
+			{Name: "DATA_DIR", Value: dataDir},
+			{Name: "GENESIS_NODES_DIR", Value: genesisNodesDir(sn)},
+			{Name: "POOL_NAME", Value: sn.Name},
+			{Name: "NAMESPACE", Value: sn.Namespace},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},

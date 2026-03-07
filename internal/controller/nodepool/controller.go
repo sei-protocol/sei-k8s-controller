@@ -3,6 +3,7 @@ package nodepool
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -240,7 +241,7 @@ func (r *SeiNodePoolReconciler) reconcileSeiNodes(ctx context.Context, sn *seiv1
 			return fmt.Errorf("ensuring SeiNode %d: %w", i, err)
 		}
 	}
-	return nil
+	return r.scaleDown(ctx, sn)
 }
 
 func (r *SeiNodePoolReconciler) ensureSeiNode(ctx context.Context, sn *seiv1alpha1.SeiNodePool, ordinal int) error {
@@ -254,7 +255,25 @@ func (r *SeiNodePoolReconciler) ensureSeiNode(ctx context.Context, sn *seiv1alph
 	if apierrors.IsNotFound(err) {
 		return r.Create(ctx, desired)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	updated := false
+	if existing.Spec.Image != desired.Spec.Image {
+		existing.Spec.Image = desired.Spec.Image
+		updated = true
+	}
+	if desired.Spec.Entrypoint != nil && (existing.Spec.Entrypoint == nil ||
+		!slices.Equal(existing.Spec.Entrypoint.Command, desired.Spec.Entrypoint.Command) ||
+		!slices.Equal(existing.Spec.Entrypoint.Args, desired.Spec.Entrypoint.Args)) {
+		existing.Spec.Entrypoint = desired.Spec.Entrypoint
+		updated = true
+	}
+	if updated {
+		return r.Update(ctx, existing)
+	}
+	return nil
 }
 
 func generateSeiNode(sn *seiv1alpha1.SeiNodePool, ordinal int) *seiv1alpha1.SeiNode {
@@ -318,12 +337,7 @@ func (r *SeiNodePoolReconciler) ensurePrepJob(ctx context.Context, sn *seiv1alph
 				break
 			}
 		}
-		patch := client.MergeFrom(sn.DeepCopy())
-		setCondition(sn, ConditionTypeReady, metav1.ConditionFalse, ReasonPrepJobFailed, msg)
-		if err := r.patchStatus(ctx, sn, patch); err != nil {
-			return false, fmt.Errorf("setting prep job failed status: %w", err)
-		}
-		return false, fmt.Errorf("%s", msg)
+		return false, r.setFailedStatus(ctx, sn, ReasonPrepJobFailed, msg)
 	}
 
 	return isJobComplete(existing), nil
