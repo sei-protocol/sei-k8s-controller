@@ -255,7 +255,7 @@ func TestBuildTaskPlan(t *testing.T) {
 }
 
 func taskTypes(plan *seiv1alpha1.TaskPlan) []string {
-	var tt []string
+	tt := make([]string, 0, len(plan.Tasks))
 	for _, t := range plan.Tasks {
 		tt = append(tt, t.Type)
 	}
