@@ -20,7 +20,8 @@ const (
 	taskDiscoverPeers      = sidecar.TaskTypeDiscoverPeers
 	taskConfigureGenesis   = sidecar.TaskTypeConfigureGenesis
 	taskConfigureStateSync = sidecar.TaskTypeConfigureStateSync
-	taskConfigPatch        = sidecar.TaskTypeConfigPatch
+	taskConfigApply        = sidecar.TaskTypeConfigApply
+	taskConfigValidate     = sidecar.TaskTypeConfigValidate
 	taskMarkReady          = sidecar.TaskTypeMarkReady
 	taskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
 
@@ -28,11 +29,14 @@ const (
 )
 
 // baseTaskProgression defines the ordered task sequence for each bootstrap mode.
-// taskProgressionForNode may extend these when spec.peers is configured.
+// config-apply runs first to generate mode-aware defaults + overrides.
+// Dynamic tasks (discover-peers, configure-genesis, configure-state-sync)
+// run between config-apply and config-validate to modify the generated config.
+// config-validate verifies the final on-disk config before marking ready.
 var baseTaskProgression = map[string][]string{
-	"snapshot":  {taskSnapshotRestore, taskDiscoverPeers, taskConfigPatch, taskMarkReady},
-	"peer-sync": {taskDiscoverPeers, taskConfigPatch, taskMarkReady},
-	"genesis":   {taskConfigPatch, taskMarkReady},
+	"snapshot":  {taskConfigApply, taskSnapshotRestore, taskDiscoverPeers, taskConfigValidate, taskMarkReady},
+	"peer-sync": {taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady},
+	"genesis":   {taskConfigApply, taskConfigValidate, taskMarkReady},
 }
 
 // SidecarStatusClient abstracts the sidecar HTTP API for testability.
@@ -56,19 +60,20 @@ func insertBefore(prog []string, target, task string) []string {
 }
 
 // taskProgressionForNode returns the task progression for a node, dynamically
-// inserting optional tasks before config-patch.
+// inserting optional tasks before config-validate (after config-apply has
+// generated the base config, dynamic tasks modify it before validation).
 func taskProgressionForNode(node *seiv1alpha1.SeiNode) []string {
 	mode := bootstrapMode(node)
 	prog := slices.Clone(baseTaskProgression[mode])
 
 	if node.Spec.Peers != nil {
-		prog = insertBefore(prog, taskConfigPatch, taskDiscoverPeers)
+		prog = insertBefore(prog, taskConfigValidate, taskDiscoverPeers)
 	}
 	if node.Spec.Genesis.S3 != nil {
-		prog = insertBefore(prog, taskConfigPatch, taskConfigureGenesis)
+		prog = insertBefore(prog, taskConfigValidate, taskConfigureGenesis)
 	}
 	if needsStateSync(node) {
-		prog = insertBefore(prog, taskConfigPatch, taskConfigureStateSync)
+		prog = insertBefore(prog, taskConfigValidate, taskConfigureStateSync)
 	}
 
 	return prog

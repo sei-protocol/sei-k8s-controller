@@ -196,19 +196,19 @@ func TestBootstrapMode(t *testing.T) {
 
 func TestTaskProgressionForNode_Snapshot(t *testing.T) {
 	got := taskProgressionForNode(snapshotNode())
-	want := []string{taskSnapshotRestore, taskDiscoverPeers, taskConfigureStateSync, taskConfigPatch, taskMarkReady}
+	want := []string{taskConfigApply, taskSnapshotRestore, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestTaskProgressionForNode_PeerSync(t *testing.T) {
 	got := taskProgressionForNode(peerSyncNode())
-	want := []string{taskDiscoverPeers, taskConfigureGenesis, taskConfigureStateSync, taskConfigPatch, taskMarkReady}
+	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigureGenesis, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestTaskProgressionForNode_Genesis(t *testing.T) {
 	got := taskProgressionForNode(genesisNode())
-	want := []string{taskConfigPatch, taskMarkReady}
+	want := []string{taskConfigApply, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -220,7 +220,7 @@ func TestTaskProgressionForNode_GenesisWithPeers(t *testing.T) {
 		},
 	}
 	got := taskProgressionForNode(node)
-	want := []string{taskDiscoverPeers, taskConfigPatch, taskMarkReady}
+	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -241,17 +241,25 @@ func TestBuildTaskPlan(t *testing.T) {
 	if plan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", plan.Phase)
 	}
-	if len(plan.Tasks) != 5 {
-		t.Fatalf("expected 5 tasks, got %d", len(plan.Tasks))
+	if len(plan.Tasks) != 6 {
+		t.Fatalf("expected 6 tasks, got %d: %v", len(plan.Tasks), taskTypes(plan))
 	}
 	for _, task := range plan.Tasks {
 		if task.Status != seiv1alpha1.PlannedTaskPending {
 			t.Errorf("task %q status = %q, want Pending", task.Type, task.Status)
 		}
 	}
-	if plan.Tasks[0].Type != taskSnapshotRestore {
-		t.Errorf("first task = %q, want %q", plan.Tasks[0].Type, taskSnapshotRestore)
+	if plan.Tasks[0].Type != taskConfigApply {
+		t.Errorf("first task = %q, want %q", plan.Tasks[0].Type, taskConfigApply)
 	}
+}
+
+func taskTypes(plan *seiv1alpha1.TaskPlan) []string {
+	var types []string
+	for _, t := range plan.Tasks {
+		types = append(types, t.Type)
+	}
+	return types
 }
 
 func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
@@ -271,12 +279,12 @@ func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
 	if updated.Status.InitPlan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", updated.Status.InitPlan.Phase)
 	}
-	// First task should have been submitted.
+	// First task should have been submitted (config-apply is now first).
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].TaskType() != taskSnapshotRestore {
-		t.Errorf("submitted task = %q, want %q", mock.submitted[0].TaskType(), taskSnapshotRestore)
+	if mock.submitted[0].TaskType() != taskConfigApply {
+		t.Errorf("submitted task = %q, want %q", mock.submitted[0].TaskType(), taskConfigApply)
 	}
 }
 
@@ -310,7 +318,7 @@ func TestReconcile_PollsSubmittedTask_StillRunning(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{
 		taskResults: map[uuid.UUID]*sidecar.TaskResult{
-			taskID: runningResult(taskID, taskSnapshotRestore),
+			taskID: runningResult(taskID, taskConfigApply),
 		},
 	}
 	node := snapshotNode()
@@ -336,7 +344,7 @@ func TestReconcile_PollsSubmittedTask_Completed_AdvancesToNext(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{
 		taskResults: map[uuid.UUID]*sidecar.TaskResult{
-			taskID: completedResult(taskID, taskSnapshotRestore, nil),
+			taskID: completedResult(taskID, taskConfigApply, nil),
 		},
 	}
 	node := snapshotNode()
@@ -364,7 +372,7 @@ func TestReconcile_PollsSubmittedTask_Failed_FailsPlan(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{
 		taskResults: map[uuid.UUID]*sidecar.TaskResult{
-			taskID: completedResult(taskID, taskSnapshotRestore, strPtr("network timeout")),
+			taskID: completedResult(taskID, taskConfigApply, strPtr("network timeout")),
 		},
 	}
 	node := snapshotNode()
@@ -583,81 +591,139 @@ func TestTaskBuilderForNode_MarkReady(t *testing.T) {
 	}
 }
 
-func TestConfigPatchBuilder(t *testing.T) {
-	t.Run("snapshot restore adds config.toml statesync patch", func(t *testing.T) {
-		task := configPatchBuilder(snapshotNode()).(sidecar.ConfigPatchTask)
-		configPatch, ok := task.Files["config.toml"]
-		if !ok {
-			t.Fatal("expected config.toml patch for snapshot node")
+func TestResolveMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want string
+	}{
+		{"empty defaults to full", "", "full"},
+		{"validator", "validator", "validator"},
+		{"rpc", "rpc", "rpc"},
+		{"archive", "archive", "archive"},
+		{"seed", "seed", "seed"},
+		{"indexer", "indexer", "indexer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := genesisNode()
+			node.Spec.Mode = tt.mode
+			if got := resolveMode(node); got != tt.want {
+				t.Errorf("resolveMode() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigApplyBuilder(t *testing.T) {
+	t.Run("default mode is full", func(t *testing.T) {
+		task := configApplyBuilder(genesisNode()).(sidecar.ConfigApplyTask)
+		if string(task.Intent.Mode) != "full" {
+			t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, "full")
 		}
-		ss, ok := configPatch["statesync"].(map[string]any)
-		if !ok {
-			t.Fatal("expected statesync section")
-		}
-		if ss["enable"] != true {
-			t.Errorf("enable = %v, want true", ss["enable"])
-		}
-		if ss["use-local-snapshot"] != true {
-			t.Errorf("use-local-snapshot = %v, want true", ss["use-local-snapshot"])
-		}
-		if ss["trust-period"] != "9999h0m0s" {
-			t.Errorf("trust-period = %v, want 9999h0m0s", ss["trust-period"])
-		}
-		if ss["backfill-blocks"] != int64(0) {
-			t.Errorf("backfill-blocks = %v, want 0", ss["backfill-blocks"])
+		if task.Intent.Incremental {
+			t.Error("expected Incremental=false for bootstrap")
 		}
 	})
 
-	t.Run("snapshot generation adds app.toml patch", func(t *testing.T) {
+	t.Run("explicit mode passed through", func(t *testing.T) {
+		node := genesisNode()
+		node.Spec.Mode = "validator"
+		task := configApplyBuilder(node).(sidecar.ConfigApplyTask)
+		if string(task.Intent.Mode) != "validator" {
+			t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, "validator")
+		}
+	})
+
+	t.Run("CRD overrides included", func(t *testing.T) {
+		node := genesisNode()
+		node.Spec.Config = &seiv1alpha1.SeiNodeConfigSpec{
+			Overrides: map[string]string{
+				"evm.http_port": "9545",
+				"logging.level": "debug",
+			},
+		}
+		task := configApplyBuilder(node).(sidecar.ConfigApplyTask)
+		if task.Intent.Overrides["evm.http_port"] != "9545" {
+			t.Errorf("evm.http_port = %q, want %q", task.Intent.Overrides["evm.http_port"], "9545")
+		}
+		if task.Intent.Overrides["logging.level"] != "debug" {
+			t.Errorf("logging.level = %q, want %q", task.Intent.Overrides["logging.level"], "debug")
+		}
+	})
+
+	t.Run("snapshot restore adds state_sync overrides", func(t *testing.T) {
+		task := configApplyBuilder(snapshotNode()).(sidecar.ConfigApplyTask)
+		if task.Intent.Overrides["state_sync.enable"] != "true" {
+			t.Errorf("state_sync.enable = %q, want %q", task.Intent.Overrides["state_sync.enable"], "true")
+		}
+		if task.Intent.Overrides["state_sync.use_local_snapshot"] != "true" {
+			t.Errorf("state_sync.use_local_snapshot = %q", task.Intent.Overrides["state_sync.use_local_snapshot"])
+		}
+		if task.Intent.Overrides["state_sync.trust_period"] != "9999h0m0s" {
+			t.Errorf("state_sync.trust_period = %q", task.Intent.Overrides["state_sync.trust_period"])
+		}
+	})
+
+	t.Run("snapshot generation adds storage overrides", func(t *testing.T) {
 		node := snapshotNode()
 		node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{KeepRecent: 5}
-		task := configPatchBuilder(node).(sidecar.ConfigPatchTask)
-		appPatch, ok := task.Files["app.toml"]
-		if !ok {
-			t.Fatal("expected app.toml patch")
+		task := configApplyBuilder(node).(sidecar.ConfigApplyTask)
+		if task.Intent.Overrides["storage.pruning"] != "nothing" {
+			t.Errorf("storage.pruning = %q", task.Intent.Overrides["storage.pruning"])
 		}
-		if appPatch["snapshot-interval"] != defaultSnapshotInterval {
-			t.Errorf("snapshot-interval = %v, want %d", appPatch["snapshot-interval"], defaultSnapshotInterval)
+		if task.Intent.Overrides["storage.snapshot_interval"] != "2000" {
+			t.Errorf("storage.snapshot_interval = %q", task.Intent.Overrides["storage.snapshot_interval"])
 		}
-		if appPatch["pruning"] != "nothing" {
-			t.Errorf("pruning = %v, want nothing", appPatch["pruning"])
-		}
-		if appPatch["snapshot-keep-recent"] != int64(5) {
-			t.Errorf("snapshot-keep-recent = %v, want 5", appPatch["snapshot-keep-recent"])
+		if task.Intent.Overrides["storage.snapshot_keep_recent"] != "5" {
+			t.Errorf("storage.snapshot_keep_recent = %q", task.Intent.Overrides["storage.snapshot_keep_recent"])
 		}
 	})
 
-	t.Run("snapshot generation passes through KeepRecent", func(t *testing.T) {
+	t.Run("controller overrides win over CRD overrides", func(t *testing.T) {
 		node := snapshotNode()
-		node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{KeepRecent: 20}
-		task := configPatchBuilder(node).(sidecar.ConfigPatchTask)
-		if task.Files["app.toml"]["snapshot-keep-recent"] != int64(20) {
-			t.Errorf("snapshot-keep-recent = %v, want 20", task.Files["app.toml"]["snapshot-keep-recent"])
+		node.Spec.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{KeepRecent: 10}
+		node.Spec.Config = &seiv1alpha1.SeiNodeConfigSpec{
+			Overrides: map[string]string{
+				"storage.pruning": "default",
+			},
+		}
+		task := configApplyBuilder(node).(sidecar.ConfigApplyTask)
+		if task.Intent.Overrides["storage.pruning"] != "nothing" {
+			t.Errorf("controller override should win: storage.pruning = %q, want %q",
+				task.Intent.Overrides["storage.pruning"], "nothing")
 		}
 	})
 
-	t.Run("snapshot + snapshot generation produces both files", func(t *testing.T) {
-		node := snapshotterNode()
-		task := configPatchBuilder(node).(sidecar.ConfigPatchTask)
-		if _, ok := task.Files["config.toml"]; !ok {
-			t.Error("expected config.toml patch")
-		}
-		if _, ok := task.Files["app.toml"]; !ok {
-			t.Error("expected app.toml patch")
+	t.Run("genesis node has no extra overrides", func(t *testing.T) {
+		task := configApplyBuilder(genesisNode()).(sidecar.ConfigApplyTask)
+		if len(task.Intent.Overrides) != 0 {
+			t.Errorf("expected no overrides for genesis node, got %v", task.Intent.Overrides)
 		}
 	})
 
-	t.Run("no snapshot produces no config.toml", func(t *testing.T) {
-		task := configPatchBuilder(peerSyncNode()).(sidecar.ConfigPatchTask)
-		if _, ok := task.Files["config.toml"]; ok {
-			t.Error("expected no config.toml patch for non-snapshot node")
+	t.Run("CRD config version passed through", func(t *testing.T) {
+		node := genesisNode()
+		node.Spec.Config = &seiv1alpha1.SeiNodeConfigSpec{Version: 2}
+		task := configApplyBuilder(node).(sidecar.ConfigApplyTask)
+		if task.Intent.TargetVersion != 2 {
+			t.Errorf("Intent.TargetVersion = %d, want 2", task.Intent.TargetVersion)
 		}
 	})
 
-	t.Run("genesis node produces empty Files", func(t *testing.T) {
-		task := configPatchBuilder(genesisNode()).(sidecar.ConfigPatchTask)
-		if len(task.Files) != 0 {
-			t.Errorf("expected empty Files for genesis node, got %d entries", len(task.Files))
+	t.Run("zero config version not set in intent", func(t *testing.T) {
+		node := genesisNode()
+		node.Spec.Config = &seiv1alpha1.SeiNodeConfigSpec{}
+		task := configApplyBuilder(node).(sidecar.ConfigApplyTask)
+		if task.Intent.TargetVersion != 0 {
+			t.Errorf("Intent.TargetVersion = %d, want 0 (use default)", task.Intent.TargetVersion)
+		}
+	})
+
+	t.Run("config-validate builder produces correct task type", func(t *testing.T) {
+		b := taskBuilderForNode(genesisNode(), taskConfigValidate)
+		if _, ok := b.(sidecar.ConfigValidateTask); !ok {
+			t.Errorf("expected ConfigValidateTask, got %T", b)
 		}
 	})
 }

@@ -53,25 +53,26 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 		return n
 	}
 
-	// First reconcile creates the plan and submits snapshot-restore.
+	// First reconcile creates the plan and submits config-apply.
 	taskID := uuid.New()
 	mock.submitID = taskID
 	_, err := r.reconcileSidecarProgression(ctx, node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(fetch().Status.InitPlan).NotTo(BeNil())
-	g.Expect(mock.submitted[0].TaskType()).To(Equal(taskSnapshotRestore))
+	g.Expect(mock.submitted[0].TaskType()).To(Equal(taskConfigApply))
 
-	// Complete snapshot-restore.
+	// Complete config-apply.
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
-		taskID: completedResult(taskID, taskSnapshotRestore, nil),
+		taskID: completedResult(taskID, taskConfigApply, nil),
 	}
 	_, err = r.reconcileSidecarProgression(ctx, fetch())
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// Drive remaining tasks through.
+	driveTask(t, g, r, mock, fetch, taskSnapshotRestore)
 	driveTask(t, g, r, mock, fetch, taskDiscoverPeers)
 	driveTask(t, g, r, mock, fetch, taskConfigureStateSync)
-	driveTask(t, g, r, mock, fetch, taskConfigPatch)
+	driveTask(t, g, r, mock, fetch, taskConfigValidate)
 	driveTask(t, g, r, mock, fetch, taskMarkReady)
 
 	// One more reconcile to transition from "all tasks done" to plan Complete.
@@ -94,21 +95,22 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 		return n
 	}
 
-	// First reconcile creates plan and submits config-patch.
+	// First reconcile creates plan and submits config-apply.
 	taskID := uuid.New()
 	mock.submitID = taskID
 	_, err := r.reconcileSidecarProgression(ctx, node)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(mock.submitted[0].TaskType()).To(Equal(taskConfigPatch))
+	g.Expect(mock.submitted[0].TaskType()).To(Equal(taskConfigApply))
 
-	// Complete config-patch.
+	// Complete config-apply.
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
-		taskID: completedResult(taskID, taskConfigPatch, nil),
+		taskID: completedResult(taskID, taskConfigApply, nil),
 	}
 	_, err = r.reconcileSidecarProgression(ctx, fetch())
 	g.Expect(err).NotTo(HaveOccurred())
 
-	// Drive mark-ready.
+	// Drive config-validate and mark-ready.
+	driveTask(t, g, r, mock, fetch, taskConfigValidate)
 	driveTask(t, g, r, mock, fetch, taskMarkReady)
 
 	// Complete the plan.
@@ -131,7 +133,7 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 		return n
 	}
 
-	// First reconcile creates plan and submits snapshot-restore.
+	// First reconcile creates plan and submits config-apply.
 	taskID := uuid.New()
 	mock.submitID = taskID
 	_, err := r.reconcileSidecarProgression(ctx, node)
@@ -139,7 +141,7 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 
 	// Fail the task.
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
-		taskID: completedResult(taskID, taskSnapshotRestore, strPtr("S3 access denied")),
+		taskID: completedResult(taskID, taskConfigApply, strPtr("S3 access denied")),
 	}
 	_, err = r.reconcileSidecarProgression(ctx, fetch())
 	g.Expect(err).NotTo(HaveOccurred())

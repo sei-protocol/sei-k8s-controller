@@ -1,6 +1,9 @@
 package node
 
 import (
+	"strconv"
+
+	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -9,6 +12,7 @@ import (
 const (
 	defaultSnapshotUploadCron = "0 0 * * *"
 	defaultSnapshotInterval   = int64(2000)
+	defaultMode               = "full"
 )
 
 func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
@@ -21,13 +25,23 @@ func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.Task
 		return configureGenesisBuilder(node)
 	case taskConfigureStateSync:
 		return sidecar.ConfigureStateSyncTask{}
-	case taskConfigPatch:
-		return configPatchBuilder(node)
+	case taskConfigApply:
+		return configApplyBuilder(node)
+	case taskConfigValidate:
+		return sidecar.ConfigValidateTask{}
 	case taskMarkReady:
 		return sidecar.MarkReadyTask{}
 	default:
 		return sidecar.MarkReadyTask{}
 	}
+}
+
+// resolveMode returns the node's operating mode, defaulting to "full".
+func resolveMode(node *seiv1alpha1.SeiNode) string {
+	if node.Spec.Mode != "" {
+		return node.Spec.Mode
+	}
+	return defaultMode
 }
 
 func snapshotRestoreBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
@@ -77,33 +91,48 @@ func configureGenesisBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	}
 }
 
-func configPatchBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
-	files := make(map[string]map[string]any)
-
-	configPatch := make(map[string]any)
-
-	if hasLocalSnapshot(node) {
-		configPatch["statesync"] = map[string]any{
-			"enable":             true,
-			"use-local-snapshot": true,
-			"trust-period":       node.Spec.StateSync.TrustPeriod,
-			"backfill-blocks":    node.Spec.StateSync.BackfillBlocks,
-		}
+// configApplyBuilder constructs a ConfigApplyTask with a ConfigIntent that
+// captures the full desired state. The controller's only job is to build the
+// intent; sei-config owns the resolution pipeline.
+func configApplyBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+	intent := seiconfig.ConfigIntent{
+		Mode:      seiconfig.NodeMode(resolveMode(node)),
+		Overrides: collectOverrides(node),
 	}
+	if node.Spec.Config != nil && node.Spec.Config.Version > 0 {
+		intent.TargetVersion = node.Spec.Config.Version
+	}
+	return sidecar.ConfigApplyTask{Intent: intent}
+}
 
-	if len(configPatch) > 0 {
-		files["config.toml"] = configPatch
+// collectOverrides merges user-specified CRD overrides with controller-managed
+// parameters (snapshot generation, state sync). Controller-managed keys take
+// precedence over user overrides for the same key.
+func collectOverrides(node *seiv1alpha1.SeiNode) map[string]string {
+	overrides := make(map[string]string)
+
+	if node.Spec.Config != nil {
+		for k, v := range node.Spec.Config.Overrides {
+			overrides[k] = v
+		}
 	}
 
 	if node.Spec.SnapshotGeneration != nil {
-		files["app.toml"] = map[string]any{
-			"pruning":              "nothing",
-			"snapshot-interval":    defaultSnapshotInterval,
-			"snapshot-keep-recent": int64(node.Spec.SnapshotGeneration.KeepRecent),
-		}
+		overrides["storage.pruning"] = "nothing"
+		overrides["storage.snapshot_interval"] = strconv.FormatInt(defaultSnapshotInterval, 10)
+		overrides["storage.snapshot_keep_recent"] = strconv.FormatInt(
+			int64(node.Spec.SnapshotGeneration.KeepRecent), 10)
 	}
 
-	return sidecar.ConfigPatchTask{Files: files}
+	if hasLocalSnapshot(node) {
+		overrides["state_sync.enable"] = "true"
+		overrides["state_sync.use_local_snapshot"] = "true"
+		overrides["state_sync.trust_period"] = node.Spec.StateSync.TrustPeriod
+		overrides["state_sync.backfill_blocks"] = strconv.FormatInt(
+			node.Spec.StateSync.BackfillBlocks, 10)
+	}
+
+	return overrides
 }
 
 func snapshotUploadTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {

@@ -12,6 +12,13 @@ type SeiNodeSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	ChainID string `json:"chainId"`
 
+	// Mode is the node's operating role. Determines mode-aware config defaults
+	// via sei-config.DefaultForMode(). When empty, defaults to "full".
+	// +kubebuilder:validation:Enum=validator;full;seed;archive;rpc;indexer
+	// +kubebuilder:default=full
+	// +optional
+	Mode string `json:"mode,omitempty"`
+
 	// Image is the seid container image.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=512
@@ -20,6 +27,11 @@ type SeiNodeSpec struct {
 	// Entrypoint overrides the image command for the running node process.
 	// +optional
 	Entrypoint *EntrypointConfig `json:"entrypoint,omitempty"`
+
+	// Config provides typed configuration overrides for the node.
+	// The sidecar resolves these against mode defaults using sei-config.
+	// +optional
+	Config *SeiNodeConfigSpec `json:"config,omitempty"`
 
 	// Genesis configures the chain's genesis identity and where the
 	// genesis configuration is sourced from.
@@ -50,6 +62,21 @@ type SeiNodeSpec struct {
 	// enable archival pruning and periodic snapshot creation.
 	// +optional
 	SnapshotGeneration *SnapshotGenerationConfig `json:"snapshotGeneration,omitempty"`
+}
+
+// SeiNodeConfigSpec provides typed configuration overrides for a SeiNode.
+type SeiNodeConfigSpec struct {
+	// Version is the target config schema version. When zero, the sidecar
+	// uses its compiled default (latest). Set this when deploying a custom
+	// binary that expects a specific config version.
+	// +optional
+	Version int `json:"version,omitempty"`
+
+	// Overrides is a flat map of dotted TOML key paths to string values.
+	// Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
+	// The sidecar parses these using the sei-config Registry.
+	// +optional
+	Overrides map[string]string `json:"overrides,omitempty"`
 }
 
 // SnapshotGenerationConfig configures a node to produce Tendermint state-sync
@@ -304,11 +331,56 @@ type SeiNodeStatus struct {
 	// prevents duplicate submissions on subsequent reconciles.
 	// +optional
 	ScheduledTasks map[string]string `json:"scheduledTasks,omitempty"`
+
+	// ConfigStatus reports the observed configuration state from the sidecar.
+	// Updated after config-apply and config-validate tasks complete.
+	// +optional
+	ConfigStatus *ConfigStatus `json:"configStatus,omitempty"`
+}
+
+// ConfigStatus reports the observed config state of a managed node.
+type ConfigStatus struct {
+	// Version is the on-disk config schema version.
+	// +optional
+	Version int `json:"version,omitempty"`
+
+	// Mode is the config mode that was applied.
+	// +optional
+	Mode string `json:"mode,omitempty"`
+
+	// Diagnostics contains validation findings from the last config-validate task.
+	// +optional
+	Diagnostics []ConfigDiagnostic `json:"diagnostics,omitempty"`
+
+	// LastValidatedAt is the timestamp of the last successful config-validate task.
+	// +optional
+	LastValidatedAt *metav1.Time `json:"lastValidatedAt,omitempty"`
+
+	// LastAppliedAt is the timestamp of the last successful config-apply task.
+	// +optional
+	LastAppliedAt *metav1.Time `json:"lastAppliedAt,omitempty"`
+
+	// DriftDetected is true when the on-disk config diverges from the CRD-desired state.
+	// +optional
+	DriftDetected bool `json:"driftDetected,omitempty"`
+}
+
+// ConfigDiagnostic is a single finding from config validation.
+type ConfigDiagnostic struct {
+	// Severity is the diagnostic level: ERROR, WARNING, or INFO.
+	Severity string `json:"severity"`
+
+	// Field is the config key path that the diagnostic applies to.
+	Field string `json:"field"`
+
+	// Message describes the finding.
+	Message string `json:"message"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=snode
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.mode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
