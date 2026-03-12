@@ -1,6 +1,7 @@
 package node
 
 import (
+	"maps"
 	"strconv"
 
 	seiconfig "github.com/sei-protocol/sei-config"
@@ -13,6 +14,9 @@ const (
 	defaultSnapshotUploadCron = "0 0 * * *"
 	defaultSnapshotInterval   = int64(2000)
 	defaultMode               = "full"
+
+	valTrue    = "true"
+	valNothing = "nothing"
 )
 
 func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
@@ -112,21 +116,19 @@ func collectOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	overrides := make(map[string]string)
 
 	if node.Spec.Config != nil {
-		for k, v := range node.Spec.Config.Overrides {
-			overrides[k] = v
-		}
+		maps.Copy(overrides, node.Spec.Config.Overrides)
 	}
 
 	if node.Spec.SnapshotGeneration != nil {
-		overrides["storage.pruning"] = "nothing"
+		overrides["storage.pruning"] = valNothing
 		overrides["storage.snapshot_interval"] = strconv.FormatInt(defaultSnapshotInterval, 10)
 		overrides["storage.snapshot_keep_recent"] = strconv.FormatInt(
 			int64(node.Spec.SnapshotGeneration.KeepRecent), 10)
 	}
 
 	if hasLocalSnapshot(node) {
-		overrides["state_sync.enable"] = "true"
-		overrides["state_sync.use_local_snapshot"] = "true"
+		overrides["state_sync.enable"] = valTrue
+		overrides["state_sync.use_local_snapshot"] = valTrue
 		overrides["state_sync.trust_period"] = node.Spec.StateSync.TrustPeriod
 		overrides["state_sync.backfill_blocks"] = strconv.FormatInt(
 			node.Spec.StateSync.BackfillBlocks, 10)

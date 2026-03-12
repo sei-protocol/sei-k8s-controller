@@ -255,11 +255,11 @@ func TestBuildTaskPlan(t *testing.T) {
 }
 
 func taskTypes(plan *seiv1alpha1.TaskPlan) []string {
-	var types []string
+	var tt []string
 	for _, t := range plan.Tasks {
-		types = append(types, t.Type)
+		tt = append(tt, t.Type)
 	}
-	return types
+	return tt
 }
 
 func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
