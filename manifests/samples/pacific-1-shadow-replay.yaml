@@ -1,0 +1,142 @@
+# Shadow Replay Job
+#
+# Re-executes mainnet blocks through the Giga engine and compares outcomes
+# against canonical results from an archival source node.
+# Output: NDJSON ComparisonRecords to stdout.
+#
+# Prerequisites:
+#   1. A seid image built from ftr-shadow (with shadow-replay command)
+#   2. An archival source node (min-retain-blocks=0) reachable via RPC
+#   3. The seid-node ServiceAccount with IRSA for S3 access
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shadow-replay-data
+  namespace: default
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1000Gi
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pacific-1-shadow-replay
+  namespace: default
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        sei.io/workload: shadow-replay
+        sei.io/chain: pacific-1
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: seid-node
+      tolerations:
+        - key: sei.io/workload
+          value: sei-node
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: karpenter.sh/nodepool
+                    operator: In
+                    values: [sei-node]
+
+      initContainers:
+        # 1. Bootstrap the seid home directory.
+        - name: seid-init
+          image: &seidImage ghcr.io/bdchatham/sei-shadow:ftr-shadow
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              if [ -f /sei/config/genesis.json ]; then
+                echo "home already initialized, skipping"
+              else
+                seid init pacific-1 --chain-id pacific-1 --home /sei --overwrite
+              fi
+              mkdir -p /sei/tmp
+          volumeMounts:
+            - name: data
+              mountPath: /sei
+
+        # 2. Download snapshot from S3 and extract into data directory.
+        - name: snapshot-restore
+          image: amazon/aws-cli:2.27.31
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              BUCKET=pacific-1-snapshots
+              PREFIX=state-sync/
+              REGION=eu-central-1
+              CHAIN_ID=pacific-1
+              DEST=/sei/data/snapshots
+
+              if [ -f /sei/.snapshot-done ]; then
+                echo "snapshot already restored, skipping"
+                exit 0
+              fi
+
+              echo "resolving latest snapshot..."
+              HEIGHT=$(aws s3 cp "s3://${BUCKET}/${PREFIX}latest.txt" - --region ${REGION} | tr -d '[:space:]')
+              KEY="${PREFIX}snapshot_${HEIGHT}_${CHAIN_ID}_${REGION}.tar.gz"
+
+              echo "downloading s3://${BUCKET}/${KEY}"
+              mkdir -p ${DEST}
+              aws s3 cp "s3://${BUCKET}/${KEY}" - --region ${REGION} | tar xzf - -C ${DEST}
+
+              echo "snapshot restored at height ${HEIGHT}"
+              touch /sei/.snapshot-done
+          volumeMounts:
+            - name: data
+              mountPath: /sei
+
+        # 3. Download the real mainnet genesis.json (overwrites the dummy from seid init).
+        - name: genesis
+          image: amazon/aws-cli:2.27.31
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              echo "downloading genesis.json..."
+              aws s3 cp s3://sei-testnet-genesis-config/pacific-1/genesis.json /sei/config/genesis.json --region us-east-2
+              echo "genesis ready"
+          volumeMounts:
+            - name: data
+              mountPath: /sei
+
+      containers:
+        - name: shadow-replay
+          image: *seidImage
+          command: ["seid"]
+          args:
+            - "shadow-replay"
+            - "--home"
+            - "/sei"
+            - "--source-rpc"
+            # TODO: replace with the archive node's RPC endpoint
+            - "http://pacific-replay.sei-network.svc.cluster.local:26657"
+            - "--start-height"
+            # Must equal snapshot height + 1. Current snapshots are ~197875000.
+            - "197875001"
+            - "--end-height"
+            # 50k blocks for initial validation. Set to "0" for continuous replay to tip.
+            - "197925000"
+          env:
+            - name: TMPDIR
+              value: /sei/tmp
+          volumeMounts:
+            - name: data
+              mountPath: /sei
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: shadow-replay-data

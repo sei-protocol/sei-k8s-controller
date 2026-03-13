@@ -5,8 +5,8 @@ go 1.25.6
 require (
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.38.2
-	github.com/sei-protocol/sei-config v0.0.3
-	github.com/sei-protocol/seictl v0.0.10
+	github.com/sei-protocol/sei-config v0.0.5
+	github.com/sei-protocol/seictl v0.0.12
 	k8s.io/api v0.35.0
 	k8s.io/apimachinery v0.35.0
 	k8s.io/client-go v0.35.0

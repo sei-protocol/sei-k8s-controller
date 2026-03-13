@@ -1,0 +1,22 @@
+# SeiNodePool — Genesis Network
+#
+# Spins up a 4-node genesis network from scratch. The controller:
+#   1. Creates per-node data PVCs and a shared EFS genesis PVC
+#   2. Runs generate.sh to produce genesis state for all nodes
+#   3. Runs per-node prep Jobs to copy genesis data into each data PVC
+#   4. Creates SeiNodes that boot directly with pre-populated PVCs
+apiVersion: sei.io/v1alpha1
+kind: SeiNodePool
+metadata:
+  name: loadtest-network
+  namespace: default
+spec:
+  chainId: loadtest-1
+  nodeConfiguration:
+    nodeCount: 4
+    image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:b424748d4e6ba38fdd8b153bdad7ff4a9a562000
+    entrypoint:
+      command: ["seid"]
+      args: ["start", "--home", "/sei"]
+  storage:
+    retainOnDelete: false

@@ -1,11 +1,11 @@
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
-  name: pacific-1-snapshotter
+  name: pacific-1-replay
   namespace: default
 spec:
   chainId: pacific-1
-  mode: full
+  mode: archive
   image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:837ba922db3f5313a474fbe0c7bba4cbec466cdc
 
   sidecar:
@@ -39,11 +39,3 @@ spec:
 
   storage:
     retainOnDelete: true
-
-  snapshotGeneration:
-    keepRecent: 5
-    destination:
-      s3:
-        bucket: sei-node-mvp
-        prefix: snapshot/
-        region: eu-central-1

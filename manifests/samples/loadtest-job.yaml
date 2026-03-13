@@ -1,0 +1,63 @@
+# Load Test Job
+#
+# Runs sei-load against a SeiNodePool genesis network using EVM transfers.
+# Requires the genesis network to be running (all nodes healthy).
+#
+# Endpoint pattern: <pool>-<ordinal>-0.<pool>-<ordinal>.<namespace>.svc.cluster.local:8545
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadtest-config
+  namespace: default
+data:
+  profile.json: |
+    {
+      "chainId": 713714,
+      "seiChainId": "loadtest-1",
+      "endpoints": [
+        "http://loadtest-network-0-0.loadtest-network-0.default.svc.cluster.local:8545",
+        "http://loadtest-network-1-0.loadtest-network-1.default.svc.cluster.local:8545",
+        "http://loadtest-network-2-0.loadtest-network-2.default.svc.cluster.local:8545",
+        "http://loadtest-network-3-0.loadtest-network-3.default.svc.cluster.local:8545"
+      ],
+      "accounts": {
+        "count": 50,
+        "newAccountRate": 0.0
+      },
+      "scenarios": [
+        { "name": "EVMTransfer", "weight": 1 }
+      ],
+      "settings": {
+        "workers": 50,
+        "tps": 10,
+        "statsInterval": "5s",
+        "bufferSize": 100,
+        "trackBlocks": false,
+        "prewarm": false,
+        "rampUp": false
+      }
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: genesis-loadtest
+  namespace: default
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seiload
+          image: ghcr.io/sei-protocol/sei-load:sha-7d4e0541dcafaf571adaa4ceb039b94b5620ef1f
+          args:
+            - --config
+            - /etc/seiload/profile.json
+          volumeMounts:
+            - name: config
+              mountPath: /etc/seiload
+      volumes:
+        - name: config
+          configMap:
+            name: loadtest-config

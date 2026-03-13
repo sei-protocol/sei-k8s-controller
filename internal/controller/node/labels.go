@@ -12,7 +12,7 @@ const (
 	nodeServiceAccount  = "seid-node"
 	defaultStorageSize  = "1000Gi"
 	defaultStorageClass = ""
-	defaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:6e000cc72463b162c7b46ea7aa83e5308a892ded24bcd41b3207e34743f12698"
+	defaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:f47f680d220b191e4934343819923b0501b9dd72f2b5c315782a524efc7b8a1b"
 )
 
 func resourceLabelsForNode(node *seiv1alpha1.SeiNode) map[string]string {
