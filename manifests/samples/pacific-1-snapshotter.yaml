@@ -9,7 +9,7 @@ spec:
   image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:837ba922db3f5313a474fbe0c7bba4cbec466cdc
 
   sidecar:
-    image: ghcr.io/sei-protocol/seictl@sha256:bdd1861e4d0803b5318fee649b781edb814ed845779b1433a8a7ebf6f856e907
+    image: ghcr.io/sei-protocol/seictl@sha256:6e000cc72463b162c7b46ea7aa83e5308a892ded24bcd41b3207e34743f12698
 
   entrypoint:
     command: ["seid"]
