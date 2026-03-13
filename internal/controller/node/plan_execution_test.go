@@ -196,7 +196,7 @@ func TestBootstrapMode(t *testing.T) {
 
 func TestTaskProgressionForNode_Snapshot(t *testing.T) {
 	got := taskProgressionForNode(snapshotNode())
-	want := []string{taskSnapshotRestore, taskConfigureStateSync, taskConfigApply, taskConfigValidate, taskMarkReady}
+	want := []string{taskSnapshotRestore, taskConfigApply, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -208,13 +208,13 @@ func TestTaskProgressionForNode_SnapshotWithPeers(t *testing.T) {
 		},
 	}
 	got := taskProgressionForNode(node)
-	want := []string{taskSnapshotRestore, taskDiscoverPeers, taskConfigureStateSync, taskConfigApply, taskConfigValidate, taskMarkReady}
+	want := []string{taskSnapshotRestore, taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestTaskProgressionForNode_PeerSync(t *testing.T) {
 	got := taskProgressionForNode(peerSyncNode())
-	want := []string{taskDiscoverPeers, taskConfigureGenesis, taskConfigureStateSync, taskConfigApply, taskConfigValidate, taskMarkReady}
+	want := []string{taskConfigureGenesis, taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -232,7 +232,7 @@ func TestTaskProgressionForNode_GenesisWithPeers(t *testing.T) {
 		},
 	}
 	got := taskProgressionForNode(node)
-	want := []string{taskDiscoverPeers, taskConfigApply, taskConfigValidate, taskMarkReady}
+	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 

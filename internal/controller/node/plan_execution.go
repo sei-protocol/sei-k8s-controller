@@ -29,10 +29,10 @@ const (
 )
 
 // baseTaskProgression defines the ordered task sequence for each bootstrap mode.
-// Discovery tasks run first to populate runtime-dependent config values
-// (peers, genesis, state-sync params). config-apply then merges mode defaults
-// with user overrides on top of the discovered values. config-validate
-// verifies the fully assembled config before marking the node ready.
+// config-apply writes the full config.toml from sei-config defaults + overrides.
+// Patching tasks (discover-peers, configure-state-sync) are inserted between
+// config-apply and config-validate so their values survive the full overwrite.
+// config-validate verifies the fully assembled config before marking ready.
 var baseTaskProgression = map[string][]string{
 	"snapshot":  {taskSnapshotRestore, taskConfigApply, taskConfigValidate, taskMarkReady},
 	"peer-sync": {taskConfigApply, taskConfigValidate, taskMarkReady},
@@ -60,21 +60,23 @@ func insertBefore(prog []string, target, task string) []string {
 }
 
 // taskProgressionForNode returns the task progression for a node, dynamically
-// inserting discovery tasks before config-apply so that runtime-dependent
-// values (peers, genesis, state-sync params) are populated before the
-// config intent is resolved and validated.
+// inserting discovery and patching tasks between config-apply and
+// config-validate. config-apply fully overwrites config.toml with mode
+// defaults, so tasks that patch specific keys (discover-peers,
+// configure-state-sync) must run after it. configure-genesis writes
+// genesis.json (not config.toml) so its position is flexible.
 func taskProgressionForNode(node *seiv1alpha1.SeiNode) []string {
 	mode := bootstrapMode(node)
 	prog := slices.Clone(baseTaskProgression[mode])
 
-	if node.Spec.Peers != nil {
-		prog = insertBefore(prog, taskConfigApply, taskDiscoverPeers)
-	}
 	if node.Spec.Genesis.S3 != nil {
 		prog = insertBefore(prog, taskConfigApply, taskConfigureGenesis)
 	}
+	if node.Spec.Peers != nil {
+		prog = insertBefore(prog, taskConfigValidate, taskDiscoverPeers)
+	}
 	if needsStateSync(node) {
-		prog = insertBefore(prog, taskConfigApply, taskConfigureStateSync)
+		prog = insertBefore(prog, taskConfigValidate, taskConfigureStateSync)
 	}
 
 	return prog

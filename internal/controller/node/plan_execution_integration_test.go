@@ -68,9 +68,9 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	_, err = r.reconcileSidecarProgression(ctx, fetch())
 	g.Expect(err).NotTo(HaveOccurred())
 
-	// Drive remaining tasks: discovery first, then config-apply, validate, ready.
-	driveTask(t, g, r, mock, fetch, taskConfigureStateSync)
+	// Drive remaining tasks: config-apply, state-sync patch, validate, ready.
 	driveTask(t, g, r, mock, fetch, taskConfigApply)
+	driveTask(t, g, r, mock, fetch, taskConfigureStateSync)
 	driveTask(t, g, r, mock, fetch, taskConfigValidate)
 	driveTask(t, g, r, mock, fetch, taskMarkReady)
 
