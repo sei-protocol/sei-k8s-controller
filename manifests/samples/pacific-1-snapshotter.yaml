@@ -6,7 +6,7 @@ metadata:
 spec:
   chainId: pacific-1
   mode: full
-  image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:6a57c4d27e472d2072193e9abcbab33c14a0fdbd
+  image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:837ba922db3f5313a474fbe0c7bba4cbec466cdc
 
   entrypoint:
     command: ["seid"]
