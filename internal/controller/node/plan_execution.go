@@ -29,13 +29,13 @@ const (
 )
 
 // baseTaskProgression defines the ordered task sequence for each bootstrap mode.
-// config-apply runs first to generate mode-aware defaults + overrides.
-// Dynamic tasks (discover-peers, configure-genesis, configure-state-sync)
-// run between config-apply and config-validate to modify the generated config.
-// config-validate verifies the final on-disk config before marking ready.
+// Discovery tasks run first to populate runtime-dependent config values
+// (peers, genesis, state-sync params). config-apply then merges mode defaults
+// with user overrides on top of the discovered values. config-validate
+// verifies the fully assembled config before marking the node ready.
 var baseTaskProgression = map[string][]string{
-	"snapshot":  {taskConfigApply, taskSnapshotRestore, taskDiscoverPeers, taskConfigValidate, taskMarkReady},
-	"peer-sync": {taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady},
+	"snapshot":  {taskSnapshotRestore, taskConfigApply, taskConfigValidate, taskMarkReady},
+	"peer-sync": {taskConfigApply, taskConfigValidate, taskMarkReady},
 	"genesis":   {taskConfigApply, taskConfigValidate, taskMarkReady},
 }
 
@@ -60,20 +60,21 @@ func insertBefore(prog []string, target, task string) []string {
 }
 
 // taskProgressionForNode returns the task progression for a node, dynamically
-// inserting optional tasks before config-validate (after config-apply has
-// generated the base config, dynamic tasks modify it before validation).
+// inserting discovery tasks before config-apply so that runtime-dependent
+// values (peers, genesis, state-sync params) are populated before the
+// config intent is resolved and validated.
 func taskProgressionForNode(node *seiv1alpha1.SeiNode) []string {
 	mode := bootstrapMode(node)
 	prog := slices.Clone(baseTaskProgression[mode])
 
 	if node.Spec.Peers != nil {
-		prog = insertBefore(prog, taskConfigValidate, taskDiscoverPeers)
+		prog = insertBefore(prog, taskConfigApply, taskDiscoverPeers)
 	}
 	if node.Spec.Genesis.S3 != nil {
-		prog = insertBefore(prog, taskConfigValidate, taskConfigureGenesis)
+		prog = insertBefore(prog, taskConfigApply, taskConfigureGenesis)
 	}
 	if needsStateSync(node) {
-		prog = insertBefore(prog, taskConfigValidate, taskConfigureStateSync)
+		prog = insertBefore(prog, taskConfigApply, taskConfigureStateSync)
 	}
 
 	return prog

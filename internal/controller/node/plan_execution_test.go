@@ -196,13 +196,25 @@ func TestBootstrapMode(t *testing.T) {
 
 func TestTaskProgressionForNode_Snapshot(t *testing.T) {
 	got := taskProgressionForNode(snapshotNode())
-	want := []string{taskConfigApply, taskSnapshotRestore, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
+	want := []string{taskSnapshotRestore, taskConfigureStateSync, taskConfigApply, taskConfigValidate, taskMarkReady}
+	assertProgression(t, got, want)
+}
+
+func TestTaskProgressionForNode_SnapshotWithPeers(t *testing.T) {
+	node := snapshotNode()
+	node.Spec.Peers = &seiv1alpha1.PeerConfig{
+		Sources: []seiv1alpha1.PeerSource{
+			{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "atlantic-2"}}},
+		},
+	}
+	got := taskProgressionForNode(node)
+	want := []string{taskSnapshotRestore, taskDiscoverPeers, taskConfigureStateSync, taskConfigApply, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestTaskProgressionForNode_PeerSync(t *testing.T) {
 	got := taskProgressionForNode(peerSyncNode())
-	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigureGenesis, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
+	want := []string{taskDiscoverPeers, taskConfigureGenesis, taskConfigureStateSync, taskConfigApply, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -220,7 +232,7 @@ func TestTaskProgressionForNode_GenesisWithPeers(t *testing.T) {
 		},
 	}
 	got := taskProgressionForNode(node)
-	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
+	want := []string{taskDiscoverPeers, taskConfigApply, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -241,16 +253,16 @@ func TestBuildTaskPlan(t *testing.T) {
 	if plan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", plan.Phase)
 	}
-	if len(plan.Tasks) != 6 {
-		t.Fatalf("expected 6 tasks, got %d: %v", len(plan.Tasks), taskTypes(plan))
+	if len(plan.Tasks) != 5 {
+		t.Fatalf("expected 5 tasks, got %d: %v", len(plan.Tasks), taskTypes(plan))
 	}
 	for _, task := range plan.Tasks {
 		if task.Status != seiv1alpha1.PlannedTaskPending {
 			t.Errorf("task %q status = %q, want Pending", task.Type, task.Status)
 		}
 	}
-	if plan.Tasks[0].Type != taskConfigApply {
-		t.Errorf("first task = %q, want %q", plan.Tasks[0].Type, taskConfigApply)
+	if plan.Tasks[0].Type != taskSnapshotRestore {
+		t.Errorf("first task = %q, want %q", plan.Tasks[0].Type, taskSnapshotRestore)
 	}
 }
 
@@ -279,12 +291,12 @@ func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
 	if updated.Status.InitPlan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", updated.Status.InitPlan.Phase)
 	}
-	// First task should have been submitted (config-apply is now first).
+	// First task should have been submitted (snapshot-restore runs before config-apply).
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].TaskType() != taskConfigApply {
-		t.Errorf("submitted task = %q, want %q", mock.submitted[0].TaskType(), taskConfigApply)
+	if mock.submitted[0].TaskType() != taskSnapshotRestore {
+		t.Errorf("submitted task = %q, want %q", mock.submitted[0].TaskType(), taskSnapshotRestore)
 	}
 }
 
@@ -318,7 +330,7 @@ func TestReconcile_PollsSubmittedTask_StillRunning(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{
 		taskResults: map[uuid.UUID]*sidecar.TaskResult{
-			taskID: runningResult(taskID, taskConfigApply),
+			taskID: runningResult(taskID, taskSnapshotRestore),
 		},
 	}
 	node := snapshotNode()
@@ -344,7 +356,7 @@ func TestReconcile_PollsSubmittedTask_Completed_AdvancesToNext(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{
 		taskResults: map[uuid.UUID]*sidecar.TaskResult{
-			taskID: completedResult(taskID, taskConfigApply, nil),
+			taskID: completedResult(taskID, taskSnapshotRestore, nil),
 		},
 	}
 	node := snapshotNode()
@@ -372,7 +384,7 @@ func TestReconcile_PollsSubmittedTask_Failed_FailsPlan(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{
 		taskResults: map[uuid.UUID]*sidecar.TaskResult{
-			taskID: completedResult(taskID, taskConfigApply, strPtr("network timeout")),
+			taskID: completedResult(taskID, taskSnapshotRestore, strPtr("network timeout")),
 		},
 	}
 	node := snapshotNode()
@@ -652,16 +664,12 @@ func TestConfigApplyBuilder(t *testing.T) {
 		}
 	})
 
-	t.Run("snapshot restore adds state_sync overrides", func(t *testing.T) {
+	t.Run("state_sync fields not set by controller (owned by configure-state-sync task)", func(t *testing.T) {
 		task := configApplyBuilder(snapshotNode()).(sidecar.ConfigApplyTask)
-		if task.Intent.Overrides["state_sync.enable"] != "true" {
-			t.Errorf("state_sync.enable = %q, want %q", task.Intent.Overrides["state_sync.enable"], "true")
-		}
-		if task.Intent.Overrides["state_sync.use_local_snapshot"] != "true" {
-			t.Errorf("state_sync.use_local_snapshot = %q", task.Intent.Overrides["state_sync.use_local_snapshot"])
-		}
-		if task.Intent.Overrides["state_sync.trust_period"] != "9999h0m0s" {
-			t.Errorf("state_sync.trust_period = %q", task.Intent.Overrides["state_sync.trust_period"])
+		for _, key := range []string{"state_sync.enable", "state_sync.use_local_snapshot", "state_sync.trust_period"} {
+			if _, ok := task.Intent.Overrides[key]; ok {
+				t.Errorf("unexpected override %q: configure-state-sync task should own this field", key)
+			}
 		}
 	})
 

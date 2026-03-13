@@ -15,7 +15,6 @@ const (
 	defaultSnapshotInterval   = int64(2000)
 	defaultMode               = "full"
 
-	valTrue    = "true"
 	valNothing = "nothing"
 )
 
@@ -110,8 +109,9 @@ func configApplyBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 }
 
 // collectOverrides merges user-specified CRD overrides with controller-managed
-// parameters (snapshot generation, state sync). Controller-managed keys take
-// precedence over user overrides for the same key.
+// parameters (snapshot generation). State-sync fields are intentionally omitted
+// because the configure-state-sync sidecar task populates those at runtime
+// after discovering RPC servers, trust height, and trust hash.
 func collectOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	overrides := make(map[string]string)
 
@@ -124,14 +124,6 @@ func collectOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 		overrides["storage.snapshot_interval"] = strconv.FormatInt(defaultSnapshotInterval, 10)
 		overrides["storage.snapshot_keep_recent"] = strconv.FormatInt(
 			int64(node.Spec.SnapshotGeneration.KeepRecent), 10)
-	}
-
-	if hasLocalSnapshot(node) {
-		overrides["state_sync.enable"] = valTrue
-		overrides["state_sync.use_local_snapshot"] = valTrue
-		overrides["state_sync.trust_period"] = node.Spec.StateSync.TrustPeriod
-		overrides["state_sync.backfill_blocks"] = strconv.FormatInt(
-			node.Spec.StateSync.BackfillBlocks, 10)
 	}
 
 	return overrides

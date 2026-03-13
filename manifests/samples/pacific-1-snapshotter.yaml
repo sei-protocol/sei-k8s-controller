@@ -5,6 +5,7 @@ metadata:
   namespace: default
 spec:
   chainId: pacific-1
+  mode: full
   image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:6a57c4d27e472d2072193e9abcbab33c14a0fdbd
 
   entrypoint:
