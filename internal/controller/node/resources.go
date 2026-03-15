@@ -129,6 +129,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 func buildSidecarMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	container := buildNodeMainContainer(node)
 	container.Command, container.Args = sidecarWaitCommand(node)
+	container.Resources = defaultResourcesForMode(node.Spec.Mode)
 	container.StartupProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
@@ -264,6 +265,8 @@ func generateNodeHeadlessService(node *seiv1alpha1.SeiNode) *corev1.Service {
 }
 
 func generateNodeDataPVC(node *seiv1alpha1.SeiNode) *corev1.PersistentVolumeClaim {
+	sc, size := defaultStorageForMode(node.Spec.Mode)
+
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      nodeDataPVCName(node),
@@ -271,18 +274,14 @@ func generateNodeDataPVC(node *seiv1alpha1.SeiNode) *corev1.PersistentVolumeClai
 			Labels:    resourceLabelsForNode(node),
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			StorageClassName: &sc,
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(defaultStorageSize),
+					corev1.ResourceStorage: resource.MustParse(size),
 				},
 			},
 		},
-	}
-
-	if defaultStorageClass != "" {
-		sc := defaultStorageClass
-		pvc.Spec.StorageClassName = &sc
 	}
 
 	return pvc
