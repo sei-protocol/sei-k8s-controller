@@ -13,7 +13,7 @@ import (
 const (
 	defaultSnapshotUploadCron = "0 0 * * *"
 	defaultSnapshotInterval   = int64(2000)
-	defaultMode               = "full"
+	defaultMode               = modeFull
 
 	valNothing = "nothing"
 )

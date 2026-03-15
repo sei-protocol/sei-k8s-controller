@@ -10,8 +10,6 @@ const (
 	nodeLabel           = "sei.io/node"
 	dataDir             = "/sei"
 	nodeServiceAccount  = "seid-node"
-	defaultStorageSize  = "1000Gi"
-	defaultStorageClass = ""
 	defaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:ad50d546c3aa4bfa220b3148ffc40b59d34d7c8d09522fa1ff25f635f2f1e710"
 )
 
