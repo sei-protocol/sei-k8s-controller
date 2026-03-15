@@ -6,7 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.38.2
 	github.com/sei-protocol/sei-config v0.0.5
-	github.com/sei-protocol/seictl v0.0.13
+	github.com/sei-protocol/seictl v0.0.14-0.20260315153226-9123721cd49e
 	k8s.io/api v0.35.0
 	k8s.io/apimachinery v0.35.0
 	k8s.io/client-go v0.35.0
