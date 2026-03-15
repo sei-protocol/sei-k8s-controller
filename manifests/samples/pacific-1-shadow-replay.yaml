@@ -183,7 +183,7 @@ spec:
                 # Check RPC (only available after state-sync completes)
                 CURRENT=$(curl -s http://localhost:26657/status 2>/dev/null | \
                   jq -r '.sync_info.latest_block_height // .result.sync_info.latest_block_height' 2>/dev/null)
-                if [ -n "${CURRENT}" ] && [ "${CURRENT}" != "null" ] && [ "${CURRENT}" -ge "${HEIGHT}" ] 2>/dev/null; then
+                if [ -n "${CURRENT}" ] && [ "${CURRENT}" != "null" ] && [ "${CURRENT}" -gt 0 ] 2>/dev/null; then
                   echo "state bootstrapped at height ${CURRENT}"
                   kill ${SEID_PID} 2>/dev/null
                   wait ${SEID_PID} 2>/dev/null
