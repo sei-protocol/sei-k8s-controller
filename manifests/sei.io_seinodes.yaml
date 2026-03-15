@@ -150,6 +150,8 @@ spec:
                 description: |-
                   Mode is the node's operating role. Determines mode-aware config defaults
                   via sei-config.DefaultForMode(). When empty, defaults to "full".
+                  "replay" is a controller-level mode for ephemeral snapshot-restore
+                  workloads; it maps to "archive" for sei-config purposes.
                 enum:
                 - validator
                 - full
@@ -157,11 +159,13 @@ spec:
                 - archive
                 - rpc
                 - indexer
+                - replay
                 type: string
               peers:
                 description: |-
                   Peers configures how this node discovers and connects to peers.
-                  When set, the sidecar resolves all configured sources during bootstrap.
+                  When set, the controller enables CometBFT state sync automatically,
+                  deriving trust-period, backfill-blocks, and other parameters.
                 properties:
                   sources:
                     description: |-
@@ -338,54 +342,30 @@ spec:
                 required:
                 - keepRecent
                 type: object
-              stateSync:
+              snapshotRestore:
                 description: |-
-                  StateSync configures how this node bootstraps into an existing chain
-                  using CometBFT state sync. When nil, the node is treated as a fresh
-                  genesis node that starts from height 1 with no state to sync.
+                  SnapshotRestore configures downloading a pre-built snapshot from S3
+                  for local-snapshot bootstrap. Required when mode is "replay". When set,
+                  the controller uses use-local-snapshot mode (trust-period = "9999h0m0s",
+                  backfill-blocks = 0). Mutually exclusive with network state-sync.
                 properties:
-                  backfillBlocks:
-                    description: |-
-                      BackfillBlocks is the number of historical blocks to fetch from peers
-                      after snapshot restore. Set to 0 if no block history is needed.
-                    format: int64
-                    type: integer
-                  snapshot:
-                    description: |-
-                      Snapshot configures the node to restore from a pre-fetched S3 snapshot
-                      instead of fetching state from peers over the network.
+                  bucket:
+                    description: Bucket is the S3 snapshot archive to restore from.
                     properties:
-                      bucket:
-                        description: Bucket is the S3 snapshot archive to restore
-                          from.
-                        properties:
-                          uri:
-                            description: URI of the snapshot archive in s3://bucket/prefix
-                              format.
-                            minLength: 1
-                            type: string
-                        required:
-                        - uri
-                        type: object
-                      region:
-                        default: eu-central-1
-                        description: Region is the AWS region for S3 access.
+                      uri:
+                        description: URI of the snapshot archive in s3://bucket/prefix
+                          format.
+                        minLength: 1
                         type: string
                     required:
-                    - bucket
+                    - uri
                     type: object
-                  trustPeriod:
-                    description: |-
-                      TrustPeriod is the window during which the snapshot's block validators
-                      are considered trustworthy. Snapshots whose block timestamps fall outside
-                      this window are rejected. Must be set long enough to cover the age of
-                      the snapshot being restored (e.g. "9999h0m0s" for old S3 snapshots,
-                      "168h0m0s" for recent peer state).
-                    minLength: 1
+                  region:
+                    default: eu-central-1
+                    description: Region is the AWS region for S3 access.
                     type: string
                 required:
-                - backfillBlocks
-                - trustPeriod
+                - bucket
                 type: object
               storage:
                 description: Storage controls PVC lifecycle.

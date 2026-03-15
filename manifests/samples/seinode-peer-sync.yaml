@@ -1,18 +1,19 @@
-# SeiNode — Peer Sync
+# SeiNode — Replay (S3 Snapshot Bootstrap)
 #
-# Bootstraps a full node by restoring from an S3 snapshot, then discovers
-# peers to catch up to the chain tip.  No snapshot generation — this node is a
-# consumer of snapshots produced by a snapshotter node.
+# Bootstraps a replay node by restoring from an S3 snapshot. The controller
+# derives state-sync parameters (useLocalSnapshot, trustPeriod) automatically
+# from the presence of snapshotRestore.
 #
-# Typical deployment: validator sentries, RPC nodes, or any node joining an
-# existing chain without replaying from genesis.
+# Typical deployment: ephemeral replay nodes for shadow testing or historical
+# block re-execution.
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
-  name: atlantic-2-fullnode
+  name: atlantic-2-replay
   namespace: default
 spec:
   chainId: atlantic-2
+  mode: replay
   image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:latest
 
   entrypoint:
@@ -25,20 +26,16 @@ spec:
       uri: s3://sei-testnet-genesis-config/atlantic-2/genesis.json
       region: us-east-2
 
-  # State sync from a pre-fetched S3 snapshot.
-  stateSync:
-    trustPeriod: "9999h0m0s"
-    backfillBlocks: 0
-    snapshot:
-      region: eu-central-1
-      bucket:
-        uri: s3://atlantic-2-snapshots/state-sync/
+  # Restore from an S3 snapshot. The controller will automatically configure
+  # state-sync with useLocalSnapshot=true and trustPeriod="9999h0m0s".
+  snapshotRestore:
+    region: eu-central-1
+    bucket:
+      uri: s3://atlantic-2-snapshots/state-sync/
 
-  # Discover peers from multiple sources.  The sidecar unions and deduplicates
-  # results across all sources before patching config.toml.
+  # Discover peers from multiple sources.
   peers:
     sources:
-      # Dynamic: find running nodes by EC2 tags.
       - ec2Tags:
           region: eu-central-1
           tags:

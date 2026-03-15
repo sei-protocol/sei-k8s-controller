@@ -30,7 +30,7 @@ metadata:
   namespace: default
 spec:
   backoffLimit: 5
-  activeDeadlineSeconds: 21600
+  activeDeadlineSeconds: 259200
   template:
     metadata:
       labels:
