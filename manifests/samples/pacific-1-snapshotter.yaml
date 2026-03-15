@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   chainId: pacific-1
-  mode: full
+  mode: archive
   image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:837ba922db3f5313a474fbe0c7bba4cbec466cdc
 
   sidecar:
@@ -14,6 +14,17 @@ spec:
   entrypoint:
     command: ["seid"]
     args: ["start", "--home", "/sei"]
+
+  config:
+    overrides:
+      # Match sei-infra production settings
+      chain.concurrency_workers: "500"
+      chain.occ_enabled: "true"
+      self_remediation.blocks_behind_threshold: "300"
+      self_remediation.blocks_behind_check_interval_seconds: "60"
+      self_remediation.restart_cooldown_seconds: "300"
+      self_remediation.p2p_no_peers_restart_window_seconds: "120"
+      self_remediation.statesync_no_peers_restart_window_seconds: "90"
 
   genesis:
     chainId: pacific-1
@@ -27,7 +38,7 @@ spec:
           region: eu-central-1
           tags:
             ChainIdentifier: pacific-1
-            Component: snapshotter
+            Component: state-syncer
 
   stateSync:
     trustPeriod: "9999h0m0s"

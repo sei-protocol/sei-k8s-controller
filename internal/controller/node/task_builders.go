@@ -27,7 +27,9 @@ func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.Task
 	case taskConfigureGenesis:
 		return configureGenesisBuilder(node)
 	case taskConfigureStateSync:
-		return sidecar.ConfigureStateSyncTask{}
+		return sidecar.ConfigureStateSyncTask{
+			UseLocalSnapshot: hasLocalSnapshot(node),
+		}
 	case taskConfigApply:
 		return configApplyBuilder(node)
 	case taskConfigValidate:
