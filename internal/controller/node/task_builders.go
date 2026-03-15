@@ -27,9 +27,7 @@ func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.Task
 	case taskConfigureGenesis:
 		return configureGenesisBuilder(node)
 	case taskConfigureStateSync:
-		return sidecar.ConfigureStateSyncTask{
-			UseLocalSnapshot: hasLocalSnapshot(node),
-		}
+		return stateSyncTaskForNode(node)
 	case taskConfigApply:
 		return configApplyBuilder(node)
 	case taskConfigValidate:
@@ -41,7 +39,28 @@ func taskBuilderForNode(node *seiv1alpha1.SeiNode, taskType string) sidecar.Task
 	}
 }
 
-// resolveMode returns the node's operating mode, defaulting to "full".
+const (
+	trustPeriodLocalSnapshot  = "9999h0m0s"
+	trustPeriodNetworkSync    = "168h0m0s"
+	backfillBlocksNetworkSync = int64(6000)
+)
+
+// stateSyncTaskForNode derives state-sync configuration based on whether the
+// node bootstraps from a local S3 snapshot or from the peer network.
+func stateSyncTaskForNode(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyncTask {
+	if hasLocalSnapshot(node) {
+		return sidecar.ConfigureStateSyncTask{
+			UseLocalSnapshot: true,
+			TrustPeriod:      trustPeriodLocalSnapshot,
+		}
+	}
+	return sidecar.ConfigureStateSyncTask{
+		TrustPeriod:    trustPeriodNetworkSync,
+		BackfillBlocks: backfillBlocksNetworkSync,
+	}
+}
+
+// resolveMode returns the node's CRD mode, defaulting to "full".
 func resolveMode(node *seiv1alpha1.SeiNode) string {
 	if node.Spec.Mode != "" {
 		return node.Spec.Mode
@@ -49,11 +68,20 @@ func resolveMode(node *seiv1alpha1.SeiNode) string {
 	return defaultMode
 }
 
+// seiConfigMode maps the CRD mode to a sei-config NodeMode. "replay" is a
+// controller-level concept that maps to "archive" for config generation.
+func seiConfigMode(mode string) string {
+	if mode == modeReplay {
+		return modeArchive
+	}
+	return mode
+}
+
 func snapshotRestoreBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
-	if !hasLocalSnapshot(node) {
+	snap := node.Spec.SnapshotRestore
+	if snap == nil {
 		return sidecar.SnapshotRestoreTask{}
 	}
-	snap := node.Spec.StateSync.Snapshot
 	bucket, prefix := parseS3URI(snap.Bucket.URI)
 	return sidecar.SnapshotRestoreTask{
 		Bucket:  bucket,
@@ -101,7 +129,7 @@ func configureGenesisBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 // intent; sei-config owns the resolution pipeline.
 func configApplyBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	intent := seiconfig.ConfigIntent{
-		Mode:      seiconfig.NodeMode(resolveMode(node)),
+		Mode:      seiconfig.NodeMode(seiConfigMode(resolveMode(node))),
 		Overrides: collectOverrides(node),
 	}
 	if node.Spec.Config != nil && node.Spec.Config.Version > 0 {

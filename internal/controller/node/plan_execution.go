@@ -82,8 +82,16 @@ func taskProgressionForNode(node *seiv1alpha1.SeiNode) []string {
 	return prog
 }
 
+// validateSpec checks for invalid field combinations in the SeiNode spec.
+func validateSpec(node *seiv1alpha1.SeiNode) error {
+	if node.Spec.Mode == modeReplay && node.Spec.SnapshotRestore == nil {
+		return fmt.Errorf("mode %q requires snapshotRestore to be set", modeReplay)
+	}
+	return nil
+}
+
 func needsStateSync(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.StateSync != nil
+	return node.Spec.Peers != nil || node.Spec.SnapshotRestore != nil
 }
 
 func bootstrapMode(node *seiv1alpha1.SeiNode) string {
@@ -98,7 +106,7 @@ func bootstrapMode(node *seiv1alpha1.SeiNode) string {
 }
 
 func hasLocalSnapshot(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.StateSync != nil && node.Spec.StateSync.Snapshot != nil
+	return node.Spec.SnapshotRestore != nil
 }
 
 // buildSidecarClient constructs a SidecarClient from the node's sidecar config.

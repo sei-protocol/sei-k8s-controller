@@ -1,11 +1,14 @@
 # SeiNode — Snapshotter
 #
 # Runs a full node that produces Tendermint state-sync snapshots and uploads
-# them to S3.  The sidecar handles genesis download, peer discovery, config
+# them to S3. The sidecar handles genesis download, peer discovery, config
 # patching for archival pruning, and periodic snapshot uploads.
 #
+# State-sync parameters (trustPeriod, backfillBlocks) are derived automatically
+# by the controller since this node syncs from the network (no snapshotRestore).
+#
 # Typical deployment: one per chain / region to keep a fresh snapshot archive
-# that peer-sync nodes can restore from.
+# that replay or peer-sync nodes can restore from.
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
@@ -25,11 +28,6 @@ spec:
       uri: s3://sei-testnet-genesis-config/atlantic-2/genesis.json
       region: us-east-2
 
-  # State sync from peers (no local snapshot).
-  stateSync:
-    trustPeriod: "168h0m0s"
-    backfillBlocks: 0
-
   # Discover peers via EC2 instance tags in the same region.
   peers:
     sources:
@@ -43,8 +41,7 @@ spec:
     retainOnDelete: true
 
   # Enable snapshot generation and upload each snapshot to the S3 bucket
-  # under the state-sync/ prefix. The controller applies a system default
-  # for snapshot-interval in app.toml.
+  # under the state-sync/ prefix.
   snapshotGeneration:
     keepRecent: 5
     destination:

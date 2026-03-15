@@ -374,13 +374,10 @@ spec:
       s3:
         uri: s3://sei-genesis/pacific-1/genesis.json
         region: us-east-2
-    stateSync:
-      trustPeriod: "9999h0m0s"
-      backfillBlocks: 0
-      snapshot:
-        bucket:
-          uri: s3://pacific-1-snapshots/state-sync/
-        region: eu-central-1
+    snapshotRestore:
+      bucket:
+        uri: s3://pacific-1-snapshots/state-sync/
+      region: eu-central-1
     peers:
       sources:
         - ec2Tags:

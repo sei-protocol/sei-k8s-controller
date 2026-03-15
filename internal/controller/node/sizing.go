@@ -11,6 +11,7 @@ const (
 	modeFull      = "full"
 	modeValidator = "validator"
 	modeSeed      = "seed"
+	modeReplay    = "replay"
 
 	storageClassPerf    = "gp3-perf"
 	storageClassDefault = "gp3"
@@ -26,7 +27,7 @@ const (
 // cache to function without constant disk reads.
 func defaultResourcesForMode(mode string) corev1.ResourceRequirements {
 	switch mode {
-	case modeArchive:
+	case modeArchive, modeReplay:
 		return makeResources("8", "48Gi")
 	case modeRPC:
 		return makeResources("8", "48Gi")
@@ -46,7 +47,7 @@ func defaultResourcesForMode(mode string) corev1.ResourceRequirements {
 // with provisioned IOPS; lightweight modes fall back to baseline gp3.
 func defaultStorageForMode(mode string) (storageClass string, size string) {
 	switch mode {
-	case modeArchive:
+	case modeArchive, modeReplay:
 		return storageClassPerf, "2000Gi"
 	case modeRPC:
 		return storageClassPerf, "1500Gi"

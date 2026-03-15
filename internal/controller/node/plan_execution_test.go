@@ -110,15 +110,12 @@ func snapshotNode() *seiv1alpha1.SeiNode {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node", Namespace: "default", Generation: 1},
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
+			Mode:    modeReplay,
 			Image:   "sei:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "atlantic-2"},
-			StateSync: &seiv1alpha1.StateSyncConfig{
-				Snapshot: &seiv1alpha1.SnapshotSource{
-					Region: "us-east-1",
-					Bucket: seiv1alpha1.BucketSnapshot{URI: "s3://my-bucket/snapshots/latest.tar"},
-				},
-				TrustPeriod:    "9999h0m0s",
-				BackfillBlocks: 0,
+			SnapshotRestore: &seiv1alpha1.SnapshotSource{
+				Region: "us-east-1",
+				Bucket: seiv1alpha1.BucketSnapshot{URI: "s3://my-bucket/snapshots/latest.tar"},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
 		},
@@ -134,10 +131,6 @@ func peerSyncNode() *seiv1alpha1.SeiNode {
 			Genesis: seiv1alpha1.GenesisConfiguration{
 				ChainID: "atlantic-2",
 				S3:      &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/atlantic-2/genesis.json", Region: "us-east-2"},
-			},
-			StateSync: &seiv1alpha1.StateSyncConfig{
-				TrustPeriod:    "168h0m0s",
-				BackfillBlocks: 0,
 			},
 			Peers: &seiv1alpha1.PeerConfig{
 				Sources: []seiv1alpha1.PeerSource{
@@ -232,7 +225,7 @@ func TestTaskProgressionForNode_GenesisWithPeers(t *testing.T) {
 		},
 	}
 	got := taskProgressionForNode(node)
-	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
+	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -603,6 +596,34 @@ func TestTaskBuilderForNode_MarkReady(t *testing.T) {
 	}
 }
 
+func TestStateSyncTaskForNode(t *testing.T) {
+	t.Run("local snapshot derives replay-style params", func(t *testing.T) {
+		task := stateSyncTaskForNode(snapshotNode())
+		if !task.UseLocalSnapshot {
+			t.Error("expected UseLocalSnapshot = true for node with snapshot source")
+		}
+		if task.TrustPeriod != trustPeriodLocalSnapshot {
+			t.Errorf("TrustPeriod = %q, want %q", task.TrustPeriod, trustPeriodLocalSnapshot)
+		}
+		if task.BackfillBlocks != 0 {
+			t.Errorf("BackfillBlocks = %d, want 0", task.BackfillBlocks)
+		}
+	})
+
+	t.Run("network sync derives long-running node params", func(t *testing.T) {
+		task := stateSyncTaskForNode(genesisNode())
+		if task.UseLocalSnapshot {
+			t.Error("expected UseLocalSnapshot = false for node without snapshot source")
+		}
+		if task.TrustPeriod != trustPeriodNetworkSync {
+			t.Errorf("TrustPeriod = %q, want %q", task.TrustPeriod, trustPeriodNetworkSync)
+		}
+		if task.BackfillBlocks != backfillBlocksNetworkSync {
+			t.Errorf("BackfillBlocks = %d, want %d", task.BackfillBlocks, backfillBlocksNetworkSync)
+		}
+	})
+}
+
 func TestResolveMode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -615,6 +636,7 @@ func TestResolveMode(t *testing.T) {
 		{"archive", "archive", "archive"},
 		{"seed", "seed", "seed"},
 		{"indexer", "indexer", "indexer"},
+		{"replay", "replay", "replay"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -624,6 +646,15 @@ func TestResolveMode(t *testing.T) {
 				t.Errorf("resolveMode() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSeiConfigMode(t *testing.T) {
+	if got := seiConfigMode("replay"); got != "archive" {
+		t.Errorf("seiConfigMode(replay) = %q, want archive", got)
+	}
+	if got := seiConfigMode("full"); got != "full" {
+		t.Errorf("seiConfigMode(full) = %q, want full", got)
 	}
 }
 
@@ -647,6 +678,13 @@ func TestConfigApplyBuilder(t *testing.T) {
 		}
 	})
 
+	t.Run("replay mode maps to archive for sei-config", func(t *testing.T) {
+		task := configApplyBuilder(snapshotNode()).(sidecar.ConfigApplyTask)
+		if string(task.Intent.Mode) != "archive" {
+			t.Errorf("Intent.Mode = %q, want %q (replay maps to archive)", task.Intent.Mode, "archive")
+		}
+	})
+
 	t.Run("CRD overrides included", func(t *testing.T) {
 		node := genesisNode()
 		node.Spec.Config = &seiv1alpha1.SeiNodeConfigSpec{
@@ -664,9 +702,9 @@ func TestConfigApplyBuilder(t *testing.T) {
 		}
 	})
 
-	t.Run("state_sync fields not set by controller (owned by configure-state-sync task)", func(t *testing.T) {
+	t.Run("state_sync fields not set by config-apply (owned by configure-state-sync task)", func(t *testing.T) {
 		task := configApplyBuilder(snapshotNode()).(sidecar.ConfigApplyTask)
-		for _, key := range []string{"state_sync.enable", "state_sync.use_local_snapshot", "state_sync.trust_period"} {
+		for _, key := range []string{"state_sync.enable", "state_sync.use_local_snapshot", "state_sync.trust_period", "state_sync.backfill_blocks"} {
 			if _, ok := task.Intent.Overrides[key]; ok {
 				t.Errorf("unexpected override %q: configure-state-sync task should own this field", key)
 			}
@@ -758,12 +796,33 @@ func TestSnapshotUploadTask_NoDestination(t *testing.T) {
 
 func TestNeedsStateSync(t *testing.T) {
 	if !needsStateSync(peerSyncNode()) {
-		t.Error("peerSyncNode: want true (StateSync set)")
+		t.Error("peerSyncNode: want true (has peers)")
 	}
 	if needsStateSync(genesisNode()) {
-		t.Error("genesisNode: want false (StateSync nil)")
+		t.Error("genesisNode: want false (no peers, no snapshot)")
 	}
 	if !needsStateSync(snapshotNode()) {
-		t.Error("snapshotNode: want true (StateSync set with snapshot)")
+		t.Error("snapshotNode: want true (has snapshotRestore)")
 	}
+}
+
+func TestValidateSpec(t *testing.T) {
+	t.Run("replay mode requires snapshotRestore", func(t *testing.T) {
+		node := genesisNode()
+		node.Spec.Mode = modeReplay
+		if err := validateSpec(node); err == nil {
+			t.Error("expected error for replay mode without snapshotRestore")
+		}
+	})
+	t.Run("replay mode with snapshotRestore is valid", func(t *testing.T) {
+		node := snapshotNode()
+		if err := validateSpec(node); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+	t.Run("non-replay mode without snapshotRestore is valid", func(t *testing.T) {
+		if err := validateSpec(genesisNode()); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
 }

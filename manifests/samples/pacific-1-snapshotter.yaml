@@ -9,7 +9,7 @@ spec:
   image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:837ba922db3f5313a474fbe0c7bba4cbec466cdc
 
   sidecar:
-    image: ghcr.io/sei-protocol/seictl@sha256:ad50d546c3aa4bfa220b3148ffc40b59d34d7c8d09522fa1ff25f635f2f1e710
+    image: ghcr.io/sei-protocol/seictl@sha256:80add5808602b0f9e92d6d7a8951ec8eb8bbcc9aaa8b2501bc1c4ea65adfa659
 
   entrypoint:
     command: ["seid"]
@@ -17,14 +17,9 @@ spec:
 
   config:
     overrides:
-      # Match sei-infra production settings
       chain.concurrency_workers: "500"
       chain.occ_enabled: "true"
-      self_remediation.blocks_behind_threshold: "300"
-      self_remediation.blocks_behind_check_interval_seconds: "60"
-      self_remediation.restart_cooldown_seconds: "300"
-      self_remediation.p2p_no_peers_restart_window_seconds: "120"
-      self_remediation.statesync_no_peers_restart_window_seconds: "90"
+      self_remediation.blocks_behind_threshold: "0"
 
   genesis:
     chainId: pacific-1
@@ -39,14 +34,6 @@ spec:
           tags:
             ChainIdentifier: pacific-1
             Component: state-syncer
-
-  stateSync:
-    trustPeriod: "9999h0m0s"
-    backfillBlocks: 0
-    snapshot:
-      bucket:
-        uri: s3://pacific-1-snapshots/state-sync/
-      region: eu-central-1
 
   storage:
     retainOnDelete: true

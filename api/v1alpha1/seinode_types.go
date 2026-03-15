@@ -14,7 +14,9 @@ type SeiNodeSpec struct {
 
 	// Mode is the node's operating role. Determines mode-aware config defaults
 	// via sei-config.DefaultForMode(). When empty, defaults to "full".
-	// +kubebuilder:validation:Enum=validator;full;seed;archive;rpc;indexer
+	// "replay" is a controller-level mode for ephemeral snapshot-restore
+	// workloads; it maps to "archive" for sei-config purposes.
+	// +kubebuilder:validation:Enum=validator;full;seed;archive;rpc;indexer;replay
 	// +kubebuilder:default=full
 	// +optional
 	Mode string `json:"mode,omitempty"`
@@ -37,16 +39,18 @@ type SeiNodeSpec struct {
 	// genesis configuration is sourced from.
 	Genesis GenesisConfiguration `json:"genesis"`
 
-	// StateSync configures how this node bootstraps into an existing chain
-	// using CometBFT state sync. When nil, the node is treated as a fresh
-	// genesis node that starts from height 1 with no state to sync.
-	// +optional
-	StateSync *StateSyncConfig `json:"stateSync,omitempty"`
-
 	// Peers configures how this node discovers and connects to peers.
-	// When set, the sidecar resolves all configured sources during bootstrap.
+	// When set, the controller enables CometBFT state sync automatically,
+	// deriving trust-period, backfill-blocks, and other parameters.
 	// +optional
 	Peers *PeerConfig `json:"peers,omitempty"`
+
+	// SnapshotRestore configures downloading a pre-built snapshot from S3
+	// for local-snapshot bootstrap. Required when mode is "replay". When set,
+	// the controller uses use-local-snapshot mode (trust-period = "9999h0m0s",
+	// backfill-blocks = 0). Mutually exclusive with network state-sync.
+	// +optional
+	SnapshotRestore *SnapshotSource `json:"snapshotRestore,omitempty"`
 
 	// Storage controls PVC lifecycle.
 	// +optional
@@ -154,27 +158,6 @@ type GenesisS3Source struct {
 	// Region is the AWS region for S3 access.
 	// +optional
 	Region string `json:"region,omitempty"`
-}
-
-// StateSyncConfig configures how a node bootstraps into an existing chain
-// using CometBFT state sync.
-type StateSyncConfig struct {
-	// Snapshot configures the node to restore from a pre-fetched S3 snapshot
-	// instead of fetching state from peers over the network.
-	// +optional
-	Snapshot *SnapshotSource `json:"snapshot,omitempty"`
-
-	// TrustPeriod is the window during which the snapshot's block validators
-	// are considered trustworthy. Snapshots whose block timestamps fall outside
-	// this window are rejected. Must be set long enough to cover the age of
-	// the snapshot being restored (e.g. "9999h0m0s" for old S3 snapshots,
-	// "168h0m0s" for recent peer state).
-	// +kubebuilder:validation:MinLength=1
-	TrustPeriod string `json:"trustPeriod"`
-
-	// BackfillBlocks is the number of historical blocks to fetch from peers
-	// after snapshot restore. Set to 0 if no block history is needed.
-	BackfillBlocks int64 `json:"backfillBlocks"`
 }
 
 // SnapshotSource configures snapshot-based state restoration from S3.
