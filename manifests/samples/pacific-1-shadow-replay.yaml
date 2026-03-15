@@ -167,37 +167,39 @@ spec:
                 echo "WARNING: could not fetch trust hash, using empty"
               fi
 
-              # Start seid in background
-              seid start --home /sei &
+              LOGFILE=/sei/tmp/seid-bootstrap.log
+
+              # Start seid and tee output to a log file for detection
+              seid start --home /sei > "${LOGFILE}" 2>&1 &
               SEID_PID=$!
 
-              echo "waiting for state-sync to apply snapshot (pid=${SEID_PID})..."
+              echo "waiting for state-sync to complete (pid=${SEID_PID})..."
               # 7200 iterations * 2s = 4 hours max
               for i in $(seq 1 7200); do
                 sleep 2
-                # If seid crashed, exit early
                 if ! kill -0 ${SEID_PID} 2>/dev/null; then
                   echo "ERROR: seid process exited unexpectedly"
+                  tail -20 "${LOGFILE}" 2>/dev/null
                   exit 1
                 fi
-                # Check RPC (only available after state-sync completes)
-                CURRENT=$(curl -s http://localhost:26657/status 2>/dev/null | \
-                  jq -r '.sync_info.latest_block_height // .result.sync_info.latest_block_height' 2>/dev/null)
-                if [ -n "${CURRENT}" ] && [ "${CURRENT}" != "null" ] && [ "${CURRENT}" -gt 0 ] 2>/dev/null; then
-                  echo "state bootstrapped at height ${CURRENT}"
+                # "not caught up yet" is emitted only after state-sync finishes
+                # and the node transitions to block-sync mode
+                if grep -q "not caught up yet" "${LOGFILE}" 2>/dev/null; then
+                  echo "state-sync complete, state bootstrapped at height ${HEIGHT}"
                   kill ${SEID_PID} 2>/dev/null
                   wait ${SEID_PID} 2>/dev/null
                   sed -i 's/^enable = true/enable = false/' /sei/config/config.toml
                   touch /sei/.bootstrap-done
                   exit 0
                 fi
-                # Progress log every 5 minutes
                 if [ $((i % 150)) -eq 0 ]; then
                   ELAPSED=$((i * 2 / 60))
-                  echo "still waiting... ${ELAPSED}m elapsed (current height: ${CURRENT:-unknown})"
+                  CHUNKS=$(grep -c "Applied snapshot chunk" "${LOGFILE}" 2>/dev/null || echo 0)
+                  echo "still waiting... ${ELAPSED}m elapsed (${CHUNKS} chunks applied)"
                 fi
               done
               echo "ERROR: timed out waiting for state-sync (4h)"
+              tail -20 "${LOGFILE}" 2>/dev/null
               kill ${SEID_PID} 2>/dev/null
               exit 1
           env:
