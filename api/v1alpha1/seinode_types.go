@@ -67,11 +67,12 @@ type FullNodeSpec struct {
 }
 
 // ArchiveSpec configures an archive node (no pruning, full history).
+// Archive nodes always block sync from genesis to retain all historical data.
 // If SnapshotGeneration is set, the node also acts as a snapshotter.
 type ArchiveSpec struct {
-	// Sync configures how the node discovers peers and bootstraps chain state.
+	// Peers configures how the archive node discovers peers for block sync.
 	// +optional
-	Sync *SyncConfig `json:"sync,omitempty"`
+	Peers *PeerConfig `json:"peers,omitempty"`
 
 	// SnapshotGeneration configures periodic snapshot creation and optional upload.
 	// +optional

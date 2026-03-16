@@ -29,15 +29,13 @@ spec:
     retainOnDelete: true
 
   archive:
-    sync:
-      peers:
-        sources:
-          - ec2Tags:
-              region: eu-central-1
-              tags:
-                ChainIdentifier: atlantic-2
-                Component: snapshotter
-      stateSync: {}
+    peers:
+      sources:
+        - ec2Tags:
+            region: eu-central-1
+            tags:
+              ChainIdentifier: atlantic-2
+              Component: snapshotter
 
     snapshotGeneration:
       keepRecent: 5

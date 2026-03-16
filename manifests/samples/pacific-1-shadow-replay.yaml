@@ -54,7 +54,7 @@ spec:
 
       initContainers:
         - name: seid-init
-          image: &seidImage ghcr.io/bdchatham/sei-shadow:ftr-shadow
+          image: &seidImage ghcr.io/bdchatham/sei-shadow:latest
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:

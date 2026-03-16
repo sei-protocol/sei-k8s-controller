@@ -177,14 +177,13 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 			Image:   "sei:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "atlantic-2"},
 			Archive: &seiv1alpha1.ArchiveSpec{
-				Sync: &seiv1alpha1.SyncConfig{
-					BlockSync: &seiv1alpha1.BlockSyncConfig{
-						Snapshot: &seiv1alpha1.SnapshotRestoreConfig{
-							Region:      "us-east-1",
-							Bucket:      seiv1alpha1.BucketSnapshot{URI: "s3://my-bucket/snapshots/latest.tar"},
-							TrustPeriod: "9999h0m0s",
+				Peers: &seiv1alpha1.PeerConfig{
+					Sources: []seiv1alpha1.PeerSource{{
+						EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
+							Region: "eu-central-1",
+							Tags:   map[string]string{"ChainIdentifier": "atlantic-2"},
 						},
-					},
+					}},
 				},
 				SnapshotGeneration: &seiv1alpha1.SnapshotGenerationConfig{
 					KeepRecent: 5,

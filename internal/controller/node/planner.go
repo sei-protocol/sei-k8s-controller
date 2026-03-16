@@ -50,7 +50,7 @@ func syncConfig(node *seiv1alpha1.SeiNode) *seiv1alpha1.SyncConfig {
 	case node.Spec.FullNode != nil:
 		return node.Spec.FullNode.Sync
 	case node.Spec.Archive != nil:
-		return node.Spec.Archive.Sync
+		return nil
 	case node.Spec.Validator != nil:
 		return node.Spec.Validator.Sync
 	default:

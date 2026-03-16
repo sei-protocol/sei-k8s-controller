@@ -28,20 +28,13 @@ spec:
     retainOnDelete: true
 
   archive:
-    sync:
-      peers:
-        sources:
-          - ec2Tags:
-              region: eu-central-1
-              tags:
-                ChainIdentifier: pacific-1
-                Component: state-syncer
-      blockSync:
-        snapshot:
-          bucket:
-            uri: s3://pacific-1-snapshots/state-sync/
-          region: eu-central-1
-          trustPeriod: "9999h0m0s"
+    peers:
+      sources:
+        - ec2Tags:
+            region: eu-central-1
+            tags:
+              ChainIdentifier: pacific-1
+              Component: state-syncer
 
     snapshotGeneration:
       keepRecent: 5
