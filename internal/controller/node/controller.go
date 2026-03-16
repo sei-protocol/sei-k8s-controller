@@ -13,7 +13,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -54,13 +53,16 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.handleNodeDeletion(ctx, node)
 	}
 
-	if err := validateSpec(node); err != nil {
-		log.FromContext(ctx).Error(err, "invalid SeiNode spec")
-		return ctrl.Result{}, nil
-	}
-
 	if err := r.ensureNodeFinalizer(ctx, node); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	planner, err := PlannerForNode(node)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("resolving planner: %w", err)
+	}
+	if err := planner.Validate(node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("validating spec: %w", err)
 	}
 
 	if !hasGenesisPVC(node) {
@@ -74,7 +76,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.reconcileNodeService(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
 	}
-	return r.reconcileSidecarProgression(ctx, node)
+	return r.reconcileSidecarProgression(ctx, node, planner)
 }
 
 // SetupWithManager sets up the controller with the Manager.

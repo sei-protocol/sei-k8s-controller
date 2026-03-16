@@ -6,20 +6,13 @@ import (
 )
 
 // SeiNodeSpec defines the desired state of a standalone Sei node.
+// Exactly one mode sub-spec (fullNode, archive, replayer, validator) must be set;
+// the populated field determines the node's operating mode.
+// +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, or validator must be set"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
-	// Deprecated: use Genesis.ChainID. Kept for backward compatibility.
 	// +kubebuilder:validation:MinLength=1
 	ChainID string `json:"chainId"`
-
-	// Mode is the node's operating role. Determines mode-aware config defaults
-	// via sei-config.DefaultForMode(). When empty, defaults to "full".
-	// "replay" is a controller-level mode for ephemeral snapshot-restore
-	// workloads; it maps to "archive" for sei-config purposes.
-	// +kubebuilder:validation:Enum=validator;full;seed;archive;rpc;indexer;replay
-	// +kubebuilder:default=full
-	// +optional
-	Mode string `json:"mode,omitempty"`
 
 	// Image is the seid container image.
 	// +kubebuilder:validation:MinLength=1
@@ -30,57 +23,131 @@ type SeiNodeSpec struct {
 	// +optional
 	Entrypoint *EntrypointConfig `json:"entrypoint,omitempty"`
 
-	// Config provides typed configuration overrides for the node.
-	// The sidecar resolves these against mode defaults using sei-config.
-	// +optional
-	Config *SeiNodeConfigSpec `json:"config,omitempty"`
-
 	// Genesis configures the chain's genesis identity and where the
 	// genesis configuration is sourced from.
 	Genesis GenesisConfiguration `json:"genesis"`
-
-	// Peers configures how this node discovers and connects to peers.
-	// When set, the controller enables CometBFT state sync automatically,
-	// deriving trust-period, backfill-blocks, and other parameters.
-	// +optional
-	Peers *PeerConfig `json:"peers,omitempty"`
-
-	// SnapshotRestore configures downloading a pre-built snapshot from S3
-	// for local-snapshot bootstrap. Required when mode is "replay". When set,
-	// the controller uses use-local-snapshot mode (trust-period = "9999h0m0s",
-	// backfill-blocks = 0). Mutually exclusive with network state-sync.
-	// +optional
-	SnapshotRestore *SnapshotSource `json:"snapshotRestore,omitempty"`
 
 	// Storage controls PVC lifecycle.
 	// +optional
 	Storage SeiNodeStorageConfig `json:"storage,omitempty"`
 
-	// Sidecar configures the sei-sidecar sidecar.
-	// When set, seid-init and snapshot-restore init containers are replaced by the sidecar.
+	// Sidecar configures the sei-sidecar container.
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
 
-	// SnapshotGeneration configures the node to produce Tendermint state-sync
-	// snapshots. When set, the sidecar patches app.toml during bootstrap to
-	// enable archival pruning and periodic snapshot creation.
+	// --- Mode-specific sub-specs (exactly one must be set) ---
+
+	// FullNode configures a chain-following full node (absorbs the "rpc" role).
+	// +optional
+	FullNode *FullNodeSpec `json:"fullNode,omitempty"`
+
+	// Archive configures an archive node with full history and no pruning.
+	// +optional
+	Archive *ArchiveSpec `json:"archive,omitempty"`
+
+	// Replayer configures an ephemeral replay workload that restores from a snapshot.
+	// +optional
+	Replayer *ReplayerSpec `json:"replayer,omitempty"`
+
+	// Validator configures a consensus-participating validator node.
+	// +optional
+	Validator *ValidatorSpec `json:"validator,omitempty"`
+}
+
+// FullNodeSpec configures a chain-following full node. If SnapshotGeneration
+// is set, the node also produces Tendermint state-sync snapshots.
+type FullNodeSpec struct {
+	// Sync configures how the node discovers peers and bootstraps chain state.
+	// +optional
+	Sync *SyncConfig `json:"sync,omitempty"`
+
+	// SnapshotGeneration configures periodic snapshot creation and optional upload.
 	// +optional
 	SnapshotGeneration *SnapshotGenerationConfig `json:"snapshotGeneration,omitempty"`
 }
 
-// SeiNodeConfigSpec provides typed configuration overrides for a SeiNode.
-type SeiNodeConfigSpec struct {
-	// Version is the target config schema version. When zero, the sidecar
-	// uses its compiled default (latest). Set this when deploying a custom
-	// binary that expects a specific config version.
+// ArchiveSpec configures an archive node (no pruning, full history).
+// If SnapshotGeneration is set, the node also acts as a snapshotter.
+type ArchiveSpec struct {
+	// Sync configures how the node discovers peers and bootstraps chain state.
 	// +optional
-	Version int `json:"version,omitempty"`
+	Sync *SyncConfig `json:"sync,omitempty"`
 
-	// Overrides is a flat map of dotted TOML key paths to string values.
-	// Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
-	// The sidecar parses these using the sei-config Registry.
+	// SnapshotGeneration configures periodic snapshot creation and optional upload.
 	// +optional
-	Overrides map[string]string `json:"overrides,omitempty"`
+	SnapshotGeneration *SnapshotGenerationConfig `json:"snapshotGeneration,omitempty"`
+}
+
+// ReplayerSpec configures an ephemeral snapshot-restore workload.
+type ReplayerSpec struct {
+	// Snapshot is the S3 snapshot to restore.
+	Snapshot SnapshotSource `json:"snapshot"`
+
+	// Peers configures how the replayer discovers peers for block sync
+	// after restoring from the snapshot.
+	Peers PeerConfig `json:"peers"`
+}
+
+// ValidatorSpec configures a consensus-participating validator node.
+// Stub — will grow to include key management and oracle configuration.
+type ValidatorSpec struct {
+	// Sync configures how the node discovers peers and bootstraps chain state.
+	// +optional
+	Sync *SyncConfig `json:"sync,omitempty"`
+}
+
+// SyncConfig configures peer discovery and the chain-sync strategy.
+// At most one of StateSync or BlockSync may be set. When neither is set,
+// block sync from genesis is assumed.
+// +kubebuilder:validation:XValidation:rule="!(has(self.stateSync) && has(self.blockSync))",message="stateSync and blockSync are mutually exclusive"
+type SyncConfig struct {
+	// Peers configures how this node discovers and connects to peers.
+	// +optional
+	Peers *PeerConfig `json:"peers,omitempty"`
+
+	// StateSync enables Tendermint state sync from peers. The controller
+	// manages trust period, trust height, and RPC server configuration.
+	// +optional
+	StateSync *StateSyncConfig `json:"stateSync,omitempty"`
+
+	// BlockSync configures block-by-block sync from peers. When a Snapshot
+	// is provided, the node restores from S3 first to accelerate catch-up.
+	// +optional
+	BlockSync *BlockSyncConfig `json:"blockSync,omitempty"`
+}
+
+// StateSyncConfig enables Tendermint state sync. Presence of this struct
+// signals the controller to configure state sync from peers.
+type StateSyncConfig struct{}
+
+// BlockSyncConfig configures block sync, optionally accelerated by an
+// S3 snapshot restore.
+type BlockSyncConfig struct {
+	// Snapshot configures S3 snapshot restore before block sync begins.
+	// +optional
+	Snapshot *SnapshotRestoreConfig `json:"snapshot,omitempty"`
+}
+
+// SnapshotRestoreConfig configures bootstrap from a pre-built S3 snapshot.
+type SnapshotRestoreConfig struct {
+	// Region is the AWS region for S3 access.
+	// +optional
+	// +kubebuilder:default="eu-central-1"
+	Region string `json:"region,omitempty"`
+
+	// Bucket is the S3 snapshot archive to restore from.
+	Bucket BucketSnapshot `json:"bucket"`
+
+	// TrustPeriod is the window during which the snapshot's block validators
+	// are considered trustworthy. Must be long enough to cover the age of
+	// the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
+	// +optional
+	TrustPeriod string `json:"trustPeriod,omitempty"`
+
+	// BackfillBlocks is the number of historical blocks to fetch from peers
+	// after snapshot restore.
+	// +optional
+	BackfillBlocks int64 `json:"backfillBlocks,omitempty"`
 }
 
 // SnapshotGenerationConfig configures a node to produce Tendermint state-sync
@@ -94,8 +161,7 @@ type SnapshotGenerationConfig struct {
 	KeepRecent int32 `json:"keepRecent"`
 
 	// Destination configures where generated snapshots are uploaded.
-	// When set, the controller submits a scheduled upload task to the sidecar
-	// which tar, compress, and push completed snapshots to the destination.
+	// When set, the controller submits a scheduled upload task to the sidecar.
 	// +optional
 	Destination *SnapshotDestination `json:"destination,omitempty"`
 }
@@ -114,7 +180,6 @@ type S3SnapshotDestination struct {
 	Bucket string `json:"bucket"`
 
 	// Prefix is an optional key prefix within the bucket (e.g. "state-sync/").
-	// A trailing slash is added automatically if missing.
 	// +optional
 	Prefix string `json:"prefix,omitempty"`
 
@@ -133,7 +198,6 @@ type GenesisConfiguration struct {
 	ChainID string `json:"chainId"`
 
 	// PVC references a pre-provisioned PVC populated by SeiNodePool's genesis ceremony.
-	// The controller mounts this PVC directly; no sidecar task runs.
 	// +optional
 	PVC *GenesisPVCSource `json:"pvc,omitempty"`
 
@@ -181,16 +245,15 @@ type BucketSnapshot struct {
 // SeiNodeStorageConfig controls PVC lifecycle for SeiNode.
 type SeiNodeStorageConfig struct {
 	// RetainOnDelete prevents the data PVC from being deleted when the
-	// SeiNode is deleted — useful for post-mortem inspection of chain state.
+	// SeiNode is deleted.
 	// +optional
 	// +kubebuilder:default=false
 	RetainOnDelete bool `json:"retainOnDelete,omitempty"`
 }
 
-// SidecarConfig configures the sei-sidecar sidecar.
+// SidecarConfig configures the sei-sidecar container.
 type SidecarConfig struct {
-	// Image overrides the sidecar container image. When empty the controller
-	// uses the default seictl image (ghcr.io/sei-protocol/seictl:main).
+	// Image overrides the sidecar container image.
 	// +optional
 	Image string `json:"image,omitempty"`
 
@@ -232,7 +295,6 @@ type EC2TagsPeerSource struct {
 	Region string `json:"region"`
 
 	// Tags are the EC2 instance tags to filter on.
-	// All specified tags must match (AND logic).
 	// +kubebuilder:validation:MinProperties=1
 	Tags map[string]string `json:"tags"`
 }
@@ -283,8 +345,7 @@ type PlannedTask struct {
 }
 
 // TaskPlan tracks an ordered sequence of sidecar tasks that the controller
-// executes to initialize a node. It serves as both the execution plan and
-// the historical log of what happened.
+// executes to initialize a node.
 type TaskPlan struct {
 	// Phase is the overall state of the plan.
 	Phase TaskPlanPhase `json:"phase"`
@@ -305,18 +366,15 @@ type SeiNodeStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
 	// InitPlan tracks the initialization task sequence for this node.
-	// Built once from the node's bootstrap mode, then reconciled to completion.
 	// +optional
 	InitPlan *TaskPlan `json:"initPlan,omitempty"`
 
 	// ScheduledTasks maps task type to the sidecar-assigned UUID of its
-	// scheduled task. Set once when the controller creates each schedule;
-	// prevents duplicate submissions on subsequent reconciles.
+	// scheduled task.
 	// +optional
 	ScheduledTasks map[string]string `json:"scheduledTasks,omitempty"`
 
 	// ConfigStatus reports the observed configuration state from the sidecar.
-	// Updated after config-apply and config-validate tasks complete.
 	// +optional
 	ConfigStatus *ConfigStatus `json:"configStatus,omitempty"`
 }
@@ -363,7 +421,6 @@ type ConfigDiagnostic struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=snode
-// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.mode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
