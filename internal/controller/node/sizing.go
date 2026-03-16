@@ -3,60 +3,54 @@ package node
 import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 const (
-	modeArchive   = "archive"
-	modeRPC       = "rpc"
-	modeFull      = "full"
-	modeValidator = "validator"
-	modeSeed      = "seed"
-	modeReplay    = "replay"
-
 	storageClassPerf    = "gp3-perf"
 	storageClassDefault = "gp3"
+
+	modeFull      = "full"
+	modeArchive   = "archive"
+	modeValidator = "validator"
+
+	defaultStorageSize = "1000Gi"
 )
 
+// nodeMode returns the sei-config mode string for the node based on which
+// sub-spec is populated. Falls back to "full" if none is set.
+func nodeMode(node *seiv1alpha1.SeiNode) string {
+	planner, err := PlannerForNode(node)
+	if err != nil {
+		return modeFull
+	}
+	return planner.Mode()
+}
+
 // defaultResourcesForMode returns CPU and memory requests for the seid
-// container based on the node's operating mode. These requests drive
-// Karpenter's instance selection — the scheduler places the pod on a node
-// whose allocatable resources satisfy the request.
-//
-// Values are derived from sei-infra production sizing, scaled down for
-// staging parity while remaining large enough for SeiDB's memIAVL page
-// cache to function without constant disk reads.
+// container based on the node's operating mode.
 func defaultResourcesForMode(mode string) corev1.ResourceRequirements {
 	switch mode {
-	case modeArchive, modeReplay:
+	case modeArchive:
 		return makeResources("8", "48Gi")
-	case modeRPC:
-		return makeResources("8", "48Gi")
-	case modeFull:
+	case modeFull, modeValidator:
 		return makeResources("4", "32Gi")
-	case modeValidator:
-		return makeResources("4", "32Gi")
-	case modeSeed:
-		return makeResources("2", "8Gi")
 	default:
 		return makeResources("4", "32Gi")
 	}
 }
 
 // defaultStorageForMode returns the StorageClass name and PVC size for a
-// node based on its operating mode. Heavier modes use the gp3-perf class
-// with provisioned IOPS; lightweight modes fall back to baseline gp3.
+// node based on its operating mode.
 func defaultStorageForMode(mode string) (storageClass string, size string) {
 	switch mode {
-	case modeArchive, modeReplay:
+	case modeArchive:
 		return storageClassPerf, "2000Gi"
-	case modeRPC:
-		return storageClassPerf, "1500Gi"
 	case modeFull, modeValidator:
-		return storageClassPerf, "1000Gi"
-	case modeSeed:
-		return storageClassDefault, "500Gi"
+		return storageClassPerf, defaultStorageSize
 	default:
-		return storageClassDefault, "1000Gi"
+		return storageClassDefault, defaultStorageSize
 	}
 }
 

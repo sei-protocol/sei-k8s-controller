@@ -129,7 +129,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 func buildSidecarMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	container := buildNodeMainContainer(node)
 	container.Command, container.Args = sidecarWaitCommand(node)
-	container.Resources = defaultResourcesForMode(node.Spec.Mode)
+	container.Resources = defaultResourcesForMode(nodeMode(node))
 	container.StartupProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
@@ -214,9 +214,10 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		container.Args = node.Spec.Entrypoint.Args
 	}
 
-	// State-synced nodes replay blocks from the snapshot/sync height to the chain tip.
-	// This can take several hours on a live chain.
-	if needsStateSync(node) {
+	// Nodes bootstrapping via state sync or snapshot restore replay blocks from
+	// the sync height to the chain tip, which can take several hours.
+	sync := syncConfig(node)
+	if sync != nil && (sync.StateSync != nil || hasSnapshotRestore(sync)) {
 		container.StartupProbe.FailureThreshold = 1800
 	}
 
@@ -265,7 +266,7 @@ func generateNodeHeadlessService(node *seiv1alpha1.SeiNode) *corev1.Service {
 }
 
 func generateNodeDataPVC(node *seiv1alpha1.SeiNode) *corev1.PersistentVolumeClaim {
-	sc, size := defaultStorageForMode(node.Spec.Mode)
+	sc, size := defaultStorageForMode(nodeMode(node))
 
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{

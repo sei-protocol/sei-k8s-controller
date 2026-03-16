@@ -28,17 +28,6 @@ const (
 	bootstrapPollInterval = 5 * time.Second
 )
 
-// baseTaskProgression defines the ordered task sequence for each bootstrap mode.
-// config-apply writes the full config.toml from sei-config defaults + overrides.
-// Patching tasks (discover-peers, configure-state-sync) are inserted between
-// config-apply and config-validate so their values survive the full overwrite.
-// config-validate verifies the fully assembled config before marking ready.
-var baseTaskProgression = map[string][]string{
-	"snapshot":  {taskSnapshotRestore, taskConfigApply, taskConfigValidate, taskMarkReady},
-	"peer-sync": {taskConfigApply, taskConfigValidate, taskMarkReady},
-	"genesis":   {taskConfigApply, taskConfigValidate, taskMarkReady},
-}
-
 // SidecarStatusClient abstracts the sidecar HTTP API for testability.
 type SidecarStatusClient interface {
 	SubmitTask(ctx context.Context, task sidecar.TaskBuilder) (uuid.UUID, error)
@@ -59,56 +48,6 @@ func insertBefore(prog []string, target, task string) []string {
 	return prog
 }
 
-// taskProgressionForNode returns the task progression for a node, dynamically
-// inserting discovery and patching tasks between config-apply and
-// config-validate. config-apply fully overwrites config.toml with mode
-// defaults, so tasks that patch specific keys (discover-peers,
-// configure-state-sync) must run after it. configure-genesis writes
-// genesis.json (not config.toml) so its position is flexible.
-func taskProgressionForNode(node *seiv1alpha1.SeiNode) []string {
-	mode := bootstrapMode(node)
-	prog := slices.Clone(baseTaskProgression[mode])
-
-	if node.Spec.Genesis.S3 != nil {
-		prog = insertBefore(prog, taskConfigApply, taskConfigureGenesis)
-	}
-	if node.Spec.Peers != nil {
-		prog = insertBefore(prog, taskConfigValidate, taskDiscoverPeers)
-	}
-	if needsStateSync(node) {
-		prog = insertBefore(prog, taskConfigValidate, taskConfigureStateSync)
-	}
-
-	return prog
-}
-
-// validateSpec checks for invalid field combinations in the SeiNode spec.
-func validateSpec(node *seiv1alpha1.SeiNode) error {
-	if node.Spec.Mode == modeReplay && node.Spec.SnapshotRestore == nil {
-		return fmt.Errorf("mode %q requires snapshotRestore to be set", modeReplay)
-	}
-	return nil
-}
-
-func needsStateSync(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.Peers != nil || node.Spec.SnapshotRestore != nil
-}
-
-func bootstrapMode(node *seiv1alpha1.SeiNode) string {
-	switch {
-	case hasLocalSnapshot(node):
-		return "snapshot"
-	case node.Spec.Genesis.PVC != nil:
-		return "genesis"
-	default:
-		return "peer-sync"
-	}
-}
-
-func hasLocalSnapshot(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.SnapshotRestore != nil
-}
-
 // buildSidecarClient constructs a SidecarClient from the node's sidecar config.
 func (r *SeiNodeReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) SidecarStatusClient {
 	if r.BuildSidecarClientFn != nil {
@@ -119,22 +58,6 @@ func (r *SeiNodeReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) Sideca
 		return nil
 	}
 	return c
-}
-
-// buildTaskPlan creates an initial TaskPlan from the node's bootstrap mode.
-func buildTaskPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	progression := taskProgressionForNode(node)
-	tasks := make([]seiv1alpha1.PlannedTask, len(progression))
-	for i, taskType := range progression {
-		tasks[i] = seiv1alpha1.PlannedTask{
-			Type:   taskType,
-			Status: seiv1alpha1.PlannedTaskPending,
-		}
-	}
-	return &seiv1alpha1.TaskPlan{
-		Phase: seiv1alpha1.TaskPlanActive,
-		Tasks: tasks,
-	}
 }
 
 // currentTask returns the first non-Complete task in the plan, or nil if all
@@ -149,12 +72,12 @@ func currentTask(plan *seiv1alpha1.TaskPlan) *seiv1alpha1.PlannedTask {
 }
 
 // reconcileSidecarProgression drives the TaskPlan through to completion.
-func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, node *seiv1alpha1.SeiNode, planner NodePlanner) (ctrl.Result, error) {
 	sc := r.buildSidecarClient(node)
 
 	// Build the plan on first encounter.
 	if node.Status.InitPlan == nil {
-		plan := buildTaskPlan(node)
+		plan := planner.BuildPlan(node)
 		patch := client.MergeFrom(node.DeepCopy())
 		node.Status.InitPlan = plan
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
@@ -179,7 +102,7 @@ func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, nod
 
 	switch task.Status {
 	case seiv1alpha1.PlannedTaskPending:
-		return r.submitTask(ctx, node, sc, task)
+		return r.submitTask(ctx, node, sc, planner, task)
 
 	case seiv1alpha1.PlannedTaskSubmitted:
 		return r.pollTask(ctx, node, sc, task)
@@ -194,9 +117,10 @@ func (r *SeiNodeReconciler) submitTask(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
 	sc SidecarStatusClient,
+	planner NodePlanner,
 	task *seiv1alpha1.PlannedTask,
 ) (ctrl.Result, error) {
-	builder := taskBuilderForNode(node, task.Type)
+	builder := planner.BuildTask(node, task.Type)
 	id, err := sc.SubmitTask(ctx, builder)
 	if err != nil {
 		log.FromContext(ctx).Info("task submission failed, will retry", "task", task.Type, "error", err)
@@ -282,7 +206,7 @@ func (r *SeiNodeReconciler) markPlanComplete(ctx context.Context, node *seiv1alp
 // reconcileRuntimeTasks ensures all scheduled tasks are submitted exactly once.
 // The sidecar owns execution cadence after that.
 func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient) (ctrl.Result, error) {
-	if task := snapshotUploadTask(node); task != nil {
+	if task := snapshotUploadTaskFromSpec(node); task != nil {
 		if err := r.ensureScheduledTask(ctx, node, sc, task); err != nil {
 			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", task.TaskType(), "error", err)
 		}

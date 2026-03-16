@@ -1,3 +1,7 @@
+# SeiNode — Pacific-1 Archive + Snapshotter
+#
+# Archive node for pacific-1 that bootstraps from an S3 snapshot, discovers
+# peers, produces Tendermint snapshots, and uploads them to S3.
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
@@ -5,21 +9,14 @@ metadata:
   namespace: default
 spec:
   chainId: pacific-1
-  mode: archive
   image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:837ba922db3f5313a474fbe0c7bba4cbec466cdc
 
   sidecar:
-    image: ghcr.io/sei-protocol/seictl@sha256:80add5808602b0f9e92d6d7a8951ec8eb8bbcc9aaa8b2501bc1c4ea65adfa659
+    image: ghcr.io/sei-protocol/seictl@sha256:ad50d546c3aa4bfa220b3148ffc40b59d34d7c8d09522fa1ff25f635f2f1e710
 
   entrypoint:
     command: ["seid"]
     args: ["start", "--home", "/sei"]
-
-  config:
-    overrides:
-      chain.concurrency_workers: "500"
-      chain.occ_enabled: "true"
-      self_remediation.blocks_behind_threshold: "0"
 
   genesis:
     chainId: pacific-1
@@ -27,21 +24,29 @@ spec:
       uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
       region: us-east-2
 
-  peers:
-    sources:
-      - ec2Tags:
-          region: eu-central-1
-          tags:
-            ChainIdentifier: pacific-1
-            Component: state-syncer
-
   storage:
     retainOnDelete: true
 
-  snapshotGeneration:
-    keepRecent: 5
-    destination:
-      s3:
-        bucket: sei-node-mvp
-        prefix: snapshot/
-        region: eu-central-1
+  archive:
+    sync:
+      peers:
+        sources:
+          - ec2Tags:
+              region: eu-central-1
+              tags:
+                ChainIdentifier: pacific-1
+                Component: state-syncer
+      blockSync:
+        snapshot:
+          bucket:
+            uri: s3://pacific-1-snapshots/state-sync/
+          region: eu-central-1
+          trustPeriod: "9999h0m0s"
+
+    snapshotGeneration:
+      keepRecent: 5
+      destination:
+        s3:
+          bucket: sei-node-mvp
+          prefix: snapshot/
+          region: eu-central-1

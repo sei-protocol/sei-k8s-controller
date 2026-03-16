@@ -1,10 +1,9 @@
 # SeiNode — Pacific-1 Replayer
 #
-# Replays the pacific-1 chain from genesis (block 1) without state sync.
-# Downloads genesis.json from S3, discovers peers, and starts seid which
-# will replay all historical blocks from the network.
+# Replays the pacific-1 chain from a snapshot restore point. Downloads
+# genesis.json from S3 and replays from the snapshot height.
 #
-# Typical deployment: archival nodes or chain history verification.
+# Typical deployment: chain verification, shadow replay, archival re-indexing.
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
@@ -24,12 +23,17 @@ spec:
       uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
       region: us-east-2
 
-  peers:
-    sources:
-      - ec2Tags:
-          region: eu-central-1
-          tags:
-            ChainIdentifier: pacific-1
-
   storage:
     retainOnDelete: true
+
+  replayer:
+    snapshot:
+      region: eu-central-1
+      bucket:
+        uri: s3://pacific-1-snapshots/state-sync/
+    peers:
+      sources:
+        - ec2Tags:
+            region: eu-central-1
+            tags:
+              ChainIdentifier: pacific-1

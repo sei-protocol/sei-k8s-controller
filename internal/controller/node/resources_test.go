@@ -25,7 +25,8 @@ func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unpa
 				ChainID: "sei-test",
 				PVC:     &seiv1alpha1.GenesisPVCSource{DataPVC: "data-mynet-0"},
 			},
-			Sidecar: &seiv1alpha1.SidecarConfig{Port: 7777},
+			Validator: &seiv1alpha1.ValidatorSpec{},
+			Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
 	}
 }
@@ -35,13 +36,17 @@ func newSnapshotNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unp
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "sei-test",
-			Mode:    "replay",
 			Image:   "ghcr.io/sei-protocol/seid:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "sei-test"},
-			SnapshotRestore: &seiv1alpha1.SnapshotSource{
-				Region: "eu-central-1",
-				Bucket: seiv1alpha1.BucketSnapshot{
-					URI: "s3://sei-snapshots/pacific-1/",
+			FullNode: &seiv1alpha1.FullNodeSpec{
+				Sync: &seiv1alpha1.SyncConfig{
+					BlockSync: &seiv1alpha1.BlockSyncConfig{
+						Snapshot: &seiv1alpha1.SnapshotRestoreConfig{
+							Region:      "eu-central-1",
+							Bucket:      seiv1alpha1.BucketSnapshot{URI: "s3://sei-snapshots/pacific-1/"},
+							TrustPeriod: "9999h0m0s",
+						},
+					},
 				},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Port: 7777},
@@ -557,7 +562,7 @@ func TestGenerateNodeDataPVC(t *testing.T) {
 	g.Expect(pvc.Spec.AccessModes).To(ConsistOf(corev1.ReadWriteOnce))
 
 	storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-	g.Expect(storage.String()).To(Equal("2000Gi"))
+	g.Expect(storage.String()).To(Equal("1000Gi"))
 }
 
 // --- S3 URI parsing ---
