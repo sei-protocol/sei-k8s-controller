@@ -17,9 +17,6 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.mode
-      name: Mode
-      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -49,35 +46,174 @@ spec:
           metadata:
             type: object
           spec:
-            description: SeiNodeSpec defines the desired state of a standalone Sei
-              node.
+            description: |-
+              SeiNodeSpec defines the desired state of a standalone Sei node.
+              Exactly one mode sub-spec (fullNode, archive, replayer, validator) must be set;
+              the populated field determines the node's operating mode.
             properties:
+              archive:
+                description: Archive configures an archive node with full history
+                  and no pruning.
+                properties:
+                  snapshotGeneration:
+                    description: SnapshotGeneration configures periodic snapshot creation
+                      and optional upload.
+                    properties:
+                      destination:
+                        description: |-
+                          Destination configures where generated snapshots are uploaded.
+                          When set, the controller submits a scheduled upload task to the sidecar.
+                        properties:
+                          s3:
+                            description: S3 uploads snapshots to an S3 bucket.
+                            properties:
+                              bucket:
+                                description: Bucket is the S3 bucket name.
+                                minLength: 1
+                                type: string
+                              prefix:
+                                description: Prefix is an optional key prefix within
+                                  the bucket (e.g. "state-sync/").
+                                type: string
+                              region:
+                                description: Region is the AWS region of the bucket.
+                                minLength: 1
+                                type: string
+                            required:
+                            - bucket
+                            - region
+                            type: object
+                        required:
+                        - s3
+                        type: object
+                      keepRecent:
+                        description: |-
+                          KeepRecent is the number of recent snapshots to retain on disk.
+                          Must be at least 2 so the upload algorithm can select the
+                          second-to-latest completed snapshot.
+                        format: int32
+                        minimum: 2
+                        type: integer
+                    required:
+                    - keepRecent
+                    type: object
+                  sync:
+                    description: Sync configures how the node discovers peers and
+                      bootstraps chain state.
+                    properties:
+                      blockSync:
+                        description: |-
+                          BlockSync configures block-by-block sync from peers. When a Snapshot
+                          is provided, the node restores from S3 first to accelerate catch-up.
+                        properties:
+                          snapshot:
+                            description: Snapshot configures S3 snapshot restore before
+                              block sync begins.
+                            properties:
+                              backfillBlocks:
+                                description: |-
+                                  BackfillBlocks is the number of historical blocks to fetch from peers
+                                  after snapshot restore.
+                                format: int64
+                                type: integer
+                              bucket:
+                                description: Bucket is the S3 snapshot archive to
+                                  restore from.
+                                properties:
+                                  uri:
+                                    description: URI of the snapshot archive in s3://bucket/prefix
+                                      format.
+                                    minLength: 1
+                                    type: string
+                                required:
+                                - uri
+                                type: object
+                              region:
+                                default: eu-central-1
+                                description: Region is the AWS region for S3 access.
+                                type: string
+                              trustPeriod:
+                                description: |-
+                                  TrustPeriod is the window during which the snapshot's block validators
+                                  are considered trustworthy. Must be long enough to cover the age of
+                                  the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
+                                type: string
+                            required:
+                            - bucket
+                            type: object
+                        type: object
+                      peers:
+                        description: Peers configures how this node discovers and
+                          connects to peers.
+                        properties:
+                          sources:
+                            description: |-
+                              Sources is an ordered list of peer sources. The sidecar iterates
+                              all sources, unions and deduplicates the results.
+                            items:
+                              description: PeerSource is a union type — exactly one
+                                field must be set.
+                              properties:
+                                ec2Tags:
+                                  description: |-
+                                    EC2Tags discovers peers by querying EC2 for running instances
+                                    matching the specified tags.
+                                  properties:
+                                    region:
+                                      description: Region is the AWS region to query
+                                        for EC2 instances.
+                                      minLength: 1
+                                      type: string
+                                    tags:
+                                      additionalProperties:
+                                        type: string
+                                      description: Tags are the EC2 instance tags
+                                        to filter on.
+                                      minProperties: 1
+                                      type: object
+                                  required:
+                                  - region
+                                  - tags
+                                  type: object
+                                static:
+                                  description: Static provides a fixed list of peer
+                                    addresses.
+                                  properties:
+                                    addresses:
+                                      description: Addresses is a list of peer addresses
+                                        in "nodeId@host:port" format.
+                                      items:
+                                        type: string
+                                      minItems: 1
+                                      type: array
+                                  required:
+                                  - addresses
+                                  type: object
+                              type: object
+                              x-kubernetes-validations:
+                              - message: exactly one of ec2Tags or static must be
+                                  set
+                                rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static)
+                                  ? 1 : 0) == 1'
+                            minItems: 1
+                            type: array
+                        required:
+                        - sources
+                        type: object
+                      stateSync:
+                        description: |-
+                          StateSync enables Tendermint state sync from peers. The controller
+                          manages trust period, trust height, and RPC server configuration.
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: stateSync and blockSync are mutually exclusive
+                      rule: '!(has(self.stateSync) && has(self.blockSync))'
+                type: object
               chainId:
-                description: |-
-                  ChainID of the chain this node belongs to.
-                  Deprecated: use Genesis.ChainID. Kept for backward compatibility.
+                description: ChainID of the chain this node belongs to.
                 minLength: 1
                 type: string
-              config:
-                description: |-
-                  Config provides typed configuration overrides for the node.
-                  The sidecar resolves these against mode defaults using sei-config.
-                properties:
-                  overrides:
-                    additionalProperties:
-                      type: string
-                    description: |-
-                      Overrides is a flat map of dotted TOML key paths to string values.
-                      Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
-                      The sidecar parses these using the sei-config Registry.
-                    type: object
-                  version:
-                    description: |-
-                      Version is the target config schema version. When zero, the sidecar
-                      uses its compiled default (latest). Set this when deploying a custom
-                      binary that expects a specific config version.
-                    type: integer
-                type: object
               entrypoint:
                 description: Entrypoint overrides the image command for the running
                   node process.
@@ -96,6 +232,165 @@ spec:
                 required:
                 - command
                 type: object
+              fullNode:
+                description: FullNode configures a chain-following full node (absorbs
+                  the "rpc" role).
+                properties:
+                  snapshotGeneration:
+                    description: SnapshotGeneration configures periodic snapshot creation
+                      and optional upload.
+                    properties:
+                      destination:
+                        description: |-
+                          Destination configures where generated snapshots are uploaded.
+                          When set, the controller submits a scheduled upload task to the sidecar.
+                        properties:
+                          s3:
+                            description: S3 uploads snapshots to an S3 bucket.
+                            properties:
+                              bucket:
+                                description: Bucket is the S3 bucket name.
+                                minLength: 1
+                                type: string
+                              prefix:
+                                description: Prefix is an optional key prefix within
+                                  the bucket (e.g. "state-sync/").
+                                type: string
+                              region:
+                                description: Region is the AWS region of the bucket.
+                                minLength: 1
+                                type: string
+                            required:
+                            - bucket
+                            - region
+                            type: object
+                        required:
+                        - s3
+                        type: object
+                      keepRecent:
+                        description: |-
+                          KeepRecent is the number of recent snapshots to retain on disk.
+                          Must be at least 2 so the upload algorithm can select the
+                          second-to-latest completed snapshot.
+                        format: int32
+                        minimum: 2
+                        type: integer
+                    required:
+                    - keepRecent
+                    type: object
+                  sync:
+                    description: Sync configures how the node discovers peers and
+                      bootstraps chain state.
+                    properties:
+                      blockSync:
+                        description: |-
+                          BlockSync configures block-by-block sync from peers. When a Snapshot
+                          is provided, the node restores from S3 first to accelerate catch-up.
+                        properties:
+                          snapshot:
+                            description: Snapshot configures S3 snapshot restore before
+                              block sync begins.
+                            properties:
+                              backfillBlocks:
+                                description: |-
+                                  BackfillBlocks is the number of historical blocks to fetch from peers
+                                  after snapshot restore.
+                                format: int64
+                                type: integer
+                              bucket:
+                                description: Bucket is the S3 snapshot archive to
+                                  restore from.
+                                properties:
+                                  uri:
+                                    description: URI of the snapshot archive in s3://bucket/prefix
+                                      format.
+                                    minLength: 1
+                                    type: string
+                                required:
+                                - uri
+                                type: object
+                              region:
+                                default: eu-central-1
+                                description: Region is the AWS region for S3 access.
+                                type: string
+                              trustPeriod:
+                                description: |-
+                                  TrustPeriod is the window during which the snapshot's block validators
+                                  are considered trustworthy. Must be long enough to cover the age of
+                                  the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
+                                type: string
+                            required:
+                            - bucket
+                            type: object
+                        type: object
+                      peers:
+                        description: Peers configures how this node discovers and
+                          connects to peers.
+                        properties:
+                          sources:
+                            description: |-
+                              Sources is an ordered list of peer sources. The sidecar iterates
+                              all sources, unions and deduplicates the results.
+                            items:
+                              description: PeerSource is a union type — exactly one
+                                field must be set.
+                              properties:
+                                ec2Tags:
+                                  description: |-
+                                    EC2Tags discovers peers by querying EC2 for running instances
+                                    matching the specified tags.
+                                  properties:
+                                    region:
+                                      description: Region is the AWS region to query
+                                        for EC2 instances.
+                                      minLength: 1
+                                      type: string
+                                    tags:
+                                      additionalProperties:
+                                        type: string
+                                      description: Tags are the EC2 instance tags
+                                        to filter on.
+                                      minProperties: 1
+                                      type: object
+                                  required:
+                                  - region
+                                  - tags
+                                  type: object
+                                static:
+                                  description: Static provides a fixed list of peer
+                                    addresses.
+                                  properties:
+                                    addresses:
+                                      description: Addresses is a list of peer addresses
+                                        in "nodeId@host:port" format.
+                                      items:
+                                        type: string
+                                      minItems: 1
+                                      type: array
+                                  required:
+                                  - addresses
+                                  type: object
+                              type: object
+                              x-kubernetes-validations:
+                              - message: exactly one of ec2Tags or static must be
+                                  set
+                                rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static)
+                                  ? 1 : 0) == 1'
+                            minItems: 1
+                            type: array
+                        required:
+                        - sources
+                        type: object
+                      stateSync:
+                        description: |-
+                          StateSync enables Tendermint state sync from peers. The controller
+                          manages trust period, trust height, and RPC server configuration.
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: stateSync and blockSync are mutually exclusive
+                      rule: '!(has(self.stateSync) && has(self.blockSync))'
+                type: object
               genesis:
                 description: |-
                   Genesis configures the chain's genesis identity and where the
@@ -107,9 +402,8 @@ spec:
                     minLength: 1
                     type: string
                   pvc:
-                    description: |-
-                      PVC references a pre-provisioned PVC populated by SeiNodePool's genesis ceremony.
-                      The controller mounts this PVC directly; no sidecar task runs.
+                    description: PVC references a pre-provisioned PVC populated by
+                      SeiNodePool's genesis ceremony.
                     properties:
                       dataPVC:
                         description: DataPVC is the name of the pre-populated PVC
@@ -145,90 +439,98 @@ spec:
                 maxLength: 512
                 minLength: 1
                 type: string
-              mode:
-                default: full
-                description: |-
-                  Mode is the node's operating role. Determines mode-aware config defaults
-                  via sei-config.DefaultForMode(). When empty, defaults to "full".
-                  "replay" is a controller-level mode for ephemeral snapshot-restore
-                  workloads; it maps to "archive" for sei-config purposes.
-                enum:
-                - validator
-                - full
-                - seed
-                - archive
-                - rpc
-                - indexer
-                - replay
-                type: string
-              peers:
-                description: |-
-                  Peers configures how this node discovers and connects to peers.
-                  When set, the controller enables CometBFT state sync automatically,
-                  deriving trust-period, backfill-blocks, and other parameters.
+              replayer:
+                description: Replayer configures an ephemeral replay workload that
+                  restores from a snapshot.
                 properties:
-                  sources:
+                  peers:
                     description: |-
-                      Sources is an ordered list of peer sources. The sidecar iterates
-                      all sources, unions and deduplicates the results.
-                    items:
-                      description: PeerSource is a union type — exactly one field
-                        must be set.
-                      properties:
-                        ec2Tags:
-                          description: |-
-                            EC2Tags discovers peers by querying EC2 for running instances
-                            matching the specified tags.
+                      Peers configures how the replayer discovers peers for block sync
+                      after restoring from the snapshot.
+                    properties:
+                      sources:
+                        description: |-
+                          Sources is an ordered list of peer sources. The sidecar iterates
+                          all sources, unions and deduplicates the results.
+                        items:
+                          description: PeerSource is a union type — exactly one field
+                            must be set.
                           properties:
-                            region:
-                              description: Region is the AWS region to query for EC2
-                                instances.
-                              minLength: 1
-                              type: string
-                            tags:
-                              additionalProperties:
-                                type: string
+                            ec2Tags:
                               description: |-
-                                Tags are the EC2 instance tags to filter on.
-                                All specified tags must match (AND logic).
-                              minProperties: 1
+                                EC2Tags discovers peers by querying EC2 for running instances
+                                matching the specified tags.
+                              properties:
+                                region:
+                                  description: Region is the AWS region to query for
+                                    EC2 instances.
+                                  minLength: 1
+                                  type: string
+                                tags:
+                                  additionalProperties:
+                                    type: string
+                                  description: Tags are the EC2 instance tags to filter
+                                    on.
+                                  minProperties: 1
+                                  type: object
+                              required:
+                              - region
+                              - tags
                               type: object
-                          required:
-                          - region
-                          - tags
+                            static:
+                              description: Static provides a fixed list of peer addresses.
+                              properties:
+                                addresses:
+                                  description: Addresses is a list of peer addresses
+                                    in "nodeId@host:port" format.
+                                  items:
+                                    type: string
+                                  minItems: 1
+                                  type: array
+                              required:
+                              - addresses
+                              type: object
                           type: object
-                        static:
-                          description: Static provides a fixed list of peer addresses.
-                          properties:
-                            addresses:
-                              description: Addresses is a list of peer addresses in
-                                "nodeId@host:port" format.
-                              items:
-                                type: string
-                              minItems: 1
-                              type: array
-                          required:
-                          - addresses
-                          type: object
-                      type: object
-                      x-kubernetes-validations:
-                      - message: exactly one of ec2Tags or static must be set
-                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
-                          : 0) == 1'
-                    minItems: 1
-                    type: array
+                          x-kubernetes-validations:
+                          - message: exactly one of ec2Tags or static must be set
+                            rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static)
+                              ? 1 : 0) == 1'
+                        minItems: 1
+                        type: array
+                    required:
+                    - sources
+                    type: object
+                  snapshot:
+                    description: Snapshot is the S3 snapshot to restore.
+                    properties:
+                      bucket:
+                        description: Bucket is the S3 snapshot archive to restore
+                          from.
+                        properties:
+                          uri:
+                            description: URI of the snapshot archive in s3://bucket/prefix
+                              format.
+                            minLength: 1
+                            type: string
+                        required:
+                        - uri
+                        type: object
+                      region:
+                        default: eu-central-1
+                        description: Region is the AWS region for S3 access.
+                        type: string
+                    required:
+                    - bucket
+                    type: object
                 required:
-                - sources
+                - peers
+                - snapshot
                 type: object
               sidecar:
-                description: |-
-                  Sidecar configures the sei-sidecar sidecar.
-                  When set, seid-init and snapshot-restore init containers are replaced by the sidecar.
+                description: Sidecar configures the sei-sidecar container.
                 properties:
                   image:
-                    description: |-
-                      Image overrides the sidecar container image. When empty the controller
-                      uses the default seictl image (ghcr.io/sei-protocol/seictl:main).
+                    description: Image overrides the sidecar container image.
                     type: string
                   port:
                     default: 7777
@@ -296,77 +598,6 @@ spec:
                         type: object
                     type: object
                 type: object
-              snapshotGeneration:
-                description: |-
-                  SnapshotGeneration configures the node to produce Tendermint state-sync
-                  snapshots. When set, the sidecar patches app.toml during bootstrap to
-                  enable archival pruning and periodic snapshot creation.
-                properties:
-                  destination:
-                    description: |-
-                      Destination configures where generated snapshots are uploaded.
-                      When set, the controller submits a scheduled upload task to the sidecar
-                      which tar, compress, and push completed snapshots to the destination.
-                    properties:
-                      s3:
-                        description: S3 uploads snapshots to an S3 bucket.
-                        properties:
-                          bucket:
-                            description: Bucket is the S3 bucket name.
-                            minLength: 1
-                            type: string
-                          prefix:
-                            description: |-
-                              Prefix is an optional key prefix within the bucket (e.g. "state-sync/").
-                              A trailing slash is added automatically if missing.
-                            type: string
-                          region:
-                            description: Region is the AWS region of the bucket.
-                            minLength: 1
-                            type: string
-                        required:
-                        - bucket
-                        - region
-                        type: object
-                    required:
-                    - s3
-                    type: object
-                  keepRecent:
-                    description: |-
-                      KeepRecent is the number of recent snapshots to retain on disk.
-                      Must be at least 2 so the upload algorithm can select the
-                      second-to-latest completed snapshot.
-                    format: int32
-                    minimum: 2
-                    type: integer
-                required:
-                - keepRecent
-                type: object
-              snapshotRestore:
-                description: |-
-                  SnapshotRestore configures downloading a pre-built snapshot from S3
-                  for local-snapshot bootstrap. Required when mode is "replay". When set,
-                  the controller uses use-local-snapshot mode (trust-period = "9999h0m0s",
-                  backfill-blocks = 0). Mutually exclusive with network state-sync.
-                properties:
-                  bucket:
-                    description: Bucket is the S3 snapshot archive to restore from.
-                    properties:
-                      uri:
-                        description: URI of the snapshot archive in s3://bucket/prefix
-                          format.
-                        minLength: 1
-                        type: string
-                    required:
-                    - uri
-                    type: object
-                  region:
-                    default: eu-central-1
-                    description: Region is the AWS region for S3 access.
-                    type: string
-                required:
-                - bucket
-                type: object
               storage:
                 description: Storage controls PVC lifecycle.
                 properties:
@@ -374,14 +605,136 @@ spec:
                     default: false
                     description: |-
                       RetainOnDelete prevents the data PVC from being deleted when the
-                      SeiNode is deleted — useful for post-mortem inspection of chain state.
+                      SeiNode is deleted.
                     type: boolean
+                type: object
+              validator:
+                description: Validator configures a consensus-participating validator
+                  node.
+                properties:
+                  sync:
+                    description: Sync configures how the node discovers peers and
+                      bootstraps chain state.
+                    properties:
+                      blockSync:
+                        description: |-
+                          BlockSync configures block-by-block sync from peers. When a Snapshot
+                          is provided, the node restores from S3 first to accelerate catch-up.
+                        properties:
+                          snapshot:
+                            description: Snapshot configures S3 snapshot restore before
+                              block sync begins.
+                            properties:
+                              backfillBlocks:
+                                description: |-
+                                  BackfillBlocks is the number of historical blocks to fetch from peers
+                                  after snapshot restore.
+                                format: int64
+                                type: integer
+                              bucket:
+                                description: Bucket is the S3 snapshot archive to
+                                  restore from.
+                                properties:
+                                  uri:
+                                    description: URI of the snapshot archive in s3://bucket/prefix
+                                      format.
+                                    minLength: 1
+                                    type: string
+                                required:
+                                - uri
+                                type: object
+                              region:
+                                default: eu-central-1
+                                description: Region is the AWS region for S3 access.
+                                type: string
+                              trustPeriod:
+                                description: |-
+                                  TrustPeriod is the window during which the snapshot's block validators
+                                  are considered trustworthy. Must be long enough to cover the age of
+                                  the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
+                                type: string
+                            required:
+                            - bucket
+                            type: object
+                        type: object
+                      peers:
+                        description: Peers configures how this node discovers and
+                          connects to peers.
+                        properties:
+                          sources:
+                            description: |-
+                              Sources is an ordered list of peer sources. The sidecar iterates
+                              all sources, unions and deduplicates the results.
+                            items:
+                              description: PeerSource is a union type — exactly one
+                                field must be set.
+                              properties:
+                                ec2Tags:
+                                  description: |-
+                                    EC2Tags discovers peers by querying EC2 for running instances
+                                    matching the specified tags.
+                                  properties:
+                                    region:
+                                      description: Region is the AWS region to query
+                                        for EC2 instances.
+                                      minLength: 1
+                                      type: string
+                                    tags:
+                                      additionalProperties:
+                                        type: string
+                                      description: Tags are the EC2 instance tags
+                                        to filter on.
+                                      minProperties: 1
+                                      type: object
+                                  required:
+                                  - region
+                                  - tags
+                                  type: object
+                                static:
+                                  description: Static provides a fixed list of peer
+                                    addresses.
+                                  properties:
+                                    addresses:
+                                      description: Addresses is a list of peer addresses
+                                        in "nodeId@host:port" format.
+                                      items:
+                                        type: string
+                                      minItems: 1
+                                      type: array
+                                  required:
+                                  - addresses
+                                  type: object
+                              type: object
+                              x-kubernetes-validations:
+                              - message: exactly one of ec2Tags or static must be
+                                  set
+                                rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static)
+                                  ? 1 : 0) == 1'
+                            minItems: 1
+                            type: array
+                        required:
+                        - sources
+                        type: object
+                      stateSync:
+                        description: |-
+                          StateSync enables Tendermint state sync from peers. The controller
+                          manages trust period, trust height, and RPC server configuration.
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: stateSync and blockSync are mutually exclusive
+                      rule: '!(has(self.stateSync) && has(self.blockSync))'
                 type: object
             required:
             - chainId
             - genesis
             - image
             type: object
+            x-kubernetes-validations:
+            - message: exactly one of fullNode, archive, replayer, or validator must
+                be set
+              rule: '(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) +
+                (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:
@@ -445,9 +798,8 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               configStatus:
-                description: |-
-                  ConfigStatus reports the observed configuration state from the sidecar.
-                  Updated after config-apply and config-validate tasks complete.
+                description: ConfigStatus reports the observed configuration state
+                  from the sidecar.
                 properties:
                   diagnostics:
                     description: Diagnostics contains validation findings from the
@@ -495,9 +847,8 @@ spec:
                     type: integer
                 type: object
               initPlan:
-                description: |-
-                  InitPlan tracks the initialization task sequence for this node.
-                  Built once from the node's bootstrap mode, then reconciled to completion.
+                description: InitPlan tracks the initialization task sequence for
+                  this node.
                 properties:
                   phase:
                     description: Phase is the overall state of the plan.
@@ -552,8 +903,7 @@ spec:
                   type: string
                 description: |-
                   ScheduledTasks maps task type to the sidecar-assigned UUID of its
-                  scheduled task. Set once when the controller creates each schedule;
-                  prevents duplicate submissions on subsequent reconciles.
+                  scheduled task.
                 type: object
             type: object
         type: object
