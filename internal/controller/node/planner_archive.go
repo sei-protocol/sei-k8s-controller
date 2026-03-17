@@ -18,13 +18,12 @@ func (p *archiveNodePlanner) Validate(_ *seiv1alpha1.SeiNode) error {
 }
 
 func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	// Archive always block syncs from genesis — no snapshot restore.
 	prog := []string{taskConfigApply, taskConfigValidate, taskMarkReady}
 
 	if node.Spec.Genesis.S3 != nil {
 		prog = insertBefore(prog, taskConfigApply, taskConfigureGenesis)
 	}
-	if node.Spec.Archive.Peers != nil {
+	if len(node.Spec.Archive.Peers) > 0 {
 		prog = insertBefore(prog, taskConfigValidate, taskDiscoverPeers)
 	}
 
@@ -46,7 +45,7 @@ func (p *archiveNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType strin
 	case taskConfigApply:
 		return p.buildConfigApply(node)
 	case taskDiscoverPeers:
-		return discoverPeersFromConfig(node.Spec.Archive.Peers)
+		return discoverPeersTask(node.Spec.Archive.Peers)
 	case taskConfigureGenesis:
 		return configureGenesisBuilder(node)
 	case taskConfigValidate:
@@ -66,8 +65,6 @@ func (p *archiveNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar
 	return sidecar.ConfigApplyTask{Intent: intent}
 }
 
-// Archive mode defaults already set pruning=nothing, so the controller only
-// needs to inject snapshot-interval and keep-recent when generation is enabled.
 func (p *archiveNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	overrides := make(map[string]string)
 	sg := node.Spec.Archive.SnapshotGeneration

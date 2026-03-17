@@ -105,6 +105,8 @@ func fetchNode(t *testing.T, c client.Client, name, namespace string) *seiv1alph
 	return n
 }
 
+// --- Test node constructors ---
+
 func snapshotNode() *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node", Namespace: "default", Generation: 1},
@@ -113,14 +115,12 @@ func snapshotNode() *seiv1alpha1.SeiNode {
 			Image:   "sei:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "atlantic-2"},
 			FullNode: &seiv1alpha1.FullNodeSpec{
-				Sync: &seiv1alpha1.SyncConfig{
-					BlockSync: &seiv1alpha1.BlockSyncConfig{
-						Snapshot: &seiv1alpha1.SnapshotRestoreConfig{
-							Region:      "us-east-1",
-							Bucket:      seiv1alpha1.BucketSnapshot{URI: "s3://my-bucket/snapshots/latest.tar"},
-							TrustPeriod: "9999h0m0s",
-						},
+				Snapshot: &seiv1alpha1.SnapshotSource{
+					S3: &seiv1alpha1.S3SnapshotSource{
+						URI:    "s3://my-bucket/snapshots/latest.tar",
+						Region: "us-east-1",
 					},
+					TrustPeriod: "9999h0m0s",
 				},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
@@ -139,13 +139,11 @@ func peerSyncNode() *seiv1alpha1.SeiNode {
 				S3:      &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/atlantic-2/genesis.json", Region: "us-east-2"},
 			},
 			FullNode: &seiv1alpha1.FullNodeSpec{
-				Sync: &seiv1alpha1.SyncConfig{
-					Peers: &seiv1alpha1.PeerConfig{
-						Sources: []seiv1alpha1.PeerSource{
-							{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
-						},
-					},
-					StateSync: &seiv1alpha1.StateSyncConfig{},
+				Peers: []seiv1alpha1.PeerSource{
+					{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
+				},
+				Snapshot: &seiv1alpha1.SnapshotSource{
+					StateSync: &seiv1alpha1.StateSyncSource{},
 				},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
@@ -177,14 +175,12 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 			Image:   "sei:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "atlantic-2"},
 			Archive: &seiv1alpha1.ArchiveSpec{
-				Peers: &seiv1alpha1.PeerConfig{
-					Sources: []seiv1alpha1.PeerSource{{
-						EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
-							Region: "eu-central-1",
-							Tags:   map[string]string{"ChainIdentifier": "atlantic-2"},
-						},
-					}},
-				},
+				Peers: []seiv1alpha1.PeerSource{{
+					EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
+						Region: "eu-central-1",
+						Tags:   map[string]string{"ChainIdentifier": "atlantic-2"},
+					},
+				}},
 				SnapshotGeneration: &seiv1alpha1.SnapshotGenerationConfig{
 					KeepRecent: 5,
 					Destination: &seiv1alpha1.SnapshotDestination{
@@ -197,23 +193,48 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 	}
 }
 
+func replayerNode() *seiv1alpha1.SeiNode {
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-replayer", Namespace: "default", Generation: 1},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "pacific-1",
+			Image:   "sei:latest",
+			Genesis: seiv1alpha1.GenesisConfiguration{
+				ChainID: "pacific-1",
+				S3:      &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/pacific-1/genesis.json", Region: "us-east-2"},
+			},
+			Replayer: &seiv1alpha1.ReplayerSpec{
+				Snapshot: seiv1alpha1.SnapshotSource{
+					S3: &seiv1alpha1.S3SnapshotSource{
+						URI:    "s3://pacific-1-snapshots/state-sync/",
+						Region: "eu-central-1",
+					},
+				},
+				Peers: []seiv1alpha1.PeerSource{
+					{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "pacific-1"}}},
+				},
+			},
+			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
+		},
+	}
+}
+
 // --- Bootstrap mode tests ---
 
-func TestSyncBootstrapMode(t *testing.T) {
+func TestBootstrapMode(t *testing.T) {
 	tests := []struct {
 		name string
-		node *seiv1alpha1.SeiNode
+		snap *seiv1alpha1.SnapshotSource
 		want string
 	}{
-		{"snapshot", snapshotNode(), "snapshot"},
-		{"state-sync", peerSyncNode(), "state-sync"},
-		{"genesis", genesisNode(), "genesis"},
+		{"snapshot", &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{URI: "s3://b/p"}}, "snapshot"},
+		{"state-sync", &seiv1alpha1.SnapshotSource{StateSync: &seiv1alpha1.StateSyncSource{}}, "state-sync"},
+		{"genesis", nil, "genesis"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sync := syncConfig(tt.node)
-			if got := syncBootstrapMode(sync); got != tt.want {
-				t.Errorf("syncBootstrapMode() = %q, want %q", got, tt.want)
+			if got := bootstrapMode(tt.snap); got != tt.want {
+				t.Errorf("bootstrapMode() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -231,10 +252,8 @@ func TestBuildPlan_Snapshot(t *testing.T) {
 
 func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 	node := snapshotNode()
-	node.Spec.FullNode.Sync.Peers = &seiv1alpha1.PeerConfig{
-		Sources: []seiv1alpha1.PeerSource{
-			{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "atlantic-2"}}},
-		},
+	node.Spec.FullNode.Peers = []seiv1alpha1.PeerSource{
+		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "atlantic-2"}}},
 	}
 	planner, _ := PlannerForNode(node)
 	plan := planner.BuildPlan(node)
@@ -261,44 +280,14 @@ func TestBuildPlan_Genesis(t *testing.T) {
 
 func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 	node := genesisNode()
-	node.Spec.Validator.Sync = &seiv1alpha1.SyncConfig{
-		Peers: &seiv1alpha1.PeerConfig{
-			Sources: []seiv1alpha1.PeerSource{
-				{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "arctic-1"}}},
-			},
-		},
+	node.Spec.Validator.Peers = []seiv1alpha1.PeerSource{
+		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "arctic-1"}}},
 	}
 	planner, _ := PlannerForNode(node)
 	plan := planner.BuildPlan(node)
 	got := taskTypes(plan)
 	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
-}
-
-func replayerNode() *seiv1alpha1.SeiNode {
-	return &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-replayer", Namespace: "default", Generation: 1},
-		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "pacific-1",
-			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{
-				ChainID: "pacific-1",
-				S3:      &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/pacific-1/genesis.json", Region: "us-east-2"},
-			},
-			Replayer: &seiv1alpha1.ReplayerSpec{
-				Snapshot: seiv1alpha1.SnapshotSource{
-					Region: "eu-central-1",
-					Bucket: seiv1alpha1.BucketSnapshot{URI: "s3://pacific-1-snapshots/state-sync/"},
-				},
-				Peers: seiv1alpha1.PeerConfig{
-					Sources: []seiv1alpha1.PeerSource{
-						{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "pacific-1"}}},
-					},
-				},
-			},
-			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
-		},
-	}
 }
 
 func TestBuildPlan_Replayer(t *testing.T) {
@@ -681,10 +670,8 @@ func TestBuildTask_SnapshotRestore(t *testing.T) {
 
 func TestBuildTask_DiscoverPeers_EC2Tags(t *testing.T) {
 	node := snapshotNode()
-	node.Spec.FullNode.Sync.Peers = &seiv1alpha1.PeerConfig{
-		Sources: []seiv1alpha1.PeerSource{
-			{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
-		},
+	node.Spec.FullNode.Peers = []seiv1alpha1.PeerSource{
+		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
 	}
 	planner, _ := PlannerForNode(node)
 	b := planner.BuildTask(node, taskDiscoverPeers)
@@ -724,7 +711,6 @@ func TestBuildTask_MarkReady(t *testing.T) {
 
 func TestConfigApply_FullNodeMode(t *testing.T) {
 	node := genesisNode()
-	// Genesis node uses Validator sub-spec, switch to FullNode for this test
 	node.Spec.Validator = nil
 	node.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
 	planner, _ := PlannerForNode(node)

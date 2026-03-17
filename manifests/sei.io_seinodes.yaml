@@ -58,59 +58,50 @@ spec:
                   peers:
                     description: Peers configures how the archive node discovers peers
                       for block sync.
-                    properties:
-                      sources:
-                        description: |-
-                          Sources is an ordered list of peer sources. The sidecar iterates
-                          all sources, unions and deduplicates the results.
-                        items:
-                          description: PeerSource is a union type — exactly one field
-                            must be set.
+                    items:
+                      description: PeerSource is a union type — exactly one field
+                        must be set.
+                      properties:
+                        ec2Tags:
+                          description: |-
+                            EC2Tags discovers peers by querying EC2 for running instances
+                            matching the specified tags.
                           properties:
-                            ec2Tags:
-                              description: |-
-                                EC2Tags discovers peers by querying EC2 for running instances
-                                matching the specified tags.
-                              properties:
-                                region:
-                                  description: Region is the AWS region to query for
-                                    EC2 instances.
-                                  minLength: 1
-                                  type: string
-                                tags:
-                                  additionalProperties:
-                                    type: string
-                                  description: Tags are the EC2 instance tags to filter
-                                    on.
-                                  minProperties: 1
-                                  type: object
-                              required:
-                              - region
-                              - tags
+                            region:
+                              description: Region is the AWS region to query for EC2
+                                instances.
+                              minLength: 1
+                              type: string
+                            tags:
+                              additionalProperties:
+                                type: string
+                              description: Tags are the EC2 instance tags to filter
+                                on.
+                              minProperties: 1
                               type: object
-                            static:
-                              description: Static provides a fixed list of peer addresses.
-                              properties:
-                                addresses:
-                                  description: Addresses is a list of peer addresses
-                                    in "nodeId@host:port" format.
-                                  items:
-                                    type: string
-                                  minItems: 1
-                                  type: array
-                              required:
-                              - addresses
-                              type: object
+                          required:
+                          - region
+                          - tags
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of ec2Tags or static must be set
-                            rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static)
-                              ? 1 : 0) == 1'
-                        minItems: 1
-                        type: array
-                    required:
-                    - sources
-                    type: object
+                        static:
+                          description: Static provides a fixed list of peer addresses.
+                          properties:
+                            addresses:
+                              description: Addresses is a list of peer addresses in
+                                "nodeId@host:port" format.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - addresses
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of ec2Tags or static must be set
+                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
+                          : 0) == 1'
+                    type: array
                   snapshotGeneration:
                     description: SnapshotGeneration configures periodic snapshot creation
                       and optional upload.
@@ -180,9 +171,98 @@ spec:
                 description: FullNode configures a chain-following full node (absorbs
                   the "rpc" role).
                 properties:
+                  peers:
+                    description: Peers configures how this node discovers and connects
+                      to peers.
+                    items:
+                      description: PeerSource is a union type — exactly one field
+                        must be set.
+                      properties:
+                        ec2Tags:
+                          description: |-
+                            EC2Tags discovers peers by querying EC2 for running instances
+                            matching the specified tags.
+                          properties:
+                            region:
+                              description: Region is the AWS region to query for EC2
+                                instances.
+                              minLength: 1
+                              type: string
+                            tags:
+                              additionalProperties:
+                                type: string
+                              description: Tags are the EC2 instance tags to filter
+                                on.
+                              minProperties: 1
+                              type: object
+                          required:
+                          - region
+                          - tags
+                          type: object
+                        static:
+                          description: Static provides a fixed list of peer addresses.
+                          properties:
+                            addresses:
+                              description: Addresses is a list of peer addresses in
+                                "nodeId@host:port" format.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - addresses
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of ec2Tags or static must be set
+                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
+                          : 0) == 1'
+                    type: array
+                  snapshot:
+                    description: |-
+                      Snapshot configures how the node obtains its initial chain state.
+                      When absent the node block-syncs from genesis.
+                    properties:
+                      backfillBlocks:
+                        description: |-
+                          BackfillBlocks is the number of historical blocks to fetch from peers
+                          after snapshot restore.
+                        format: int64
+                        type: integer
+                      s3:
+                        description: S3 downloads a snapshot archive from an S3 bucket.
+                        properties:
+                          region:
+                            default: us-east-1
+                            description: Region is the AWS region for S3 access.
+                            type: string
+                          uri:
+                            description: URI of the snapshot archive in s3://bucket/prefix
+                              format.
+                            minLength: 1
+                            type: string
+                        required:
+                        - uri
+                        type: object
+                      stateSync:
+                        description: StateSync fetches snapshot chunks from peers
+                          via Tendermint state sync.
+                        type: object
+                      trustPeriod:
+                        description: |-
+                          TrustPeriod is the window during which the snapshot's block validators
+                          are considered trustworthy. Must be long enough to cover the age of
+                          the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of s3 or stateSync must be set
+                      rule: '(has(self.s3) ? 1 : 0) + (has(self.stateSync) ? 1 : 0)
+                        == 1'
                   snapshotGeneration:
-                    description: SnapshotGeneration configures periodic snapshot creation
-                      and optional upload.
+                    description: |-
+                      SnapshotGeneration configures periodic snapshot creation and optional upload.
+                      When set, the controller disables pruning and enables snapshot intervals.
                     properties:
                       destination:
                         description: |-
@@ -222,118 +302,6 @@ spec:
                     required:
                     - keepRecent
                     type: object
-                  sync:
-                    description: Sync configures how the node discovers peers and
-                      bootstraps chain state.
-                    properties:
-                      blockSync:
-                        description: |-
-                          BlockSync configures block-by-block sync from peers. When a Snapshot
-                          is provided, the node restores from S3 first to accelerate catch-up.
-                        properties:
-                          snapshot:
-                            description: Snapshot configures S3 snapshot restore before
-                              block sync begins.
-                            properties:
-                              backfillBlocks:
-                                description: |-
-                                  BackfillBlocks is the number of historical blocks to fetch from peers
-                                  after snapshot restore.
-                                format: int64
-                                type: integer
-                              bucket:
-                                description: Bucket is the S3 snapshot archive to
-                                  restore from.
-                                properties:
-                                  uri:
-                                    description: URI of the snapshot archive in s3://bucket/prefix
-                                      format.
-                                    minLength: 1
-                                    type: string
-                                required:
-                                - uri
-                                type: object
-                              region:
-                                default: eu-central-1
-                                description: Region is the AWS region for S3 access.
-                                type: string
-                              trustPeriod:
-                                description: |-
-                                  TrustPeriod is the window during which the snapshot's block validators
-                                  are considered trustworthy. Must be long enough to cover the age of
-                                  the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
-                                type: string
-                            required:
-                            - bucket
-                            type: object
-                        type: object
-                      peers:
-                        description: Peers configures how this node discovers and
-                          connects to peers.
-                        properties:
-                          sources:
-                            description: |-
-                              Sources is an ordered list of peer sources. The sidecar iterates
-                              all sources, unions and deduplicates the results.
-                            items:
-                              description: PeerSource is a union type — exactly one
-                                field must be set.
-                              properties:
-                                ec2Tags:
-                                  description: |-
-                                    EC2Tags discovers peers by querying EC2 for running instances
-                                    matching the specified tags.
-                                  properties:
-                                    region:
-                                      description: Region is the AWS region to query
-                                        for EC2 instances.
-                                      minLength: 1
-                                      type: string
-                                    tags:
-                                      additionalProperties:
-                                        type: string
-                                      description: Tags are the EC2 instance tags
-                                        to filter on.
-                                      minProperties: 1
-                                      type: object
-                                  required:
-                                  - region
-                                  - tags
-                                  type: object
-                                static:
-                                  description: Static provides a fixed list of peer
-                                    addresses.
-                                  properties:
-                                    addresses:
-                                      description: Addresses is a list of peer addresses
-                                        in "nodeId@host:port" format.
-                                      items:
-                                        type: string
-                                      minItems: 1
-                                      type: array
-                                  required:
-                                  - addresses
-                                  type: object
-                              type: object
-                              x-kubernetes-validations:
-                              - message: exactly one of ec2Tags or static must be
-                                  set
-                                rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static)
-                                  ? 1 : 0) == 1'
-                            minItems: 1
-                            type: array
-                        required:
-                        - sources
-                        type: object
-                      stateSync:
-                        description: |-
-                          StateSync enables Tendermint state sync from peers. The controller
-                          manages trust period, trust height, and RPC server configuration.
-                        type: object
-                    type: object
-                    x-kubernetes-validations:
-                    - message: stateSync and blockSync are mutually exclusive
-                      rule: '!(has(self.stateSync) && has(self.blockSync))'
                 type: object
               genesis:
                 description: |-
@@ -391,66 +359,68 @@ spec:
                     description: |-
                       Peers configures how the replayer discovers peers for block sync
                       after restoring from the snapshot.
-                    properties:
-                      sources:
-                        description: |-
-                          Sources is an ordered list of peer sources. The sidecar iterates
-                          all sources, unions and deduplicates the results.
-                        items:
-                          description: PeerSource is a union type — exactly one field
-                            must be set.
+                    items:
+                      description: PeerSource is a union type — exactly one field
+                        must be set.
+                      properties:
+                        ec2Tags:
+                          description: |-
+                            EC2Tags discovers peers by querying EC2 for running instances
+                            matching the specified tags.
                           properties:
-                            ec2Tags:
-                              description: |-
-                                EC2Tags discovers peers by querying EC2 for running instances
-                                matching the specified tags.
-                              properties:
-                                region:
-                                  description: Region is the AWS region to query for
-                                    EC2 instances.
-                                  minLength: 1
-                                  type: string
-                                tags:
-                                  additionalProperties:
-                                    type: string
-                                  description: Tags are the EC2 instance tags to filter
-                                    on.
-                                  minProperties: 1
-                                  type: object
-                              required:
-                              - region
-                              - tags
+                            region:
+                              description: Region is the AWS region to query for EC2
+                                instances.
+                              minLength: 1
+                              type: string
+                            tags:
+                              additionalProperties:
+                                type: string
+                              description: Tags are the EC2 instance tags to filter
+                                on.
+                              minProperties: 1
                               type: object
-                            static:
-                              description: Static provides a fixed list of peer addresses.
-                              properties:
-                                addresses:
-                                  description: Addresses is a list of peer addresses
-                                    in "nodeId@host:port" format.
-                                  items:
-                                    type: string
-                                  minItems: 1
-                                  type: array
-                              required:
-                              - addresses
-                              type: object
+                          required:
+                          - region
+                          - tags
                           type: object
-                          x-kubernetes-validations:
-                          - message: exactly one of ec2Tags or static must be set
-                            rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static)
-                              ? 1 : 0) == 1'
-                        minItems: 1
-                        type: array
-                    required:
-                    - sources
-                    type: object
+                        static:
+                          description: Static provides a fixed list of peer addresses.
+                          properties:
+                            addresses:
+                              description: Addresses is a list of peer addresses in
+                                "nodeId@host:port" format.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - addresses
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of ec2Tags or static must be set
+                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
+                          : 0) == 1'
+                    minItems: 1
+                    type: array
                   snapshot:
-                    description: Snapshot is the S3 snapshot to restore.
+                    description: Snapshot identifies the snapshot to restore from
+                      before replay begins.
                     properties:
-                      bucket:
-                        description: Bucket is the S3 snapshot archive to restore
-                          from.
+                      backfillBlocks:
+                        description: |-
+                          BackfillBlocks is the number of historical blocks to fetch from peers
+                          after snapshot restore.
+                        format: int64
+                        type: integer
+                      s3:
+                        description: S3 downloads a snapshot archive from an S3 bucket.
                         properties:
+                          region:
+                            default: us-east-1
+                            description: Region is the AWS region for S3 access.
+                            type: string
                           uri:
                             description: URI of the snapshot archive in s3://bucket/prefix
                               format.
@@ -459,13 +429,21 @@ spec:
                         required:
                         - uri
                         type: object
-                      region:
-                        default: eu-central-1
-                        description: Region is the AWS region for S3 access.
+                      stateSync:
+                        description: StateSync fetches snapshot chunks from peers
+                          via Tendermint state sync.
+                        type: object
+                      trustPeriod:
+                        description: |-
+                          TrustPeriod is the window during which the snapshot's block validators
+                          are considered trustworthy. Must be long enough to cover the age of
+                          the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
                         type: string
-                    required:
-                    - bucket
                     type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of s3 or stateSync must be set
+                      rule: '(has(self.s3) ? 1 : 0) + (has(self.stateSync) ? 1 : 0)
+                        == 1'
                 required:
                 - peers
                 - snapshot
@@ -556,118 +534,94 @@ spec:
                 description: Validator configures a consensus-participating validator
                   node.
                 properties:
-                  sync:
-                    description: Sync configures how the node discovers peers and
-                      bootstraps chain state.
-                    properties:
-                      blockSync:
-                        description: |-
-                          BlockSync configures block-by-block sync from peers. When a Snapshot
-                          is provided, the node restores from S3 first to accelerate catch-up.
-                        properties:
-                          snapshot:
-                            description: Snapshot configures S3 snapshot restore before
-                              block sync begins.
-                            properties:
-                              backfillBlocks:
-                                description: |-
-                                  BackfillBlocks is the number of historical blocks to fetch from peers
-                                  after snapshot restore.
-                                format: int64
-                                type: integer
-                              bucket:
-                                description: Bucket is the S3 snapshot archive to
-                                  restore from.
-                                properties:
-                                  uri:
-                                    description: URI of the snapshot archive in s3://bucket/prefix
-                                      format.
-                                    minLength: 1
-                                    type: string
-                                required:
-                                - uri
-                                type: object
-                              region:
-                                default: eu-central-1
-                                description: Region is the AWS region for S3 access.
+                  peers:
+                    description: Peers configures how this node discovers and connects
+                      to peers.
+                    items:
+                      description: PeerSource is a union type — exactly one field
+                        must be set.
+                      properties:
+                        ec2Tags:
+                          description: |-
+                            EC2Tags discovers peers by querying EC2 for running instances
+                            matching the specified tags.
+                          properties:
+                            region:
+                              description: Region is the AWS region to query for EC2
+                                instances.
+                              minLength: 1
+                              type: string
+                            tags:
+                              additionalProperties:
                                 type: string
-                              trustPeriod:
-                                description: |-
-                                  TrustPeriod is the window during which the snapshot's block validators
-                                  are considered trustworthy. Must be long enough to cover the age of
-                                  the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
-                                type: string
-                            required:
-                            - bucket
-                            type: object
-                        type: object
-                      peers:
-                        description: Peers configures how this node discovers and
-                          connects to peers.
-                        properties:
-                          sources:
-                            description: |-
-                              Sources is an ordered list of peer sources. The sidecar iterates
-                              all sources, unions and deduplicates the results.
-                            items:
-                              description: PeerSource is a union type — exactly one
-                                field must be set.
-                              properties:
-                                ec2Tags:
-                                  description: |-
-                                    EC2Tags discovers peers by querying EC2 for running instances
-                                    matching the specified tags.
-                                  properties:
-                                    region:
-                                      description: Region is the AWS region to query
-                                        for EC2 instances.
-                                      minLength: 1
-                                      type: string
-                                    tags:
-                                      additionalProperties:
-                                        type: string
-                                      description: Tags are the EC2 instance tags
-                                        to filter on.
-                                      minProperties: 1
-                                      type: object
-                                  required:
-                                  - region
-                                  - tags
-                                  type: object
-                                static:
-                                  description: Static provides a fixed list of peer
-                                    addresses.
-                                  properties:
-                                    addresses:
-                                      description: Addresses is a list of peer addresses
-                                        in "nodeId@host:port" format.
-                                      items:
-                                        type: string
-                                      minItems: 1
-                                      type: array
-                                  required:
-                                  - addresses
-                                  type: object
+                              description: Tags are the EC2 instance tags to filter
+                                on.
+                              minProperties: 1
                               type: object
-                              x-kubernetes-validations:
-                              - message: exactly one of ec2Tags or static must be
-                                  set
-                                rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static)
-                                  ? 1 : 0) == 1'
-                            minItems: 1
-                            type: array
+                          required:
+                          - region
+                          - tags
+                          type: object
+                        static:
+                          description: Static provides a fixed list of peer addresses.
+                          properties:
+                            addresses:
+                              description: Addresses is a list of peer addresses in
+                                "nodeId@host:port" format.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - addresses
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of ec2Tags or static must be set
+                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
+                          : 0) == 1'
+                    type: array
+                  snapshot:
+                    description: |-
+                      Snapshot configures how the node obtains its initial chain state.
+                      When absent the node block-syncs from genesis.
+                    properties:
+                      backfillBlocks:
+                        description: |-
+                          BackfillBlocks is the number of historical blocks to fetch from peers
+                          after snapshot restore.
+                        format: int64
+                        type: integer
+                      s3:
+                        description: S3 downloads a snapshot archive from an S3 bucket.
+                        properties:
+                          region:
+                            default: us-east-1
+                            description: Region is the AWS region for S3 access.
+                            type: string
+                          uri:
+                            description: URI of the snapshot archive in s3://bucket/prefix
+                              format.
+                            minLength: 1
+                            type: string
                         required:
-                        - sources
+                        - uri
                         type: object
                       stateSync:
-                        description: |-
-                          StateSync enables Tendermint state sync from peers. The controller
-                          manages trust period, trust height, and RPC server configuration.
+                        description: StateSync fetches snapshot chunks from peers
+                          via Tendermint state sync.
                         type: object
+                      trustPeriod:
+                        description: |-
+                          TrustPeriod is the window during which the snapshot's block validators
+                          are considered trustworthy. Must be long enough to cover the age of
+                          the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
+                        type: string
                     type: object
                     x-kubernetes-validations:
-                    - message: stateSync and blockSync are mutually exclusive
-                      rule: '!(has(self.stateSync) && has(self.blockSync))'
+                    - message: exactly one of s3 or stateSync must be set
+                      rule: '(has(self.s3) ? 1 : 0) + (has(self.stateSync) ? 1 : 0)
+                        == 1'
                 type: object
             required:
             - chainId
