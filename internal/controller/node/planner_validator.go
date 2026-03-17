@@ -16,7 +16,8 @@ func (p *validatorPlanner) Validate(_ *seiv1alpha1.SeiNode) error {
 }
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	return buildPlanFromSync(node, node.Spec.Validator.Sync)
+	v := node.Spec.Validator
+	return buildPlan(node, v.Peers, v.Snapshot)
 }
 
 func (p *validatorPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
@@ -27,5 +28,6 @@ func (p *validatorPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string)
 			},
 		}
 	}
-	return sharedTaskBuilder(node, node.Spec.Validator.Sync, taskType)
+	v := node.Spec.Validator
+	return buildSharedTask(node, v.Peers, v.Snapshot, taskType)
 }

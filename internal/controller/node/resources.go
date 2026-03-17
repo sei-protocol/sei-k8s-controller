@@ -214,10 +214,7 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		container.Args = node.Spec.Entrypoint.Args
 	}
 
-	// Nodes bootstrapping via state sync or snapshot restore replay blocks from
-	// the sync height to the chain tip, which can take several hours.
-	sync := syncConfig(node)
-	if sync != nil && (sync.StateSync != nil || hasSnapshotRestore(sync)) {
+	if needsLongStartup(node) {
 		container.StartupProbe.FailureThreshold = 1800
 	}
 

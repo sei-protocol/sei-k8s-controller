@@ -18,14 +18,16 @@ func (p *fullNodePlanner) Validate(_ *seiv1alpha1.SeiNode) error {
 }
 
 func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	return buildPlanFromSync(node, node.Spec.FullNode.Sync)
+	fn := node.Spec.FullNode
+	return buildPlan(node, fn.Peers, fn.Snapshot)
 }
 
 func (p *fullNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
 	if taskType == taskConfigApply {
 		return p.buildConfigApply(node)
 	}
-	return sharedTaskBuilder(node, node.Spec.FullNode.Sync, taskType)
+	fn := node.Spec.FullNode
+	return buildSharedTask(node, fn.Peers, fn.Snapshot, taskType)
 }
 
 func (p *fullNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {

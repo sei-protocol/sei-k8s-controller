@@ -43,21 +43,6 @@ func PlannerForNode(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
 	}
 }
 
-// syncConfig extracts the SyncConfig from whichever mode sub-spec is populated.
-// Returns nil when the mode has no sync config (e.g. replayer).
-func syncConfig(node *seiv1alpha1.SeiNode) *seiv1alpha1.SyncConfig {
-	switch {
-	case node.Spec.FullNode != nil:
-		return node.Spec.FullNode.Sync
-	case node.Spec.Archive != nil:
-		return nil
-	case node.Spec.Validator != nil:
-		return node.Spec.Validator.Sync
-	default:
-		return nil
-	}
-}
-
 // snapshotGeneration extracts the SnapshotGenerationConfig from the populated
 // mode sub-spec. Returns nil when the mode doesn't support it.
 func snapshotGeneration(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotGenerationConfig {
@@ -71,54 +56,66 @@ func snapshotGeneration(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotGenerati
 	}
 }
 
-// syncBootstrapMode determines the bootstrap strategy from a SyncConfig.
-func syncBootstrapMode(sync *seiv1alpha1.SyncConfig) string {
-	if sync == nil {
-		return "genesis"
+// needsLongStartup returns true when the node's bootstrap strategy involves
+// replaying blocks from a snapshot or state sync, which can take hours.
+func needsLongStartup(node *seiv1alpha1.SeiNode) bool {
+	switch {
+	case node.Spec.FullNode != nil:
+		return node.Spec.FullNode.Snapshot != nil
+	case node.Spec.Validator != nil:
+		return node.Spec.Validator.Snapshot != nil
+	case node.Spec.Replayer != nil:
+		return true
+	default:
+		return false
 	}
-	if sync.BlockSync != nil && sync.BlockSync.Snapshot != nil {
+}
+
+// hasS3Snapshot returns true when the snapshot source is an S3 download.
+func hasS3Snapshot(snap *seiv1alpha1.SnapshotSource) bool {
+	return snap != nil && snap.S3 != nil
+}
+
+// hasStateSync returns true when the snapshot source is Tendermint state sync.
+func hasStateSync(snap *seiv1alpha1.SnapshotSource) bool {
+	return snap != nil && snap.StateSync != nil
+}
+
+// bootstrapMode determines the bootstrap strategy from a snapshot source.
+func bootstrapMode(snap *seiv1alpha1.SnapshotSource) string {
+	if hasS3Snapshot(snap) {
 		return "snapshot"
 	}
-	if sync.StateSync != nil {
+	if hasStateSync(snap) {
 		return "state-sync"
 	}
-	if sync.Peers != nil {
-		return "peer-sync"
-	}
 	return "genesis"
-}
-
-// hasPeers returns true when the sync config provides peer sources.
-func hasPeers(sync *seiv1alpha1.SyncConfig) bool {
-	return sync != nil && sync.Peers != nil
-}
-
-// hasSnapshotRestore returns true when block sync with an S3 snapshot is configured.
-func hasSnapshotRestore(sync *seiv1alpha1.SyncConfig) bool {
-	return sync != nil && sync.BlockSync != nil && sync.BlockSync.Snapshot != nil
 }
 
 // baseProgression defines the ordered task sequence for each bootstrap mode.
 var baseProgression = map[string][]string{
 	"snapshot":   {taskSnapshotRestore, taskConfigApply, taskConfigValidate, taskMarkReady},
 	"state-sync": {taskConfigApply, taskConfigValidate, taskMarkReady},
-	"peer-sync":  {taskConfigApply, taskConfigValidate, taskMarkReady},
 	"genesis":    {taskConfigApply, taskConfigValidate, taskMarkReady},
 }
 
-// buildPlanFromSync builds a TaskPlan by starting with the base progression
+// buildPlan builds a TaskPlan by starting with the base progression
 // for the node's bootstrap mode and inserting optional tasks.
-func buildPlanFromSync(node *seiv1alpha1.SeiNode, sync *seiv1alpha1.SyncConfig) *seiv1alpha1.TaskPlan {
-	mode := syncBootstrapMode(sync)
+func buildPlan(
+	node *seiv1alpha1.SeiNode,
+	peers []seiv1alpha1.PeerSource,
+	snap *seiv1alpha1.SnapshotSource,
+) *seiv1alpha1.TaskPlan {
+	mode := bootstrapMode(snap)
 	prog := slices.Clone(baseProgression[mode])
 
 	if node.Spec.Genesis.S3 != nil {
 		prog = insertBefore(prog, taskConfigApply, taskConfigureGenesis)
 	}
-	if hasPeers(sync) {
+	if len(peers) > 0 {
 		prog = insertBefore(prog, taskConfigValidate, taskDiscoverPeers)
 	}
-	if sync != nil && (sync.StateSync != nil || hasSnapshotRestore(sync)) {
+	if snap != nil {
 		prog = insertBefore(prog, taskConfigValidate, taskConfigureStateSync)
 	}
 
@@ -135,18 +132,23 @@ func buildPlanFromSync(node *seiv1alpha1.SeiNode, sync *seiv1alpha1.SyncConfig) 
 	}
 }
 
-// sharedTaskBuilder handles task types common across all modes.
-// Returns nil when the task type is mode-specific and must be handled by the planner.
-func sharedTaskBuilder(node *seiv1alpha1.SeiNode, sync *seiv1alpha1.SyncConfig, taskType string) sidecar.TaskBuilder {
+// buildSharedTask handles task types common across modes that use the
+// standard bootstrap fields (peers, snapshot).
+func buildSharedTask(
+	node *seiv1alpha1.SeiNode,
+	peers []seiv1alpha1.PeerSource,
+	snap *seiv1alpha1.SnapshotSource,
+	taskType string,
+) sidecar.TaskBuilder {
 	switch taskType {
 	case taskSnapshotRestore:
-		return snapshotRestoreFromSync(sync, node.Spec.ChainID)
+		return snapshotRestoreTask(snap, node.Spec.ChainID)
 	case taskDiscoverPeers:
-		return discoverPeersFromSync(sync)
+		return discoverPeersTask(peers)
 	case taskConfigureGenesis:
 		return configureGenesisBuilder(node)
 	case taskConfigureStateSync:
-		return configureStateSyncFromSync(sync)
+		return configureStateSyncTask(snap)
 	case taskConfigValidate:
 		return sidecar.ConfigValidateTask{}
 	case taskMarkReady:
@@ -156,33 +158,25 @@ func sharedTaskBuilder(node *seiv1alpha1.SeiNode, sync *seiv1alpha1.SyncConfig, 
 	}
 }
 
-func snapshotRestoreFromSync(sync *seiv1alpha1.SyncConfig, chainID string) sidecar.TaskBuilder {
-	if !hasSnapshotRestore(sync) {
+func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource, chainID string) sidecar.TaskBuilder {
+	if snap == nil || snap.S3 == nil {
 		return sidecar.SnapshotRestoreTask{}
 	}
-	snap := sync.BlockSync.Snapshot
-	bucket, prefix := parseS3URI(snap.Bucket.URI)
+	bucket, prefix := parseS3URI(snap.S3.URI)
 	return sidecar.SnapshotRestoreTask{
 		Bucket:  bucket,
 		Prefix:  prefix,
-		Region:  snap.Region,
+		Region:  snap.S3.Region,
 		ChainID: chainID,
 	}
 }
 
-func discoverPeersFromSync(sync *seiv1alpha1.SyncConfig) sidecar.TaskBuilder {
-	if !hasPeers(sync) {
-		return sidecar.DiscoverPeersTask{}
-	}
-	return discoverPeersFromConfig(sync.Peers)
-}
-
-func discoverPeersFromConfig(peers *seiv1alpha1.PeerConfig) sidecar.TaskBuilder {
-	if peers == nil {
+func discoverPeersTask(peers []seiv1alpha1.PeerSource) sidecar.TaskBuilder {
+	if len(peers) == 0 {
 		return sidecar.DiscoverPeersTask{}
 	}
 	var sources []sidecar.PeerSource
-	for _, s := range peers.Sources {
+	for _, s := range peers {
 		if s.EC2Tags != nil {
 			sources = append(sources, sidecar.PeerSource{
 				Type:   sidecar.PeerSourceEC2Tags,
@@ -200,15 +194,15 @@ func discoverPeersFromConfig(peers *seiv1alpha1.PeerConfig) sidecar.TaskBuilder 
 	return sidecar.DiscoverPeersTask{Sources: sources}
 }
 
-func configureStateSyncFromSync(sync *seiv1alpha1.SyncConfig) sidecar.TaskBuilder {
+func configureStateSyncTask(snap *seiv1alpha1.SnapshotSource) sidecar.TaskBuilder {
 	task := sidecar.ConfigureStateSyncTask{
-		UseLocalSnapshot: hasSnapshotRestore(sync),
+		UseLocalSnapshot: hasS3Snapshot(snap),
 	}
-	if hasSnapshotRestore(sync) && sync.BlockSync.Snapshot.TrustPeriod != "" {
-		task.TrustPeriod = sync.BlockSync.Snapshot.TrustPeriod
-	}
-	if hasSnapshotRestore(sync) {
-		task.BackfillBlocks = sync.BlockSync.Snapshot.BackfillBlocks
+	if snap != nil {
+		if snap.TrustPeriod != "" {
+			task.TrustPeriod = snap.TrustPeriod
+		}
+		task.BackfillBlocks = snap.BackfillBlocks
 	}
 	return task
 }
