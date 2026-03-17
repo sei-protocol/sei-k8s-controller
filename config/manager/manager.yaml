@@ -32,7 +32,7 @@ spec:
           - --metrics-bind-address=:8443
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: controller:latest
+        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:e0b1a7644dfa5284bf241dea117b2b1d44a26b735a034753049edb210a126210
         name: manager
         ports: []
         securityContext:
