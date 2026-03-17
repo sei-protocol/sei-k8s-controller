@@ -13,7 +13,11 @@ lint: ## Run golangci-lint.
 	$(GOLANGCI_LINT) run
 
 manifests: ## Generate CRD and RBAC manifests.
-	controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=manifests output:rbac:artifacts:config=manifests
+	controller-gen rbac:roleName=manager-role crd webhook paths="./..." \
+		output:crd:artifacts:config=config/crd \
+		output:rbac:artifacts:config=config/rbac
+	cp config/crd/sei.io_seinodes.yaml config/crd/sei.io_seinodepools.yaml manifests/
+	cp config/rbac/role.yaml manifests/
 
 generate: ## Generate DeepCopy implementations.
 	controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
