@@ -4,7 +4,7 @@ metadata:
   labels:
     app.kubernetes.io/name: sei-k8s-controller
     app.kubernetes.io/managed-by: kustomize
-  name: sei-k8s-allow-metrics-traffic
+  name: allow-metrics-traffic
   namespace: system
 spec:
   podSelector:

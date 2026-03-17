@@ -4,7 +4,7 @@ metadata:
   labels:
     app.kubernetes.io/name: sei-k8s-controller
     app.kubernetes.io/managed-by: kustomize
-  name: sei-k8s-leader-election-role
+  name: leader-election-role
 rules:
 - apiGroups:
   - ""
