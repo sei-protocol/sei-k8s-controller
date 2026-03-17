@@ -24,10 +24,31 @@ const (
 	fieldOwner            = client.FieldOwner("seinode-controller")
 )
 
+// PlatformConfig holds infrastructure-level settings that vary per deployment
+// environment. Values are read from environment variables in main.go with
+// sensible defaults.
+type PlatformConfig struct {
+	NodepoolName   string
+	TolerationKey  string
+	TolerationVal  string
+	ServiceAccount string
+}
+
+// DefaultPlatformConfig returns PlatformConfig with production defaults.
+func DefaultPlatformConfig() PlatformConfig {
+	return PlatformConfig{
+		NodepoolName:   "sei-node",
+		TolerationKey:  "sei.io/workload",
+		TolerationVal:  "sei-node",
+		ServiceAccount: "seid-node",
+	}
+}
+
 // SeiNodeReconciler reconciles a SeiNode object.
 type SeiNodeReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Platform PlatformConfig
 	// BuildSidecarClientFn overrides sidecar client construction for testing.
 	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) SidecarStatusClient
 }
@@ -147,7 +168,7 @@ func (r *SeiNodeReconciler) ensureNodeDataPVC(ctx context.Context, node *seiv1al
 }
 
 func (r *SeiNodeReconciler) reconcileNodeStatefulSet(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	desired := generateNodeStatefulSet(node)
+	desired := generateNodeStatefulSet(node, r.Platform)
 	desired.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
 	if err := ctrl.SetControllerReference(node, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)

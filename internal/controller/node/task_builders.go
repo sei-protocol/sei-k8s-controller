@@ -10,6 +10,10 @@ const (
 	defaultSnapshotUploadCron = "0 0 * * *"
 	defaultSnapshotInterval   = int64(2000)
 
+	resultExportBucket = "sei-node-mvp"
+	resultExportRegion = "us-east-2"
+	resultExportPrefix = "shadow-results/"
+
 	valNothing = "nothing"
 )
 
@@ -20,6 +24,20 @@ func configureGenesisBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	return sidecar.ConfigureGenesisTask{
 		URI:    node.Spec.Genesis.S3.URI,
 		Region: node.Spec.Genesis.S3.Region,
+	}
+}
+
+// resultExportTaskFromSpec returns a scheduled result-export task if the
+// node is a replayer with result export enabled. Bucket, region, and prefix
+// are platform defaults — the prefix is derived from the node's chain ID.
+func resultExportTaskFromSpec(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+	if node.Spec.Replayer == nil || node.Spec.Replayer.ResultExport == nil {
+		return nil
+	}
+	return sidecar.ResultExportTask{
+		Bucket: resultExportBucket,
+		Prefix: resultExportPrefix + node.Spec.ChainID + "/",
+		Region: resultExportRegion,
 	}
 }
 

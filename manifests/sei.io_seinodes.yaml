@@ -308,11 +308,6 @@ spec:
                   Genesis configures the chain's genesis identity and where the
                   genesis configuration is sourced from.
                 properties:
-                  chainId:
-                    description: ChainID is the canonical chain identifier for this
-                      node.
-                    minLength: 1
-                    type: string
                   pvc:
                     description: PVC references a pre-provisioned PVC populated by
                       SeiNodePool's genesis ceremony.
@@ -340,8 +335,6 @@ spec:
                     required:
                     - uri
                     type: object
-                required:
-                - chainId
                 type: object
                 x-kubernetes-validations:
                 - message: at most one of pvc or s3 may be set

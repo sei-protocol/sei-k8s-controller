@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	seiconfig "github.com/sei-protocol/sei-config"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,8 +23,7 @@ func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unpa
 				Args:    []string{"start"},
 			},
 			Genesis: seiv1alpha1.GenesisConfiguration{
-				ChainID: "sei-test",
-				PVC:     &seiv1alpha1.GenesisPVCSource{DataPVC: "data-mynet-0"},
+				PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-mynet-0"},
 			},
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
@@ -37,7 +37,7 @@ func newSnapshotNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unp
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "sei-test",
 			Image:   "ghcr.io/sei-protocol/seid:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "sei-test"},
+			Genesis: seiv1alpha1.GenesisConfiguration{},
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{
@@ -50,15 +50,6 @@ func newSnapshotNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unp
 			Sidecar: &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
 	}
-}
-
-func findCondition(conditions []metav1.Condition, condType string) *metav1.Condition {
-	for i := range conditions {
-		if conditions[i].Type == condType {
-			return &conditions[i]
-		}
-	}
-	return nil
 }
 
 func findInitContainer(containers []corev1.Container, name string) *corev1.Container {
@@ -94,7 +85,7 @@ func TestGenerateNodeStatefulSet_BasicFields(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 
 	g.Expect(sts.Name).To(Equal("mynet-0"))
 	g.Expect(sts.Namespace).To(Equal("default"))
@@ -109,7 +100,7 @@ func TestGenerateNodeStatefulSet_AlwaysHasSidecar(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	g.Expect(initContainers).To(HaveLen(2))
@@ -124,9 +115,9 @@ func TestBuildNodePodSpec_Genesis_MountsExistingPVC(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
 
-	spec := buildNodePodSpec(node)
+	spec := buildNodePodSpec(node, DefaultPlatformConfig())
 
-	g.Expect(spec.ServiceAccountName).To(Equal(nodeServiceAccount))
+	g.Expect(spec.ServiceAccountName).To(Equal(DefaultPlatformConfig().ServiceAccount))
 	g.Expect(spec.Volumes).To(HaveLen(1))
 	g.Expect(spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal("data-mynet-0"))
 }
@@ -135,7 +126,7 @@ func TestBuildNodePodSpec_Snapshot_MountsNodePVC(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	spec := buildNodePodSpec(node)
+	spec := buildNodePodSpec(node, DefaultPlatformConfig())
 
 	g.Expect(spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal("data-snap-0"))
 }
@@ -144,7 +135,7 @@ func TestBuildNodePodSpec_SharedPIDNamespace(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 
 	g.Expect(sts.Spec.Template.Spec.ShareProcessNamespace).NotTo(BeNil())
 	g.Expect(*sts.Spec.Template.Spec.ShareProcessNamespace).To(BeTrue())
@@ -255,7 +246,7 @@ func TestSidecarPort_DefaultWhenZero(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{}
 
-	g.Expect(sidecarPort(node)).To(Equal(defaultSidecarPort))
+	g.Expect(sidecarPort(node)).To(Equal(seiconfig.PortSidecar))
 }
 
 func TestSidecarPort_DefaultWhenNil(t *testing.T) {
@@ -263,7 +254,7 @@ func TestSidecarPort_DefaultWhenNil(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	node.Spec.Sidecar = nil
 
-	g.Expect(sidecarPort(node)).To(Equal(defaultSidecarPort))
+	g.Expect(sidecarPort(node)).To(Equal(seiconfig.PortSidecar))
 }
 
 func TestSidecarPort_OverriddenWhenSet(t *testing.T) {
@@ -281,7 +272,7 @@ func TestSidecarContainer_DefaultImage(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Port: 7777}
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Image).To(Equal(defaultSidecarImage))
@@ -292,7 +283,7 @@ func TestSidecarContainer_CustomImage(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Image: "custom/seictl:v3", Port: 7777}
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Image).To(Equal("custom/seictl:v3"))
@@ -302,7 +293,7 @@ func TestSidecarContainer_RestartPolicyAlways(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc).NotTo(BeNil())
@@ -314,7 +305,7 @@ func TestSidecarContainer_EnvVars(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(envValue(sc.Env, "SEI_SIDECAR_PORT")).To(Equal("7777"))
@@ -325,7 +316,7 @@ func TestSidecarContainer_DataVolumeMount(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.VolumeMounts).To(HaveLen(1))
@@ -337,7 +328,7 @@ func TestSidecarContainer_CustomPort(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Port: 9999}
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Ports).To(HaveLen(1))
@@ -361,7 +352,7 @@ func TestSidecarContainer_CustomResources(t *testing.T) {
 		},
 	}
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Resources.Requests.Cpu().String()).To(Equal("250m"))
@@ -374,7 +365,7 @@ func TestSidecarContainer_NoResources_DefaultsToEmpty(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Resources.Requests).To(BeNil())
@@ -387,7 +378,7 @@ func TestSidecarMainContainer_StartupProbeTargetsHealthz(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid).NotTo(BeNil())
@@ -406,7 +397,7 @@ func TestSidecarMainContainer_StartupProbeUsesCustomPort(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Port: 9999}
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(9999))
@@ -416,7 +407,7 @@ func TestSidecarMainContainer_WaitWrapper_PollsHealthzBeforeExec(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
@@ -434,7 +425,7 @@ func TestSidecarMainContainer_WaitWrapper_IncludesEntrypointArgs(t *testing.T) {
 		Args:    []string{"start", "--home", "/sei"},
 	}
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "/sei"`))
@@ -444,7 +435,7 @@ func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeid(t *testing.T
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
@@ -456,15 +447,15 @@ func TestSidecarMainContainer_NilSidecarConfig_UsesDefaults(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = nil
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
-	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(int(defaultSidecarPort)))
+	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(int(seiconfig.PortSidecar)))
 	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/7777"))
 
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 	g.Expect(sc.Image).To(Equal(defaultSidecarImage))
-	g.Expect(sc.Ports[0].ContainerPort).To(Equal(defaultSidecarPort))
+	g.Expect(sc.Ports[0].ContainerPort).To(Equal(seiconfig.PortSidecar))
 }
 
 func TestSidecarMainContainer_WaitWrapper_UsesCustomPort(t *testing.T) {
@@ -472,7 +463,7 @@ func TestSidecarMainContainer_WaitWrapper_UsesCustomPort(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Port: 9999}
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/9999"))
@@ -484,7 +475,7 @@ func TestGenesisMode_SidecarPresent(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	g.Expect(initContainers).To(HaveLen(2))
@@ -496,7 +487,7 @@ func TestGenesisMode_NoSnapshotRestoreInitContainer(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	g.Expect(findInitContainer(initContainers, "snapshot-restore")).To(BeNil())
@@ -506,7 +497,7 @@ func TestGenesisMode_SharedPIDNamespace(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
 
-	sts := generateNodeStatefulSet(node)
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 
 	g.Expect(sts.Spec.Template.Spec.ShareProcessNamespace).NotTo(BeNil())
 	g.Expect(*sts.Spec.Template.Spec.ShareProcessNamespace).To(BeTrue())
@@ -587,45 +578,12 @@ func TestParseS3URI(t *testing.T) {
 	}
 }
 
-// --- Conditions ---
-
-func TestSetNodeCondition_ObservedGeneration(t *testing.T) {
-	g := NewWithT(t)
-	node := &seiv1alpha1.SeiNode{}
-	node.Generation = 7
-
-	setNodeCondition(node, ConditionTypeReady, metav1.ConditionTrue, ReasonAllPodsReady, "ok")
-
-	cond := findCondition(node.Status.Conditions, ConditionTypeReady)
-	g.Expect(cond).NotTo(BeNil())
-	g.Expect(cond.ObservedGeneration).To(Equal(int64(7)))
-}
-
-func TestSetNodeCondition_UpdatesExistingInPlace(t *testing.T) {
-	g := NewWithT(t)
-	node := &seiv1alpha1.SeiNode{}
-
-	setNodeCondition(node, ConditionTypeReady, metav1.ConditionFalse, ReasonPodsNotReady, "waiting")
-	setNodeCondition(node, ConditionTypeReady, metav1.ConditionTrue, ReasonAllPodsReady, "done")
-
-	count := 0
-	for _, c := range node.Status.Conditions {
-		if c.Type == ConditionTypeReady {
-			count++
-		}
-	}
-	g.Expect(count).To(Equal(1))
-	cond := findCondition(node.Status.Conditions, ConditionTypeReady)
-	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-}
-
 // --- Genesis configuration ---
 
 func TestGenesisConfiguration_PVCOnly(t *testing.T) {
 	g := NewWithT(t)
 	gc := seiv1alpha1.GenesisConfiguration{
-		ChainID: "sei-test",
-		PVC:     &seiv1alpha1.GenesisPVCSource{DataPVC: "data-0"},
+		PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-0"},
 	}
 	count := genesisSourceCount(gc)
 	g.Expect(count).To(Equal(1), "PVC-only should have exactly one source set")
@@ -634,8 +592,7 @@ func TestGenesisConfiguration_PVCOnly(t *testing.T) {
 func TestGenesisConfiguration_S3Only(t *testing.T) {
 	g := NewWithT(t)
 	gc := seiv1alpha1.GenesisConfiguration{
-		ChainID: "sei-test",
-		S3:      &seiv1alpha1.GenesisS3Source{URI: "s3://bucket/genesis.json", Region: "us-east-1"},
+		S3: &seiv1alpha1.GenesisS3Source{URI: "s3://bucket/genesis.json", Region: "us-east-1"},
 	}
 	count := genesisSourceCount(gc)
 	g.Expect(count).To(Equal(1), "S3-only should have exactly one source set")
@@ -644,9 +601,8 @@ func TestGenesisConfiguration_S3Only(t *testing.T) {
 func TestGenesisConfiguration_RejectsBoth(t *testing.T) {
 	g := NewWithT(t)
 	gc := seiv1alpha1.GenesisConfiguration{
-		ChainID: "sei-test",
-		PVC:     &seiv1alpha1.GenesisPVCSource{DataPVC: "data-0"},
-		S3:      &seiv1alpha1.GenesisS3Source{URI: "s3://bucket/genesis.json", Region: "us-east-1"},
+		PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-0"},
+		S3:  &seiv1alpha1.GenesisS3Source{URI: "s3://bucket/genesis.json", Region: "us-east-1"},
 	}
 	count := genesisSourceCount(gc)
 	g.Expect(count).To(Equal(2), "both PVC and S3 set should violate at-most-one-of")
@@ -654,7 +610,7 @@ func TestGenesisConfiguration_RejectsBoth(t *testing.T) {
 
 func TestGenesisConfiguration_AllowsNeither(t *testing.T) {
 	g := NewWithT(t)
-	gc := seiv1alpha1.GenesisConfiguration{ChainID: "sei-test"}
+	gc := seiv1alpha1.GenesisConfiguration{}
 	count := genesisSourceCount(gc)
 	g.Expect(count).To(Equal(0), "neither PVC nor S3 is valid (uses default genesis)")
 }

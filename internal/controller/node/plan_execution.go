@@ -24,6 +24,7 @@ const (
 	taskConfigValidate     = sidecar.TaskTypeConfigValidate
 	taskMarkReady          = sidecar.TaskTypeMarkReady
 	taskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
+	taskResultExport       = sidecar.TaskTypeResultExport
 
 	bootstrapPollInterval = 5 * time.Second
 )
@@ -213,6 +214,11 @@ func (r *SeiNodeReconciler) markPlanComplete(ctx context.Context, node *seiv1alp
 // The sidecar owns execution cadence after that.
 func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient) (ctrl.Result, error) {
 	if task := snapshotUploadTaskFromSpec(node); task != nil {
+		if err := r.ensureScheduledTask(ctx, node, sc, task); err != nil {
+			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", task.TaskType(), "error", err)
+		}
+	}
+	if task := resultExportTaskFromSpec(node); task != nil {
 		if err := r.ensureScheduledTask(ctx, node, sc, task); err != nil {
 			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", task.TaskType(), "error", err)
 		}

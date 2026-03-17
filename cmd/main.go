@@ -111,9 +111,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	platform := nodecontroller.DefaultPlatformConfig()
+	if v := os.Getenv("SEI_NODEPOOL_NAME"); v != "" {
+		platform.NodepoolName = v
+	}
+	if v := os.Getenv("SEI_TOLERATION_KEY"); v != "" {
+		platform.TolerationKey = v
+	}
+	if v := os.Getenv("SEI_TOLERATION_VALUE"); v != "" {
+		platform.TolerationVal = v
+	}
+	if v := os.Getenv("SEI_SERVICE_ACCOUNT"); v != "" {
+		platform.ServiceAccount = v
+	}
+
 	if err := (&nodecontroller.SeiNodeReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Platform: platform,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNode")
 		os.Exit(1)
