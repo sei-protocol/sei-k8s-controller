@@ -55,9 +55,14 @@ func strPtr(s string) *string { return &s }
 
 func completedResult(id uuid.UUID, taskType string, taskErr *string) *sidecar.TaskResult {
 	now := time.Now()
+	status := sidecar.TaskResultStatusCompleted
+	if taskErr != nil && *taskErr != "" {
+		status = sidecar.TaskResultStatusFailed
+	}
 	return &sidecar.TaskResult{
 		Id:          id,
 		Type:        taskType,
+		Status:      status,
 		SubmittedAt: now.Add(-10 * time.Second),
 		CompletedAt: &now,
 		Error:       taskErr,
@@ -68,6 +73,7 @@ func runningResult(id uuid.UUID, taskType string) *sidecar.TaskResult {
 	return &sidecar.TaskResult{
 		Id:          id,
 		Type:        taskType,
+		Status:      sidecar.TaskResultStatusRunning,
 		SubmittedAt: time.Now(),
 	}
 }
