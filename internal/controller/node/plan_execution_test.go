@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
@@ -119,7 +120,7 @@ func snapshotNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "atlantic-2"},
+			Genesis: seiv1alpha1.GenesisConfiguration{},
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{
@@ -141,8 +142,7 @@ func peerSyncNode() *seiv1alpha1.SeiNode {
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{
-				ChainID: "atlantic-2",
-				S3:      &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/atlantic-2/genesis.json", Region: "us-east-2"},
+				S3: &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/atlantic-2/genesis.json", Region: "us-east-2"},
 			},
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Peers: []seiv1alpha1.PeerSource{
@@ -164,8 +164,7 @@ func genesisNode() *seiv1alpha1.SeiNode {
 			ChainID: "arctic-1",
 			Image:   "sei:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{
-				ChainID: "arctic-1",
-				PVC:     &seiv1alpha1.GenesisPVCSource{DataPVC: "data-pvc"},
+				PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-pvc"},
 			},
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
@@ -179,7 +178,7 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "atlantic-2"},
+			Genesis: seiv1alpha1.GenesisConfiguration{},
 			Archive: &seiv1alpha1.ArchiveSpec{
 				Peers: []seiv1alpha1.PeerSource{{
 					EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
@@ -206,8 +205,7 @@ func replayerNode() *seiv1alpha1.SeiNode {
 			ChainID: "pacific-1",
 			Image:   "sei:latest",
 			Genesis: seiv1alpha1.GenesisConfiguration{
-				ChainID: "pacific-1",
-				S3:      &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/pacific-1/genesis.json", Region: "us-east-2"},
+				S3: &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/pacific-1/genesis.json", Region: "us-east-2"},
 			},
 			Replayer: &seiv1alpha1.ReplayerSpec{
 				Snapshot: seiv1alpha1.SnapshotSource{
@@ -327,8 +325,8 @@ func TestPlannerForNode_Replayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode() != modeArchive {
-		t.Errorf("Mode() = %q, want %q", p.Mode(), modeArchive)
+	if p.Mode() != string(seiconfig.ModeArchive) {
+		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeArchive))
 	}
 }
 
@@ -722,8 +720,8 @@ func TestConfigApply_FullNodeMode(t *testing.T) {
 	planner, _ := PlannerForNode(node)
 	b := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
-	if string(task.Intent.Mode) != modeFull {
-		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, modeFull)
+	if string(task.Intent.Mode) != string(seiconfig.ModeFull) {
+		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, string(seiconfig.ModeFull))
 	}
 }
 
@@ -732,8 +730,8 @@ func TestConfigApply_ValidatorMode(t *testing.T) {
 	planner, _ := PlannerForNode(node)
 	b := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
-	if string(task.Intent.Mode) != modeValidator {
-		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, modeValidator)
+	if string(task.Intent.Mode) != string(seiconfig.ModeValidator) {
+		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, string(seiconfig.ModeValidator))
 	}
 }
 
@@ -742,8 +740,8 @@ func TestConfigApply_ArchiveWithSnapshotGeneration(t *testing.T) {
 	planner, _ := PlannerForNode(node)
 	b := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
-	if string(task.Intent.Mode) != modeArchive {
-		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, modeArchive)
+	if string(task.Intent.Mode) != string(seiconfig.ModeArchive) {
+		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, string(seiconfig.ModeArchive))
 	}
 	if task.Intent.Overrides["storage.snapshot_interval"] != "2000" {
 		t.Errorf("storage.snapshot_interval = %q", task.Intent.Overrides["storage.snapshot_interval"])
@@ -819,8 +817,8 @@ func TestPlannerForNode_FullNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode() != modeFull {
-		t.Errorf("Mode() = %q, want %q", p.Mode(), modeFull)
+	if p.Mode() != string(seiconfig.ModeFull) {
+		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeFull))
 	}
 }
 
@@ -830,8 +828,8 @@ func TestPlannerForNode_Archive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode() != modeArchive {
-		t.Errorf("Mode() = %q, want %q", p.Mode(), modeArchive)
+	if p.Mode() != string(seiconfig.ModeArchive) {
+		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeArchive))
 	}
 }
 
@@ -841,8 +839,8 @@ func TestPlannerForNode_Validator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode() != modeValidator {
-		t.Errorf("Mode() = %q, want %q", p.Mode(), modeValidator)
+	if p.Mode() != string(seiconfig.ModeValidator) {
+		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeValidator))
 	}
 }
 
@@ -851,11 +849,127 @@ func TestPlannerForNode_NoSubSpec(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "test",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{ChainID: "test"},
+			Genesis: seiv1alpha1.GenesisConfiguration{},
 		},
 	}
 	_, err := PlannerForNode(node)
 	if err == nil {
 		t.Error("expected error for node with no sub-spec")
+	}
+}
+
+// --- Result export tests ---
+
+func TestResultExportTaskFromSpec_ReplayerWithExport(t *testing.T) {
+	node := replayerNode()
+	node.Spec.Replayer.ResultExport = &seiv1alpha1.ResultExportConfig{}
+	b := resultExportTaskFromSpec(node)
+	if b == nil {
+		t.Fatal("expected non-nil task")
+	}
+	task, ok := b.(sidecar.ResultExportTask)
+	if !ok {
+		t.Fatalf("expected ResultExportTask, got %T", b)
+	}
+	if task.Bucket != "sei-node-mvp" {
+		t.Errorf("Bucket = %q, want %q", task.Bucket, "sei-node-mvp")
+	}
+	if task.Prefix != "shadow-results/pacific-1/" {
+		t.Errorf("Prefix = %q, want %q", task.Prefix, "shadow-results/pacific-1/")
+	}
+	if task.Region != "us-east-2" {
+		t.Errorf("Region = %q, want %q", task.Region, "us-east-2")
+	}
+}
+
+func TestResultExportTaskFromSpec_ReplayerWithoutExport(t *testing.T) {
+	node := replayerNode()
+	if b := resultExportTaskFromSpec(node); b != nil {
+		t.Errorf("expected nil, got %v", b)
+	}
+}
+
+func TestResultExportTaskFromSpec_FullNode(t *testing.T) {
+	node := snapshotNode()
+	if b := resultExportTaskFromSpec(node); b != nil {
+		t.Errorf("expected nil for full node, got %v", b)
+	}
+}
+
+// --- Replayer validation tests ---
+
+func TestReplayerPlanner_Validate_WellKnownChain(t *testing.T) {
+	node := replayerNode()
+	node.Spec.Replayer.Snapshot.S3.URI = ""
+	planner, err := PlannerForNode(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := planner.Validate(node); err != nil {
+		t.Errorf("expected no error for well-known chain, got %v", err)
+	}
+}
+
+func TestReplayerPlanner_Validate_CustomChainRequiresURI(t *testing.T) {
+	node := replayerNode()
+	node.Spec.ChainID = "custom-chain"
+	node.Spec.Replayer.Snapshot.S3.URI = ""
+	planner, err := PlannerForNode(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := planner.Validate(node); err == nil {
+		t.Error("expected error for unknown chain without URI")
+	}
+}
+
+// --- Replayer BuildTask tests ---
+
+func TestBuildTask_Replayer_SnapshotRestore_InferredBucket(t *testing.T) {
+	node := replayerNode()
+	node.Spec.Replayer.Snapshot.S3.URI = ""
+	planner, _ := PlannerForNode(node)
+	b := planner.BuildTask(node, taskSnapshotRestore)
+	task, ok := b.(sidecar.SnapshotRestoreTask)
+	if !ok {
+		t.Fatalf("expected SnapshotRestoreTask, got %T", b)
+	}
+	if task.Bucket != "pacific-1-snapshots" {
+		t.Errorf("Bucket = %q, want %q", task.Bucket, "pacific-1-snapshots")
+	}
+	if task.Prefix != "state-sync/" {
+		t.Errorf("Prefix = %q, want %q", task.Prefix, "state-sync/")
+	}
+}
+
+// --- Reconcile replayer runtime task tests ---
+
+func TestReconcile_CompletePlan_SubmitsResultExportForReplayer(t *testing.T) {
+	taskID := uuid.New()
+	mock := &mockSidecarClient{submitID: taskID}
+	node := replayerNode()
+	node.Spec.Replayer.ResultExport = &seiv1alpha1.ResultExportConfig{}
+	planner, _ := PlannerForNode(node)
+	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+
+	r, c := newProgressionReconciler(t, mock, node)
+
+	_, err := r.reconcileSidecarProgression(context.Background(), node, planner)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(mock.submitted) != 1 {
+		t.Fatalf("expected 1 scheduled task submitted, got %d", len(mock.submitted))
+	}
+	if mock.submitted[0].TaskType() != taskResultExport {
+		t.Errorf("task type = %q, want %q", mock.submitted[0].TaskType(), taskResultExport)
+	}
+
+	updated := fetchNode(t, c, node.Name, node.Namespace)
+	if updated.Status.ScheduledTasks == nil {
+		t.Fatal("expected ScheduledTasks to be set")
+	}
+	if got := updated.Status.ScheduledTasks[taskResultExport]; got != taskID.String() {
+		t.Errorf("ScheduledTasks[%s] = %q, want %q", taskResultExport, got, taskID.String())
 	}
 }

@@ -1,0 +1,42 @@
+# SeiNode — Pacific-1 Shadow Replayer
+#
+# Identical to pacific-1-replay except the entrypoint passes
+# --skip-app-hash-validation so the node can block sync with a
+# different execution engine (V2 vs Giga). The node is queryable
+# via RPC for external comparison against the canonical chain.
+apiVersion: sei.io/v1alpha1
+kind: SeiNode
+metadata:
+  name: pacific-1-shadow-replayer
+  namespace: default
+spec:
+  chainId: pacific-1
+  image: ghcr.io/bdchatham/sei-shadow:skip-apphash
+
+  sidecar:
+    image: ghcr.io/sei-protocol/seictl@sha256:ad50d546c3aa4bfa220b3148ffc40b59d34d7c8d09522fa1ff25f635f2f1e710
+
+  entrypoint:
+    command: ["seid"]
+    args: ["start", "--home", "/sei", "--skip-app-hash-validation"]
+
+  genesis:
+    s3:
+      uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
+      region: us-east-2
+
+  storage:
+    retainOnDelete: true
+
+  replayer:
+    peers:
+      - ec2Tags:
+          region: eu-central-1
+          tags:
+            ChainIdentifier: pacific-1
+            Component: state-syncer
+    snapshot:
+      s3:
+        region: eu-central-1
+      trustPeriod: "9999h0m0s"
+    resultExport: {}

@@ -1,6 +1,7 @@
 package node
 
 import (
+	seiconfig "github.com/sei-protocol/sei-config"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -11,10 +12,6 @@ const (
 	storageClassPerf    = "gp3-perf"
 	storageClassDefault = "gp3"
 
-	modeFull      = "full"
-	modeArchive   = "archive"
-	modeValidator = "validator"
-
 	defaultStorageSize = "1000Gi"
 )
 
@@ -23,7 +20,7 @@ const (
 func nodeMode(node *seiv1alpha1.SeiNode) string {
 	planner, err := PlannerForNode(node)
 	if err != nil {
-		return modeFull
+		return string(seiconfig.ModeFull)
 	}
 	return planner.Mode()
 }
@@ -32,9 +29,9 @@ func nodeMode(node *seiv1alpha1.SeiNode) string {
 // container based on the node's operating mode.
 func defaultResourcesForMode(mode string) corev1.ResourceRequirements {
 	switch mode {
-	case modeArchive:
+	case string(seiconfig.ModeArchive):
 		return makeResources("8", "48Gi")
-	case modeFull, modeValidator:
+	case string(seiconfig.ModeFull), string(seiconfig.ModeValidator):
 		return makeResources("4", "32Gi")
 	default:
 		return makeResources("4", "32Gi")
@@ -45,9 +42,9 @@ func defaultResourcesForMode(mode string) corev1.ResourceRequirements {
 // node based on its operating mode.
 func defaultStorageForMode(mode string) (storageClass string, size string) {
 	switch mode {
-	case modeArchive:
+	case string(seiconfig.ModeArchive):
 		return storageClassPerf, "2000Gi"
-	case modeFull, modeValidator:
+	case string(seiconfig.ModeFull), string(seiconfig.ModeValidator):
 		return storageClassPerf, defaultStorageSize
 	default:
 		return storageClassDefault, defaultStorageSize

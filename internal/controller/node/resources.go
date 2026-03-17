@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -15,9 +16,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-const defaultSidecarPort int32 = 7777
-
-func generateNodeStatefulSet(node *seiv1alpha1.SeiNode) *appsv1.StatefulSet {
+func generateNodeStatefulSet(node *seiv1alpha1.SeiNode, platform PlatformConfig) *appsv1.StatefulSet {
 	one := int32(1)
 	labels := resourceLabelsForNode(node)
 
@@ -35,13 +34,13 @@ func generateNodeStatefulSet(node *seiv1alpha1.SeiNode) *appsv1.StatefulSet {
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec:       buildNodePodSpec(node),
+				Spec:       buildNodePodSpec(node, platform),
 			},
 		},
 	}
 }
 
-func buildNodePodSpec(node *seiv1alpha1.SeiNode) corev1.PodSpec {
+func buildNodePodSpec(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1.PodSpec {
 	dataVolume := corev1.Volume{
 		Name: "data",
 		VolumeSource: corev1.VolumeSource{
@@ -52,9 +51,9 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode) corev1.PodSpec {
 	}
 
 	spec := corev1.PodSpec{
-		ServiceAccountName: nodeServiceAccount,
+		ServiceAccountName: platform.ServiceAccount,
 		Tolerations: []corev1.Toleration{
-			{Key: "sei.io/workload", Value: "sei-node", Effect: corev1.TaintEffectNoSchedule},
+			{Key: platform.TolerationKey, Value: platform.TolerationVal, Effect: corev1.TaintEffectNoSchedule},
 		},
 		Affinity: &corev1.Affinity{
 			NodeAffinity: &corev1.NodeAffinity{
@@ -63,7 +62,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode) corev1.PodSpec {
 						MatchExpressions: []corev1.NodeSelectorRequirement{{
 							Key:      "karpenter.sh/nodepool",
 							Operator: corev1.NodeSelectorOpIn,
-							Values:   []string{"sei-node"},
+							Values:   []string{platform.NodepoolName},
 						}},
 					}},
 				},
@@ -93,7 +92,7 @@ func sidecarPort(node *seiv1alpha1.SeiNode) int32 {
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
 		return node.Spec.Sidecar.Port
 	}
-	return defaultSidecarPort
+	return seiconfig.PortSidecar
 }
 
 // buildSidecarContainer constructs the sei-sidecar as a restartable init
@@ -200,7 +199,7 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				TCPSocket: &corev1.TCPSocketAction{
-					Port: intstr.FromInt32(26657),
+					Port: intstr.FromInt32(seiconfig.PortRPC),
 				},
 			},
 			InitialDelaySeconds: 10,
@@ -286,25 +285,21 @@ func generateNodeDataPVC(node *seiv1alpha1.SeiNode) *corev1.PersistentVolumeClai
 }
 
 func containerPorts() []corev1.ContainerPort {
-	return []corev1.ContainerPort{
-		{Name: "evm-rpc", ContainerPort: 8545, Protocol: corev1.ProtocolTCP},
-		{Name: "evm-ws", ContainerPort: 8546, Protocol: corev1.ProtocolTCP},
-		{Name: "grpc", ContainerPort: 9090, Protocol: corev1.ProtocolTCP},
-		{Name: "p2p", ContainerPort: 26656, Protocol: corev1.ProtocolTCP},
-		{Name: "rpc", ContainerPort: 26657, Protocol: corev1.ProtocolTCP},
-		{Name: "metrics", ContainerPort: 26660, Protocol: corev1.ProtocolTCP},
+	np := seiconfig.NodePorts()
+	ports := make([]corev1.ContainerPort, len(np))
+	for i, p := range np {
+		ports[i] = corev1.ContainerPort{Name: p.Name, ContainerPort: p.Port, Protocol: corev1.ProtocolTCP}
 	}
+	return ports
 }
 
 func servicePorts() []corev1.ServicePort {
-	return []corev1.ServicePort{
-		{Name: "evm-rpc", Port: 8545, TargetPort: intstr.FromInt32(8545), Protocol: corev1.ProtocolTCP},
-		{Name: "evm-ws", Port: 8546, TargetPort: intstr.FromInt32(8546), Protocol: corev1.ProtocolTCP},
-		{Name: "grpc", Port: 9090, TargetPort: intstr.FromInt32(9090), Protocol: corev1.ProtocolTCP},
-		{Name: "p2p", Port: 26656, TargetPort: intstr.FromInt32(26656), Protocol: corev1.ProtocolTCP},
-		{Name: "rpc", Port: 26657, TargetPort: intstr.FromInt32(26657), Protocol: corev1.ProtocolTCP},
-		{Name: "metrics", Port: 26660, TargetPort: intstr.FromInt32(26660), Protocol: corev1.ProtocolTCP},
+	np := seiconfig.NodePorts()
+	ports := make([]corev1.ServicePort, len(np))
+	for i, p := range np {
+		ports[i] = corev1.ServicePort{Name: p.Name, Port: p.Port, TargetPort: intstr.FromInt32(p.Port), Protocol: corev1.ProtocolTCP}
 	}
+	return ports
 }
 
 // parseS3URI splits an s3://bucket/prefix URI into its bucket and prefix parts.

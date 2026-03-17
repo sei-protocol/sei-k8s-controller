@@ -60,10 +60,16 @@ type SnapshotSource struct {
 }
 
 // S3SnapshotSource configures snapshot download from an S3 bucket.
+// When URI is set the controller uses that exact archive. When URI is
+// omitted the controller infers the bucket from the chain ID using the
+// well-known convention {chainId}-snapshots/state-sync/ and selects the
+// latest snapshot via latest.txt.
 type S3SnapshotSource struct {
-	// URI of the snapshot archive in s3://bucket/prefix format.
-	// +kubebuilder:validation:MinLength=1
-	URI string `json:"uri"`
+	// URI of a specific snapshot archive in s3://bucket/prefix format.
+	// When omitted, the snapshot is resolved from the well-known
+	// state-sync bucket for the chain ID ({chainId}-snapshots/state-sync/).
+	// +optional
+	URI string `json:"uri,omitempty"`
 
 	// Region is the AWS region for S3 access.
 	// +optional
@@ -114,15 +120,20 @@ type S3SnapshotDestination struct {
 	Region string `json:"region"`
 }
 
-// GenesisConfiguration defines the chain identity and where genesis data is sourced.
-// At most one of PVC or S3 may be set. When neither is set the node uses the
-// default genesis produced by seid init.
+// ResultExportConfig enables periodic export of block execution results.
+// The sidecar queries the local RPC endpoint for block results and uploads
+// them in compressed NDJSON pages to the platform S3 bucket, keyed by the
+// node's chain ID. Its presence on a node spec is sufficient to enable
+// export — no additional fields are required.
+type ResultExportConfig struct{}
+
+// GenesisConfiguration defines where genesis data is sourced.
+// At most one of PVC or S3 may be set. When neither is set and the chain ID
+// is a well-known network (pacific-1, atlantic-2, arctic-1), the sidecar
+// writes the embedded genesis from sei-config. Unknown chains fall back to
+// the default genesis produced by seid init.
 // +kubebuilder:validation:XValidation:rule="(has(self.pvc) ? 1 : 0) + (has(self.s3) ? 1 : 0) <= 1",message="at most one of pvc or s3 may be set"
 type GenesisConfiguration struct {
-	// ChainID is the canonical chain identifier for this node.
-	// +kubebuilder:validation:MinLength=1
-	ChainID string `json:"chainId"`
-
 	// PVC references a pre-provisioned PVC populated by SeiNodePool's genesis ceremony.
 	// +optional
 	PVC *GenesisPVCSource `json:"pvc,omitempty"`

@@ -9,7 +9,6 @@ import (
 const (
 	nodeLabel           = "sei.io/node"
 	dataDir             = "/sei"
-	nodeServiceAccount  = "seid-node"
 	defaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:80add5808602b0f9e92d6d7a8951ec8eb8bbcc9aaa8b2501bc1c4ea65adfa659"
 )
 

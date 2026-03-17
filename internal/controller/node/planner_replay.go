@@ -5,7 +5,6 @@ import (
 
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
-
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
@@ -18,8 +17,11 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 		return fmt.Errorf("replayer sub-spec is nil")
 	}
 	snap := node.Spec.Replayer.Snapshot
-	if snap.S3 == nil || snap.S3.URI == "" {
-		return fmt.Errorf("replayer requires a snapshot source with a URI")
+	if snap.S3 == nil {
+		return fmt.Errorf("replayer requires an S3 snapshot source")
+	}
+	if snap.S3.URI == "" && seiconfig.KnownChain(node.Spec.ChainID) == nil {
+		return fmt.Errorf("replayer: chain %q has no well-known snapshot bucket; s3.uri is required", node.Spec.ChainID)
 	}
 	if len(node.Spec.Replayer.Peers) == 0 {
 		return fmt.Errorf("replayer requires at least one peer source for block sync")
@@ -48,16 +50,10 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.Task
 }
 
 func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
+	snap := &node.Spec.Replayer.Snapshot
 	switch taskType {
 	case taskSnapshotRestore:
-		s3 := node.Spec.Replayer.Snapshot.S3
-		bucket, prefix := parseS3URI(s3.URI)
-		return sidecar.SnapshotRestoreTask{
-			Bucket:  bucket,
-			Prefix:  prefix,
-			Region:  s3.Region,
-			ChainID: node.Spec.ChainID,
-		}
+		return snapshotRestoreTask(snap, node.Spec.ChainID)
 	case taskDiscoverPeers:
 		return discoverPeersTask(node.Spec.Replayer.Peers)
 	case taskConfigApply:

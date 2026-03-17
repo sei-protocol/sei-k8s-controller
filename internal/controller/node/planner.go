@@ -162,11 +162,18 @@ func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource, chainID string) sidec
 	if snap == nil || snap.S3 == nil {
 		return sidecar.SnapshotRestoreTask{}
 	}
-	bucket, prefix := parseS3URI(snap.S3.URI)
+	s3 := snap.S3
+	var bucket, prefix string
+	if s3.URI != "" {
+		bucket, prefix = parseS3URI(s3.URI)
+	} else {
+		bucket = chainID + "-snapshots"
+		prefix = "state-sync/"
+	}
 	return sidecar.SnapshotRestoreTask{
 		Bucket:  bucket,
 		Prefix:  prefix,
-		Region:  snap.S3.Region,
+		Region:  s3.Region,
 		ChainID: chainID,
 	}
 }
