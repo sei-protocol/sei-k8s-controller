@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	defaultSnapshotUploadCron  = "0 0 * * *"
-	defaultSnapshotInterval    = int64(2000)
+	defaultSnapshotUploadCron = "0 0 * * *"
+	defaultSnapshotInterval   = int64(2000)
 
 	resultExportBucket = "sei-node-mvp"
 	resultExportRegion = "us-east-2"
