@@ -5,8 +5,8 @@ go 1.25.6
 require (
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.38.2
-	github.com/sei-protocol/sei-config v0.0.5
-	github.com/sei-protocol/seictl v0.0.14
+	github.com/sei-protocol/sei-config v0.0.7
+	github.com/sei-protocol/seictl v0.0.15
 	k8s.io/api v0.35.0
 	k8s.io/apimachinery v0.35.0
 	k8s.io/client-go v0.35.0
@@ -54,6 +54,7 @@ require (
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/sei-protocol/seilog v0.0.2 // indirect
 	github.com/spf13/cobra v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/stoewer/go-strcase v1.3.0 // indirect

@@ -154,24 +154,30 @@ func (r *SeiNodeReconciler) pollTask(
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
 	}
 
-	// Still running.
-	if result.CompletedAt == nil {
+	switch result.Status {
+	case sidecar.TaskResultStatusRunning:
+		log.FromContext(ctx).V(1).Info("task still running", "task", task.Type)
+		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+
+	case sidecar.TaskResultStatusFailed:
+		errMsg := "unknown error"
+		if result.Error != nil && *result.Error != "" {
+			errMsg = *result.Error
+		}
+		return r.failTask(ctx, node, task, errMsg)
+
+	case sidecar.TaskResultStatusCompleted:
+		patch := client.MergeFrom(node.DeepCopy())
+		task.Status = seiv1alpha1.PlannedTaskComplete
+		if err := r.Status().Patch(ctx, node, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("marking task complete: %w", err)
+		}
+		return ctrl.Result{RequeueAfter: 1}, nil
+
+	default:
+		log.FromContext(ctx).Info("unexpected task status, will retry", "task", task.Type, "status", result.Status)
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
 	}
-
-	// Failed.
-	if result.Error != nil && *result.Error != "" {
-		return r.failTask(ctx, node, task, *result.Error)
-	}
-
-	// Completed successfully — mark and let the next reconcile advance.
-	patch := client.MergeFrom(node.DeepCopy())
-	task.Status = seiv1alpha1.PlannedTaskComplete
-	if err := r.Status().Patch(ctx, node, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("marking task complete: %w", err)
-	}
-
-	return ctrl.Result{RequeueAfter: 1}, nil
 }
 
 // failTask marks an individual task and the overall plan as Failed.
