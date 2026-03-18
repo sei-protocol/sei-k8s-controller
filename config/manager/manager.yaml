@@ -32,7 +32,7 @@ spec:
           - --metrics-bind-address=:8443
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:73e5900738cf1bd353a502e9423345ee9c12fb1a6fefa9173cd1b484af9cad5a
+        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:2f01aa578e4e7e9e1d8bed8c1e32b9e9dcc3e8ae962115868c7d0ac223a01719
         name: manager
         env:
           - name: SEI_NODEPOOL_NAME
