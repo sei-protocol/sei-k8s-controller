@@ -237,12 +237,11 @@ spec:
                             description: Region is the AWS region for S3 access.
                             type: string
                           uri:
-                            description: URI of the snapshot archive in s3://bucket/prefix
-                              format.
-                            minLength: 1
+                            description: |-
+                              URI of a specific snapshot archive in s3://bucket/prefix format.
+                              When omitted, the snapshot is resolved from the well-known
+                              state-sync bucket for the chain ID ({chainId}-snapshots/state-sync/).
                             type: string
-                        required:
-                        - uri
                         type: object
                       stateSync:
                         description: StateSync fetches snapshot chunks from peers
@@ -397,6 +396,13 @@ spec:
                           : 0) == 1'
                     minItems: 1
                     type: array
+                  resultExport:
+                    description: |-
+                      ResultExport configures periodic export of block execution results to S3.
+                      The sidecar queries the local RPC for block_results and uploads compressed
+                      NDJSON pages on a schedule. Useful for shadow replayers that need their
+                      execution results compared against the canonical chain.
+                    type: object
                   snapshot:
                     description: Snapshot identifies the snapshot to restore from
                       before replay begins.
@@ -415,12 +421,11 @@ spec:
                             description: Region is the AWS region for S3 access.
                             type: string
                           uri:
-                            description: URI of the snapshot archive in s3://bucket/prefix
-                              format.
-                            minLength: 1
+                            description: |-
+                              URI of a specific snapshot archive in s3://bucket/prefix format.
+                              When omitted, the snapshot is resolved from the well-known
+                              state-sync bucket for the chain ID ({chainId}-snapshots/state-sync/).
                             type: string
-                        required:
-                        - uri
                         type: object
                       stateSync:
                         description: StateSync fetches snapshot chunks from peers
@@ -593,12 +598,11 @@ spec:
                             description: Region is the AWS region for S3 access.
                             type: string
                           uri:
-                            description: URI of the snapshot archive in s3://bucket/prefix
-                              format.
-                            minLength: 1
+                            description: |-
+                              URI of a specific snapshot archive in s3://bucket/prefix format.
+                              When omitted, the snapshot is resolved from the well-known
+                              state-sync bucket for the chain ID ({chainId}-snapshots/state-sync/).
                             type: string
-                        required:
-                        - uri
                         type: object
                       stateSync:
                         description: StateSync fetches snapshot chunks from peers
