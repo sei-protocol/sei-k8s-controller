@@ -22,9 +22,11 @@ type SeiNodeSpec struct {
 	// +optional
 	Entrypoint *EntrypointConfig `json:"entrypoint,omitempty"`
 
-	// Genesis configures the chain's genesis identity and where the
-	// genesis configuration is sourced from.
-	Genesis GenesisConfiguration `json:"genesis"`
+	// Genesis configures where the genesis configuration is sourced from.
+	// When omitted for a well-known chain (pacific-1, atlantic-2, arctic-1),
+	// the sidecar writes the embedded genesis from sei-config.
+	// +optional
+	Genesis GenesisConfiguration `json:"genesis,omitempty"`
 
 	// Storage controls PVC lifecycle.
 	// +optional

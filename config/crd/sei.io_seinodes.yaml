@@ -304,8 +304,9 @@ spec:
                 type: object
               genesis:
                 description: |-
-                  Genesis configures the chain's genesis identity and where the
-                  genesis configuration is sourced from.
+                  Genesis configures where the genesis configuration is sourced from.
+                  When omitted for a well-known chain (pacific-1, atlantic-2, arctic-1),
+                  the sidecar writes the embedded genesis from sei-config.
                 properties:
                   pvc:
                     description: PVC references a pre-provisioned PVC populated by
@@ -622,7 +623,6 @@ spec:
                 type: object
             required:
             - chainId
-            - genesis
             - image
             type: object
             x-kubernetes-validations:
