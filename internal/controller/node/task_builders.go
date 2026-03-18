@@ -1,6 +1,8 @@
 package node
 
 import (
+	"maps"
+
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -24,12 +26,8 @@ func mergeOverrides(controllerOverrides map[string]string, userOverrides map[str
 		return nil
 	}
 	merged := make(map[string]string, len(controllerOverrides)+len(userOverrides))
-	for k, v := range controllerOverrides {
-		merged[k] = v
-	}
-	for k, v := range userOverrides {
-		merged[k] = v
-	}
+	maps.Copy(merged, controllerOverrides)
+	maps.Copy(merged, userOverrides)
 	return merged
 }
 
