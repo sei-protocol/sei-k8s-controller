@@ -24,7 +24,8 @@ func (p *validatorPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string)
 	if taskType == taskConfigApply {
 		return sidecar.ConfigApplyTask{
 			Intent: seiconfig.ConfigIntent{
-				Mode: seiconfig.ModeValidator,
+				Mode:      seiconfig.ModeValidator,
+				Overrides: mergeOverrides(nil, node.Spec.Overrides),
 			},
 		}
 	}

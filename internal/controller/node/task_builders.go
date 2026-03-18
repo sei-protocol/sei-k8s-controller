@@ -1,6 +1,8 @@
 package node
 
 import (
+	"maps"
+
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -16,6 +18,18 @@ const (
 
 	valNothing = "nothing"
 )
+
+// mergeOverrides combines controller-generated overrides with user-specified
+// overrides from spec.overrides. User overrides take precedence.
+func mergeOverrides(controllerOverrides map[string]string, userOverrides map[string]string) map[string]string {
+	if len(controllerOverrides) == 0 && len(userOverrides) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(controllerOverrides)+len(userOverrides))
+	maps.Copy(merged, controllerOverrides)
+	maps.Copy(merged, userOverrides)
+	return merged
+}
 
 func configureGenesisBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	if node.Spec.Genesis.S3 == nil {

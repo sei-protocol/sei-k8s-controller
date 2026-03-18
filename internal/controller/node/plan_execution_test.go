@@ -344,6 +344,73 @@ func TestPlannerForNode_Replayer(t *testing.T) {
 	}
 }
 
+// --- Config overrides passthrough tests ---
+
+func TestConfigApply_ReplayerPassesSpecOverrides(t *testing.T) {
+	node := replayerNode()
+	node.Spec.Overrides = map[string]string{
+		"giga_executor.enabled": "true",
+		"evm.http_port":         "8545",
+	}
+	planner, _ := PlannerForNode(node)
+	b := planner.BuildTask(node, taskConfigApply)
+	task, ok := b.(sidecar.ConfigApplyTask)
+	if !ok {
+		t.Fatalf("expected ConfigApplyTask, got %T", b)
+	}
+	if task.Intent.Overrides["giga_executor.enabled"] != "true" {
+		t.Errorf("giga_executor.enabled = %q, want %q", task.Intent.Overrides["giga_executor.enabled"], "true")
+	}
+	if task.Intent.Overrides["evm.http_port"] != "8545" {
+		t.Errorf("evm.http_port = %q, want %q", task.Intent.Overrides["evm.http_port"], "8545")
+	}
+}
+
+func TestConfigApply_FullNodeMergesOverrides(t *testing.T) {
+	node := snapshotNode()
+	node.Spec.Overrides = map[string]string{
+		"giga_executor.enabled": "true",
+	}
+	planner, _ := PlannerForNode(node)
+	b := planner.BuildTask(node, taskConfigApply)
+	task, ok := b.(sidecar.ConfigApplyTask)
+	if !ok {
+		t.Fatalf("expected ConfigApplyTask, got %T", b)
+	}
+	if task.Intent.Overrides["giga_executor.enabled"] != "true" {
+		t.Errorf("giga_executor.enabled = %q, want %q", task.Intent.Overrides["giga_executor.enabled"], "true")
+	}
+	if task.Intent.Mode != seiconfig.ModeFull {
+		t.Errorf("Mode = %q, want %q", task.Intent.Mode, seiconfig.ModeFull)
+	}
+}
+
+func TestConfigApply_UserOverridesTakePrecedence(t *testing.T) {
+	node := snapshotterNode()
+	node.Spec.Overrides = map[string]string{
+		"storage.snapshot_keep_recent": "99",
+	}
+	planner, _ := PlannerForNode(node)
+	b := planner.BuildTask(node, taskConfigApply)
+	task, ok := b.(sidecar.ConfigApplyTask)
+	if !ok {
+		t.Fatalf("expected ConfigApplyTask, got %T", b)
+	}
+	if task.Intent.Overrides["storage.snapshot_keep_recent"] != "99" {
+		t.Errorf("user override should take precedence, got %q", task.Intent.Overrides["storage.snapshot_keep_recent"])
+	}
+}
+
+func TestConfigApply_NoOverridesYieldsNil(t *testing.T) {
+	node := replayerNode()
+	planner, _ := PlannerForNode(node)
+	b := planner.BuildTask(node, taskConfigApply)
+	task := b.(sidecar.ConfigApplyTask)
+	if task.Intent.Overrides != nil {
+		t.Errorf("expected nil overrides when none specified, got %v", task.Intent.Overrides)
+	}
+}
+
 func assertProgression(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {

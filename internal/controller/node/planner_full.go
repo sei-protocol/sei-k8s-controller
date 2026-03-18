@@ -33,7 +33,7 @@ func (p *fullNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) 
 func (p *fullNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	intent := seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeFull,
-		Overrides: p.controllerOverrides(node),
+		Overrides: mergeOverrides(p.controllerOverrides(node), node.Spec.Overrides),
 	}
 	return sidecar.ConfigApplyTask{Intent: intent}
 }
