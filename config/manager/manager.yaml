@@ -32,8 +32,25 @@ spec:
           - --metrics-bind-address=:8443
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:e0b1a7644dfa5284bf241dea117b2b1d44a26b735a034753049edb210a126210
+        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:ee65334ea4523628a2ce49a6a9176aa91ed1a30828ea258cf86c86f6446fc11a
         name: manager
+        env:
+          - name: SEI_STORAGE_CLASS_PERF
+            value: gp3-10k-750
+          - name: SEI_STORAGE_CLASS_DEFAULT
+            value: gp3
+          - name: SEI_STORAGE_SIZE_DEFAULT
+            value: 1000Gi
+          - name: SEI_STORAGE_SIZE_ARCHIVE
+            value: 2000Gi
+          - name: SEI_RESOURCE_CPU_ARCHIVE
+            value: "8"
+          - name: SEI_RESOURCE_MEM_ARCHIVE
+            value: 48Gi
+          - name: SEI_RESOURCE_CPU_DEFAULT
+            value: "4"
+          - name: SEI_RESOURCE_MEM_DEFAULT
+            value: 32Gi
         ports: []
         securityContext:
           readOnlyRootFilesystem: true

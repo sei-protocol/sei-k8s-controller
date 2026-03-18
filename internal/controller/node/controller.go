@@ -28,19 +28,35 @@ const (
 // environment. Values are read from environment variables in main.go with
 // sensible defaults.
 type PlatformConfig struct {
-	NodepoolName   string
-	TolerationKey  string
-	TolerationVal  string
-	ServiceAccount string
+	NodepoolName        string
+	TolerationKey       string
+	TolerationVal       string
+	ServiceAccount      string
+	StorageClassPerf    string
+	StorageClassDefault string
+	StorageSizeDefault  string
+	StorageSizeArchive  string
+	ResourceCPUArchive  string
+	ResourceMemArchive  string
+	ResourceCPUDefault  string
+	ResourceMemDefault  string
 }
 
 // DefaultPlatformConfig returns PlatformConfig with production defaults.
 func DefaultPlatformConfig() PlatformConfig {
 	return PlatformConfig{
-		NodepoolName:   "sei-node",
-		TolerationKey:  "sei.io/workload",
-		TolerationVal:  "sei-node",
-		ServiceAccount: "seid-node",
+		NodepoolName:        "sei-node",
+		TolerationKey:       "sei.io/workload",
+		TolerationVal:       "sei-node",
+		ServiceAccount:      "seid-node",
+		StorageClassPerf:    "gp3-10k-750",
+		StorageClassDefault: "gp3",
+		StorageSizeDefault:  "1000Gi",
+		StorageSizeArchive:  "2000Gi",
+		ResourceCPUArchive:  "8",
+		ResourceMemArchive:  "48Gi",
+		ResourceCPUDefault:  "4",
+		ResourceMemDefault:  "32Gi",
 	}
 }
 
@@ -154,7 +170,7 @@ func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1al
 }
 
 func (r *SeiNodeReconciler) ensureNodeDataPVC(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	desired := generateNodeDataPVC(node)
+	desired := generateNodeDataPVC(node, r.Platform)
 	if err := ctrl.SetControllerReference(node, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
 	}

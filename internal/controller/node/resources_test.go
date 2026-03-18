@@ -543,7 +543,7 @@ func TestGenerateNodeDataPVC(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "ns1")
 
-	pvc := generateNodeDataPVC(node)
+	pvc := generateNodeDataPVC(node, DefaultPlatformConfig())
 
 	g.Expect(pvc.Name).To(Equal("data-snap-0"))
 	g.Expect(pvc.Namespace).To(Equal("ns1"))

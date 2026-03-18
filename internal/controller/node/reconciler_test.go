@@ -39,8 +39,9 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 	r := &SeiNodeReconciler{
-		Client: c,
-		Scheme: s,
+		Client:   c,
+		Scheme:   s,
+		Platform: DefaultPlatformConfig(),
 		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) SidecarStatusClient {
 			return &mockSidecarClient{}
 		},

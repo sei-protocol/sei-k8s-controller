@@ -8,13 +8,6 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-const (
-	storageClassPerf    = "gp3-10k-750"
-	storageClassDefault = "gp3"
-
-	defaultStorageSize = "1000Gi"
-)
-
 // nodeMode returns the sei-config mode string for the node based on which
 // sub-spec is populated. Falls back to "full" if none is set.
 func nodeMode(node *seiv1alpha1.SeiNode) string {
@@ -27,27 +20,25 @@ func nodeMode(node *seiv1alpha1.SeiNode) string {
 
 // defaultResourcesForMode returns CPU and memory requests for the seid
 // container based on the node's operating mode.
-func defaultResourcesForMode(mode string) corev1.ResourceRequirements {
+func defaultResourcesForMode(mode string, platform PlatformConfig) corev1.ResourceRequirements {
 	switch mode {
 	case string(seiconfig.ModeArchive):
-		return makeResources("8", "48Gi")
-	case string(seiconfig.ModeFull), string(seiconfig.ModeValidator):
-		return makeResources("4", "32Gi")
+		return makeResources(platform.ResourceCPUArchive, platform.ResourceMemArchive)
 	default:
-		return makeResources("4", "32Gi")
+		return makeResources(platform.ResourceCPUDefault, platform.ResourceMemDefault)
 	}
 }
 
 // defaultStorageForMode returns the StorageClass name and PVC size for a
 // node based on its operating mode.
-func defaultStorageForMode(mode string) (storageClass string, size string) {
+func defaultStorageForMode(mode string, platform PlatformConfig) (storageClass string, size string) {
 	switch mode {
 	case string(seiconfig.ModeArchive):
-		return storageClassPerf, "2000Gi"
+		return platform.StorageClassPerf, platform.StorageSizeArchive
 	case string(seiconfig.ModeFull), string(seiconfig.ModeValidator):
-		return storageClassPerf, defaultStorageSize
+		return platform.StorageClassPerf, platform.StorageSizeDefault
 	default:
-		return storageClassDefault, defaultStorageSize
+		return platform.StorageClassDefault, platform.StorageSizeDefault
 	}
 }
 

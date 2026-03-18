@@ -94,8 +94,9 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 	r := &SeiNodeReconciler{
-		Client: c,
-		Scheme: s,
+		Client:   c,
+		Scheme:   s,
+		Platform: DefaultPlatformConfig(),
 		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) SidecarStatusClient {
 			return mock
 		},
