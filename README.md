@@ -57,19 +57,19 @@ spec:
   chainId: pacific-1
   image: sei-protocol/seid:v5.0.0
   genesis:
-    chainId: pacific-1
     s3:
       uri: s3://sei-genesis/pacific-1/genesis.json
+      region: us-east-2
   snapshot:
-    bucket:
+    s3:
       uri: s3://sei-snapshots/pacific-1
-    region: us-east-2
+      region: us-east-2
+    trustPeriod: "9999h0m0s"
   peers:
-    sources:
-      - ec2Tags:
-          region: us-east-2
-          tags:
-            Network: pacific-1
+    - ec2Tags:
+        region: us-east-2
+        tags:
+          Network: pacific-1
   snapshotGeneration:
     interval: 2000
     keepRecent: 5
@@ -92,14 +92,72 @@ The `sidecar` field is optional — when omitted the controller uses the default
 
 | Mode | Condition | Task sequence |
 |------|-----------|---------------|
-| Snapshot | `spec.snapshot` set | `snapshot-restore` > `config-patch` > `mark-ready` |
-| Genesis PVC | `spec.genesis.pvc` set | `config-patch` > `mark-ready` |
-| Peer sync | Default | `config-patch` > `mark-ready` |
+| Snapshot | `spec.snapshot` set | `snapshot-restore` > `configure-genesis` > `config-apply` > `discover-peers` > `config-validate` > `mark-ready` |
+| Replayer | `spec.replayer` set | `snapshot-restore` > `configure-genesis` > `config-apply` > `discover-peers` > `config-validate` > `mark-ready` |
+| Genesis PVC | `spec.genesis.pvc` set | `config-apply` > `config-validate` > `mark-ready` |
+| Genesis S3 | `spec.genesis.s3` set | `configure-genesis` > `config-apply` > `config-validate` > `mark-ready` |
 
-Additional tasks are inserted dynamically before `config-patch`: `discover-peers` (when `spec.peers` is set), `configure-genesis` (when `spec.genesis.s3` is set), and `configure-state-sync` (for Tendermint state sync).
+Tasks like `discover-peers` and `configure-genesis` are inserted dynamically based on the spec.
 
 **Runtime operations** (after bootstrap):
 - **Snapshot generation** — when `spec.snapshotGeneration` is configured, the sidecar patches `app.toml` for archival pruning and the controller periodically submits `snapshot-upload` tasks to push completed snapshots to S3.
+- **Result export** — for replayer nodes with `spec.replayer.resultExport` set, the controller schedules a recurring `result-export` task after the init plan completes.
+
+### Shadow Replayer
+
+A replayer node replays blocks from a snapshot using a different execution engine (e.g. for shadow validation). The controller discovers peers via EC2 tags and infers the snapshot S3 bucket from the chain ID when no explicit URI is given.
+
+```yaml
+apiVersion: sei.io/v1alpha1
+kind: SeiNode
+metadata:
+  name: pacific-1-shadow-replayer
+spec:
+  chainId: pacific-1
+  image: ghcr.io/bdchatham/sei-shadow:skip-apphash
+  sidecar:
+    image: ghcr.io/sei-protocol/seictl@sha256:...
+  entrypoint:
+    command: ["seid"]
+    args: ["start", "--home", "/sei", "--skip-app-hash-validation"]
+  genesis:
+    s3:
+      uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
+      region: us-east-2
+  storage:
+    retainOnDelete: true
+  replayer:
+    peers:
+      - ec2Tags:
+          region: eu-central-1
+          tags:
+            ChainIdentifier: pacific-1
+            Component: state-syncer
+    snapshot:
+      s3:
+        region: eu-central-1
+      trustPeriod: "9999h0m0s"
+    resultExport: {}
+```
+
+## Platform Configuration
+
+The controller reads infrastructure-level settings from environment variables, falling back to sensible defaults. This allows per-environment tuning via the Deployment manifest or kustomize overlays without rebuilding the image.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `SEI_NODEPOOL_NAME` | `sei-node` | Karpenter NodePool for pod scheduling |
+| `SEI_TOLERATION_KEY` | `sei.io/workload` | Taint key to tolerate |
+| `SEI_TOLERATION_VALUE` | `sei-node` | Taint value to tolerate |
+| `SEI_SERVICE_ACCOUNT` | `seid-node` | ServiceAccount for node pods |
+| `SEI_STORAGE_CLASS_PERF` | `gp3-10k-750` | StorageClass for full/validator/archive nodes |
+| `SEI_STORAGE_CLASS_DEFAULT` | `gp3` | StorageClass for other modes |
+| `SEI_STORAGE_SIZE_DEFAULT` | `1000Gi` | PVC size for full/validator nodes |
+| `SEI_STORAGE_SIZE_ARCHIVE` | `2000Gi` | PVC size for archive nodes |
+| `SEI_RESOURCE_CPU_ARCHIVE` | `8` | CPU request for archive nodes |
+| `SEI_RESOURCE_MEM_ARCHIVE` | `48Gi` | Memory request for archive nodes |
+| `SEI_RESOURCE_CPU_DEFAULT` | `4` | CPU request for full/validator nodes |
+| `SEI_RESOURCE_MEM_DEFAULT` | `32Gi` | Memory request for full/validator nodes |
 
 ## Development
 
@@ -115,4 +173,26 @@ make generate    # Regenerate DeepCopy implementations
 
 The controller image is built from a multi-stage Dockerfile (Go build + `distroless/static:nonroot` runtime) and pushed to ECR by the `ecr.yml` GitHub Actions workflow on every push to `main`.
 
-CRD manifests are generated into `manifests/` and consumed by the platform deployment repo, which deploys the controller via [Flux CD](https://fluxcd.io).
+The `config/` directory follows the standard [Kubebuilder](https://book.kubebuilder.io) layout:
+
+```
+config/
+├── crd/              # Generated CRD manifests (SeiNode, SeiNodePool)
+├── rbac/             # ServiceAccount, ClusterRole, bindings, leader election
+├── manager/          # Deployment and metrics Service
+├── network-policy/   # Metrics traffic NetworkPolicy
+└── default/          # Top-level kustomization (namePrefix: sei-k8s-)
+```
+
+`config/default` is the canonical kustomize base. Platform repos reference it as a remote base and apply environment-specific overlays (namespace, image overrides, resource patches):
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sei-k8s-controller-system
+resources:
+  - github.com/sei-protocol/sei-k8s-controller/config/default?ref=main
+  - namespace.yaml
+```
+
+CRD manifests are also mirrored into `manifests/` for convenience.
