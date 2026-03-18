@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	storageClassPerf    = "gp3-perf"
+	storageClassPerf    = "gp3-10k-750"
 	storageClassDefault = "gp3"
 
 	defaultStorageSize = "1000Gi"
