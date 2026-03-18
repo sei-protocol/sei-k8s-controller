@@ -300,7 +300,7 @@ func TestBuildPlan_Replayer(t *testing.T) {
 	planner, _ := PlannerForNode(node)
 	plan := planner.BuildPlan(node)
 	got := taskTypes(plan)
-	want := []string{taskSnapshotRestore, taskConfigureGenesis, taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
+	want := []string{taskSnapshotRestore, taskConfigureGenesis, taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -317,6 +317,19 @@ func TestBuildTask_Replayer_DiscoverPeers(t *testing.T) {
 	}
 	if task.Sources[0].Type != sidecar.PeerSourceEC2Tags {
 		t.Errorf("type = %v, want ec2Tags", task.Sources[0].Type)
+	}
+}
+
+func TestBuildTask_Replayer_ConfigureStateSync(t *testing.T) {
+	node := replayerNode()
+	planner, _ := PlannerForNode(node)
+	b := planner.BuildTask(node, taskConfigureStateSync)
+	task, ok := b.(sidecar.ConfigureStateSyncTask)
+	if !ok {
+		t.Fatalf("expected ConfigureStateSyncTask, got %T", b)
+	}
+	if !task.UseLocalSnapshot {
+		t.Error("UseLocalSnapshot should be true for S3 snapshot source")
 	}
 }
 

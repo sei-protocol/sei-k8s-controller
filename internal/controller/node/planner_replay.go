@@ -31,45 +31,16 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	prog := []string{taskSnapshotRestore, taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
-
-	if node.Spec.Genesis.S3 != nil {
-		prog = insertBefore(prog, taskConfigApply, taskConfigureGenesis)
-	}
-
-	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
-	for i, taskType := range prog {
-		tasks[i] = seiv1alpha1.PlannedTask{
-			Type:   taskType,
-			Status: seiv1alpha1.PlannedTaskPending,
-		}
-	}
-	return &seiv1alpha1.TaskPlan{
-		Phase: seiv1alpha1.TaskPlanActive,
-		Tasks: tasks,
-	}
+	return buildPlan(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot)
 }
 
 func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
-	snap := &node.Spec.Replayer.Snapshot
-	switch taskType {
-	case taskSnapshotRestore:
-		return snapshotRestoreTask(snap, node.Spec.ChainID)
-	case taskDiscoverPeers:
-		return discoverPeersTask(node.Spec.Replayer.Peers)
-	case taskConfigApply:
+	if taskType == taskConfigApply {
 		return sidecar.ConfigApplyTask{
 			Intent: seiconfig.ConfigIntent{
 				Mode: seiconfig.ModeArchive,
 			},
 		}
-	case taskConfigureGenesis:
-		return configureGenesisBuilder(node)
-	case taskConfigValidate:
-		return sidecar.ConfigValidateTask{}
-	case taskMarkReady:
-		return sidecar.MarkReadyTask{}
-	default:
-		return sidecar.MarkReadyTask{}
 	}
+	return buildSharedTask(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, taskType)
 }
