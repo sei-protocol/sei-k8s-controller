@@ -20,7 +20,7 @@ import (
 )
 
 type mockSidecarClient struct {
-	submitted []sidecar.TaskBuilder
+	submitted []sidecar.TaskRequest
 	submitErr error
 	submitID  uuid.UUID
 
@@ -28,7 +28,7 @@ type mockSidecarClient struct {
 	getTaskErr  error
 }
 
-func (m *mockSidecarClient) SubmitTask(_ context.Context, task sidecar.TaskBuilder) (uuid.UUID, error) {
+func (m *mockSidecarClient) SubmitTask(_ context.Context, task sidecar.TaskRequest) (uuid.UUID, error) {
 	m.submitted = append(m.submitted, task)
 	if m.submitErr != nil {
 		return uuid.Nil, m.submitErr
@@ -56,9 +56,9 @@ func strPtr(s string) *string { return &s }
 
 func completedResult(id uuid.UUID, taskType string, taskErr *string) *sidecar.TaskResult {
 	now := time.Now()
-	status := sidecar.TaskResultStatusCompleted
+	status := sidecar.Completed
 	if taskErr != nil && *taskErr != "" {
-		status = sidecar.TaskResultStatusFailed
+		status = sidecar.Failed
 	}
 	return &sidecar.TaskResult{
 		Id:          id,
@@ -74,7 +74,7 @@ func runningResult(id uuid.UUID, taskType string) *sidecar.TaskResult {
 	return &sidecar.TaskResult{
 		Id:          id,
 		Type:        taskType,
-		Status:      sidecar.TaskResultStatusRunning,
+		Status:      sidecar.Running,
 		SubmittedAt: time.Now(),
 	}
 }
@@ -473,8 +473,8 @@ func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].TaskType() != taskSnapshotRestore {
-		t.Errorf("submitted task = %q, want %q", mock.submitted[0].TaskType(), taskSnapshotRestore)
+	if mock.submitted[0].Type != taskSnapshotRestore {
+		t.Errorf("submitted task = %q, want %q", mock.submitted[0].Type, taskSnapshotRestore)
 	}
 }
 
@@ -661,8 +661,8 @@ func TestReconcile_CompletePlan_SubmitsScheduledTask(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 scheduled task submitted, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].TaskType() != taskSnapshotUpload {
-		t.Errorf("task type = %q, want %q", mock.submitted[0].TaskType(), taskSnapshotUpload)
+	if mock.submitted[0].Type != taskSnapshotUpload {
+		t.Errorf("task type = %q, want %q", mock.submitted[0].Type, taskSnapshotUpload)
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -870,23 +870,27 @@ func TestConfigApply_GenesisNodeNoOverrides(t *testing.T) {
 
 // --- Snapshot upload tests ---
 
-func TestSnapshotUploadTask_WithDestination(t *testing.T) {
-	b := snapshotUploadTaskFromSpec(snapshotterNode())
-	if b == nil {
-		t.Fatal("expected non-nil task")
+func TestSnapshotUploadScheduledTask_WithDestination(t *testing.T) {
+	builder := snapshotUploadScheduledTask(snapshotterNode())
+	if builder == nil {
+		t.Fatal("expected non-nil builder")
 	}
-	task := b.(sidecar.SnapshotUploadTask)
+	task := builder.(sidecar.SnapshotUploadTask)
 	if task.Bucket != "atlantic-2-snapshots" {
 		t.Errorf("Bucket = %q, want %q", task.Bucket, "atlantic-2-snapshots")
 	}
-	if task.Cron != defaultSnapshotUploadCron {
-		t.Errorf("Cron = %q, want %q", task.Cron, defaultSnapshotUploadCron)
+	if task.Schedule == nil || task.Schedule.Cron == nil {
+		t.Fatal("expected schedule config on task")
+	}
+	if *task.Schedule.Cron != defaultSnapshotUploadCron {
+		t.Errorf("Cron = %q, want %q", *task.Schedule.Cron, defaultSnapshotUploadCron)
 	}
 }
 
-func TestSnapshotUploadTask_NoDestination(t *testing.T) {
-	if task := snapshotUploadTaskFromSpec(snapshotNode()); task != nil {
-		t.Errorf("expected nil, got %v", task)
+func TestSnapshotUploadScheduledTask_NoDestination(t *testing.T) {
+	builder := snapshotUploadScheduledTask(snapshotNode())
+	if builder != nil {
+		t.Errorf("expected nil builder, got %v", builder)
 	}
 }
 
@@ -941,16 +945,16 @@ func TestPlannerForNode_NoSubSpec(t *testing.T) {
 
 // --- Result export tests ---
 
-func TestResultExportTaskFromSpec_ReplayerWithExport(t *testing.T) {
+func TestResultExportScheduledTask_ReplayerWithExport(t *testing.T) {
 	node := replayerNode()
 	node.Spec.Replayer.ResultExport = &seiv1alpha1.ResultExportConfig{}
-	b := resultExportTaskFromSpec(node)
-	if b == nil {
-		t.Fatal("expected non-nil task")
+	builder := resultExportScheduledTask(node)
+	if builder == nil {
+		t.Fatal("expected non-nil builder")
 	}
-	task, ok := b.(sidecar.ResultExportTask)
+	task, ok := builder.(sidecar.ResultExportTask)
 	if !ok {
-		t.Fatalf("expected ResultExportTask, got %T", b)
+		t.Fatalf("expected ResultExportTask, got %T", builder)
 	}
 	if task.Bucket != "sei-node-mvp" {
 		t.Errorf("Bucket = %q, want %q", task.Bucket, "sei-node-mvp")
@@ -961,19 +965,27 @@ func TestResultExportTaskFromSpec_ReplayerWithExport(t *testing.T) {
 	if task.Region != "us-east-2" {
 		t.Errorf("Region = %q, want %q", task.Region, "us-east-2")
 	}
-}
-
-func TestResultExportTaskFromSpec_ReplayerWithoutExport(t *testing.T) {
-	node := replayerNode()
-	if b := resultExportTaskFromSpec(node); b != nil {
-		t.Errorf("expected nil, got %v", b)
+	if task.Schedule == nil || task.Schedule.Cron == nil {
+		t.Fatal("expected schedule config on task")
+	}
+	if *task.Schedule.Cron != defaultResultExportCron {
+		t.Errorf("Cron = %q, want %q", *task.Schedule.Cron, defaultResultExportCron)
 	}
 }
 
-func TestResultExportTaskFromSpec_FullNode(t *testing.T) {
+func TestResultExportScheduledTask_ReplayerWithoutExport(t *testing.T) {
+	node := replayerNode()
+	builder := resultExportScheduledTask(node)
+	if builder != nil {
+		t.Errorf("expected nil builder, got %v", builder)
+	}
+}
+
+func TestResultExportScheduledTask_FullNode(t *testing.T) {
 	node := snapshotNode()
-	if b := resultExportTaskFromSpec(node); b != nil {
-		t.Errorf("expected nil for full node, got %v", b)
+	builder := resultExportScheduledTask(node)
+	if builder != nil {
+		t.Errorf("expected nil builder for full node, got %v", builder)
 	}
 }
 
@@ -1042,8 +1054,8 @@ func TestReconcile_CompletePlan_SubmitsResultExportForReplayer(t *testing.T) {
 	if len(mock.submitted) != 1 {
 		t.Fatalf("expected 1 scheduled task submitted, got %d", len(mock.submitted))
 	}
-	if mock.submitted[0].TaskType() != taskResultExport {
-		t.Errorf("task type = %q, want %q", mock.submitted[0].TaskType(), taskResultExport)
+	if mock.submitted[0].Type != taskResultExport {
+		t.Errorf("task type = %q, want %q", mock.submitted[0].Type, taskResultExport)
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)

@@ -31,7 +31,7 @@ const (
 
 // SidecarStatusClient abstracts the sidecar HTTP API for testability.
 type SidecarStatusClient interface {
-	SubmitTask(ctx context.Context, task sidecar.TaskBuilder) (uuid.UUID, error)
+	SubmitTask(ctx context.Context, task sidecar.TaskRequest) (uuid.UUID, error)
 	GetTask(ctx context.Context, id uuid.UUID) (*sidecar.TaskResult, error)
 }
 
@@ -122,7 +122,8 @@ func (r *SeiNodeReconciler) submitTask(
 	task *seiv1alpha1.PlannedTask,
 ) (ctrl.Result, error) {
 	builder := planner.BuildTask(node, task.Type)
-	id, err := sc.SubmitTask(ctx, builder)
+	req := builder.ToTaskRequest()
+	id, err := sc.SubmitTask(ctx, req)
 	if err != nil {
 		log.FromContext(ctx).Info("task submission failed, will retry", "task", task.Type, "error", err)
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
@@ -156,18 +157,18 @@ func (r *SeiNodeReconciler) pollTask(
 	}
 
 	switch result.Status {
-	case sidecar.TaskResultStatusRunning:
+	case sidecar.Running:
 		log.FromContext(ctx).V(1).Info("task still running", "task", task.Type)
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
 
-	case sidecar.TaskResultStatusFailed:
+	case sidecar.Failed:
 		errMsg := "unknown error"
 		if result.Error != nil && *result.Error != "" {
 			errMsg = *result.Error
 		}
 		return r.failTask(ctx, node, task, errMsg)
 
-	case sidecar.TaskResultStatusCompleted:
+	case sidecar.Completed:
 		patch := client.MergeFrom(node.DeepCopy())
 		task.Status = seiv1alpha1.PlannedTaskComplete
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
@@ -210,31 +211,32 @@ func (r *SeiNodeReconciler) markPlanComplete(ctx context.Context, node *seiv1alp
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
 
-// reconcileRuntimeTasks ensures all scheduled tasks are submitted exactly once.
-// The sidecar owns execution cadence after that.
+// reconcileRuntimeTasks ensures all scheduled tasks are submitted exactly
+// once. The sidecar owns execution cadence after that.
 func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient) (ctrl.Result, error) {
-	if task := snapshotUploadTaskFromSpec(node); task != nil {
-		if err := r.ensureScheduledTask(ctx, node, sc, task); err != nil {
-			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", task.TaskType(), "error", err)
+	if builder := snapshotUploadScheduledTask(node); builder != nil {
+		req := builder.ToTaskRequest()
+		if err := r.ensureScheduledTask(ctx, node, sc, req); err != nil {
+			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", req.Type, "error", err)
 		}
 	}
-	if task := resultExportTaskFromSpec(node); task != nil {
-		if err := r.ensureScheduledTask(ctx, node, sc, task); err != nil {
-			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", task.TaskType(), "error", err)
+	if builder := resultExportScheduledTask(node); builder != nil {
+		req := builder.ToTaskRequest()
+		if err := r.ensureScheduledTask(ctx, node, sc, req); err != nil {
+			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", req.Type, "error", err)
 		}
 	}
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
 
-func (r *SeiNodeReconciler) ensureScheduledTask(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient, task sidecar.TaskBuilder) error {
-	taskType := task.TaskType()
+func (r *SeiNodeReconciler) ensureScheduledTask(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient, req sidecar.TaskRequest) error {
 	if node.Status.ScheduledTasks != nil {
-		if _, ok := node.Status.ScheduledTasks[taskType]; ok {
+		if _, ok := node.Status.ScheduledTasks[req.Type]; ok {
 			return nil
 		}
 	}
 
-	id, err := sc.SubmitTask(ctx, task)
+	id, err := sc.SubmitTask(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -243,6 +245,6 @@ func (r *SeiNodeReconciler) ensureScheduledTask(ctx context.Context, node *seiv1
 	if node.Status.ScheduledTasks == nil {
 		node.Status.ScheduledTasks = make(map[string]string)
 	}
-	node.Status.ScheduledTasks[taskType] = id.String()
+	node.Status.ScheduledTasks[req.Type] = id.String()
 	return r.Status().Patch(ctx, node, patch)
 }
