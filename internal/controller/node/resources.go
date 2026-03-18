@@ -76,7 +76,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1
 		buildSeidInitContainer(node),
 		buildSidecarContainer(node),
 	}
-	spec.Containers = []corev1.Container{buildSidecarMainContainer(node)}
+	spec.Containers = []corev1.Container{buildSidecarMainContainer(node, platform)}
 
 	return spec
 }
@@ -125,10 +125,10 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 // sidecar to become healthy before exec'ing seid. Kubernetes starts main
 // containers as soon as restartable init containers are running, so we
 // wrap the entrypoint in a shell loop that polls /healthz until 200.
-func buildSidecarMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
+func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1.Container {
 	container := buildNodeMainContainer(node)
 	container.Command, container.Args = sidecarWaitCommand(node)
-	container.Resources = defaultResourcesForMode(nodeMode(node))
+	container.Resources = defaultResourcesForMode(nodeMode(node), platform)
 	container.StartupProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
@@ -261,8 +261,8 @@ func generateNodeHeadlessService(node *seiv1alpha1.SeiNode) *corev1.Service {
 	}
 }
 
-func generateNodeDataPVC(node *seiv1alpha1.SeiNode) *corev1.PersistentVolumeClaim {
-	sc, size := defaultStorageForMode(nodeMode(node))
+func generateNodeDataPVC(node *seiv1alpha1.SeiNode, platform PlatformConfig) *corev1.PersistentVolumeClaim {
+	sc, size := defaultStorageForMode(nodeMode(node), platform)
 
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{

@@ -124,6 +124,30 @@ func main() {
 	if v := os.Getenv("SEI_SERVICE_ACCOUNT"); v != "" {
 		platform.ServiceAccount = v
 	}
+	if v := os.Getenv("SEI_STORAGE_CLASS_PERF"); v != "" {
+		platform.StorageClassPerf = v
+	}
+	if v := os.Getenv("SEI_STORAGE_CLASS_DEFAULT"); v != "" {
+		platform.StorageClassDefault = v
+	}
+	if v := os.Getenv("SEI_STORAGE_SIZE_DEFAULT"); v != "" {
+		platform.StorageSizeDefault = v
+	}
+	if v := os.Getenv("SEI_STORAGE_SIZE_ARCHIVE"); v != "" {
+		platform.StorageSizeArchive = v
+	}
+	if v := os.Getenv("SEI_RESOURCE_CPU_ARCHIVE"); v != "" {
+		platform.ResourceCPUArchive = v
+	}
+	if v := os.Getenv("SEI_RESOURCE_MEM_ARCHIVE"); v != "" {
+		platform.ResourceMemArchive = v
+	}
+	if v := os.Getenv("SEI_RESOURCE_CPU_DEFAULT"); v != "" {
+		platform.ResourceCPUDefault = v
+	}
+	if v := os.Getenv("SEI_RESOURCE_MEM_DEFAULT"); v != "" {
+		platform.ResourceMemDefault = v
+	}
 
 	if err := (&nodecontroller.SeiNodeReconciler{
 		Client:   mgr.GetClient(),
