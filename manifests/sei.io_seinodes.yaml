@@ -344,6 +344,14 @@ spec:
                 maxLength: 512
                 minLength: 1
                 type: string
+              overrides:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Overrides is a flat map of dotted TOML key paths to string values.
+                  Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
+                  These are applied on top of mode defaults during config-apply.
+                type: object
               replayer:
                 description: Replayer configures an ephemeral replay workload that
                   restores from a snapshot.

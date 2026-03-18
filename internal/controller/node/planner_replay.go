@@ -38,7 +38,8 @@ func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) 
 	if taskType == taskConfigApply {
 		return sidecar.ConfigApplyTask{
 			Intent: seiconfig.ConfigIntent{
-				Mode: seiconfig.ModeArchive,
+				Mode:      seiconfig.ModeArchive,
+				Overrides: mergeOverrides(nil, node.Spec.Overrides),
 			},
 		}
 	}

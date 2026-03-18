@@ -17,6 +17,22 @@ const (
 	valNothing = "nothing"
 )
 
+// mergeOverrides combines controller-generated overrides with user-specified
+// overrides from spec.overrides. User overrides take precedence.
+func mergeOverrides(controllerOverrides map[string]string, userOverrides map[string]string) map[string]string {
+	if len(controllerOverrides) == 0 && len(userOverrides) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(controllerOverrides)+len(userOverrides))
+	for k, v := range controllerOverrides {
+		merged[k] = v
+	}
+	for k, v := range userOverrides {
+		merged[k] = v
+	}
+	return merged
+}
+
 func configureGenesisBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	if node.Spec.Genesis.S3 == nil {
 		return sidecar.ConfigureGenesisTask{}
