@@ -11,6 +11,7 @@ import (
 const (
 	defaultSnapshotUploadCron = "0 0 * * *"
 	defaultSnapshotInterval   = int64(2000)
+	defaultResultExportCron   = "*/10 * * * *"
 
 	resultExportBucket = "sei-node-mvp"
 	resultExportRegion = "us-east-2"
@@ -41,32 +42,36 @@ func configureGenesisBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	}
 }
 
-// resultExportTaskFromSpec returns a scheduled result-export task if the
-// node is a replayer with result export enabled. Bucket, region, and prefix
-// are platform defaults — the prefix is derived from the node's chain ID.
-func resultExportTaskFromSpec(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+// resultExportScheduledTask returns a result-export task builder with a
+// cron schedule if the node is a replayer with result export enabled.
+// Returns nil when not applicable.
+func resultExportScheduledTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	if node.Spec.Replayer == nil || node.Spec.Replayer.ResultExport == nil {
 		return nil
 	}
+	cron := defaultResultExportCron
 	return sidecar.ResultExportTask{
-		Bucket: resultExportBucket,
-		Prefix: resultExportPrefix + node.Spec.ChainID + "/",
-		Region: resultExportRegion,
+		Bucket:   resultExportBucket,
+		Prefix:   resultExportPrefix + node.Spec.ChainID + "/",
+		Region:   resultExportRegion,
+		Schedule: &sidecar.ScheduleConfig{Cron: &cron},
 	}
 }
 
-// snapshotUploadTaskFromSpec returns a scheduled snapshot-upload task if the
-// node's mode sub-spec configures snapshot generation with an S3 destination.
-func snapshotUploadTaskFromSpec(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+// snapshotUploadScheduledTask returns a snapshot-upload task builder with a
+// cron schedule if the node's mode sub-spec configures snapshot generation
+// with an S3 destination. Returns nil when not applicable.
+func snapshotUploadScheduledTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	sg := snapshotGeneration(node)
 	if sg == nil || sg.Destination == nil || sg.Destination.S3 == nil {
 		return nil
 	}
 	dest := sg.Destination.S3
+	cron := defaultSnapshotUploadCron
 	return sidecar.SnapshotUploadTask{
-		Bucket: dest.Bucket,
-		Prefix: dest.Prefix,
-		Region: dest.Region,
-		Cron:   defaultSnapshotUploadCron,
+		Bucket:   dest.Bucket,
+		Prefix:   dest.Prefix,
+		Region:   dest.Region,
+		Schedule: &sidecar.ScheduleConfig{Cron: &cron},
 	}
 }

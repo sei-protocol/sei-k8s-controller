@@ -33,7 +33,7 @@ func driveTask(
 	_, err = r.reconcileSidecarProgression(context.Background(), node, planner)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(mock.submitted).To(HaveLen(1))
-	g.Expect(mock.submitted[0].TaskType()).To(Equal(taskType))
+	g.Expect(mock.submitted[0].Type).To(Equal(taskType))
 
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
 		taskID: completedResult(taskID, taskType, nil),
@@ -65,7 +65,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	_, err := r.reconcileSidecarProgression(ctx, node, planner)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(fetch().Status.InitPlan).NotTo(BeNil())
-	g.Expect(mock.submitted[0].TaskType()).To(Equal(taskSnapshotRestore))
+	g.Expect(mock.submitted[0].Type).To(Equal(taskSnapshotRestore))
 
 	// Complete snapshot-restore.
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
@@ -110,7 +110,7 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 	mock.submitID = taskID
 	_, err := r.reconcileSidecarProgression(ctx, node, planner)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(mock.submitted[0].TaskType()).To(Equal(taskConfigApply))
+	g.Expect(mock.submitted[0].Type).To(Equal(taskConfigApply))
 
 	// Complete config-apply.
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{

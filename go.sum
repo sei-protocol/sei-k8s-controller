@@ -128,8 +128,8 @@ github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
 github.com/sei-protocol/sei-config v0.0.8 h1:8HPxXvcJ4eBmHXLxUlpTe2/KZtBvsM+GeENnl65ldCQ=
 github.com/sei-protocol/sei-config v0.0.8/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
-github.com/sei-protocol/seictl v0.0.16 h1:fUEhonburQEWb2EBYiYZO4YhjtjG2XPydcVxB2KCIOU=
-github.com/sei-protocol/seictl v0.0.16/go.mod h1:CHKMT7b7n6wUaPnWajOgqs8mEZA8NchLa7ct+KgQPcw=
+github.com/sei-protocol/seictl v0.0.18 h1:aicDJws1JMSvI86Rt3YhS/iNQDkqOdQjdhIdG93o11k=
+github.com/sei-protocol/seictl v0.0.18/go.mod h1:yStmlDoRN35chV8sQXf3pt6sYYwPjfDDsrxBXkNc50g=
 github.com/sei-protocol/seilog v0.0.2 h1:xDWNr1LUHLnOER1o/5f3rq2TQZFCv/mG1ANBaQcw24s=
 github.com/sei-protocol/seilog v0.0.2/go.mod h1:CKg58wraWnB3gRxWQ0v1rIVr0gmDHjkfP1bM2giKFFU=
 github.com/spf13/cobra v1.10.0 h1:a5/WeUlSDCvV5a45ljW2ZFtV0bTDpkfSAj3uqB6Sc+0=
