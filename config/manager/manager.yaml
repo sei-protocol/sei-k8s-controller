@@ -32,9 +32,17 @@ spec:
           - --metrics-bind-address=:8443
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:ee65334ea4523628a2ce49a6a9176aa91ed1a30828ea258cf86c86f6446fc11a
+        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:73e5900738cf1bd353a502e9423345ee9c12fb1a6fefa9173cd1b484af9cad5a
         name: manager
         env:
+          - name: SEI_NODEPOOL_NAME
+            value: sei-node
+          - name: SEI_TOLERATION_KEY
+            value: sei.io/workload
+          - name: SEI_TOLERATION_VALUE
+            value: sei-node
+          - name: SEI_SERVICE_ACCOUNT
+            value: seid-node
           - name: SEI_STORAGE_CLASS_PERF
             value: gp3-10k-750
           - name: SEI_STORAGE_CLASS_DEFAULT
