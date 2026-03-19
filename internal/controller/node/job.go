@@ -71,6 +71,27 @@ func preInitSidecarURL(node *seiv1alpha1.SeiNode) string {
 		preInitPodHostname, preInitJobName(node), node.Namespace, sidecarPort(node))
 }
 
+// preInitWaitCommand returns a shell command that waits for the sidecar
+// healthz to return 200 and then runs a standard "seid start --home /sei".
+// Unlike sidecarWaitCommand, it does NOT use the node's custom entrypoint
+// because the pre-init Job runs the bootstrap image which may not support
+// custom flags (e.g. --skip-app-hash-validation).
+func preInitWaitCommand(port int32) (command []string, args []string) {
+	script := fmt.Sprintf(
+		`echo "waiting for sidecar to become ready..."; `+
+			`while true; do `+
+			`{ exec 3<>/dev/tcp/localhost/%d; } 2>/dev/null && `+
+			`printf "GET /v0/healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && `+
+			`head -1 <&3 | grep -q "200" && break; `+
+			`exec 3>&-; sleep 5; done; `+
+			`exec 3>&-; `+
+			`echo "sidecar ready, starting seid"; `+
+			`exec seid start --home %s`,
+		port, dataDir,
+	)
+	return []string{"/bin/bash", "-c"}, []string{script}
+}
+
 func buildPreInitPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSource, platform PlatformConfig) corev1.PodSpec {
 	serviceName := preInitJobName(node)
 
@@ -110,7 +131,7 @@ func buildPreInitPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSo
 		bootstrapImage = snap.BootstrapImage
 	}
 
-	seidCmd, seidArgs := sidecarWaitCommand(node)
+	seidCmd, seidArgs := preInitWaitCommand(sidecarPort(node))
 	seidContainer := corev1.Container{
 		Name:    "seid",
 		Image:   bootstrapImage,

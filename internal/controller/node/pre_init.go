@@ -30,9 +30,9 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 		return r.setPhase(ctx, node, seiv1alpha1.PhaseInitializing)
 	}
 	if plan.Phase == seiv1alpha1.TaskPlanFailed {
-		if err := r.cleanupPreInit(ctx, node); err != nil {
-			log.FromContext(ctx).Error(err, "failed to clean up pre-init resources after plan failure")
-		}
+		// if err := r.cleanupPreInit(ctx, node); err != nil {
+		// 	log.FromContext(ctx).Error(err, "failed to clean up pre-init resources after plan failure")
+		// }
 		return r.setPhase(ctx, node, seiv1alpha1.PhaseFailed)
 	}
 
@@ -85,9 +85,9 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 		return r.setPhase(ctx, node, seiv1alpha1.PhaseInitializing)
 	}
 	if plan.Phase == seiv1alpha1.TaskPlanFailed {
-		if err := r.cleanupPreInit(ctx, node); err != nil {
-			log.FromContext(ctx).Error(err, "failed to clean up pre-init resources after plan failure")
-		}
+		// if err := r.cleanupPreInit(ctx, node); err != nil {
+		// 	log.FromContext(ctx).Error(err, "failed to clean up pre-init resources after plan failure")
+		// }
 		return r.setPhase(ctx, node, seiv1alpha1.PhaseFailed)
 	}
 	return result, nil
