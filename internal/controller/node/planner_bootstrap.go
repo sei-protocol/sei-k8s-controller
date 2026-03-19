@@ -17,7 +17,7 @@ const taskAwaitCondition = sidecar.TaskTypeAwaitCondition
 // resolves trivially.
 func buildPreInitPlan(node *seiv1alpha1.SeiNode, planner NodePlanner) *seiv1alpha1.TaskPlan {
 	if !needsPreInit(node) {
-		return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
+		return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: []seiv1alpha1.PlannedTask{}}
 	}
 	plan := planner.BuildPlan(node)
 	plan.Tasks = append(plan.Tasks, seiv1alpha1.PlannedTask{

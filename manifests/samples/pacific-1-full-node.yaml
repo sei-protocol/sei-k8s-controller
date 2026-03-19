@@ -1,0 +1,30 @@
+# SeiNode — Pacific-1 Full Node
+#
+# A chain-following full node that bootstraps from an S3 snapshot via
+# a PreInit Job, then block-syncs to tip. Exposes RPC for queries.
+apiVersion: sei.io/v1alpha1
+kind: SeiNode
+metadata:
+  name: pacific-1-full-node
+  namespace: default
+spec:
+  chainId: pacific-1
+  image: "ghcr.io/sei-protocol/sei:v6.3.0"
+
+  sidecar:
+    image: ghcr.io/sei-protocol/seictl@sha256:f094321f0dcadc7e348fa50cdb37ac5ed0d67a65d2303094e281e00e7ffb53f8
+
+  storage:
+    retainOnDelete: true
+
+  fullNode:
+    peers:
+      - ec2Tags:
+          region: eu-central-1
+          tags:
+            ChainIdentifier: pacific-1
+            Component: state-syncer
+    snapshot:
+      s3:
+        targetHeight: 198740000
+      trustPeriod: "9999h0m0s"
