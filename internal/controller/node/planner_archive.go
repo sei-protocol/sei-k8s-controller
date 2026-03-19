@@ -25,9 +25,9 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.T
 	return buildPlan(node, node.Spec.Archive.Peers, nil)
 }
 
-func (p *archiveNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
+func (p *archiveNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {
 	if taskType == taskConfigApply {
-		return p.buildConfigApply(node)
+		return p.buildConfigApply(node), nil
 	}
 	return buildSharedTask(node, node.Spec.Archive.Peers, nil, taskType)
 }

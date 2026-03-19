@@ -25,14 +25,14 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.Tas
 	return buildPlan(node, v.Peers, v.Snapshot)
 }
 
-func (p *validatorPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
+func (p *validatorPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {
 	if taskType == taskConfigApply {
 		return sidecar.ConfigApplyTask{
 			Intent: seiconfig.ConfigIntent{
 				Mode:      seiconfig.ModeValidator,
 				Overrides: mergeOverrides(nil, node.Spec.Overrides),
 			},
-		}
+		}, nil
 	}
 	v := node.Spec.Validator
 	return buildSharedTask(node, v.Peers, v.Snapshot, taskType)

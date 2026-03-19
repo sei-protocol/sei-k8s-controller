@@ -307,7 +307,10 @@ func TestBuildPlan_Replayer(t *testing.T) {
 func TestBuildTask_Replayer_DiscoverPeers(t *testing.T) {
 	node := replayerNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskDiscoverPeers)
+	b, err := planner.BuildTask(node, taskDiscoverPeers)
+	if err != nil {
+		t.Fatalf("BuildTask error: %v", err)
+	}
 	task, ok := b.(sidecar.DiscoverPeersTask)
 	if !ok {
 		t.Fatalf("expected DiscoverPeersTask, got %T", b)
@@ -323,7 +326,10 @@ func TestBuildTask_Replayer_DiscoverPeers(t *testing.T) {
 func TestBuildTask_Replayer_ConfigureStateSync(t *testing.T) {
 	node := replayerNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigureStateSync)
+	b, err := planner.BuildTask(node, taskConfigureStateSync)
+	if err != nil {
+		t.Fatalf("BuildTask error: %v", err)
+	}
 	task, ok := b.(sidecar.ConfigureStateSyncTask)
 	if !ok {
 		t.Fatalf("expected ConfigureStateSyncTask, got %T", b)
@@ -353,7 +359,7 @@ func TestConfigApply_ReplayerPassesSpecOverrides(t *testing.T) {
 		"evm.http_port":         "8545",
 	}
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task, ok := b.(sidecar.ConfigApplyTask)
 	if !ok {
 		t.Fatalf("expected ConfigApplyTask, got %T", b)
@@ -372,7 +378,7 @@ func TestConfigApply_FullNodeMergesOverrides(t *testing.T) {
 		"giga_executor.enabled": "true",
 	}
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task, ok := b.(sidecar.ConfigApplyTask)
 	if !ok {
 		t.Fatalf("expected ConfigApplyTask, got %T", b)
@@ -391,7 +397,7 @@ func TestConfigApply_UserOverridesTakePrecedence(t *testing.T) {
 		"storage.snapshot_keep_recent": "99",
 	}
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task, ok := b.(sidecar.ConfigApplyTask)
 	if !ok {
 		t.Fatalf("expected ConfigApplyTask, got %T", b)
@@ -404,7 +410,7 @@ func TestConfigApply_UserOverridesTakePrecedence(t *testing.T) {
 func TestConfigApply_NoOverridesYieldsNil(t *testing.T) {
 	node := replayerNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if task.Intent.Overrides != nil {
 		t.Errorf("expected nil overrides when none specified, got %v", task.Intent.Overrides)
@@ -766,7 +772,7 @@ func TestReconcile_GetTaskError_RequeuesGracefully(t *testing.T) {
 func TestBuildTask_SnapshotRestore(t *testing.T) {
 	node := snapshotNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskSnapshotRestore)
+	b, _ := planner.BuildTask(node, taskSnapshotRestore)
 	task, ok := b.(sidecar.SnapshotRestoreTask)
 	if !ok {
 		t.Fatalf("expected SnapshotRestoreTask, got %T", b)
@@ -785,7 +791,7 @@ func TestBuildTask_DiscoverPeers_EC2Tags(t *testing.T) {
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
 	}
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskDiscoverPeers)
+	b, _ := planner.BuildTask(node, taskDiscoverPeers)
 	task, ok := b.(sidecar.DiscoverPeersTask)
 	if !ok {
 		t.Fatalf("expected DiscoverPeersTask, got %T", b)
@@ -812,7 +818,7 @@ func TestBuildTask_ConfigureGenesis_WithS3(t *testing.T) {
 func TestBuildTask_MarkReady(t *testing.T) {
 	node := snapshotNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskMarkReady)
+	b, _ := planner.BuildTask(node, taskMarkReady)
 	if _, ok := b.(sidecar.MarkReadyTask); !ok {
 		t.Errorf("expected MarkReadyTask, got %T", b)
 	}
@@ -825,7 +831,7 @@ func TestConfigApply_FullNodeMode(t *testing.T) {
 	node.Spec.Validator = nil
 	node.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if string(task.Intent.Mode) != string(seiconfig.ModeFull) {
 		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, string(seiconfig.ModeFull))
@@ -835,7 +841,7 @@ func TestConfigApply_FullNodeMode(t *testing.T) {
 func TestConfigApply_ValidatorMode(t *testing.T) {
 	node := genesisNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if string(task.Intent.Mode) != string(seiconfig.ModeValidator) {
 		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, string(seiconfig.ModeValidator))
@@ -845,7 +851,7 @@ func TestConfigApply_ValidatorMode(t *testing.T) {
 func TestConfigApply_ArchiveWithSnapshotGeneration(t *testing.T) {
 	node := snapshotterNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if string(task.Intent.Mode) != string(seiconfig.ModeArchive) {
 		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, string(seiconfig.ModeArchive))
@@ -861,7 +867,7 @@ func TestConfigApply_ArchiveWithSnapshotGeneration(t *testing.T) {
 func TestConfigApply_StateSyncFieldsNotSet(t *testing.T) {
 	node := snapshotNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	for _, key := range []string{"state_sync.enable", "state_sync.use_local_snapshot", "state_sync.trust_period"} {
 		if _, ok := task.Intent.Overrides[key]; ok {
@@ -874,7 +880,7 @@ func TestConfigApply_FullNodeWithSnapshotGeneration(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.FullNode.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{KeepRecent: 5}
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if task.Intent.Overrides["storage.pruning"] != "nothing" {
 		t.Errorf("storage.pruning = %q", task.Intent.Overrides["storage.pruning"])
@@ -887,7 +893,7 @@ func TestConfigApply_FullNodeWithSnapshotGeneration(t *testing.T) {
 func TestConfigApply_GenesisNodeNoOverrides(t *testing.T) {
 	node := genesisNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskConfigApply)
+	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if len(task.Intent.Overrides) != 0 {
 		t.Errorf("expected no overrides for genesis node, got %v", task.Intent.Overrides)
@@ -1034,7 +1040,7 @@ func TestReplayerPlanner_Validate_RequiresTargetHeight(t *testing.T) {
 func TestBuildTask_Replayer_SnapshotRestore_InferredBucket(t *testing.T) {
 	node := replayerNode()
 	planner, _ := PlannerForNode(node)
-	b := planner.BuildTask(node, taskSnapshotRestore)
+	b, _ := planner.BuildTask(node, taskSnapshotRestore)
 	task, ok := b.(sidecar.SnapshotRestoreTask)
 	if !ok {
 		t.Fatalf("expected SnapshotRestoreTask, got %T", b)
@@ -1219,7 +1225,10 @@ func TestBuildPreInitPlan_NoBootstrap_ReturnsEmptyPlan(t *testing.T) {
 func TestBuildSharedTask_AwaitCondition(t *testing.T) {
 	node := replayerNode()
 	planner, _ := PlannerForNode(node)
-	builder := planner.BuildTask(node, taskAwaitCondition)
+	builder, err := planner.BuildTask(node, taskAwaitCondition)
+	if err != nil {
+		t.Fatalf("BuildTask error: %v", err)
+	}
 
 	task, ok := builder.(sidecar.AwaitConditionTask)
 	if !ok {

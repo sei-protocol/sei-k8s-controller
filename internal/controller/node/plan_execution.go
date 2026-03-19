@@ -123,7 +123,10 @@ func (r *SeiNodeReconciler) submitTask(
 	planner NodePlanner,
 	task *seiv1alpha1.PlannedTask,
 ) (ctrl.Result, error) {
-	builder := planner.BuildTask(node, task.Type)
+	builder, err := planner.BuildTask(node, task.Type)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("building task %q: %w", task.Type, err)
+	}
 	req := builder.ToTaskRequest()
 	id, err := sc.SubmitTask(ctx, req)
 	if err != nil {

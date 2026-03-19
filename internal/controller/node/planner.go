@@ -20,7 +20,7 @@ type NodePlanner interface {
 	BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan
 
 	// BuildTask constructs the sidecar TaskBuilder for a given task type.
-	BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder
+	BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error)
 
 	// Mode returns the sei-config mode string for config-apply.
 	Mode() string
@@ -160,24 +160,24 @@ func buildSharedTask(
 	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
 	taskType string,
-) sidecar.TaskBuilder {
+) (sidecar.TaskBuilder, error) {
 	switch taskType {
 	case taskSnapshotRestore:
-		return snapshotRestoreTask(snap, node.Spec.ChainID)
+		return snapshotRestoreTask(snap, node.Spec.ChainID), nil
 	case taskDiscoverPeers:
-		return discoverPeersTask(peers)
+		return discoverPeersTask(peers), nil
 	case taskConfigureGenesis:
-		return configureGenesisBuilder(node)
+		return configureGenesisBuilder(node), nil
 	case taskConfigureStateSync:
-		return configureStateSyncTask(snap)
+		return configureStateSyncTask(snap), nil
 	case taskConfigValidate:
-		return sidecar.ConfigValidateTask{}
+		return sidecar.ConfigValidateTask{}, nil
 	case taskMarkReady:
-		return sidecar.MarkReadyTask{}
+		return sidecar.MarkReadyTask{}, nil
 	case taskAwaitCondition:
 		return awaitConditionTask(node)
 	default:
-		panic(fmt.Sprintf("buildSharedTask: unhandled task type %q", taskType))
+		return nil, fmt.Errorf("buildSharedTask: unhandled task type %q", taskType)
 	}
 }
 

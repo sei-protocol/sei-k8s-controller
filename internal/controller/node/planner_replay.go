@@ -4,8 +4,9 @@ import (
 	"fmt"
 
 	seiconfig "github.com/sei-protocol/sei-config"
-	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 type replayerPlanner struct{}
@@ -33,14 +34,14 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.Task
 	return buildPlan(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot)
 }
 
-func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
+func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {
 	if taskType == taskConfigApply {
 		return sidecar.ConfigApplyTask{
 			Intent: seiconfig.ConfigIntent{
 				Mode:      seiconfig.ModeArchive,
 				Overrides: mergeOverrides(nil, node.Spec.Overrides),
 			},
-		}
+		}, nil
 	}
 	return buildSharedTask(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, taskType)
 }
