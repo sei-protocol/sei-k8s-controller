@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -57,6 +58,7 @@ func (r *SeiNodeReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) Sideca
 	}
 	c, err := sidecar.NewSidecarClientFromPodDNS(node.Name, node.Namespace, sidecarPort(node))
 	if err != nil {
+		log.Log.Info("failed to build sidecar client", "node", node.Name, "error", err)
 		return nil
 	}
 	return c
@@ -116,6 +118,9 @@ func (r *SeiNodeReconciler) executePlan(
 }
 
 // submitTask submits a task to the sidecar and records the UUID in the plan.
+// If task.TaskID is already set (previous submission succeeded but the status
+// patch failed), it skips re-submission and retries the patch to avoid
+// creating duplicate tasks on the sidecar.
 func (r *SeiNodeReconciler) submitTask(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
@@ -123,6 +128,16 @@ func (r *SeiNodeReconciler) submitTask(
 	planner NodePlanner,
 	task *seiv1alpha1.PlannedTask,
 ) (ctrl.Result, error) {
+	if task.TaskID != "" {
+		log.FromContext(ctx).Info("task already submitted, retrying status patch", "task", task.Type, "taskID", task.TaskID)
+		patch := client.MergeFrom(node.DeepCopy())
+		task.Status = seiv1alpha1.PlannedTaskSubmitted
+		if err := r.Status().Patch(ctx, node, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("recording submitted task: %w", err)
+		}
+		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+	}
+
 	builder, err := planner.BuildTask(node, task.Type)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("building task %q: %w", task.Type, err)
@@ -158,6 +173,16 @@ func (r *SeiNodeReconciler) pollTask(
 
 	result, err := sc.GetTask(ctx, taskID)
 	if err != nil {
+		if errors.Is(err, sidecar.ErrNotFound) {
+			log.FromContext(ctx).Info("task not found on sidecar, will resubmit", "task", task.Type, "taskID", task.TaskID)
+			patch := client.MergeFrom(node.DeepCopy())
+			task.Status = seiv1alpha1.PlannedTaskPending
+			task.TaskID = ""
+			if patchErr := r.Status().Patch(ctx, node, patch); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("resetting lost task: %w", patchErr)
+			}
+			return ctrl.Result{RequeueAfter: immediateRequeue}, nil
+		}
 		log.FromContext(ctx).Info("failed to poll task, will retry", "task", task.Type, "error", err)
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
 	}
@@ -226,6 +251,10 @@ func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *sei
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
 
+// ensureScheduledTask submits a recurring task exactly once. If the submission
+// succeeds but the status patch fails, the next reconcile will re-submit
+// because the task ID was not persisted. The sidecar is expected to handle
+// duplicate schedule registrations gracefully (idempotent or dedup).
 func (r *SeiNodeReconciler) ensureScheduledTask(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient, req sidecar.TaskRequest) error {
 	if node.Status.ScheduledTasks != nil {
 		if _, ok := node.Status.ScheduledTasks[req.Type]; ok {

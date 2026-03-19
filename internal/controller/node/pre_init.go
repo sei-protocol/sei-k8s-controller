@@ -142,6 +142,7 @@ func (r *SeiNodeReconciler) buildJobSidecarClient(node *seiv1alpha1.SeiNode) Sid
 	}
 	c, err := sidecar.NewSidecarClient(preInitSidecarURL(node))
 	if err != nil {
+		log.Log.Info("failed to build job sidecar client", "node", node.Name, "error", err)
 		return nil
 	}
 	return c
