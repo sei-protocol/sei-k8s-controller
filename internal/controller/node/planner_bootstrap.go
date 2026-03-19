@@ -35,10 +35,7 @@ func buildPreInitPlan(node *seiv1alpha1.SeiNode, planner NodePlanner) *seiv1alph
 func buildPostBootstrapInitPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	peers := peersFor(node)
 
-	prog := []string{taskConfigApply}
-	if node.Spec.Genesis.S3 != nil {
-		prog = append(prog, taskConfigureGenesis)
-	}
+	prog := []string{taskConfigureGenesis, taskConfigApply}
 	if len(peers) > 0 {
 		prog = append(prog, taskDiscoverPeers)
 	}

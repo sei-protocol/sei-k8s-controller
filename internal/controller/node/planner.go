@@ -148,9 +148,7 @@ func buildPlan(
 	mode := bootstrapMode(snap)
 	prog := slices.Clone(baseProgression[mode])
 
-	if node.Spec.Genesis.S3 != nil {
-		prog = insertBefore(prog, taskConfigApply, taskConfigureGenesis)
-	}
+	prog = insertBefore(prog, taskConfigApply, taskConfigureGenesis)
 	if len(peers) > 0 {
 		prog = insertBefore(prog, taskConfigValidate, taskDiscoverPeers)
 	}

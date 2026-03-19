@@ -266,7 +266,7 @@ func TestBuildPlan_Snapshot(t *testing.T) {
 	planner, _ := PlannerForNode(snapshotNode(), testSnapshotRegion)
 	plan := planner.BuildPlan(snapshotNode())
 	got := taskTypes(plan)
-	want := []string{taskSnapshotRestore, taskConfigApply, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
+	want := []string{taskSnapshotRestore, taskConfigureGenesis, taskConfigApply, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -278,7 +278,7 @@ func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	plan := planner.BuildPlan(node)
 	got := taskTypes(plan)
-	want := []string{taskSnapshotRestore, taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
+	want := []string{taskSnapshotRestore, taskConfigureGenesis, taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -294,7 +294,7 @@ func TestBuildPlan_Genesis(t *testing.T) {
 	planner, _ := PlannerForNode(genesisNode(), testSnapshotRegion)
 	plan := planner.BuildPlan(genesisNode())
 	got := taskTypes(plan)
-	want := []string{taskConfigApply, taskConfigValidate, taskMarkReady}
+	want := []string{taskConfigureGenesis, taskConfigApply, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -306,7 +306,7 @@ func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	plan := planner.BuildPlan(node)
 	got := taskTypes(plan)
-	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
+	want := []string{taskConfigureGenesis, taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -450,8 +450,8 @@ func TestBuildPlanPhaseAndTasks(t *testing.T) {
 	if plan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", plan.Phase)
 	}
-	if len(plan.Tasks) != 5 {
-		t.Fatalf("expected 5 tasks, got %d: %v", len(plan.Tasks), taskTypes(plan))
+	if len(plan.Tasks) != 6 {
+		t.Fatalf("expected 6 tasks, got %d: %v", len(plan.Tasks), taskTypes(plan))
 	}
 	for _, task := range plan.Tasks {
 		if task.Status != seiv1alpha1.PlannedTaskPending {

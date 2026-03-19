@@ -87,7 +87,8 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	// Drive remaining tasks: config-apply, state-sync patch, validate, ready.
+	// Drive remaining tasks: genesis, config-apply, state-sync patch, validate, ready.
+	driveTask(t, g, r, mock, fetch, taskConfigureGenesis)
 	driveTask(t, g, r, mock, fetch, taskConfigApply)
 	driveTask(t, g, r, mock, fetch, taskConfigureStateSync)
 	driveTask(t, g, r, mock, fetch, taskConfigValidate)
@@ -123,18 +124,18 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 	node = fetch()
 	g.Expect(node.Status.InitPlan).NotTo(BeNil())
 
-	// Drive the first task (config-apply submit)
+	// Drive the first task (configure-genesis submit)
 	taskID := uuid.New()
 	mock.submitID = taskID
 	planner, _ = PlannerForNode(node, testSnapshotRegion)
 	sc := r.buildSidecarClient(node)
 	_, err = r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(mock.submitted[0].Type).To(Equal(taskConfigApply))
+	g.Expect(mock.submitted[0].Type).To(Equal(taskConfigureGenesis))
 
-	// Complete config-apply.
+	// Complete configure-genesis.
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
-		taskID: completedResult(taskID, taskConfigApply, nil),
+		taskID: completedResult(taskID, taskConfigureGenesis, nil),
 	}
 	updated := fetch()
 	planner, _ = PlannerForNode(updated, testSnapshotRegion)
@@ -142,7 +143,8 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	// Drive config-validate and mark-ready.
+	// Drive config-apply, config-validate, and mark-ready.
+	driveTask(t, g, r, mock, fetch, taskConfigApply)
 	driveTask(t, g, r, mock, fetch, taskConfigValidate)
 	driveTask(t, g, r, mock, fetch, taskMarkReady)
 
