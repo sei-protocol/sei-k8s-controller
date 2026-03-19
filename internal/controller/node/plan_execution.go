@@ -35,6 +35,17 @@ const (
 type SidecarStatusClient interface {
 	SubmitTask(ctx context.Context, task sidecar.TaskRequest) (uuid.UUID, error)
 	GetTask(ctx context.Context, id uuid.UUID) (*sidecar.TaskResult, error)
+	ListTasks(ctx context.Context) ([]sidecar.TaskResult, error)
+}
+
+// findTaskByType returns the first task matching the given type, or nil.
+func findTaskByType(tasks []sidecar.TaskResult, taskType string) *sidecar.TaskResult {
+	for i := range tasks {
+		if tasks[i].Type == taskType {
+			return &tasks[i]
+		}
+	}
+	return nil
 }
 
 // insertBefore inserts task into prog immediately before target, unless task
@@ -118,9 +129,10 @@ func (r *SeiNodeReconciler) executePlan(
 }
 
 // submitTask submits a task to the sidecar and records the UUID in the plan.
-// If task.TaskID is already set (previous submission succeeded but the status
-// patch failed), it skips re-submission and retries the patch to avoid
-// creating duplicate tasks on the sidecar.
+// Before submitting, it queries the sidecar for existing tasks of the same
+// type to detect orphaned submissions from a prior reconcile where the status
+// patch failed. If a matching task is found, its UUID is adopted without
+// re-submitting.
 func (r *SeiNodeReconciler) submitTask(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
@@ -128,12 +140,20 @@ func (r *SeiNodeReconciler) submitTask(
 	planner NodePlanner,
 	task *seiv1alpha1.PlannedTask,
 ) (ctrl.Result, error) {
-	if task.TaskID != "" {
-		log.FromContext(ctx).Info("task already submitted, retrying status patch", "task", task.Type, "taskID", task.TaskID)
+	logger := log.FromContext(ctx)
+
+	existing, err := sc.ListTasks(ctx)
+	if err != nil {
+		logger.Info("failed to list sidecar tasks, will retry", "error", err)
+		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+	}
+	if found := findTaskByType(existing, task.Type); found != nil {
+		logger.Info("adopting existing sidecar task", "task", task.Type, "taskID", found.Id)
 		patch := client.MergeFrom(node.DeepCopy())
+		task.TaskID = found.Id.String()
 		task.Status = seiv1alpha1.PlannedTaskSubmitted
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("recording submitted task: %w", err)
+			return ctrl.Result{}, fmt.Errorf("adopting existing task: %w", err)
 		}
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
 	}
@@ -145,7 +165,7 @@ func (r *SeiNodeReconciler) submitTask(
 	req := builder.ToTaskRequest()
 	id, err := sc.SubmitTask(ctx, req)
 	if err != nil {
-		log.FromContext(ctx).Info("task submission failed, will retry", "task", task.Type, "error", err)
+		logger.Info("task submission failed, will retry", "task", task.Type, "error", err)
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
 	}
 

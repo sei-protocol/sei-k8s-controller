@@ -34,6 +34,9 @@ type mockSidecarClient struct {
 
 	taskResults map[uuid.UUID]*sidecar.TaskResult
 	getTaskErr  error
+
+	listedTasks []sidecar.TaskResult
+	listTaskErr error
 }
 
 func (m *mockSidecarClient) SubmitTask(_ context.Context, task sidecar.TaskRequest) (uuid.UUID, error) {
@@ -58,6 +61,16 @@ func (m *mockSidecarClient) GetTask(_ context.Context, id uuid.UUID) (*sidecar.T
 		}
 	}
 	return nil, sidecar.ErrNotFound
+}
+
+func (m *mockSidecarClient) ListTasks(_ context.Context) ([]sidecar.TaskResult, error) {
+	if m.listTaskErr != nil {
+		return nil, m.listTaskErr
+	}
+	if m.listedTasks != nil {
+		return m.listedTasks, nil
+	}
+	return []sidecar.TaskResult{}, nil
 }
 
 func strPtr(s string) *string { return &s }
@@ -520,6 +533,64 @@ func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 	}
 	if task.TaskID != taskID.String() {
 		t.Errorf("taskID = %q, want %q", task.TaskID, taskID.String())
+	}
+}
+
+func TestSubmitTask_AdoptsOrphanedTask(t *testing.T) {
+	orphanedID := uuid.New()
+	mock := &mockSidecarClient{
+		listedTasks: []sidecar.TaskResult{
+			*runningResult(orphanedID, taskSnapshotRestore),
+		},
+	}
+	node := snapshotNode()
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
+	node.Status.InitPlan = planner.BuildPlan(node)
+
+	r, c := newProgressionReconciler(t, mock, node)
+	ctx := context.Background()
+
+	sc := r.buildSidecarClient(node)
+	_, err := r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if len(mock.submitted) != 0 {
+		t.Fatalf("expected 0 submissions (should adopt), got %d", len(mock.submitted))
+	}
+
+	updated := fetchNode(t, c, node.Name, node.Namespace)
+	task := updated.Status.InitPlan.Tasks[0]
+	if task.Status != seiv1alpha1.PlannedTaskSubmitted {
+		t.Errorf("task status = %q, want Submitted", task.Status)
+	}
+	if task.TaskID != orphanedID.String() {
+		t.Errorf("taskID = %q, want %q (adopted orphan)", task.TaskID, orphanedID.String())
+	}
+}
+
+func TestSubmitTask_ListTasksError_Requeues(t *testing.T) {
+	mock := &mockSidecarClient{
+		listTaskErr: fmt.Errorf("connection refused"),
+	}
+	node := snapshotNode()
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
+	node.Status.InitPlan = planner.BuildPlan(node)
+
+	r, _ := newProgressionReconciler(t, mock, node)
+	ctx := context.Background()
+
+	sc := r.buildSidecarClient(node)
+	result, err := r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if result.RequeueAfter != bootstrapPollInterval {
+		t.Errorf("requeue = %v, want %v", result.RequeueAfter, bootstrapPollInterval)
+	}
+	if len(mock.submitted) != 0 {
+		t.Fatalf("expected 0 submissions when ListTasks fails, got %d", len(mock.submitted))
 	}
 }
 
