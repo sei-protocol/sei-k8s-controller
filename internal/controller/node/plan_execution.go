@@ -27,6 +27,7 @@ const (
 	taskResultExport       = sidecar.TaskTypeResultExport
 
 	bootstrapPollInterval = 5 * time.Second
+	immediateRequeue      = time.Millisecond
 )
 
 // SidecarStatusClient abstracts the sidecar HTTP API for testability.
@@ -99,7 +100,7 @@ func (r *SeiNodeReconciler) executePlan(
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 	}
 
 	switch task.Status {
@@ -176,7 +177,7 @@ func (r *SeiNodeReconciler) pollTask(
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking task complete: %w", err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 
 	default:
 		log.FromContext(ctx).Info("unexpected task status, will retry", "task", task.Type, "status", result.Status)

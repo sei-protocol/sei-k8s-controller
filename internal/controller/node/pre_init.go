@@ -42,7 +42,7 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking empty pre-init plan complete: %w", err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 	}
 
 	if err := r.ensurePreInitService(ctx, node); err != nil {

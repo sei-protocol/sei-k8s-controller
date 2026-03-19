@@ -138,7 +138,7 @@ func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alp
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("initializing plans: %w", err)
 	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 }
 
 // reconcileInitializing ensures the StatefulSet and Service exist, then drives
@@ -188,7 +188,7 @@ func (r *SeiNodeReconciler) setPhase(ctx context.Context, node *seiv1alpha1.SeiN
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting phase to %s: %w", phase, err)
 	}
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

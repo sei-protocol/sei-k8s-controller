@@ -80,7 +80,7 @@ func TestNodeReconcile_GenesisNode_CreateStatefulSetAndService(t *testing.T) {
 	r, c := newNodeReconciler(t, node)
 
 	// Drive through Pending -> PreInitializing (empty) -> Initializing.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())
 	}
@@ -132,7 +132,7 @@ func TestNodeReconcile_StatefulSet_Idempotent(t *testing.T) {
 	r, c := newNodeReconciler(t, node)
 
 	// Drive through Pending -> PreInitializing (empty) -> Initializing, then one more for idempotency.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())
 	}
@@ -165,7 +165,7 @@ func TestNodeReconcile_SnapshotNode_StatefulSetHasInitContainers(t *testing.T) {
 	r, c := newNodeReconciler(t, node)
 
 	// Drive through Pending -> PreInitializing (empty) -> Initializing.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())
 	}

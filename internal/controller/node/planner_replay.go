@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	seiconfig "github.com/sei-protocol/sei-config"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 )
 
 type replayerPlanner struct{}

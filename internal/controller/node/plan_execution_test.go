@@ -20,6 +20,11 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
+const (
+	testBootstrapImage   = "sei:bootstrap"
+	testBootstrapImageV1 = "sei:bootstrap-v1"
+)
+
 type mockSidecarClient struct {
 	submitted []sidecar.TaskRequest
 	submitErr error
@@ -125,7 +130,7 @@ func snapshotNode() *seiv1alpha1.SeiNode {
 			Genesis: seiv1alpha1.GenesisConfiguration{},
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
-					S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
+					S3:          &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
 					TrustPeriod: "9999h0m0s",
 				},
 			},
@@ -560,8 +565,8 @@ func TestReconcile_PollsSubmittedTask_Completed_AdvancesToNext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected immediate requeue after task completion")
+	if result.RequeueAfter != immediateRequeue {
+		t.Errorf("expected immediate requeue after task completion, got %v", result.RequeueAfter)
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -624,7 +629,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if !result.Requeue && result.RequeueAfter == 0 {
+	if result.RequeueAfter == 0 {
 		t.Error("expected requeue when marking plan complete")
 	}
 
@@ -1088,8 +1093,8 @@ func TestReconcilePending_NoBootstrap_SetsPreInitializingWithEmptyPlan(t *testin
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected Requeue=true after reconcilePending")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after reconcilePending")
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -1110,7 +1115,7 @@ func TestReconcilePending_NoBootstrap_SetsPreInitializingWithEmptyPlan(t *testin
 func TestReconcilePending_WithBootstrap_SetsPreInitializing(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := replayerNode()
-	node.Spec.Replayer.Snapshot.BootstrapImage = "sei:bootstrap"
+	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImage
 	r, c := newProgressionReconciler(t, mock, node)
 
 	planner, _ := PlannerForNode(node)
@@ -1118,8 +1123,8 @@ func TestReconcilePending_WithBootstrap_SetsPreInitializing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected Requeue=true after reconcilePending")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after reconcilePending")
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -1148,8 +1153,8 @@ func TestReconcileInitializing_PlanComplete_TransitionsToRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected Requeue=true after plan complete")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after plan complete")
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -1172,8 +1177,8 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected Requeue=true after plan failed")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after plan failed")
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -1235,7 +1240,7 @@ func TestBuildSharedTask_AwaitCondition(t *testing.T) {
 
 func TestGeneratePreInitJob(t *testing.T) {
 	node := replayerNode()
-	node.Spec.Replayer.Snapshot.BootstrapImage = "sei:bootstrap-v1"
+	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
 	job := generatePreInitJob(node, DefaultPlatformConfig())
 
 	if job.Name != "test-replayer-pre-init" {
@@ -1273,7 +1278,7 @@ func TestGeneratePreInitJob(t *testing.T) {
 	if spec.InitContainers[0].Name != "seid-init" {
 		t.Errorf("first init container name = %q, want seid-init", spec.InitContainers[0].Name)
 	}
-	if spec.InitContainers[0].Image != "sei:bootstrap-v1" {
+	if spec.InitContainers[0].Image != testBootstrapImageV1 {
 		t.Errorf("seid-init image = %q, want sei:bootstrap-v1", spec.InitContainers[0].Image)
 	}
 	if spec.InitContainers[1].Name != "sei-sidecar" {
@@ -1286,7 +1291,7 @@ func TestGeneratePreInitJob(t *testing.T) {
 	if spec.Containers[0].Name != "seid" {
 		t.Errorf("main container name = %q, want seid", spec.Containers[0].Name)
 	}
-	if spec.Containers[0].Image != "sei:bootstrap-v1" {
+	if spec.Containers[0].Image != testBootstrapImageV1 {
 		t.Errorf("main container image = %q, want sei:bootstrap-v1", spec.Containers[0].Image)
 	}
 
@@ -1366,7 +1371,7 @@ func TestReconcileInitializing_NilSidecarClient_Requeues(t *testing.T) {
 
 func bootstrapReplayerNode() *seiv1alpha1.SeiNode {
 	n := replayerNode()
-	n.Spec.Replayer.Snapshot.BootstrapImage = "sei:bootstrap"
+	n.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImage
 	return n
 }
 
@@ -1420,8 +1425,8 @@ func TestReconcilePreInitializing_PlanComplete_CleansUpAndTransitions(t *testing
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected Requeue=true after plan complete")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after plan complete")
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -1446,8 +1451,8 @@ func TestReconcilePreInitializing_EmptyPlan_TransitionsToInitializing(t *testing
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected Requeue=true after marking empty plan complete")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after marking empty plan complete")
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -1460,8 +1465,8 @@ func TestReconcilePreInitializing_EmptyPlan_TransitionsToInitializing(t *testing
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected Requeue=true after phase transition")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after phase transition")
 	}
 
 	updated = fetchNode(t, c, node.Name, node.Namespace)
@@ -1490,8 +1495,8 @@ func TestReconcilePreInitializing_PlanFailed_CleansUpAndFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected Requeue=true after plan failed")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after plan failed")
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -1533,7 +1538,7 @@ func TestNeedsPreInit(t *testing.T) {
 			"replayer with bootstrap image",
 			func() *seiv1alpha1.SeiNode {
 				n := replayerNode()
-				n.Spec.Replayer.Snapshot.BootstrapImage = "sei:bootstrap"
+				n.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImage
 				return n
 			}(),
 			true,
