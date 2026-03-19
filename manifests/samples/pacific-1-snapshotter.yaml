@@ -18,23 +18,16 @@ spec:
     command: ["seid"]
     args: ["start", "--home", "/sei"]
 
-  genesis:
-    chainId: pacific-1
-    s3:
-      uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
-      region: us-east-2
-
   storage:
     retainOnDelete: true
 
   archive:
     peers:
-      sources:
-        - ec2Tags:
-            region: eu-central-1
-            tags:
-              ChainIdentifier: pacific-1
-              Component: state-syncer
+      - ec2Tags:
+          region: eu-central-1
+          tags:
+            ChainIdentifier: pacific-1
+            Component: state-syncer
 
     snapshotGeneration:
       keepRecent: 5
