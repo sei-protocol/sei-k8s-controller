@@ -586,8 +586,8 @@ func TestSubmitTask_ListTasksError_Requeues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if result.RequeueAfter != bootstrapPollInterval {
-		t.Errorf("requeue = %v, want %v", result.RequeueAfter, bootstrapPollInterval)
+	if result.RequeueAfter != taskPollInterval {
+		t.Errorf("requeue = %v, want %v", result.RequeueAfter, taskPollInterval)
 	}
 	if len(mock.submitted) != 0 {
 		t.Fatalf("expected 0 submissions when ListTasks fails, got %d", len(mock.submitted))
@@ -615,8 +615,8 @@ func TestReconcile_PollsSubmittedTask_StillRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if result.RequeueAfter != bootstrapPollInterval {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, bootstrapPollInterval)
+	if result.RequeueAfter != taskPollInterval {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, taskPollInterval)
 	}
 	if len(mock.submitted) != 0 {
 		t.Errorf("expected no new submissions, got %d", len(mock.submitted))
@@ -809,8 +809,8 @@ func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if result.RequeueAfter != bootstrapPollInterval {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, bootstrapPollInterval)
+	if result.RequeueAfter != taskPollInterval {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, taskPollInterval)
 	}
 	updated := fetchNode(t, c, node.Name, node.Namespace)
 	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.PlannedTaskPending {
@@ -835,8 +835,8 @@ func TestReconcile_GetTaskError_RequeuesGracefully(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if result.RequeueAfter != bootstrapPollInterval {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, bootstrapPollInterval)
+	if result.RequeueAfter != taskPollInterval {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, taskPollInterval)
 	}
 }
 
@@ -1479,8 +1479,8 @@ func TestReconcileInitializing_NilSidecarClient_Requeues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.RequeueAfter != bootstrapPollInterval {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, bootstrapPollInterval)
+	if result.RequeueAfter != taskPollInterval {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, taskPollInterval)
 	}
 }
 
@@ -1694,8 +1694,8 @@ func TestReconcilePreInitializing_NilSidecarClient_Requeues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.RequeueAfter != bootstrapPollInterval {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, bootstrapPollInterval)
+	if result.RequeueAfter != taskPollInterval {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, taskPollInterval)
 	}
 }
 

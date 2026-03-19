@@ -70,7 +70,7 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 	sc := r.buildJobSidecarClient(node)
 	if sc == nil {
 		log.FromContext(ctx).Info("pre-init job sidecar not reachable yet, will retry")
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 
 	result, err := r.executePlan(ctx, node, plan, planner, sc)

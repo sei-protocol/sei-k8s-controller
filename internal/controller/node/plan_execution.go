@@ -27,8 +27,8 @@ const (
 	taskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
 	taskResultExport       = sidecar.TaskTypeResultExport
 
-	bootstrapPollInterval = 5 * time.Second
-	immediateRequeue      = time.Millisecond
+	taskPollInterval = 5 * time.Second
+	immediateRequeue = time.Millisecond
 )
 
 // SidecarStatusClient abstracts the sidecar HTTP API for testability.
@@ -124,7 +124,7 @@ func (r *SeiNodeReconciler) executePlan(
 		return r.pollTask(ctx, node, sc, plan, task)
 
 	default:
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 }
 
@@ -145,7 +145,7 @@ func (r *SeiNodeReconciler) submitTask(
 	existing, err := sc.ListTasks(ctx)
 	if err != nil {
 		logger.Info("failed to list sidecar tasks, will retry", "error", err)
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 	if found := findTaskByType(existing, task.Type); found != nil {
 		logger.Info("adopting existing sidecar task", "task", task.Type, "taskID", found.Id)
@@ -155,7 +155,7 @@ func (r *SeiNodeReconciler) submitTask(
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("adopting existing task: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 
 	builder, err := planner.BuildTask(node, task.Type)
@@ -166,7 +166,7 @@ func (r *SeiNodeReconciler) submitTask(
 	id, err := sc.SubmitTask(ctx, req)
 	if err != nil {
 		logger.Info("task submission failed, will retry", "task", task.Type, "error", err)
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 
 	patch := client.MergeFrom(node.DeepCopy())
@@ -175,7 +175,7 @@ func (r *SeiNodeReconciler) submitTask(
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("recording submitted task: %w", err)
 	}
-	return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+	return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 }
 
 // pollTask checks the result of a submitted task via GetTask.
@@ -204,13 +204,13 @@ func (r *SeiNodeReconciler) pollTask(
 			return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 		}
 		log.FromContext(ctx).Info("failed to poll task, will retry", "task", task.Type, "error", err)
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 
 	switch result.Status {
 	case sidecar.Running:
 		log.FromContext(ctx).V(1).Info("task still running", "task", task.Type)
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 
 	case sidecar.Failed:
 		errMsg := "unknown error"
@@ -229,7 +229,7 @@ func (r *SeiNodeReconciler) pollTask(
 
 	default:
 		log.FromContext(ctx).Info("unexpected task status, will retry", "task", task.Type, "status", result.Status)
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 }
 
