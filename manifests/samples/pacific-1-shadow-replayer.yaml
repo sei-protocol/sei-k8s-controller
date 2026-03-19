@@ -14,7 +14,7 @@ spec:
   image: ghcr.io/bdchatham/sei-shadow:skip-apphash
 
   sidecar:
-    image: ghcr.io/sei-protocol/seictl@sha256:f094321f0dcadc7e348fa50cdb37ac5ed0d67a65d2303094e281e00e7ffb53f8
+    image: ghcr.io/sei-protocol/seictl@sha256:64f92fb5bc3f451b3cd23d95275685b7fed28ab4dff36a0182267dc77e266c49
 
   entrypoint:
     command: ["seid"]

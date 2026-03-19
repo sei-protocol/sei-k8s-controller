@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -26,14 +27,25 @@ const (
 	taskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
 	taskResultExport       = sidecar.TaskTypeResultExport
 
-	bootstrapPollInterval = 5 * time.Second
-	immediateRequeue      = time.Millisecond
+	taskPollInterval = 5 * time.Second
+	immediateRequeue = time.Millisecond
 )
 
 // SidecarStatusClient abstracts the sidecar HTTP API for testability.
 type SidecarStatusClient interface {
 	SubmitTask(ctx context.Context, task sidecar.TaskRequest) (uuid.UUID, error)
 	GetTask(ctx context.Context, id uuid.UUID) (*sidecar.TaskResult, error)
+	ListTasks(ctx context.Context) ([]sidecar.TaskResult, error)
+}
+
+// findTaskByType returns the first task matching the given type, or nil.
+func findTaskByType(tasks []sidecar.TaskResult, taskType string) *sidecar.TaskResult {
+	for i := range tasks {
+		if tasks[i].Type == taskType {
+			return &tasks[i]
+		}
+	}
+	return nil
 }
 
 // insertBefore inserts task into prog immediately before target, unless task
@@ -57,6 +69,7 @@ func (r *SeiNodeReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) Sideca
 	}
 	c, err := sidecar.NewSidecarClientFromPodDNS(node.Name, node.Namespace, sidecarPort(node))
 	if err != nil {
+		log.Log.Info("failed to build sidecar client", "node", node.Name, "error", err)
 		return nil
 	}
 	return c
@@ -111,11 +124,15 @@ func (r *SeiNodeReconciler) executePlan(
 		return r.pollTask(ctx, node, sc, plan, task)
 
 	default:
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 }
 
 // submitTask submits a task to the sidecar and records the UUID in the plan.
+// Before submitting, it queries the sidecar for existing tasks of the same
+// type to detect orphaned submissions from a prior reconcile where the status
+// patch failed. If a matching task is found, its UUID is adopted without
+// re-submitting.
 func (r *SeiNodeReconciler) submitTask(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
@@ -123,6 +140,24 @@ func (r *SeiNodeReconciler) submitTask(
 	planner NodePlanner,
 	task *seiv1alpha1.PlannedTask,
 ) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	existing, err := sc.ListTasks(ctx)
+	if err != nil {
+		logger.Info("failed to list sidecar tasks, will retry", "error", err)
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
+	}
+	if found := findTaskByType(existing, task.Type); found != nil {
+		logger.Info("adopting existing sidecar task", "task", task.Type, "taskID", found.Id)
+		patch := client.MergeFrom(node.DeepCopy())
+		task.TaskID = found.Id.String()
+		task.Status = seiv1alpha1.PlannedTaskSubmitted
+		if err := r.Status().Patch(ctx, node, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("adopting existing task: %w", err)
+		}
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
+	}
+
 	builder, err := planner.BuildTask(node, task.Type)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("building task %q: %w", task.Type, err)
@@ -130,8 +165,8 @@ func (r *SeiNodeReconciler) submitTask(
 	req := builder.ToTaskRequest()
 	id, err := sc.SubmitTask(ctx, req)
 	if err != nil {
-		log.FromContext(ctx).Info("task submission failed, will retry", "task", task.Type, "error", err)
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		logger.Info("task submission failed, will retry", "task", task.Type, "error", err)
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 
 	patch := client.MergeFrom(node.DeepCopy())
@@ -140,7 +175,7 @@ func (r *SeiNodeReconciler) submitTask(
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("recording submitted task: %w", err)
 	}
-	return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+	return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 }
 
 // pollTask checks the result of a submitted task via GetTask.
@@ -158,14 +193,24 @@ func (r *SeiNodeReconciler) pollTask(
 
 	result, err := sc.GetTask(ctx, taskID)
 	if err != nil {
+		if errors.Is(err, sidecar.ErrNotFound) {
+			log.FromContext(ctx).Info("task not found on sidecar, will resubmit", "task", task.Type, "taskID", task.TaskID)
+			patch := client.MergeFrom(node.DeepCopy())
+			task.Status = seiv1alpha1.PlannedTaskPending
+			task.TaskID = ""
+			if patchErr := r.Status().Patch(ctx, node, patch); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("resetting lost task: %w", patchErr)
+			}
+			return ctrl.Result{RequeueAfter: immediateRequeue}, nil
+		}
 		log.FromContext(ctx).Info("failed to poll task, will retry", "task", task.Type, "error", err)
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 
 	switch result.Status {
 	case sidecar.Running:
 		log.FromContext(ctx).V(1).Info("task still running", "task", task.Type)
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 
 	case sidecar.Failed:
 		errMsg := "unknown error"
@@ -184,7 +229,7 @@ func (r *SeiNodeReconciler) pollTask(
 
 	default:
 		log.FromContext(ctx).Info("unexpected task status, will retry", "task", task.Type, "status", result.Status)
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 }
 
@@ -226,6 +271,10 @@ func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *sei
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
 
+// ensureScheduledTask submits a recurring task exactly once. If the submission
+// succeeds but the status patch fails, the next reconcile will re-submit
+// because the task ID was not persisted. The sidecar is expected to handle
+// duplicate schedule registrations gracefully (idempotent or dedup).
 func (r *SeiNodeReconciler) ensureScheduledTask(ctx context.Context, node *seiv1alpha1.SeiNode, sc SidecarStatusClient, req sidecar.TaskRequest) error {
 	if node.Status.ScheduledTasks != nil {
 		if _, ok := node.Status.ScheduledTasks[req.Type]; ok {

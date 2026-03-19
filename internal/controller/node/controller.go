@@ -160,7 +160,7 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 	sc := r.buildSidecarClient(node)
 	if sc == nil {
 		log.FromContext(ctx).Info("sidecar not reachable yet, will retry")
-		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
 
 	result, err := r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
