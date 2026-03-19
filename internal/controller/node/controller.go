@@ -42,6 +42,7 @@ type PlatformConfig struct {
 	ResourceMemArchive  string
 	ResourceCPUDefault  string
 	ResourceMemDefault  string
+	SnapshotRegion      string
 }
 
 // DefaultPlatformConfig returns PlatformConfig with production defaults.
@@ -59,6 +60,7 @@ func DefaultPlatformConfig() PlatformConfig {
 		ResourceMemArchive:  "48Gi",
 		ResourceCPUDefault:  "4",
 		ResourceMemDefault:  "32Gi",
+		SnapshotRegion:      "eu-central-1",
 	}
 }
 
@@ -97,7 +99,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	planner, err := PlannerForNode(node)
+	planner, err := PlannerForNode(node, r.Platform.SnapshotRegion)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving planner: %w", err)
 	}
@@ -132,7 +134,11 @@ func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alp
 	patch := client.MergeFrom(node.DeepCopy())
 
 	node.Status.PreInitPlan = buildPreInitPlan(node, planner)
-	node.Status.InitPlan = planner.BuildPlan(node)
+	if needsPreInit(node) {
+		node.Status.InitPlan = buildPostBootstrapInitPlan(node)
+	} else {
+		node.Status.InitPlan = planner.BuildPlan(node)
+	}
 	node.Status.Phase = seiv1alpha1.PhasePreInitializing
 
 	if err := r.Status().Patch(ctx, node, patch); err != nil {

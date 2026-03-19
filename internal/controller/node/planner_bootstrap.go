@@ -27,6 +27,30 @@ func buildPreInitPlan(node *seiv1alpha1.SeiNode, planner NodePlanner) *seiv1alph
 	return plan
 }
 
+// buildPostBootstrapInitPlan constructs a reduced InitPlan for nodes that
+// completed a PreInit Job. The PVC already contains blockchain data synced
+// to the target height, so snapshot-restore and configure-state-sync are
+// skipped. The plan applies config for the actual image, discovers peers
+// for ongoing operation, and validates.
+func buildPostBootstrapInitPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
+	peers := peersFor(node)
+
+	prog := []string{taskConfigApply}
+	if node.Spec.Genesis.S3 != nil {
+		prog = append(prog, taskConfigureGenesis)
+	}
+	if len(peers) > 0 {
+		prog = append(prog, taskDiscoverPeers)
+	}
+	prog = append(prog, taskConfigValidate, taskMarkReady)
+
+	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
+	for i, t := range prog {
+		tasks[i] = seiv1alpha1.PlannedTask{Type: t, Status: seiv1alpha1.PlannedTaskPending}
+	}
+	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}
+}
+
 // awaitConditionTask builds the sidecar task for the await-condition step.
 func awaitConditionTask(node *seiv1alpha1.SeiNode) (sidecar.TaskBuilder, error) {
 	snap := snapshotSourceFor(node)

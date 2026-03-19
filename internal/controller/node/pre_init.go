@@ -48,8 +48,23 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 	if err := r.ensurePreInitService(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensuring pre-init service: %w", err)
 	}
-	if _, err := r.ensurePreInitJob(ctx, node); err != nil {
+	job, err := r.ensurePreInitJob(ctx, node)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensuring pre-init job: %w", err)
+	}
+
+	if isJobFailed(job) {
+		log.FromContext(ctx).Error(fmt.Errorf("pre-init job failed"), "pre-init job terminated unexpectedly", "job", job.Name)
+		patch := client.MergeFrom(node.DeepCopy())
+		plan.Phase = seiv1alpha1.TaskPlanFailed
+		if task := currentTask(plan); task != nil {
+			task.Status = seiv1alpha1.PlannedTaskFailed
+			task.Error = jobFailureReason(job)
+		}
+		if err := r.Status().Patch(ctx, node, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("marking pre-init plan failed after job failure: %w", err)
+		}
+		return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 	}
 
 	sc := r.buildJobSidecarClient(node)
@@ -132,7 +147,30 @@ func (r *SeiNodeReconciler) buildJobSidecarClient(node *seiv1alpha1.SeiNode) Sid
 	return c
 }
 
-// cleanupPreInit removes the pre-init Job and its headless Service.
+// isJobFailed returns true if the Job has a Failed condition.
+func isJobFailed(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// jobFailureReason extracts a human-readable failure reason from the Job's conditions.
+func jobFailureReason(job *batchv1.Job) string {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue && c.Message != "" {
+			return c.Message
+		}
+	}
+	return "pre-init job failed"
+}
+
+// cleanupPreInit removes the pre-init Job and its headless Service. It
+// returns an error while the Job still exists so the reconciler requeues,
+// preventing the StatefulSet from mounting the RWO PVC before the Job pod
+// has fully released it.
 func (r *SeiNodeReconciler) cleanupPreInit(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	key := types.NamespacedName{Name: preInitJobName(node), Namespace: node.Namespace}
 
@@ -141,10 +179,14 @@ func (r *SeiNodeReconciler) cleanupPreInit(ctx context.Context, node *seiv1alpha
 		if err := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationForeground)); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("deleting pre-init job: %w", err)
 		}
+		// Foreground deletion is async; requeue until the Job is fully gone
+		// to avoid RWO PVC mount conflicts with the StatefulSet.
+		return fmt.Errorf("waiting for pre-init job %s to be fully deleted", key.Name)
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
 
+	// Job is gone -- safe to clean up the headless service.
 	svc := &corev1.Service{}
 	if err := r.Get(ctx, key, svc); err == nil {
 		if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {

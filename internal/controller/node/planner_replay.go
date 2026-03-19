@@ -9,7 +9,9 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-type replayerPlanner struct{}
+type replayerPlanner struct {
+	snapshotRegion string
+}
 
 func (p *replayerPlanner) Mode() string { return string(seiconfig.ModeArchive) }
 
@@ -43,5 +45,5 @@ func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) 
 			},
 		}, nil
 	}
-	return buildSharedTask(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, taskType)
+	return buildSharedTask(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, taskType, p.snapshotRegion)
 }

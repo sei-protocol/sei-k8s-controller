@@ -10,7 +10,9 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-type archiveNodePlanner struct{}
+type archiveNodePlanner struct {
+	snapshotRegion string
+}
 
 func (p *archiveNodePlanner) Mode() string { return string(seiconfig.ModeArchive) }
 
@@ -29,7 +31,7 @@ func (p *archiveNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType strin
 	if taskType == taskConfigApply {
 		return p.buildConfigApply(node), nil
 	}
-	return buildSharedTask(node, node.Spec.Archive.Peers, nil, taskType)
+	return buildSharedTask(node, node.Spec.Archive.Peers, nil, taskType, p.snapshotRegion)
 }
 
 func (p *archiveNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {

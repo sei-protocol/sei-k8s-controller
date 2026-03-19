@@ -11,7 +11,7 @@ import (
 // nodeMode returns the sei-config mode string for the node based on which
 // sub-spec is populated. Falls back to "full" if none is set.
 func nodeMode(node *seiv1alpha1.SeiNode) string {
-	planner, err := PlannerForNode(node)
+	planner, err := PlannerForNode(node, "")
 	if err != nil {
 		return string(seiconfig.ModeFull)
 	}

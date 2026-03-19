@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	preInitTerminationGracePeriod = int64(45)
+	preInitTerminationGracePeriod = int64(120)
 	preInitPodHostname            = "seid"
 )
 
@@ -32,7 +32,8 @@ func generatePreInitJob(node *seiv1alpha1.SeiNode, platform PlatformConfig) *bat
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: ptr.To(int32(0)),
+			BackoffLimit:            ptr.To(int32(0)),
+			TTLSecondsAfterFinished: ptr.To(int32(3600)),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec:       buildPreInitPodSpec(node, snap, platform),
@@ -98,6 +99,9 @@ func buildPreInitPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSo
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
 		},
+	}
+	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Resources != nil {
+		sidecar.Resources = *node.Spec.Sidecar.Resources
 	}
 
 	bootstrapImage := node.Spec.Image

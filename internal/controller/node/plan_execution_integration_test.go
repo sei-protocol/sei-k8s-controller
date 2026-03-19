@@ -28,7 +28,7 @@ func driveTask(
 	taskID := uuid.New()
 	mock.submitID = taskID
 	node := fetch()
-	planner, err := PlannerForNode(node)
+	planner, err := PlannerForNode(node, testSnapshotRegion)
 	g.Expect(err).NotTo(HaveOccurred())
 	sc := r.buildSidecarClient(node)
 	_, err = r.executePlan(context.Background(), node, node.Status.InitPlan, planner, sc)
@@ -40,7 +40,7 @@ func driveTask(
 		taskID: completedResult(taskID, taskType, nil),
 	}
 	node = fetch()
-	planner, _ = PlannerForNode(node)
+	planner, _ = PlannerForNode(node, testSnapshotRegion)
 	sc = r.buildSidecarClient(node)
 	_, err = r.executePlan(context.Background(), node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -49,7 +49,7 @@ func driveTask(
 func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	g := NewGomegaWithT(t)
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	mock := &mockSidecarClient{}
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -71,7 +71,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	// Drive the first task (snapshot-restore submit)
 	taskID := uuid.New()
 	mock.submitID = taskID
-	planner, _ = PlannerForNode(node)
+	planner, _ = PlannerForNode(node, testSnapshotRegion)
 	sc := r.buildSidecarClient(node)
 	_, err = r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -82,7 +82,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 		taskID: completedResult(taskID, taskSnapshotRestore, nil),
 	}
 	updated := fetch()
-	planner, _ = PlannerForNode(updated)
+	planner, _ = PlannerForNode(updated, testSnapshotRegion)
 	sc = r.buildSidecarClient(updated)
 	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -95,7 +95,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 
 	// Final plan completion reconcile
 	updated = fetch()
-	planner, _ = PlannerForNode(updated)
+	planner, _ = PlannerForNode(updated, testSnapshotRegion)
 	sc = r.buildSidecarClient(updated)
 	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -105,7 +105,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 	g := NewGomegaWithT(t)
 	node := genesisNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	mock := &mockSidecarClient{}
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -126,7 +126,7 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 	// Drive the first task (config-apply submit)
 	taskID := uuid.New()
 	mock.submitID = taskID
-	planner, _ = PlannerForNode(node)
+	planner, _ = PlannerForNode(node, testSnapshotRegion)
 	sc := r.buildSidecarClient(node)
 	_, err = r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -137,7 +137,7 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 		taskID: completedResult(taskID, taskConfigApply, nil),
 	}
 	updated := fetch()
-	planner, _ = PlannerForNode(updated)
+	planner, _ = PlannerForNode(updated, testSnapshotRegion)
 	sc = r.buildSidecarClient(updated)
 	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -148,7 +148,7 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 
 	// Complete the plan.
 	updated = fetch()
-	planner, _ = PlannerForNode(updated)
+	planner, _ = PlannerForNode(updated, testSnapshotRegion)
 	sc = r.buildSidecarClient(updated)
 	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -158,7 +158,7 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 	g := NewGomegaWithT(t)
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	mock := &mockSidecarClient{}
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -179,7 +179,7 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 	// Drive the first task (snapshot-restore submit)
 	taskID := uuid.New()
 	mock.submitID = taskID
-	planner, _ = PlannerForNode(node)
+	planner, _ = PlannerForNode(node, testSnapshotRegion)
 	sc := r.buildSidecarClient(node)
 	_, err = r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -189,7 +189,7 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 		taskID: completedResult(taskID, taskSnapshotRestore, strPtr("S3 access denied")),
 	}
 	updated := fetch()
-	planner, _ = PlannerForNode(updated)
+	planner, _ = PlannerForNode(updated, testSnapshotRegion)
 	sc = r.buildSidecarClient(updated)
 	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -201,7 +201,7 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 
 	// Subsequent reconciles are no-ops.
 	mock.submitted = nil
-	planner, _ = PlannerForNode(updated)
+	planner, _ = PlannerForNode(updated, testSnapshotRegion)
 	sc = r.buildSidecarClient(updated)
 	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())

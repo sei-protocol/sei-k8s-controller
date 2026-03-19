@@ -9,13 +9,20 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-type validatorPlanner struct{}
+type validatorPlanner struct {
+	snapshotRegion string
+}
 
 func (p *validatorPlanner) Mode() string { return string(seiconfig.ModeValidator) }
 
 func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if node.Spec.Validator == nil {
 		return fmt.Errorf("validator sub-spec is nil")
+	}
+	if snap := node.Spec.Validator.Snapshot; snap != nil && snap.BootstrapImage != "" {
+		if snap.S3 == nil || snap.S3.TargetHeight <= 0 {
+			return fmt.Errorf("validator: bootstrapImage requires s3 with targetHeight > 0")
+		}
 	}
 	return nil
 }
@@ -35,5 +42,5 @@ func (p *validatorPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string)
 		}, nil
 	}
 	v := node.Spec.Validator
-	return buildSharedTask(node, v.Peers, v.Snapshot, taskType)
+	return buildSharedTask(node, v.Peers, v.Snapshot, taskType, p.snapshotRegion)
 }

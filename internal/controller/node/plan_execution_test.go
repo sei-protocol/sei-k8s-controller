@@ -10,6 +10,7 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -23,6 +24,7 @@ import (
 const (
 	testBootstrapImage   = "sei:bootstrap"
 	testBootstrapImageV1 = "sei:bootstrap-v1"
+	testSnapshotRegion   = "eu-central-1"
 )
 
 type mockSidecarClient struct {
@@ -248,7 +250,7 @@ func TestBootstrapMode(t *testing.T) {
 // --- Plan building tests ---
 
 func TestBuildPlan_Snapshot(t *testing.T) {
-	planner, _ := PlannerForNode(snapshotNode())
+	planner, _ := PlannerForNode(snapshotNode(), testSnapshotRegion)
 	plan := planner.BuildPlan(snapshotNode())
 	got := taskTypes(plan)
 	want := []string{taskSnapshotRestore, taskConfigApply, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
@@ -260,7 +262,7 @@ func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 	node.Spec.FullNode.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "atlantic-2"}}},
 	}
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	plan := planner.BuildPlan(node)
 	got := taskTypes(plan)
 	want := []string{taskSnapshotRestore, taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
@@ -268,7 +270,7 @@ func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 }
 
 func TestBuildPlan_StateSync(t *testing.T) {
-	planner, _ := PlannerForNode(peerSyncNode())
+	planner, _ := PlannerForNode(peerSyncNode(), testSnapshotRegion)
 	plan := planner.BuildPlan(peerSyncNode())
 	got := taskTypes(plan)
 	want := []string{taskConfigureGenesis, taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
@@ -276,7 +278,7 @@ func TestBuildPlan_StateSync(t *testing.T) {
 }
 
 func TestBuildPlan_Genesis(t *testing.T) {
-	planner, _ := PlannerForNode(genesisNode())
+	planner, _ := PlannerForNode(genesisNode(), testSnapshotRegion)
 	plan := planner.BuildPlan(genesisNode())
 	got := taskTypes(plan)
 	want := []string{taskConfigApply, taskConfigValidate, taskMarkReady}
@@ -288,7 +290,7 @@ func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 	node.Spec.Validator.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "arctic-1"}}},
 	}
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	plan := planner.BuildPlan(node)
 	got := taskTypes(plan)
 	want := []string{taskConfigApply, taskDiscoverPeers, taskConfigValidate, taskMarkReady}
@@ -297,7 +299,7 @@ func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 
 func TestBuildPlan_Replayer(t *testing.T) {
 	node := replayerNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	plan := planner.BuildPlan(node)
 	got := taskTypes(plan)
 	want := []string{taskSnapshotRestore, taskConfigureGenesis, taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
@@ -306,7 +308,7 @@ func TestBuildPlan_Replayer(t *testing.T) {
 
 func TestBuildTask_Replayer_DiscoverPeers(t *testing.T) {
 	node := replayerNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, err := planner.BuildTask(node, taskDiscoverPeers)
 	if err != nil {
 		t.Fatalf("BuildTask error: %v", err)
@@ -325,7 +327,7 @@ func TestBuildTask_Replayer_DiscoverPeers(t *testing.T) {
 
 func TestBuildTask_Replayer_ConfigureStateSync(t *testing.T) {
 	node := replayerNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, err := planner.BuildTask(node, taskConfigureStateSync)
 	if err != nil {
 		t.Fatalf("BuildTask error: %v", err)
@@ -341,7 +343,7 @@ func TestBuildTask_Replayer_ConfigureStateSync(t *testing.T) {
 
 func TestPlannerForNode_Replayer(t *testing.T) {
 	node := replayerNode()
-	p, err := PlannerForNode(node)
+	p, err := PlannerForNode(node, testSnapshotRegion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +360,7 @@ func TestConfigApply_ReplayerPassesSpecOverrides(t *testing.T) {
 		"giga_executor.enabled": "true",
 		"evm.http_port":         "8545",
 	}
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task, ok := b.(sidecar.ConfigApplyTask)
 	if !ok {
@@ -377,7 +379,7 @@ func TestConfigApply_FullNodeMergesOverrides(t *testing.T) {
 	node.Spec.Overrides = map[string]string{
 		"giga_executor.enabled": "true",
 	}
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task, ok := b.(sidecar.ConfigApplyTask)
 	if !ok {
@@ -396,7 +398,7 @@ func TestConfigApply_UserOverridesTakePrecedence(t *testing.T) {
 	node.Spec.Overrides = map[string]string{
 		"storage.snapshot_keep_recent": "99",
 	}
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task, ok := b.(sidecar.ConfigApplyTask)
 	if !ok {
@@ -409,7 +411,7 @@ func TestConfigApply_UserOverridesTakePrecedence(t *testing.T) {
 
 func TestConfigApply_NoOverridesYieldsNil(t *testing.T) {
 	node := replayerNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if task.Intent.Overrides != nil {
@@ -430,7 +432,7 @@ func assertProgression(t *testing.T, got, want []string) {
 }
 
 func TestBuildPlanPhaseAndTasks(t *testing.T) {
-	planner, _ := PlannerForNode(snapshotNode())
+	planner, _ := PlannerForNode(snapshotNode(), testSnapshotRegion)
 	plan := planner.BuildPlan(snapshotNode())
 	if plan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", plan.Phase)
@@ -461,7 +463,7 @@ func taskTypes(plan *seiv1alpha1.TaskPlan) []string {
 func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
@@ -470,7 +472,7 @@ func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	node = fetchNode(t, c, node.Name, node.Namespace)
-	planner, _ = PlannerForNode(node)
+	planner, _ = PlannerForNode(node, testSnapshotRegion)
 	sc := r.buildSidecarClient(node)
 	_, err = r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
 	if err != nil {
@@ -496,7 +498,7 @@ func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{submitID: taskID}
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.InitPlan = planner.BuildPlan(node)
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -529,7 +531,7 @@ func TestReconcile_PollsSubmittedTask_StillRunning(t *testing.T) {
 		},
 	}
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.InitPlan = planner.BuildPlan(node)
 	node.Status.InitPlan.Tasks[0].Status = seiv1alpha1.PlannedTaskSubmitted
 	node.Status.InitPlan.Tasks[0].TaskID = taskID.String()
@@ -558,7 +560,7 @@ func TestReconcile_PollsSubmittedTask_Completed_AdvancesToNext(t *testing.T) {
 		},
 	}
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.InitPlan = planner.BuildPlan(node)
 	node.Status.InitPlan.Tasks[0].Status = seiv1alpha1.PlannedTaskSubmitted
 	node.Status.InitPlan.Tasks[0].TaskID = taskID.String()
@@ -589,7 +591,7 @@ func TestReconcile_PollsSubmittedTask_Failed_FailsPlan(t *testing.T) {
 		},
 	}
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.InitPlan = planner.BuildPlan(node)
 	node.Status.InitPlan.Tasks[0].Status = seiv1alpha1.PlannedTaskSubmitted
 	node.Status.InitPlan.Tasks[0].TaskID = taskID.String()
@@ -621,7 +623,7 @@ func TestReconcile_PollsSubmittedTask_Failed_FailsPlan(t *testing.T) {
 func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := genesisNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.InitPlan = planner.BuildPlan(node)
 	for i := range node.Status.InitPlan.Tasks {
 		node.Status.InitPlan.Tasks[i].Status = seiv1alpha1.PlannedTaskComplete
@@ -648,7 +650,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 func TestReconcile_FailedPlan_NoOps(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.InitPlan = planner.BuildPlan(node)
 	node.Status.InitPlan.Phase = seiv1alpha1.TaskPlanFailed
 
@@ -725,7 +727,7 @@ func TestReconcile_CompletePlan_SkipsAlreadyScheduled(t *testing.T) {
 func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 	mock := &mockSidecarClient{submitErr: fmt.Errorf("connection refused")}
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.InitPlan = planner.BuildPlan(node)
 
 	r, c := newProgressionReconciler(t, mock, node)
@@ -749,7 +751,7 @@ func TestReconcile_GetTaskError_RequeuesGracefully(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{getTaskErr: fmt.Errorf("connection refused")}
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.InitPlan = planner.BuildPlan(node)
 	node.Status.InitPlan.Tasks[0].Status = seiv1alpha1.PlannedTaskSubmitted
 	node.Status.InitPlan.Tasks[0].TaskID = taskID.String()
@@ -771,7 +773,7 @@ func TestReconcile_GetTaskError_RequeuesGracefully(t *testing.T) {
 
 func TestBuildTask_SnapshotRestore(t *testing.T) {
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskSnapshotRestore)
 	task, ok := b.(sidecar.SnapshotRestoreTask)
 	if !ok {
@@ -790,7 +792,7 @@ func TestBuildTask_DiscoverPeers_EC2Tags(t *testing.T) {
 	node.Spec.FullNode.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
 	}
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskDiscoverPeers)
 	task, ok := b.(sidecar.DiscoverPeersTask)
 	if !ok {
@@ -817,7 +819,7 @@ func TestBuildTask_ConfigureGenesis_WithS3(t *testing.T) {
 
 func TestBuildTask_MarkReady(t *testing.T) {
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskMarkReady)
 	if _, ok := b.(sidecar.MarkReadyTask); !ok {
 		t.Errorf("expected MarkReadyTask, got %T", b)
@@ -830,7 +832,7 @@ func TestConfigApply_FullNodeMode(t *testing.T) {
 	node := genesisNode()
 	node.Spec.Validator = nil
 	node.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if string(task.Intent.Mode) != string(seiconfig.ModeFull) {
@@ -840,7 +842,7 @@ func TestConfigApply_FullNodeMode(t *testing.T) {
 
 func TestConfigApply_ValidatorMode(t *testing.T) {
 	node := genesisNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if string(task.Intent.Mode) != string(seiconfig.ModeValidator) {
@@ -850,7 +852,7 @@ func TestConfigApply_ValidatorMode(t *testing.T) {
 
 func TestConfigApply_ArchiveWithSnapshotGeneration(t *testing.T) {
 	node := snapshotterNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if string(task.Intent.Mode) != string(seiconfig.ModeArchive) {
@@ -866,7 +868,7 @@ func TestConfigApply_ArchiveWithSnapshotGeneration(t *testing.T) {
 
 func TestConfigApply_StateSyncFieldsNotSet(t *testing.T) {
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	for _, key := range []string{"state_sync.enable", "state_sync.use_local_snapshot", "state_sync.trust_period"} {
@@ -879,7 +881,7 @@ func TestConfigApply_StateSyncFieldsNotSet(t *testing.T) {
 func TestConfigApply_FullNodeWithSnapshotGeneration(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.FullNode.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{KeepRecent: 5}
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if task.Intent.Overrides["storage.pruning"] != "nothing" {
@@ -892,7 +894,7 @@ func TestConfigApply_FullNodeWithSnapshotGeneration(t *testing.T) {
 
 func TestConfigApply_GenesisNodeNoOverrides(t *testing.T) {
 	node := genesisNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
 	if len(task.Intent.Overrides) != 0 {
@@ -930,7 +932,7 @@ func TestSnapshotUploadScheduledTask_NoDestination(t *testing.T) {
 
 func TestPlannerForNode_FullNode(t *testing.T) {
 	node := snapshotNode()
-	p, err := PlannerForNode(node)
+	p, err := PlannerForNode(node, testSnapshotRegion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -941,7 +943,7 @@ func TestPlannerForNode_FullNode(t *testing.T) {
 
 func TestPlannerForNode_Archive(t *testing.T) {
 	node := snapshotterNode()
-	p, err := PlannerForNode(node)
+	p, err := PlannerForNode(node, testSnapshotRegion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -952,7 +954,7 @@ func TestPlannerForNode_Archive(t *testing.T) {
 
 func TestPlannerForNode_Validator(t *testing.T) {
 	node := genesisNode()
-	p, err := PlannerForNode(node)
+	p, err := PlannerForNode(node, testSnapshotRegion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -969,7 +971,7 @@ func TestPlannerForNode_NoSubSpec(t *testing.T) {
 			Genesis: seiv1alpha1.GenesisConfiguration{},
 		},
 	}
-	_, err := PlannerForNode(node)
+	_, err := PlannerForNode(node, testSnapshotRegion)
 	if err == nil {
 		t.Error("expected error for node with no sub-spec")
 	}
@@ -1026,7 +1028,7 @@ func TestResultExportScheduledTask_FullNode(t *testing.T) {
 func TestReplayerPlanner_Validate_RequiresTargetHeight(t *testing.T) {
 	node := replayerNode()
 	node.Spec.Replayer.Snapshot.S3.TargetHeight = 0
-	planner, err := PlannerForNode(node)
+	planner, err := PlannerForNode(node, testSnapshotRegion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1039,7 +1041,7 @@ func TestReplayerPlanner_Validate_RequiresTargetHeight(t *testing.T) {
 
 func TestBuildTask_Replayer_SnapshotRestore_InferredBucket(t *testing.T) {
 	node := replayerNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskSnapshotRestore)
 	task, ok := b.(sidecar.SnapshotRestoreTask)
 	if !ok {
@@ -1094,7 +1096,7 @@ func TestReconcilePending_NoBootstrap_SetsPreInitializingWithEmptyPlan(t *testin
 	node := snapshotNode()
 	r, c := newProgressionReconciler(t, mock, node)
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	result, err := r.reconcilePending(context.Background(), node, planner)
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
@@ -1124,7 +1126,7 @@ func TestReconcilePending_WithBootstrap_SetsPreInitializing(t *testing.T) {
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImage
 	r, c := newProgressionReconciler(t, mock, node)
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	result, err := r.reconcilePending(context.Background(), node, planner)
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
@@ -1154,7 +1156,7 @@ func TestReconcileInitializing_PlanComplete_TransitionsToRunning(t *testing.T) {
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	result, err := r.reconcileInitializing(context.Background(), node, planner)
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
@@ -1178,7 +1180,7 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	result, err := r.reconcileInitializing(context.Background(), node, planner)
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
@@ -1197,7 +1199,7 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 
 func TestBuildPreInitPlan_AppendsAwaitCondition(t *testing.T) {
 	node := bootstrapReplayerNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	plan := buildPreInitPlan(node, planner)
 
 	lastTask := plan.Tasks[len(plan.Tasks)-1]
@@ -1211,7 +1213,7 @@ func TestBuildPreInitPlan_AppendsAwaitCondition(t *testing.T) {
 
 func TestBuildPreInitPlan_NoBootstrap_ReturnsEmptyPlan(t *testing.T) {
 	node := snapshotNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	plan := buildPreInitPlan(node, planner)
 
 	if len(plan.Tasks) != 0 {
@@ -1224,7 +1226,7 @@ func TestBuildPreInitPlan_NoBootstrap_ReturnsEmptyPlan(t *testing.T) {
 
 func TestBuildSharedTask_AwaitCondition(t *testing.T) {
 	node := replayerNode()
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	builder, err := planner.BuildTask(node, taskAwaitCondition)
 	if err != nil {
 		t.Fatalf("BuildTask error: %v", err)
@@ -1261,6 +1263,10 @@ func TestGeneratePreInitJob(t *testing.T) {
 
 	if job.Labels[componentLabel] != "pre-init" {
 		t.Errorf("Job label %s = %q, want %q", componentLabel, job.Labels[componentLabel], "pre-init")
+	}
+
+	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != 3600 {
+		t.Errorf("TTLSecondsAfterFinished = %v, want 3600", job.Spec.TTLSecondsAfterFinished)
 	}
 
 	spec := job.Spec.Template.Spec
@@ -1309,6 +1315,37 @@ func TestGeneratePreInitJob(t *testing.T) {
 	}
 }
 
+func TestGeneratePreInitJob_SidecarResources(t *testing.T) {
+	node := replayerNode()
+	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
+	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{
+		Resources: &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("500m"),
+				corev1.ResourceMemory: resource.MustParse("512Mi"),
+			},
+		},
+	}
+	job := generatePreInitJob(node, DefaultPlatformConfig())
+	spec := job.Spec.Template.Spec
+
+	if len(spec.InitContainers) < 2 {
+		t.Fatalf("expected at least 2 init containers, got %d", len(spec.InitContainers))
+	}
+	sidecar := spec.InitContainers[1]
+	if sidecar.Name != "sei-sidecar" {
+		t.Fatalf("expected sei-sidecar, got %q", sidecar.Name)
+	}
+	cpuReq := sidecar.Resources.Requests[corev1.ResourceCPU]
+	if cpuReq.String() != "500m" {
+		t.Errorf("sidecar CPU request = %q, want %q", cpuReq.String(), "500m")
+	}
+	memReq := sidecar.Resources.Requests[corev1.ResourceMemory]
+	if memReq.String() != "512Mi" {
+		t.Errorf("sidecar memory request = %q, want %q", memReq.String(), "512Mi")
+	}
+}
+
 func TestGeneratePreInitService(t *testing.T) {
 	node := replayerNode()
 	svc := generatePreInitService(node)
@@ -1342,7 +1379,7 @@ func TestExecutePlan_NilPlan_ReturnsError(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
 	r, _ := newProgressionReconciler(t, mock, node)
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	sc := r.buildSidecarClient(node)
 
 	_, err := r.executePlan(context.Background(), node, nil, planner, sc)
@@ -1366,7 +1403,7 @@ func TestReconcileInitializing_NilSidecarClient_Requeues(t *testing.T) {
 	r, _ := newProgressionReconciler(t, nil, node)
 	r.BuildSidecarClientFn = func(_ *seiv1alpha1.SeiNode) SidecarStatusClient { return nil }
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	result, err := r.reconcileInitializing(context.Background(), node, planner)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1389,13 +1426,13 @@ func TestReconcilePreInitializing_CreatesServiceAndJob(t *testing.T) {
 	node := bootstrapReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhasePreInitializing
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.PreInitPlan = buildPreInitPlan(node, planner)
 	node.Status.InitPlan = planner.BuildPlan(node)
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	planner, _ = PlannerForNode(node)
+	planner, _ = PlannerForNode(node, testSnapshotRegion)
 	_, err := r.reconcilePreInitializing(context.Background(), node, planner)
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -1429,7 +1466,7 @@ func TestReconcilePreInitializing_PlanComplete_CleansUpAndTransitions(t *testing
 		t.Fatalf("creating service: %v", err)
 	}
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	result, err := r.reconcilePreInitializing(context.Background(), node, planner)
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -1444,6 +1481,62 @@ func TestReconcilePreInitializing_PlanComplete_CleansUpAndTransitions(t *testing
 	}
 }
 
+func TestCleanupPreInit_WaitsForJobDeletion(t *testing.T) {
+	mock := &mockSidecarClient{}
+	node := bootstrapReplayerNode()
+	node.Status.Phase = seiv1alpha1.PhasePreInitializing
+	node.Status.PreInitPlan = &seiv1alpha1.TaskPlan{
+		Phase: seiv1alpha1.TaskPlanComplete,
+	}
+	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
+
+	r, c := newProgressionReconciler(t, mock, node)
+	ctx := context.Background()
+
+	svc := generatePreInitService(node)
+	if err := c.Create(ctx, svc); err != nil {
+		t.Fatalf("creating service: %v", err)
+	}
+
+	job := generatePreInitJob(node, DefaultPlatformConfig())
+	if err := c.Create(ctx, job); err != nil {
+		t.Fatalf("creating job: %v", err)
+	}
+
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
+
+	// First call finds the Job, issues the delete, and returns an error to
+	// requeue (the fake client deletes synchronously but cleanupPreInit
+	// always returns an error on the same pass where it issues the delete).
+	_, err := r.reconcilePreInitializing(ctx, node, planner)
+	if err == nil {
+		t.Fatal("expected error while Job is still being deleted")
+	}
+
+	// Node should still be in PreInitializing.
+	updated := fetchNode(t, c, node.Name, node.Namespace)
+	if updated.Status.Phase != seiv1alpha1.PhasePreInitializing {
+		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhasePreInitializing)
+	}
+
+	// Second call: Job is now gone (fake client deleted it synchronously),
+	// so cleanupPreInit succeeds and the phase transitions.
+	updated = fetchNode(t, c, node.Name, node.Namespace)
+	planner, _ = PlannerForNode(updated, testSnapshotRegion)
+	result, err := r.reconcilePreInitializing(ctx, updated, planner)
+	if err != nil {
+		t.Fatalf("unexpected error after Job deleted: %v", err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after transition")
+	}
+
+	updated = fetchNode(t, c, node.Name, node.Namespace)
+	if updated.Status.Phase != seiv1alpha1.PhaseInitializing {
+		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseInitializing)
+	}
+}
+
 func TestReconcilePreInitializing_EmptyPlan_TransitionsToInitializing(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
@@ -1453,7 +1546,7 @@ func TestReconcilePreInitializing_EmptyPlan_TransitionsToInitializing(t *testing
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 
 	// First call marks the empty plan complete.
 	result, err := r.reconcilePreInitializing(context.Background(), node, planner)
@@ -1499,7 +1592,7 @@ func TestReconcilePreInitializing_PlanFailed_CleansUpAndFails(t *testing.T) {
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	result, err := r.reconcilePreInitializing(context.Background(), node, planner)
 	if err != nil {
 		t.Fatalf("error: %v", err)
@@ -1518,14 +1611,14 @@ func TestReconcilePreInitializing_NilSidecarClient_Requeues(t *testing.T) {
 	node := bootstrapReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhasePreInitializing
 
-	planner, _ := PlannerForNode(node)
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	node.Status.PreInitPlan = buildPreInitPlan(node, planner)
 	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
 
 	r, _ := newProgressionReconciler(t, nil, node)
 	r.BuildSidecarClientFn = func(_ *seiv1alpha1.SeiNode) SidecarStatusClient { return nil }
 
-	planner, _ = PlannerForNode(node)
+	planner, _ = PlannerForNode(node, testSnapshotRegion)
 	result, err := r.reconcilePreInitializing(context.Background(), node, planner)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1567,6 +1660,39 @@ func TestNeedsPreInit(t *testing.T) {
 			genesisNode(),
 			false,
 		},
+		{
+			"full node with bootstrap image but no S3",
+			func() *seiv1alpha1.SeiNode {
+				n := snapshotNode()
+				n.Spec.FullNode.Snapshot = &seiv1alpha1.SnapshotSource{
+					BootstrapImage: testBootstrapImage,
+					StateSync:      &seiv1alpha1.StateSyncSource{},
+				}
+				return n
+			}(),
+			false,
+		},
+		{
+			"full node with bootstrap image and S3 but zero target height",
+			func() *seiv1alpha1.SeiNode {
+				n := snapshotNode()
+				n.Spec.FullNode.Snapshot = &seiv1alpha1.SnapshotSource{
+					BootstrapImage: testBootstrapImage,
+					S3:             &seiv1alpha1.S3SnapshotSource{TargetHeight: 0},
+				}
+				return n
+			}(),
+			false,
+		},
+		{
+			"full node with bootstrap image and valid S3",
+			func() *seiv1alpha1.SeiNode {
+				n := snapshotNode()
+				n.Spec.FullNode.Snapshot.BootstrapImage = testBootstrapImage
+				return n
+			}(),
+			true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1574,5 +1700,35 @@ func TestNeedsPreInit(t *testing.T) {
 				t.Errorf("needsPreInit() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFullNodePlanner_Validate_BootstrapRequiresS3(t *testing.T) {
+	node := snapshotNode()
+	node.Spec.FullNode.Snapshot = &seiv1alpha1.SnapshotSource{
+		BootstrapImage: testBootstrapImage,
+		StateSync:      &seiv1alpha1.StateSyncSource{},
+	}
+	planner, err := PlannerForNode(node, testSnapshotRegion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := planner.Validate(node); err == nil {
+		t.Error("expected validation error for bootstrapImage without S3")
+	}
+}
+
+func TestValidatorPlanner_Validate_BootstrapRequiresS3(t *testing.T) {
+	node := genesisNode()
+	node.Spec.Validator.Snapshot = &seiv1alpha1.SnapshotSource{
+		BootstrapImage: testBootstrapImage,
+		StateSync:      &seiv1alpha1.StateSyncSource{},
+	}
+	planner, err := PlannerForNode(node, testSnapshotRegion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := planner.Validate(node); err == nil {
+		t.Error("expected validation error for bootstrapImage without S3")
 	}
 }

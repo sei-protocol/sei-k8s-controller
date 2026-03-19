@@ -10,13 +10,20 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-type fullNodePlanner struct{}
+type fullNodePlanner struct {
+	snapshotRegion string
+}
 
 func (p *fullNodePlanner) Mode() string { return string(seiconfig.ModeFull) }
 
 func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if node.Spec.FullNode == nil {
 		return fmt.Errorf("fullNode sub-spec is nil")
+	}
+	if snap := node.Spec.FullNode.Snapshot; snap != nil && snap.BootstrapImage != "" {
+		if snap.S3 == nil || snap.S3.TargetHeight <= 0 {
+			return fmt.Errorf("fullNode: bootstrapImage requires s3 with targetHeight > 0")
+		}
 	}
 	return nil
 }
@@ -31,7 +38,7 @@ func (p *fullNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) 
 		return p.buildConfigApply(node), nil
 	}
 	fn := node.Spec.FullNode
-	return buildSharedTask(node, fn.Peers, fn.Snapshot, taskType)
+	return buildSharedTask(node, fn.Peers, fn.Snapshot, taskType, p.snapshotRegion)
 }
 
 func (p *fullNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
