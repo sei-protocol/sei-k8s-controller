@@ -1332,15 +1332,15 @@ func TestGeneratePreInitJob_SidecarResources(t *testing.T) {
 	if len(spec.InitContainers) < 2 {
 		t.Fatalf("expected at least 2 init containers, got %d", len(spec.InitContainers))
 	}
-	sidecar := spec.InitContainers[1]
-	if sidecar.Name != "sei-sidecar" {
-		t.Fatalf("expected sei-sidecar, got %q", sidecar.Name)
+	sc := spec.InitContainers[1]
+	if sc.Name != "sei-sidecar" {
+		t.Fatalf("expected sei-sidecar, got %q", sc.Name)
 	}
-	cpuReq := sidecar.Resources.Requests[corev1.ResourceCPU]
+	cpuReq := sc.Resources.Requests[corev1.ResourceCPU]
 	if cpuReq.String() != "500m" {
 		t.Errorf("sidecar CPU request = %q, want %q", cpuReq.String(), "500m")
 	}
-	memReq := sidecar.Resources.Requests[corev1.ResourceMemory]
+	memReq := sc.Resources.Requests[corev1.ResourceMemory]
 	if memReq.String() != "512Mi" {
 		t.Errorf("sidecar memory request = %q, want %q", memReq.String(), "512Mi")
 	}
