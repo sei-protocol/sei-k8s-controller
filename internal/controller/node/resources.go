@@ -105,6 +105,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env: []corev1.EnvVar{
+			{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
 			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
 			{Name: "SEI_HOME", Value: dataDir},
 		},

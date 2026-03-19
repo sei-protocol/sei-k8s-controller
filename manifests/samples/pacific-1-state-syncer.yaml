@@ -1,0 +1,39 @@
+# SeiNode — Pacific-1 State Syncer
+#
+# Full node that bootstraps via Tendermint state sync, produces snapshots,
+# and uploads them to S3 for consumption by other nodes.
+apiVersion: sei.io/v1alpha1
+kind: SeiNode
+metadata:
+  name: pacific-1-state-syncer
+  namespace: default
+spec:
+  chainId: pacific-1
+  image: "ghcr.io/sei-protocol/sei:v6.3.0"
+
+  sidecar:
+    image: ghcr.io/sei-protocol/seictl@sha256:64f92fb5bc3f451b3cd23d95275685b7fed28ab4dff36a0182267dc77e266c49
+
+  entrypoint:
+    command: ["seid"]
+    args: ["start", "--home", "/sei"]
+
+  storage:
+    retainOnDelete: true
+
+  fullNode:
+    snapshot:
+      stateSync: {}
+    peers:
+      - ec2Tags:
+          region: eu-central-1
+          tags:
+            ChainIdentifier: pacific-1
+            Component: state-syncer
+    snapshotGeneration:
+      keepRecent: 5
+      destination:
+        s3:
+          bucket: sei-node-mvp
+          prefix: snapshot/
+          region: eu-central-1

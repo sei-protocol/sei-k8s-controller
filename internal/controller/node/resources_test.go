@@ -307,6 +307,7 @@ func TestSidecarContainer_EnvVars(t *testing.T) {
 	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
+	g.Expect(envValue(sc.Env, "SEI_CHAIN_ID")).To(Equal(node.Spec.ChainID))
 	g.Expect(envValue(sc.Env, "SEI_SIDECAR_PORT")).To(Equal("7777"))
 	g.Expect(envValue(sc.Env, "SEI_HOME")).To(Equal(dataDir))
 }
