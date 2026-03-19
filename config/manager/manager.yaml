@@ -32,7 +32,7 @@ spec:
           - --metrics-bind-address=:8443
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:2f01aa578e4e7e9e1d8bed8c1e32b9e9dcc3e8ae962115868c7d0ac223a01719
+        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:3a54810f92d928e782e6bcf54bf181866ac922df9ca703b97d6addeeca2c5f09
         name: manager
         env:
           - name: SEI_NODEPOOL_NAME
@@ -59,6 +59,8 @@ spec:
             value: "4"
           - name: SEI_RESOURCE_MEM_DEFAULT
             value: 32Gi
+          - name: SEI_SNAPSHOT_REGION
+            value: eu-central-1
         ports: []
         securityContext:
           readOnlyRootFilesystem: true
