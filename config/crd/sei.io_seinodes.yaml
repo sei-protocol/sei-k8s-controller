@@ -229,19 +229,25 @@ spec:
                           after snapshot restore.
                         format: int64
                         type: integer
+                      bootstrapImage:
+                        description: |-
+                          BootstrapImage is a seid container image used for the PreInitPlan Job.
+                          When set, the controller runs a one-shot Job with this image and the
+                          seictl sidecar to prepare the node's data PVC before the main StatefulSet
+                          starts. The Job restores a snapshot, applies config, and syncs to the
+                          target height.
+                        type: string
                       s3:
                         description: S3 downloads a snapshot archive from an S3 bucket.
                         properties:
-                          region:
-                            default: us-east-1
-                            description: Region is the AWS region for S3 access.
-                            type: string
-                          uri:
-                            description: |-
-                              URI of a specific snapshot archive in s3://bucket/prefix format.
-                              When omitted, the snapshot is resolved from the well-known
-                              state-sync bucket for the chain ID ({chainId}-snapshots/state-sync/).
-                            type: string
+                          targetHeight:
+                            description: TargetHeight is the block height the node
+                              should sync to after restoring.
+                            format: int64
+                            minimum: 1
+                            type: integer
+                        required:
+                        - targetHeight
                         type: object
                       stateSync:
                         description: StateSync fetches snapshot chunks from peers
@@ -422,19 +428,25 @@ spec:
                           after snapshot restore.
                         format: int64
                         type: integer
+                      bootstrapImage:
+                        description: |-
+                          BootstrapImage is a seid container image used for the PreInitPlan Job.
+                          When set, the controller runs a one-shot Job with this image and the
+                          seictl sidecar to prepare the node's data PVC before the main StatefulSet
+                          starts. The Job restores a snapshot, applies config, and syncs to the
+                          target height.
+                        type: string
                       s3:
                         description: S3 downloads a snapshot archive from an S3 bucket.
                         properties:
-                          region:
-                            default: us-east-1
-                            description: Region is the AWS region for S3 access.
-                            type: string
-                          uri:
-                            description: |-
-                              URI of a specific snapshot archive in s3://bucket/prefix format.
-                              When omitted, the snapshot is resolved from the well-known
-                              state-sync bucket for the chain ID ({chainId}-snapshots/state-sync/).
-                            type: string
+                          targetHeight:
+                            description: TargetHeight is the block height the node
+                              should sync to after restoring.
+                            format: int64
+                            minimum: 1
+                            type: integer
+                        required:
+                        - targetHeight
                         type: object
                       stateSync:
                         description: StateSync fetches snapshot chunks from peers
@@ -599,19 +611,25 @@ spec:
                           after snapshot restore.
                         format: int64
                         type: integer
+                      bootstrapImage:
+                        description: |-
+                          BootstrapImage is a seid container image used for the PreInitPlan Job.
+                          When set, the controller runs a one-shot Job with this image and the
+                          seictl sidecar to prepare the node's data PVC before the main StatefulSet
+                          starts. The Job restores a snapshot, applies config, and syncs to the
+                          target height.
+                        type: string
                       s3:
                         description: S3 downloads a snapshot archive from an S3 bucket.
                         properties:
-                          region:
-                            default: us-east-1
-                            description: Region is the AWS region for S3 access.
-                            type: string
-                          uri:
-                            description: |-
-                              URI of a specific snapshot archive in s3://bucket/prefix format.
-                              When omitted, the snapshot is resolved from the well-known
-                              state-sync bucket for the chain ID ({chainId}-snapshots/state-sync/).
-                            type: string
+                          targetHeight:
+                            description: TargetHeight is the block height the node
+                              should sync to after restoring.
+                            format: int64
+                            minimum: 1
+                            type: integer
+                        required:
+                        - targetHeight
                         type: object
                       stateSync:
                         description: StateSync fetches snapshot chunks from peers
@@ -797,10 +815,56 @@ spec:
                 description: Phase is the high-level lifecycle state.
                 enum:
                 - Pending
+                - PreInitializing
+                - Initializing
                 - Running
                 - Failed
                 - Terminating
                 type: string
+              preInitPlan:
+                description: PreInitPlan tracks the pre-initialization task sequence
+                  (bootstrap Job).
+                properties:
+                  phase:
+                    description: Phase is the overall state of the plan.
+                    enum:
+                    - Active
+                    - Complete
+                    - Failed
+                    type: string
+                  tasks:
+                    description: Tasks is the ordered list of tasks to execute.
+                    items:
+                      description: PlannedTask is a single task within a TaskPlan.
+                      properties:
+                        error:
+                          description: Error is the error message if the task failed.
+                          type: string
+                        status:
+                          description: Status is the current state of this task.
+                          enum:
+                          - Pending
+                          - Submitted
+                          - Complete
+                          - Failed
+                          type: string
+                        taskID:
+                          description: TaskID is the UUID assigned by the sidecar
+                            when the task was submitted.
+                          type: string
+                        type:
+                          description: Type identifies the sidecar task (e.g. "snapshot-restore",
+                            "config-patch").
+                          type: string
+                      required:
+                      - status
+                      - type
+                      type: object
+                    type: array
+                required:
+                - phase
+                - tasks
+                type: object
               scheduledTasks:
                 additionalProperties:
                   type: string

@@ -41,8 +41,7 @@ func newSnapshotNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unp
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{
-						URI:    "s3://sei-snapshots/pacific-1/",
-						Region: "eu-central-1",
+						TargetHeight: 100000000,
 					},
 					TrustPeriod: "9999h0m0s",
 				},

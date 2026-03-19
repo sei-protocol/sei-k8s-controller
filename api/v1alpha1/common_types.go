@@ -57,24 +57,24 @@ type SnapshotSource struct {
 	// after snapshot restore.
 	// +optional
 	BackfillBlocks int64 `json:"backfillBlocks,omitempty"`
+
+	// BootstrapImage is a seid container image used for the PreInitPlan Job.
+	// When set, the controller runs a one-shot Job with this image and the
+	// seictl sidecar to prepare the node's data PVC before the main StatefulSet
+	// starts. The Job restores a snapshot, applies config, and syncs to the
+	// target height.
+	// +optional
+	BootstrapImage string `json:"bootstrapImage,omitempty"`
 }
 
 // S3SnapshotSource configures snapshot download from an S3 bucket.
-// When URI is set the controller uses that exact archive. When URI is
-// omitted the controller infers the bucket from the chain ID using the
-// well-known convention {chainId}-snapshots/state-sync/ and selects the
-// latest snapshot via latest.txt.
+// The controller infers the bucket from the chain ID using the well-known
+// convention {chainId}-snapshots/state-sync/ and selects the latest snapshot
+// via latest.txt.
 type S3SnapshotSource struct {
-	// URI of a specific snapshot archive in s3://bucket/prefix format.
-	// When omitted, the snapshot is resolved from the well-known
-	// state-sync bucket for the chain ID ({chainId}-snapshots/state-sync/).
-	// +optional
-	URI string `json:"uri,omitempty"`
-
-	// Region is the AWS region for S3 access.
-	// +optional
-	// +kubebuilder:default="us-east-1"
-	Region string `json:"region,omitempty"`
+	// TargetHeight is the block height the node should sync to after restoring.
+	// +kubebuilder:validation:Minimum=1
+	TargetHeight int64 `json:"targetHeight"`
 }
 
 // StateSyncSource enables Tendermint state sync, which fetches snapshot

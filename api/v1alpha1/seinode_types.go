@@ -113,16 +113,32 @@ type TaskPlan struct {
 	Tasks []PlannedTask `json:"tasks"`
 }
 
+// SeiNodePhase represents the high-level lifecycle state of a SeiNode.
+// +kubebuilder:validation:Enum=Pending;PreInitializing;Initializing;Running;Failed;Terminating
+type SeiNodePhase string
+
+const (
+	PhasePending         SeiNodePhase = "Pending"
+	PhasePreInitializing SeiNodePhase = "PreInitializing"
+	PhaseInitializing    SeiNodePhase = "Initializing"
+	PhaseRunning         SeiNodePhase = "Running"
+	PhaseFailed          SeiNodePhase = "Failed"
+	PhaseTerminating     SeiNodePhase = "Terminating"
+)
+
 // SeiNodeStatus defines the observed state of a SeiNode.
 type SeiNodeStatus struct {
 	// Phase is the high-level lifecycle state.
-	// +kubebuilder:validation:Enum=Pending;Running;Failed;Terminating
-	Phase string `json:"phase,omitempty"`
+	Phase SeiNodePhase `json:"phase,omitempty"`
 
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// PreInitPlan tracks the pre-initialization task sequence (bootstrap Job).
+	// +optional
+	PreInitPlan *TaskPlan `json:"preInitPlan,omitempty"`
 
 	// InitPlan tracks the initialization task sequence for this node.
 	// +optional

@@ -79,8 +79,11 @@ func TestNodeReconcile_GenesisNode_CreateStatefulSetAndService(t *testing.T) {
 	node := newGenesisNode("mynet-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
-	g.Expect(err).NotTo(HaveOccurred())
+	// Drive through Pending -> PreInitializing (empty) -> Initializing.
+	for range 4 {
+		_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
+		g.Expect(err).NotTo(HaveOccurred())
+	}
 
 	// StatefulSet created
 	sts := &appsv1.StatefulSet{}
@@ -128,9 +131,11 @@ func TestNodeReconcile_StatefulSet_Idempotent(t *testing.T) {
 	node := newGenesisNode("mynet-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	_, _ = r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
-	_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
-	g.Expect(err).NotTo(HaveOccurred())
+	// Drive through Pending -> PreInitializing (empty) -> Initializing, then one more for idempotency.
+	for range 5 {
+		_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
+		g.Expect(err).NotTo(HaveOccurred())
+	}
 
 	stsList := &appsv1.StatefulSetList{}
 	g.Expect(c.List(ctx, stsList, client.InNamespace("default"))).To(Succeed())
@@ -159,8 +164,11 @@ func TestNodeReconcile_SnapshotNode_StatefulSetHasInitContainers(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
-	g.Expect(err).NotTo(HaveOccurred())
+	// Drive through Pending -> PreInitializing (empty) -> Initializing.
+	for range 4 {
+		_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
+		g.Expect(err).NotTo(HaveOccurred())
+	}
 
 	sts := &appsv1.StatefulSet{}
 	g.Expect(c.Get(ctx, types.NamespacedName{Name: "snap-0", Namespace: "default"}, sts)).To(Succeed())

@@ -330,12 +330,12 @@ func TestUpdateStatus_AggregatesSeiNodePhases(t *testing.T) {
 	// Update SeiNode statuses (needed because WithStatusSubresource separates them)
 	n0 := &seiv1alpha1.SeiNode{}
 	g.Expect(c.Get(ctx, types.NamespacedName{Name: "testnet-0", Namespace: "default"}, n0)).To(Succeed())
-	n0.Status.Phase = "Running"
+	n0.Status.Phase = seiv1alpha1.PhaseRunning
 	g.Expect(c.Status().Update(ctx, n0)).To(Succeed())
 
 	n1 := &seiv1alpha1.SeiNode{}
 	g.Expect(c.Get(ctx, types.NamespacedName{Name: "testnet-1", Namespace: "default"}, n1)).To(Succeed())
-	n1.Status.Phase = "Pending"
+	n1.Status.Phase = seiv1alpha1.PhasePending
 	g.Expect(c.Status().Update(ctx, n1)).To(Succeed())
 
 	g.Expect(r.updateStatus(ctx, sn)).To(Succeed())
@@ -366,7 +366,7 @@ func TestUpdateStatus_AllNodesRunning(t *testing.T) {
 	for _, name := range []string{"testnet-0", "testnet-1"} {
 		n := &seiv1alpha1.SeiNode{}
 		g.Expect(c.Get(ctx, types.NamespacedName{Name: name, Namespace: "default"}, n)).To(Succeed())
-		n.Status.Phase = "Running"
+		n.Status.Phase = seiv1alpha1.PhaseRunning
 		g.Expect(c.Status().Update(ctx, n)).To(Succeed())
 	}
 

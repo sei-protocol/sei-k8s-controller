@@ -20,27 +20,66 @@ type NodePlanner interface {
 	BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan
 
 	// BuildTask constructs the sidecar TaskBuilder for a given task type.
-	BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder
+	BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error)
 
 	// Mode returns the sei-config mode string for config-apply.
 	Mode() string
 }
 
 // PlannerForNode returns the appropriate NodePlanner based on which mode
-// sub-spec is populated on the SeiNode.
-func PlannerForNode(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
+// sub-spec is populated on the SeiNode. snapshotRegion is the default AWS
+// region used when constructing snapshot-restore tasks.
+func PlannerForNode(node *seiv1alpha1.SeiNode, snapshotRegion string) (NodePlanner, error) {
 	switch {
 	case node.Spec.FullNode != nil:
-		return &fullNodePlanner{}, nil
+		return &fullNodePlanner{snapshotRegion: snapshotRegion}, nil
 	case node.Spec.Archive != nil:
-		return &archiveNodePlanner{}, nil
+		return &archiveNodePlanner{snapshotRegion: snapshotRegion}, nil
 	case node.Spec.Replayer != nil:
-		return &replayerPlanner{}, nil
+		return &replayerPlanner{snapshotRegion: snapshotRegion}, nil
 	case node.Spec.Validator != nil:
-		return &validatorPlanner{}, nil
+		return &validatorPlanner{snapshotRegion: snapshotRegion}, nil
 	default:
 		return nil, fmt.Errorf("no mode sub-spec set on SeiNode %s/%s", node.Namespace, node.Name)
 	}
+}
+
+// snapshotSourceFor extracts the SnapshotSource from the populated mode sub-spec.
+// Returns nil when the mode doesn't use a snapshot.
+func snapshotSourceFor(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotSource {
+	switch {
+	case node.Spec.FullNode != nil:
+		return node.Spec.FullNode.Snapshot
+	case node.Spec.Validator != nil:
+		return node.Spec.Validator.Snapshot
+	case node.Spec.Replayer != nil:
+		return &node.Spec.Replayer.Snapshot
+	default:
+		return nil
+	}
+}
+
+// peersFor extracts the PeerSource list from whichever node mode is set.
+func peersFor(node *seiv1alpha1.SeiNode) []seiv1alpha1.PeerSource {
+	switch {
+	case node.Spec.FullNode != nil:
+		return node.Spec.FullNode.Peers
+	case node.Spec.Validator != nil:
+		return node.Spec.Validator.Peers
+	case node.Spec.Replayer != nil:
+		return node.Spec.Replayer.Peers
+	case node.Spec.Archive != nil:
+		return node.Spec.Archive.Peers
+	default:
+		return nil
+	}
+}
+
+// needsPreInit returns true when the node requires a PreInitPlan Job.
+func needsPreInit(node *seiv1alpha1.SeiNode) bool {
+	snap := snapshotSourceFor(node)
+	return snap != nil && snap.BootstrapImage != "" &&
+		snap.S3 != nil && snap.S3.TargetHeight > 0
 }
 
 // snapshotGeneration extracts the SnapshotGenerationConfig from the populated
@@ -139,41 +178,36 @@ func buildSharedTask(
 	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
 	taskType string,
-) sidecar.TaskBuilder {
+	snapshotRegion string,
+) (sidecar.TaskBuilder, error) {
 	switch taskType {
 	case taskSnapshotRestore:
-		return snapshotRestoreTask(snap, node.Spec.ChainID)
+		return snapshotRestoreTask(snap, node.Spec.ChainID, snapshotRegion), nil
 	case taskDiscoverPeers:
-		return discoverPeersTask(peers)
+		return discoverPeersTask(peers), nil
 	case taskConfigureGenesis:
-		return configureGenesisBuilder(node)
+		return configureGenesisBuilder(node), nil
 	case taskConfigureStateSync:
-		return configureStateSyncTask(snap)
+		return configureStateSyncTask(snap), nil
 	case taskConfigValidate:
-		return sidecar.ConfigValidateTask{}
+		return sidecar.ConfigValidateTask{}, nil
 	case taskMarkReady:
-		return sidecar.MarkReadyTask{}
+		return sidecar.MarkReadyTask{}, nil
+	case taskAwaitCondition:
+		return awaitConditionTask(node)
 	default:
-		return sidecar.MarkReadyTask{}
+		return nil, fmt.Errorf("buildSharedTask: unhandled task type %q", taskType)
 	}
 }
 
-func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource, chainID string) sidecar.TaskBuilder {
+func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource, chainID string, region string) sidecar.TaskBuilder {
 	if snap == nil || snap.S3 == nil {
 		return sidecar.SnapshotRestoreTask{}
 	}
-	s3 := snap.S3
-	var bucket, prefix string
-	if s3.URI != "" {
-		bucket, prefix = parseS3URI(s3.URI)
-	} else {
-		bucket = chainID + "-snapshots"
-		prefix = "state-sync/"
-	}
 	return sidecar.SnapshotRestoreTask{
-		Bucket:  bucket,
-		Prefix:  prefix,
-		Region:  s3.Region,
+		Bucket:  chainID + "-snapshots",
+		Prefix:  "state-sync/",
+		Region:  region,
 		ChainID: chainID,
 	}
 }

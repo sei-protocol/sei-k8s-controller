@@ -148,6 +148,9 @@ func main() {
 	if v := os.Getenv("SEI_RESOURCE_MEM_DEFAULT"); v != "" {
 		platform.ResourceMemDefault = v
 	}
+	if v := os.Getenv("SEI_SNAPSHOT_REGION"); v != "" {
+		platform.SnapshotRegion = v
+	}
 
 	if err := (&nodecontroller.SeiNodeReconciler{
 		Client:   mgr.GetClient(),

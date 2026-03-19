@@ -311,7 +311,7 @@ func TestNodepoolPhase(t *testing.T) {
 		name       string
 		ready      int32
 		total      int32
-		nodePhases []string
+		nodePhases []seiv1alpha1.SeiNodePhase
 		wantPhase  string
 	}{
 		{
@@ -323,28 +323,28 @@ func TestNodepoolPhase(t *testing.T) {
 			name:       "all nodes ready",
 			ready:      2,
 			total:      2,
-			nodePhases: []string{"Running", "Running"},
+			nodePhases: []seiv1alpha1.SeiNodePhase{seiv1alpha1.PhaseRunning, seiv1alpha1.PhaseRunning},
 			wantPhase:  "Running",
 		},
 		{
 			name:       "partial ready — no failures",
 			ready:      1,
 			total:      2,
-			nodePhases: []string{"Running", "Pending"},
+			nodePhases: []seiv1alpha1.SeiNodePhase{seiv1alpha1.PhaseRunning, seiv1alpha1.PhasePending},
 			wantPhase:  "Pending",
 		},
 		{
 			name:       "any node failed",
 			ready:      1,
 			total:      2,
-			nodePhases: []string{"Running", "Failed"},
+			nodePhases: []seiv1alpha1.SeiNodePhase{seiv1alpha1.PhaseRunning, seiv1alpha1.PhaseFailed},
 			wantPhase:  "Failed",
 		},
 		{
 			name:       "no nodes ready",
 			ready:      0,
 			total:      2,
-			nodePhases: []string{"Pending", "Pending"},
+			nodePhases: []seiv1alpha1.SeiNodePhase{seiv1alpha1.PhasePending, seiv1alpha1.PhasePending},
 			wantPhase:  "Pending",
 		},
 	}

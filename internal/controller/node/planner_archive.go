@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"strconv"
 
 	seiconfig "github.com/sei-protocol/sei-config"
@@ -9,11 +10,16 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-type archiveNodePlanner struct{}
+type archiveNodePlanner struct {
+	snapshotRegion string
+}
 
 func (p *archiveNodePlanner) Mode() string { return string(seiconfig.ModeArchive) }
 
-func (p *archiveNodePlanner) Validate(_ *seiv1alpha1.SeiNode) error {
+func (p *archiveNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
+	if node.Spec.Archive == nil {
+		return fmt.Errorf("archive sub-spec is nil")
+	}
 	return nil
 }
 
@@ -21,11 +27,11 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.T
 	return buildPlan(node, node.Spec.Archive.Peers, nil)
 }
 
-func (p *archiveNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) sidecar.TaskBuilder {
+func (p *archiveNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {
 	if taskType == taskConfigApply {
-		return p.buildConfigApply(node)
+		return p.buildConfigApply(node), nil
 	}
-	return buildSharedTask(node, node.Spec.Archive.Peers, nil, taskType)
+	return buildSharedTask(node, node.Spec.Archive.Peers, nil, taskType, p.snapshotRegion)
 }
 
 func (p *archiveNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
