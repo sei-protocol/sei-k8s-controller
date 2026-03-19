@@ -30,7 +30,8 @@ func driveTask(
 	node := fetch()
 	planner, err := PlannerForNode(node)
 	g.Expect(err).NotTo(HaveOccurred())
-	_, err = r.reconcileSidecarProgression(context.Background(), node, planner)
+	sc := r.buildSidecarClient(node)
+	_, err = r.executePlan(context.Background(), node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(mock.submitted).To(HaveLen(1))
 	g.Expect(mock.submitted[0].Type).To(Equal(taskType))
@@ -40,7 +41,8 @@ func driveTask(
 	}
 	node = fetch()
 	planner, _ = PlannerForNode(node)
-	_, err = r.reconcileSidecarProgression(context.Background(), node, planner)
+	sc = r.buildSidecarClient(node)
+	_, err = r.executePlan(context.Background(), node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 }
 
@@ -59,12 +61,20 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 		return n
 	}
 
-	// First reconcile creates the plan and submits snapshot-restore.
+	// Create plan via reconcilePending
+	_, err := r.reconcilePending(ctx, node, planner)
+	g.Expect(err).NotTo(HaveOccurred())
+	node = fetch()
+	g.Expect(node.Status.InitPlan).NotTo(BeNil())
+	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhasePreInitializing))
+
+	// Drive the first task (snapshot-restore submit)
 	taskID := uuid.New()
 	mock.submitID = taskID
-	_, err := r.reconcileSidecarProgression(ctx, node, planner)
+	planner, _ = PlannerForNode(node)
+	sc := r.buildSidecarClient(node)
+	_, err = r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(fetch().Status.InitPlan).NotTo(BeNil())
 	g.Expect(mock.submitted[0].Type).To(Equal(taskSnapshotRestore))
 
 	// Complete snapshot-restore.
@@ -73,7 +83,8 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	}
 	updated := fetch()
 	planner, _ = PlannerForNode(updated)
-	_, err = r.reconcileSidecarProgression(ctx, updated, planner)
+	sc = r.buildSidecarClient(updated)
+	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// Drive remaining tasks: config-apply, state-sync patch, validate, ready.
@@ -82,10 +93,11 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	driveTask(t, g, r, mock, fetch, taskConfigValidate)
 	driveTask(t, g, r, mock, fetch, taskMarkReady)
 
-	// One more reconcile to transition from "all tasks done" to plan Complete.
+	// Final plan completion reconcile
 	updated = fetch()
 	planner, _ = PlannerForNode(updated)
-	_, err = r.reconcileSidecarProgression(ctx, updated, planner)
+	sc = r.buildSidecarClient(updated)
+	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(fetch().Status.InitPlan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
 }
@@ -105,10 +117,18 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 		return n
 	}
 
-	// First reconcile creates plan and submits config-apply.
+	// Create plan via reconcilePending
+	_, err := r.reconcilePending(ctx, node, planner)
+	g.Expect(err).NotTo(HaveOccurred())
+	node = fetch()
+	g.Expect(node.Status.InitPlan).NotTo(BeNil())
+
+	// Drive the first task (config-apply submit)
 	taskID := uuid.New()
 	mock.submitID = taskID
-	_, err := r.reconcileSidecarProgression(ctx, node, planner)
+	planner, _ = PlannerForNode(node)
+	sc := r.buildSidecarClient(node)
+	_, err = r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(mock.submitted[0].Type).To(Equal(taskConfigApply))
 
@@ -118,7 +138,8 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 	}
 	updated := fetch()
 	planner, _ = PlannerForNode(updated)
-	_, err = r.reconcileSidecarProgression(ctx, updated, planner)
+	sc = r.buildSidecarClient(updated)
+	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// Drive config-validate and mark-ready.
@@ -128,7 +149,8 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 	// Complete the plan.
 	updated = fetch()
 	planner, _ = PlannerForNode(updated)
-	_, err = r.reconcileSidecarProgression(ctx, updated, planner)
+	sc = r.buildSidecarClient(updated)
+	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(fetch().Status.InitPlan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
 }
@@ -148,10 +170,18 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 		return n
 	}
 
-	// First reconcile creates plan and submits snapshot-restore.
+	// Create plan via reconcilePending
+	_, err := r.reconcilePending(ctx, node, planner)
+	g.Expect(err).NotTo(HaveOccurred())
+	node = fetch()
+	g.Expect(node.Status.InitPlan).NotTo(BeNil())
+
+	// Drive the first task (snapshot-restore submit)
 	taskID := uuid.New()
 	mock.submitID = taskID
-	_, err := r.reconcileSidecarProgression(ctx, node, planner)
+	planner, _ = PlannerForNode(node)
+	sc := r.buildSidecarClient(node)
+	_, err = r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// Fail the task.
@@ -160,7 +190,8 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 	}
 	updated := fetch()
 	planner, _ = PlannerForNode(updated)
-	_, err = r.reconcileSidecarProgression(ctx, updated, planner)
+	sc = r.buildSidecarClient(updated)
+	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	updated = fetch()
@@ -171,7 +202,8 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 	// Subsequent reconciles are no-ops.
 	mock.submitted = nil
 	planner, _ = PlannerForNode(updated)
-	_, err = r.reconcileSidecarProgression(ctx, updated, planner)
+	sc = r.buildSidecarClient(updated)
+	_, err = r.executePlan(ctx, updated, updated.Status.InitPlan, planner, sc)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(mock.submitted).To(BeEmpty())
 }

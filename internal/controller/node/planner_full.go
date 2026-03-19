@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"strconv"
 
 	seiconfig "github.com/sei-protocol/sei-config"
@@ -13,7 +14,10 @@ type fullNodePlanner struct{}
 
 func (p *fullNodePlanner) Mode() string { return string(seiconfig.ModeFull) }
 
-func (p *fullNodePlanner) Validate(_ *seiv1alpha1.SeiNode) error {
+func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
+	if node.Spec.FullNode == nil {
+		return fmt.Errorf("fullNode sub-spec is nil")
+	}
 	return nil
 }
 

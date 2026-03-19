@@ -72,33 +72,34 @@ func currentTask(plan *seiv1alpha1.TaskPlan) *seiv1alpha1.PlannedTask {
 	return nil
 }
 
-// reconcileSidecarProgression drives the TaskPlan through to completion.
-func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, node *seiv1alpha1.SeiNode, planner NodePlanner) (ctrl.Result, error) {
-	sc := r.buildSidecarClient(node)
-
-	// Build the plan on first encounter.
-	if node.Status.InitPlan == nil {
-		plan := planner.BuildPlan(node)
-		patch := client.MergeFrom(node.DeepCopy())
-		node.Status.InitPlan = plan
-		if err := r.Status().Patch(ctx, node, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("initializing task plan: %w", err)
-		}
+// executePlan drives a TaskPlan through to completion. It does not create
+// plans or manage phase transitions -- it only advances tasks within the
+// given plan. The plan pointer must reference a field inside node.Status
+// so that MergeFrom patching captures mutations.
+func (r *SeiNodeReconciler) executePlan(
+	ctx context.Context,
+	node *seiv1alpha1.SeiNode,
+	plan *seiv1alpha1.TaskPlan,
+	planner NodePlanner,
+	sc SidecarStatusClient,
+) (ctrl.Result, error) {
+	if plan == nil {
+		return ctrl.Result{}, fmt.Errorf("executePlan called with nil plan for node %s/%s", node.Namespace, node.Name)
 	}
 
-	plan := node.Status.InitPlan
-
-	// Terminal states — nothing to do.
 	switch plan.Phase {
-	case seiv1alpha1.TaskPlanComplete:
-		return r.reconcileRuntimeTasks(ctx, node, sc)
-	case seiv1alpha1.TaskPlanFailed:
+	case seiv1alpha1.TaskPlanComplete, seiv1alpha1.TaskPlanFailed:
 		return ctrl.Result{}, nil
 	}
 
 	task := currentTask(plan)
 	if task == nil {
-		return r.markPlanComplete(ctx, node)
+		patch := client.MergeFrom(node.DeepCopy())
+		plan.Phase = seiv1alpha1.TaskPlanComplete
+		if err := r.Status().Patch(ctx, node, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	switch task.Status {
@@ -106,7 +107,7 @@ func (r *SeiNodeReconciler) reconcileSidecarProgression(ctx context.Context, nod
 		return r.submitTask(ctx, node, sc, planner, task)
 
 	case seiv1alpha1.PlannedTaskSubmitted:
-		return r.pollTask(ctx, node, sc, task)
+		return r.pollTask(ctx, node, sc, plan, task)
 
 	default:
 		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
@@ -143,11 +144,12 @@ func (r *SeiNodeReconciler) pollTask(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
 	sc SidecarStatusClient,
+	plan *seiv1alpha1.TaskPlan,
 	task *seiv1alpha1.PlannedTask,
 ) (ctrl.Result, error) {
 	taskID, err := uuid.Parse(task.TaskID)
 	if err != nil {
-		return r.failTask(ctx, node, task, fmt.Sprintf("invalid task UUID %q", task.TaskID))
+		return r.failTask(ctx, node, plan, task, fmt.Sprintf("invalid task UUID %q", task.TaskID))
 	}
 
 	result, err := sc.GetTask(ctx, taskID)
@@ -166,7 +168,7 @@ func (r *SeiNodeReconciler) pollTask(
 		if result.Error != nil && *result.Error != "" {
 			errMsg = *result.Error
 		}
-		return r.failTask(ctx, node, task, errMsg)
+		return r.failTask(ctx, node, plan, task, errMsg)
 
 	case sidecar.Completed:
 		patch := client.MergeFrom(node.DeepCopy())
@@ -174,7 +176,7 @@ func (r *SeiNodeReconciler) pollTask(
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking task complete: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: 1}, nil
+		return ctrl.Result{Requeue: true}, nil
 
 	default:
 		log.FromContext(ctx).Info("unexpected task status, will retry", "task", task.Type, "status", result.Status)
@@ -186,6 +188,7 @@ func (r *SeiNodeReconciler) pollTask(
 func (r *SeiNodeReconciler) failTask(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
+	plan *seiv1alpha1.TaskPlan,
 	task *seiv1alpha1.PlannedTask,
 	errMsg string,
 ) (ctrl.Result, error) {
@@ -194,21 +197,11 @@ func (r *SeiNodeReconciler) failTask(
 	patch := client.MergeFrom(node.DeepCopy())
 	task.Status = seiv1alpha1.PlannedTaskFailed
 	task.Error = errMsg
-	node.Status.InitPlan.Phase = seiv1alpha1.TaskPlanFailed
+	plan.Phase = seiv1alpha1.TaskPlanFailed
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("marking task failed: %w", err)
 	}
 	return ctrl.Result{}, nil
-}
-
-// markPlanComplete transitions the plan to Complete.
-func (r *SeiNodeReconciler) markPlanComplete(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
-	patch := client.MergeFrom(node.DeepCopy())
-	node.Status.InitPlan.Phase = seiv1alpha1.TaskPlanComplete
-	if err := r.Status().Patch(ctx, node, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
-	}
-	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
 
 // reconcileRuntimeTasks ensures all scheduled tasks are submitted exactly

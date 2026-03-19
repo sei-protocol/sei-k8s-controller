@@ -28,10 +28,10 @@ const (
 	genesisJobPollInterval  = 10 * time.Second
 	controllerName          = "seinodepool"
 
-	phasePending     = "Pending"
-	phaseRunning     = "Running"
-	phaseFailed      = "Failed"
-	phaseTerminating = "Terminating"
+	phasePending     = string(seiv1alpha1.PhasePending)
+	phaseRunning     = string(seiv1alpha1.PhaseRunning)
+	phaseFailed      = string(seiv1alpha1.PhaseFailed)
+	phaseTerminating = string(seiv1alpha1.PhaseTerminating)
 )
 
 // SeiNodePoolReconciler reconciles a SeiNodePool object.
@@ -455,7 +455,7 @@ func (r *SeiNodePoolReconciler) updateStatus(ctx context.Context, sn *seiv1alpha
 	nodeStatuses := make([]seiv1alpha1.NodeStatus, 0, len(nodeList.Items))
 	for i := range nodeList.Items {
 		node := &nodeList.Items[i]
-		ready := node.Status.Phase == phaseRunning
+		ready := node.Status.Phase == seiv1alpha1.PhaseRunning
 		if ready {
 			readyNodes++
 		}
@@ -482,7 +482,7 @@ func nodepoolPhase(readyNodes, totalNodes int32, nodeList *seiv1alpha1.SeiNodeLi
 		return phaseRunning
 	}
 	for i := range nodeList.Items {
-		if nodeList.Items[i].Status.Phase == phaseFailed {
+		if nodeList.Items[i].Status.Phase == seiv1alpha1.PhaseFailed {
 			return phaseFailed
 		}
 	}

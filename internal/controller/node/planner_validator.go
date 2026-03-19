@@ -1,6 +1,8 @@
 package node
 
 import (
+	"fmt"
+
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
@@ -11,7 +13,10 @@ type validatorPlanner struct{}
 
 func (p *validatorPlanner) Mode() string { return string(seiconfig.ModeValidator) }
 
-func (p *validatorPlanner) Validate(_ *seiv1alpha1.SeiNode) error {
+func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
+	if node.Spec.Validator == nil {
+		return fmt.Errorf("validator sub-spec is nil")
+	}
 	return nil
 }
 

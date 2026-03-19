@@ -6,6 +6,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -13,6 +14,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -73,6 +75,7 @@ type SeiNodeReconciler struct {
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
@@ -107,13 +110,85 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, fmt.Errorf("ensuring data PVC: %w", err)
 		}
 	}
+
+	switch node.Status.Phase {
+	case "", seiv1alpha1.PhasePending:
+		return r.reconcilePending(ctx, node, planner)
+	case seiv1alpha1.PhasePreInitializing:
+		return r.reconcilePreInitializing(ctx, node, planner)
+	case seiv1alpha1.PhaseInitializing:
+		return r.reconcileInitializing(ctx, node, planner)
+	case seiv1alpha1.PhaseRunning:
+		return r.reconcileRunning(ctx, node)
+	case seiv1alpha1.PhaseFailed:
+		return ctrl.Result{}, nil
+	default:
+		return ctrl.Result{}, nil
+	}
+}
+
+// reconcilePending creates all plans up front and selects the starting phase.
+func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alpha1.SeiNode, planner NodePlanner) (ctrl.Result, error) {
+	patch := client.MergeFrom(node.DeepCopy())
+
+	node.Status.PreInitPlan = buildPreInitPlan(node, planner)
+	node.Status.InitPlan = planner.BuildPlan(node)
+	node.Status.Phase = seiv1alpha1.PhasePreInitializing
+
+	if err := r.Status().Patch(ctx, node, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("initializing plans: %w", err)
+	}
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// reconcileInitializing ensures the StatefulSet and Service exist, then drives
+// the InitPlan to completion.
+func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *seiv1alpha1.SeiNode, planner NodePlanner) (ctrl.Result, error) {
 	if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
 	}
 	if err := r.reconcileNodeService(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
 	}
-	return r.reconcileSidecarProgression(ctx, node, planner)
+
+	sc := r.buildSidecarClient(node)
+	if sc == nil {
+		log.FromContext(ctx).Info("sidecar not reachable yet, will retry")
+		return ctrl.Result{RequeueAfter: bootstrapPollInterval}, nil
+	}
+
+	result, err := r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
+	if err != nil {
+		return result, err
+	}
+
+	if node.Status.InitPlan.Phase == seiv1alpha1.TaskPlanComplete {
+		return r.setPhase(ctx, node, seiv1alpha1.PhaseRunning)
+	}
+	if node.Status.InitPlan.Phase == seiv1alpha1.TaskPlanFailed {
+		return r.setPhase(ctx, node, seiv1alpha1.PhaseFailed)
+	}
+	return result, nil
+}
+
+// reconcileRunning handles runtime tasks (scheduled uploads, exports).
+func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	sc := r.buildSidecarClient(node)
+	if sc == nil {
+		log.FromContext(ctx).Info("sidecar not reachable, will retry")
+		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
+	}
+	return r.reconcileRuntimeTasks(ctx, node, sc)
+}
+
+// setPhase transitions the node to a new phase.
+func (r *SeiNodeReconciler) setPhase(ctx context.Context, node *seiv1alpha1.SeiNode, phase seiv1alpha1.SeiNodePhase) (ctrl.Result, error) {
+	patch := client.MergeFrom(node.DeepCopy())
+	node.Status.Phase = phase
+	if err := r.Status().Patch(ctx, node, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("setting phase to %s: %w", phase, err)
+	}
+	return ctrl.Result{Requeue: true}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -121,6 +196,7 @@ func (r *SeiNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&seiv1alpha1.SeiNode{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&batchv1.Job{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Named(seiNodeControllerName).
@@ -141,7 +217,7 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 	}
 
 	patch := client.MergeFrom(node.DeepCopy())
-	node.Status.Phase = "Terminating"
+	node.Status.Phase = seiv1alpha1.PhaseTerminating
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting terminating status: %w", err)
 	}

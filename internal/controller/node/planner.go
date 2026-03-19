@@ -43,6 +43,27 @@ func PlannerForNode(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
 	}
 }
 
+// snapshotSourceFor extracts the SnapshotSource from the populated mode sub-spec.
+// Returns nil when the mode doesn't use a snapshot.
+func snapshotSourceFor(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotSource {
+	switch {
+	case node.Spec.FullNode != nil:
+		return node.Spec.FullNode.Snapshot
+	case node.Spec.Validator != nil:
+		return node.Spec.Validator.Snapshot
+	case node.Spec.Replayer != nil:
+		return &node.Spec.Replayer.Snapshot
+	default:
+		return nil
+	}
+}
+
+// needsPreInit returns true when the node requires a PreInitPlan Job.
+func needsPreInit(node *seiv1alpha1.SeiNode) bool {
+	snap := snapshotSourceFor(node)
+	return snap != nil && snap.BootstrapImage != ""
+}
+
 // snapshotGeneration extracts the SnapshotGenerationConfig from the populated
 // mode sub-spec. Returns nil when the mode doesn't support it.
 func snapshotGeneration(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotGenerationConfig {
@@ -153,27 +174,23 @@ func buildSharedTask(
 		return sidecar.ConfigValidateTask{}
 	case taskMarkReady:
 		return sidecar.MarkReadyTask{}
+	case taskAwaitCondition:
+		return awaitConditionTask(node)
 	default:
-		return sidecar.MarkReadyTask{}
+		panic(fmt.Sprintf("buildSharedTask: unhandled task type %q", taskType))
 	}
 }
+
+const defaultSnapshotRegion = "eu-central-1"
 
 func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource, chainID string) sidecar.TaskBuilder {
 	if snap == nil || snap.S3 == nil {
 		return sidecar.SnapshotRestoreTask{}
 	}
-	s3 := snap.S3
-	var bucket, prefix string
-	if s3.URI != "" {
-		bucket, prefix = parseS3URI(s3.URI)
-	} else {
-		bucket = chainID + "-snapshots"
-		prefix = "state-sync/"
-	}
 	return sidecar.SnapshotRestoreTask{
-		Bucket:  bucket,
-		Prefix:  prefix,
-		Region:  s3.Region,
+		Bucket:  chainID + "-snapshots",
+		Prefix:  "state-sync/",
+		Region:  defaultSnapshotRegion,
 		ChainID: chainID,
 	}
 }

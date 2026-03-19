@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"strconv"
 
 	seiconfig "github.com/sei-protocol/sei-config"
@@ -13,7 +14,10 @@ type archiveNodePlanner struct{}
 
 func (p *archiveNodePlanner) Mode() string { return string(seiconfig.ModeArchive) }
 
-func (p *archiveNodePlanner) Validate(_ *seiv1alpha1.SeiNode) error {
+func (p *archiveNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
+	if node.Spec.Archive == nil {
+		return fmt.Errorf("archive sub-spec is nil")
+	}
 	return nil
 }
 
