@@ -141,7 +141,6 @@ var baseProgression = map[string][]string{
 // buildPlan builds a TaskPlan by starting with the base progression
 // for the node's bootstrap mode and inserting optional tasks.
 func buildPlan(
-	node *seiv1alpha1.SeiNode,
 	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
 ) *seiv1alpha1.TaskPlan {

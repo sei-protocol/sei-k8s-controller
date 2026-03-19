@@ -29,7 +29,7 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	v := node.Spec.Validator
-	return buildPlan(node, v.Peers, v.Snapshot)
+	return buildPlan(v.Peers, v.Snapshot)
 }
 
 func (p *validatorPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {

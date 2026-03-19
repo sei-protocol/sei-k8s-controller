@@ -24,7 +24,7 @@ func (p *archiveNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	return buildPlan(node, node.Spec.Archive.Peers, nil)
+	return buildPlan(node.Spec.Archive.Peers, nil)
 }
 
 func (p *archiveNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {

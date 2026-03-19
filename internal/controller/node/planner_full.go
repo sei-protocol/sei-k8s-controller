@@ -30,7 +30,7 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 
 func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	fn := node.Spec.FullNode
-	return buildPlan(node, fn.Peers, fn.Snapshot)
+	return buildPlan(fn.Peers, fn.Snapshot)
 }
 
 func (p *fullNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {

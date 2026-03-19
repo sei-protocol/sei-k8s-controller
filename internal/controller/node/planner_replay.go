@@ -33,7 +33,7 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	return buildPlan(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot)
+	return buildPlan(node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot)
 }
 
 func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {
