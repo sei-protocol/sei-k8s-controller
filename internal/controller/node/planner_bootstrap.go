@@ -1,6 +1,8 @@
 package node
 
 import (
+	"fmt"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 )
@@ -25,15 +27,16 @@ func buildPreInitPlan(node *seiv1alpha1.SeiNode, planner NodePlanner) *seiv1alph
 }
 
 // awaitConditionTask builds the sidecar task for the await-condition step.
+// It panics if the node lacks a valid S3 target height, since planner
+// validation should have rejected such nodes before reaching this point.
 func awaitConditionTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	snap := snapshotSourceFor(node)
-	var targetHeight int64
-	if snap != nil && snap.S3 != nil {
-		targetHeight = snap.S3.TargetHeight
+	if snap == nil || snap.S3 == nil || snap.S3.TargetHeight <= 0 {
+		panic(fmt.Sprintf("awaitConditionTask: node %s/%s has no valid S3 targetHeight", node.Namespace, node.Name))
 	}
 	return sidecar.AwaitConditionTask{
 		Condition:    sidecar.ConditionHeight,
-		TargetHeight: targetHeight,
+		TargetHeight: snap.S3.TargetHeight,
 		Action:       sidecar.ActionSIGTERM,
 	}
 }
