@@ -77,19 +77,13 @@ func preInitSidecarURL(node *seiv1alpha1.SeiNode) string {
 }
 
 // preInitWaitCommand returns a shell command that waits for the sidecar
-// healthz to return 200 and then runs "seid start --home /sei".
-// Unlike sidecarWaitCommand, it does NOT use the node's custom entrypoint
-// because the pre-init Job runs the bootstrap image which may not support
-// custom flags (e.g. --skip-app-hash-validation).
+// healthz to return 200 and then exec's seid with --halt-height.
 //
-// seid is run as a child process (not exec'd) so the shell can exit 0
-// regardless of how seid terminates. The sidecar's await-condition task
-// sends SIGTERM directly to the seid process when the target height is
-// reached; the trailing "exit 0" ensures the shell reports success even
-// though seid exits with code 143 (SIGTERM). The trap handles the case
-// where Kubernetes sends SIGTERM to the shell (PID 1) during pod
-// termination.
-func preInitWaitCommand(port int32) (command []string, args []string) {
+// The bootstrap image's seid uses the Cosmos SDK halt-height mechanism:
+// after committing the block at haltHeight, seid sends itself SIGINT and
+// exits 0. This avoids the need for the sidecar to kill seid externally
+// and keeps the Job exit code clean without wrapper tricks.
+func preInitWaitCommand(port int32, haltHeight int64) (command []string, args []string) {
 	script := fmt.Sprintf(
 		`echo "waiting for sidecar to become ready..."; `+
 			`while true; do `+
@@ -98,10 +92,9 @@ func preInitWaitCommand(port int32) (command []string, args []string) {
 			`head -1 <&3 | grep -q "200" && break; `+
 			`exec 3>&-; sleep 5; done; `+
 			`exec 3>&-; `+
-			`echo "sidecar ready, starting seid"; `+
-			`trap 'exit 0' TERM; `+
-			`seid start --home %s & wait $!; exit 0`,
-		port, dataDir,
+			`echo "sidecar ready, starting seid with halt-height %d"; `+
+			`exec seid start --home %s --halt-height %d`,
+		port, haltHeight, dataDir, haltHeight,
 	)
 	return []string{"/bin/bash", "-c"}, []string{script}
 }
@@ -145,7 +138,8 @@ func buildPreInitPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSo
 		bootstrapImage = snap.BootstrapImage
 	}
 
-	seidCmd, seidArgs := preInitWaitCommand(sidecarPort(node))
+	haltHeight := snap.S3.TargetHeight
+	seidCmd, seidArgs := preInitWaitCommand(sidecarPort(node), haltHeight)
 	seidContainer := corev1.Container{
 		Name:    "seid",
 		Image:   bootstrapImage,

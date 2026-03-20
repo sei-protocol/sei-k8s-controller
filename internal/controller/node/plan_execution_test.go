@@ -1268,17 +1268,19 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 
 // --- PreInitPlan builder tests ---
 
-func TestBuildPreInitPlan_AppendsAwaitCondition(t *testing.T) {
+func TestBuildPreInitPlan_DoesNotIncludeAwaitCondition(t *testing.T) {
 	node := bootstrapReplayerNode()
 	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	plan := buildPreInitPlan(node, planner)
 
-	lastTask := plan.Tasks[len(plan.Tasks)-1]
-	if lastTask.Type != taskAwaitCondition {
-		t.Errorf("last task type = %q, want %q", lastTask.Type, taskAwaitCondition)
+	for _, task := range plan.Tasks {
+		if task.Type == taskAwaitCondition {
+			t.Errorf("pre-init plan should not contain await-condition (halt-height is used instead)")
+		}
 	}
-	if lastTask.Status != seiv1alpha1.PlannedTaskPending {
-		t.Errorf("last task status = %q, want Pending", lastTask.Status)
+	lastTask := plan.Tasks[len(plan.Tasks)-1]
+	if lastTask.Type != taskMarkReady {
+		t.Errorf("last task type = %q, want %q", lastTask.Type, taskMarkReady)
 	}
 }
 

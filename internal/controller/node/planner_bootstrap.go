@@ -12,19 +12,15 @@ const taskAwaitCondition = sidecar.TaskTypeAwaitCondition
 
 // buildPreInitPlan constructs the task plan for the PreInit Job. For nodes
 // that require bootstrap infrastructure (e.g. S3 snapshot with a bootstrap
-// image), it builds the standard bootstrap sequence and appends an
-// await-condition task. For all other nodes it returns an empty plan that
-// resolves trivially.
+// image), it builds the standard bootstrap sequence. The seid process
+// handles the halt-height natively (via --halt-height), so no
+// await-condition task is needed. For all other nodes it returns an empty
+// plan that resolves trivially.
 func buildPreInitPlan(node *seiv1alpha1.SeiNode, planner NodePlanner) *seiv1alpha1.TaskPlan {
 	if !needsPreInit(node) {
 		return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: []seiv1alpha1.PlannedTask{}}
 	}
-	plan := planner.BuildPlan(node)
-	plan.Tasks = append(plan.Tasks, seiv1alpha1.PlannedTask{
-		Type:   taskAwaitCondition,
-		Status: seiv1alpha1.PlannedTaskPending,
-	})
-	return plan
+	return planner.BuildPlan(node)
 }
 
 // buildPostBootstrapInitPlan constructs a reduced InitPlan for nodes that
