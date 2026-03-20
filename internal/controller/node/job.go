@@ -82,10 +82,13 @@ func preInitSidecarURL(node *seiv1alpha1.SeiNode) string {
 // because the pre-init Job runs the bootstrap image which may not support
 // custom flags (e.g. --skip-app-hash-validation).
 //
-// seid is run as a child process (not exec'd) so the shell can trap
-// SIGTERM and exit 0. The sidecar's await-condition task sends SIGTERM
-// to seid when the target height is reached; without the trap, seid's
-// exit code 143 would cause the Job to fail.
+// seid is run as a child process (not exec'd) so the shell can exit 0
+// regardless of how seid terminates. The sidecar's await-condition task
+// sends SIGTERM directly to the seid process when the target height is
+// reached; the trailing "exit 0" ensures the shell reports success even
+// though seid exits with code 143 (SIGTERM). The trap handles the case
+// where Kubernetes sends SIGTERM to the shell (PID 1) during pod
+// termination.
 func preInitWaitCommand(port int32) (command []string, args []string) {
 	script := fmt.Sprintf(
 		`echo "waiting for sidecar to become ready..."; `+
@@ -97,7 +100,7 @@ func preInitWaitCommand(port int32) (command []string, args []string) {
 			`exec 3>&-; `+
 			`echo "sidecar ready, starting seid"; `+
 			`trap 'exit 0' TERM; `+
-			`seid start --home %s & wait $!`,
+			`seid start --home %s & wait $!; exit 0`,
 		port, dataDir,
 	)
 	return []string{"/bin/bash", "-c"}, []string{script}
