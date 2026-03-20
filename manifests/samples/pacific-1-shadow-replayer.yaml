@@ -14,7 +14,7 @@ spec:
   image: ghcr.io/bdchatham/sei-shadow@sha256:fabc114bea77f8b0d331360d860d5e807b9c35f56d9f01d34d82b8113304d530
 
   sidecar:
-    image: ghcr.io/sei-protocol/seictl@sha256:8834d1f312b3427ffc39ecba705114299a7a3964672f60001ad76b0bc708b155
+    image: ghcr.io/sei-protocol/seictl@sha256:78acbf33cc62c41f65766eef10698af2656b3a169eef3be19f707af6f6f51d62
 
   entrypoint:
     command: ["seid"]

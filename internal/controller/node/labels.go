@@ -10,7 +10,7 @@ const (
 	nodeLabel           = "sei.io/node"
 	componentLabel      = "sei.io/component"
 	dataDir             = "/sei"
-	defaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:8834d1f312b3427ffc39ecba705114299a7a3964672f60001ad76b0bc708b155"
+	defaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:78acbf33cc62c41f65766eef10698af2656b3a169eef3be19f707af6f6f51d62"
 )
 
 func resourceLabelsForNode(node *seiv1alpha1.SeiNode) map[string]string {
