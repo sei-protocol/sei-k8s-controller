@@ -35,8 +35,13 @@ func generatePreInitJob(node *seiv1alpha1.SeiNode, platform PlatformConfig) *bat
 			BackoffLimit:            ptr.To(int32(0)),
 			TTLSecondsAfterFinished: ptr.To(int32(3600)),
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec:       buildPreInitPodSpec(node, snap, platform),
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+					Annotations: map[string]string{
+						"karpenter.sh/do-not-disrupt": "true",
+					},
+				},
+				Spec: buildPreInitPodSpec(node, snap, platform),
 			},
 		},
 	}

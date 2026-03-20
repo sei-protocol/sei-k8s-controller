@@ -33,8 +33,13 @@ func generateNodeStatefulSet(node *seiv1alpha1.SeiNode, platform PlatformConfig)
 				MatchLabels: labels,
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec:       buildNodePodSpec(node, platform),
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+					Annotations: map[string]string{
+						"karpenter.sh/do-not-disrupt": "true",
+					},
+				},
+				Spec: buildNodePodSpec(node, platform),
 			},
 		},
 	}
