@@ -24,6 +24,14 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 	plan := node.Status.PreInitPlan
 
 	if plan.Phase == seiv1alpha1.TaskPlanComplete {
+		if len(plan.Tasks) > 0 {
+			job := &batchv1.Job{}
+			key := types.NamespacedName{Name: preInitJobName(node), Namespace: node.Namespace}
+			if err := r.Get(ctx, key, job); err == nil && !isJobComplete(job) && !isJobFailed(job) {
+				log.FromContext(ctx).Info("pre-init plan complete, waiting for seid to reach halt-height", "job", job.Name)
+				return ctrl.Result{RequeueAfter: taskPollInterval}, nil
+			}
+		}
 		if err := r.cleanupPreInit(ctx, node); err != nil {
 			return ctrl.Result{}, fmt.Errorf("cleaning up pre-init resources: %w", err)
 		}
