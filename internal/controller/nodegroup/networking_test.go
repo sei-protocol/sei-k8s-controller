@@ -220,6 +220,71 @@ func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
 	g.Expect(hostnames).To(ConsistOf("rpc.pacific-1.sei.io"))
 }
 
+func TestGenerateHTTPRoute_SectionName(t *testing.T) {
+	g := NewWithT(t)
+	section := "https"
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{
+			ParentRef: seiv1alpha1.GatewayParentRef{
+				Name:        "sei-gateway",
+				Namespace:   "istio-system",
+				SectionName: &section,
+			},
+			Hostnames: []string{"rpc.pacific-1.sei.io"},
+		},
+	}
+
+	route := generateHTTPRoute(group)
+
+	spec := route.Object["spec"].(map[string]interface{})
+	parentRefs := spec["parentRefs"].([]interface{})
+	ref := parentRefs[0].(map[string]interface{})
+	g.Expect(ref["sectionName"]).To(Equal("https"))
+}
+
+func TestGenerateHTTPRoute_NoSectionName(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{
+			ParentRef: seiv1alpha1.GatewayParentRef{
+				Name:      "sei-gateway",
+				Namespace: "istio-system",
+			},
+			Hostnames: []string{"rpc.pacific-1.sei.io"},
+		},
+	}
+
+	route := generateHTTPRoute(group)
+
+	spec := route.Object["spec"].(map[string]interface{})
+	parentRefs := spec["parentRefs"].([]interface{})
+	ref := parentRefs[0].(map[string]interface{})
+	_, hasSectionName := ref["sectionName"]
+	g.Expect(hasSectionName).To(BeFalse())
+}
+
+func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{
+			ParentRef: seiv1alpha1.GatewayParentRef{
+				Name:      "gw",
+				Namespace: "istio-system",
+			},
+			Hostnames: []string{"rpc.sei.io"},
+		},
+	}
+
+	route := generateHTTPRoute(group)
+	g.Expect(route.GetAnnotations()).To(HaveKeyWithValue("sei.io/managed-by", "seinodegroup"))
+}
+
 func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")

@@ -61,6 +61,8 @@ spec:
             value: 32Gi
           - name: SEI_SNAPSHOT_REGION
             value: eu-central-1
+          - name: SEI_CONTROLLER_SA_PRINCIPAL
+            value: "cluster.local/ns/sei-k8s-controller-system/sa/sei-k8s-controller-manager"
         ports: []
         securityContext:
           readOnlyRootFilesystem: true

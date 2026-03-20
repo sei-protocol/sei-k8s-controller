@@ -290,23 +290,26 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructur
 		hostnames[i] = h
 	}
 
-	nsStr := cfg.ParentRef.Namespace
+	parentRef := map[string]interface{}{
+		"name":      cfg.ParentRef.Name,
+		"namespace": cfg.ParentRef.Namespace,
+	}
+	if cfg.ParentRef.SectionName != nil {
+		parentRef["sectionName"] = *cfg.ParentRef.SectionName
+	}
+
 	route := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "HTTPRoute",
 			"metadata": map[string]interface{}{
-				"name":      group.Name,
-				"namespace": group.Namespace,
-				"labels":    toStringInterfaceMap(resourceLabels(group)),
+				"name":        group.Name,
+				"namespace":   group.Namespace,
+				"labels":      toStringInterfaceMap(resourceLabels(group)),
+				"annotations": toStringInterfaceMap(managedByAnnotations()),
 			},
 			"spec": map[string]interface{}{
-				"parentRefs": []interface{}{
-					map[string]interface{}{
-						"name":      cfg.ParentRef.Name,
-						"namespace": nsStr,
-					},
-				},
+				"parentRefs": []interface{}{parentRef},
 				"hostnames": hostnames,
 				"rules": []interface{}{
 					map[string]interface{}{
@@ -323,12 +326,11 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructur
 	}
 
 	if len(cfg.Annotations) > 0 {
-		annotations := make(map[string]interface{}, len(cfg.Annotations))
+		metadata := route.Object["metadata"].(map[string]interface{})
+		annotations := metadata["annotations"].(map[string]interface{})
 		for k, v := range cfg.Annotations {
 			annotations[k] = v
 		}
-		metadata := route.Object["metadata"].(map[string]interface{})
-		metadata["annotations"] = annotations
 	}
 
 	return route
@@ -438,9 +440,10 @@ func generateAuthorizationPolicy(group *seiv1alpha1.SeiNodeGroup, controllerSA s
 			"apiVersion": "security.istio.io/v1",
 			"kind":       "AuthorizationPolicy",
 			"metadata": map[string]interface{}{
-				"name":      group.Name,
-				"namespace": group.Namespace,
-				"labels":    toStringInterfaceMap(resourceLabels(group)),
+				"name":        group.Name,
+				"namespace":   group.Namespace,
+				"labels":      toStringInterfaceMap(resourceLabels(group)),
+				"annotations": toStringInterfaceMap(managedByAnnotations()),
 			},
 			"spec": map[string]interface{}{
 				"selector": map[string]interface{}{

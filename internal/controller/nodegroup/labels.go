@@ -12,6 +12,7 @@ const (
 	groupLabel        = "sei.io/group"
 	groupOrdinalLabel = "sei.io/group-ordinal"
 	nodeLabel         = "sei.io/node"
+	managedByAnnotation = "sei.io/managed-by"
 )
 
 func seiNodeName(group *seiv1alpha1.SeiNodeGroup, ordinal int) string {
@@ -58,4 +59,11 @@ func seiNodeAnnotations(group *seiv1alpha1.SeiNodeGroup) map[string]string {
 // resourceLabels returns labels for resources owned by the group.
 func resourceLabels(group *seiv1alpha1.SeiNodeGroup) map[string]string {
 	return map[string]string{groupLabel: group.Name}
+}
+
+// managedByAnnotations returns the standard annotation that marks a resource
+// as owned by the seinodegroup controller. Useful for operators to identify
+// resources subject to periodic drift correction via polling reconciliation.
+func managedByAnnotations() map[string]string {
+	return map[string]string{managedByAnnotation: controllerName}
 }

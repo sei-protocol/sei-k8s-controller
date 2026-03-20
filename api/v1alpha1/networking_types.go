@@ -126,13 +126,20 @@ type GatewayRouteConfig struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// GatewayParentRef identifies a Gateway resource.
+// GatewayParentRef identifies a gateway.networking.k8s.io/v1 Gateway resource.
+// Note: this targets the Kubernetes Gateway API Gateway, not the
+// Istio-native networking.istio.io/v1 Gateway.
 type GatewayParentRef struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
 	// +kubebuilder:validation:MinLength=1
 	Namespace string `json:"namespace"`
+
+	// SectionName targets a specific listener on the Gateway (e.g. "https").
+	// When omitted, the HTTPRoute attaches to all compatible listeners.
+	// +optional
+	SectionName *string `json:"sectionName,omitempty"`
 }
 
 // NetworkIsolationConfig defines network-level access control.

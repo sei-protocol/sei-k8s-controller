@@ -78,9 +78,10 @@ func generateServiceMonitor(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstr
 			"apiVersion": "monitoring.coreos.com/v1",
 			"kind":       "ServiceMonitor",
 			"metadata": map[string]interface{}{
-				"name":      group.Name,
-				"namespace": group.Namespace,
-				"labels":    labels,
+				"name":        group.Name,
+				"namespace":   group.Namespace,
+				"labels":      labels,
+				"annotations": toStringInterfaceMap(managedByAnnotations()),
 			},
 			"spec": map[string]interface{}{
 				"selector": map[string]interface{}{

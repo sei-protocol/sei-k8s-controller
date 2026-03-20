@@ -121,6 +121,11 @@ spec:
                           namespace:
                             minLength: 1
                             type: string
+                          sectionName:
+                            description: |-
+                              SectionName targets a specific listener on the Gateway (e.g. "https").
+                              When omitted, the HTTPRoute attaches to all compatible listeners.
+                            type: string
                         required:
                         - name
                         - namespace
