@@ -67,6 +67,21 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 		return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 	}
 
+	if isJobComplete(job) {
+		log.FromContext(ctx).Info("pre-init job completed, advancing plan", "job", job.Name)
+		patch := client.MergeFrom(node.DeepCopy())
+		for i := range plan.Tasks {
+			if plan.Tasks[i].Status != seiv1alpha1.PlannedTaskComplete {
+				plan.Tasks[i].Status = seiv1alpha1.PlannedTaskComplete
+			}
+		}
+		plan.Phase = seiv1alpha1.TaskPlanComplete
+		if err := r.Status().Patch(ctx, node, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("marking pre-init plan complete after job success: %w", err)
+		}
+		return ctrl.Result{RequeueAfter: immediateRequeue}, nil
+	}
+
 	sc := r.buildJobSidecarClient(node)
 	if sc == nil {
 		log.FromContext(ctx).Info("pre-init job sidecar not reachable yet, will retry")
@@ -152,6 +167,16 @@ func (r *SeiNodeReconciler) buildJobSidecarClient(node *seiv1alpha1.SeiNode) Sid
 func isJobFailed(job *batchv1.Job) bool {
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+// isJobComplete returns true if the Job has a Complete condition.
+func isJobComplete(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
 			return true
 		}
 	}
