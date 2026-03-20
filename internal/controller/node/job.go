@@ -77,10 +77,15 @@ func preInitSidecarURL(node *seiv1alpha1.SeiNode) string {
 }
 
 // preInitWaitCommand returns a shell command that waits for the sidecar
-// healthz to return 200 and then runs a standard "seid start --home /sei".
+// healthz to return 200 and then runs "seid start --home /sei".
 // Unlike sidecarWaitCommand, it does NOT use the node's custom entrypoint
 // because the pre-init Job runs the bootstrap image which may not support
 // custom flags (e.g. --skip-app-hash-validation).
+//
+// seid is run as a child process (not exec'd) so the shell can trap
+// SIGTERM and exit 0. The sidecar's await-condition task sends SIGTERM
+// to seid when the target height is reached; without the trap, seid's
+// exit code 143 would cause the Job to fail.
 func preInitWaitCommand(port int32) (command []string, args []string) {
 	script := fmt.Sprintf(
 		`echo "waiting for sidecar to become ready..."; `+
@@ -91,7 +96,8 @@ func preInitWaitCommand(port int32) (command []string, args []string) {
 			`exec 3>&-; sleep 5; done; `+
 			`exec 3>&-; `+
 			`echo "sidecar ready, starting seid"; `+
-			`exec seid start --home %s`,
+			`trap 'exit 0' TERM; `+
+			`seid start --home %s & wait $!`,
 		port, dataDir,
 	)
 	return []string{"/bin/bash", "-c"}, []string{script}
