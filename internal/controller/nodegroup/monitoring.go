@@ -65,7 +65,7 @@ func generateServiceMonitor(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstr
 		interval = "30s"
 	}
 
-	labels := make(map[string]interface{})
+	labels := make(map[string]any)
 	for k, v := range cfg.Labels {
 		labels[k] = v
 	}
@@ -74,25 +74,25 @@ func generateServiceMonitor(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstr
 	}
 
 	sm := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "monitoring.coreos.com/v1",
 			"kind":       "ServiceMonitor",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":        group.Name,
 				"namespace":   group.Namespace,
 				"labels":      labels,
 				"annotations": toStringInterfaceMap(managedByAnnotations()),
 			},
-			"spec": map[string]interface{}{
-				"selector": map[string]interface{}{
+			"spec": map[string]any{
+				"selector": map[string]any{
 					"matchLabels": toStringInterfaceMap(groupSelector(group)),
 				},
-			"endpoints": []interface{}{
-				map[string]interface{}{
-					"port":     "metrics",
-					"interval": interval,
+				"endpoints": []any{
+					map[string]any{
+						"port":     "metrics",
+						"interval": interval,
+					},
 				},
-			},
 			},
 		},
 	}

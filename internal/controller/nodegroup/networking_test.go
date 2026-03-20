@@ -208,15 +208,15 @@ func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
 	g.Expect(route.GetName()).To(Equal("archive-rpc"))
 	g.Expect(route.GetNamespace()).To(Equal("sei"))
 
-	spec := route.Object["spec"].(map[string]interface{})
-	parentRefs := spec["parentRefs"].([]interface{})
+	spec := route.Object["spec"].(map[string]any)
+	parentRefs := spec["parentRefs"].([]any)
 	g.Expect(parentRefs).To(HaveLen(1))
 
-	ref := parentRefs[0].(map[string]interface{})
+	ref := parentRefs[0].(map[string]any)
 	g.Expect(ref["name"]).To(Equal("istio-gateway"))
 	g.Expect(ref["namespace"]).To(Equal("istio-system"))
 
-	hostnames := spec["hostnames"].([]interface{})
+	hostnames := spec["hostnames"].([]any)
 	g.Expect(hostnames).To(ConsistOf("rpc.pacific-1.sei.io"))
 }
 
@@ -238,9 +238,9 @@ func TestGenerateHTTPRoute_SectionName(t *testing.T) {
 
 	route := generateHTTPRoute(group)
 
-	spec := route.Object["spec"].(map[string]interface{})
-	parentRefs := spec["parentRefs"].([]interface{})
-	ref := parentRefs[0].(map[string]interface{})
+	spec := route.Object["spec"].(map[string]any)
+	parentRefs := spec["parentRefs"].([]any)
+	ref := parentRefs[0].(map[string]any)
 	g.Expect(ref["sectionName"]).To(Equal("https"))
 }
 
@@ -260,9 +260,9 @@ func TestGenerateHTTPRoute_NoSectionName(t *testing.T) {
 
 	route := generateHTTPRoute(group)
 
-	spec := route.Object["spec"].(map[string]interface{})
-	parentRefs := spec["parentRefs"].([]interface{})
-	ref := parentRefs[0].(map[string]interface{})
+	spec := route.Object["spec"].(map[string]any)
+	parentRefs := spec["parentRefs"].([]any)
+	ref := parentRefs[0].(map[string]any)
 	_, hasSectionName := ref["sectionName"]
 	g.Expect(hasSectionName).To(BeFalse())
 }
@@ -301,15 +301,15 @@ func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 
 	route := generateHTTPRoute(group)
 
-	spec := route.Object["spec"].(map[string]interface{})
-	rules := spec["rules"].([]interface{})
+	spec := route.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
 	g.Expect(rules).To(HaveLen(1))
 
-	rule := rules[0].(map[string]interface{})
-	backends := rule["backendRefs"].([]interface{})
+	rule := rules[0].(map[string]any)
+	backends := rule["backendRefs"].([]any)
 	g.Expect(backends).To(HaveLen(1))
 
-	backend := backends[0].(map[string]interface{})
+	backend := backends[0].(map[string]any)
 	g.Expect(backend["name"]).To(Equal("archive-rpc-external"))
 }
 
@@ -333,11 +333,11 @@ func TestGenerateAuthorizationPolicy_BasicStructure(t *testing.T) {
 	g.Expect(policy.GetName()).To(Equal("archive-rpc"))
 	g.Expect(policy.GetNamespace()).To(Equal("sei"))
 
-	spec := policy.Object["spec"].(map[string]interface{})
+	spec := policy.Object["spec"].(map[string]any)
 	g.Expect(spec["action"]).To(Equal("ALLOW"))
 
-	selector := spec["selector"].(map[string]interface{})
-	matchLabels := selector["matchLabels"].(map[string]interface{})
+	selector := spec["selector"].(map[string]any)
+	matchLabels := selector["matchLabels"].(map[string]any)
 	g.Expect(matchLabels[groupLabel]).To(Equal("archive-rpc"))
 }
 
@@ -357,14 +357,14 @@ func TestGenerateAuthorizationPolicy_InjectsControllerSA(t *testing.T) {
 	controllerSA := "cluster.local/ns/sei-system/sa/sei-controller"
 	policy := generateAuthorizationPolicy(group, controllerSA)
 
-	spec := policy.Object["spec"].(map[string]interface{})
-	rules := spec["rules"].([]interface{})
+	spec := policy.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
 	g.Expect(rules).To(HaveLen(2), "should have user source + injected controller SA")
 
-	lastRule := rules[1].(map[string]interface{})
-	from := lastRule["from"].([]interface{})
-	source := from[0].(map[string]interface{})["source"].(map[string]interface{})
-	principals := source["principals"].([]interface{})
+	lastRule := rules[1].(map[string]any)
+	from := lastRule["from"].([]any)
+	source := from[0].(map[string]any)["source"].(map[string]any)
+	principals := source["principals"].([]any)
 	g.Expect(principals).To(ConsistOf(controllerSA))
 }
 
@@ -383,8 +383,8 @@ func TestGenerateAuthorizationPolicy_NoControllerSA(t *testing.T) {
 
 	policy := generateAuthorizationPolicy(group, "")
 
-	spec := policy.Object["spec"].(map[string]interface{})
-	rules := spec["rules"].([]interface{})
+	spec := policy.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
 	g.Expect(rules).To(HaveLen(1), "only user sources when controller SA is empty")
 }
 
@@ -403,13 +403,13 @@ func TestGenerateAuthorizationPolicy_NamespaceSource(t *testing.T) {
 
 	policy := generateAuthorizationPolicy(group, "")
 
-	spec := policy.Object["spec"].(map[string]interface{})
-	rules := spec["rules"].([]interface{})
+	spec := policy.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
 	g.Expect(rules).To(HaveLen(1))
 
-	rule := rules[0].(map[string]interface{})
-	from := rule["from"].([]interface{})
-	source := from[0].(map[string]interface{})["source"].(map[string]interface{})
-	namespaces := source["namespaces"].([]interface{})
+	rule := rules[0].(map[string]any)
+	from := rule["from"].([]any)
+	source := from[0].(map[string]any)["source"].(map[string]any)
+	namespaces := source["namespaces"].([]any)
 	g.Expect(namespaces).To(ConsistOf("monitoring", "sei-system"))
 }

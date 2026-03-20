@@ -285,12 +285,12 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructur
 	cfg := group.Spec.Networking.Gateway
 	svcName := externalServiceName(group)
 
-	hostnames := make([]interface{}, len(cfg.Hostnames))
+	hostnames := make([]any, len(cfg.Hostnames))
 	for i, h := range cfg.Hostnames {
 		hostnames[i] = h
 	}
 
-	parentRef := map[string]interface{}{
+	parentRef := map[string]any{
 		"name":      cfg.ParentRef.Name,
 		"namespace": cfg.ParentRef.Namespace,
 	}
@@ -299,22 +299,22 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructur
 	}
 
 	route := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "HTTPRoute",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":        group.Name,
 				"namespace":   group.Namespace,
 				"labels":      toStringInterfaceMap(resourceLabels(group)),
 				"annotations": toStringInterfaceMap(managedByAnnotations()),
 			},
-			"spec": map[string]interface{}{
-				"parentRefs": []interface{}{parentRef},
-				"hostnames": hostnames,
-				"rules": []interface{}{
-					map[string]interface{}{
-						"backendRefs": []interface{}{
-							map[string]interface{}{
+			"spec": map[string]any{
+				"parentRefs": []any{parentRef},
+				"hostnames":  hostnames,
+				"rules": []any{
+					map[string]any{
+						"backendRefs": []any{
+							map[string]any{
 								"name": svcName,
 								"port": int64(seiconfig.PortRPC),
 							},
@@ -326,8 +326,8 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructur
 	}
 
 	if len(cfg.Annotations) > 0 {
-		metadata := route.Object["metadata"].(map[string]interface{})
-		annotations := metadata["annotations"].(map[string]interface{})
+		metadata := route.Object["metadata"].(map[string]any)
+		annotations := metadata["annotations"].(map[string]any)
 		for k, v := range cfg.Annotations {
 			annotations[k] = v
 		}
@@ -398,37 +398,37 @@ func (r *SeiNodeGroupReconciler) reconcileIsolation(ctx context.Context, group *
 func generateAuthorizationPolicy(group *seiv1alpha1.SeiNodeGroup, controllerSA string) *unstructured.Unstructured {
 	cfg := group.Spec.Networking.Isolation.AuthorizationPolicy
 
-	var rules []interface{}
+	var rules []any
 	for _, src := range cfg.AllowedSources {
-		rule := map[string]interface{}{}
-		from := map[string]interface{}{}
-		source := map[string]interface{}{}
+		rule := map[string]any{}
+		from := map[string]any{}
+		source := map[string]any{}
 		if len(src.Principals) > 0 {
-			principals := make([]interface{}, len(src.Principals))
+			principals := make([]any, len(src.Principals))
 			for i, p := range src.Principals {
 				principals[i] = p
 			}
 			source["principals"] = principals
 		}
 		if len(src.Namespaces) > 0 {
-			namespaces := make([]interface{}, len(src.Namespaces))
+			namespaces := make([]any, len(src.Namespaces))
 			for i, n := range src.Namespaces {
 				namespaces[i] = n
 			}
 			source["namespaces"] = namespaces
 		}
 		from["source"] = source
-		rule["from"] = []interface{}{from}
+		rule["from"] = []any{from}
 		rules = append(rules, rule)
 	}
 
 	// Auto-inject the controller's SA so sidecar communication is never blocked
 	if controllerSA != "" {
-		rules = append(rules, map[string]interface{}{
-			"from": []interface{}{
-				map[string]interface{}{
-					"source": map[string]interface{}{
-						"principals": []interface{}{controllerSA},
+		rules = append(rules, map[string]any{
+			"from": []any{
+				map[string]any{
+					"source": map[string]any{
+						"principals": []any{controllerSA},
 					},
 				},
 			},
@@ -436,17 +436,17 @@ func generateAuthorizationPolicy(group *seiv1alpha1.SeiNodeGroup, controllerSA s
 	}
 
 	policy := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "security.istio.io/v1",
 			"kind":       "AuthorizationPolicy",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":        group.Name,
 				"namespace":   group.Namespace,
 				"labels":      toStringInterfaceMap(resourceLabels(group)),
 				"annotations": toStringInterfaceMap(managedByAnnotations()),
 			},
-			"spec": map[string]interface{}{
-				"selector": map[string]interface{}{
+			"spec": map[string]any{
+				"selector": map[string]any{
 					"matchLabels": toStringInterfaceMap(groupSelector(group)),
 				},
 				"action": "ALLOW",
@@ -482,8 +482,8 @@ func (r *SeiNodeGroupReconciler) deleteNetworkingResources(ctx context.Context, 
 		}
 	}
 
-	r.deleteUnstructured(ctx, group, httpRouteGVK())   //nolint:errcheck // best-effort
-	r.deleteUnstructured(ctx, group, authPolicyGVK())   //nolint:errcheck // best-effort
+	r.deleteUnstructured(ctx, group, httpRouteGVK())      //nolint:errcheck // best-effort
+	r.deleteUnstructured(ctx, group, authPolicyGVK())     //nolint:errcheck // best-effort
 	r.deleteUnstructured(ctx, group, serviceMonitorGVK()) //nolint:errcheck // best-effort
 
 	return nil
@@ -553,8 +553,8 @@ func (r *SeiNodeGroupReconciler) orphanChildSeiNodes(ctx context.Context, group 
 	return nil
 }
 
-func toStringInterfaceMap(m map[string]string) map[string]interface{} {
-	out := make(map[string]interface{}, len(m))
+func toStringInterfaceMap(m map[string]string) map[string]any {
+	out := make(map[string]any, len(m))
 	for k, v := range m {
 		out[k] = v
 	}
