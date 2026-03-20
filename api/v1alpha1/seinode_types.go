@@ -42,6 +42,14 @@ type SeiNodeSpec struct {
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
 
+	// PodLabels are additional labels merged into the StatefulSet pod template.
+	// The controller always sets sei.io/node; these are additive and applied
+	// first so that system labels take precedence.
+	// Must be set before the StatefulSet is first created; changes after
+	// creation require StatefulSet recreation due to selector immutability.
+	// +optional
+	PodLabels map[string]string `json:"podLabels,omitempty"`
+
 	// --- Mode-specific sub-specs (exactly one must be set) ---
 
 	// FullNode configures a chain-following full node (absorbs the "rpc" role).

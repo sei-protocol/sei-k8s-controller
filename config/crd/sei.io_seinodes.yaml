@@ -358,6 +358,16 @@ spec:
                   Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
                   These are applied on top of mode defaults during config-apply.
                 type: object
+              podLabels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodLabels are additional labels merged into the StatefulSet pod template.
+                  The controller always sets sei.io/node; these are additive and applied
+                  first so that system labels take precedence.
+                  Must be set before the StatefulSet is first created; changes after
+                  creation require StatefulSet recreation due to selector immutability.
+                type: object
               replayer:
                 description: Replayer configures an ephemeral replay workload that
                   restores from a snapshot.

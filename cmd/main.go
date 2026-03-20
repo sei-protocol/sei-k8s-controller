@@ -18,6 +18,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
+	nodegroupcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodegroup"
 	nodepoolcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodepool"
 )
 
@@ -158,6 +159,16 @@ func main() {
 		Platform: platform,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNode")
+		os.Exit(1)
+	}
+
+	controllerSA := os.Getenv("SEI_CONTROLLER_SA_PRINCIPAL")
+	if err := (&nodegroupcontroller.SeiNodeGroupReconciler{
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		ControllerSA: controllerSA,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "SeiNodeGroup")
 		os.Exit(1)
 	}
 
