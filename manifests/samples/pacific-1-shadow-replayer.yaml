@@ -14,11 +14,16 @@ spec:
   image: ghcr.io/bdchatham/sei-shadow:skip-apphash
 
   sidecar:
-    image: ghcr.io/sei-protocol/seictl@sha256:64f92fb5bc3f451b3cd23d95275685b7fed28ab4dff36a0182267dc77e266c49
+    image: ghcr.io/sei-protocol/seictl@sha256:8834d1f312b3427ffc39ecba705114299a7a3964672f60001ad76b0bc708b155
 
   entrypoint:
     command: ["seid"]
     args: ["start", "--home", "/sei", "--skip-app-hash-validation"]
+
+  genesis:
+    s3:
+      uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
+      region: us-east-2
 
   storage:
     retainOnDelete: true
