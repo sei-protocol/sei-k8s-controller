@@ -94,6 +94,10 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 	}
 
 	if plan.Phase == seiv1alpha1.TaskPlanComplete {
+		if !isJobComplete(job) {
+			log.FromContext(ctx).Info("sidecar tasks complete, waiting for seid to reach halt-height", "job", job.Name)
+			return ctrl.Result{RequeueAfter: taskPollInterval}, nil
+		}
 		if err := r.cleanupPreInit(ctx, node); err != nil {
 			return ctrl.Result{}, fmt.Errorf("cleaning up pre-init resources: %w", err)
 		}
