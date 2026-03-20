@@ -109,10 +109,12 @@ func TestGenerateSeiNode_PreservesExistingPodLabels(t *testing.T) {
 
 func TestGenerateSeiNode_CopiesSpec(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
+	group := newTestGroup("full-node", "pacific-1")
 
 	node := generateSeiNode(group, 0)
 
+	g.Expect(node.Name).To(Equal("full-node-0"))
+	g.Expect(node.Namespace).To(Equal("pacific-1"))
 	g.Expect(node.Spec.ChainID).To(Equal("pacific-1"))
 	g.Expect(node.Spec.Image).To(Equal("ghcr.io/sei-protocol/seid:v1.0.0"))
 	g.Expect(node.Spec.FullNode).NotTo(BeNil())
