@@ -12,7 +12,7 @@ spec:
   image: "ghcr.io/sei-protocol/sei:v6.3.0"
 
   sidecar:
-    image: ghcr.io/sei-protocol/seictl@sha256:78acbf33cc62c41f65766eef10698af2656b3a169eef3be19f707af6f6f51d62
+    image: ghcr.io/sei-protocol/seictl@sha256:8bfef078409c160f03c62fcd969702b3edc9d957369fb56dca9e34e09ac6c99a
 
   storage:
     retainOnDelete: true
