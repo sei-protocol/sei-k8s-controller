@@ -45,13 +45,19 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 		existing.Spec.Image = desired.Spec.Image
 		updated = true
 	}
-	if desired.Spec.Entrypoint != nil && (existing.Spec.Entrypoint == nil ||
+	if desired.Spec.Entrypoint == nil && existing.Spec.Entrypoint != nil {
+		existing.Spec.Entrypoint = nil
+		updated = true
+	} else if desired.Spec.Entrypoint != nil && (existing.Spec.Entrypoint == nil ||
 		!slices.Equal(existing.Spec.Entrypoint.Command, desired.Spec.Entrypoint.Command) ||
 		!slices.Equal(existing.Spec.Entrypoint.Args, desired.Spec.Entrypoint.Args)) {
 		existing.Spec.Entrypoint = desired.Spec.Entrypoint
 		updated = true
 	}
-	if desired.Spec.Sidecar != nil && (existing.Spec.Sidecar == nil ||
+	if desired.Spec.Sidecar == nil && existing.Spec.Sidecar != nil {
+		existing.Spec.Sidecar = nil
+		updated = true
+	} else if desired.Spec.Sidecar != nil && (existing.Spec.Sidecar == nil ||
 		existing.Spec.Sidecar.Image != desired.Spec.Sidecar.Image ||
 		existing.Spec.Sidecar.Port != desired.Spec.Sidecar.Port) {
 		existing.Spec.Sidecar = desired.Spec.Sidecar
@@ -91,7 +97,7 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.
 // scaleDown deletes SeiNodes with ordinals >= the desired replica count.
 func (r *SeiNodeGroupReconciler) scaleDown(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Replicas <= 0 {
-		log.FromContext(ctx).Error(nil, "refusing scale-down: desired replicas is zero or negative")
+		log.FromContext(ctx).Info("refusing scale-down: desired replicas is zero or negative")
 		return nil
 	}
 
@@ -132,5 +138,11 @@ func (r *SeiNodeGroupReconciler) listChildSeiNodes(ctx context.Context, group *s
 	); err != nil {
 		return nil, fmt.Errorf("listing child SeiNodes: %w", err)
 	}
-	return nodeList.Items, nil
+	owned := nodeList.Items[:0]
+	for i := range nodeList.Items {
+		if metav1.IsControlledBy(&nodeList.Items[i], group) {
+			owned = append(owned, nodeList.Items[i])
+		}
+	}
+	return owned, nil
 }

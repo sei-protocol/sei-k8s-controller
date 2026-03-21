@@ -133,8 +133,9 @@ func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv
 		}
 	}
 
+	finalizerPatch := client.MergeFrom(group.DeepCopy())
 	controllerutil.RemoveFinalizer(group, groupFinalizerName)
-	return ctrl.Result{}, r.Update(ctx, group)
+	return ctrl.Result{}, r.Patch(ctx, group, finalizerPatch)
 }
 
 // SetupWithManager sets up the controller with the Manager.

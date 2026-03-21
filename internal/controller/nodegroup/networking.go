@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 
-	seiconfig "github.com/sei-protocol/sei-config"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -17,12 +16,16 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Networking == nil {
-		return nil
+		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
+		removeCondition(group, seiv1alpha1.ConditionRouteReady)
+		removeCondition(group, seiv1alpha1.ConditionIsolationReady)
+		return r.deleteNetworkingResources(ctx, group)
 	}
 
 	if err := r.reconcileExternalService(ctx, group); err != nil {
@@ -41,7 +44,8 @@ func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx context.Context, group 
 
 func (r *SeiNodeGroupReconciler) reconcileExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Networking.Service == nil {
-		return nil
+		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
+		return r.deleteExternalService(ctx, group)
 	}
 
 	desired := generateExternalService(group)
@@ -312,12 +316,24 @@ func authPolicyGVK() schema.GroupVersionKind {
 
 // --- Deletion policy helpers ---
 
-func (r *SeiNodeGroupReconciler) deleteNetworkingResources(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeGroupReconciler) deleteExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	svc := &corev1.Service{}
-	if err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc); err == nil {
-		if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
+	err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("fetching external Service for deletion: %w", err)
+	}
+	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func (r *SeiNodeGroupReconciler) deleteNetworkingResources(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+	if err := r.deleteExternalService(ctx, group); err != nil {
+		return err
 	}
 
 	for _, gvk := range []schema.GroupVersionKind{httpRouteGVK(), authPolicyGVK(), serviceMonitorGVK()} {
