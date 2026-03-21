@@ -2,7 +2,6 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 )
 
 // PortName is a well-known sei-node port identifier from sei-config.
@@ -21,18 +20,16 @@ const (
 )
 
 // NetworkingConfig controls how the group is exposed to traffic.
-// +kubebuilder:validation:XValidation:rule="!has(self.ingress) || has(self.service)",message="ingress requires service to be configured"
+//
+// Routing uses the Kubernetes Gateway API exclusively; the platform must
+// install the Gateway API CRDs (v1+) and a Gateway implementation such
+// as Istio before HTTPRoute resources will take effect.
 // +kubebuilder:validation:XValidation:rule="!has(self.gateway) || has(self.service)",message="gateway requires service to be configured"
-// +kubebuilder:validation:XValidation:rule="!(has(self.ingress) && has(self.gateway))",message="only one of ingress or gateway may be set"
 type NetworkingConfig struct {
 	// Service creates a non-headless Service shared across all replicas.
 	// Each SeiNode still gets its own headless Service for pod DNS.
 	// +optional
 	Service *ExternalServiceConfig `json:"service,omitempty"`
-
-	// Ingress creates a networking.k8s.io/v1 Ingress resource.
-	// +optional
-	Ingress *IngressConfig `json:"ingress,omitempty"`
 
 	// Gateway creates a gateway.networking.k8s.io/v1 HTTPRoute
 	// targeting a shared Gateway (e.g. Istio ingress gateway).
@@ -60,55 +57,6 @@ type ExternalServiceConfig struct {
 	// Annotations are merged onto the Service metadata.
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
-}
-
-// IngressConfig defines a networking.k8s.io/v1 Ingress.
-// +kubebuilder:validation:XValidation:rule="!has(self.tls) || !self.tls.enabled || has(self.className)",message="tls requires className to be set"
-type IngressConfig struct {
-	// ClassName is the IngressClass (e.g. "alb", "nginx").
-	// +optional
-	ClassName *string `json:"className,omitempty"`
-
-	// Host is the DNS hostname for the Ingress rule.
-	// +kubebuilder:validation:MinLength=1
-	Host string `json:"host"`
-
-	// Annotations are merged onto the Ingress metadata.
-	// +optional
-	Annotations map[string]string `json:"annotations,omitempty"`
-
-	// TLS configures TLS termination.
-	// +optional
-	TLS *IngressTLS `json:"tls,omitempty"`
-
-	// Paths defines routing rules. When empty, "/" routes to the
-	// first Service port.
-	// +optional
-	Paths []IngressPath `json:"paths,omitempty"`
-}
-
-// IngressTLS configures TLS for the Ingress.
-type IngressTLS struct {
-	// Enabled controls whether TLS is configured.
-	// +kubebuilder:default=true
-	Enabled bool `json:"enabled"`
-
-	// SecretName references a TLS Secret. When omitted, the
-	// IngressClass default is used (e.g. ACM for ALB).
-	// +optional
-	SecretName *string `json:"secretName,omitempty"`
-}
-
-// IngressPath maps a URL path to a Service port.
-type IngressPath struct {
-	// +kubebuilder:validation:MinLength=1
-	Path string `json:"path"`
-
-	// +optional
-	// +kubebuilder:default=Prefix
-	PathType networkingv1.PathType `json:"pathType,omitempty"`
-
-	PortName PortName `json:"portName"`
 }
 
 // GatewayRouteConfig creates a gateway.networking.k8s.io/v1 HTTPRoute

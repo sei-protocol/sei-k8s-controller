@@ -6,7 +6,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -41,7 +40,6 @@ type SeiNodeGroupReconciler struct {
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
@@ -134,7 +132,6 @@ func (r *SeiNodeGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&seiv1alpha1.SeiNodeGroup{}).
 		Owns(&seiv1alpha1.SeiNode{}).
 		Owns(&corev1.Service{}).
-		Owns(&networkingv1.Ingress{}).
 		Named(controllerName).
 		Complete(r)
 }

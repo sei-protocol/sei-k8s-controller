@@ -1,0 +1,890 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: seinodes.sei.io
+spec:
+  group: sei.io
+  names:
+    kind: SeiNode
+    listKind: SeiNodeList
+    plural: seinodes
+    shortNames:
+    - snode
+    singular: seinode
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SeiNode is the Schema for the seinodes API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SeiNodeSpec defines the desired state of a standalone Sei node.
+              Exactly one mode sub-spec (fullNode, archive, replayer, validator) must be set;
+              the populated field determines the node's operating mode.
+            properties:
+              archive:
+                description: Archive configures an archive node with full history
+                  and no pruning.
+                properties:
+                  peers:
+                    description: Peers configures how the archive node discovers peers
+                      for block sync.
+                    items:
+                      description: PeerSource is a union type — exactly one field
+                        must be set.
+                      properties:
+                        ec2Tags:
+                          description: |-
+                            EC2Tags discovers peers by querying EC2 for running instances
+                            matching the specified tags.
+                          properties:
+                            region:
+                              description: Region is the AWS region to query for EC2
+                                instances.
+                              minLength: 1
+                              type: string
+                            tags:
+                              additionalProperties:
+                                type: string
+                              description: Tags are the EC2 instance tags to filter
+                                on.
+                              minProperties: 1
+                              type: object
+                          required:
+                          - region
+                          - tags
+                          type: object
+                        static:
+                          description: Static provides a fixed list of peer addresses.
+                          properties:
+                            addresses:
+                              description: Addresses is a list of peer addresses in
+                                "nodeId@host:port" format.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - addresses
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of ec2Tags or static must be set
+                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
+                          : 0) == 1'
+                    type: array
+                  snapshotGeneration:
+                    description: SnapshotGeneration configures periodic snapshot creation
+                      and optional upload.
+                    properties:
+                      destination:
+                        description: |-
+                          Destination configures where generated snapshots are uploaded.
+                          When set, the controller submits a scheduled upload task to the sidecar.
+                        properties:
+                          s3:
+                            description: S3 uploads snapshots to an S3 bucket.
+                            properties:
+                              bucket:
+                                description: Bucket is the S3 bucket name.
+                                minLength: 1
+                                type: string
+                              prefix:
+                                description: Prefix is an optional key prefix within
+                                  the bucket (e.g. "state-sync/").
+                                type: string
+                              region:
+                                description: Region is the AWS region of the bucket.
+                                minLength: 1
+                                type: string
+                            required:
+                            - bucket
+                            - region
+                            type: object
+                        required:
+                        - s3
+                        type: object
+                      keepRecent:
+                        description: |-
+                          KeepRecent is the number of recent snapshots to retain on disk.
+                          Must be at least 2 so the upload algorithm can select the
+                          second-to-latest completed snapshot.
+                        format: int32
+                        minimum: 2
+                        type: integer
+                    required:
+                    - keepRecent
+                    type: object
+                type: object
+              chainId:
+                description: ChainID of the chain this node belongs to.
+                minLength: 1
+                type: string
+              entrypoint:
+                description: Entrypoint overrides the image command for the running
+                  node process.
+                properties:
+                  args:
+                    items:
+                      type: string
+                    maxItems: 64
+                    type: array
+                  command:
+                    items:
+                      type: string
+                    maxItems: 16
+                    minItems: 1
+                    type: array
+                required:
+                - command
+                type: object
+              fullNode:
+                description: FullNode configures a chain-following full node (absorbs
+                  the "rpc" role).
+                properties:
+                  peers:
+                    description: Peers configures how this node discovers and connects
+                      to peers.
+                    items:
+                      description: PeerSource is a union type — exactly one field
+                        must be set.
+                      properties:
+                        ec2Tags:
+                          description: |-
+                            EC2Tags discovers peers by querying EC2 for running instances
+                            matching the specified tags.
+                          properties:
+                            region:
+                              description: Region is the AWS region to query for EC2
+                                instances.
+                              minLength: 1
+                              type: string
+                            tags:
+                              additionalProperties:
+                                type: string
+                              description: Tags are the EC2 instance tags to filter
+                                on.
+                              minProperties: 1
+                              type: object
+                          required:
+                          - region
+                          - tags
+                          type: object
+                        static:
+                          description: Static provides a fixed list of peer addresses.
+                          properties:
+                            addresses:
+                              description: Addresses is a list of peer addresses in
+                                "nodeId@host:port" format.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - addresses
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of ec2Tags or static must be set
+                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
+                          : 0) == 1'
+                    type: array
+                  snapshot:
+                    description: |-
+                      Snapshot configures how the node obtains its initial chain state.
+                      When absent the node block-syncs from genesis.
+                    properties:
+                      backfillBlocks:
+                        description: |-
+                          BackfillBlocks is the number of historical blocks to fetch from peers
+                          after snapshot restore.
+                        format: int64
+                        type: integer
+                      bootstrapImage:
+                        description: |-
+                          BootstrapImage is a seid container image used for the PreInitPlan Job.
+                          When set, the controller runs a one-shot Job with this image and the
+                          seictl sidecar to prepare the node's data PVC before the main StatefulSet
+                          starts. The Job restores a snapshot, applies config, and syncs to the
+                          target height.
+                        type: string
+                      s3:
+                        description: S3 downloads a snapshot archive from an S3 bucket.
+                        properties:
+                          targetHeight:
+                            description: TargetHeight is the block height the node
+                              should sync to after restoring.
+                            format: int64
+                            minimum: 1
+                            type: integer
+                        required:
+                        - targetHeight
+                        type: object
+                      stateSync:
+                        description: StateSync fetches snapshot chunks from peers
+                          via Tendermint state sync.
+                        type: object
+                      trustPeriod:
+                        description: |-
+                          TrustPeriod is the window during which the snapshot's block validators
+                          are considered trustworthy. Must be long enough to cover the age of
+                          the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of s3 or stateSync must be set
+                      rule: '(has(self.s3) ? 1 : 0) + (has(self.stateSync) ? 1 : 0)
+                        == 1'
+                  snapshotGeneration:
+                    description: |-
+                      SnapshotGeneration configures periodic snapshot creation and optional upload.
+                      When set, the controller disables pruning and enables snapshot intervals.
+                    properties:
+                      destination:
+                        description: |-
+                          Destination configures where generated snapshots are uploaded.
+                          When set, the controller submits a scheduled upload task to the sidecar.
+                        properties:
+                          s3:
+                            description: S3 uploads snapshots to an S3 bucket.
+                            properties:
+                              bucket:
+                                description: Bucket is the S3 bucket name.
+                                minLength: 1
+                                type: string
+                              prefix:
+                                description: Prefix is an optional key prefix within
+                                  the bucket (e.g. "state-sync/").
+                                type: string
+                              region:
+                                description: Region is the AWS region of the bucket.
+                                minLength: 1
+                                type: string
+                            required:
+                            - bucket
+                            - region
+                            type: object
+                        required:
+                        - s3
+                        type: object
+                      keepRecent:
+                        description: |-
+                          KeepRecent is the number of recent snapshots to retain on disk.
+                          Must be at least 2 so the upload algorithm can select the
+                          second-to-latest completed snapshot.
+                        format: int32
+                        minimum: 2
+                        type: integer
+                    required:
+                    - keepRecent
+                    type: object
+                type: object
+              genesis:
+                description: |-
+                  Genesis configures where the genesis configuration is sourced from.
+                  When omitted for a well-known chain (pacific-1, atlantic-2, arctic-1),
+                  the sidecar writes the embedded genesis from sei-config.
+                properties:
+                  pvc:
+                    description: PVC references a pre-provisioned PVC populated by
+                      SeiNodePool's genesis ceremony.
+                    properties:
+                      dataPVC:
+                        description: DataPVC is the name of the pre-populated PVC
+                          in the same namespace.
+                        minLength: 1
+                        type: string
+                    required:
+                    - dataPVC
+                    type: object
+                  s3:
+                    description: S3 configures the sidecar to download genesis.json
+                      from an S3 bucket.
+                    properties:
+                      region:
+                        description: Region is the AWS region for S3 access.
+                        type: string
+                      uri:
+                        description: URI is the S3 URI of the genesis.json file (s3://bucket/key
+                          format).
+                        minLength: 1
+                        type: string
+                    required:
+                    - uri
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: at most one of pvc or s3 may be set
+                  rule: '(has(self.pvc) ? 1 : 0) + (has(self.s3) ? 1 : 0) <= 1'
+              image:
+                description: Image is the seid container image.
+                maxLength: 512
+                minLength: 1
+                type: string
+              overrides:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Overrides is a flat map of dotted TOML key paths to string values.
+                  Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
+                  These are applied on top of mode defaults during config-apply.
+                type: object
+              podLabels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodLabels are additional labels merged into the StatefulSet pod template.
+                  The controller always sets sei.io/node; these are additive and applied
+                  first so that system labels take precedence.
+                  Must be set before the StatefulSet is first created; changes after
+                  creation require StatefulSet recreation due to selector immutability.
+                type: object
+              replayer:
+                description: Replayer configures an ephemeral replay workload that
+                  restores from a snapshot.
+                properties:
+                  peers:
+                    description: |-
+                      Peers configures how the replayer discovers peers for block sync
+                      after restoring from the snapshot.
+                    items:
+                      description: PeerSource is a union type — exactly one field
+                        must be set.
+                      properties:
+                        ec2Tags:
+                          description: |-
+                            EC2Tags discovers peers by querying EC2 for running instances
+                            matching the specified tags.
+                          properties:
+                            region:
+                              description: Region is the AWS region to query for EC2
+                                instances.
+                              minLength: 1
+                              type: string
+                            tags:
+                              additionalProperties:
+                                type: string
+                              description: Tags are the EC2 instance tags to filter
+                                on.
+                              minProperties: 1
+                              type: object
+                          required:
+                          - region
+                          - tags
+                          type: object
+                        static:
+                          description: Static provides a fixed list of peer addresses.
+                          properties:
+                            addresses:
+                              description: Addresses is a list of peer addresses in
+                                "nodeId@host:port" format.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - addresses
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of ec2Tags or static must be set
+                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
+                          : 0) == 1'
+                    minItems: 1
+                    type: array
+                  resultExport:
+                    description: |-
+                      ResultExport configures periodic export of block execution results to S3.
+                      The sidecar queries the local RPC for block_results and uploads compressed
+                      NDJSON pages on a schedule. Useful for shadow replayers that need their
+                      execution results compared against the canonical chain.
+                    type: object
+                  snapshot:
+                    description: Snapshot identifies the snapshot to restore from
+                      before replay begins.
+                    properties:
+                      backfillBlocks:
+                        description: |-
+                          BackfillBlocks is the number of historical blocks to fetch from peers
+                          after snapshot restore.
+                        format: int64
+                        type: integer
+                      bootstrapImage:
+                        description: |-
+                          BootstrapImage is a seid container image used for the PreInitPlan Job.
+                          When set, the controller runs a one-shot Job with this image and the
+                          seictl sidecar to prepare the node's data PVC before the main StatefulSet
+                          starts. The Job restores a snapshot, applies config, and syncs to the
+                          target height.
+                        type: string
+                      s3:
+                        description: S3 downloads a snapshot archive from an S3 bucket.
+                        properties:
+                          targetHeight:
+                            description: TargetHeight is the block height the node
+                              should sync to after restoring.
+                            format: int64
+                            minimum: 1
+                            type: integer
+                        required:
+                        - targetHeight
+                        type: object
+                      stateSync:
+                        description: StateSync fetches snapshot chunks from peers
+                          via Tendermint state sync.
+                        type: object
+                      trustPeriod:
+                        description: |-
+                          TrustPeriod is the window during which the snapshot's block validators
+                          are considered trustworthy. Must be long enough to cover the age of
+                          the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of s3 or stateSync must be set
+                      rule: '(has(self.s3) ? 1 : 0) + (has(self.stateSync) ? 1 : 0)
+                        == 1'
+                required:
+                - peers
+                - snapshot
+                type: object
+              sidecar:
+                description: Sidecar configures the sei-sidecar container.
+                properties:
+                  image:
+                    description: Image overrides the sidecar container image.
+                    type: string
+                  port:
+                    default: 7777
+                    description: Port is the HTTP port the sidecar listens on.
+                    format: int32
+                    type: integer
+                  resources:
+                    description: Resources defines CPU/memory requests and limits
+                      for the sidecar container.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                type: object
+              storage:
+                description: Storage controls PVC lifecycle.
+                properties:
+                  retainOnDelete:
+                    default: false
+                    description: |-
+                      RetainOnDelete prevents the data PVC from being deleted when the
+                      SeiNode is deleted.
+                    type: boolean
+                type: object
+              validator:
+                description: Validator configures a consensus-participating validator
+                  node.
+                properties:
+                  peers:
+                    description: Peers configures how this node discovers and connects
+                      to peers.
+                    items:
+                      description: PeerSource is a union type — exactly one field
+                        must be set.
+                      properties:
+                        ec2Tags:
+                          description: |-
+                            EC2Tags discovers peers by querying EC2 for running instances
+                            matching the specified tags.
+                          properties:
+                            region:
+                              description: Region is the AWS region to query for EC2
+                                instances.
+                              minLength: 1
+                              type: string
+                            tags:
+                              additionalProperties:
+                                type: string
+                              description: Tags are the EC2 instance tags to filter
+                                on.
+                              minProperties: 1
+                              type: object
+                          required:
+                          - region
+                          - tags
+                          type: object
+                        static:
+                          description: Static provides a fixed list of peer addresses.
+                          properties:
+                            addresses:
+                              description: Addresses is a list of peer addresses in
+                                "nodeId@host:port" format.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                          required:
+                          - addresses
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: exactly one of ec2Tags or static must be set
+                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
+                          : 0) == 1'
+                    type: array
+                  snapshot:
+                    description: |-
+                      Snapshot configures how the node obtains its initial chain state.
+                      When absent the node block-syncs from genesis.
+                    properties:
+                      backfillBlocks:
+                        description: |-
+                          BackfillBlocks is the number of historical blocks to fetch from peers
+                          after snapshot restore.
+                        format: int64
+                        type: integer
+                      bootstrapImage:
+                        description: |-
+                          BootstrapImage is a seid container image used for the PreInitPlan Job.
+                          When set, the controller runs a one-shot Job with this image and the
+                          seictl sidecar to prepare the node's data PVC before the main StatefulSet
+                          starts. The Job restores a snapshot, applies config, and syncs to the
+                          target height.
+                        type: string
+                      s3:
+                        description: S3 downloads a snapshot archive from an S3 bucket.
+                        properties:
+                          targetHeight:
+                            description: TargetHeight is the block height the node
+                              should sync to after restoring.
+                            format: int64
+                            minimum: 1
+                            type: integer
+                        required:
+                        - targetHeight
+                        type: object
+                      stateSync:
+                        description: StateSync fetches snapshot chunks from peers
+                          via Tendermint state sync.
+                        type: object
+                      trustPeriod:
+                        description: |-
+                          TrustPeriod is the window during which the snapshot's block validators
+                          are considered trustworthy. Must be long enough to cover the age of
+                          the snapshot (e.g. "9999h0m0s" for old S3 snapshots).
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of s3 or stateSync must be set
+                      rule: '(has(self.s3) ? 1 : 0) + (has(self.stateSync) ? 1 : 0)
+                        == 1'
+                type: object
+            required:
+            - chainId
+            - image
+            type: object
+            x-kubernetes-validations:
+            - message: exactly one of fullNode, archive, replayer, or validator must
+                be set
+              rule: '(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) +
+                (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1'
+          status:
+            description: SeiNodeStatus defines the observed state of a SeiNode.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              configStatus:
+                description: ConfigStatus reports the observed configuration state
+                  from the sidecar.
+                properties:
+                  diagnostics:
+                    description: Diagnostics contains validation findings from the
+                      last config-validate task.
+                    items:
+                      description: ConfigDiagnostic is a single finding from config
+                        validation.
+                      properties:
+                        field:
+                          description: Field is the config key path that the diagnostic
+                            applies to.
+                          type: string
+                        message:
+                          description: Message describes the finding.
+                          type: string
+                        severity:
+                          description: 'Severity is the diagnostic level: ERROR, WARNING,
+                            or INFO.'
+                          type: string
+                      required:
+                      - field
+                      - message
+                      - severity
+                      type: object
+                    type: array
+                  driftDetected:
+                    description: DriftDetected is true when the on-disk config diverges
+                      from the CRD-desired state.
+                    type: boolean
+                  lastAppliedAt:
+                    description: LastAppliedAt is the timestamp of the last successful
+                      config-apply task.
+                    format: date-time
+                    type: string
+                  lastValidatedAt:
+                    description: LastValidatedAt is the timestamp of the last successful
+                      config-validate task.
+                    format: date-time
+                    type: string
+                  mode:
+                    description: Mode is the config mode that was applied.
+                    type: string
+                  version:
+                    description: Version is the on-disk config schema version.
+                    type: integer
+                type: object
+              initPlan:
+                description: InitPlan tracks the initialization task sequence for
+                  this node.
+                properties:
+                  phase:
+                    description: Phase is the overall state of the plan.
+                    enum:
+                    - Active
+                    - Complete
+                    - Failed
+                    type: string
+                  tasks:
+                    description: Tasks is the ordered list of tasks to execute.
+                    items:
+                      description: PlannedTask is a single task within a TaskPlan.
+                      properties:
+                        error:
+                          description: Error is the error message if the task failed.
+                          type: string
+                        status:
+                          description: Status is the current state of this task.
+                          enum:
+                          - Pending
+                          - Submitted
+                          - Complete
+                          - Failed
+                          type: string
+                        taskID:
+                          description: TaskID is the UUID assigned by the sidecar
+                            when the task was submitted.
+                          type: string
+                        type:
+                          description: Type identifies the sidecar task (e.g. "snapshot-restore",
+                            "config-patch").
+                          type: string
+                      required:
+                      - status
+                      - type
+                      type: object
+                    type: array
+                required:
+                - phase
+                - tasks
+                type: object
+              phase:
+                description: Phase is the high-level lifecycle state.
+                enum:
+                - Pending
+                - PreInitializing
+                - Initializing
+                - Running
+                - Failed
+                - Terminating
+                type: string
+              preInitPlan:
+                description: PreInitPlan tracks the pre-initialization task sequence
+                  (bootstrap Job).
+                properties:
+                  phase:
+                    description: Phase is the overall state of the plan.
+                    enum:
+                    - Active
+                    - Complete
+                    - Failed
+                    type: string
+                  tasks:
+                    description: Tasks is the ordered list of tasks to execute.
+                    items:
+                      description: PlannedTask is a single task within a TaskPlan.
+                      properties:
+                        error:
+                          description: Error is the error message if the task failed.
+                          type: string
+                        status:
+                          description: Status is the current state of this task.
+                          enum:
+                          - Pending
+                          - Submitted
+                          - Complete
+                          - Failed
+                          type: string
+                        taskID:
+                          description: TaskID is the UUID assigned by the sidecar
+                            when the task was submitted.
+                          type: string
+                        type:
+                          description: Type identifies the sidecar task (e.g. "snapshot-restore",
+                            "config-patch").
+                          type: string
+                      required:
+                      - status
+                      - type
+                      type: object
+                    type: array
+                required:
+                - phase
+                - tasks
+                type: object
+              scheduledTasks:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ScheduledTasks maps task type to the sidecar-assigned UUID of its
+                  scheduled task.
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

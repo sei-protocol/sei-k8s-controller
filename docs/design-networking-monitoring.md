@@ -12,7 +12,7 @@ The SeiNode controller manages single-node lifecycle (bootstrap → init → run
 
 - **Multiple nodes** behind a shared load balancer (sei-infra runs 3 instances per role)
 - **External Service** (ClusterIP/LoadBalancer) for RPC, REST, and EVM traffic
-- **Ingress routing** (Istio Gateway / Kubernetes Ingress) with TLS for public endpoints
+- **Ingress routing** via Kubernetes Gateway API (HTTPRoute) with TLS for public endpoints
 - **Network isolation** so that only the ingress gateway and authorized peers can reach node APIs
 - **DNS** (Route53 via external-dns) for stable hostnames
 - **Monitoring** (Prometheus ServiceMonitor) for observability
@@ -56,11 +56,11 @@ This follows the same pattern as the existing `SeiNodePool → SeiNode` relation
 
 2. **Same patterns as SeiNodePool** — The SeiNodeGroup controller follows the same `ensureSeiNode` / `updateStatus` / owner-reference patterns already established by SeiNodePool. No new controller patterns to learn.
 
-3. **Passthrough over abstraction** — Service annotations, Ingress annotations, and Istio config use Kubernetes-native values. No DSL wrappers.
+3. **Passthrough over abstraction** — Service annotations, HTTPRoute annotations, and Istio config use Kubernetes-native values. No DSL wrappers.
 
 4. **Safe by default** — `DeletionPolicy` governs both networking resources and child SeiNodes. Network isolation is an additive feature, not a breaking change.
 
-5. **Two-way doors only** — Every field is optional. WAF is just an annotation. Istio support is additive to Ingress support. Update strategy for rolling out changes across replicas is a future concern that the current design does not block.
+5. **Two-way doors only** — Every field is optional. WAF is just an annotation on the Service or HTTPRoute. Update strategy for rolling out changes across replicas is a future concern that the current design does not block.
 
 6. **SeiNodePool vs SeiNodeGroup** — SeiNodePool is for genesis network bootstrapping (prep jobs, shared genesis PVC, then SeiNodes). SeiNodeGroup is for production fleet management (N nodes from a template + shared networking/monitoring). They target different use cases and should not manage the same SeiNodes.
 
@@ -259,37 +259,25 @@ const (
 )
 
 // NetworkingConfig controls how the group is exposed to traffic.
-// +kubebuilder:validation:XValidation:rule="!has(self.ingress) || has(self.service)",message="ingress requires service to be configured"
+//
+// Routing uses the Kubernetes Gateway API exclusively; the platform must
+// install the Gateway API CRDs (v1+) and a Gateway implementation such
+// as Istio before HTTPRoute resources will take effect.
 // +kubebuilder:validation:XValidation:rule="!has(self.gateway) || has(self.service)",message="gateway requires service to be configured"
-// +kubebuilder:validation:XValidation:rule="!(has(self.ingress) && has(self.gateway))",message="only one of ingress or gateway may be set"
 type NetworkingConfig struct {
     // Service creates a non-headless Service shared across all replicas.
     // Each SeiNode still gets its own headless Service for pod DNS.
     // +optional
     Service *ExternalServiceConfig `json:"service,omitempty"`
 
-    // Ingress creates a networking.k8s.io/v1 Ingress resource.
-    // Use for clusters without Istio / Gateway API.
-    // +optional
-    Ingress *IngressConfig `json:"ingress,omitempty"`
-
     // Gateway creates a gateway.networking.k8s.io/v1 HTTPRoute
     // targeting a shared Gateway (e.g. Istio ingress gateway).
-    // Use for clusters with Istio or a Gateway API implementation.
     // +optional
     Gateway *GatewayRouteConfig `json:"gateway,omitempty"`
 
     // Isolation configures network-level access control for node pods.
     // +optional
     Isolation *NetworkIsolationConfig `json:"isolation,omitempty"`
-
-    // DeletionPolicy controls what happens to the external Service,
-    // Ingress/HTTPRoute, and AuthorizationPolicy when spec.networking
-    // is removed. "Delete" (default) removes managed resources. "Retain"
-    // orphans them so load balancers and DNS survive spec changes.
-    // +optional
-    // +kubebuilder:default=Delete
-    DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 
 // ExternalServiceConfig defines the shared non-headless Service.
@@ -308,55 +296,6 @@ type ExternalServiceConfig struct {
     // Annotations are merged onto the Service metadata.
     // +optional
     Annotations map[string]string `json:"annotations,omitempty"`
-}
-
-// IngressConfig defines a networking.k8s.io/v1 Ingress.
-// +kubebuilder:validation:XValidation:rule="!has(self.tls) || !self.tls.enabled || has(self.className)",message="tls requires className to be set"
-type IngressConfig struct {
-    // ClassName is the IngressClass (e.g. "alb", "nginx").
-    // +optional
-    ClassName *string `json:"className,omitempty"`
-
-    // Host is the DNS hostname for the Ingress rule.
-    // +kubebuilder:validation:MinLength=1
-    Host string `json:"host"`
-
-    // Annotations are merged onto the Ingress metadata.
-    // +optional
-    Annotations map[string]string `json:"annotations,omitempty"`
-
-    // TLS configures TLS termination.
-    // +optional
-    TLS *IngressTLS `json:"tls,omitempty"`
-
-    // Paths defines routing rules. When empty, "/" routes to the
-    // first Service port. Order is preserved.
-    // +optional
-    Paths []IngressPath `json:"paths,omitempty"`
-}
-
-// IngressTLS configures TLS for the Ingress.
-type IngressTLS struct {
-    // Enabled controls whether TLS is configured.
-    // +kubebuilder:default=true
-    Enabled bool `json:"enabled"`
-
-    // SecretName references a TLS Secret. When omitted, the
-    // IngressClass default is used (e.g. ACM for ALB).
-    // +optional
-    SecretName *string `json:"secretName,omitempty"`
-}
-
-// IngressPath maps a URL path to a Service port.
-type IngressPath struct {
-    // +kubebuilder:validation:MinLength=1
-    Path string `json:"path"`
-
-    // +optional
-    // +kubebuilder:default=Prefix
-    PathType networkingv1.PathType `json:"pathType,omitempty"`
-
-    PortName PortName `json:"portName"`
 }
 
 // GatewayRouteConfig creates a gateway.networking.k8s.io/v1 HTTPRoute
@@ -445,7 +384,7 @@ type ServiceMonitorConfig struct {
 const (
     ConditionNodesReady            = "NodesReady"
     ConditionExternalServiceReady  = "ExternalServiceReady"
-    ConditionRouteReady            = "RouteReady"          // Ingress or HTTPRoute
+    ConditionRouteReady            = "RouteReady"          // HTTPRoute
     ConditionIsolationReady        = "IsolationReady"      // AuthorizationPolicy
     ConditionServiceMonitorReady   = "ServiceMonitorReady"
 )
@@ -484,7 +423,6 @@ labels["sei.io/group-ordinal"] = strconv.Itoa(ordinal)
 | SeiNode | `{group}-{ordinal}` | Matches SeiNodePool pattern |
 | External Service | `{group}-external` | Distinguishes from per-node headless Services |
 | HTTPRoute | `{group}` | One route per group |
-| Ingress | `{group}` | One ingress per group |
 | AuthorizationPolicy | `{group}` | Applied to all group pods |
 | ServiceMonitor | `{group}` | Scrapes all group pods |
 
@@ -505,7 +443,7 @@ internal/controller/
 ├── nodegroup/                   # NEW: SeiNodeGroup controller
 │   ├── controller.go            # Reconcile loop, phase transitions
 │   ├── nodes.go                 # ensureSeiNode, scaleDown
-│   ├── networking.go            # External Service, Ingress, HTTPRoute,
+│   ├── networking.go            # External Service, HTTPRoute,
 │   │                            # AuthorizationPolicy generation + reconcile
 │   ├── monitoring.go            # ServiceMonitor generation + reconcile
 │   ├── status.go                # Status aggregation
@@ -615,7 +553,7 @@ Each networking resource is managed independently:
 ```go
 func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx, group) error {
     r.reconcileExternalService(ctx, group)
-    r.reconcileRoute(ctx, group)          // Ingress OR HTTPRoute
+    r.reconcileRoute(ctx, group)          // HTTPRoute
     r.reconcileIsolation(ctx, group)      // AuthorizationPolicy
 }
 ```
@@ -627,7 +565,7 @@ func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx, group) error {
 - If spec is nil and `deletionPolicy: Delete`, delete the Service
 - If spec is nil and `deletionPolicy: Retain`, remove owner reference (orphan)
 
-**HTTPRoute / Ingress:**
+**HTTPRoute:**
 - Generated as `unstructured.Unstructured` (avoids importing Gateway API Go modules)
 - Backend targets `{group}-external` Service
 - If CRD not installed (no Gateway API), sets `RouteReady` condition to False
@@ -708,7 +646,6 @@ When `Retain`, the finalizer removes owner references from all managed resources
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
@@ -722,7 +659,6 @@ func (r *SeiNodeGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
         For(&seiv1alpha1.SeiNodeGroup{}).
         Owns(&seiv1alpha1.SeiNode{}).
         Owns(&corev1.Service{}).
-        Owns(&networkingv1.Ingress{}).
         Named("seinodegroup").
         Complete(r)
 }
@@ -759,28 +695,7 @@ networking:
         - namespaces: ["sei-nodes"]
 ```
 
-### Pattern 2: ALB Ingress (no Istio)
-
-Traffic flow: `Client → ALB (WAF, TLS) → pod`
-
-```yaml
-networking:
-  deletionPolicy: Retain
-  service:
-    type: ClusterIP
-    ports: ["rpc", "rest", "evm-http", "evm-ws"]
-  ingress:
-    className: alb
-    host: rpc.sei-archive.pacific-1.seinetwork.io
-    tls:
-      enabled: true
-    annotations:
-      alb.ingress.kubernetes.io/scheme: internet-facing
-      alb.ingress.kubernetes.io/target-type: ip
-      alb.ingress.kubernetes.io/wafv2-acl-arn: "arn:aws:wafv2:..."
-```
-
-### Pattern 3: NLB for TCP (p2p, gRPC)
+### Pattern 2: NLB for TCP (p2p, gRPC)
 
 ```yaml
 networking:
@@ -794,12 +709,12 @@ networking:
 
 ### WAF
 
-WAF is an ALB annotation (`alb.ingress.kubernetes.io/wafv2-acl-arn`). The WAF WebACL is provisioned by the platform team (Terraform) and referenced by ARN. This is a two-way door — adding or removing the annotation just toggles WAF on the ALB.
+WAF is provisioned by the platform team (Terraform) and applied externally (e.g. via AWS WAF associated with the NLB or ALB fronting the Istio ingress gateway). This is a two-way door — WAF configuration lives outside the controller and can be toggled independently.
 
 ### DNS
 
-DNS is handled by external-dns, which reads HTTPRoute `hostnames` or Ingress `host` fields and creates Route53 records. Prerequisites:
-- external-dns deployed with `--source=ingress` and/or `--source=gateway-httproute`
+DNS is handled by external-dns, which reads HTTPRoute `hostnames` fields and creates Route53 records. Prerequisites:
+- external-dns deployed with `--source=gateway-httproute`
 - `--domain-filter` matching the target domain
 - IAM permissions for Route53
 
@@ -918,8 +833,7 @@ Existing SeiNode manifests without `podLabels` continue to work identically. Sei
 | `sei.io/group` label on child SeiNodes | Remove label. SeiNode controller doesn't read this label. | None |
 | Unstructured HTTPRoute / AuthorizationPolicy / ServiceMonitor | Switch to typed imports later. Same apply semantics. | Code change only |
 | `DeletionPolicy` (covers nodes + networking) | Change per-group. Existing groups unaffected. | Per-resource |
-| Ingress alongside Gateway API | Both optional, mutually exclusive. Remove one whenever ready. | Additive |
-| WAF | Just an annotation on Ingress/HTTPRoute. Add/remove at will. | Two-way door |
+| WAF | External to controller. Managed by platform team via Terraform/annotations. | Two-way door |
 | Network isolation via AuthorizationPolicy | Optional field. Remove to disable. Istio defaults to ALLOW-all when no policy exists. | Two-way door |
 | Controller SA auto-injection in AuthPolicy | Implementation detail. User never sees it in spec. | Transparent |
 
@@ -946,7 +860,7 @@ Existing SeiNode manifests without `podLabels` continue to work identically. Sei
 - [ ] Unit tests for node orchestration and status
 
 ### Phase 2: Shared Networking
-- [ ] `internal/controller/nodegroup/networking.go` — External Service, Ingress, HTTPRoute, AuthorizationPolicy
+- [ ] `internal/controller/nodegroup/networking.go` — External Service, HTTPRoute, AuthorizationPolicy
 - [ ] Controller SA auto-injection into AuthorizationPolicy
 - [ ] DeletionPolicy logic (delete vs orphan, covers nodes + networking)
 - [ ] Status conditions for each networking resource
