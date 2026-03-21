@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -26,7 +27,8 @@ const (
 // SeiNodeGroupReconciler reconciles a SeiNodeGroup object.
 type SeiNodeGroupReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 
 	// ControllerSA is the SPIFFE principal of the controller's ServiceAccount.
 	// It is auto-injected into every AuthorizationPolicy to ensure the
@@ -40,6 +42,7 @@ type SeiNodeGroupReconciler struct {
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
@@ -63,6 +66,11 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	// Snapshot the status before any reconciliation mutates it in memory.
+	// Conditions set during networking/monitoring reconciliation are captured
+	// in the diff when updateStatus patches against this base.
+	statusBase := client.MergeFrom(group.DeepCopy())
+
 	if err := r.reconcileSeiNodes(ctx, group); err != nil {
 		logger.Error(err, "reconciling SeiNodes")
 		return ctrl.Result{}, fmt.Errorf("reconciling SeiNodes: %w", err)
@@ -78,7 +86,7 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("reconciling monitoring: %w", err)
 	}
 
-	if err := r.updateStatus(ctx, group); err != nil {
+	if err := r.updateStatus(ctx, group, statusBase); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 	}
 
@@ -89,8 +97,9 @@ func (r *SeiNodeGroupReconciler) ensureFinalizer(ctx context.Context, group *sei
 	if controllerutil.ContainsFinalizer(group, groupFinalizerName) {
 		return nil
 	}
+	patch := client.MergeFrom(group.DeepCopy())
 	controllerutil.AddFinalizer(group, groupFinalizerName)
-	return r.Update(ctx, group)
+	return r.Patch(ctx, group, patch)
 }
 
 func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) (ctrl.Result, error) {
@@ -110,6 +119,7 @@ func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv
 	}
 
 	if policy == seiv1alpha1.DeletionPolicyRetain {
+		r.Recorder.Event(group, corev1.EventTypeNormal, "RetainResources", "Orphaning child SeiNodes and networking resources")
 		if err := r.orphanChildSeiNodes(ctx, group); err != nil {
 			return ctrl.Result{}, fmt.Errorf("orphaning child SeiNodes: %w", err)
 		}
@@ -118,6 +128,7 @@ func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv
 		}
 	} else {
 		if err := r.deleteNetworkingResources(ctx, group); err != nil {
+			r.Recorder.Eventf(group, corev1.EventTypeWarning, "DeleteFailed", "Failed to clean up networking resources: %v", err)
 			return ctrl.Result{}, fmt.Errorf("cleaning up networking: %w", err)
 		}
 	}

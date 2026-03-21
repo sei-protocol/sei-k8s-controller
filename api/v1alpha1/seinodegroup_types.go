@@ -6,6 +6,7 @@ import (
 )
 
 // SeiNodeGroupSpec defines the desired state of a SeiNodeGroup.
+// +kubebuilder:validation:XValidation:rule="!(has(self.monitoring) && has(self.monitoring.serviceMonitor) && has(self.networking) && has(self.networking.service) && has(self.networking.service.ports) && size(self.networking.service.ports) > 0) || self.networking.service.ports.exists(p, p == 'metrics')",message="networking.service.ports must include 'metrics' when monitoring.serviceMonitor is configured"
 type SeiNodeGroupSpec struct {
 	// Replicas is the number of SeiNode instances to create.
 	// +kubebuilder:validation:Minimum=1

@@ -52,6 +52,7 @@ type ExternalServiceConfig struct {
 	// Ports selects which node ports to expose. When empty, all
 	// standard sei-config ports are exposed.
 	// +optional
+	// +listType=set
 	Ports []PortName `json:"ports,omitempty"`
 
 	// Annotations are merged onto the Service metadata.

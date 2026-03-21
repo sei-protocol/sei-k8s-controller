@@ -4,20 +4,21 @@ import (
 	"context"
 	"fmt"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 func (r *SeiNodeGroupReconciler) reconcileMonitoring(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Monitoring == nil || group.Spec.Monitoring.ServiceMonitor == nil {
-		return nil
+		removeCondition(group, seiv1alpha1.ConditionServiceMonitorReady)
+		return r.deleteUnstructured(ctx, group, serviceMonitorGVK())
 	}
 	return r.reconcileServiceMonitor(ctx, group)
 }
@@ -28,28 +29,14 @@ func (r *SeiNodeGroupReconciler) reconcileServiceMonitor(ctx context.Context, gr
 		return fmt.Errorf("setting owner reference on ServiceMonitor: %w", err)
 	}
 
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(serviceMonitorGVK())
-	err := r.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: group.Namespace}, existing)
+	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 	if meta.IsNoMatchError(err) {
+		r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Prometheus Operator CRD (ServiceMonitor) is not installed; monitoring will not be configured")
 		setCondition(group, seiv1alpha1.ConditionServiceMonitorReady, metav1.ConditionFalse,
 			"CRDNotInstalled", "Prometheus Operator CRD (ServiceMonitor) is not installed")
 		return nil
 	}
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
-			return err
-		}
-		setCondition(group, seiv1alpha1.ConditionServiceMonitorReady, metav1.ConditionTrue,
-			"ServiceMonitorReady", "ServiceMonitor reconciled successfully")
-		return nil
-	}
 	if err != nil {
-		return err
-	}
-
-	desired.SetResourceVersion(existing.GetResourceVersion())
-	if err := r.Update(ctx, desired); err != nil {
 		return err
 	}
 	setCondition(group, seiv1alpha1.ConditionServiceMonitorReady, metav1.ConditionTrue,

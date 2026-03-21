@@ -203,6 +203,7 @@ spec:
                           - metrics
                           type: string
                         type: array
+                        x-kubernetes-list-type: set
                       type:
                         default: ClusterIP
                         description: Type is the Kubernetes Service type.
@@ -888,6 +889,13 @@ spec:
             - replicas
             - template
             type: object
+            x-kubernetes-validations:
+            - message: networking.service.ports must include 'metrics' when monitoring.serviceMonitor
+                is configured
+              rule: '!(has(self.monitoring) && has(self.monitoring.serviceMonitor)
+                && has(self.networking) && has(self.networking.service) && has(self.networking.service.ports)
+                && size(self.networking.service.ports) > 0) || self.networking.service.ports.exists(p,
+                p == ''metrics'')'
           status:
             description: SeiNodeGroupStatus defines the observed state of a SeiNodeGroup.
             properties:

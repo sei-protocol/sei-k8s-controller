@@ -16,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -114,7 +113,8 @@ func externalServicePorts(portNames []seiv1alpha1.PortName) []corev1.ServicePort
 
 func (r *SeiNodeGroupReconciler) reconcileRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Networking.Gateway == nil {
-		return nil
+		removeCondition(group, seiv1alpha1.ConditionRouteReady)
+		return r.deleteUnstructured(ctx, group, httpRouteGVK())
 	}
 	return r.reconcileHTTPRoute(ctx, group)
 }
@@ -126,28 +126,14 @@ func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *
 		return fmt.Errorf("setting owner reference on HTTPRoute: %w", err)
 	}
 
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(httpRouteGVK())
-	err := r.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: group.Namespace}, existing)
+	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 	if meta.IsNoMatchError(err) {
+		r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed; HTTPRoute will not be created")
 		setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionFalse,
 			"CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed")
 		return nil
 	}
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
-			return err
-		}
-		setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionTrue,
-			"HTTPRouteReady", "HTTPRoute reconciled successfully")
-		return nil
-	}
 	if err != nil {
-		return err
-	}
-
-	desired.SetResourceVersion(existing.GetResourceVersion())
-	if err := r.Update(ctx, desired); err != nil {
 		return err
 	}
 	setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionTrue,
@@ -222,11 +208,12 @@ func httpRouteGVK() schema.GroupVersionKind {
 
 func (r *SeiNodeGroupReconciler) reconcileIsolation(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Networking.Isolation == nil || group.Spec.Networking.Isolation.AuthorizationPolicy == nil {
-		return nil
+		removeCondition(group, seiv1alpha1.ConditionIsolationReady)
+		return r.deleteUnstructured(ctx, group, authPolicyGVK())
 	}
 
 	if r.ControllerSA == "" {
-		log.FromContext(ctx).Info("WARNING: SEI_CONTROLLER_SA_PRINCIPAL is not set; AuthorizationPolicy will not include controller SA, sidecar communication may be blocked")
+		r.Recorder.Event(group, corev1.EventTypeWarning, "ControllerSAMissing", "SEI_CONTROLLER_SA_PRINCIPAL is not set; AuthorizationPolicy will not include controller SA, sidecar communication may be blocked")
 		setCondition(group, seiv1alpha1.ConditionIsolationReady, metav1.ConditionFalse,
 			"ControllerSAMissing", "SEI_CONTROLLER_SA_PRINCIPAL env var is not set; controller SA will not be injected into AuthorizationPolicy")
 	}
@@ -236,30 +223,14 @@ func (r *SeiNodeGroupReconciler) reconcileIsolation(ctx context.Context, group *
 		return fmt.Errorf("setting owner reference on AuthorizationPolicy: %w", err)
 	}
 
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(authPolicyGVK())
-	err := r.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: group.Namespace}, existing)
+	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 	if meta.IsNoMatchError(err) {
+		r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Istio CRD (AuthorizationPolicy) is not installed; isolation will not be enforced")
 		setCondition(group, seiv1alpha1.ConditionIsolationReady, metav1.ConditionFalse,
 			"CRDNotInstalled", "Istio CRD (AuthorizationPolicy) is not installed")
 		return nil
 	}
-	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, desired); err != nil {
-			return err
-		}
-		if r.ControllerSA != "" {
-			setCondition(group, seiv1alpha1.ConditionIsolationReady, metav1.ConditionTrue,
-				"AuthorizationPolicyReady", "AuthorizationPolicy reconciled successfully")
-		}
-		return nil
-	}
 	if err != nil {
-		return err
-	}
-
-	desired.SetResourceVersion(existing.GetResourceVersion())
-	if err := r.Update(ctx, desired); err != nil {
 		return err
 	}
 	if r.ControllerSA != "" {
@@ -349,10 +320,11 @@ func (r *SeiNodeGroupReconciler) deleteNetworkingResources(ctx context.Context, 
 		}
 	}
 
-	r.deleteUnstructured(ctx, group, httpRouteGVK())      //nolint:errcheck // best-effort
-	r.deleteUnstructured(ctx, group, authPolicyGVK())     //nolint:errcheck // best-effort
-	r.deleteUnstructured(ctx, group, serviceMonitorGVK()) //nolint:errcheck // best-effort
-
+	for _, gvk := range []schema.GroupVersionKind{httpRouteGVK(), authPolicyGVK(), serviceMonitorGVK()} {
+		if err := r.deleteUnstructured(ctx, group, gvk); err != nil {
+			return fmt.Errorf("deleting %s: %w", gvk.Kind, err)
+		}
+	}
 	return nil
 }
 
@@ -361,24 +333,36 @@ func (r *SeiNodeGroupReconciler) deleteUnstructured(ctx context.Context, group *
 	obj.SetGroupVersionKind(gvk)
 	obj.SetName(group.Name)
 	obj.SetNamespace(group.Namespace)
-	return client.IgnoreNotFound(r.Delete(ctx, obj))
+	err := r.Delete(ctx, obj)
+	if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+		return nil
+	}
+	return err
 }
 
 func (r *SeiNodeGroupReconciler) orphanNetworkingResources(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	svc := &corev1.Service{}
-	if err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc); err == nil {
+	err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc)
+	if err == nil {
 		if err := r.removeOwnerRef(ctx, svc, group); err != nil {
 			return fmt.Errorf("orphaning external Service: %w", err)
 		}
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("fetching external Service for orphan: %w", err)
 	}
 
 	for _, gvk := range []schema.GroupVersionKind{httpRouteGVK(), authPolicyGVK(), serviceMonitorGVK()} {
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(gvk)
-		if err := r.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: group.Namespace}, obj); err == nil {
-			if err := r.removeOwnerRef(ctx, obj, group); err != nil {
-				return fmt.Errorf("orphaning %s: %w", gvk.Kind, err)
-			}
+		err := r.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: group.Namespace}, obj)
+		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("fetching %s for orphan: %w", gvk.Kind, err)
+		}
+		if err := r.removeOwnerRef(ctx, obj, group); err != nil {
+			return fmt.Errorf("orphaning %s: %w", gvk.Kind, err)
 		}
 	}
 	return nil

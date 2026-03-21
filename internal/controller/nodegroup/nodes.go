@@ -3,6 +3,7 @@ package nodegroup
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -56,6 +57,10 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 		existing.Spec.Sidecar = desired.Spec.Sidecar
 		updated = true
 	}
+	if !maps.Equal(existing.Spec.PodLabels, desired.Spec.PodLabels) {
+		existing.Spec.PodLabels = desired.Spec.PodLabels
+		updated = true
+	}
 	if updated {
 		return r.Update(ctx, existing)
 	}
@@ -100,6 +105,9 @@ func (r *SeiNodeGroupReconciler) scaleDown(ctx context.Context, group *seiv1alph
 
 	for i := range nodeList.Items {
 		node := &nodeList.Items[i]
+		if !metav1.IsControlledBy(node, group) {
+			continue
+		}
 		if node.Labels[groupOrdinalLabel] == "" {
 			continue
 		}

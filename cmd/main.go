@@ -166,6 +166,7 @@ func main() {
 	if err := (&nodegroupcontroller.SeiNodeGroupReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorderFor("seinodegroup-controller"),
 		ControllerSA: controllerSA,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNodeGroup")

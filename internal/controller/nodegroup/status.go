@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -13,9 +13,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
-	patch := client.MergeFrom(group.DeepCopy())
-
+func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, statusBase client.Patch) error {
 	nodes, err := r.listChildSeiNodes(ctx, group)
 	if err != nil {
 		return err
@@ -39,12 +37,14 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses
 	group.Status.Phase = computeGroupPhase(readyReplicas, group.Spec.Replicas, nodes)
-	group.Status.NetworkingStatus = r.readNetworkingStatus(ctx, group)
+
+	svc := r.fetchExternalService(ctx, group)
+	group.Status.NetworkingStatus = buildNetworkingStatus(group, svc)
 
 	setNodesReadyCondition(group, readyReplicas, group.Spec.Replicas, nodes)
-	setExternalServiceCondition(ctx, r, group)
+	setExternalServiceCondition(group, svc)
 
-	return r.Status().Patch(ctx, group, patch)
+	return r.Status().Patch(ctx, group, statusBase)
 }
 
 func computeGroupPhase(ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1alpha1.SeiNodeGroupPhase {
@@ -69,26 +69,30 @@ func computeGroupPhase(ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1a
 		if ready > 0 {
 			return seiv1alpha1.GroupPhaseDegraded
 		}
-		// Some failed, some still initializing
 	}
 	return seiv1alpha1.GroupPhaseInitializing
 }
 
-func (r *SeiNodeGroupReconciler) readNetworkingStatus(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) *seiv1alpha1.NetworkingStatus {
+// fetchExternalService returns the external Service if networking is configured,
+// or nil if not configured or not yet created.
+func (r *SeiNodeGroupReconciler) fetchExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
 	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
 		return nil
 	}
-
 	svc := &corev1.Service{}
-	svcName := externalServiceName(group)
-	if err := r.Get(ctx, types.NamespacedName{Name: svcName, Namespace: group.Namespace}, svc); err != nil {
-		return &seiv1alpha1.NetworkingStatus{ExternalServiceName: svcName}
+	if err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc); err != nil {
+		return nil
 	}
+	return svc
+}
 
-	status := &seiv1alpha1.NetworkingStatus{
-		ExternalServiceName: svcName,
+func buildNetworkingStatus(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Service) *seiv1alpha1.NetworkingStatus {
+	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
+		return nil
 	}
-	if len(svc.Status.LoadBalancer.Ingress) > 0 {
+	svcName := externalServiceName(group)
+	status := &seiv1alpha1.NetworkingStatus{ExternalServiceName: svcName}
+	if svc != nil && len(svc.Status.LoadBalancer.Ingress) > 0 {
 		status.LoadBalancerIngress = svc.Status.LoadBalancer.Ingress
 	}
 	return status
@@ -123,18 +127,14 @@ func setNodesReadyCondition(group *seiv1alpha1.SeiNodeGroup, ready, desired int3
 	setCondition(group, seiv1alpha1.ConditionNodesReady, status, reason, message)
 }
 
-func setExternalServiceCondition(ctx context.Context, r *SeiNodeGroupReconciler, group *seiv1alpha1.SeiNodeGroup) {
+func setExternalServiceCondition(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Service) {
 	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
 		return
 	}
 
-	svc := &corev1.Service{}
-	svcName := externalServiceName(group)
-	if err := r.Get(ctx, types.NamespacedName{Name: svcName, Namespace: group.Namespace}, svc); err != nil {
-		if apierrors.IsNotFound(err) {
-			setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionFalse,
-				"ServiceNotFound", "External Service not yet created")
-		}
+	if svc == nil {
+		setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionFalse,
+			"ServiceNotFound", "External Service not yet created")
 		return
 	}
 
@@ -145,27 +145,19 @@ func setExternalServiceCondition(ctx context.Context, r *SeiNodeGroupReconciler,
 	}
 
 	setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionTrue,
-		"ServiceReady", fmt.Sprintf("External Service %s is ready", svcName))
+		"ServiceReady", fmt.Sprintf("External Service %s is ready", svc.Name))
+}
+
+func removeCondition(group *seiv1alpha1.SeiNodeGroup, condType string) {
+	apimeta.RemoveStatusCondition(&group.Status.Conditions, condType)
 }
 
 func setCondition(group *seiv1alpha1.SeiNodeGroup, condType string, status metav1.ConditionStatus, reason, message string) {
-	condition := metav1.Condition{
+	apimeta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:               condType,
 		Status:             status,
 		Reason:             reason,
 		Message:            message,
 		ObservedGeneration: group.Generation,
-		LastTransitionTime: metav1.Now(),
-	}
-
-	for i, c := range group.Status.Conditions {
-		if c.Type == condType {
-			if c.Status == status {
-				condition.LastTransitionTime = c.LastTransitionTime
-			}
-			group.Status.Conditions[i] = condition
-			return
-		}
-	}
-	group.Status.Conditions = append(group.Status.Conditions, condition)
+	})
 }

@@ -58,7 +58,7 @@ This follows the same pattern as the existing `SeiNodePool → SeiNode` relation
 
 3. **Passthrough over abstraction** — Service annotations, HTTPRoute annotations, and Istio config use Kubernetes-native values. No DSL wrappers.
 
-4. **Safe by default** — `DeletionPolicy` governs both networking resources and child SeiNodes. Network isolation is an additive feature, not a breaking change.
+4. **Safe by default** — `DeletionPolicy` governs both networking resources and child SeiNodes. Network isolation is an additive feature, not a breaking change. **Important:** The default `DeletionPolicy` is `Delete`, which cascades deletion of _all_ child SeiNodes and networking resources when the group is removed. Production deployments should use `deletionPolicy: Retain` to prevent accidental data loss.
 
 5. **Two-way doors only** — Every field is optional. WAF is just an annotation on the Service or HTTPRoute. Update strategy for rolling out changes across replicas is a future concern that the current design does not block.
 
@@ -634,6 +634,8 @@ The `DeletionPolicy` governs both networking resources AND child SeiNodes:
 |----------------|---------------------|----------------|
 | `Delete` | Deleted | Deleted (via owner ref GC) |
 | `Retain` | Orphaned (owner ref removed) | Orphaned (owner ref removed, continue running independently) |
+
+> **Production recommendation:** Always use `deletionPolicy: Retain` in production. The `Delete` default is convenient for development but dangerous in production because deleting a SeiNodeGroup will cascade-delete all child SeiNodes (and their PVCs if configured), causing irreversible data loss.
 
 When `Retain`, the finalizer removes owner references from all managed resources before allowing the SeiNodeGroup to be deleted. This prevents Kubernetes GC from cascading the deletion.
 
