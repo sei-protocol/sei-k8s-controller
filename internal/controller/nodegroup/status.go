@@ -148,6 +148,11 @@ func setExternalServiceCondition(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Se
 		"ServiceReady", fmt.Sprintf("External Service %s is ready", svc.Name))
 }
 
+func hasConditionReason(group *seiv1alpha1.SeiNodeGroup, condType, reason string) bool {
+	c := apimeta.FindStatusCondition(group.Status.Conditions, condType)
+	return c != nil && c.Reason == reason
+}
+
 func removeCondition(group *seiv1alpha1.SeiNodeGroup, condType string) {
 	apimeta.RemoveStatusCondition(&group.Status.Conditions, condType)
 }

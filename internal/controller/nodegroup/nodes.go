@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,7 +35,11 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 	existing := &seiv1alpha1.SeiNode{}
 	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
 	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
+		if createErr := r.Create(ctx, desired); createErr != nil {
+			return createErr
+		}
+		r.Recorder.Eventf(group, corev1.EventTypeNormal, "SeiNodeCreated", "Created SeiNode %s", desired.Name)
+		return nil
 	}
 	if err != nil {
 		return err
@@ -125,6 +130,7 @@ func (r *SeiNodeGroupReconciler) scaleDown(ctx context.Context, group *seiv1alph
 			if err := r.Delete(ctx, node); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("deleting excess SeiNode %s: %w", node.Name, err)
 			}
+			r.Recorder.Eventf(group, corev1.EventTypeNormal, "SeiNodeDeleted", "Scaled down SeiNode %s", node.Name)
 		}
 	}
 	return nil

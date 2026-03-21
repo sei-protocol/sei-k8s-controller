@@ -31,13 +31,18 @@ func (r *SeiNodeGroupReconciler) reconcileServiceMonitor(ctx context.Context, gr
 
 	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 	if meta.IsNoMatchError(err) {
-		r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Prometheus Operator CRD (ServiceMonitor) is not installed; monitoring will not be configured")
+		if !hasConditionReason(group, seiv1alpha1.ConditionServiceMonitorReady, "CRDNotInstalled") {
+			r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Prometheus Operator CRD (ServiceMonitor) is not installed; monitoring will not be configured")
+		}
 		setCondition(group, seiv1alpha1.ConditionServiceMonitorReady, metav1.ConditionFalse,
 			"CRDNotInstalled", "Prometheus Operator CRD (ServiceMonitor) is not installed")
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if !hasConditionReason(group, seiv1alpha1.ConditionServiceMonitorReady, "ServiceMonitorReady") {
+		r.Recorder.Event(group, corev1.EventTypeNormal, "ServiceMonitorReady", "ServiceMonitor reconciled successfully")
 	}
 	setCondition(group, seiv1alpha1.ConditionServiceMonitorReady, metav1.ConditionTrue,
 		"ServiceMonitorReady", "ServiceMonitor reconciled successfully")

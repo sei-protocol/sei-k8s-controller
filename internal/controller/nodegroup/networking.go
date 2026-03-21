@@ -123,7 +123,6 @@ func (r *SeiNodeGroupReconciler) reconcileRoute(ctx context.Context, group *seiv
 	return r.reconcileHTTPRoute(ctx, group)
 }
 
-
 func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	desired := generateHTTPRoute(group)
 	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
@@ -132,13 +131,18 @@ func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *
 
 	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 	if meta.IsNoMatchError(err) {
-		r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed; HTTPRoute will not be created")
+		if !hasConditionReason(group, seiv1alpha1.ConditionRouteReady, "CRDNotInstalled") {
+			r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed; HTTPRoute will not be created")
+		}
 		setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionFalse,
 			"CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed")
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if !hasConditionReason(group, seiv1alpha1.ConditionRouteReady, "HTTPRouteReady") {
+		r.Recorder.Event(group, corev1.EventTypeNormal, "HTTPRouteReady", "HTTPRoute reconciled successfully")
 	}
 	setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionTrue,
 		"HTTPRouteReady", "HTTPRoute reconciled successfully")
@@ -217,7 +221,9 @@ func (r *SeiNodeGroupReconciler) reconcileIsolation(ctx context.Context, group *
 	}
 
 	if r.ControllerSA == "" {
-		r.Recorder.Event(group, corev1.EventTypeWarning, "ControllerSAMissing", "SEI_CONTROLLER_SA_PRINCIPAL is not set; AuthorizationPolicy will not include controller SA, sidecar communication may be blocked")
+		if !hasConditionReason(group, seiv1alpha1.ConditionIsolationReady, "ControllerSAMissing") {
+			r.Recorder.Event(group, corev1.EventTypeWarning, "ControllerSAMissing", "SEI_CONTROLLER_SA_PRINCIPAL is not set; AuthorizationPolicy will not include controller SA, sidecar communication may be blocked")
+		}
 		setCondition(group, seiv1alpha1.ConditionIsolationReady, metav1.ConditionFalse,
 			"ControllerSAMissing", "SEI_CONTROLLER_SA_PRINCIPAL env var is not set; controller SA will not be injected into AuthorizationPolicy")
 	}
@@ -229,7 +235,9 @@ func (r *SeiNodeGroupReconciler) reconcileIsolation(ctx context.Context, group *
 
 	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 	if meta.IsNoMatchError(err) {
-		r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Istio CRD (AuthorizationPolicy) is not installed; isolation will not be enforced")
+		if !hasConditionReason(group, seiv1alpha1.ConditionIsolationReady, "CRDNotInstalled") {
+			r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Istio CRD (AuthorizationPolicy) is not installed; isolation will not be enforced")
+		}
 		setCondition(group, seiv1alpha1.ConditionIsolationReady, metav1.ConditionFalse,
 			"CRDNotInstalled", "Istio CRD (AuthorizationPolicy) is not installed")
 		return nil
@@ -238,6 +246,9 @@ func (r *SeiNodeGroupReconciler) reconcileIsolation(ctx context.Context, group *
 		return err
 	}
 	if r.ControllerSA != "" {
+		if !hasConditionReason(group, seiv1alpha1.ConditionIsolationReady, "AuthorizationPolicyReady") {
+			r.Recorder.Event(group, corev1.EventTypeNormal, "AuthorizationPolicyReady", "AuthorizationPolicy reconciled successfully")
+		}
 		setCondition(group, seiv1alpha1.ConditionIsolationReady, metav1.ConditionTrue,
 			"AuthorizationPolicyReady", "AuthorizationPolicy reconciled successfully")
 	}
@@ -395,8 +406,9 @@ func (r *SeiNodeGroupReconciler) removeOwnerRef(ctx context.Context, obj client.
 	if len(filtered) == len(refs) {
 		return nil
 	}
+	patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
 	obj.SetOwnerReferences(filtered)
-	return r.Update(ctx, obj)
+	return r.Patch(ctx, obj, patch)
 }
 
 func (r *SeiNodeGroupReconciler) orphanChildSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
