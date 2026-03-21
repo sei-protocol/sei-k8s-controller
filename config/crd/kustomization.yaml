@@ -3,3 +3,4 @@ kind: Kustomization
 resources:
   - sei.io_seinodes.yaml
   - sei.io_seinodepools.yaml
+  - sei.io_seinodegroups.yaml
