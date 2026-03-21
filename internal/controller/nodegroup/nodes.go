@@ -46,6 +46,14 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 	}
 
 	updated := false
+	if !maps.Equal(existing.Labels, desired.Labels) {
+		existing.Labels = desired.Labels
+		updated = true
+	}
+	if !maps.Equal(existing.Annotations, desired.Annotations) {
+		existing.Annotations = desired.Annotations
+		updated = true
+	}
 	if existing.Spec.Image != desired.Spec.Image {
 		existing.Spec.Image = desired.Spec.Image
 		updated = true

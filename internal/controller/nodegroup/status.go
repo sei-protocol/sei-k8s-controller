@@ -5,10 +5,12 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -38,11 +40,11 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 	group.Status.Nodes = nodeStatuses
 	group.Status.Phase = computeGroupPhase(readyReplicas, group.Spec.Replicas, nodes)
 
-	svc := r.fetchExternalService(ctx, group)
+	svc, svcErr := r.fetchExternalService(ctx, group)
 	group.Status.NetworkingStatus = buildNetworkingStatus(group, svc)
 
 	setNodesReadyCondition(group, readyReplicas, group.Spec.Replicas, nodes)
-	setExternalServiceCondition(group, svc)
+	setExternalServiceCondition(group, svc, svcErr)
 
 	return r.Status().Patch(ctx, group, statusBase)
 }
@@ -73,17 +75,23 @@ func computeGroupPhase(ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1a
 	return seiv1alpha1.GroupPhaseInitializing
 }
 
-// fetchExternalService returns the external Service if networking is configured,
-// or nil if not configured or not yet created.
-func (r *SeiNodeGroupReconciler) fetchExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
+// fetchExternalService returns the external Service if networking is configured.
+// Returns (nil, nil) when not configured or NotFound, and (nil, err) on
+// transient API errors so callers can surface an accurate condition.
+func (r *SeiNodeGroupReconciler) fetchExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) (*corev1.Service, error) {
 	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
-		return nil
+		return nil, nil
 	}
 	svc := &corev1.Service{}
-	if err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc); err != nil {
-		return nil
+	err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc)
+	if apierrors.IsNotFound(err) {
+		return nil, nil
 	}
-	return svc
+	if err != nil {
+		log.FromContext(ctx).Error(err, "fetching external Service for status")
+		return nil, err
+	}
+	return svc, nil
 }
 
 func buildNetworkingStatus(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Service) *seiv1alpha1.NetworkingStatus {
@@ -127,8 +135,14 @@ func setNodesReadyCondition(group *seiv1alpha1.SeiNodeGroup, ready, desired int3
 	setCondition(group, seiv1alpha1.ConditionNodesReady, status, reason, message)
 }
 
-func setExternalServiceCondition(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Service) {
+func setExternalServiceCondition(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Service, fetchErr error) {
 	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
+		return
+	}
+
+	if fetchErr != nil {
+		setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionFalse,
+			"FetchError", fmt.Sprintf("Unable to fetch external Service: %v", fetchErr))
 		return
 	}
 

@@ -29,6 +29,7 @@ func (r *SeiNodeGroupReconciler) reconcileServiceMonitor(ctx context.Context, gr
 		return fmt.Errorf("setting owner reference on ServiceMonitor: %w", err)
 	}
 
+	//nolint:staticcheck // migrating unstructured SSA to typed ApplyConfiguration is a separate effort
 	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 	if meta.IsNoMatchError(err) {
 		if !hasConditionReason(group, seiv1alpha1.ConditionServiceMonitorReady, "CRDNotInstalled") {

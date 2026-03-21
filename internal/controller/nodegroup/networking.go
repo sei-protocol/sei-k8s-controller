@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -16,7 +17,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	seiconfig "github.com/sei-protocol/sei-config"
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
@@ -129,6 +129,7 @@ func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *
 		return fmt.Errorf("setting owner reference on HTTPRoute: %w", err)
 	}
 
+	//nolint:staticcheck // migrating unstructured SSA to typed ApplyConfiguration is a separate effort
 	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 	if meta.IsNoMatchError(err) {
 		if !hasConditionReason(group, seiv1alpha1.ConditionRouteReady, "CRDNotInstalled") {
@@ -233,6 +234,7 @@ func (r *SeiNodeGroupReconciler) reconcileIsolation(ctx context.Context, group *
 		return fmt.Errorf("setting owner reference on AuthorizationPolicy: %w", err)
 	}
 
+	//nolint:staticcheck // migrating unstructured SSA to typed ApplyConfiguration is a separate effort
 	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 	if meta.IsNoMatchError(err) {
 		if !hasConditionReason(group, seiv1alpha1.ConditionIsolationReady, "CRDNotInstalled") {

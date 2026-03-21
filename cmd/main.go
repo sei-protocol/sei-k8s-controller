@@ -163,10 +163,12 @@ func main() {
 	}
 
 	controllerSA := os.Getenv("SEI_CONTROLLER_SA_PRINCIPAL")
+	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
+	recorder := mgr.GetEventRecorderFor("seinodegroup-controller")
 	if err := (&nodegroupcontroller.SeiNodeGroupReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
-		Recorder:     mgr.GetEventRecorderFor("seinodegroup-controller"),
+		Recorder:     recorder,
 		ControllerSA: controllerSA,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNodeGroup")
