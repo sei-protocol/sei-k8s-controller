@@ -14,7 +14,7 @@ const (
 	defaultResultExportCron   = "*/10 * * * *"
 
 	resultExportBucket = "sei-node-mvp"
-	resultExportRegion = "us-east-2"
+	resultExportRegion = "eu-central-1"
 	resultExportPrefix = "shadow-results/"
 
 	valNothing = "nothing"

@@ -11,7 +11,7 @@ metadata:
   namespace: default
 spec:
   chainId: pacific-1
-  image: ghcr.io/bdchatham/sei-shadow@sha256:fabc114bea77f8b0d331360d860d5e807b9c35f56d9f01d34d82b8113304d530
+  image: ghcr.io/bdchatham/sei-shadow@sha256:0d04d7ff4327d298bd584083835aaaa68ef0d6918581858b4e377853b476f0f0
 
   sidecar:
     image: ghcr.io/sei-protocol/seictl@sha256:8bfef078409c160f03c62fcd969702b3edc9d957369fb56dca9e34e09ac6c99a
