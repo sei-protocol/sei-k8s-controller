@@ -431,7 +431,7 @@ func TestSidecarMainContainer_WaitWrapper_IncludesEntrypointArgs(t *testing.T) {
 	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "/sei"`))
 }
 
-func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeid(t *testing.T) {
+func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeidStart(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
@@ -439,7 +439,7 @@ func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeid(t *testing.T
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
-	g.Expect(seid.Args[0]).To(HaveSuffix("exec seid"))
+	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "/sei"`))
 }
 
 func TestSidecarMainContainer_NilSidecarConfig_UsesDefaults(t *testing.T) {
