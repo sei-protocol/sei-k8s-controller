@@ -18,6 +18,11 @@ spec:
     command: ["seid"]
     args: ["start", "--home", "/sei"]
 
+  genesis:
+    s3:
+      uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
+      region: us-east-2
+
   storage:
     retainOnDelete: true
 
@@ -28,6 +33,11 @@ spec:
           tags:
             ChainIdentifier: pacific-1
             Component: state-syncer
+    snapshot:
+      s3:
+        targetHeight: 198740000
+      bootstrapImage: "ghcr.io/sei-protocol/sei:v6.3.0"
+      trustPeriod: "9999h0m0s"
 
     snapshotGeneration:
       keepRecent: 5

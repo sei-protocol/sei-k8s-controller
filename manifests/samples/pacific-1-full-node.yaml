@@ -14,6 +14,11 @@ spec:
   sidecar:
     image: ghcr.io/sei-protocol/seictl@sha256:8bfef078409c160f03c62fcd969702b3edc9d957369fb56dca9e34e09ac6c99a
 
+  genesis:
+    s3:
+      uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
+      region: us-east-2
+
   storage:
     retainOnDelete: true
 
@@ -27,4 +32,5 @@ spec:
     snapshot:
       s3:
         targetHeight: 198740000
+      bootstrapImage: "ghcr.io/sei-protocol/sei:v6.3.0"
       trustPeriod: "9999h0m0s"
