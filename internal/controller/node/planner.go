@@ -54,8 +54,6 @@ func snapshotSourceFor(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotSource {
 		return node.Spec.Validator.Snapshot
 	case node.Spec.Replayer != nil:
 		return &node.Spec.Replayer.Snapshot
-	case node.Spec.Archive != nil:
-		return node.Spec.Archive.Snapshot
 	default:
 		return nil
 	}

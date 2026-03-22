@@ -27,6 +27,7 @@ spec:
     retainOnDelete: true
 
   archive:
+    stateSync: {}
     peers:
       - ec2Tags:
           region: eu-central-1

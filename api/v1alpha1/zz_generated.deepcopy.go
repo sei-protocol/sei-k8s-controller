@@ -20,6 +20,11 @@ func (in *ArchiveSpec) DeepCopyInto(out *ArchiveSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.StateSync != nil {
+		in, out := &in.StateSync, &out.StateSync
+		*out = new(StateSyncSource)
+		**out = **in
+	}
 	if in.SnapshotGeneration != nil {
 		in, out := &in.SnapshotGeneration, &out.SnapshotGeneration
 		*out = new(SnapshotGenerationConfig)
