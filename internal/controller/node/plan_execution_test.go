@@ -1067,8 +1067,8 @@ func TestResultExportScheduledTask_ReplayerWithExport(t *testing.T) {
 	if task.Prefix != "shadow-results/pacific-1/" {
 		t.Errorf("Prefix = %q, want %q", task.Prefix, "shadow-results/pacific-1/")
 	}
-	if task.Region != "us-east-2" {
-		t.Errorf("Region = %q, want %q", task.Region, "us-east-2")
+	if task.Region != "eu-central-1" {
+		t.Errorf("Region = %q, want %q", task.Region, "eu-central-1")
 	}
 	if task.Schedule == nil || task.Schedule.Cron == nil {
 		t.Fatal("expected schedule config on task")
