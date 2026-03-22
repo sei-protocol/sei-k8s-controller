@@ -853,8 +853,8 @@ func TestBuildTask_SnapshotRestore(t *testing.T) {
 	if task.Bucket != "atlantic-2-snapshots" {
 		t.Errorf("Bucket = %q, want %q", task.Bucket, "atlantic-2-snapshots")
 	}
-	if task.Region != "eu-central-1" {
-		t.Errorf("Region = %q, want %q", task.Region, "eu-central-1")
+	if task.Region != testSnapshotRegion {
+		t.Errorf("Region = %q, want %q", task.Region, testSnapshotRegion)
 	}
 }
 
@@ -1067,8 +1067,8 @@ func TestResultExportScheduledTask_ReplayerWithExport(t *testing.T) {
 	if task.Prefix != "shadow-results/pacific-1/" {
 		t.Errorf("Prefix = %q, want %q", task.Prefix, "shadow-results/pacific-1/")
 	}
-	if task.Region != "eu-central-1" {
-		t.Errorf("Region = %q, want %q", task.Region, "eu-central-1")
+	if task.Region != resultExportRegion {
+		t.Errorf("Region = %q, want %q", task.Region, resultExportRegion)
 	}
 	if task.Schedule == nil || task.Schedule.Cron == nil {
 		t.Fatal("expected schedule config on task")
@@ -1124,8 +1124,8 @@ func TestBuildTask_Replayer_SnapshotRestore_InferredBucket(t *testing.T) {
 	if task.Prefix != "state-sync/" {
 		t.Errorf("Prefix = %q, want %q", task.Prefix, "state-sync/")
 	}
-	if task.Region != "eu-central-1" {
-		t.Errorf("Region = %q, want %q", task.Region, "eu-central-1")
+	if task.Region != testSnapshotRegion {
+		t.Errorf("Region = %q, want %q", task.Region, testSnapshotRegion)
 	}
 }
 

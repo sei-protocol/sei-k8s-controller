@@ -8,6 +8,12 @@ type ArchiveSpec struct {
 	// +optional
 	Peers []PeerSource `json:"peers,omitempty"`
 
+	// Snapshot configures how the archive node bootstraps its initial state.
+	// When set with a BootstrapImage and S3 target, a PreInit Job restores
+	// the snapshot before the main container starts.
+	// +optional
+	Snapshot *SnapshotSource `json:"snapshot,omitempty"`
+
 	// SnapshotGeneration configures periodic snapshot creation and optional upload.
 	// +optional
 	SnapshotGeneration *SnapshotGenerationConfig `json:"snapshotGeneration,omitempty"`
