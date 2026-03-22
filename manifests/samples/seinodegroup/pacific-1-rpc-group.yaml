@@ -1,13 +1,13 @@
 # SeiNodeGroup — Pacific-1 RPC Fleet
 #
-# Three full nodes behind a shared ClusterIP Service. Each SeiNode
-# bootstraps from an S3 snapshot and block-syncs to tip, exposing
-# RPC/EVM/gRPC ports through a single stable Service endpoint.
+# Three full nodes behind a shared Service with Gateway API routing,
+# Istio network isolation, and Prometheus monitoring. Each SeiNode
+# bootstraps from an S3 snapshot and block-syncs to tip.
 #
-# Gateway routing, network isolation, and monitoring resources are
-# included to demonstrate the full API surface. They activate once
-# the corresponding CRDs are installed on the cluster (Gateway API,
-# Istio, Prometheus Operator).
+# The HTTPRoute attaches to the shared sei-gateway (NLB-backed) in
+# istio-system, giving external clients a stable hostname. The
+# AuthorizationPolicy restricts pod access to the gateway and the
+# default namespace for peer communication.
 apiVersion: sei.io/v1alpha1
 kind: SeiNodeGroup
 metadata:
@@ -55,27 +55,24 @@ spec:
   networking:
     service:
       type: ClusterIP
+
+    gateway:
+      parentRef:
+        name: sei-gateway
+        namespace: istio-system
+        sectionName: http
+      hostnames:
+        - rpc.pacific-1.sei.io
       annotations:
         external-dns.alpha.kubernetes.io/hostname: rpc.pacific-1.sei.io
 
-    # Uncomment once a Gateway resource is deployed (e.g. via the Istio platform PR):
-    # gateway:
-    #   parentRef:
-    #     name: sei-gateway
-    #     namespace: istio-system
-    #   hostnames:
-    #     - rpc.pacific-1.sei.io
-    #   annotations:
-    #     external-dns.alpha.kubernetes.io/hostname: rpc.pacific-1.sei.io
-
-    # Uncomment once Istio AuthorizationPolicy CRDs are available:
-    # isolation:
-    #   authorizationPolicy:
-    #     allowedSources:
-    #       - principals:
-    #           - "cluster.local/ns/istio-system/sa/istio-ingressgateway"
-    #       - namespaces:
-    #           - default
+    isolation:
+      authorizationPolicy:
+        allowedSources:
+          - principals:
+              - "cluster.local/ns/istio-system/sa/sei-gateway-istio"
+          - namespaces:
+              - default
 
   monitoring:
     serviceMonitor:
