@@ -1,7 +1,7 @@
 # SeiNode — Pacific-1 Archive + Snapshotter
 #
-# Archive node for pacific-1 that bootstraps from an S3 snapshot, discovers
-# peers, produces Tendermint snapshots, and uploads them to S3.
+# Archive node for pacific-1 that bootstraps via Tendermint state sync,
+# discovers peers, produces Tendermint snapshots, and uploads them to S3.
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
@@ -27,7 +27,6 @@ spec:
     retainOnDelete: true
 
   archive:
-    stateSync: {}
     peers:
       - ec2Tags:
           region: eu-central-1

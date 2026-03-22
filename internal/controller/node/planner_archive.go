@@ -24,21 +24,18 @@ func (p *archiveNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	return buildPlan(node.Spec.Archive.Peers, p.snapshotSource(node))
+	return buildPlan(node.Spec.Archive.Peers, p.snapshotSource())
 }
 
 func (p *archiveNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {
 	if taskType == taskConfigApply {
 		return p.buildConfigApply(node), nil
 	}
-	return buildSharedTask(node, node.Spec.Archive.Peers, p.snapshotSource(node), taskType, p.snapshotRegion)
+	return buildSharedTask(node, node.Spec.Archive.Peers, p.snapshotSource(), taskType, p.snapshotRegion)
 }
 
-func (p *archiveNodePlanner) snapshotSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotSource {
-	if node.Spec.Archive.StateSync == nil {
-		return nil
-	}
-	return &seiv1alpha1.SnapshotSource{StateSync: node.Spec.Archive.StateSync}
+func (p *archiveNodePlanner) snapshotSource() *seiv1alpha1.SnapshotSource {
+	return &seiv1alpha1.SnapshotSource{StateSync: &seiv1alpha1.StateSyncSource{}}
 }
 
 func (p *archiveNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {

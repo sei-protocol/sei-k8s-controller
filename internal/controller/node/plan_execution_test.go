@@ -319,6 +319,15 @@ func TestBuildPlan_Replayer(t *testing.T) {
 	assertProgression(t, got, want)
 }
 
+func TestBuildPlan_Archive(t *testing.T) {
+	node := snapshotterNode()
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
+	plan := planner.BuildPlan(node)
+	got := taskTypes(plan)
+	want := []string{taskConfigureGenesis, taskConfigApply, taskDiscoverPeers, taskConfigureStateSync, taskConfigValidate, taskMarkReady}
+	assertProgression(t, got, want)
+}
+
 func TestBuildTask_Replayer_DiscoverPeers(t *testing.T) {
 	node := replayerNode()
 	planner, _ := PlannerForNode(node, testSnapshotRegion)

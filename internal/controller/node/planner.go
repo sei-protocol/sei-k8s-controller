@@ -46,6 +46,9 @@ func PlannerForNode(node *seiv1alpha1.SeiNode, snapshotRegion string) (NodePlann
 
 // snapshotSourceFor extracts the SnapshotSource from the populated mode sub-spec.
 // Returns nil when the mode doesn't use a snapshot.
+// NOTE: Archive is intentionally absent — it always uses state sync, which is
+// handled internally by archiveNodePlanner.snapshotSource(). If archive ever
+// gains configurable bootstrap (e.g. S3), add it here too.
 func snapshotSourceFor(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotSource {
 	switch {
 	case node.Spec.FullNode != nil:
@@ -104,6 +107,8 @@ func needsLongStartup(node *seiv1alpha1.SeiNode) bool {
 	case node.Spec.Validator != nil:
 		return node.Spec.Validator.Snapshot != nil
 	case node.Spec.Replayer != nil:
+		return true
+	case node.Spec.Archive != nil:
 		return true
 	default:
 		return false
