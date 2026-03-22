@@ -78,6 +78,57 @@ func envValue(envs []corev1.EnvVar, name string) string {
 	return ""
 }
 
+// --- Pod labels ---
+
+func TestResourceLabelsForNode_DefaultsToNodeOnly(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default")
+	labels := resourceLabelsForNode(node)
+
+	g.Expect(labels).To(Equal(map[string]string{nodeLabel: "snap-0"}))
+}
+
+func TestResourceLabelsForNode_MergesPodLabels(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default")
+	node.Spec.PodLabels = map[string]string{
+		"sei.io/group": "my-group",
+		"team":         "platform",
+	}
+	labels := resourceLabelsForNode(node)
+
+	g.Expect(labels).To(Equal(map[string]string{
+		nodeLabel:      "snap-0",
+		"sei.io/group": "my-group",
+		"team":         "platform",
+	}))
+}
+
+func TestResourceLabelsForNode_SystemLabelWins(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default")
+	node.Spec.PodLabels = map[string]string{
+		nodeLabel: "should-be-overridden",
+	}
+	labels := resourceLabelsForNode(node)
+
+	g.Expect(labels).To(HaveKeyWithValue(nodeLabel, "snap-0"))
+}
+
+func TestGenerateNodeStatefulSet_PodLabelsPropagate(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default")
+	node.Spec.PodLabels = map[string]string{
+		"sei.io/group": "my-group",
+	}
+
+	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
+
+	g.Expect(sts.Labels).To(HaveKeyWithValue("sei.io/group", "my-group"))
+	g.Expect(sts.Spec.Template.Labels).To(HaveKeyWithValue("sei.io/group", "my-group"))
+	g.Expect(sts.Spec.Selector.MatchLabels).To(HaveKeyWithValue("sei.io/group", "my-group"))
+}
+
 // --- StatefulSet generation ---
 
 func TestGenerateNodeStatefulSet_BasicFields(t *testing.T) {
