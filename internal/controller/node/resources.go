@@ -153,7 +153,7 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, platform PlatformConfi
 // that blocks until the sidecar's /healthz returns 200, then exec's seid.
 func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []string) {
 	cmd := "seid"
-	var cmdArgs []string
+	cmdArgs := []string{"start", "--home", dataDir}
 	if node.Spec.Entrypoint != nil && len(node.Spec.Entrypoint.Command) > 0 {
 		cmd = node.Spec.Entrypoint.Command[0]
 		cmdArgs = append(node.Spec.Entrypoint.Command[1:], node.Spec.Entrypoint.Args...)
