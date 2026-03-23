@@ -50,12 +50,22 @@ func (p *fullNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar.Ta
 }
 
 func (p *fullNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
-	overrides := make(map[string]string)
+	overrides := map[string]string{
+		keyConcurrencyWorkers: defaultConcurrencyWorkers,
+		keyPruning:            valCustom,
+		keyPruningInterval:    "10",
+	}
+
 	sg := node.Spec.FullNode.SnapshotGeneration
 	if sg != nil {
-		overrides["storage.pruning"] = valNothing
-		overrides["storage.snapshot_interval"] = strconv.FormatInt(defaultSnapshotInterval, 10)
-		overrides["storage.snapshot_keep_recent"] = strconv.FormatInt(int64(sg.KeepRecent), 10)
+		overrides[keyPruningKeepRecent] = "50000"
+		overrides[keyPruningKeepEvery] = "0"
+		overrides[keyMinRetainBlocks] = "50000"
+		overrides[keySnapshotInterval] = strconv.FormatInt(defaultSnapshotInterval, 10)
+		overrides[keySnapshotKeepRecent] = strconv.FormatInt(int64(sg.KeepRecent), 10)
+	} else {
+		overrides[keyPruningKeepRecent] = "86400"
+		overrides[keyPruningKeepEvery] = "500"
 	}
 	return overrides
 }

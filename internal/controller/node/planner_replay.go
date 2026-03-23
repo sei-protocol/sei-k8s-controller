@@ -41,9 +41,15 @@ func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) 
 		return sidecar.ConfigApplyTask{
 			Intent: seiconfig.ConfigIntent{
 				Mode:      seiconfig.ModeArchive,
-				Overrides: mergeOverrides(nil, node.Spec.Overrides),
+				Overrides: mergeOverrides(p.controllerOverrides(), node.Spec.Overrides),
 			},
 		}, nil
 	}
 	return buildSharedTask(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, taskType, p.snapshotRegion)
+}
+
+func (p *replayerPlanner) controllerOverrides() map[string]string {
+	return map[string]string{
+		keyConcurrencyWorkers: defaultConcurrencyWorkers,
+	}
 }

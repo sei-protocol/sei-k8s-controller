@@ -431,13 +431,16 @@ func TestConfigApply_UserOverridesTakePrecedence(t *testing.T) {
 	}
 }
 
-func TestConfigApply_NoOverridesYieldsNil(t *testing.T) {
+func TestConfigApply_ReplayerDefaultOverrides(t *testing.T) {
 	node := replayerNode()
 	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
-	if task.Intent.Overrides != nil {
-		t.Errorf("expected nil overrides when none specified, got %v", task.Intent.Overrides)
+	if task.Intent.Overrides[keyConcurrencyWorkers] != defaultConcurrencyWorkers {
+		t.Errorf("concurrency_workers = %q, want %q", task.Intent.Overrides[keyConcurrencyWorkers], defaultConcurrencyWorkers)
+	}
+	if _, ok := task.Intent.Overrides[keyPruning]; ok {
+		t.Errorf("replayer should not set pruning override (ModeArchive handles it), got %q", task.Intent.Overrides[keyPruning])
 	}
 }
 
@@ -958,17 +961,63 @@ func TestConfigApply_StateSyncFieldsNotSet(t *testing.T) {
 	}
 }
 
-func TestConfigApply_FullNodeWithSnapshotGeneration(t *testing.T) {
+func TestConfigApply_FullNodeSnapshotProducerProfile(t *testing.T) {
 	node := snapshotNode()
 	node.Spec.FullNode.SnapshotGeneration = &seiv1alpha1.SnapshotGenerationConfig{KeepRecent: 5}
 	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
-	if task.Intent.Overrides["storage.pruning"] != "nothing" {
-		t.Errorf("storage.pruning = %q", task.Intent.Overrides["storage.pruning"])
+	checks := map[string]string{
+		keyPruning:            valCustom,
+		keyPruningKeepRecent:  "50000",
+		keyPruningKeepEvery:   "0",
+		keyPruningInterval:    "10",
+		keyMinRetainBlocks:    "50000",
+		keyConcurrencyWorkers: defaultConcurrencyWorkers,
+		keySnapshotInterval:   "2000",
+		keySnapshotKeepRecent: "5",
 	}
-	if task.Intent.Overrides["storage.snapshot_interval"] != "2000" {
-		t.Errorf("storage.snapshot_interval = %q", task.Intent.Overrides["storage.snapshot_interval"])
+	for k, want := range checks {
+		if got := task.Intent.Overrides[k]; got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+}
+
+func TestConfigApply_FullNodeRPCProfile(t *testing.T) {
+	node := genesisNode()
+	node.Spec.Validator = nil
+	node.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
+	b, _ := planner.BuildTask(node, taskConfigApply)
+	task := b.(sidecar.ConfigApplyTask)
+	checks := map[string]string{
+		keyPruning:            valCustom,
+		keyPruningKeepRecent:  "86400",
+		keyPruningKeepEvery:   "500",
+		keyPruningInterval:    "10",
+		keyConcurrencyWorkers: defaultConcurrencyWorkers,
+	}
+	for k, want := range checks {
+		if got := task.Intent.Overrides[k]; got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+	if _, ok := task.Intent.Overrides[keyMinRetainBlocks]; ok {
+		t.Errorf("RPC profile should not set min_retain_blocks (use ModeFull default)")
+	}
+}
+
+func TestConfigApply_ArchiveDefaultOverrides(t *testing.T) {
+	node := snapshotterNode()
+	planner, _ := PlannerForNode(node, testSnapshotRegion)
+	b, _ := planner.BuildTask(node, taskConfigApply)
+	task := b.(sidecar.ConfigApplyTask)
+	if task.Intent.Overrides[keyConcurrencyWorkers] != defaultConcurrencyWorkers {
+		t.Errorf("concurrency_workers = %q, want %q", task.Intent.Overrides[keyConcurrencyWorkers], defaultConcurrencyWorkers)
+	}
+	if _, ok := task.Intent.Overrides[keyPruning]; ok {
+		t.Errorf("archive should not set pruning override (ModeArchive handles it), got %q", task.Intent.Overrides[keyPruning])
 	}
 }
 
