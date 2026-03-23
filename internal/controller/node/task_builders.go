@@ -17,7 +17,21 @@ const (
 	resultExportRegion = "eu-central-1"
 	resultExportPrefix = "shadow-results/"
 
+	// sei-config unified schema keys used by planner controllerOverrides.
+	keyConcurrencyWorkers = "chain.concurrency_workers"
+	keyMinRetainBlocks    = "chain.min_retain_blocks"
+	keyPruning            = "storage.pruning"
+	keyPruningKeepRecent  = "storage.pruning_keep_recent"
+	keyPruningKeepEvery   = "storage.pruning_keep_every"
+	keyPruningInterval    = "storage.pruning_interval"
+	keySnapshotInterval   = "storage.snapshot_interval"
+	keySnapshotKeepRecent = "storage.snapshot_keep_recent"
+
+	valCustom  = "custom"
 	valNothing = "nothing"
+
+	// Matches sei-infra production config across all node roles.
+	defaultConcurrencyWorkers = "500"
 )
 
 // mergeOverrides combines controller-generated overrides with user-specified

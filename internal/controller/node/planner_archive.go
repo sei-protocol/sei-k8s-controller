@@ -47,11 +47,13 @@ func (p *archiveNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar
 }
 
 func (p *archiveNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
-	overrides := make(map[string]string)
+	overrides := map[string]string{
+		keyConcurrencyWorkers: defaultConcurrencyWorkers,
+	}
 	sg := node.Spec.Archive.SnapshotGeneration
 	if sg != nil {
-		overrides["storage.snapshot_interval"] = strconv.FormatInt(defaultSnapshotInterval, 10)
-		overrides["storage.snapshot_keep_recent"] = strconv.FormatInt(int64(sg.KeepRecent), 10)
+		overrides[keySnapshotInterval] = strconv.FormatInt(defaultSnapshotInterval, 10)
+		overrides[keySnapshotKeepRecent] = strconv.FormatInt(int64(sg.KeepRecent), 10)
 	}
 	return overrides
 }
