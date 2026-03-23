@@ -40,11 +40,6 @@ spec:
       storage:
         retainOnDelete: true
 
-      resources:
-        requests:
-          cpu: "4"
-          memory: 64Gi
-
       fullNode:
         peers:
           - ec2Tags:
