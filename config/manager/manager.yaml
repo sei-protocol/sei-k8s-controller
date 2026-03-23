@@ -52,9 +52,9 @@ spec:
           - name: SEI_STORAGE_SIZE_ARCHIVE
             value: 2000Gi
           - name: SEI_RESOURCE_CPU_ARCHIVE
-            value: "8"
+            value: "16"
           - name: SEI_RESOURCE_MEM_ARCHIVE
-            value: 48Gi
+            value: 256Gi
           - name: SEI_RESOURCE_CPU_DEFAULT
             value: "4"
           - name: SEI_RESOURCE_MEM_DEFAULT
