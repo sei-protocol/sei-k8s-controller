@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 )
 
 const (
@@ -70,25 +71,39 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Conditions set during networking/monitoring reconciliation are captured
 	// in the diff when updateStatus patches against this base.
 	statusBase := client.MergeFrom(group.DeepCopy())
+	ns, name := group.Namespace, group.Name
 
-	if err := r.reconcileSeiNodes(ctx, group); err != nil {
+	if err := timeSubstep("reconcileSeiNodes", func() error {
+		return r.reconcileSeiNodes(ctx, group)
+	}); err != nil {
 		logger.Error(err, "reconciling SeiNodes")
+		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 		return ctrl.Result{}, fmt.Errorf("reconciling SeiNodes: %w", err)
 	}
 
-	if err := r.reconcileNetworking(ctx, group); err != nil {
+	if err := timeSubstep("reconcileNetworking", func() error {
+		return r.reconcileNetworking(ctx, group)
+	}); err != nil {
 		logger.Error(err, "reconciling networking")
+		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 		return ctrl.Result{}, fmt.Errorf("reconciling networking: %w", err)
 	}
 
-	if err := r.reconcileMonitoring(ctx, group); err != nil {
+	if err := timeSubstep("reconcileMonitoring", func() error {
+		return r.reconcileMonitoring(ctx, group)
+	}); err != nil {
 		logger.Error(err, "reconciling monitoring")
+		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 		return ctrl.Result{}, fmt.Errorf("reconciling monitoring: %w", err)
 	}
 
 	if err := r.updateStatus(ctx, group, statusBase); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 	}
+
+	emitGroupPhase(ns, name, group.Status.Phase)
+	emitGroupReplicas(ns, name, group.Spec.Replicas, group.Status.ReadyReplicas)
+	emitGroupConditions(ns, name, group.Status.Conditions)
 
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
@@ -132,6 +147,8 @@ func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv
 			return ctrl.Result{}, fmt.Errorf("cleaning up networking: %w", err)
 		}
 	}
+
+	cleanupGroupMetrics(group.Namespace, group.Name)
 
 	finalizerPatch := client.MergeFrom(group.DeepCopy())
 	controllerutil.RemoveFinalizer(group, groupFinalizerName)

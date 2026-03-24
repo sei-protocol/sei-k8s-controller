@@ -19,5 +19,5 @@ spec:
           matchLabels:
             metrics: enabled
       ports:
-        - port: 8443
+        - port: 8080
           protocol: TCP

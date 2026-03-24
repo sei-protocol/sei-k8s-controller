@@ -1,0 +1,82 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: controller-alerts
+  namespace: system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: sei-k8s-controller
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  groups:
+    - name: sei-controller
+      rules:
+        - alert: SeiNodeGroupDegraded
+          expr: sei_controller_seinodegroup_phase{phase="Degraded"} == 1
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} is degraded"
+            description: "Some nodes are not ready. Check child SeiNode status."
+
+        - alert: SeiNodeGroupFailed
+          expr: sei_controller_seinodegroup_phase{phase="Failed"} == 1
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} has failed"
+            description: "All nodes have failed. Immediate investigation required."
+
+        - alert: SeiNodeStuckInitializing
+          expr: sei_controller_seinode_phase{phase="Initializing"} == 1
+          for: 30m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} stuck initializing"
+            description: "Node has been in Initializing phase for over 30 minutes."
+
+        - alert: SeiNodeStuckPending
+          expr: max by (namespace, name) (sei_controller_seinode_phase{phase=~"Pending|PreInitializing"}) == 1
+          for: 15m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} stuck pending"
+            description: "Node has been in Pending/PreInitializing phase for over 15 minutes."
+
+        - alert: SidecarUnreachableHigh
+          expr: rate(sei_controller_sidecar_unreachable_total[5m]) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Sidecar for {{ $labels.namespace }}/{{ $labels.node }} is frequently unreachable"
+            description: "Sidecar connectivity failures sustained above 0.5/s for 10 minutes."
+
+        - alert: ControllerReconcileErrors
+          expr: increase(sei_controller_reconcile_errors_total[15m]) > 5
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Controller {{ $labels.controller }} has elevated reconcile errors"
+            description: "More than 5 reconcile errors in the last 15 minutes for {{ $labels.namespace }}/{{ $labels.name }}."
+
+        - alert: ControllerHighReconcileLatency
+          expr: histogram_quantile(0.99, rate(sei_controller_seinodegroup_reconcile_substep_duration_seconds_bucket[5m])) > 10
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SeiNodeGroup reconcile substep {{ $labels.substep }} is slow"
+            description: "p99 latency above 10s for 10 minutes."
