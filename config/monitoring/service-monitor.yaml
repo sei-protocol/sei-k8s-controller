@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/name: sei-k8s-controller
     app.kubernetes.io/managed-by: kustomize
 spec:
+  jobLabel: app.kubernetes.io/name
   selector:
     matchLabels:
       control-plane: controller-manager

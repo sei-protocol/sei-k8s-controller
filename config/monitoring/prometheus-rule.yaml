@@ -80,3 +80,13 @@ spec:
           annotations:
             summary: "SeiNodeGroup reconcile substep {{ $labels.substep }} is slow"
             description: "p99 latency above 10s for 10 minutes."
+
+        - alert: ControllerMetricsDown
+          expr: up{job=~".*sei-k8s-controller.*"} == 0
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "sei-k8s-controller metrics endpoint is down"
+            description: "Prometheus has been unable to scrape the controller for 5 minutes. All other controller alerts are blind."
