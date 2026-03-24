@@ -369,8 +369,8 @@ func TestPlannerForNode_Replayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode() != string(seiconfig.ModeArchive) {
-		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeArchive))
+	if p.Mode() != string(seiconfig.ModeFull) {
+		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeFull))
 	}
 }
 
@@ -436,11 +436,20 @@ func TestConfigApply_ReplayerDefaultOverrides(t *testing.T) {
 	planner, _ := PlannerForNode(node, testSnapshotRegion)
 	b, _ := planner.BuildTask(node, taskConfigApply)
 	task := b.(sidecar.ConfigApplyTask)
-	if task.Intent.Overrides[keyConcurrencyWorkers] != defaultConcurrencyWorkers {
-		t.Errorf("concurrency_workers = %q, want %q", task.Intent.Overrides[keyConcurrencyWorkers], defaultConcurrencyWorkers)
+	if string(task.Intent.Mode) != string(seiconfig.ModeFull) {
+		t.Errorf("Intent.Mode = %q, want %q", task.Intent.Mode, seiconfig.ModeFull)
 	}
-	if _, ok := task.Intent.Overrides[keyPruning]; ok {
-		t.Errorf("replayer should not set pruning override (ModeArchive handles it), got %q", task.Intent.Overrides[keyPruning])
+	checks := map[string]string{
+		keyConcurrencyWorkers: defaultConcurrencyWorkers,
+		keyPruning:            valCustom,
+		keyPruningKeepRecent:  "86400",
+		keyPruningKeepEvery:   "500",
+		keyPruningInterval:    "10",
+	}
+	for k, want := range checks {
+		if got := task.Intent.Overrides[k]; got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
 	}
 }
 

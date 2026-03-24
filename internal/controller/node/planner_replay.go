@@ -13,7 +13,7 @@ type replayerPlanner struct {
 	snapshotRegion string
 }
 
-func (p *replayerPlanner) Mode() string { return string(seiconfig.ModeArchive) }
+func (p *replayerPlanner) Mode() string { return string(seiconfig.ModeFull) }
 
 func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if node.Spec.Replayer == nil {
@@ -40,7 +40,7 @@ func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) 
 	if taskType == taskConfigApply {
 		return sidecar.ConfigApplyTask{
 			Intent: seiconfig.ConfigIntent{
-				Mode:      seiconfig.ModeArchive,
+				Mode:      seiconfig.ModeFull,
 				Overrides: mergeOverrides(p.controllerOverrides(), node.Spec.Overrides),
 			},
 		}, nil
@@ -51,5 +51,9 @@ func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) 
 func (p *replayerPlanner) controllerOverrides() map[string]string {
 	return map[string]string{
 		keyConcurrencyWorkers: defaultConcurrencyWorkers,
+		keyPruning:            valCustom,
+		keyPruningKeepRecent:  "86400",
+		keyPruningKeepEvery:   "500",
+		keyPruningInterval:    "10",
 	}
 }
