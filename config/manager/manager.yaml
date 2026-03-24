@@ -29,7 +29,7 @@ spec:
       - command:
         - /manager
         args:
-          - --metrics-bind-address=:8443
+          - --metrics-bind-address=:8080
           - --leader-elect
           - --health-probe-bind-address=:8081
         image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller@sha256:87b8b8ed04013f23ada6f2a34e162c98708c90424b2e6cd552bc7ac1e4284d9f
@@ -63,7 +63,10 @@ spec:
             value: eu-central-1
           - name: SEI_CONTROLLER_SA_PRINCIPAL
             value: "cluster.local/ns/sei-k8s-controller-system/sa/sei-k8s-controller-manager"
-        ports: []
+        ports:
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false

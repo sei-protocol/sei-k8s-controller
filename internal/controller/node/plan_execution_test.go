@@ -15,6 +15,7 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -117,6 +118,7 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 	r := &SeiNodeReconciler{
 		Client:   c,
 		Scheme:   s,
+		Recorder: record.NewFakeRecorder(100),
 		Platform: DefaultPlatformConfig(),
 		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) SidecarStatusClient {
 			return mock

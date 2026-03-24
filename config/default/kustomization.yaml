@@ -8,3 +8,4 @@ resources:
   - ../rbac
   - ../manager
   - ../network-policy
+  - ../monitoring

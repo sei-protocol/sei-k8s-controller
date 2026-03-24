@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: controller-manager-metrics
+  namespace: system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: sei-k8s-controller
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: sei-k8s-controller
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s

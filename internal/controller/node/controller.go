@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -68,6 +69,7 @@ func DefaultPlatformConfig() PlatformConfig {
 type SeiNodeReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 	Platform PlatformConfig
 	// BuildSidecarClientFn overrides sidecar client construction for testing.
 	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) SidecarStatusClient
@@ -81,6 +83,7 @@ type SeiNodeReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	node := &seiv1alpha1.SeiNode{}
@@ -89,6 +92,10 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+
+	if node.Status.Phase != "" {
+		emitNodePhase(node.Namespace, node.Name, node.Status.Phase)
 	}
 
 	if !node.DeletionTimestamp.IsZero() {
@@ -144,6 +151,13 @@ func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alp
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("initializing plans: %w", err)
 	}
+
+	ns, name := node.Namespace, node.Name
+	nodePhaseTransitions.WithLabelValues(ns, string(seiv1alpha1.PhasePending), string(seiv1alpha1.PhasePreInitializing)).Inc()
+	emitNodePhase(ns, name, seiv1alpha1.PhasePreInitializing)
+	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
+		"Phase changed from %s to %s", seiv1alpha1.PhasePending, seiv1alpha1.PhasePreInitializing)
+
 	return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 }
 
@@ -159,6 +173,7 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 
 	sc := r.buildSidecarClient(node)
 	if sc == nil {
+		sidecarUnreachableTotal.WithLabelValues(node.Namespace, node.Name).Inc()
 		log.FromContext(ctx).Info("sidecar not reachable yet, will retry")
 		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
 	}
@@ -169,10 +184,10 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 	}
 
 	if node.Status.InitPlan.Phase == seiv1alpha1.TaskPlanComplete {
-		return r.setPhase(ctx, node, seiv1alpha1.PhaseRunning)
+		return r.transitionPhase(ctx, node, seiv1alpha1.PhaseRunning)
 	}
 	if node.Status.InitPlan.Phase == seiv1alpha1.TaskPlanFailed {
-		return r.setPhase(ctx, node, seiv1alpha1.PhaseFailed)
+		return r.transitionPhase(ctx, node, seiv1alpha1.PhaseFailed)
 	}
 	return result, nil
 }
@@ -181,19 +196,40 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
 	sc := r.buildSidecarClient(node)
 	if sc == nil {
+		sidecarUnreachableTotal.WithLabelValues(node.Namespace, node.Name).Inc()
 		log.FromContext(ctx).Info("sidecar not reachable, will retry")
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 	return r.reconcileRuntimeTasks(ctx, node, sc)
 }
 
-// setPhase transitions the node to a new phase.
-func (r *SeiNodeReconciler) setPhase(ctx context.Context, node *seiv1alpha1.SeiNode, phase seiv1alpha1.SeiNodePhase) (ctrl.Result, error) {
+// transitionPhase transitions the node to a new phase and emits the associated
+// metric counter, phase gauge, and Kubernetes event.
+func (r *SeiNodeReconciler) transitionPhase(ctx context.Context, node *seiv1alpha1.SeiNode, phase seiv1alpha1.SeiNodePhase) (ctrl.Result, error) {
+	prev := node.Status.Phase
+	if prev == "" {
+		prev = seiv1alpha1.PhasePending
+	}
+
 	patch := client.MergeFrom(node.DeepCopy())
 	node.Status.Phase = phase
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting phase to %s: %w", phase, err)
 	}
+
+	ns, name := node.Namespace, node.Name
+	nodePhaseTransitions.WithLabelValues(ns, string(prev), string(phase)).Inc()
+	emitNodePhase(ns, name, phase)
+
+	if phase == seiv1alpha1.PhaseRunning {
+		dur := time.Since(node.CreationTimestamp.Time).Seconds()
+		nodeInitDuration.WithLabelValues(ns, node.Spec.ChainID).Observe(dur)
+		nodeLastInitDuration.WithLabelValues(ns, name).Set(dur)
+	}
+
+	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
+		"Phase changed from %s to %s", prev, phase)
+
 	return ctrl.Result{RequeueAfter: immediateRequeue}, nil
 }
 
@@ -234,6 +270,8 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 			return ctrl.Result{}, fmt.Errorf("deleting data PVC: %w", err)
 		}
 	}
+
+	cleanupNodeMetrics(node.Namespace, node.Name)
 
 	controllerutil.RemoveFinalizer(node, nodeFinalizerName)
 	return ctrl.Result{}, r.Update(ctx, node)
