@@ -24,13 +24,8 @@ func preInitJobName(node *seiv1alpha1.SeiNode) string {
 func generatePreInitJob(node *seiv1alpha1.SeiNode, platform PlatformConfig) *batchv1.Job {
 	labels := preInitLabelsForNode(node)
 
-	var podSpec corev1.PodSpec
-	if isGenesisCeremonyNode(node) {
-		podSpec = buildGenesisPreInitPodSpec(node, platform)
-	} else {
-		snap := snapshotSourceFor(node)
-		podSpec = buildPreInitPodSpec(node, snap, platform)
-	}
+	snap := snapshotSourceFor(node)
+	podSpec := buildPreInitPodSpec(node, snap, platform)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -111,78 +106,6 @@ func preInitWaitCommand(port int32, haltHeight int64) (command []string, args []
 		port, haltHeight, dataDir, haltHeight,
 	)
 	return []string{"/bin/bash", "-c"}, []string{script}
-}
-
-// buildGenesisPreInitPodSpec constructs a PodSpec for the genesis ceremony PreInit Job.
-// Unlike the snapshot PreInit, the main container runs "sleep infinity" as a keepalive
-// (the sidecar does the real work), and an init container copies the seid binary from
-// the node image to the PVC so sidecar tasks can invoke it.
-func buildGenesisPreInitPodSpec(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1.PodSpec {
-	serviceName := preInitJobName(node)
-
-	dataVolume := corev1.Volume{
-		Name: "data",
-		VolumeSource: corev1.VolumeSource{
-			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-				ClaimName: nodeDataPVCClaimName(node),
-			},
-		},
-	}
-
-	port := sidecarPort(node)
-	sidecarContainer := corev1.Container{
-		Name:          "sei-sidecar",
-		Image:         sidecarImage(node),
-		Command:       []string{"seictl", "serve"},
-		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
-		Env: []corev1.EnvVar{
-			{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
-			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
-			{Name: "SEI_HOME", Value: dataDir},
-		},
-		Ports: []corev1.ContainerPort{
-			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
-		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataDir},
-		},
-	}
-	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Resources != nil {
-		sidecarContainer.Resources = *node.Spec.Sidecar.Resources
-	}
-
-	copySeid := corev1.Container{
-		Name:    "copy-seid",
-		Image:   node.Spec.Image,
-		Command: []string{"sh", "-c", fmt.Sprintf("mkdir -p %s/bin && cp $(which seid) %s/bin/seid", dataDir, dataDir)},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataDir},
-		},
-	}
-
-	keepalive := corev1.Container{
-		Name:    "keepalive",
-		Image:   node.Spec.Image,
-		Command: []string{"sleep", "infinity"},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataDir},
-		},
-	}
-
-	return corev1.PodSpec{
-		Hostname:                      preInitPodHostname,
-		Subdomain:                     serviceName,
-		ServiceAccountName:            platform.ServiceAccount,
-		ShareProcessNamespace:         ptr.To(true),
-		RestartPolicy:                 corev1.RestartPolicyNever,
-		TerminationGracePeriodSeconds: ptr.To(int64(5)),
-		Tolerations: []corev1.Toleration{
-			{Key: platform.TolerationKey, Value: platform.TolerationVal, Effect: corev1.TaintEffectNoSchedule},
-		},
-		Volumes:        []corev1.Volume{dataVolume},
-		InitContainers: []corev1.Container{copySeid, sidecarContainer},
-		Containers:     []corev1.Container{keepalive},
-	}
 }
 
 func buildPreInitPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSource, platform PlatformConfig) corev1.PodSpec {

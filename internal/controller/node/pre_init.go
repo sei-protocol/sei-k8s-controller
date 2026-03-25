@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"fmt"
-	"time"
 
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	batchv1 "k8s.io/api/batch/v1"
@@ -25,9 +24,6 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 	plan := node.Status.PreInitPlan
 
 	if plan.Phase == seiv1alpha1.TaskPlanComplete {
-		if isGenesisCeremonyNode(node) {
-			return r.handleGenesisPreInitComplete(ctx, node)
-		}
 		if len(plan.Tasks) > 0 {
 			job := &batchv1.Job{}
 			key := types.NamespacedName{Name: preInitJobName(node), Namespace: node.Namespace}
@@ -106,9 +102,6 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 	}
 
 	if plan.Phase == seiv1alpha1.TaskPlanComplete {
-		if isGenesisCeremonyNode(node) {
-			return r.handleGenesisPreInitComplete(ctx, node)
-		}
 		if !isJobComplete(job) {
 			log.FromContext(ctx).Info("sidecar tasks complete, waiting for seid to reach halt-height", "job", job.Name)
 			return ctrl.Result{RequeueAfter: taskPollInterval}, nil
@@ -125,24 +118,6 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 		return r.transitionPhase(ctx, node, seiv1alpha1.PhaseFailed)
 	}
 	return result, nil
-}
-
-// handleGenesisPreInitComplete is called when a genesis ceremony node's PreInit
-// plan completes. The genesis PreInit Job runs "sleep infinity" — it never
-// completes on its own. The Init plan was already built in reconcilePending
-// (the S3 URI is deterministic). We wait for the group controller to push
-// static peers (the last step of finalizeGenesis after assembly + nodeID
-// collection), then clean up PreInit resources and transition.
-func (r *SeiNodeReconciler) handleGenesisPreInitComplete(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
-	if len(peersFor(node)) == 0 {
-		log.FromContext(ctx).Info("genesis PreInit complete, waiting for group to push peers")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
-	if err := r.cleanupPreInit(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("cleaning up genesis pre-init resources: %w", err)
-	}
-	return r.transitionPhase(ctx, node, seiv1alpha1.PhaseInitializing)
 }
 
 // ensurePreInitService creates the headless Service for pre-init Job pod DNS.

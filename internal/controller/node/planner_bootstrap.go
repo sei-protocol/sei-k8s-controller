@@ -9,37 +9,21 @@ import (
 )
 
 const (
-	taskAwaitCondition         = sidecar.TaskTypeAwaitCondition
-	taskGenerateIdentity       = sidecar.TaskTypeGenerateIdentity
-	taskGenerateGentx          = sidecar.TaskTypeGenerateGentx
-	taskUploadGenesisArtifacts = sidecar.TaskTypeUploadGenesisArtifacts
+	taskAwaitCondition          = sidecar.TaskTypeAwaitCondition
+	taskGenerateIdentity        = sidecar.TaskTypeGenerateIdentity
+	taskGenerateGentx           = sidecar.TaskTypeGenerateGentx
+	taskUploadGenesisArtifacts  = sidecar.TaskTypeUploadGenesisArtifacts
+	taskAwaitGenesisAssembly    = sidecar.TaskTypeAwaitGenesisAssembly
 )
 
-// buildPreInitPlan constructs the task plan for the PreInit Job. For genesis
-// ceremony nodes, it builds the 3-task identity/gentx/upload sequence. For
+// buildPreInitPlan constructs the task plan for the PreInit Job. For
 // snapshot-bootstrap nodes, it builds the standard bootstrap sequence. For
 // all other nodes it returns an empty plan that resolves trivially.
 func buildPreInitPlan(node *seiv1alpha1.SeiNode, planner NodePlanner) *seiv1alpha1.TaskPlan {
-	if isGenesisCeremonyNode(node) {
-		return buildGenesisPreInitPlan()
-	}
 	if !needsPreInit(node) {
 		return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: []seiv1alpha1.PlannedTask{}}
 	}
 	return planner.BuildPlan(node)
-}
-
-// buildGenesisPreInitPlan returns a 3-task plan for genesis ceremony PreInit:
-// generate validator identity, generate gentx, upload artifacts to S3.
-func buildGenesisPreInitPlan() *seiv1alpha1.TaskPlan {
-	return &seiv1alpha1.TaskPlan{
-		Phase: seiv1alpha1.TaskPlanActive,
-		Tasks: []seiv1alpha1.PlannedTask{
-			{Type: taskGenerateIdentity, Status: seiv1alpha1.PlannedTaskPending},
-			{Type: taskGenerateGentx, Status: seiv1alpha1.PlannedTaskPending},
-			{Type: taskUploadGenesisArtifacts, Status: seiv1alpha1.PlannedTaskPending},
-		},
-	}
 }
 
 // buildPostBootstrapInitPlan constructs a reduced InitPlan for nodes that
@@ -63,12 +47,16 @@ func buildPostBootstrapInitPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan
 	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}
 }
 
-// buildGenesisInitPlan constructs the Init plan for genesis ceremony nodes.
-// Unlike buildPostBootstrapInitPlan, discover-peers is unconditionally
-// included: peers are not yet set at plan-creation time but will be pushed
-// by the group controller before the node transitions to Initializing.
+// buildGenesisInitPlan constructs the full Init plan for genesis ceremony
+// nodes. Per-node artifact generation runs first, then await-genesis-assembly
+// blocks until the group controller has assembled and uploaded genesis.json.
+// After that the standard configure/apply/peers/validate/ready sequence runs.
 func buildGenesisInitPlan() *seiv1alpha1.TaskPlan {
 	prog := []string{
+		taskGenerateIdentity,
+		taskGenerateGentx,
+		taskUploadGenesisArtifacts,
+		taskAwaitGenesisAssembly,
 		taskConfigureGenesis,
 		taskConfigApply,
 		taskDiscoverPeers,

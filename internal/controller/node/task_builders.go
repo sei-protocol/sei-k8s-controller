@@ -93,6 +93,15 @@ func uploadGenesisArtifactsTaskBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBu
 	}
 }
 
+func awaitGenesisAssemblyTaskBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+	gc := node.Spec.Validator.GenesisCeremony
+	return sidecar.AwaitGenesisAssemblyTask{
+		S3Bucket: gc.ArtifactS3.Bucket,
+		S3Prefix: gc.ArtifactS3.Prefix,
+		S3Region: gc.ArtifactS3.Region,
+	}
+}
+
 // resultExportScheduledTask returns a result-export task builder with a
 // cron schedule if the node is a replayer with result export enabled.
 // Returns nil when not applicable.
