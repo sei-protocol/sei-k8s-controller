@@ -137,11 +137,16 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 // reconcilePending creates all plans up front and selects the starting phase.
+// The Init plan is always built here — for genesis ceremony nodes the S3
+// source is deterministic and discover-peers is unconditionally included.
+// Plan execution order is the single source of truth for orchestration.
 func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alpha1.SeiNode, planner NodePlanner) (ctrl.Result, error) {
 	patch := client.MergeFrom(node.DeepCopy())
 
 	node.Status.PreInitPlan = buildPreInitPlan(node, planner)
-	if needsPreInit(node) {
+	if isGenesisCeremonyNode(node) {
+		node.Status.InitPlan = buildGenesisInitPlan()
+	} else if needsPreInit(node) {
 		node.Status.InitPlan = buildPostBootstrapInitPlan(node)
 	} else {
 		node.Status.InitPlan = planner.BuildPlan(node)

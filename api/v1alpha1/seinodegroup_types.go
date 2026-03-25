@@ -26,6 +26,12 @@ type SeiNodeGroupSpec struct {
 	// +kubebuilder:default=Delete
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 
+	// Genesis configures genesis ceremony orchestration for this group.
+	// When set, the controller generates GenesisCeremonyNodeConfig for each
+	// child SeiNode and coordinates assembly of the final genesis.json.
+	// +optional
+	Genesis *GenesisCeremonyConfig `json:"genesis,omitempty"`
+
 	// Networking controls how the group is exposed to traffic.
 	// Networking resources are shared across all replicas.
 	// +optional
@@ -35,6 +41,56 @@ type SeiNodeGroupSpec struct {
 	// all replicas.
 	// +optional
 	Monitoring *MonitoringConfig `json:"monitoring,omitempty"`
+}
+
+// GenesisCeremonyConfig configures genesis ceremony orchestration for a node group.
+type GenesisCeremonyConfig struct {
+	// ChainID for the new network.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*[a-z0-9]$`
+	ChainID string `json:"chainId"`
+
+	// StakingAmount is the amount each validator self-delegates in its gentx.
+	// +optional
+	// +kubebuilder:default="10000000usei"
+	StakingAmount string `json:"stakingAmount,omitempty"`
+
+	// AccountBalance is the initial balance for each validator's genesis account.
+	// +optional
+	// +kubebuilder:default="1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom"
+	AccountBalance string `json:"accountBalance,omitempty"`
+
+	// Accounts adds non-validator genesis accounts (e.g. for load test funding).
+	// +optional
+	Accounts []GenesisAccount `json:"accounts,omitempty"`
+
+	// Overrides is a flat map of dotted key paths merged on top of sei-config's
+	// GenesisDefaults(). Applied BEFORE gentx generation.
+	// +optional
+	Overrides map[string]string `json:"overrides,omitempty"`
+
+	// GenesisS3 configures where genesis artifacts are stored.
+	// When omitted, inferred: bucket = "sei-genesis-artifacts",
+	// prefix = "<chainId>/<group-name>/", region from PlatformConfig.
+	// +optional
+	GenesisS3 *GenesisS3Destination `json:"genesisS3,omitempty"`
+
+	// MaxCeremonyDuration is the maximum time from group creation to genesis
+	// assembly completion. Default: "15m".
+	// +optional
+	MaxCeremonyDuration *metav1.Duration `json:"maxCeremonyDuration,omitempty"`
+}
+
+// GenesisAccount represents a non-validator genesis account to fund.
+type GenesisAccount struct {
+	// Address is the bech32-encoded account address.
+	// +kubebuilder:validation:MinLength=1
+	Address string `json:"address"`
+
+	// Balance is the initial balance in coin notation (e.g. "1000000usei").
+	// +kubebuilder:validation:MinLength=1
+	Balance string `json:"balance"`
 }
 
 // SeiNodeTemplate wraps a SeiNodeSpec for use in the group template.
@@ -65,16 +121,17 @@ type SeiNodeTemplateMeta struct {
 // ---------------------------------------------------------------------------
 
 // SeiNodeGroupPhase represents the high-level lifecycle state.
-// +kubebuilder:validation:Enum=Pending;Initializing;Ready;Degraded;Failed;Terminating
+// +kubebuilder:validation:Enum=Pending;GenesisCeremony;Initializing;Ready;Degraded;Failed;Terminating
 type SeiNodeGroupPhase string
 
 const (
-	GroupPhasePending      SeiNodeGroupPhase = "Pending"
-	GroupPhaseInitializing SeiNodeGroupPhase = "Initializing"
-	GroupPhaseReady        SeiNodeGroupPhase = "Ready"
-	GroupPhaseDegraded     SeiNodeGroupPhase = "Degraded"
-	GroupPhaseFailed       SeiNodeGroupPhase = "Failed"
-	GroupPhaseTerminating  SeiNodeGroupPhase = "Terminating"
+	GroupPhasePending        SeiNodeGroupPhase = "Pending"
+	GroupPhaseGenesisCeremony SeiNodeGroupPhase = "GenesisCeremony"
+	GroupPhaseInitializing   SeiNodeGroupPhase = "Initializing"
+	GroupPhaseReady          SeiNodeGroupPhase = "Ready"
+	GroupPhaseDegraded       SeiNodeGroupPhase = "Degraded"
+	GroupPhaseFailed         SeiNodeGroupPhase = "Failed"
+	GroupPhaseTerminating    SeiNodeGroupPhase = "Terminating"
 )
 
 // SeiNodeGroupStatus defines the observed state of a SeiNodeGroup.
@@ -97,6 +154,18 @@ type SeiNodeGroupStatus struct {
 	// +listMapKey=name
 	// +optional
 	Nodes []GroupNodeStatus `json:"nodes,omitempty"`
+
+	// AssemblyPlan tracks the genesis assembly task on index 0's sidecar.
+	// +optional
+	AssemblyPlan *TaskPlan `json:"assemblyPlan,omitempty"`
+
+	// GenesisHash is the SHA-256 hex digest of the assembled genesis.json.
+	// +optional
+	GenesisHash string `json:"genesisHash,omitempty"`
+
+	// GenesisS3URI is the S3 URI of the uploaded genesis.
+	// +optional
+	GenesisS3URI string `json:"genesisS3URI,omitempty"`
 
 	// NetworkingStatus reports the observed state of networking resources.
 	// +optional
@@ -131,11 +200,12 @@ type NetworkingStatus struct {
 
 // Status condition types for SeiNodeGroup.
 const (
-	ConditionNodesReady           = "NodesReady"
-	ConditionExternalServiceReady = "ExternalServiceReady"
-	ConditionRouteReady           = "RouteReady"
-	ConditionIsolationReady       = "IsolationReady"
-	ConditionServiceMonitorReady  = "ServiceMonitorReady"
+	ConditionNodesReady              = "NodesReady"
+	ConditionExternalServiceReady    = "ExternalServiceReady"
+	ConditionRouteReady              = "RouteReady"
+	ConditionIsolationReady          = "IsolationReady"
+	ConditionServiceMonitorReady     = "ServiceMonitorReady"
+	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
 )
 
 // +kubebuilder:object:root=true

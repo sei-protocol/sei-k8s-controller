@@ -80,9 +80,17 @@ func peersFor(node *seiv1alpha1.SeiNode) []seiv1alpha1.PeerSource {
 
 // needsPreInit returns true when the node requires a PreInitPlan Job.
 func needsPreInit(node *seiv1alpha1.SeiNode) bool {
+	if isGenesisCeremonyNode(node) {
+		return true
+	}
 	snap := snapshotSourceFor(node)
 	return snap != nil && snap.BootstrapImage != "" &&
 		snap.S3 != nil && snap.S3.TargetHeight > 0
+}
+
+// isGenesisCeremonyNode returns true when the node participates in a group genesis ceremony.
+func isGenesisCeremonyNode(node *seiv1alpha1.SeiNode) bool {
+	return node.Spec.Validator != nil && node.Spec.Validator.GenesisCeremony != nil
 }
 
 // snapshotGeneration extracts the SnapshotGenerationConfig from the populated
@@ -197,6 +205,12 @@ func buildSharedTask(
 		return sidecar.MarkReadyTask{}, nil
 	case taskAwaitCondition:
 		return awaitConditionTask(node)
+	case taskGenerateIdentity:
+		return generateIdentityTaskBuilder(node), nil
+	case taskGenerateGentx:
+		return generateGentxTaskBuilder(node), nil
+	case taskUploadGenesisArtifacts:
+		return uploadGenesisArtifactsTaskBuilder(node), nil
 	default:
 		return nil, fmt.Errorf("buildSharedTask: unhandled task type %q", taskType)
 	}

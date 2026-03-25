@@ -60,6 +60,39 @@ func configureGenesisBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
 	}
 }
 
+// generateIdentityTaskBuilder builds the sidecar task for the generate-identity step.
+func generateIdentityTaskBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+	gc := node.Spec.Validator.GenesisCeremony
+	return sidecar.GenerateIdentityTask{
+		ChainID: gc.ChainID,
+		Moniker: node.Name,
+	}
+}
+
+// generateGentxTaskBuilder builds the sidecar task for the generate-gentx step.
+// The node's own address is discovered at runtime by the handler — only the
+// balance amount and staking parameters need to be forwarded.
+func generateGentxTaskBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+	gc := node.Spec.Validator.GenesisCeremony
+	return sidecar.GenerateGentxTask{
+		ChainID:        gc.ChainID,
+		StakingAmount:  gc.StakingAmount,
+		AccountBalance: gc.AccountBalance,
+		GenesisParams:  gc.GenesisParams,
+	}
+}
+
+// uploadGenesisArtifactsTaskBuilder builds the sidecar task for the upload-genesis-artifacts step.
+func uploadGenesisArtifactsTaskBuilder(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+	gc := node.Spec.Validator.GenesisCeremony
+	return sidecar.UploadGenesisArtifactsTask{
+		S3Bucket: gc.ArtifactS3.Bucket,
+		S3Prefix: gc.ArtifactS3.Prefix,
+		S3Region: gc.ArtifactS3.Region,
+		NodeName: node.Name,
+	}
+}
+
 // resultExportScheduledTask returns a result-export task builder with a
 // cron schedule if the node is a replayer with result export enabled.
 // Returns nil when not applicable.
