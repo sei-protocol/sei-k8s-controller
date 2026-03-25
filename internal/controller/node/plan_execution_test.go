@@ -447,6 +447,10 @@ func TestConfigApply_ReplayerDefaultOverrides(t *testing.T) {
 		keyPruningKeepRecent:  "86400",
 		keyPruningKeepEvery:   "500",
 		keyPruningInterval:    "10",
+
+		keySCAsyncCommitBuffer:       "100",
+		keySCSnapshotKeepRecent:      "2",
+		keySCSnapshotMinTimeInterval: "3600",
 	}
 	for k, want := range checks {
 		if got := task.Intent.Overrides[k]; got != want {

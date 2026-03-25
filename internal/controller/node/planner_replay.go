@@ -55,5 +55,9 @@ func (p *replayerPlanner) controllerOverrides() map[string]string {
 		keyPruningKeepRecent:  "86400",
 		keyPruningKeepEvery:   "500",
 		keyPruningInterval:    "10",
+
+		keySCAsyncCommitBuffer:       "100",
+		keySCSnapshotKeepRecent:      "2",
+		keySCSnapshotMinTimeInterval: "3600",
 	}
 }
