@@ -125,13 +125,13 @@ type SeiNodeTemplateMeta struct {
 type SeiNodeGroupPhase string
 
 const (
-	GroupPhasePending        SeiNodeGroupPhase = "Pending"
+	GroupPhasePending         SeiNodeGroupPhase = "Pending"
 	GroupPhaseGenesisCeremony SeiNodeGroupPhase = "GenesisCeremony"
-	GroupPhaseInitializing   SeiNodeGroupPhase = "Initializing"
-	GroupPhaseReady          SeiNodeGroupPhase = "Ready"
-	GroupPhaseDegraded       SeiNodeGroupPhase = "Degraded"
-	GroupPhaseFailed         SeiNodeGroupPhase = "Failed"
-	GroupPhaseTerminating    SeiNodeGroupPhase = "Terminating"
+	GroupPhaseInitializing    SeiNodeGroupPhase = "Initializing"
+	GroupPhaseReady           SeiNodeGroupPhase = "Ready"
+	GroupPhaseDegraded        SeiNodeGroupPhase = "Degraded"
+	GroupPhaseFailed          SeiNodeGroupPhase = "Failed"
+	GroupPhaseTerminating     SeiNodeGroupPhase = "Terminating"
 )
 
 // SeiNodeGroupStatus defines the observed state of a SeiNodeGroup.

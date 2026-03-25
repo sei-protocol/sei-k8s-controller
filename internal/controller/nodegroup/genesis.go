@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -15,14 +16,13 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 )
 
 const (
-	defaultGenesisBucket          = "sei-genesis-artifacts"
-	defaultMaxCeremonyDuration    = 15 * time.Minute
-	defaultSidecarPort            = int32(7777)
-	defaultP2PPort                = int32(26656)
+	defaultGenesisBucket       = "sei-genesis-artifacts"
+	defaultMaxCeremonyDuration = 15 * time.Minute
+	defaultSidecarPort         = int32(7777)
+	defaultP2PPort             = int32(26656)
 )
 
 // SidecarStatusClient abstracts the sidecar HTTP API for testability.
@@ -177,7 +177,7 @@ func (r *SeiNodeGroupReconciler) driveAssemblyPlan(ctx context.Context, group *s
 }
 
 // TODO(PR-3): poll sidecar GetTask, mark plan Complete/Failed based on result.
-func (r *SeiNodeGroupReconciler) pollAssemblyTask(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, sc interface{}, task *seiv1alpha1.PlannedTask) (ctrl.Result, error) {
+func (r *SeiNodeGroupReconciler) pollAssemblyTask(ctx context.Context, _ *seiv1alpha1.SeiNodeGroup, _ any, task *seiv1alpha1.PlannedTask) (ctrl.Result, error) {
 	log.FromContext(ctx).Info("polling assembly task", "taskID", task.TaskID)
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
@@ -249,7 +249,7 @@ func (r *SeiNodeGroupReconciler) setStaticPeers(ctx context.Context, node *seiv1
 	return r.Patch(ctx, node, patch)
 }
 
-func (r *SeiNodeGroupReconciler) buildPreInitSidecarClient(node *seiv1alpha1.SeiNode) interface{} {
+func (r *SeiNodeGroupReconciler) buildPreInitSidecarClient(node *seiv1alpha1.SeiNode) any {
 	if r.BuildSidecarClientFn != nil {
 		return r.BuildSidecarClientFn(node)
 	}
