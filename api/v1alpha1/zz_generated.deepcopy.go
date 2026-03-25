@@ -770,8 +770,8 @@ func (in *SeiNodeGroupStatus) DeepCopyInto(out *SeiNodeGroupStatus) {
 		*out = make([]GroupNodeStatus, len(*in))
 		copy(*out, *in)
 	}
-	if in.AssemblyPlan != nil {
-		in, out := &in.AssemblyPlan, &out.AssemblyPlan
+	if in.InitPlan != nil {
+		in, out := &in.InitPlan, &out.InitPlan
 		*out = new(TaskPlan)
 		(*in).DeepCopyInto(*out)
 	}

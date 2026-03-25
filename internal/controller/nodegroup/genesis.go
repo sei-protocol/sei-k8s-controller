@@ -88,23 +88,23 @@ func (r *SeiNodeGroupReconciler) reconcileGenesisAssembly(ctx context.Context, g
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if group.Status.AssemblyPlan == nil {
+	if group.Status.InitPlan == nil {
 		return r.startAssembly(ctx, group)
 	}
 
-	if group.Status.AssemblyPlan.Phase == seiv1alpha1.TaskPlanComplete {
+	if group.Status.InitPlan.Phase == seiv1alpha1.TaskPlanComplete {
 		if group.Status.GenesisS3URI != "" {
 			return ctrl.Result{}, nil
 		}
 		return r.finalizeGenesis(ctx, group, nodes)
 	}
 
-	if group.Status.AssemblyPlan.Phase == seiv1alpha1.TaskPlanFailed {
+	if group.Status.InitPlan.Phase == seiv1alpha1.TaskPlanFailed {
 		return r.setGenesisCondition(ctx, group, metav1.ConditionFalse,
 			"AssemblyFailed", "genesis assembly task failed")
 	}
 
-	return r.driveAssemblyPlan(ctx, group, nodes)
+	return r.driveInitPlan(ctx, group, nodes)
 }
 
 func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) (ctrl.Result, error) {
@@ -116,10 +116,9 @@ func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1
 	}
 
 	patch := client.MergeFrom(group.DeepCopy())
-	group.Status.AssemblyPlan = plan
-	group.Status.Phase = seiv1alpha1.GroupPhaseGenesisCeremony
+	group.Status.InitPlan = plan
 	if err := r.Status().Patch(ctx, group, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("setting assembly plan: %w", err)
+		return ctrl.Result{}, fmt.Errorf("setting init plan: %w", err)
 	}
 
 	r.Recorder.Event(group, corev1.EventTypeNormal, "GenesisAssemblyStarted",
@@ -127,7 +126,7 @@ func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1
 	return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 }
 
-func (r *SeiNodeGroupReconciler) driveAssemblyPlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
+func (r *SeiNodeGroupReconciler) driveInitPlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
 	if len(nodes) == 0 {
 		return ctrl.Result{}, fmt.Errorf("no nodes available for assembly")
 	}
@@ -139,7 +138,7 @@ func (r *SeiNodeGroupReconciler) driveAssemblyPlan(ctx context.Context, group *s
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	plan := group.Status.AssemblyPlan
+	plan := group.Status.InitPlan
 	task := &plan.Tasks[0]
 
 	switch task.Status {
@@ -170,15 +169,15 @@ func (r *SeiNodeGroupReconciler) driveAssemblyPlan(ctx context.Context, group *s
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 
 	case seiv1alpha1.PlannedTaskSubmitted:
-		return r.pollAssemblyTask(ctx, group, sc, task)
+		return r.pollInitTask(ctx, group, sc, task)
 	}
 
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
 // TODO(PR-3): poll sidecar GetTask, mark plan Complete/Failed based on result.
-func (r *SeiNodeGroupReconciler) pollAssemblyTask(ctx context.Context, _ *seiv1alpha1.SeiNodeGroup, _ any, task *seiv1alpha1.PlannedTask) (ctrl.Result, error) {
-	log.FromContext(ctx).Info("polling assembly task", "taskID", task.TaskID)
+func (r *SeiNodeGroupReconciler) pollInitTask(ctx context.Context, _ *seiv1alpha1.SeiNodeGroup, _ any, task *seiv1alpha1.PlannedTask) (ctrl.Result, error) {
+	log.FromContext(ctx).Info("polling init task", "taskID", task.TaskID)
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 

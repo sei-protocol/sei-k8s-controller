@@ -121,17 +121,16 @@ type SeiNodeTemplateMeta struct {
 // ---------------------------------------------------------------------------
 
 // SeiNodeGroupPhase represents the high-level lifecycle state.
-// +kubebuilder:validation:Enum=Pending;GenesisCeremony;Initializing;Ready;Degraded;Failed;Terminating
+// +kubebuilder:validation:Enum=Pending;Initializing;Ready;Degraded;Failed;Terminating
 type SeiNodeGroupPhase string
 
 const (
-	GroupPhasePending         SeiNodeGroupPhase = "Pending"
-	GroupPhaseGenesisCeremony SeiNodeGroupPhase = "GenesisCeremony"
-	GroupPhaseInitializing    SeiNodeGroupPhase = "Initializing"
-	GroupPhaseReady           SeiNodeGroupPhase = "Ready"
-	GroupPhaseDegraded        SeiNodeGroupPhase = "Degraded"
-	GroupPhaseFailed          SeiNodeGroupPhase = "Failed"
-	GroupPhaseTerminating     SeiNodeGroupPhase = "Terminating"
+	GroupPhasePending      SeiNodeGroupPhase = "Pending"
+	GroupPhaseInitializing SeiNodeGroupPhase = "Initializing"
+	GroupPhaseReady        SeiNodeGroupPhase = "Ready"
+	GroupPhaseDegraded     SeiNodeGroupPhase = "Degraded"
+	GroupPhaseFailed       SeiNodeGroupPhase = "Failed"
+	GroupPhaseTerminating  SeiNodeGroupPhase = "Terminating"
 )
 
 // SeiNodeGroupStatus defines the observed state of a SeiNodeGroup.
@@ -155,9 +154,9 @@ type SeiNodeGroupStatus struct {
 	// +optional
 	Nodes []GroupNodeStatus `json:"nodes,omitempty"`
 
-	// AssemblyPlan tracks the genesis assembly task on index 0's sidecar.
+	// InitPlan tracks group-level initialization tasks (e.g. genesis assembly).
 	// +optional
-	AssemblyPlan *TaskPlan `json:"assemblyPlan,omitempty"`
+	InitPlan *TaskPlan `json:"initPlan,omitempty"`
 
 	// GenesisHash is the SHA-256 hex digest of the assembled genesis.json.
 	// +optional
