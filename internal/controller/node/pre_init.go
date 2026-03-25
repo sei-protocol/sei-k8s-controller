@@ -15,12 +15,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 // reconcilePreInitializing drives the PreInitPlan to completion. For nodes
 // that don't need pre-init the plan has zero tasks and completes trivially
 // without creating any Job infrastructure.
-func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *seiv1alpha1.SeiNode, planner NodePlanner) (ctrl.Result, error) {
+func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *seiv1alpha1.SeiNode, _ planner.NodePlanner) (ctrl.Result, error) {
 	plan := node.Status.PreInitPlan
 
 	if plan.Phase == seiv1alpha1.TaskPlanComplete {
@@ -29,7 +31,7 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 			key := types.NamespacedName{Name: preInitJobName(node), Namespace: node.Namespace}
 			if err := r.Get(ctx, key, job); err == nil && !isJobComplete(job) && !isJobFailed(job) {
 				log.FromContext(ctx).Info("pre-init plan complete, waiting for seid to reach halt-height", "job", job.Name)
-				return ctrl.Result{RequeueAfter: taskPollInterval}, nil
+				return ctrl.Result{RequeueAfter: planner.TaskPollInterval}, nil
 			}
 		}
 		if err := r.cleanupPreInit(ctx, node); err != nil {
@@ -50,7 +52,7 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking empty pre-init plan complete: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: immediateRequeue}, nil
+		return ctrl.Result{RequeueAfter: planner.ImmediateRequeue}, nil
 	}
 
 	if err := r.ensurePreInitService(ctx, node); err != nil {
@@ -65,14 +67,14 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 		log.FromContext(ctx).Error(fmt.Errorf("pre-init job failed"), "pre-init job terminated unexpectedly", "job", job.Name)
 		patch := client.MergeFrom(node.DeepCopy())
 		plan.Phase = seiv1alpha1.TaskPlanFailed
-		if task := currentTask(plan); task != nil {
-			task.Status = seiv1alpha1.PlannedTaskFailed
-			task.Error = jobFailureReason(job)
+		if ct := planner.CurrentTask(plan); ct != nil {
+			ct.Status = seiv1alpha1.PlannedTaskFailed
+			ct.Error = jobFailureReason(job)
 		}
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking pre-init plan failed after job failure: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: immediateRequeue}, nil
+		return ctrl.Result{RequeueAfter: planner.ImmediateRequeue}, nil
 	}
 
 	if isJobComplete(job) {
@@ -87,16 +89,16 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking pre-init plan complete after job success: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: immediateRequeue}, nil
+		return ctrl.Result{RequeueAfter: planner.ImmediateRequeue}, nil
 	}
 
 	sc := r.buildJobSidecarClient(node)
 	if sc == nil {
 		log.FromContext(ctx).Info("pre-init job sidecar not reachable yet, will retry")
-		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
+		return ctrl.Result{RequeueAfter: planner.TaskPollInterval}, nil
 	}
 
-	result, err := r.executePlan(ctx, node, plan, planner, sc)
+	result, err := r.PlanExecutor.ExecutePlan(ctx, node, plan, sc)
 	if err != nil {
 		return result, err
 	}
@@ -104,7 +106,7 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 	if plan.Phase == seiv1alpha1.TaskPlanComplete {
 		if !isJobComplete(job) {
 			log.FromContext(ctx).Info("sidecar tasks complete, waiting for seid to reach halt-height", "job", job.Name)
-			return ctrl.Result{RequeueAfter: taskPollInterval}, nil
+			return ctrl.Result{RequeueAfter: planner.TaskPollInterval}, nil
 		}
 		if err := r.cleanupPreInit(ctx, node); err != nil {
 			return ctrl.Result{}, fmt.Errorf("cleaning up pre-init resources: %w", err)
@@ -163,7 +165,7 @@ func (r *SeiNodeReconciler) ensurePreInitJob(ctx context.Context, node *seiv1alp
 
 // buildJobSidecarClient constructs a sidecar client targeting the pre-init
 // Job's pod via hostname/subdomain DNS. Returns nil if the client can't be built.
-func (r *SeiNodeReconciler) buildJobSidecarClient(node *seiv1alpha1.SeiNode) SidecarStatusClient {
+func (r *SeiNodeReconciler) buildJobSidecarClient(node *seiv1alpha1.SeiNode) task.SidecarClient {
 	if r.BuildSidecarClientFn != nil {
 		return r.BuildSidecarClientFn(node)
 	}

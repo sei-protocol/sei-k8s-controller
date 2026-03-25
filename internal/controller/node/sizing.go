@@ -6,16 +6,17 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 // nodeMode returns the sei-config mode string for the node based on which
 // sub-spec is populated. Falls back to "full" if none is set.
 func nodeMode(node *seiv1alpha1.SeiNode) string {
-	planner, err := PlannerForNode(node, "")
+	p, err := planner.ForNode(node, "")
 	if err != nil {
 		return string(seiconfig.ModeFull)
 	}
-	return planner.Mode()
+	return p.Mode()
 }
 
 // defaultResourcesForMode returns CPU and memory requests for the seid

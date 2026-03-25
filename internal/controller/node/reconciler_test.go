@@ -17,6 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 func newNodeTestScheme(t *testing.T) *k8sruntime.Scheme {
@@ -40,11 +42,12 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 	r := &SeiNodeReconciler{
-		Client:   c,
-		Scheme:   s,
-		Recorder: record.NewFakeRecorder(100),
-		Platform: DefaultPlatformConfig(),
-		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) SidecarStatusClient {
+		Client:       c,
+		Scheme:       s,
+		Recorder:     record.NewFakeRecorder(100),
+		Platform:     DefaultPlatformConfig(),
+		PlanExecutor: &planner.Executor{Client: c},
+		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) task.SidecarClient {
 			return &mockSidecarClient{}
 		},
 	}

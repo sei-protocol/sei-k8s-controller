@@ -1,12 +1,12 @@
-package node
+package planner
 
 import (
 	"fmt"
 
 	seiconfig "github.com/sei-protocol/sei-config"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type validatorPlanner struct {
@@ -41,18 +41,8 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	v := node.Spec.Validator
-	return buildPlan(v.Peers, v.Snapshot)
-}
-
-func (p *validatorPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {
-	if taskType == taskConfigApply {
-		return sidecar.ConfigApplyTask{
-			Intent: seiconfig.ConfigIntent{
-				Mode:      seiconfig.ModeValidator,
-				Overrides: mergeOverrides(nil, node.Spec.Overrides),
-			},
-		}, nil
-	}
-	v := node.Spec.Validator
-	return buildSharedTask(node, v.Peers, v.Snapshot, taskType, p.snapshotRegion)
+	return buildBasePlan(node, v.Peers, v.Snapshot, p.snapshotRegion, &task.ConfigApplyParams{
+		Mode:      string(seiconfig.ModeValidator),
+		Overrides: mergeOverrides(nil, node.Spec.Overrides),
+	})
 }

@@ -10,6 +10,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 const (
@@ -24,7 +25,7 @@ func preInitJobName(node *seiv1alpha1.SeiNode) string {
 func generatePreInitJob(node *seiv1alpha1.SeiNode, platform PlatformConfig) *batchv1.Job {
 	labels := preInitLabelsForNode(node)
 
-	snap := snapshotSourceFor(node)
+	snap := planner.SnapshotSourceFor(node)
 	podSpec := buildPreInitPodSpec(node, snap, platform)
 
 	return &batchv1.Job{

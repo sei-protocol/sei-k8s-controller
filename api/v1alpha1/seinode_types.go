@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -84,27 +85,33 @@ const (
 )
 
 // PlannedTaskStatus represents the state of an individual task within a plan.
-// +kubebuilder:validation:Enum=Pending;Submitted;Complete;Failed
+// +kubebuilder:validation:Enum=Pending;Complete;Failed
 type PlannedTaskStatus string
 
 const (
-	PlannedTaskPending   PlannedTaskStatus = "Pending"
-	PlannedTaskSubmitted PlannedTaskStatus = "Submitted"
-	PlannedTaskComplete  PlannedTaskStatus = "Complete"
-	PlannedTaskFailed    PlannedTaskStatus = "Failed"
+	PlannedTaskPending  PlannedTaskStatus = "Pending"
+	PlannedTaskComplete PlannedTaskStatus = "Complete"
+	PlannedTaskFailed   PlannedTaskStatus = "Failed"
 )
 
-// PlannedTask is a single task within a TaskPlan.
+// PlannedTask is a single task within a TaskPlan. Each task carries its full
+// payload so the plan executor can deserialize and run it without needing
+// access to the planner or sidecar client factory.
 type PlannedTask struct {
-	// Type identifies the sidecar task (e.g. "snapshot-restore", "config-patch").
+	// Type identifies the task (e.g. "snapshot-restore", "config-patch").
 	Type string `json:"type"`
 
-	// TaskID is the UUID assigned by the sidecar when the task was submitted.
-	// +optional
-	TaskID string `json:"taskID,omitempty"`
+	// ID is a deterministic UUID v5 derived from nodeName/taskType/attempt.
+	// Used as the key for sidecar task submission and status polling.
+	ID string `json:"id"`
 
 	// Status is the current state of this task.
 	Status PlannedTaskStatus `json:"status"`
+
+	// Params is the opaque JSON payload for this task. Deserialized at
+	// execution time by task.Deserialize into the concrete task type.
+	// +optional
+	Params *apiextensionsv1.JSON `json:"params,omitempty"`
 
 	// Error is the error message if the task failed.
 	// +optional

@@ -18,6 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 const (
@@ -68,11 +70,11 @@ func DefaultPlatformConfig() PlatformConfig {
 // SeiNodeReconciler reconciles a SeiNode object.
 type SeiNodeReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-	Platform PlatformConfig
-	// BuildSidecarClientFn overrides sidecar client construction for testing.
-	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) SidecarStatusClient
+	Scheme               *runtime.Scheme
+	Recorder             record.EventRecorder
+	Platform             PlatformConfig
+	PlanExecutor         *planner.Executor
+	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) task.SidecarClient
 }
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
@@ -106,11 +108,11 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	planner, err := PlannerForNode(node, r.Platform.SnapshotRegion)
+	p, err := planner.ForNode(node, r.Platform.SnapshotRegion)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving planner: %w", err)
 	}
-	if err := planner.Validate(node); err != nil {
+	if err := p.Validate(node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("validating spec: %w", err)
 	}
 
@@ -122,11 +124,11 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	switch node.Status.Phase {
 	case "", seiv1alpha1.PhasePending:
-		return r.reconcilePending(ctx, node, planner)
+		return r.reconcilePending(ctx, node, p)
 	case seiv1alpha1.PhasePreInitializing:
-		return r.reconcilePreInitializing(ctx, node, planner)
+		return r.reconcilePreInitializing(ctx, node, p)
 	case seiv1alpha1.PhaseInitializing:
-		return r.reconcileInitializing(ctx, node, planner)
+		return r.reconcileInitializing(ctx, node, p)
 	case seiv1alpha1.PhaseRunning:
 		return r.reconcileRunning(ctx, node)
 	case seiv1alpha1.PhaseFailed:
@@ -140,16 +142,16 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // The Init plan is always built here — for genesis ceremony nodes the S3
 // source is deterministic and discover-peers is unconditionally included.
 // Plan execution order is the single source of truth for orchestration.
-func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alpha1.SeiNode, planner NodePlanner) (ctrl.Result, error) {
+func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alpha1.SeiNode, p planner.NodePlanner) (ctrl.Result, error) {
 	patch := client.MergeFrom(node.DeepCopy())
 
-	node.Status.PreInitPlan = buildPreInitPlan(node, planner)
-	if isGenesisCeremonyNode(node) {
-		node.Status.InitPlan = buildGenesisInitPlan()
-	} else if needsPreInit(node) {
-		node.Status.InitPlan = buildPostBootstrapInitPlan(node)
+	node.Status.PreInitPlan = planner.BuildPreInitPlan(node, p)
+	if planner.IsGenesisCeremonyNode(node) {
+		node.Status.InitPlan = planner.BuildGenesisInitPlan(node)
+	} else if planner.NeedsPreInit(node) {
+		node.Status.InitPlan = planner.BuildPostBootstrapInitPlan(node, nil)
 	} else {
-		node.Status.InitPlan = planner.BuildPlan(node)
+		node.Status.InitPlan = p.BuildPlan(node)
 	}
 	node.Status.Phase = seiv1alpha1.PhasePreInitializing
 
@@ -163,12 +165,12 @@ func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alp
 	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
 		"Phase changed from %s to %s", seiv1alpha1.PhasePending, seiv1alpha1.PhasePreInitializing)
 
-	return ctrl.Result{RequeueAfter: immediateRequeue}, nil
+	return ctrl.Result{RequeueAfter: planner.ImmediateRequeue}, nil
 }
 
 // reconcileInitializing ensures the StatefulSet and Service exist, then drives
 // the InitPlan to completion.
-func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *seiv1alpha1.SeiNode, planner NodePlanner) (ctrl.Result, error) {
+func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *seiv1alpha1.SeiNode, _ planner.NodePlanner) (ctrl.Result, error) {
 	if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
 	}
@@ -180,10 +182,10 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 	if sc == nil {
 		sidecarUnreachableTotal.WithLabelValues(node.Namespace, node.Name).Inc()
 		log.FromContext(ctx).Info("sidecar not reachable yet, will retry")
-		return ctrl.Result{RequeueAfter: taskPollInterval}, nil
+		return ctrl.Result{RequeueAfter: planner.TaskPollInterval}, nil
 	}
 
-	result, err := r.executePlan(ctx, node, node.Status.InitPlan, planner, sc)
+	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan, sc)
 	if err != nil {
 		return result, err
 	}
@@ -216,7 +218,7 @@ func (r *SeiNodeReconciler) transitionPhase(ctx context.Context, node *seiv1alph
 		prev = seiv1alpha1.PhasePending
 	}
 
-	patch := client.MergeFrom(node.DeepCopy())
+	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	node.Status.Phase = phase
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting phase to %s: %w", phase, err)
@@ -235,7 +237,7 @@ func (r *SeiNodeReconciler) transitionPhase(ctx context.Context, node *seiv1alph
 	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
 		"Phase changed from %s to %s", prev, phase)
 
-	return ctrl.Result{RequeueAfter: immediateRequeue}, nil
+	return ctrl.Result{RequeueAfter: planner.ImmediateRequeue}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

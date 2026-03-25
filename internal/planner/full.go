@@ -1,13 +1,13 @@
-package node
+package planner
 
 import (
 	"fmt"
 	"strconv"
 
 	seiconfig "github.com/sei-protocol/sei-config"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type fullNodePlanner struct {
@@ -30,23 +30,10 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 
 func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	fn := node.Spec.FullNode
-	return buildPlan(fn.Peers, fn.Snapshot)
-}
-
-func (p *fullNodePlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {
-	if taskType == taskConfigApply {
-		return p.buildConfigApply(node), nil
-	}
-	fn := node.Spec.FullNode
-	return buildSharedTask(node, fn.Peers, fn.Snapshot, taskType, p.snapshotRegion)
-}
-
-func (p *fullNodePlanner) buildConfigApply(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
-	intent := seiconfig.ConfigIntent{
-		Mode:      seiconfig.ModeFull,
+	return buildBasePlan(node, fn.Peers, fn.Snapshot, p.snapshotRegion, &task.ConfigApplyParams{
+		Mode:      string(seiconfig.ModeFull),
 		Overrides: mergeOverrides(p.controllerOverrides(node), node.Spec.Overrides),
-	}
-	return sidecar.ConfigApplyTask{Intent: intent}
+	})
 }
 
 func (p *fullNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {

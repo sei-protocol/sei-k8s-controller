@@ -161,23 +161,14 @@ func (r *SeiNodeGroupReconciler) driveInitPlan(ctx context.Context, group *seiv1
 			return ctrl.Result{}, fmt.Errorf("submitting assembly task: %w", err)
 		}
 		patch := client.MergeFrom(group.DeepCopy())
-		task.Status = seiv1alpha1.PlannedTaskSubmitted
-		task.TaskID = id.String()
+		task.Status = seiv1alpha1.PlannedTaskComplete
+		task.ID = id.String()
 		if err := r.Status().Patch(ctx, group, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("recording assembly task submission: %w", err)
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-
-	case seiv1alpha1.PlannedTaskSubmitted:
-		return r.pollInitTask(ctx, group, sc, task)
 	}
 
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-}
-
-// TODO(PR-3): poll sidecar GetTask, mark plan Complete/Failed based on result.
-func (r *SeiNodeGroupReconciler) pollInitTask(ctx context.Context, _ *seiv1alpha1.SeiNodeGroup, _ any, task *seiv1alpha1.PlannedTask) (ctrl.Result, error) {
-	log.FromContext(ctx).Info("polling init task", "taskID", task.TaskID)
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
