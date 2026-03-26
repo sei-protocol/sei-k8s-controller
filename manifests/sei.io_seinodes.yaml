@@ -231,7 +231,7 @@ spec:
                         type: integer
                       bootstrapImage:
                         description: |-
-                          BootstrapImage is a seid container image used for the PreInitPlan Job.
+                          BootstrapImage is a seid container image used for the bootstrap Job.
                           When set, the controller runs a one-shot Job with this image and the
                           seictl sidecar to prepare the node's data PVC before the main StatefulSet
                           starts. The Job restores a snapshot, applies config, and syncs to the
@@ -440,7 +440,7 @@ spec:
                         type: integer
                       bootstrapImage:
                         description: |-
-                          BootstrapImage is a seid container image used for the PreInitPlan Job.
+                          BootstrapImage is a seid container image used for the bootstrap Job.
                           When set, the controller runs a one-shot Job with this image and the
                           seictl sidecar to prepare the node's data PVC before the main StatefulSet
                           starts. The Job restores a snapshot, applies config, and syncs to the
@@ -563,6 +563,65 @@ spec:
                 description: Validator configures a consensus-participating validator
                   node.
                 properties:
+                  genesisCeremony:
+                    description: |-
+                      GenesisCeremony indicates this validator participates in a group genesis
+                      ceremony. Set by the SeiNodeGroup controller — not intended for direct use.
+                    properties:
+                      accountBalance:
+                        description: |-
+                          AccountBalance is the initial coin balance to fund this validator's
+                          genesis account. The node's own address is discovered during identity
+                          generation — no cross-node coordination needed.
+                        minLength: 1
+                        type: string
+                      artifactS3:
+                        description: ArtifactS3 is the S3 location where this node
+                          uploads its genesis artifacts.
+                        properties:
+                          bucket:
+                            description: Bucket is the S3 bucket name.
+                            minLength: 1
+                            type: string
+                          prefix:
+                            description: Prefix is an optional key prefix within the
+                              bucket.
+                            type: string
+                          region:
+                            description: Region is the AWS region for S3 access.
+                            minLength: 1
+                            type: string
+                        required:
+                        - bucket
+                        - region
+                        type: object
+                      chainId:
+                        description: ChainID of the genesis network.
+                        minLength: 1
+                        type: string
+                      genesisParams:
+                        description: |-
+                          GenesisParams is a JSON string of genesis parameter overrides merged
+                          on top of sei-config's GenesisDefaults(). Applied before gentx generation.
+                        type: string
+                      index:
+                        description: Index is the node's ordinal within the group
+                          (0-based).
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      stakingAmount:
+                        description: StakingAmount is the self-delegation amount for
+                          this validator's gentx.
+                        minLength: 1
+                        type: string
+                    required:
+                    - accountBalance
+                    - artifactS3
+                    - chainId
+                    - index
+                    - stakingAmount
+                    type: object
                   peers:
                     description: Peers configures how this node discovers and connects
                       to peers.
@@ -623,7 +682,7 @@ spec:
                         type: integer
                       bootstrapImage:
                         description: |-
-                          BootstrapImage is a seid container image used for the PreInitPlan Job.
+                          BootstrapImage is a seid container image used for the bootstrap Job.
                           When set, the controller runs a one-shot Job with this image and the
                           seictl sidecar to prepare the node's data PVC before the main StatefulSet
                           starts. The Job restores a snapshot, applies config, and syncs to the
@@ -791,28 +850,37 @@ spec:
                   tasks:
                     description: Tasks is the ordered list of tasks to execute.
                     items:
-                      description: PlannedTask is a single task within a TaskPlan.
+                      description: |-
+                        PlannedTask is a single task within a TaskPlan. Each task carries its full
+                        payload so the plan executor can deserialize and run it without needing
+                        access to the planner or sidecar client factory.
                       properties:
                         error:
                           description: Error is the error message if the task failed.
                           type: string
+                        id:
+                          description: |-
+                            ID is a deterministic UUID v5 derived from nodeName/taskType/attempt.
+                            Used as the key for sidecar task submission and status polling.
+                          type: string
+                        params:
+                          description: |-
+                            Params is the opaque JSON payload for this task. Deserialized at
+                            execution time by task.Deserialize into the concrete task type.
+                          x-kubernetes-preserve-unknown-fields: true
                         status:
                           description: Status is the current state of this task.
                           enum:
                           - Pending
-                          - Submitted
                           - Complete
                           - Failed
                           type: string
-                        taskID:
-                          description: TaskID is the UUID assigned by the sidecar
-                            when the task was submitted.
-                          type: string
                         type:
-                          description: Type identifies the sidecar task (e.g. "snapshot-restore",
+                          description: Type identifies the task (e.g. "snapshot-restore",
                             "config-patch").
                           type: string
                       required:
+                      - id
                       - status
                       - type
                       type: object
@@ -825,56 +893,11 @@ spec:
                 description: Phase is the high-level lifecycle state.
                 enum:
                 - Pending
-                - PreInitializing
                 - Initializing
                 - Running
                 - Failed
                 - Terminating
                 type: string
-              preInitPlan:
-                description: PreInitPlan tracks the pre-initialization task sequence
-                  (bootstrap Job).
-                properties:
-                  phase:
-                    description: Phase is the overall state of the plan.
-                    enum:
-                    - Active
-                    - Complete
-                    - Failed
-                    type: string
-                  tasks:
-                    description: Tasks is the ordered list of tasks to execute.
-                    items:
-                      description: PlannedTask is a single task within a TaskPlan.
-                      properties:
-                        error:
-                          description: Error is the error message if the task failed.
-                          type: string
-                        status:
-                          description: Status is the current state of this task.
-                          enum:
-                          - Pending
-                          - Submitted
-                          - Complete
-                          - Failed
-                          type: string
-                        taskID:
-                          description: TaskID is the UUID assigned by the sidecar
-                            when the task was submitted.
-                          type: string
-                        type:
-                          description: Type identifies the sidecar task (e.g. "snapshot-restore",
-                            "config-patch").
-                          type: string
-                      required:
-                      - status
-                      - type
-                      type: object
-                    type: array
-                required:
-                - phase
-                - tasks
-                type: object
               scheduledTasks:
                 additionalProperties:
                   type: string

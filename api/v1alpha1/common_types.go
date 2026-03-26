@@ -58,7 +58,7 @@ type SnapshotSource struct {
 	// +optional
 	BackfillBlocks int64 `json:"backfillBlocks,omitempty"`
 
-	// BootstrapImage is a seid container image used for the PreInitPlan Job.
+	// BootstrapImage is a seid container image used for the bootstrap Job.
 	// When set, the controller runs a one-shot Job with this image and the
 	// seictl sidecar to prepare the node's data PVC before the main StatefulSet
 	// starts. The Job restores a snapshot, applies config, and syncs to the

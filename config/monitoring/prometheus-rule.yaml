@@ -42,14 +42,14 @@ spec:
             description: "Node has been in Initializing phase for over 30 minutes."
 
         - alert: SeiNodeStuckPending
-          expr: max by (namespace, name) (sei_controller_seinode_phase{phase=~"Pending|PreInitializing"}) == 1
+          expr: max by (namespace, name) (sei_controller_seinode_phase{phase="Pending"}) == 1
           for: 15m
           labels:
             severity: warning
             team: platform
           annotations:
             summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} stuck pending"
-            description: "Node has been in Pending/PreInitializing phase for over 15 minutes."
+            description: "Node has been in Pending phase for over 15 minutes."
 
         - alert: SidecarUnreachableHigh
           expr: rate(sei_controller_sidecar_unreachable_total[5m]) > 0.5

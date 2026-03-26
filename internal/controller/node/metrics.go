@@ -10,7 +10,6 @@ import (
 
 var allNodePhases = []string{
 	string(seiv1alpha1.PhasePending),
-	string(seiv1alpha1.PhasePreInitializing),
 	string(seiv1alpha1.PhaseInitializing),
 	string(seiv1alpha1.PhaseRunning),
 	string(seiv1alpha1.PhaseFailed),

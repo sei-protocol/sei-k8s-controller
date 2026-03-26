@@ -70,6 +70,21 @@ type SeiNodeSpec struct {
 	Validator *ValidatorSpec `json:"validator,omitempty"`
 }
 
+// SnapshotSource returns the SnapshotSource from whichever mode sub-spec is
+// populated, or nil if no snapshot is configured.
+func (s *SeiNodeSpec) SnapshotSource() *SnapshotSource {
+	switch {
+	case s.FullNode != nil:
+		return s.FullNode.Snapshot
+	case s.Validator != nil:
+		return s.Validator.Snapshot
+	case s.Replayer != nil:
+		return &s.Replayer.Snapshot
+	default:
+		return nil
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
@@ -129,16 +144,15 @@ type TaskPlan struct {
 }
 
 // SeiNodePhase represents the high-level lifecycle state of a SeiNode.
-// +kubebuilder:validation:Enum=Pending;PreInitializing;Initializing;Running;Failed;Terminating
+// +kubebuilder:validation:Enum=Pending;Initializing;Running;Failed;Terminating
 type SeiNodePhase string
 
 const (
-	PhasePending         SeiNodePhase = "Pending"
-	PhasePreInitializing SeiNodePhase = "PreInitializing"
-	PhaseInitializing    SeiNodePhase = "Initializing"
-	PhaseRunning         SeiNodePhase = "Running"
-	PhaseFailed          SeiNodePhase = "Failed"
-	PhaseTerminating     SeiNodePhase = "Terminating"
+	PhasePending      SeiNodePhase = "Pending"
+	PhaseInitializing SeiNodePhase = "Initializing"
+	PhaseRunning      SeiNodePhase = "Running"
+	PhaseFailed       SeiNodePhase = "Failed"
+	PhaseTerminating  SeiNodePhase = "Terminating"
 )
 
 // SeiNodeStatus defines the observed state of a SeiNode.
@@ -150,10 +164,6 @@ type SeiNodeStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	// PreInitPlan tracks the pre-initialization task sequence (bootstrap Job).
-	// +optional
-	PreInitPlan *TaskPlan `json:"preInitPlan,omitempty"`
 
 	// InitPlan tracks the initialization task sequence for this node.
 	// +optional

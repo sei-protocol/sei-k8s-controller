@@ -5,24 +5,33 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-const (
-	TaskPollInterval = 5 * time.Second
-	ImmediateRequeue = time.Millisecond
-)
+const TaskPollInterval = 5 * time.Second
+
+// ResultRequeueImmediate is the idiomatic way to request an immediate
+// re-enqueue in controller-runtime without an artificial timer delay.
+var ResultRequeueImmediate = ctrl.Result{Requeue: true}
 
 // Executor drives TaskPlans to completion using the task.TaskExecution
 // interface. It is stateless per reconcile — each call re-deserializes
 // the current task from the plan's embedded params and calls Status/Execute.
+//
+// BuildSidecarClient is a factory that produces a SidecarClient for the
+// given node. Only called for sidecar-driven tasks (not controller-side).
 type Executor struct {
-	Client client.Client
+	Client             client.Client
+	Scheme             *runtime.Scheme
+	Platform           platform.Config
+	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
 }
 
 // CurrentTask returns the first non-Complete task in the plan, or nil if all
@@ -43,7 +52,6 @@ func (e *Executor) ExecutePlan(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
 	plan *seiv1alpha1.TaskPlan,
-	sc task.SidecarClient,
 ) (ctrl.Result, error) {
 	if plan == nil {
 		return ctrl.Result{}, fmt.Errorf("ExecutePlan called with nil plan for node %s/%s", node.Namespace, node.Name)
@@ -61,7 +69,17 @@ func (e *Executor) ExecutePlan(
 		if err := e.Client.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: ImmediateRequeue}, nil
+		return ResultRequeueImmediate, nil
+	}
+
+	cfg := task.ExecutionConfig{
+		BuildSidecarClient: func() (task.SidecarClient, error) {
+			return e.BuildSidecarClient(node)
+		},
+		KubeClient: e.Client,
+		Scheme:     e.Scheme,
+		Node:       node,
+		Platform:   e.Platform,
 	}
 
 	var paramsRaw []byte
@@ -69,7 +87,7 @@ func (e *Executor) ExecutePlan(
 		paramsRaw = t.Params.Raw
 	}
 
-	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, sc)
+	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, cfg)
 	if err != nil {
 		return e.failTask(ctx, node, plan, t, err.Error())
 	}
@@ -95,7 +113,7 @@ func (e *Executor) ExecutePlan(
 		if err := e.Client.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking task complete: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: ImmediateRequeue}, nil
+		return ResultRequeueImmediate, nil
 
 	case task.ExecutionFailed:
 		errMsg := "unknown error"

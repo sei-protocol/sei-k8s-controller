@@ -41,14 +41,20 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		WithObjects(objs...).
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
+	mock := &mockSidecarClient{}
 	r := &SeiNodeReconciler{
-		Client:       c,
-		Scheme:       s,
-		Recorder:     record.NewFakeRecorder(100),
-		Platform:     DefaultPlatformConfig(),
-		PlanExecutor: &planner.Executor{Client: c},
+		Client:   c,
+		Scheme:   s,
+		Recorder: record.NewFakeRecorder(100),
+		Platform: DefaultPlatformConfig(),
+		PlanExecutor: &planner.Executor{
+			Client: c,
+			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
+				return mock, nil
+			},
+		},
 		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) task.SidecarClient {
-			return &mockSidecarClient{}
+			return mock
 		},
 	}
 	return r, c
@@ -84,7 +90,7 @@ func TestNodeReconcile_GenesisNode_CreateStatefulSetAndService(t *testing.T) {
 	node := newGenesisNode("mynet-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	// Drive through Pending -> PreInitializing (empty) -> Initializing.
+	// Drive through Pending -> Initializing.
 	for range 4 {
 		_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())
@@ -136,7 +142,7 @@ func TestNodeReconcile_StatefulSet_Idempotent(t *testing.T) {
 	node := newGenesisNode("mynet-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	// Drive through Pending -> PreInitializing (empty) -> Initializing, then one more for idempotency.
+	// Drive through Pending -> Initializing, then one more for idempotency.
 	for range 5 {
 		_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())
@@ -169,7 +175,7 @@ func TestNodeReconcile_SnapshotNode_StatefulSetHasInitContainers(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	// Drive through Pending -> PreInitializing (empty) -> Initializing.
+	// Drive through Pending -> Initializing.
 	for range 4 {
 		_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())

@@ -57,7 +57,7 @@ func (r *SeiNodeReconciler) ensureScheduledTask(ctx context.Context, node *seiv1
 		return err
 	}
 
-	patch := client.MergeFrom(node.DeepCopy())
+	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	if node.Status.ScheduledTasks == nil {
 		node.Status.ScheduledTasks = make(map[string]string)
 	}

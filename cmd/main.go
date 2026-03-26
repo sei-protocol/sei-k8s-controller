@@ -16,11 +16,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
 	nodegroupcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodegroup"
 	nodepoolcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodepool"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 var (
@@ -113,55 +117,66 @@ func main() {
 		os.Exit(1)
 	}
 
-	platform := nodecontroller.DefaultPlatformConfig()
+	platformCfg := platform.DefaultConfig()
 	if v := os.Getenv("SEI_NODEPOOL_NAME"); v != "" {
-		platform.NodepoolName = v
+		platformCfg.NodepoolName = v
 	}
 	if v := os.Getenv("SEI_TOLERATION_KEY"); v != "" {
-		platform.TolerationKey = v
+		platformCfg.TolerationKey = v
 	}
 	if v := os.Getenv("SEI_TOLERATION_VALUE"); v != "" {
-		platform.TolerationVal = v
+		platformCfg.TolerationVal = v
 	}
 	if v := os.Getenv("SEI_SERVICE_ACCOUNT"); v != "" {
-		platform.ServiceAccount = v
+		platformCfg.ServiceAccount = v
 	}
 	if v := os.Getenv("SEI_STORAGE_CLASS_PERF"); v != "" {
-		platform.StorageClassPerf = v
+		platformCfg.StorageClassPerf = v
 	}
 	if v := os.Getenv("SEI_STORAGE_CLASS_DEFAULT"); v != "" {
-		platform.StorageClassDefault = v
+		platformCfg.StorageClassDefault = v
 	}
 	if v := os.Getenv("SEI_STORAGE_SIZE_DEFAULT"); v != "" {
-		platform.StorageSizeDefault = v
+		platformCfg.StorageSizeDefault = v
 	}
 	if v := os.Getenv("SEI_STORAGE_SIZE_ARCHIVE"); v != "" {
-		platform.StorageSizeArchive = v
+		platformCfg.StorageSizeArchive = v
 	}
 	if v := os.Getenv("SEI_RESOURCE_CPU_ARCHIVE"); v != "" {
-		platform.ResourceCPUArchive = v
+		platformCfg.ResourceCPUArchive = v
 	}
 	if v := os.Getenv("SEI_RESOURCE_MEM_ARCHIVE"); v != "" {
-		platform.ResourceMemArchive = v
+		platformCfg.ResourceMemArchive = v
 	}
 	if v := os.Getenv("SEI_RESOURCE_CPU_DEFAULT"); v != "" {
-		platform.ResourceCPUDefault = v
+		platformCfg.ResourceCPUDefault = v
 	}
 	if v := os.Getenv("SEI_RESOURCE_MEM_DEFAULT"); v != "" {
-		platform.ResourceMemDefault = v
+		platformCfg.ResourceMemDefault = v
 	}
 	if v := os.Getenv("SEI_SNAPSHOT_REGION"); v != "" {
-		platform.SnapshotRegion = v
+		platformCfg.SnapshotRegion = v
 	}
 
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
 	nodeRecorder := mgr.GetEventRecorderFor("seinode-controller")
 	if err := (&nodecontroller.SeiNodeReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Recorder:     nodeRecorder,
-		Platform:     platform,
-		PlanExecutor: &planner.Executor{Client: mgr.GetClient()},
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: nodeRecorder,
+		Platform: platformCfg,
+		PlanExecutor: &planner.Executor{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Platform: platformCfg,
+			BuildSidecarClient: func(
+				node *seiv1alpha1.SeiNode,
+			) (task.SidecarClient, error) {
+				return sidecar.NewSidecarClient(
+					planner.SidecarURLForNode(node),
+				)
+			},
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNode")
 		os.Exit(1)

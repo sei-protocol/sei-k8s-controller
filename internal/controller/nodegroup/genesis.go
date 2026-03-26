@@ -15,7 +15,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 const (
@@ -32,7 +33,7 @@ type SidecarStatusClient interface {
 
 // sidecarSubmitter is the subset of sidecar.SidecarClient that can submit and poll tasks.
 type sidecarSubmitter interface {
-	SubmitTask(ctx context.Context, task sidecar.TaskRequest) (interface{ String() string }, error)
+	SubmitTask(ctx context.Context, req sidecar.TaskRequest) (interface{ String() string }, error)
 	GetTask(ctx context.Context, id interface{ String() string }) (*sidecar.TaskResult, error)
 }
 
@@ -70,21 +71,26 @@ func (r *SeiNodeGroupReconciler) reconcileGenesisAssembly(ctx context.Context, g
 		n := &nodes[i]
 		if n.Status.Phase == seiv1alpha1.PhaseFailed {
 			msg := fmt.Sprintf("SeiNode %s is in Failed phase", n.Name)
-			r.Recorder.Event(group, corev1.EventTypeWarning, "GenesisPreInitFailed", msg)
-			return r.setGenesisCondition(ctx, group, metav1.ConditionFalse, "PreInitFailed", msg)
+			r.Recorder.Event(group, corev1.EventTypeWarning, "GenesisBootstrapFailed", msg)
+			return r.setGenesisCondition(ctx, group, metav1.ConditionFalse, "BootstrapFailed", msg)
 		}
 	}
 
-	allPreInitComplete := true
+	allGenesisTasksReady := true
 	for i := range nodes {
-		plan := nodes[i].Status.PreInitPlan
-		if plan == nil || plan.Phase != seiv1alpha1.TaskPlanComplete {
-			allPreInitComplete = false
+		plan := nodes[i].Status.InitPlan
+		if plan == nil {
+			allGenesisTasksReady = false
+			break
+		}
+		ct := planner.CurrentTask(plan)
+		if ct == nil || ct.Type != task.TaskTypeAwaitGenesisAssembly {
+			allGenesisTasksReady = false
 			break
 		}
 	}
-	if !allPreInitComplete {
-		log.FromContext(ctx).Info("waiting for all SeiNodes PreInit to complete")
+	if !allGenesisTasksReady {
+		log.FromContext(ctx).Info("waiting for all SeiNodes genesis tasks to complete")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -122,7 +128,7 @@ func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1
 	}
 
 	r.Recorder.Event(group, corev1.EventTypeNormal, "GenesisAssemblyStarted",
-		"All PreInit complete, starting genesis assembly")
+		"All bootstrap tasks complete, starting genesis assembly")
 	return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 }
 
@@ -132,16 +138,16 @@ func (r *SeiNodeGroupReconciler) driveInitPlan(ctx context.Context, group *seiv1
 	}
 
 	assemblerNode := &nodes[0]
-	sc := r.buildPreInitSidecarClient(assemblerNode)
+	sc := r.buildSidecarClient(assemblerNode)
 	if sc == nil {
 		log.FromContext(ctx).Info("assembler sidecar not reachable yet")
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
 	plan := group.Status.InitPlan
-	task := &plan.Tasks[0]
+	currentTask := &plan.Tasks[0]
 
-	switch task.Status {
+	switch currentTask.Status {
 	case seiv1alpha1.PlannedTaskPending:
 		s3 := genesisS3Config(group)
 		nodeParams := make([]sidecar.GenesisNodeParam, len(nodes))
@@ -161,8 +167,8 @@ func (r *SeiNodeGroupReconciler) driveInitPlan(ctx context.Context, group *seiv1
 			return ctrl.Result{}, fmt.Errorf("submitting assembly task: %w", err)
 		}
 		patch := client.MergeFrom(group.DeepCopy())
-		task.Status = seiv1alpha1.PlannedTaskComplete
-		task.ID = id.String()
+		currentTask.Status = seiv1alpha1.PlannedTaskComplete
+		currentTask.ID = id.String()
 		if err := r.Status().Patch(ctx, group, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("recording assembly task submission: %w", err)
 		}
@@ -207,7 +213,7 @@ func (r *SeiNodeGroupReconciler) collectPeers(ctx context.Context, nodes []seiv1
 	var peers []string
 	for i := range nodes {
 		n := &nodes[i]
-		sc := r.buildPreInitSidecarClient(n)
+		sc := r.buildSidecarClient(n)
 		if sc == nil {
 			return nil, fmt.Errorf("cannot reach sidecar on %s", n.Name)
 		}
@@ -239,15 +245,11 @@ func (r *SeiNodeGroupReconciler) setStaticPeers(ctx context.Context, node *seiv1
 	return r.Patch(ctx, node, patch)
 }
 
-func (r *SeiNodeGroupReconciler) buildPreInitSidecarClient(node *seiv1alpha1.SeiNode) any {
+func (r *SeiNodeGroupReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) any {
 	if r.BuildSidecarClientFn != nil {
 		return r.BuildSidecarClientFn(node)
 	}
-	port := defaultSidecarPort
-	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
-		port = node.Spec.Sidecar.Port
-	}
-	url := nodecontroller.PreInitSidecarURL(node.Name, node.Namespace, port)
+	url := planner.SidecarURLForNode(node)
 	c, err := sidecar.NewSidecarClient(url)
 	if err != nil {
 		return nil
