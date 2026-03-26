@@ -41,39 +41,63 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 		t.Errorf("phase = %q, want Active", plan.Phase)
 	}
 
-	if len(plan.Tasks) != 1 {
-		t.Fatalf("expected 1 task, got %d", len(plan.Tasks))
+	if len(plan.Tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(plan.Tasks))
 	}
 
-	tsk := plan.Tasks[0]
-	if tsk.Type != TaskAssembleGenesis {
-		t.Errorf("task type = %q, want %q", tsk.Type, TaskAssembleGenesis)
+	// Task 0: assemble-and-upload-genesis
+	assembleTask := plan.Tasks[0]
+	if assembleTask.Type != TaskAssembleGenesis {
+		t.Errorf("task[0] type = %q, want %q", assembleTask.Type, TaskAssembleGenesis)
 	}
-	if tsk.Status != seiv1alpha1.PlannedTaskPending {
-		t.Errorf("task status = %q, want Pending", tsk.Status)
+	if assembleTask.Status != seiv1alpha1.PlannedTaskPending {
+		t.Errorf("task[0] status = %q, want Pending", assembleTask.Status)
 	}
-	if tsk.ID == "" {
-		t.Error("task ID should not be empty")
+	if assembleTask.ID == "" {
+		t.Error("task[0] ID should not be empty")
 	}
-	if tsk.Params == nil {
-		t.Fatal("task params should not be nil")
+	if assembleTask.MaxRetries != groupAssemblyMaxRetries {
+		t.Errorf("task[0] MaxRetries = %d, want %d", assembleTask.MaxRetries, groupAssemblyMaxRetries)
+	}
+	if assembleTask.Params == nil {
+		t.Fatal("task[0] params should not be nil")
 	}
 
-	var params task.AssembleAndUploadGenesisParams
-	if err := json.Unmarshal(tsk.Params.Raw, &params); err != nil {
-		t.Fatalf("unmarshal params: %v", err)
+	var assembleParams task.AssembleAndUploadGenesisParams
+	if err := json.Unmarshal(assembleTask.Params.Raw, &assembleParams); err != nil {
+		t.Fatalf("unmarshal assemble params: %v", err)
 	}
-	if params.S3Bucket != "test-bucket" {
-		t.Errorf("S3Bucket = %q, want %q", params.S3Bucket, "test-bucket")
+	if assembleParams.S3Bucket != "test-bucket" {
+		t.Errorf("S3Bucket = %q, want %q", assembleParams.S3Bucket, "test-bucket")
 	}
-	if params.ChainID != "arctic-1" {
-		t.Errorf("ChainID = %q, want %q", params.ChainID, "arctic-1")
+	if assembleParams.ChainID != "arctic-1" {
+		t.Errorf("ChainID = %q, want %q", assembleParams.ChainID, "arctic-1")
 	}
-	if len(params.Nodes) != 3 {
-		t.Errorf("expected 3 nodes, got %d", len(params.Nodes))
+	if len(assembleParams.Nodes) != 3 {
+		t.Errorf("expected 3 nodes, got %d", len(assembleParams.Nodes))
 	}
-	if params.Nodes[0].Name != "node-0" {
-		t.Errorf("nodes[0].Name = %q, want %q", params.Nodes[0].Name, "node-0")
+	if assembleParams.Nodes[0].Name != "node-0" {
+		t.Errorf("nodes[0].Name = %q, want %q", assembleParams.Nodes[0].Name, "node-0")
+	}
+
+	// Task 1: await-nodes-running
+	awaitTask := plan.Tasks[1]
+	if awaitTask.Type != TaskAwaitNodesRunning {
+		t.Errorf("task[1] type = %q, want %q", awaitTask.Type, TaskAwaitNodesRunning)
+	}
+	if awaitTask.Params == nil {
+		t.Fatal("task[1] params should not be nil")
+	}
+
+	var awaitParams task.AwaitNodesRunningParams
+	if err := json.Unmarshal(awaitTask.Params.Raw, &awaitParams); err != nil {
+		t.Fatalf("unmarshal await params: %v", err)
+	}
+	if awaitParams.GroupName != "test-group" {
+		t.Errorf("GroupName = %q, want %q", awaitParams.GroupName, "test-group")
+	}
+	if awaitParams.Expected != 3 {
+		t.Errorf("Expected = %d, want 3", awaitParams.Expected)
 	}
 }
 
@@ -133,6 +157,9 @@ func TestBuildGroupAssemblyPlan_DeterministicIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if plan1.Tasks[0].ID != plan2.Tasks[0].ID {
-		t.Errorf("IDs not deterministic: %q vs %q", plan1.Tasks[0].ID, plan2.Tasks[0].ID)
+		t.Errorf("assemble IDs not deterministic: %q vs %q", plan1.Tasks[0].ID, plan2.Tasks[0].ID)
+	}
+	if plan1.Tasks[1].ID != plan2.Tasks[1].ID {
+		t.Errorf("await IDs not deterministic: %q vs %q", plan1.Tasks[1].ID, plan2.Tasks[1].ID)
 	}
 }

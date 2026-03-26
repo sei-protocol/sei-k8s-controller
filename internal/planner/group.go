@@ -7,9 +7,13 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// BuildGroupAssemblyPlan constructs a TaskPlan for the SeiNodeGroup that
-// assembles all per-node genesis artifacts into a final genesis.json.
-// The plan has a single assemble-and-upload-genesis sidecar task.
+const groupAssemblyMaxRetries = 60
+
+// BuildGroupAssemblyPlan constructs a TaskPlan for the SeiNodeGroup that:
+//  1. Assembles all per-node genesis artifacts into a final genesis.json
+//     (retried until the sidecar succeeds).
+//  2. Waits for all child SeiNodes to reach PhaseRunning, confirming
+//     they picked up the genesis.
 func BuildGroupAssemblyPlan(
 	group *seiv1alpha1.SeiNodeGroup,
 	nodes []seiv1alpha1.SeiNode,
@@ -21,7 +25,7 @@ func BuildGroupAssemblyPlan(
 		nodeParams[i] = task.GenesisNodeParam{Name: nodes[i].Name}
 	}
 
-	params := &task.AssembleAndUploadGenesisParams{
+	assembleParams := &task.AssembleAndUploadGenesisParams{
 		S3Bucket: s3.Bucket,
 		S3Prefix: s3.Prefix,
 		S3Region: s3.Region,
@@ -29,14 +33,25 @@ func BuildGroupAssemblyPlan(
 		Nodes:    nodeParams,
 	}
 
-	t, err := buildGroupPlannedTask(group.Name, TaskAssembleGenesis, 0, params)
+	assembleTask, err := buildGroupPlannedTask(group.Name, TaskAssembleGenesis, 0, assembleParams)
+	if err != nil {
+		return nil, err
+	}
+	assembleTask.MaxRetries = groupAssemblyMaxRetries
+
+	awaitParams := &task.AwaitNodesRunningParams{
+		GroupName: group.Name,
+		Namespace: group.Namespace,
+		Expected:  len(nodes),
+	}
+	awaitTask, err := buildGroupPlannedTask(group.Name, TaskAwaitNodesRunning, 0, awaitParams)
 	if err != nil {
 		return nil, err
 	}
 
 	return &seiv1alpha1.TaskPlan{
 		Phase: seiv1alpha1.TaskPlanActive,
-		Tasks: []seiv1alpha1.PlannedTask{t},
+		Tasks: []seiv1alpha1.PlannedTask{assembleTask, awaitTask},
 	}, nil
 }
 

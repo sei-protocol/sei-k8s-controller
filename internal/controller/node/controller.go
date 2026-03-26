@@ -45,7 +45,7 @@ type SeiNodeReconciler struct {
 	Scheme               *runtime.Scheme
 	Recorder             record.EventRecorder
 	Platform             PlatformConfig
-	PlanExecutor         *planner.Executor
+	PlanExecutor         planner.PlanExecutor[*seiv1alpha1.SeiNode]
 	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) task.SidecarClient
 }
 

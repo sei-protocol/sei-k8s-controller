@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"maps"
+
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -44,9 +46,7 @@ func (m *mockSidecarClient) SubmitTask(_ context.Context, req sidecar.TaskReques
 	if m.activeResults == nil {
 		m.activeResults = make(map[uuid.UUID]*sidecar.TaskResult)
 	}
-	for k, v := range m.postSubmitResults {
-		m.activeResults[k] = v
-	}
+	maps.Copy(m.activeResults, m.postSubmitResults)
 	return id, nil
 }
 
@@ -97,6 +97,21 @@ func configGenesisParams(t *testing.T) *apiextensionsv1.JSON {
 	return &apiextensionsv1.JSON{Raw: raw}
 }
 
+func nodeExecutor(c *fake.ClientBuilder, s *k8sruntime.Scheme, mock *mockSidecarClient) *Executor[*seiv1alpha1.SeiNode] {
+	fc := c.Build()
+	return &Executor[*seiv1alpha1.SeiNode]{
+		Client: fc,
+		ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
+			return task.ExecutionConfig{
+				BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
+				KubeClient:         fc,
+				Scheme:             s,
+				Resource:           node,
+			}
+		},
+	}
+}
+
 func TestExecutePlan_RetryOnFailure(t *testing.T) {
 	s := testScheme(t)
 	node := testNode()
@@ -129,19 +144,11 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().
+	builder := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(node).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
-		Build()
-
-	executor := &Executor{
-		Client: c,
-		Scheme: s,
-		BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
-			return mock, nil
-		},
-	}
+		WithStatusSubresource(&seiv1alpha1.SeiNode{})
+	executor := nodeExecutor(builder, s, mock)
 
 	ctx := context.Background()
 	result, err := executor.ExecutePlan(ctx, node, node.Status.InitPlan)
@@ -154,7 +161,7 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 	}
 
 	updated := &seiv1alpha1.SeiNode{}
-	if err := c.Get(ctx, keyFor(node), updated); err != nil {
+	if err := executor.Client.Get(ctx, keyFor(node), updated); err != nil {
 		t.Fatalf("get node: %v", err)
 	}
 
@@ -206,19 +213,11 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().
+	builder := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(node).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
-		Build()
-
-	executor := &Executor{
-		Client: c,
-		Scheme: s,
-		BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
-			return mock, nil
-		},
-	}
+		WithStatusSubresource(&seiv1alpha1.SeiNode{})
+	executor := nodeExecutor(builder, s, mock)
 
 	ctx := context.Background()
 	_, err := executor.ExecutePlan(ctx, node, node.Status.InitPlan)
@@ -227,7 +226,7 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 	}
 
 	updated := &seiv1alpha1.SeiNode{}
-	if err := c.Get(ctx, keyFor(node), updated); err != nil {
+	if err := executor.Client.Get(ctx, keyFor(node), updated); err != nil {
 		t.Fatalf("get node: %v", err)
 	}
 
@@ -241,7 +240,6 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 
 func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	s := testScheme(t)
-	node := testNode()
 	group := &seiv1alpha1.SeiNodeGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-group", Namespace: "default", Generation: 1},
 		Spec: seiv1alpha1.SeiNodeGroupSpec{
@@ -286,24 +284,28 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().
+	fc := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(group, node).
+		WithObjects(group).
 		WithStatusSubresource(&seiv1alpha1.SeiNodeGroup{}).
 		Build()
 
-	executor := &Executor{
-		Client: c,
-		Scheme: s,
-		BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
-			return mock, nil
+	executor := &Executor[*seiv1alpha1.SeiNodeGroup]{
+		Client: fc,
+		ConfigFor: func(_ context.Context, g *seiv1alpha1.SeiNodeGroup) task.ExecutionConfig {
+			return task.ExecutionConfig{
+				BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
+				KubeClient:         fc,
+				Scheme:             s,
+				Resource:           g,
+			}
 		},
 	}
 
 	ctx := context.Background()
-	result, err := executor.ExecuteGroupPlan(ctx, group, group.Status.InitPlan, node)
+	result, err := executor.ExecutePlan(ctx, group, group.Status.InitPlan)
 	if err != nil {
-		t.Fatalf("ExecuteGroupPlan: %v", err)
+		t.Fatalf("ExecutePlan: %v", err)
 	}
 
 	if len(mock.submitted) != 1 {
@@ -311,15 +313,15 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	}
 
 	updated := &seiv1alpha1.SeiNodeGroup{}
-	if err := c.Get(ctx, keyForGroup(group), updated); err != nil {
+	if err := fc.Get(ctx, keyForGroup(group), updated); err != nil {
 		t.Fatalf("get group: %v", err)
 	}
 
 	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.PlannedTaskComplete {
 		t.Errorf("task status = %q, want Complete", updated.Status.InitPlan.Tasks[0].Status)
 	}
-	if !result.Requeue {
-		t.Error("expected Requeue after task completion")
+	if result.RequeueAfter == 0 {
+		t.Error("expected non-zero RequeueAfter after task completion")
 	}
 }
 

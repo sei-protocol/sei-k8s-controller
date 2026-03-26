@@ -9,6 +9,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 // DeployBootstrapServiceParams holds the serialized parameters for the
@@ -42,7 +44,10 @@ func deserializeBootstrapService(id string, params json.RawMessage, cfg Executio
 }
 
 func (e *deployBootstrapServiceExecution) Execute(ctx context.Context) error {
-	node := e.cfg.Node
+	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
+	if err != nil {
+		return err
+	}
 	svc := GenerateBootstrapService(node)
 	if err := ctrl.SetControllerReference(node, svc, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on bootstrap service: %w", err)

@@ -54,11 +54,10 @@ func testCfg(t *testing.T, objs ...client.Object) ExecutionConfig {
 		WithScheme(s).
 		WithObjects(objs...).
 		Build()
-	node := testNode()
 	return ExecutionConfig{
 		KubeClient: c,
 		Scheme:     s,
-		Node:       node,
+		Resource:   testNode(),
 		Platform:   platform.DefaultConfig(),
 	}
 }
@@ -66,8 +65,9 @@ func testCfg(t *testing.T, objs ...client.Object) ExecutionConfig {
 // --- deploy-bootstrap-service ---
 
 func TestDeployBootstrapService_Execute_CreatesService(t *testing.T) {
+	node := testNode()
 	cfg := testCfg(t)
-	params := DeployBootstrapServiceParams{ServiceName: cfg.Node.Name, Namespace: cfg.Node.Namespace}
+	params := DeployBootstrapServiceParams{ServiceName: node.Name, Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapService("id-1", raw, cfg)
 	if err != nil {
@@ -83,17 +83,17 @@ func TestDeployBootstrapService_Execute_CreatesService(t *testing.T) {
 	}
 
 	svc := &corev1.Service{}
-	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: cfg.Node.Name, Namespace: cfg.Node.Namespace}, svc); err != nil {
+	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, svc); err != nil {
 		t.Fatalf("service not found: %v", err)
 	}
 }
 
 func TestDeployBootstrapService_Execute_Idempotent(t *testing.T) {
-	cfg := testCfg(t)
-	svc := GenerateBootstrapService(cfg.Node)
-	cfg = testCfg(t, svc)
+	node := testNode()
+	svc := GenerateBootstrapService(node)
+	cfg := testCfg(t, svc)
 
-	params := DeployBootstrapServiceParams{ServiceName: cfg.Node.Name, Namespace: cfg.Node.Namespace}
+	params := DeployBootstrapServiceParams{ServiceName: node.Name, Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapService("id-1", raw, cfg)
 	if err != nil {
@@ -110,11 +110,11 @@ func TestDeployBootstrapService_Execute_Idempotent(t *testing.T) {
 }
 
 func TestDeployBootstrapService_Status_DetectsExisting(t *testing.T) {
-	cfg := testCfg(t)
-	svc := GenerateBootstrapService(cfg.Node)
-	cfg = testCfg(t, svc)
+	node := testNode()
+	svc := GenerateBootstrapService(node)
+	cfg := testCfg(t, svc)
 
-	params := DeployBootstrapServiceParams{ServiceName: cfg.Node.Name, Namespace: cfg.Node.Namespace}
+	params := DeployBootstrapServiceParams{ServiceName: node.Name, Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapService("id-1", raw, cfg)
 	if err != nil {
@@ -129,8 +129,9 @@ func TestDeployBootstrapService_Status_DetectsExisting(t *testing.T) {
 // --- deploy-bootstrap-job ---
 
 func TestDeployBootstrapJob_Execute_CreatesJob(t *testing.T) {
+	node := testNode()
 	cfg := testCfg(t)
-	params := DeployBootstrapJobParams{JobName: BootstrapJobName(cfg.Node), Namespace: cfg.Node.Namespace}
+	params := DeployBootstrapJobParams{JobName: BootstrapJobName(node), Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapJob("id-2", raw, cfg)
 	if err != nil {
@@ -146,16 +147,24 @@ func TestDeployBootstrapJob_Execute_CreatesJob(t *testing.T) {
 	}
 
 	job := &batchv1.Job{}
-	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: BootstrapJobName(cfg.Node), Namespace: cfg.Node.Namespace}, job); err != nil {
+	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: BootstrapJobName(node), Namespace: node.Namespace}, job); err != nil {
 		t.Fatalf("job not found: %v", err)
 	}
 }
 
 func TestDeployBootstrapJob_Execute_NilSnapshot(t *testing.T) {
-	cfg := testCfg(t)
-	cfg.Node.Spec.FullNode.Snapshot = nil
+	node := testNode()
+	node.Spec.FullNode.Snapshot = nil
+	s := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	cfg := ExecutionConfig{
+		KubeClient: c,
+		Scheme:     s,
+		Resource:   node,
+		Platform:   platform.DefaultConfig(),
+	}
 
-	params := DeployBootstrapJobParams{JobName: BootstrapJobName(cfg.Node), Namespace: cfg.Node.Namespace}
+	params := DeployBootstrapJobParams{JobName: BootstrapJobName(node), Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapJob("id-2", raw, cfg)
 	if err != nil {

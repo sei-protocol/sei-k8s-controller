@@ -13,8 +13,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
-
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
@@ -31,13 +29,14 @@ type SidecarStatusClient interface {
 }
 
 // reconcileGenesisAssembly is the top-level genesis coordination entry point.
-// It runs only when spec.genesis is set. The flow is:
+// The flow follows a plan-driven pattern:
 //  1. Wait for all child SeiNodes to be created.
-//  2. Check S3 for each node's gentx artifact.
-//  3. Once all artifacts are present, build and drive a group-level InitPlan
-//     that submits assemble-and-upload-genesis to the 0th node's sidecar.
-//  4. After the plan completes, finalize: collect peers, distribute them, and
-//     record the genesis S3 URI.
+//  2. Build a group-level TaskPlan (assemble-and-upload-genesis + await-nodes-running).
+//  3. Drive the plan via PlanExecutor until completion.
+//
+// The assemble-and-upload-genesis task retries automatically until all
+// per-node artifacts are present and assembly succeeds. The
+// await-nodes-running task polls until all child nodes reach PhaseRunning.
 func (r *SeiNodeGroupReconciler) reconcileGenesisAssembly(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) (ctrl.Result, error) {
 	if group.Spec.Genesis == nil {
 		return ctrl.Result{}, nil
@@ -67,64 +66,28 @@ func (r *SeiNodeGroupReconciler) reconcileGenesisAssembly(ctx context.Context, g
 	}
 
 	for i := range nodes {
-		n := &nodes[i]
-		if n.Status.Phase == seiv1alpha1.PhaseFailed {
-			msg := fmt.Sprintf("SeiNode %s is in Failed phase", n.Name)
+		if nodes[i].Status.Phase == seiv1alpha1.PhaseFailed {
+			msg := fmt.Sprintf("SeiNode %s is in Failed phase", nodes[i].Name)
 			r.Recorder.Event(group, corev1.EventTypeWarning, "GenesisBootstrapFailed", msg)
 			return r.setGenesisCondition(ctx, group, metav1.ConditionFalse, "BootstrapFailed", msg)
 		}
 	}
 
-	allArtifactsUploaded, err := r.checkGenesisArtifacts(ctx, group, nodes)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("checking genesis artifacts: %w", err)
-	}
-	if !allArtifactsUploaded {
-		log.FromContext(ctx).Info("waiting for all genesis artifacts in S3")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
+	// Build plan on first entry.
 	if group.Status.InitPlan == nil {
 		return r.startAssembly(ctx, group, nodes)
 	}
 
-	if group.Status.InitPlan.Phase == seiv1alpha1.TaskPlanComplete {
-		if group.Status.GenesisS3URI != "" {
-			return ctrl.Result{}, nil
-		}
+	switch group.Status.InitPlan.Phase {
+	case seiv1alpha1.TaskPlanComplete:
 		return r.finalizeGenesis(ctx, group, nodes)
-	}
-
-	if group.Status.InitPlan.Phase == seiv1alpha1.TaskPlanFailed {
+	case seiv1alpha1.TaskPlanFailed:
 		return r.setGenesisCondition(ctx, group, metav1.ConditionFalse,
 			"AssemblyFailed", "genesis assembly task failed")
 	}
 
-	return r.driveInitPlan(ctx, group, nodes)
-}
-
-// checkGenesisArtifacts verifies that every node has uploaded its gentx
-// artifact to S3. Returns true only when all expected keys are present.
-func (r *SeiNodeGroupReconciler) checkGenesisArtifacts(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (bool, error) {
-	if r.ObjectStore == nil {
-		return false, fmt.Errorf("ObjectStore not configured on reconciler")
-	}
-
-	s3 := genesisS3Config(group)
-
-	for i := range nodes {
-		key := fmt.Sprintf("%s%s/gentx.json", s3.Prefix, nodes[i].Name)
-		exists, err := r.ObjectStore.HeadObject(ctx, s3.Bucket, key, s3.Region)
-		if err != nil {
-			return false, fmt.Errorf("checking artifact for %s: %w", nodes[i].Name, err)
-		}
-		if !exists {
-			log.FromContext(ctx).V(1).Info("artifact not yet uploaded",
-				"node", nodes[i].Name, "key", key)
-			return false, nil
-		}
-	}
-	return true, nil
+	// Drive plan forward.
+	return r.PlanExecutor.ExecutePlan(ctx, group, group.Status.InitPlan)
 }
 
 func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
@@ -140,20 +103,15 @@ func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1
 	}
 
 	r.Recorder.Event(group, corev1.EventTypeNormal, "GenesisAssemblyStarted",
-		"All artifacts uploaded, starting genesis assembly")
+		"Starting genesis assembly plan")
 	return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 }
 
-func (r *SeiNodeGroupReconciler) driveInitPlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
-	if len(nodes) == 0 {
-		return ctrl.Result{}, fmt.Errorf("no nodes available for assembly")
+func (r *SeiNodeGroupReconciler) finalizeGenesis(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	if group.Status.GenesisS3URI != "" {
+		return ctrl.Result{}, nil
 	}
 
-	assemblerNode := &nodes[0]
-	return r.PlanExecutor.ExecuteGroupPlan(ctx, group, group.Status.InitPlan, assemblerNode)
-}
-
-func (r *SeiNodeGroupReconciler) finalizeGenesis(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	peerList, err := r.collectPeers(ctx, nodes)
@@ -224,12 +182,7 @@ func (r *SeiNodeGroupReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) a
 	if r.BuildSidecarClientFn != nil {
 		return r.BuildSidecarClientFn(node)
 	}
-	url := planner.SidecarURLForNode(node)
-	c, err := sidecar.NewSidecarClient(url)
-	if err != nil {
-		return nil
-	}
-	return c
+	return nil
 }
 
 func (r *SeiNodeGroupReconciler) setGenesisCondition(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
@@ -262,6 +215,17 @@ func (r *SeiNodeGroupReconciler) setGenesisCondition(ctx context.Context, group 
 	return ctrl.Result{}, nil
 }
 
+func marshalOverrides(overrides map[string]string) string {
+	if len(overrides) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(overrides)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 // genesisS3Config returns the S3 destination for genesis artifacts, applying
 // defaults when the user omits the field.
 func genesisS3Config(group *seiv1alpha1.SeiNodeGroup) seiv1alpha1.GenesisS3Destination {
@@ -278,15 +242,4 @@ func genesisS3Config(group *seiv1alpha1.SeiNodeGroup) seiv1alpha1.GenesisS3Desti
 		Prefix: fmt.Sprintf("%s/%s/", gc.ChainID, group.Name),
 		Region: "us-east-2",
 	}
-}
-
-func marshalOverrides(overrides map[string]string) string {
-	if len(overrides) == 0 {
-		return ""
-	}
-	data, err := json.Marshal(overrides)
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }
