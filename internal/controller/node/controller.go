@@ -115,15 +115,9 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alpha1.SeiNode, p planner.NodePlanner) (ctrl.Result, error) {
 	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 
-	var initPlan *seiv1alpha1.TaskPlan
-	var buildErr error
-	if planner.IsGenesisCeremonyNode(node) {
-		initPlan, buildErr = planner.BuildGenesisInitPlan(node)
-	} else {
-		initPlan, buildErr = p.BuildPlan(node)
-	}
-	if buildErr != nil {
-		return ctrl.Result{}, fmt.Errorf("building init plan: %w", buildErr)
+	initPlan, err := p.BuildPlan(node)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("building init plan: %w", err)
 	}
 	node.Status.InitPlan = initPlan
 	node.Status.Phase = seiv1alpha1.PhaseInitializing

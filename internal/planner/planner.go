@@ -47,6 +47,20 @@ type NodePlanner interface {
 	Mode() string
 }
 
+// GroupPlanner encapsulates logic for building a group-level task plan.
+type GroupPlanner interface {
+	BuildPlan(group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
+}
+
+// ForGroup returns the appropriate GroupPlanner based on which group-level
+// feature is configured.
+func ForGroup(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
+	if group.Spec.Genesis != nil {
+		return &genesisGroupPlanner{}, nil
+	}
+	return nil, fmt.Errorf("no group planner for %s/%s: no genesis spec", group.Namespace, group.Name)
+}
+
 // ForNode returns the appropriate NodePlanner based on which mode sub-spec
 // is populated on the SeiNode.
 func ForNode(node *seiv1alpha1.SeiNode, snapshotRegion string) (NodePlanner, error) {
@@ -102,8 +116,8 @@ func NeedsBootstrap(node *seiv1alpha1.SeiNode) bool {
 		snap.S3 != nil && snap.S3.TargetHeight > 0
 }
 
-// IsGenesisCeremonyNode returns true when the node participates in a group genesis ceremony.
-func IsGenesisCeremonyNode(node *seiv1alpha1.SeiNode) bool {
+// isGenesisCeremonyNode returns true when the node participates in a group genesis ceremony.
+func isGenesisCeremonyNode(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Validator != nil && node.Spec.Validator.GenesisCeremony != nil
 }
 

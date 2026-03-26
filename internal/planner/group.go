@@ -9,12 +9,14 @@ import (
 
 const groupAssemblyMaxRetries = 60
 
-// BuildGroupAssemblyPlan constructs a TaskPlan for the SeiNodeGroup that:
+type genesisGroupPlanner struct{}
+
+// BuildPlan constructs a TaskPlan for the SeiNodeGroup that:
 //  1. Assembles all per-node genesis artifacts into a final genesis.json
 //     (retried until the sidecar succeeds).
 //  2. Waits for all child SeiNodes to reach PhaseRunning, confirming
 //     they picked up the genesis.
-func BuildGroupAssemblyPlan(
+func (p *genesisGroupPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
 	nodes []seiv1alpha1.SeiNode,
 ) (*seiv1alpha1.TaskPlan, error) {
