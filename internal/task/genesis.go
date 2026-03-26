@@ -77,6 +77,10 @@ type AwaitGenesisAssemblyParams struct {
 
 // awaitGenesisAssemblyExecution polls S3 for the assembled genesis.json.
 // Execute is a no-op — Status IS the execution for this task type.
+//
+// STUB: The S3 polling logic is not yet implemented; Status always returns
+// ExecutionRunning. The genesis assembly PR will inject an ObjectStoreClient
+// via ExecutionConfig and implement the HeadObject check here.
 type awaitGenesisAssemblyExecution struct {
 	id     string
 	params AwaitGenesisAssemblyParams

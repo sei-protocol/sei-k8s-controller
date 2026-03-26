@@ -82,6 +82,10 @@ type SidecarClient interface {
 // ExecutionConfig bundles all dependencies needed by task executions:
 // external clients, runtime context, and platform configuration. New
 // dependencies are added here without changing Deserialize call sites.
+//
+// Node is a shared pointer to the authoritative SeiNode object. Task
+// executions MUST treat it as read-only; mutations belong in the
+// reconciler after ExecutePlan returns.
 type ExecutionConfig struct {
 	BuildSidecarClient func() (SidecarClient, error)
 	KubeClient         client.Client

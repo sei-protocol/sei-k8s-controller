@@ -74,6 +74,12 @@ func GenerateBootstrapJob(
 // GenerateBootstrapService creates a headless Service that provides stable DNS
 // for the bootstrap Job pod. The pod registers as
 // <hostname>.<service-name>.<namespace>.svc.cluster.local.
+//
+// The Service deliberately uses node.Name — the same name as the production
+// headless Service created by the StatefulSet reconciler. The bootstrap
+// teardown task deletes this Service before the StatefulSet is created,
+// so the sidecar URL (node-0.node.ns.svc.cluster.local) is consistent
+// across both phases without overlap.
 func GenerateBootstrapService(node *seiv1alpha1.SeiNode) *corev1.Service {
 	labels := BootstrapLabels(node)
 	port := bootstrapSidecarPort(node)

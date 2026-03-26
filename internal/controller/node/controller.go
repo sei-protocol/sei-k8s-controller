@@ -113,7 +113,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // steps. For bootstrap nodes the plan includes controller-side Job lifecycle
 // tasks followed by production config. All orchestration lives in the plan.
 func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alpha1.SeiNode, p planner.NodePlanner) (ctrl.Result, error) {
-	patch := client.MergeFrom(node.DeepCopy())
+	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 
 	var initPlan *seiv1alpha1.TaskPlan
 	var buildErr error
@@ -138,7 +138,7 @@ func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alp
 	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
 		"Phase changed from %s to %s", seiv1alpha1.PhasePending, seiv1alpha1.PhaseInitializing)
 
-	return ctrl.Result{RequeueAfter: planner.ImmediateRequeue}, nil
+	return planner.ResultRequeueImmediate, nil
 }
 
 // reconcileInitializing drives the unified InitPlan to completion. For
@@ -209,7 +209,7 @@ func (r *SeiNodeReconciler) transitionPhase(ctx context.Context, node *seiv1alph
 	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
 		"Phase changed from %s to %s", prev, phase)
 
-	return ctrl.Result{RequeueAfter: planner.ImmediateRequeue}, nil
+	return planner.ResultRequeueImmediate, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -237,7 +237,7 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 		return ctrl.Result{}, nil
 	}
 
-	patch := client.MergeFrom(node.DeepCopy())
+	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	node.Status.Phase = seiv1alpha1.PhaseTerminating
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting terminating status: %w", err)

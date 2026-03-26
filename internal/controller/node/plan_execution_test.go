@@ -512,7 +512,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if result.RequeueAfter == 0 {
+	if !result.Requeue && result.RequeueAfter == 0 {
 		t.Error("expected requeue when marking plan complete")
 	}
 
@@ -705,7 +705,7 @@ func TestReconcilePending_NoBootstrap_SetsInitializingWithPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
 	}
-	if result.RequeueAfter == 0 {
+	if !result.Requeue && result.RequeueAfter == 0 {
 		t.Error("expected requeue after reconcilePending")
 	}
 
@@ -729,7 +729,7 @@ func TestReconcilePending_WithBootstrap_SetsInitializing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
 	}
-	if result.RequeueAfter == 0 {
+	if !result.Requeue && result.RequeueAfter == 0 {
 		t.Error("expected requeue after reconcilePending")
 	}
 
@@ -755,7 +755,7 @@ func TestReconcileInitializing_PlanComplete_TransitionsToRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
 	}
-	if result.RequeueAfter == 0 {
+	if !result.Requeue && result.RequeueAfter == 0 {
 		t.Error("expected requeue after plan complete")
 	}
 
@@ -778,7 +778,7 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
 	}
-	if result.RequeueAfter == 0 {
+	if !result.Requeue && result.RequeueAfter == 0 {
 		t.Error("expected requeue after plan failed")
 	}
 

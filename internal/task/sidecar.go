@@ -11,11 +11,27 @@ import (
 )
 
 // taskParamser is implemented by param structs that know how to convert
-// themselves into sidecar TaskRequest params.
+// themselves into sidecar TaskRequest params. The *map[string]any return
+// type matches the generated sidecar client's TaskRequest.Params field.
 type taskParamser interface {
 	toRequestParams() *map[string]any
 	taskType() string
 }
+
+// Compile-time assertions that all sidecar param types implement taskParamser.
+var (
+	_ taskParamser = (*SnapshotRestoreParams)(nil)
+	_ taskParamser = (*ConfigureStateSyncParams)(nil)
+	_ taskParamser = (*AwaitConditionParams)(nil)
+	_ taskParamser = (*ConfigApplyParams)(nil)
+	_ taskParamser = (*ConfigValidateParams)(nil)
+	_ taskParamser = (*ConfigureGenesisParams)(nil)
+	_ taskParamser = (*DiscoverPeersParams)(nil)
+	_ taskParamser = (*MarkReadyParams)(nil)
+	_ taskParamser = (*GenerateIdentityParams)(nil)
+	_ taskParamser = (*GenerateGentxParams)(nil)
+	_ taskParamser = (*UploadGenesisArtifactsParams)(nil)
+)
 
 // sidecarExecution is a generic TaskExecution backed by the sidecar HTTP API.
 // T is the typed params struct. The sidecar client is constructed lazily via

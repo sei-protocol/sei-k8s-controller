@@ -15,10 +15,11 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-const (
-	TaskPollInterval = 5 * time.Second
-	ImmediateRequeue = time.Millisecond
-)
+const TaskPollInterval = 5 * time.Second
+
+// ResultRequeueImmediate is the idiomatic way to request an immediate
+// re-enqueue in controller-runtime without an artificial timer delay.
+var ResultRequeueImmediate = ctrl.Result{Requeue: true}
 
 // Executor drives TaskPlans to completion using the task.TaskExecution
 // interface. It is stateless per reconcile — each call re-deserializes
@@ -68,7 +69,7 @@ func (e *Executor) ExecutePlan(
 		if err := e.Client.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: ImmediateRequeue}, nil
+		return ResultRequeueImmediate, nil
 	}
 
 	cfg := task.ExecutionConfig{
@@ -112,7 +113,7 @@ func (e *Executor) ExecutePlan(
 		if err := e.Client.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking task complete: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: ImmediateRequeue}, nil
+		return ResultRequeueImmediate, nil
 
 	case task.ExecutionFailed:
 		errMsg := "unknown error"
