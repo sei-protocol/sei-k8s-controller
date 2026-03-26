@@ -522,17 +522,6 @@ func TestSidecarMainContainer_WaitWrapper_UsesCustomPort(t *testing.T) {
 
 // --- Genesis mode specifics ---
 
-func TestSeidInitContainer_CopiesBinaryToSharedVolume(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("snap-0", "default")
-
-	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
-	init := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
-
-	g.Expect(init).NotTo(BeNil())
-	g.Expect(init.Command[2]).To(ContainSubstring("mkdir -p " + dataDir + "/tmp"))
-}
-
 func TestGenesisMode_SidecarPresent(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")

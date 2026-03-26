@@ -18,7 +18,7 @@ import (
 const (
 	bootstrapTerminationGracePeriod = int64(120)
 	bootstrapDataDir                = "/sei"
-	bootstrapDefaultSidecarImage    = "ghcr.io/sei-protocol/seictl@sha256:cba34c7ae314a53952c4cf9a473bcc42b752ceecc39e82b08ff2f49c8051ca58"
+	bootstrapDefaultSidecarImage    = "ghcr.io/sei-protocol/seictl@sha256:6314a5a05cf532841a181a4cd55c6d501db4c4c19bfe8173d887f8e435bc490c"
 	bootstrapNodeLabel              = "sei.io/node"
 	bootstrapComponentLabel         = "sei.io/component"
 )
@@ -122,7 +122,6 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 			{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
 			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
 			{Name: "SEI_HOME", Value: bootstrapDataDir},
-			{Name: "PATH", Value: bootstrapDataDir + "/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		},
 		Ports: []corev1.ContainerPort{
 			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
