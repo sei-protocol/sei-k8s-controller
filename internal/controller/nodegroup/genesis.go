@@ -91,7 +91,11 @@ func (r *SeiNodeGroupReconciler) reconcileGenesisAssembly(ctx context.Context, g
 }
 
 func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
-	plan, err := planner.BuildGroupAssemblyPlan(group, nodes)
+	p, err := planner.ForGroup(group)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	plan, err := p.BuildPlan(group, nodes)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("building assembly plan: %w", err)
 	}

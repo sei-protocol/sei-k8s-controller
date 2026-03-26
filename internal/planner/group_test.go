@@ -32,9 +32,13 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 		{ObjectMeta: metav1.ObjectMeta{Name: "node-2"}},
 	}
 
-	plan, err := BuildGroupAssemblyPlan(group, nodes)
+	p, err := ForGroup(group)
 	if err != nil {
-		t.Fatalf("BuildGroupAssemblyPlan: %v", err)
+		t.Fatalf("ForGroup: %v", err)
+	}
+	plan, err := p.BuildPlan(group, nodes)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
 	}
 
 	if plan.Phase != seiv1alpha1.TaskPlanActive {
@@ -116,9 +120,13 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 		{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}},
 	}
 
-	plan, err := BuildGroupAssemblyPlan(group, nodes)
+	p, err := ForGroup(group)
 	if err != nil {
-		t.Fatalf("BuildGroupAssemblyPlan: %v", err)
+		t.Fatalf("ForGroup: %v", err)
+	}
+	plan, err := p.BuildPlan(group, nodes)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
 	}
 
 	var params task.AssembleAndUploadGenesisParams
@@ -148,11 +156,15 @@ func TestBuildGroupAssemblyPlan_DeterministicIDs(t *testing.T) {
 		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}},
 	}
 
-	plan1, err := BuildGroupAssemblyPlan(group, nodes)
+	p, err := ForGroup(group)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan2, err := BuildGroupAssemblyPlan(group, nodes)
+	plan1, err := p.BuildPlan(group, nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan2, err := p.BuildPlan(group, nodes)
 	if err != nil {
 		t.Fatal(err)
 	}

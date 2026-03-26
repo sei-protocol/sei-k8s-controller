@@ -138,11 +138,11 @@ func IsBootstrapComplete(plan *seiv1alpha1.TaskPlan) bool {
 // genesis.json.
 const genesisConfigureMaxRetries = 180
 
-// BuildGenesisInitPlan constructs the full Init plan for genesis ceremony
+// buildGenesisInitPlan constructs the full Init plan for genesis ceremony
 // nodes. Per-node artifact generation and upload runs first, then
 // configure-genesis retries until the group controller has assembled and
 // uploaded genesis.json to S3.
-func BuildGenesisInitPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+func buildGenesisInitPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	gc := node.Spec.Validator.GenesisCeremony
 	attempt := 0
 
