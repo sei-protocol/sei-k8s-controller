@@ -863,11 +863,20 @@ spec:
                             ID is a deterministic UUID v5 derived from nodeName/taskType/attempt.
                             Used as the key for sidecar task submission and status polling.
                           type: string
+                        maxRetries:
+                          description: |-
+                            MaxRetries is the maximum number of times this task can be retried after
+                            failure. When 0 (default), failures are terminal. Used for tasks like
+                            configure-genesis that may need to wait for upstream data to appear.
+                          type: integer
                         params:
                           description: |-
                             Params is the opaque JSON payload for this task. Deserialized at
                             execution time by task.Deserialize into the concrete task type.
                           x-kubernetes-preserve-unknown-fields: true
+                        retryCount:
+                          description: RetryCount is the current retry attempt number.
+                          type: integer
                         status:
                           description: Status is the current state of this task.
                           enum:

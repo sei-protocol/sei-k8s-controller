@@ -1,9 +1,6 @@
 package task
 
 import (
-	"context"
-	"fmt"
-
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 )
 
@@ -67,44 +64,36 @@ func (p *UploadGenesisArtifactsParams) toRequestParams() *map[string]any {
 	return &m
 }
 
-// AwaitGenesisAssemblyParams are the serialized fields for await-genesis-assembly.
-// This is a controller-managed task that polls S3, not a sidecar task.
-type AwaitGenesisAssemblyParams struct {
-	S3Bucket string `json:"s3Bucket"`
-	S3Prefix string `json:"s3Prefix"`
-	S3Region string `json:"s3Region"`
+// AssembleAndUploadGenesisParams are the serialized fields for the
+// group-level assemble-and-upload-genesis sidecar task.
+type AssembleAndUploadGenesisParams struct {
+	S3Bucket string             `json:"s3Bucket"`
+	S3Prefix string             `json:"s3Prefix"`
+	S3Region string             `json:"s3Region"`
+	ChainID  string             `json:"chainId"`
+	Nodes    []GenesisNodeParam `json:"nodes"`
 }
 
-// awaitGenesisAssemblyExecution polls S3 for the assembled genesis.json.
-// Execute is a no-op — Status IS the execution for this task type.
-//
-// STUB: The S3 polling logic is not yet implemented; Status always returns
-// ExecutionRunning. The genesis assembly PR will inject an ObjectStoreClient
-// via ExecutionConfig and implement the HeadObject check here.
-type awaitGenesisAssemblyExecution struct {
-	id     string
-	params AwaitGenesisAssemblyParams
-	status ExecutionStatus
-	err    error
+// GenesisNodeParam identifies a node participating in the genesis ceremony.
+type GenesisNodeParam struct {
+	Name string `json:"name"`
 }
 
-func (e *awaitGenesisAssemblyExecution) Execute(_ context.Context) error {
-	return nil
+func (p *AssembleAndUploadGenesisParams) taskType() string {
+	return sidecar.TaskTypeAssembleGenesis
 }
 
-func (e *awaitGenesisAssemblyExecution) Status(ctx context.Context) ExecutionStatus {
-	if e.status == ExecutionComplete || e.status == ExecutionFailed {
-		return e.status
+func (p *AssembleAndUploadGenesisParams) toRequestParams() *map[string]any {
+	nodes := make([]map[string]any, len(p.Nodes))
+	for i, n := range p.Nodes {
+		nodes[i] = map[string]any{"name": n.Name}
 	}
-
-	// TODO(genesis-pr): implement S3 HeadObject check for
-	// s3://{bucket}/{prefix}genesis.json. For now, this always returns
-	// Running so the task blocks until the group controller assembles
-	// and uploads genesis.json (which will be implemented in the genesis
-	// task handlers PR).
-	key := fmt.Sprintf("%sgenesis.json", e.params.S3Prefix)
-	_ = key
-	return ExecutionRunning
+	m := map[string]any{
+		"s3Bucket": p.S3Bucket,
+		"s3Prefix": p.S3Prefix,
+		"s3Region": p.S3Region,
+		"chainId":  p.ChainID,
+		"nodes":    nodes,
+	}
+	return &m
 }
-
-func (e *awaitGenesisAssemblyExecution) Err() error { return e.err }

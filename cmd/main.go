@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
+	"sort"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -11,6 +14,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -158,23 +162,33 @@ func main() {
 		platformCfg.SnapshotRegion = v
 	}
 
+	objectStore := platform.NewS3ObjectStore()
+	kc := mgr.GetClient()
+
+	buildSidecarClient := func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
+		return sidecar.NewSidecarClient(planner.SidecarURLForNode(node))
+	}
+
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
 	nodeRecorder := mgr.GetEventRecorderFor("seinode-controller")
 	if err := (&nodecontroller.SeiNodeReconciler{
-		Client:   mgr.GetClient(),
+		Client:   kc,
 		Scheme:   mgr.GetScheme(),
 		Recorder: nodeRecorder,
 		Platform: platformCfg,
-		PlanExecutor: &planner.Executor{
-			Client:   mgr.GetClient(),
-			Scheme:   mgr.GetScheme(),
-			Platform: platformCfg,
-			BuildSidecarClient: func(
-				node *seiv1alpha1.SeiNode,
-			) (task.SidecarClient, error) {
-				return sidecar.NewSidecarClient(
-					planner.SidecarURLForNode(node),
-				)
+		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
+			Client: kc,
+			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
+				return task.ExecutionConfig{
+					BuildSidecarClient: func() (task.SidecarClient, error) {
+						return buildSidecarClient(node)
+					},
+					KubeClient:  kc,
+					Scheme:      mgr.GetScheme(),
+					Resource:    node,
+					Platform:    platformCfg,
+					ObjectStore: objectStore,
+				}
 			},
 		},
 	}).SetupWithManager(mgr); err != nil {
@@ -186,10 +200,39 @@ func main() {
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodegroup-controller")
 	if err := (&nodegroupcontroller.SeiNodeGroupReconciler{
-		Client:       mgr.GetClient(),
+		Client:       kc,
 		Scheme:       mgr.GetScheme(),
 		Recorder:     recorder,
 		ControllerSA: controllerSA,
+		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeGroup]{
+			Client: kc,
+			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) task.ExecutionConfig {
+				var assemblerNode *seiv1alpha1.SeiNode
+				nodes := &seiv1alpha1.SeiNodeList{}
+				if err := kc.List(ctx, nodes,
+					client.InNamespace(group.Namespace),
+					client.MatchingLabels{"sei.io/nodegroup": group.Name},
+				); err == nil && len(nodes.Items) > 0 {
+					sort.Slice(nodes.Items, func(i, j int) bool {
+						return nodes.Items[i].Name < nodes.Items[j].Name
+					})
+					assemblerNode = &nodes.Items[0]
+				}
+				return task.ExecutionConfig{
+					BuildSidecarClient: func() (task.SidecarClient, error) {
+						if assemblerNode == nil {
+							return nil, fmt.Errorf("no assembler node found for group %s", group.Name)
+						}
+						return buildSidecarClient(assemblerNode)
+					},
+					KubeClient:  kc,
+					Scheme:      mgr.GetScheme(),
+					Resource:    group,
+					Platform:    platformCfg,
+					ObjectStore: objectStore,
+				}
+			},
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNodeGroup")
 		os.Exit(1)

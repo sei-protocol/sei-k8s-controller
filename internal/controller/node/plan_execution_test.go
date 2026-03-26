@@ -110,10 +110,16 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
 		Platform: DefaultPlatformConfig(),
-		PlanExecutor: &planner.Executor{
+		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			Client: c,
-			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
-				return mock, nil
+			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
+				return task.ExecutionConfig{
+					BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
+					KubeClient:         c,
+					Scheme:             s,
+					Resource:           node,
+					Platform:           DefaultPlatformConfig(),
+				}
 			},
 		},
 		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) task.SidecarClient {
@@ -512,7 +518,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if !result.Requeue && result.RequeueAfter == 0 {
+	if result.RequeueAfter == 0 {
 		t.Error("expected requeue when marking plan complete")
 	}
 
@@ -705,7 +711,7 @@ func TestReconcilePending_NoBootstrap_SetsInitializingWithPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
 	}
-	if !result.Requeue && result.RequeueAfter == 0 {
+	if result.RequeueAfter == 0 {
 		t.Error("expected requeue after reconcilePending")
 	}
 
@@ -729,7 +735,7 @@ func TestReconcilePending_WithBootstrap_SetsInitializing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
 	}
-	if !result.Requeue && result.RequeueAfter == 0 {
+	if result.RequeueAfter == 0 {
 		t.Error("expected requeue after reconcilePending")
 	}
 
@@ -755,7 +761,7 @@ func TestReconcileInitializing_PlanComplete_TransitionsToRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
 	}
-	if !result.Requeue && result.RequeueAfter == 0 {
+	if result.RequeueAfter == 0 {
 		t.Error("expected requeue after plan complete")
 	}
 
@@ -778,7 +784,7 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
 	}
-	if !result.Requeue && result.RequeueAfter == 0 {
+	if result.RequeueAfter == 0 {
 		t.Error("expected requeue after plan failed")
 	}
 
@@ -832,6 +838,14 @@ func TestSnapshotUploadScheduledTask_NoDestination(t *testing.T) {
 // --- Nil sidecar client handling ---
 
 func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
+	s := k8sruntime.NewScheme()
+	if err := clientgoscheme.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := seiv1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+
 	node := genesisNode()
 	node.Status.Phase = seiv1alpha1.PhaseInitializing
 	node.Status.InitPlan = &seiv1alpha1.TaskPlan{
@@ -841,9 +855,31 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 		},
 	}
 
-	r, _ := newProgressionReconciler(t, nil, node)
-	r.PlanExecutor.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
-		return nil, fmt.Errorf("sidecar unavailable")
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(node).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
+		Build()
+
+	r := &SeiNodeReconciler{
+		Client:   c,
+		Scheme:   s,
+		Recorder: record.NewFakeRecorder(100),
+		Platform: DefaultPlatformConfig(),
+		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
+			Client: c,
+			ConfigFor: func(_ context.Context, n *seiv1alpha1.SeiNode) task.ExecutionConfig {
+				return task.ExecutionConfig{
+					BuildSidecarClient: func() (task.SidecarClient, error) {
+						return nil, fmt.Errorf("sidecar unavailable")
+					},
+					KubeClient: c,
+					Scheme:     s,
+					Resource:   n,
+					Platform:   DefaultPlatformConfig(),
+				}
+			},
+		},
 	}
 
 	result, err := r.reconcileInitializing(context.Background(), node)

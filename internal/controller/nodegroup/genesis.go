@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -16,13 +15,11 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 const (
 	defaultGenesisBucket       = "sei-genesis-artifacts"
 	defaultMaxCeremonyDuration = 15 * time.Minute
-	defaultSidecarPort         = int32(7777)
 	defaultP2PPort             = int32(26656)
 )
 
@@ -31,14 +28,15 @@ type SidecarStatusClient interface {
 	GetNodeID(ctx context.Context) (string, error)
 }
 
-// sidecarSubmitter is the subset of sidecar.SidecarClient that can submit and poll tasks.
-type sidecarSubmitter interface {
-	SubmitTask(ctx context.Context, req sidecar.TaskRequest) (interface{ String() string }, error)
-	GetTask(ctx context.Context, id interface{ String() string }) (*sidecar.TaskResult, error)
-}
-
 // reconcileGenesisAssembly is the top-level genesis coordination entry point.
-// It runs only when spec.genesis is set.
+// The flow follows a plan-driven pattern:
+//  1. Wait for all child SeiNodes to be created.
+//  2. Build a group-level TaskPlan (assemble-and-upload-genesis + await-nodes-running).
+//  3. Drive the plan via PlanExecutor until completion.
+//
+// The assemble-and-upload-genesis task retries automatically until all
+// per-node artifacts are present and assembly succeeds. The
+// await-nodes-running task polls until all child nodes reach PhaseRunning.
 func (r *SeiNodeGroupReconciler) reconcileGenesisAssembly(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) (ctrl.Result, error) {
 	if group.Spec.Genesis == nil {
 		return ctrl.Result{}, nil
@@ -68,57 +66,34 @@ func (r *SeiNodeGroupReconciler) reconcileGenesisAssembly(ctx context.Context, g
 	}
 
 	for i := range nodes {
-		n := &nodes[i]
-		if n.Status.Phase == seiv1alpha1.PhaseFailed {
-			msg := fmt.Sprintf("SeiNode %s is in Failed phase", n.Name)
+		if nodes[i].Status.Phase == seiv1alpha1.PhaseFailed {
+			msg := fmt.Sprintf("SeiNode %s is in Failed phase", nodes[i].Name)
 			r.Recorder.Event(group, corev1.EventTypeWarning, "GenesisBootstrapFailed", msg)
 			return r.setGenesisCondition(ctx, group, metav1.ConditionFalse, "BootstrapFailed", msg)
 		}
 	}
 
-	allGenesisTasksReady := true
-	for i := range nodes {
-		plan := nodes[i].Status.InitPlan
-		if plan == nil {
-			allGenesisTasksReady = false
-			break
-		}
-		ct := planner.CurrentTask(plan)
-		if ct == nil || ct.Type != task.TaskTypeAwaitGenesisAssembly {
-			allGenesisTasksReady = false
-			break
-		}
-	}
-	if !allGenesisTasksReady {
-		log.FromContext(ctx).Info("waiting for all SeiNodes genesis tasks to complete")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-	}
-
+	// Build plan on first entry.
 	if group.Status.InitPlan == nil {
-		return r.startAssembly(ctx, group)
+		return r.startAssembly(ctx, group, nodes)
 	}
 
-	if group.Status.InitPlan.Phase == seiv1alpha1.TaskPlanComplete {
-		if group.Status.GenesisS3URI != "" {
-			return ctrl.Result{}, nil
-		}
+	switch group.Status.InitPlan.Phase {
+	case seiv1alpha1.TaskPlanComplete:
 		return r.finalizeGenesis(ctx, group, nodes)
-	}
-
-	if group.Status.InitPlan.Phase == seiv1alpha1.TaskPlanFailed {
+	case seiv1alpha1.TaskPlanFailed:
 		return r.setGenesisCondition(ctx, group, metav1.ConditionFalse,
 			"AssemblyFailed", "genesis assembly task failed")
 	}
 
-	return r.driveInitPlan(ctx, group, nodes)
+	// Drive plan forward.
+	return r.PlanExecutor.ExecutePlan(ctx, group, group.Status.InitPlan)
 }
 
-func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) (ctrl.Result, error) {
-	plan := &seiv1alpha1.TaskPlan{
-		Phase: seiv1alpha1.TaskPlanActive,
-		Tasks: []seiv1alpha1.PlannedTask{
-			{Type: sidecar.TaskTypeAssembleGenesis, Status: seiv1alpha1.PlannedTaskPending},
-		},
+func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	plan, err := planner.BuildGroupAssemblyPlan(group, nodes)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("building assembly plan: %w", err)
 	}
 
 	patch := client.MergeFrom(group.DeepCopy())
@@ -128,57 +103,15 @@ func (r *SeiNodeGroupReconciler) startAssembly(ctx context.Context, group *seiv1
 	}
 
 	r.Recorder.Event(group, corev1.EventTypeNormal, "GenesisAssemblyStarted",
-		"All bootstrap tasks complete, starting genesis assembly")
+		"Starting genesis assembly plan")
 	return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 }
 
-func (r *SeiNodeGroupReconciler) driveInitPlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
-	if len(nodes) == 0 {
-		return ctrl.Result{}, fmt.Errorf("no nodes available for assembly")
-	}
-
-	assemblerNode := &nodes[0]
-	sc := r.buildSidecarClient(assemblerNode)
-	if sc == nil {
-		log.FromContext(ctx).Info("assembler sidecar not reachable yet")
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	}
-
-	plan := group.Status.InitPlan
-	currentTask := &plan.Tasks[0]
-
-	switch currentTask.Status {
-	case seiv1alpha1.PlannedTaskPending:
-		s3 := genesisS3Config(group)
-		nodeParams := make([]sidecar.GenesisNodeParam, len(nodes))
-		for i := range nodes {
-			nodeParams[i] = sidecar.GenesisNodeParam{Name: nodes[i].Name}
-		}
-		builder := sidecar.AssembleAndUploadGenesisTask{
-			S3Bucket: s3.Bucket,
-			S3Prefix: s3.Prefix,
-			S3Region: s3.Region,
-			ChainID:  group.Spec.Genesis.ChainID,
-			Nodes:    nodeParams,
-		}
-		req := builder.ToTaskRequest()
-		id, err := sc.(sidecarSubmitter).SubmitTask(ctx, req)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("submitting assembly task: %w", err)
-		}
-		patch := client.MergeFrom(group.DeepCopy())
-		currentTask.Status = seiv1alpha1.PlannedTaskComplete
-		currentTask.ID = id.String()
-		if err := r.Status().Patch(ctx, group, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("recording assembly task submission: %w", err)
-		}
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-	}
-
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-}
-
 func (r *SeiNodeGroupReconciler) finalizeGenesis(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	if group.Status.GenesisS3URI != "" {
+		return ctrl.Result{}, nil
+	}
+
 	logger := log.FromContext(ctx)
 
 	peerList, err := r.collectPeers(ctx, nodes)
@@ -249,12 +182,7 @@ func (r *SeiNodeGroupReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) a
 	if r.BuildSidecarClientFn != nil {
 		return r.BuildSidecarClientFn(node)
 	}
-	url := planner.SidecarURLForNode(node)
-	c, err := sidecar.NewSidecarClient(url)
-	if err != nil {
-		return nil
-	}
-	return c
+	return nil
 }
 
 func (r *SeiNodeGroupReconciler) setGenesisCondition(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, status metav1.ConditionStatus, reason, message string) (ctrl.Result, error) {
@@ -287,6 +215,17 @@ func (r *SeiNodeGroupReconciler) setGenesisCondition(ctx context.Context, group 
 	return ctrl.Result{}, nil
 }
 
+func marshalOverrides(overrides map[string]string) string {
+	if len(overrides) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(overrides)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 // genesisS3Config returns the S3 destination for genesis artifacts, applying
 // defaults when the user omits the field.
 func genesisS3Config(group *seiv1alpha1.SeiNodeGroup) seiv1alpha1.GenesisS3Destination {
@@ -303,15 +242,4 @@ func genesisS3Config(group *seiv1alpha1.SeiNodeGroup) seiv1alpha1.GenesisS3Desti
 		Prefix: fmt.Sprintf("%s/%s/", gc.ChainID, group.Name),
 		Region: "us-east-2",
 	}
-}
-
-func marshalOverrides(overrides map[string]string) string {
-	if len(overrides) == 0 {
-		return ""
-	}
-	data, err := json.Marshal(overrides)
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }

@@ -131,6 +131,16 @@ type PlannedTask struct {
 	// Error is the error message if the task failed.
 	// +optional
 	Error string `json:"error,omitempty"`
+
+	// MaxRetries is the maximum number of times this task can be retried after
+	// failure. When 0 (default), failures are terminal. Used for tasks like
+	// configure-genesis that may need to wait for upstream data to appear.
+	// +optional
+	MaxRetries int `json:"maxRetries,omitempty"`
+
+	// RetryCount is the current retry attempt number.
+	// +optional
+	RetryCount int `json:"retryCount,omitempty"`
 }
 
 // TaskPlan tracks an ordered sequence of sidecar tasks that the controller

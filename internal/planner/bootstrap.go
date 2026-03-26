@@ -132,9 +132,16 @@ func IsBootstrapComplete(plan *seiv1alpha1.TaskPlan) bool {
 	return true
 }
 
+// genesisConfigureMaxRetries is the number of times configure-genesis can
+// retry before the plan is marked failed. At the default 10s poll interval
+// this gives ~30 minutes for the group controller to assemble and upload
+// genesis.json.
+const genesisConfigureMaxRetries = 180
+
 // BuildGenesisInitPlan constructs the full Init plan for genesis ceremony
-// nodes. Per-node artifact generation runs first, then await-genesis-assembly
-// blocks until the group controller has assembled and uploaded genesis.json.
+// nodes. Per-node artifact generation and upload runs first, then
+// configure-genesis retries until the group controller has assembled and
+// uploaded genesis.json to S3.
 func BuildGenesisInitPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	gc := node.Spec.Validator.GenesisCeremony
 	attempt := 0
@@ -143,7 +150,6 @@ func BuildGenesisInitPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, err
 		TaskGenerateIdentity,
 		TaskGenerateGentx,
 		TaskUploadGenesisArtifacts,
-		TaskAwaitGenesisAssembly,
 		TaskConfigureGenesis,
 		TaskConfigApply,
 		TaskDiscoverPeers,
@@ -156,6 +162,9 @@ func BuildGenesisInitPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, err
 		t, err := buildPlannedTask(node, taskType, attempt, genesisParamsForTaskType(node, gc, taskType))
 		if err != nil {
 			return nil, err
+		}
+		if taskType == TaskConfigureGenesis {
+			t.MaxRetries = genesisConfigureMaxRetries
 		}
 		tasks[i] = t
 	}
@@ -182,12 +191,6 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 			S3Prefix: gc.ArtifactS3.Prefix,
 			S3Region: gc.ArtifactS3.Region,
 			NodeName: node.Name,
-		}
-	case TaskAwaitGenesisAssembly:
-		return &task.AwaitGenesisAssemblyParams{
-			S3Bucket: gc.ArtifactS3.Bucket,
-			S3Prefix: gc.ArtifactS3.Prefix,
-			S3Region: gc.ArtifactS3.Region,
 		}
 	case TaskConfigureGenesis:
 		s3URI := fmt.Sprintf("s3://%s/%sgenesis.json", gc.ArtifactS3.Bucket, gc.ArtifactS3.Prefix)

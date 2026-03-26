@@ -47,10 +47,16 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
 		Platform: DefaultPlatformConfig(),
-		PlanExecutor: &planner.Executor{
+		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			Client: c,
-			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
-				return mock, nil
+			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
+				return task.ExecutionConfig{
+					BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
+					KubeClient:         c,
+					Scheme:             s,
+					Resource:           node,
+					Platform:           DefaultPlatformConfig(),
+				}
 			},
 		},
 		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) task.SidecarClient {

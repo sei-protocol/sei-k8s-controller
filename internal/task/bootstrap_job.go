@@ -9,6 +9,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 // DeployBootstrapJobParams holds the serialized parameters for the
@@ -42,7 +44,10 @@ func deserializeBootstrapJob(id string, params json.RawMessage, cfg ExecutionCon
 }
 
 func (e *deployBootstrapJobExecution) Execute(ctx context.Context) error {
-	node := e.cfg.Node
+	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
+	if err != nil {
+		return err
+	}
 	snap := node.Spec.SnapshotSource()
 	job, err := GenerateBootstrapJob(node, snap, e.cfg.Platform)
 	if err != nil {

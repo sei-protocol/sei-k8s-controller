@@ -16,6 +16,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 const (
@@ -35,6 +36,9 @@ type SeiNodeGroupReconciler struct {
 	// It is auto-injected into every AuthorizationPolicy to ensure the
 	// controller can always reach the seictl sidecar.
 	ControllerSA string
+
+	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
+	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeGroup]
 
 	// BuildSidecarClientFn overrides sidecar client construction for testing.
 	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) any

@@ -11,7 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
@@ -22,7 +21,6 @@ var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
 // Controller-managed task types — the sidecar has no handlers for these.
 const (
-	TaskTypeAwaitGenesisAssembly   = "await-genesis-assembly"
 	TaskTypeDeployBootstrapSvc     = "deploy-bootstrap-service"
 	TaskTypeDeployBootstrapJob     = "deploy-bootstrap-job"
 	TaskTypeAwaitBootstrapComplete = "await-bootstrap-complete"
@@ -83,15 +81,27 @@ type SidecarClient interface {
 // external clients, runtime context, and platform configuration. New
 // dependencies are added here without changing Deserialize call sites.
 //
-// Node is a shared pointer to the authoritative SeiNode object. Task
-// executions MUST treat it as read-only; mutations belong in the
-// reconciler after ExecutePlan returns.
+// Resource is the owning Kubernetes object (SeiNode or SeiNodeGroup).
+// Task executions that need a concrete type should type-assert it.
+// Treat as read-only; mutations belong in the reconciler after
+// ExecutePlan returns.
 type ExecutionConfig struct {
 	BuildSidecarClient func() (SidecarClient, error)
 	KubeClient         client.Client
 	Scheme             *runtime.Scheme
-	Node               *seiv1alpha1.SeiNode
+	Resource           client.Object
 	Platform           platform.Config
+	ObjectStore        platform.ObjectStore
+}
+
+// ResourceAs is a generic helper that type-asserts the Resource field.
+func ResourceAs[T client.Object](cfg ExecutionConfig) (T, error) {
+	r, ok := cfg.Resource.(T)
+	if !ok {
+		var zero T
+		return zero, fmt.Errorf("expected resource type %T, got %T", zero, cfg.Resource)
+	}
+	return r, nil
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD
@@ -127,8 +137,12 @@ func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfi
 		return deserializeSidecar[GenerateGentxParams](id, params, buildSC, false)
 	case sidecar.TaskTypeUploadGenesisArtifacts:
 		return deserializeSidecar[UploadGenesisArtifactsParams](id, params, buildSC, false)
-	case TaskTypeAwaitGenesisAssembly:
-		return deserializeAwaitGenesisAssembly(id, params)
+	case sidecar.TaskTypeAssembleGenesis:
+		return deserializeSidecar[AssembleAndUploadGenesisParams](id, params, buildSC, false)
+
+	// Controller-side group tasks
+	case TaskTypeAwaitNodesRunning:
+		return deserializeAwaitNodesRunning(id, params, cfg)
 
 	// Controller-side bootstrap tasks
 	case TaskTypeDeployBootstrapSvc:
@@ -161,19 +175,5 @@ func deserializeSidecar[T any](id string, params json.RawMessage, buildSC func()
 		params:        p,
 		fireAndForget: fireAndForget,
 		status:        ExecutionRunning,
-	}, nil
-}
-
-func deserializeAwaitGenesisAssembly(id string, params json.RawMessage) (TaskExecution, error) {
-	var p AwaitGenesisAssemblyParams
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, fmt.Errorf("deserializing await-genesis-assembly params: %w", err)
-		}
-	}
-	return &awaitGenesisAssemblyExecution{
-		id:     id,
-		params: p,
-		status: ExecutionRunning,
 	}, nil
 }
