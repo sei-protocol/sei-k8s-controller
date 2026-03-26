@@ -28,11 +28,12 @@ func (p *genesisGroupPlanner) BuildPlan(
 	}
 
 	assembleParams := &task.AssembleAndUploadGenesisParams{
-		S3Bucket: s3.Bucket,
-		S3Prefix: s3.Prefix,
-		S3Region: s3.Region,
-		ChainID:  group.Spec.Genesis.ChainID,
-		Nodes:    nodeParams,
+		S3Bucket:       s3.Bucket,
+		S3Prefix:       s3.Prefix,
+		S3Region:       s3.Region,
+		ChainID:        group.Spec.Genesis.ChainID,
+		AccountBalance: group.Spec.Genesis.AccountBalance,
+		Nodes:          nodeParams,
 	}
 
 	assembleTask, err := buildGroupPlannedTask(group.Name, TaskAssembleGenesis, 0, assembleParams)

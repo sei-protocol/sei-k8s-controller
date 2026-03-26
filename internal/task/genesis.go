@@ -67,11 +67,12 @@ func (p *UploadGenesisArtifactsParams) toRequestParams() *map[string]any {
 // AssembleAndUploadGenesisParams are the serialized fields for the
 // group-level assemble-and-upload-genesis sidecar task.
 type AssembleAndUploadGenesisParams struct {
-	S3Bucket string             `json:"s3Bucket"`
-	S3Prefix string             `json:"s3Prefix"`
-	S3Region string             `json:"s3Region"`
-	ChainID  string             `json:"chainId"`
-	Nodes    []GenesisNodeParam `json:"nodes"`
+	S3Bucket       string             `json:"s3Bucket"`
+	S3Prefix       string             `json:"s3Prefix"`
+	S3Region       string             `json:"s3Region"`
+	ChainID        string             `json:"chainId"`
+	AccountBalance string             `json:"accountBalance"`
+	Nodes          []GenesisNodeParam `json:"nodes"`
 }
 
 // GenesisNodeParam identifies a node participating in the genesis ceremony.
