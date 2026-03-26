@@ -90,11 +90,12 @@ func (p *AssembleAndUploadGenesisParams) toRequestParams() *map[string]any {
 		nodes[i] = map[string]any{"name": n.Name}
 	}
 	m := map[string]any{
-		"s3Bucket": p.S3Bucket,
-		"s3Prefix": p.S3Prefix,
-		"s3Region": p.S3Region,
-		"chainId":  p.ChainID,
-		"nodes":    nodes,
+		"s3Bucket":       p.S3Bucket,
+		"s3Prefix":       p.S3Prefix,
+		"s3Region":       p.S3Region,
+		"chainId":        p.ChainID,
+		"accountBalance": p.AccountBalance,
+		"nodes":          nodes,
 	}
 	return &m
 }
