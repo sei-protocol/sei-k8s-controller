@@ -31,6 +31,15 @@ const (
 	testSnapshotRegion   = "eu-central-1"
 )
 
+func mustBuildPlan(t *testing.T, p planner.NodePlanner, node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
+	t.Helper()
+	plan, err := p.BuildPlan(node)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	return plan
+}
+
 type mockSidecarClient struct {
 	submitted []sidecar.TaskRequest
 	submitErr error
@@ -243,7 +252,7 @@ func TestBootstrapMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p, _ := planner.ForNode(snapshotNode(), testSnapshotRegion)
-			plan := p.BuildPlan(snapshotNode())
+			plan := mustBuildPlan(t, p, snapshotNode())
 			if plan == nil {
 				t.Fatal("expected non-nil plan")
 			}
@@ -256,7 +265,7 @@ func TestBootstrapMode(t *testing.T) {
 
 func TestBuildPlan_Snapshot(t *testing.T) {
 	p, _ := planner.ForNode(snapshotNode(), testSnapshotRegion)
-	plan := p.BuildPlan(snapshotNode())
+	plan := mustBuildPlan(t, p, snapshotNode())
 	got := taskTypes(plan)
 	want := []string{planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
@@ -268,7 +277,7 @@ func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "atlantic-2"}}},
 	}
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	plan := p.BuildPlan(node)
+	plan := mustBuildPlan(t, p, node)
 	got := taskTypes(plan)
 	want := []string{planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
@@ -276,7 +285,7 @@ func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 
 func TestBuildPlan_StateSync(t *testing.T) {
 	p, _ := planner.ForNode(peerSyncNode(), testSnapshotRegion)
-	plan := p.BuildPlan(peerSyncNode())
+	plan := mustBuildPlan(t, p, peerSyncNode())
 	got := taskTypes(plan)
 	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
@@ -284,7 +293,7 @@ func TestBuildPlan_StateSync(t *testing.T) {
 
 func TestBuildPlan_Genesis(t *testing.T) {
 	p, _ := planner.ForNode(genesisNode(), testSnapshotRegion)
-	plan := p.BuildPlan(genesisNode())
+	plan := mustBuildPlan(t, p, genesisNode())
 	got := taskTypes(plan)
 	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
@@ -296,7 +305,7 @@ func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "arctic-1"}}},
 	}
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	plan := p.BuildPlan(node)
+	plan := mustBuildPlan(t, p, node)
 	got := taskTypes(plan)
 	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
@@ -305,7 +314,7 @@ func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 func TestBuildPlan_Replayer(t *testing.T) {
 	node := replayerNode()
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	plan := p.BuildPlan(node)
+	plan := mustBuildPlan(t, p, node)
 	got := taskTypes(plan)
 	want := []string{planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
@@ -314,7 +323,7 @@ func TestBuildPlan_Replayer(t *testing.T) {
 func TestBuildPlan_Archive(t *testing.T) {
 	node := snapshotterNode()
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	plan := p.BuildPlan(node)
+	plan := mustBuildPlan(t, p, node)
 	got := taskTypes(plan)
 	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
@@ -322,7 +331,7 @@ func TestBuildPlan_Archive(t *testing.T) {
 
 func TestBuildPlanPhaseAndTasks(t *testing.T) {
 	p, _ := planner.ForNode(snapshotNode(), testSnapshotRegion)
-	plan := p.BuildPlan(snapshotNode())
+	plan := mustBuildPlan(t, p, snapshotNode())
 	if plan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", plan.Phase)
 	}
@@ -348,8 +357,8 @@ func TestBuildPlanPhaseAndTasks(t *testing.T) {
 func TestBuildPlan_DeterministicIDs(t *testing.T) {
 	node := snapshotNode()
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	plan1 := p.BuildPlan(node)
-	plan2 := p.BuildPlan(node)
+	plan1 := mustBuildPlan(t, p, node)
+	plan2 := mustBuildPlan(t, p, node)
 	for i := range plan1.Tasks {
 		if plan1.Tasks[i].ID != plan2.Tasks[i].ID {
 			t.Errorf("task %d ID not deterministic: %q vs %q", i, plan1.Tasks[i].ID, plan2.Tasks[i].ID)
@@ -360,7 +369,7 @@ func TestBuildPlan_DeterministicIDs(t *testing.T) {
 func TestBuildPlan_ParamsRoundTrip(t *testing.T) {
 	node := snapshotNode()
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	plan := p.BuildPlan(node)
+	plan := mustBuildPlan(t, p, node)
 	firstTask := plan.Tasks[0]
 	if firstTask.Type != planner.TaskSnapshotRestore {
 		t.Fatalf("expected snapshot-restore, got %s", firstTask.Type)
@@ -383,7 +392,7 @@ func TestConfigApply_ParamsFromPlan(t *testing.T) {
 		"giga_executor.enabled": "true",
 	}
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	plan := p.BuildPlan(node)
+	plan := mustBuildPlan(t, p, node)
 
 	var configTask *seiv1alpha1.PlannedTask
 	for i := range plan.Tasks {
@@ -467,7 +476,7 @@ func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	node.Status.InitPlan = p.BuildPlan(node)
+	node.Status.InitPlan = mustBuildPlan(t, p, node)
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
@@ -491,7 +500,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := genesisNode()
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	node.Status.InitPlan = p.BuildPlan(node)
+	node.Status.InitPlan = mustBuildPlan(t, p, node)
 	for i := range node.Status.InitPlan.Tasks {
 		node.Status.InitPlan.Tasks[i].Status = seiv1alpha1.PlannedTaskComplete
 	}
@@ -517,7 +526,7 @@ func TestReconcile_FailedPlan_NoOps(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	node.Status.InitPlan = p.BuildPlan(node)
+	node.Status.InitPlan = mustBuildPlan(t, p, node)
 	node.Status.InitPlan.Phase = seiv1alpha1.TaskPlanFailed
 
 	r, _ := newProgressionReconciler(t, mock, node)
@@ -593,7 +602,7 @@ func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 	mock := &mockSidecarClient{submitErr: fmt.Errorf("connection refused")}
 	node := snapshotNode()
 	p, _ := planner.ForNode(node, testSnapshotRegion)
-	node.Status.InitPlan = p.BuildPlan(node)
+	node.Status.InitPlan = mustBuildPlan(t, p, node)
 
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -881,7 +890,7 @@ func TestNeedsBootstrap(t *testing.T) {
 func TestTaskGenerateBootstrapJob(t *testing.T) {
 	node := replayerNode()
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
-	snap := planner.SnapshotSourceFor(node)
+	snap := node.Spec.SnapshotSource()
 	job, err := task.GenerateBootstrapJob(node, snap, DefaultPlatformConfig())
 	if err != nil {
 		t.Fatalf("GenerateBootstrapJob error: %v", err)
@@ -920,7 +929,7 @@ func TestTaskGenerateBootstrapJob_SidecarResources(t *testing.T) {
 			},
 		},
 	}
-	snap := planner.SnapshotSourceFor(node)
+	snap := node.Spec.SnapshotSource()
 	job, err := task.GenerateBootstrapJob(node, snap, DefaultPlatformConfig())
 	if err != nil {
 		t.Fatalf("GenerateBootstrapJob error: %v", err)

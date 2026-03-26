@@ -42,7 +42,7 @@ var baseProgression = map[string][]string{
 // and building its initialization task plan with fully embedded params.
 type NodePlanner interface {
 	Validate(node *seiv1alpha1.SeiNode) error
-	BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan
+	BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
 	Mode() string
 }
 
@@ -77,12 +77,6 @@ func insertBefore(prog []string, target, taskType string) []string {
 	return prog
 }
 
-// SnapshotSourceFor extracts the SnapshotSource from the populated mode sub-spec.
-// Deprecated: prefer node.Spec.SnapshotSource() directly.
-func SnapshotSourceFor(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotSource {
-	return node.Spec.SnapshotSource()
-}
-
 // PeersFor extracts the PeerSource list from whichever node mode is set.
 func PeersFor(node *seiv1alpha1.SeiNode) []seiv1alpha1.PeerSource {
 	switch {
@@ -102,7 +96,7 @@ func PeersFor(node *seiv1alpha1.SeiNode) []seiv1alpha1.PeerSource {
 // NeedsBootstrap returns true when the node requires a bootstrap Job to
 // populate the PVC before the StatefulSet takes over.
 func NeedsBootstrap(node *seiv1alpha1.SeiNode) bool {
-	snap := SnapshotSourceFor(node)
+	snap := node.Spec.SnapshotSource()
 	return snap != nil && snap.BootstrapImage != "" &&
 		snap.S3 != nil && snap.S3.TargetHeight > 0
 }
@@ -175,26 +169,28 @@ func sidecarPortForNode(node *seiv1alpha1.SeiNode) int32 {
 }
 
 // marshalParams serializes a task params struct to apiextensionsv1.JSON.
-// Panics on marshal failure since all param types are simple structs with
-// json tags — a failure here indicates a programming error.
-func marshalParams(v any) *apiextensionsv1.JSON {
+func marshalParams(v any) (*apiextensionsv1.JSON, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		panic(fmt.Sprintf("marshalParams: failed to marshal %T: %v", v, err))
+		return nil, fmt.Errorf("marshaling %T: %w", v, err)
 	}
-	return &apiextensionsv1.JSON{Raw: raw}
+	return &apiextensionsv1.JSON{Raw: raw}, nil
 }
 
 // buildPlannedTask constructs a PlannedTask with deterministic ID and
 // serialized params.
-func buildPlannedTask(node *seiv1alpha1.SeiNode, taskType string, attempt int, params any) seiv1alpha1.PlannedTask {
+func buildPlannedTask(node *seiv1alpha1.SeiNode, taskType string, attempt int, params any) (seiv1alpha1.PlannedTask, error) {
 	id := task.DeterministicTaskID(node.Name, taskType, attempt)
+	p, err := marshalParams(params)
+	if err != nil {
+		return seiv1alpha1.PlannedTask{}, fmt.Errorf("task %s: %w", taskType, err)
+	}
 	return seiv1alpha1.PlannedTask{
 		Type:   taskType,
 		ID:     id,
 		Status: seiv1alpha1.PlannedTaskPending,
-		Params: marshalParams(params),
-	}
+		Params: p,
+	}, nil
 }
 
 // buildBasePlan builds a TaskPlan by starting with the base progression for the
@@ -205,7 +201,7 @@ func buildBasePlan(
 	snap *seiv1alpha1.SnapshotSource,
 	snapshotRegion string,
 	configApplyParams *task.ConfigApplyParams,
-) *seiv1alpha1.TaskPlan {
+) (*seiv1alpha1.TaskPlan, error) {
 	mode := bootstrapMode(snap)
 	prog := slices.Clone(baseProgression[mode])
 
@@ -220,12 +216,16 @@ func buildBasePlan(
 	attempt := 0
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		tasks[i] = buildPlannedTask(node, taskType, attempt, paramsForTaskType(node, taskType, peers, snap, snapshotRegion, configApplyParams))
+		t, err := buildPlannedTask(node, taskType, attempt, paramsForTaskType(node, taskType, peers, snap, snapshotRegion, configApplyParams))
+		if err != nil {
+			return nil, err
+		}
+		tasks[i] = t
 	}
 	return &seiv1alpha1.TaskPlan{
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: tasks,
-	}
+	}, nil
 }
 
 // paramsForTaskType constructs the appropriate params struct for a task type.

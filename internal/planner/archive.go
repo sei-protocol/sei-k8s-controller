@@ -23,7 +23,7 @@ func (p *archiveNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	return nil
 }
 
-func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
+func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	return buildBasePlan(node, node.Spec.Archive.Peers, p.snapshotSource(), p.snapshotRegion, &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeArchive),
 		Overrides: mergeOverrides(p.controllerOverrides(node), node.Spec.Overrides),

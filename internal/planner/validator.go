@@ -39,7 +39,7 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	return nil
 }
 
-func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
+func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	v := node.Spec.Validator
 	params := &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeValidator),

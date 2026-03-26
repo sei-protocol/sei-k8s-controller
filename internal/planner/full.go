@@ -28,7 +28,7 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	return nil
 }
 
-func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
+func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	fn := node.Spec.FullNode
 	params := &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeFull),

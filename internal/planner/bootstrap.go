@@ -28,7 +28,7 @@ func buildBootstrapPlan(
 	snap *seiv1alpha1.SnapshotSource,
 	snapshotRegion string,
 	configApplyParams *task.ConfigApplyParams,
-) *seiv1alpha1.TaskPlan {
+) (*seiv1alpha1.TaskPlan, error) {
 	attempts := map[string]int{}
 	nextAttempt := func(taskType string) int {
 		a := attempts[taskType]
@@ -43,31 +43,50 @@ func buildBootstrapPlan(
 	postProg := buildPostBootstrapProgression(peers)
 	tasks := make([]seiv1alpha1.PlannedTask, 0, 2+len(bootstrapProg)+2+len(postProg))
 
+	appendTask := func(taskType string, params any) error {
+		t, err := buildPlannedTask(node, taskType, nextAttempt(taskType), params)
+		if err != nil {
+			return err
+		}
+		tasks = append(tasks, t)
+		return nil
+	}
+
 	// Phase 1: Deploy bootstrap infrastructure
-	tasks = append(tasks, buildPlannedTask(node, task.TaskTypeDeployBootstrapSvc, nextAttempt(task.TaskTypeDeployBootstrapSvc),
-		&task.DeployBootstrapServiceParams{ServiceName: serviceName, Namespace: node.Namespace}))
-	tasks = append(tasks, buildPlannedTask(node, task.TaskTypeDeployBootstrapJob, nextAttempt(task.TaskTypeDeployBootstrapJob),
-		&task.DeployBootstrapJobParams{JobName: jobName, Namespace: node.Namespace}))
+	if err := appendTask(task.TaskTypeDeployBootstrapSvc,
+		&task.DeployBootstrapServiceParams{ServiceName: serviceName, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
+	if err := appendTask(task.TaskTypeDeployBootstrapJob,
+		&task.DeployBootstrapJobParams{JobName: jobName, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
 
 	// Phase 2: Sidecar tasks on bootstrap pod (same progression as base, minus mark-ready)
 	for _, taskType := range bootstrapProg {
-		tasks = append(tasks, buildPlannedTask(node, taskType, nextAttempt(taskType),
-			paramsForTaskType(node, taskType, peers, snap, snapshotRegion, configApplyParams)))
+		if err := appendTask(taskType, paramsForTaskType(node, taskType, peers, snap, snapshotRegion, configApplyParams)); err != nil {
+			return nil, err
+		}
 	}
 
 	// Phase 3: Wait for seid to reach halt-height, then tear down
-	tasks = append(tasks, buildPlannedTask(node, task.TaskTypeAwaitBootstrapComplete, nextAttempt(task.TaskTypeAwaitBootstrapComplete),
-		&task.AwaitBootstrapCompleteParams{JobName: jobName, Namespace: node.Namespace}))
-	tasks = append(tasks, buildPlannedTask(node, task.TaskTypeTeardownBootstrap, nextAttempt(task.TaskTypeTeardownBootstrap),
-		&task.TeardownBootstrapParams{JobName: jobName, ServiceName: serviceName, Namespace: node.Namespace}))
+	if err := appendTask(task.TaskTypeAwaitBootstrapComplete,
+		&task.AwaitBootstrapCompleteParams{JobName: jobName, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
+	if err := appendTask(task.TaskTypeTeardownBootstrap,
+		&task.TeardownBootstrapParams{JobName: jobName, ServiceName: serviceName, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
 
 	// Phase 4: Post-bootstrap config on StatefulSet pod
 	for _, taskType := range postProg {
-		tasks = append(tasks, buildPlannedTask(node, taskType, nextAttempt(taskType),
-			paramsForTaskType(node, taskType, peers, nil, "", configApplyParams)))
+		if err := appendTask(taskType, paramsForTaskType(node, taskType, peers, nil, "", configApplyParams)); err != nil {
+			return nil, err
+		}
 	}
 
-	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}
+	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
 }
 
 // buildBootstrapProgression returns the sidecar task sequence for the
@@ -116,7 +135,7 @@ func IsBootstrapComplete(plan *seiv1alpha1.TaskPlan) bool {
 // BuildGenesisInitPlan constructs the full Init plan for genesis ceremony
 // nodes. Per-node artifact generation runs first, then await-genesis-assembly
 // blocks until the group controller has assembled and uploaded genesis.json.
-func BuildGenesisInitPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
+func BuildGenesisInitPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	gc := node.Spec.Validator.GenesisCeremony
 	attempt := 0
 
@@ -134,9 +153,13 @@ func BuildGenesisInitPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		tasks[i] = buildPlannedTask(node, taskType, attempt, genesisParamsForTaskType(node, gc, taskType))
+		t, err := buildPlannedTask(node, taskType, attempt, genesisParamsForTaskType(node, gc, taskType))
+		if err != nil {
+			return nil, err
+		}
+		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}
+	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
 }
 
 func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.GenesisCeremonyNodeConfig, taskType string) any {
@@ -190,7 +213,7 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 
 // AwaitConditionParams builds await-condition params from a node's snapshot source.
 func AwaitConditionParams(node *seiv1alpha1.SeiNode) (*task.AwaitConditionParams, error) {
-	snap := SnapshotSourceFor(node)
+	snap := node.Spec.SnapshotSource()
 	if snap == nil || snap.S3 == nil || snap.S3.TargetHeight <= 0 {
 		return nil, fmt.Errorf("node %s/%s has no valid S3 targetHeight", node.Namespace, node.Name)
 	}
