@@ -114,6 +114,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 			{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
 			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
 			{Name: "SEI_HOME", Value: dataDir},
+			{Name: "PATH", Value: dataDir + "/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		},
 		Ports: []corev1.ContainerPort{
 			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
@@ -236,8 +237,8 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 // distinguish pre-populated volumes from fresh ones without filesystem probes.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
-		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
+		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp %s/bin && cp /usr/bin/seid %s/bin/seid`,
+		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir, dataDir, dataDir,
 	)
 	return corev1.Container{
 		Name:  "seid-init",
