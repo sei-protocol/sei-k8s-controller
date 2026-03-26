@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	groupLabel          = "sei.io/group"
-	groupOrdinalLabel   = "sei.io/group-ordinal"
+	groupLabel          = "sei.io/nodegroup"
+	groupOrdinalLabel   = "sei.io/nodegroup-ordinal"
 	nodeLabel           = "sei.io/node"
 	managedByAnnotation = "sei.io/managed-by"
 )

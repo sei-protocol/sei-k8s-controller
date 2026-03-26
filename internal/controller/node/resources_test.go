@@ -92,15 +92,15 @@ func TestResourceLabelsForNode_MergesPodLabels(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 	node.Spec.PodLabels = map[string]string{
-		"sei.io/group": "my-group",
-		"team":         "platform",
+		"sei.io/nodegroup": "my-group",
+		"team":             "platform",
 	}
 	labels := resourceLabelsForNode(node)
 
 	g.Expect(labels).To(Equal(map[string]string{
-		nodeLabel:      "snap-0",
-		"sei.io/group": "my-group",
-		"team":         "platform",
+		nodeLabel:          "snap-0",
+		"sei.io/nodegroup": "my-group",
+		"team":             "platform",
 	}))
 }
 
@@ -119,14 +119,14 @@ func TestGenerateNodeStatefulSet_PodLabelsPropagate(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 	node.Spec.PodLabels = map[string]string{
-		"sei.io/group": "my-group",
+		"sei.io/nodegroup": "my-group",
 	}
 
 	sts := generateNodeStatefulSet(node, DefaultPlatformConfig())
 
-	g.Expect(sts.Labels).To(HaveKeyWithValue("sei.io/group", "my-group"))
-	g.Expect(sts.Spec.Template.Labels).To(HaveKeyWithValue("sei.io/group", "my-group"))
-	g.Expect(sts.Spec.Selector.MatchLabels).To(HaveKeyWithValue("sei.io/group", "my-group"))
+	g.Expect(sts.Labels).To(HaveKeyWithValue("sei.io/nodegroup", "my-group"))
+	g.Expect(sts.Spec.Template.Labels).To(HaveKeyWithValue("sei.io/nodegroup", "my-group"))
+	g.Expect(sts.Spec.Selector.MatchLabels).To(HaveKeyWithValue("sei.io/nodegroup", "my-group"))
 }
 
 // --- StatefulSet generation ---

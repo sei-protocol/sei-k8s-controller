@@ -1,0 +1,36 @@
+# SeiNodeGroup — Genesis Ceremony (dev testnet)
+#
+# Three validator nodes that bootstrap a new chain from scratch via
+# the genesis ceremony workflow. The group controller coordinates:
+#   1. Each node generates identity + gentx, uploads artifacts to S3
+#   2. Group assembles final genesis.json from all artifacts
+#   3. Each node downloads genesis and starts the chain
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeGroup
+metadata:
+  name: genesis-test
+  namespace: default
+spec:
+  replicas: 3
+
+  genesis:
+    chainId: genesis-test-1
+    stakingAmount: "10000000usei"
+    accountBalance: "1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom"
+
+  template:
+    metadata:
+      labels:
+        sei.io/role: validator
+    spec:
+      chainId: genesis-test-1
+      image: "ghcr.io/sei-protocol/sei:v6.3.0"
+
+      entrypoint:
+        command: ["seid"]
+        args: ["start", "--home", "/sei"]
+
+      sidecar:
+        image: ghcr.io/sei-protocol/seictl@sha256:cba34c7ae314a53952c4cf9a473bcc42b752ceecc39e82b08ff2f49c8051ca58
+
+      validator: {}

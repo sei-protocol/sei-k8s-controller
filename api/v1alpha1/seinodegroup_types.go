@@ -96,7 +96,7 @@ type GenesisAccount struct {
 // SeiNodeTemplate wraps a SeiNodeSpec for use in the group template.
 type SeiNodeTemplate struct {
 	// Metadata allows setting labels and annotations on child SeiNodes.
-	// The controller always adds sei.io/group and sei.io/group-ordinal
+	// The controller always adds sei.io/nodegroup and sei.io/nodegroup-ordinal
 	// labels; user-specified labels are merged.
 	// +optional
 	Metadata *SeiNodeTemplateMeta `json:"metadata,omitempty"`
