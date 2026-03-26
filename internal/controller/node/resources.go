@@ -14,6 +14,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 func generateNodeStatefulSet(node *seiv1alpha1.SeiNode, platform PlatformConfig) *appsv1.StatefulSet {
@@ -219,7 +220,7 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		container.Args = node.Spec.Entrypoint.Args
 	}
 
-	if needsLongStartup(node) {
+	if planner.NeedsLongStartup(node) {
 		container.StartupProbe.FailureThreshold = 1800
 	}
 

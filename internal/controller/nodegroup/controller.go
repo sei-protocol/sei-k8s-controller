@@ -35,6 +35,9 @@ type SeiNodeGroupReconciler struct {
 	// It is auto-injected into every AuthorizationPolicy to ensure the
 	// controller can always reach the seictl sidecar.
 	ControllerSA string
+
+	// BuildSidecarClientFn overrides sidecar client construction for testing.
+	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) any
 }
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodegroups,verbs=get;list;watch;create;update;patch;delete
@@ -79,6 +82,21 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		logger.Error(err, "reconciling SeiNodes")
 		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 		return ctrl.Result{}, fmt.Errorf("reconciling SeiNodes: %w", err)
+	}
+
+	if group.Spec.Genesis != nil {
+		result, err := r.reconcileGenesisAssembly(ctx, group)
+		if err != nil {
+			logger.Error(err, "reconciling genesis assembly")
+			observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
+			return ctrl.Result{}, fmt.Errorf("reconciling genesis assembly: %w", err)
+		}
+		if result.RequeueAfter > 0 {
+			if err := r.updateStatus(ctx, group, statusBase); err != nil {
+				return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
+			}
+			return result, nil
+		}
 	}
 
 	if err := timeSubstep("reconcileNetworking", func() error {

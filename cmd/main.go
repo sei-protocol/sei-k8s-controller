@@ -20,6 +20,7 @@ import (
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
 	nodegroupcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodegroup"
 	nodepoolcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodepool"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 var (
@@ -153,12 +154,14 @@ func main() {
 		platform.SnapshotRegion = v
 	}
 
+	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
 	nodeRecorder := mgr.GetEventRecorderFor("seinode-controller")
 	if err := (&nodecontroller.SeiNodeReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: nodeRecorder,
-		Platform: platform,
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     nodeRecorder,
+		Platform:     platform,
+		PlanExecutor: &planner.Executor{Client: mgr.GetClient()},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNode")
 		os.Exit(1)

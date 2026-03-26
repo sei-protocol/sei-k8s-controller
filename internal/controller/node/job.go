@@ -10,6 +10,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 const (
@@ -23,7 +24,9 @@ func preInitJobName(node *seiv1alpha1.SeiNode) string {
 
 func generatePreInitJob(node *seiv1alpha1.SeiNode, platform PlatformConfig) *batchv1.Job {
 	labels := preInitLabelsForNode(node)
-	snap := snapshotSourceFor(node)
+
+	snap := planner.SnapshotSourceFor(node)
+	podSpec := buildPreInitPodSpec(node, snap, platform)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -41,7 +44,7 @@ func generatePreInitJob(node *seiv1alpha1.SeiNode, platform PlatformConfig) *bat
 						"karpenter.sh/do-not-disrupt": "true",
 					},
 				},
-				Spec: buildPreInitPodSpec(node, snap, platform),
+				Spec: podSpec,
 			},
 		},
 	}
@@ -72,8 +75,15 @@ func generatePreInitService(node *seiv1alpha1.SeiNode) *corev1.Service {
 
 // preInitSidecarURL returns the in-cluster DNS URL for the pre-init Job's sidecar.
 func preInitSidecarURL(node *seiv1alpha1.SeiNode) string {
+	return PreInitSidecarURL(node.Name, node.Namespace, sidecarPort(node))
+}
+
+// PreInitSidecarURL builds the in-cluster DNS URL for a pre-init Job's sidecar
+// given the node name, namespace, and port. Exported for use by the group controller.
+func PreInitSidecarURL(nodeName, namespace string, port int32) string {
+	jobName := fmt.Sprintf("%s-pre-init", nodeName)
 	return fmt.Sprintf("http://%s.%s.%s.svc.cluster.local:%d",
-		preInitPodHostname, preInitJobName(node), node.Namespace, sidecarPort(node))
+		preInitPodHostname, jobName, namespace, port)
 }
 
 // preInitWaitCommand returns a shell command that waits for the sidecar

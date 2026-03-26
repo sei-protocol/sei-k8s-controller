@@ -1,12 +1,12 @@
-package node
+package planner
 
 import (
 	"fmt"
 
 	seiconfig "github.com/sei-protocol/sei-config"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type replayerPlanner struct {
@@ -33,19 +33,10 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	return buildPlan(node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot)
-}
-
-func (p *replayerPlanner) BuildTask(node *seiv1alpha1.SeiNode, taskType string) (sidecar.TaskBuilder, error) {
-	if taskType == taskConfigApply {
-		return sidecar.ConfigApplyTask{
-			Intent: seiconfig.ConfigIntent{
-				Mode:      seiconfig.ModeFull,
-				Overrides: mergeOverrides(p.controllerOverrides(), node.Spec.Overrides),
-			},
-		}, nil
-	}
-	return buildSharedTask(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, taskType, p.snapshotRegion)
+	return buildBasePlan(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, p.snapshotRegion, &task.ConfigApplyParams{
+		Mode:      string(seiconfig.ModeFull),
+		Overrides: mergeOverrides(p.controllerOverrides(), node.Spec.Overrides),
+	})
 }
 
 func (p *replayerPlanner) controllerOverrides() map[string]string {
