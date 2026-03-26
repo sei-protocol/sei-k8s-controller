@@ -72,7 +72,13 @@ func (e *sidecarExecution[T]) Execute(ctx context.Context) error {
 		return fmt.Errorf("params type %T does not implement taskParamser", e.params)
 	}
 
+	taskID, parseErr := uuid.Parse(e.id)
+	if parseErr != nil {
+		return fmt.Errorf("invalid task UUID %q: %w", e.id, parseErr)
+	}
+
 	req := sidecar.TaskRequest{
+		Id:     &taskID,
 		Type:   p.taskType(),
 		Params: p.toRequestParams(),
 	}
