@@ -97,11 +97,16 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 	r := &SeiNodeReconciler{
-		Client:       c,
-		Scheme:       s,
-		Recorder:     record.NewFakeRecorder(100),
-		Platform:     DefaultPlatformConfig(),
-		PlanExecutor: &planner.Executor{Client: c},
+		Client:   c,
+		Scheme:   s,
+		Recorder: record.NewFakeRecorder(100),
+		Platform: DefaultPlatformConfig(),
+		PlanExecutor: &planner.Executor{
+			Client: c,
+			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
+				return mock, nil
+			},
+		},
 		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) task.SidecarClient {
 			return mock
 		},
@@ -438,8 +443,7 @@ func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
 	}
 	node = fetchNode(t, c, node.Name, node.Namespace)
 
-	sc := r.BuildSidecarClientFn(node)
-	_, err = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan, sc)
+	_, err = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -467,8 +471,7 @@ func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	sc := r.BuildSidecarClientFn(node)
-	_, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan, sc)
+	_, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -496,8 +499,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	sc := r.BuildSidecarClientFn(node)
-	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan, sc)
+	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -521,8 +523,7 @@ func TestReconcile_FailedPlan_NoOps(t *testing.T) {
 	r, _ := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	sc := r.BuildSidecarClientFn(node)
-	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan, sc)
+	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -597,8 +598,7 @@ func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	sc := r.BuildSidecarClientFn(node)
-	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan, sc)
+	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -617,9 +617,8 @@ func TestExecutePlan_NilPlan_ReturnsError(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
 	r, _ := newProgressionReconciler(t, mock, node)
-	sc := r.BuildSidecarClientFn(node)
 
-	_, err := r.PlanExecutor.ExecutePlan(context.Background(), node, nil, sc)
+	_, err := r.PlanExecutor.ExecutePlan(context.Background(), node, nil)
 	if err == nil {
 		t.Fatal("expected error for nil plan")
 	}
@@ -752,8 +751,7 @@ func TestReconcileInitializing_PlanComplete_TransitionsToRunning(t *testing.T) {
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
-	p, _ := planner.ForNode(node, testSnapshotRegion)
-	result, err := r.reconcileInitializing(context.Background(), node, p)
+	result, err := r.reconcileInitializing(context.Background(), node)
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
 	}
@@ -776,8 +774,7 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 	}
 	r, c := newProgressionReconciler(t, mock, node)
 
-	p, _ := planner.ForNode(node, testSnapshotRegion)
-	result, err := r.reconcileInitializing(context.Background(), node, p)
+	result, err := r.reconcileInitializing(context.Background(), node)
 	if err != nil {
 		t.Fatalf("reconcileInitializing error: %v", err)
 	}
@@ -834,7 +831,7 @@ func TestSnapshotUploadScheduledTask_NoDestination(t *testing.T) {
 
 // --- Nil sidecar client handling ---
 
-func TestReconcileInitializing_NilSidecarClient_Requeues(t *testing.T) {
+func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 	node := genesisNode()
 	node.Status.Phase = seiv1alpha1.PhaseInitializing
 	node.Status.InitPlan = &seiv1alpha1.TaskPlan{
@@ -845,10 +842,11 @@ func TestReconcileInitializing_NilSidecarClient_Requeues(t *testing.T) {
 	}
 
 	r, _ := newProgressionReconciler(t, nil, node)
-	r.BuildSidecarClientFn = func(_ *seiv1alpha1.SeiNode) task.SidecarClient { return nil }
+	r.PlanExecutor.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
+		return nil, fmt.Errorf("sidecar unavailable")
+	}
 
-	p, _ := planner.ForNode(node, testSnapshotRegion)
-	result, err := r.reconcileInitializing(context.Background(), node, p)
+	result, err := r.reconcileInitializing(context.Background(), node)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

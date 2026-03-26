@@ -69,10 +69,18 @@ type SidecarClient interface {
 	GetTask(ctx context.Context, id uuid.UUID) (*sidecar.TaskResult, error)
 }
 
+// ExecutionClients bundles the external clients needed by task executions.
+// New client types (e.g. object store for genesis assembly) are added here
+// without changing existing Deserialize call sites.
+type ExecutionClients struct {
+	Sidecar SidecarClient
+}
+
 // Deserialize reconstructs a TaskExecution from its serialized CRD
-// representation. The sidecar client is injected for sidecar-backed tasks.
+// representation. Clients are injected via the ExecutionClients bundle.
 // Returns UnknownTaskTypeError for unrecognized types.
-func Deserialize(taskType, id string, params json.RawMessage, sc SidecarClient) (TaskExecution, error) {
+func Deserialize(taskType, id string, params json.RawMessage, clients ExecutionClients) (TaskExecution, error) {
+	sc := clients.Sidecar
 	switch taskType {
 	// Bootstrap tasks
 	case sidecar.TaskTypeSnapshotRestore:

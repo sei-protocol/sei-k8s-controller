@@ -128,7 +128,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	case seiv1alpha1.PhasePreInitializing:
 		return r.reconcilePreInitializing(ctx, node, p)
 	case seiv1alpha1.PhaseInitializing:
-		return r.reconcileInitializing(ctx, node, p)
+		return r.reconcileInitializing(ctx, node)
 	case seiv1alpha1.PhaseRunning:
 		return r.reconcileRunning(ctx, node)
 	case seiv1alpha1.PhaseFailed:
@@ -170,7 +170,7 @@ func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alp
 
 // reconcileInitializing ensures the StatefulSet and Service exist, then drives
 // the InitPlan to completion.
-func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *seiv1alpha1.SeiNode, _ planner.NodePlanner) (ctrl.Result, error) {
+func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
 	if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
 	}
@@ -178,14 +178,7 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 		return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
 	}
 
-	sc := r.buildSidecarClient(node)
-	if sc == nil {
-		sidecarUnreachableTotal.WithLabelValues(node.Namespace, node.Name).Inc()
-		log.FromContext(ctx).Info("sidecar not reachable yet, will retry")
-		return ctrl.Result{RequeueAfter: planner.TaskPollInterval}, nil
-	}
-
-	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan, sc)
+	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan)
 	if err != nil {
 		return result, err
 	}

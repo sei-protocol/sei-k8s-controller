@@ -160,14 +160,36 @@ func bootstrapMode(snap *seiv1alpha1.SnapshotSource) string {
 	return "genesis"
 }
 
-// SidecarURLForNode builds the in-cluster sidecar URL from the node's identity.
+// SidecarURLForNode builds the in-cluster sidecar URL for a node's
+// StatefulSet pod (used during Initializing and Running phases).
 func SidecarURLForNode(node *seiv1alpha1.SeiNode) string {
-	port := sidecar.DefaultPort
-	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
-		port = node.Spec.Sidecar.Port
-	}
 	return fmt.Sprintf("http://%s-0.%s.%s.svc.cluster.local:%d",
-		node.Name, node.Name, node.Namespace, port)
+		node.Name, node.Name, node.Namespace, sidecarPortForNode(node))
+}
+
+// PreInitSidecarURLForNode builds the in-cluster sidecar URL for a node's
+// pre-init Job pod (used during PreInitializing phase).
+func PreInitSidecarURLForNode(node *seiv1alpha1.SeiNode) string {
+	jobName := fmt.Sprintf("%s-pre-init", node.Name)
+	return fmt.Sprintf("http://seid.%s.%s.svc.cluster.local:%d",
+		jobName, node.Namespace, sidecarPortForNode(node))
+}
+
+// SidecarURLForPhase returns the correct sidecar URL based on the node's
+// current phase. PreInitializing targets the Job pod; all other phases
+// target the StatefulSet pod.
+func SidecarURLForPhase(node *seiv1alpha1.SeiNode) string {
+	if node.Status.Phase == seiv1alpha1.PhasePreInitializing {
+		return PreInitSidecarURLForNode(node)
+	}
+	return SidecarURLForNode(node)
+}
+
+func sidecarPortForNode(node *seiv1alpha1.SeiNode) int32 {
+	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
+		return node.Spec.Sidecar.Port
+	}
+	return sidecar.DefaultPort
 }
 
 // marshalParams serializes a task params struct to apiextensionsv1.JSON.

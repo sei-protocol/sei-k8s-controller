@@ -21,8 +21,13 @@ const (
 // Executor drives TaskPlans to completion using the task.TaskExecution
 // interface. It is stateless per reconcile — each call re-deserializes
 // the current task from the plan's embedded params and calls Status/Execute.
+//
+// BuildSidecarClient is a factory that produces a SidecarClient for the
+// given node. The implementation is phase-aware: PreInitializing nodes
+// target the Job pod DNS while Initializing nodes target the StatefulSet.
 type Executor struct {
-	Client client.Client
+	Client             client.Client
+	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
 }
 
 // CurrentTask returns the first non-Complete task in the plan, or nil if all
@@ -43,7 +48,6 @@ func (e *Executor) ExecutePlan(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
 	plan *seiv1alpha1.TaskPlan,
-	sc task.SidecarClient,
 ) (ctrl.Result, error) {
 	if plan == nil {
 		return ctrl.Result{}, fmt.Errorf("ExecutePlan called with nil plan for node %s/%s", node.Namespace, node.Name)
@@ -64,12 +68,18 @@ func (e *Executor) ExecutePlan(
 		return ctrl.Result{RequeueAfter: ImmediateRequeue}, nil
 	}
 
+	sc, err := e.BuildSidecarClient(node)
+	if err != nil {
+		log.FromContext(ctx).Info("sidecar client unavailable, will retry", "error", err)
+		return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
+	}
+
 	var paramsRaw []byte
 	if t.Params != nil {
 		paramsRaw = t.Params.Raw
 	}
 
-	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, sc)
+	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, task.ExecutionClients{Sidecar: sc})
 	if err != nil {
 		return e.failTask(ctx, node, plan, t, err.Error())
 	}

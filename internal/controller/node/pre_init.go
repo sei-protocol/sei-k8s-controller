@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -16,7 +15,6 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 // reconcilePreInitializing drives the PreInitPlan to completion. For nodes
@@ -92,13 +90,7 @@ func (r *SeiNodeReconciler) reconcilePreInitializing(ctx context.Context, node *
 		return ctrl.Result{RequeueAfter: planner.ImmediateRequeue}, nil
 	}
 
-	sc := r.buildJobSidecarClient(node)
-	if sc == nil {
-		log.FromContext(ctx).Info("pre-init job sidecar not reachable yet, will retry")
-		return ctrl.Result{RequeueAfter: planner.TaskPollInterval}, nil
-	}
-
-	result, err := r.PlanExecutor.ExecutePlan(ctx, node, plan, sc)
+	result, err := r.PlanExecutor.ExecutePlan(ctx, node, plan)
 	if err != nil {
 		return result, err
 	}
@@ -161,20 +153,6 @@ func (r *SeiNodeReconciler) ensurePreInitJob(ctx context.Context, node *seiv1alp
 		return nil, fmt.Errorf("creating pre-init job: %w", err)
 	}
 	return desired, nil
-}
-
-// buildJobSidecarClient constructs a sidecar client targeting the pre-init
-// Job's pod via hostname/subdomain DNS. Returns nil if the client can't be built.
-func (r *SeiNodeReconciler) buildJobSidecarClient(node *seiv1alpha1.SeiNode) task.SidecarClient {
-	if r.BuildSidecarClientFn != nil {
-		return r.BuildSidecarClientFn(node)
-	}
-	c, err := sidecar.NewSidecarClient(preInitSidecarURL(node))
-	if err != nil {
-		log.Log.Info("failed to build job sidecar client", "node", node.Name, "error", err)
-		return nil
-	}
-	return c
 }
 
 // isJobFailed returns true if the Job has a Failed condition.
