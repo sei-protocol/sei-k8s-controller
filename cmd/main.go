@@ -182,14 +182,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	objectStore := platform.NewS3ObjectStore()
 	controllerSA := os.Getenv("SEI_CONTROLLER_SA_PRINCIPAL")
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodegroup-controller")
+	groupPlanExecutor := &planner.Executor{
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		Platform:    platformCfg,
+		ObjectStore: objectStore,
+		BuildSidecarClient: func(
+			node *seiv1alpha1.SeiNode,
+		) (task.SidecarClient, error) {
+			return sidecar.NewSidecarClient(
+				planner.SidecarURLForNode(node),
+			)
+		},
+	}
 	if err := (&nodegroupcontroller.SeiNodeGroupReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Recorder:     recorder,
 		ControllerSA: controllerSA,
+		PlanExecutor: groupPlanExecutor,
+		ObjectStore:  objectStore,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNodeGroup")
 		os.Exit(1)

@@ -28,7 +28,7 @@ const (
 	TaskGenerateIdentity       = sidecar.TaskTypeGenerateIdentity
 	TaskGenerateGentx          = sidecar.TaskTypeGenerateGentx
 	TaskUploadGenesisArtifacts = sidecar.TaskTypeUploadGenesisArtifacts
-	TaskAwaitGenesisAssembly   = task.TaskTypeAwaitGenesisAssembly
+	TaskAssembleGenesis        = sidecar.TaskTypeAssembleGenesis
 )
 
 // baseProgression defines the ordered task sequence for each bootstrap mode.

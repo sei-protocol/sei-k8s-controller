@@ -22,7 +22,6 @@ var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
 // Controller-managed task types — the sidecar has no handlers for these.
 const (
-	TaskTypeAwaitGenesisAssembly   = "await-genesis-assembly"
 	TaskTypeDeployBootstrapSvc     = "deploy-bootstrap-service"
 	TaskTypeDeployBootstrapJob     = "deploy-bootstrap-job"
 	TaskTypeAwaitBootstrapComplete = "await-bootstrap-complete"
@@ -92,6 +91,7 @@ type ExecutionConfig struct {
 	Scheme             *runtime.Scheme
 	Node               *seiv1alpha1.SeiNode
 	Platform           platform.Config
+	ObjectStore        platform.ObjectStore
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD
@@ -127,8 +127,8 @@ func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfi
 		return deserializeSidecar[GenerateGentxParams](id, params, buildSC, false)
 	case sidecar.TaskTypeUploadGenesisArtifacts:
 		return deserializeSidecar[UploadGenesisArtifactsParams](id, params, buildSC, false)
-	case TaskTypeAwaitGenesisAssembly:
-		return deserializeAwaitGenesisAssembly(id, params)
+	case sidecar.TaskTypeAssembleGenesis:
+		return deserializeSidecar[AssembleAndUploadGenesisParams](id, params, buildSC, false)
 
 	// Controller-side bootstrap tasks
 	case TaskTypeDeployBootstrapSvc:
@@ -164,16 +164,3 @@ func deserializeSidecar[T any](id string, params json.RawMessage, buildSC func()
 	}, nil
 }
 
-func deserializeAwaitGenesisAssembly(id string, params json.RawMessage) (TaskExecution, error) {
-	var p AwaitGenesisAssemblyParams
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, fmt.Errorf("deserializing await-genesis-assembly params: %w", err)
-		}
-	}
-	return &awaitGenesisAssemblyExecution{
-		id:     id,
-		params: p,
-		status: ExecutionRunning,
-	}, nil
-}

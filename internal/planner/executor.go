@@ -15,7 +15,10 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-const TaskPollInterval = 5 * time.Second
+const (
+	TaskPollInterval = 5 * time.Second
+	maxRetryBackoff  = 30 * time.Second
+)
 
 // ResultRequeueImmediate is the idiomatic way to request an immediate
 // re-enqueue in controller-runtime without an artificial timer delay.
@@ -31,6 +34,7 @@ type Executor struct {
 	Client             client.Client
 	Scheme             *runtime.Scheme
 	Platform           platform.Config
+	ObjectStore        platform.ObjectStore
 	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
 }
 
@@ -45,9 +49,8 @@ func CurrentTask(plan *seiv1alpha1.TaskPlan) *seiv1alpha1.PlannedTask {
 	return nil
 }
 
-// ExecutePlan drives a TaskPlan one step forward. The plan pointer must
-// reference a field inside node.Status so that status patches capture
-// mutations. Returns (result, error) suitable for the reconciler.
+// ExecutePlan drives a TaskPlan one step forward for a SeiNode. This is the
+// node-specific convenience wrapper around executePlan.
 func (e *Executor) ExecutePlan(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
@@ -57,6 +60,55 @@ func (e *Executor) ExecutePlan(
 		return ctrl.Result{}, fmt.Errorf("ExecutePlan called with nil plan for node %s/%s", node.Namespace, node.Name)
 	}
 
+	cfg := task.ExecutionConfig{
+		BuildSidecarClient: func() (task.SidecarClient, error) {
+			return e.BuildSidecarClient(node)
+		},
+		KubeClient:  e.Client,
+		Scheme:      e.Scheme,
+		Node:        node,
+		Platform:    e.Platform,
+		ObjectStore: e.ObjectStore,
+	}
+
+	return e.executePlan(ctx, node, plan, cfg)
+}
+
+// ExecuteGroupPlan drives a TaskPlan one step forward for a SeiNodeGroup.
+// The assemblerNode is used to build the sidecar client for sidecar tasks.
+func (e *Executor) ExecuteGroupPlan(
+	ctx context.Context,
+	group *seiv1alpha1.SeiNodeGroup,
+	plan *seiv1alpha1.TaskPlan,
+	assemblerNode *seiv1alpha1.SeiNode,
+) (ctrl.Result, error) {
+	if plan == nil {
+		return ctrl.Result{}, fmt.Errorf("ExecuteGroupPlan called with nil plan for group %s/%s", group.Namespace, group.Name)
+	}
+
+	cfg := task.ExecutionConfig{
+		BuildSidecarClient: func() (task.SidecarClient, error) {
+			return e.BuildSidecarClient(assemblerNode)
+		},
+		KubeClient:  e.Client,
+		Scheme:      e.Scheme,
+		Node:        assemblerNode,
+		Platform:    e.Platform,
+		ObjectStore: e.ObjectStore,
+	}
+
+	return e.executePlan(ctx, group, plan, cfg)
+}
+
+// executePlan is the core plan execution loop, generic over the status-bearing
+// resource type. It deserializes the current task, polls/submits it, and
+// patches the owning object's status.
+func (e *Executor) executePlan(
+	ctx context.Context,
+	obj client.Object,
+	plan *seiv1alpha1.TaskPlan,
+	cfg task.ExecutionConfig,
+) (ctrl.Result, error) {
 	switch plan.Phase {
 	case seiv1alpha1.TaskPlanComplete, seiv1alpha1.TaskPlanFailed:
 		return ctrl.Result{}, nil
@@ -64,22 +116,12 @@ func (e *Executor) ExecutePlan(
 
 	t := CurrentTask(plan)
 	if t == nil {
-		patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 		plan.Phase = seiv1alpha1.TaskPlanComplete
-		if err := e.Client.Status().Patch(ctx, node, patch); err != nil {
+		if err := e.Client.Status().Patch(ctx, obj, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
 		}
 		return ResultRequeueImmediate, nil
-	}
-
-	cfg := task.ExecutionConfig{
-		BuildSidecarClient: func() (task.SidecarClient, error) {
-			return e.BuildSidecarClient(node)
-		},
-		KubeClient: e.Client,
-		Scheme:     e.Scheme,
-		Node:       node,
-		Platform:   e.Platform,
 	}
 
 	var paramsRaw []byte
@@ -89,7 +131,7 @@ func (e *Executor) ExecutePlan(
 
 	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, cfg)
 	if err != nil {
-		return e.failTask(ctx, node, plan, t, err.Error())
+		return e.failTask(ctx, obj, plan, t, err.Error())
 	}
 
 	status := exec.Status(ctx)
@@ -108,9 +150,9 @@ func (e *Executor) ExecutePlan(
 		return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
 
 	case task.ExecutionComplete:
-		patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 		t.Status = seiv1alpha1.PlannedTaskComplete
-		if err := e.Client.Status().Patch(ctx, node, patch); err != nil {
+		if err := e.Client.Status().Patch(ctx, obj, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking task complete: %w", err)
 		}
 		return ResultRequeueImmediate, nil
@@ -120,29 +162,73 @@ func (e *Executor) ExecutePlan(
 		if exec.Err() != nil {
 			errMsg = exec.Err().Error()
 		}
-		return e.failTask(ctx, node, plan, t, errMsg)
+		if t.MaxRetries > 0 && t.RetryCount < t.MaxRetries {
+			return e.retryTask(ctx, obj, plan, t, cfg, errMsg)
+		}
+		return e.failTask(ctx, obj, plan, t, errMsg)
 
 	default:
 		return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
 	}
 }
 
+// retryTask resets a failed task for another attempt with a new deterministic
+// ID, so the sidecar treats it as a fresh submission.
+func (e *Executor) retryTask(
+	ctx context.Context,
+	obj client.Object,
+	_ *seiv1alpha1.TaskPlan,
+	t *seiv1alpha1.PlannedTask,
+	cfg task.ExecutionConfig,
+	errMsg string,
+) (ctrl.Result, error) {
+	patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
+
+	t.RetryCount++
+	log.FromContext(ctx).Info("retrying failed task",
+		"task", t.Type, "attempt", t.RetryCount, "maxRetries", t.MaxRetries, "lastError", errMsg)
+
+	nodeName := ""
+	if cfg.Node != nil {
+		nodeName = cfg.Node.Name
+	}
+	t.ID = task.DeterministicTaskID(nodeName, t.Type, t.RetryCount)
+	t.Status = seiv1alpha1.PlannedTaskPending
+	t.Error = ""
+
+	if err := e.Client.Status().Patch(ctx, obj, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("resetting task for retry: %w", err)
+	}
+
+	backoff := retryBackoff(t.RetryCount)
+	return ctrl.Result{RequeueAfter: backoff}, nil
+}
+
 // failTask marks an individual task and the overall plan as Failed.
 func (e *Executor) failTask(
 	ctx context.Context,
-	node *seiv1alpha1.SeiNode,
+	obj client.Object,
 	plan *seiv1alpha1.TaskPlan,
 	t *seiv1alpha1.PlannedTask,
 	errMsg string,
 ) (ctrl.Result, error) {
 	log.FromContext(ctx).Error(fmt.Errorf("task failed: %s", errMsg), "task plan failed", "task", t.Type)
 
-	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 	t.Status = seiv1alpha1.PlannedTaskFailed
 	t.Error = errMsg
 	plan.Phase = seiv1alpha1.TaskPlanFailed
-	if err := e.Client.Status().Patch(ctx, node, patch); err != nil {
+	if err := e.Client.Status().Patch(ctx, obj, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("marking task failed: %w", err)
 	}
 	return ctrl.Result{}, nil
+}
+
+// retryBackoff returns an exponential backoff duration capped at maxRetryBackoff.
+func retryBackoff(attempt int) time.Duration {
+	d := TaskPollInterval * time.Duration(1<<min(attempt, 5))
+	if d > maxRetryBackoff {
+		return maxRetryBackoff
+	}
+	return d
 }
