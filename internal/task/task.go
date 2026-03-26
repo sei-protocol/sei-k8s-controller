@@ -15,6 +15,10 @@ import (
 // produce a stable, collision-free ID for each task instance.
 var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
+// TaskTypeAwaitGenesisAssembly is defined here (not in seictl) because it's a
+// controller-managed task — the sidecar has no handler for it.
+const TaskTypeAwaitGenesisAssembly = "await-genesis-assembly"
+
 // ExecutionStatus represents the lifecycle state of a task execution.
 type ExecutionStatus string
 
@@ -97,7 +101,7 @@ func Deserialize(taskType, id string, params json.RawMessage, sc SidecarClient) 
 		return deserializeSidecar[GenerateGentxParams](id, params, sc, false)
 	case sidecar.TaskTypeUploadGenesisArtifacts:
 		return deserializeSidecar[UploadGenesisArtifactsParams](id, params, sc, false)
-	case sidecar.TaskTypeAwaitGenesisAssembly:
+	case TaskTypeAwaitGenesisAssembly:
 		return deserializeAwaitGenesisAssembly(id, params)
 
 	default:

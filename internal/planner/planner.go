@@ -28,7 +28,7 @@ const (
 	TaskGenerateIdentity       = sidecar.TaskTypeGenerateIdentity
 	TaskGenerateGentx          = sidecar.TaskTypeGenerateGentx
 	TaskUploadGenesisArtifacts = sidecar.TaskTypeUploadGenesisArtifacts
-	TaskAwaitGenesisAssembly   = sidecar.TaskTypeAwaitGenesisAssembly
+	TaskAwaitGenesisAssembly   = task.TaskTypeAwaitGenesisAssembly
 )
 
 // NodePlanner encapsulates mode-specific logic for validating a SeiNode

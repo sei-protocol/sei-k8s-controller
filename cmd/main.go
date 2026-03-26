@@ -154,6 +154,7 @@ func main() {
 		platform.SnapshotRegion = v
 	}
 
+	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
 	nodeRecorder := mgr.GetEventRecorderFor("seinode-controller")
 	if err := (&nodecontroller.SeiNodeReconciler{
 		Client:       mgr.GetClient(),
