@@ -78,17 +78,9 @@ func insertBefore(prog []string, target, taskType string) []string {
 }
 
 // SnapshotSourceFor extracts the SnapshotSource from the populated mode sub-spec.
+// Deprecated: prefer node.Spec.SnapshotSource() directly.
 func SnapshotSourceFor(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotSource {
-	switch {
-	case node.Spec.FullNode != nil:
-		return node.Spec.FullNode.Snapshot
-	case node.Spec.Validator != nil:
-		return node.Spec.Validator.Snapshot
-	case node.Spec.Replayer != nil:
-		return &node.Spec.Replayer.Snapshot
-	default:
-		return nil
-	}
+	return node.Spec.SnapshotSource()
 }
 
 // PeersFor extracts the PeerSource list from whichever node mode is set.
@@ -183,10 +175,12 @@ func sidecarPortForNode(node *seiv1alpha1.SeiNode) int32 {
 }
 
 // marshalParams serializes a task params struct to apiextensionsv1.JSON.
+// Panics on marshal failure since all param types are simple structs with
+// json tags — a failure here indicates a programming error.
 func marshalParams(v any) *apiextensionsv1.JSON {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return nil
+		panic(fmt.Sprintf("marshalParams: failed to marshal %T: %v", v, err))
 	}
 	return &apiextensionsv1.JSON{Raw: raw}
 }

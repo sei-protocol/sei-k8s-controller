@@ -9,8 +9,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-
-	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 // DeployBootstrapJobParams holds the serialized parameters for the
@@ -45,7 +43,7 @@ func deserializeBootstrapJob(id string, params json.RawMessage, cfg ExecutionCon
 
 func (e *deployBootstrapJobExecution) Execute(ctx context.Context) error {
 	node := e.cfg.Node
-	snap := snapshotSourceFor(node)
+	snap := node.Spec.SnapshotSource()
 	job, err := GenerateBootstrapJob(node, snap, e.cfg.Platform)
 	if err != nil {
 		return fmt.Errorf("generating bootstrap job spec: %w", err)
@@ -77,18 +75,3 @@ func (e *deployBootstrapJobExecution) Status(ctx context.Context) ExecutionStatu
 }
 
 func (e *deployBootstrapJobExecution) Err() error { return e.err }
-
-// snapshotSourceFor extracts the SnapshotSource from the node spec.
-// Duplicated here to avoid importing internal/planner.
-func snapshotSourceFor(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotSource {
-	switch {
-	case node.Spec.FullNode != nil:
-		return node.Spec.FullNode.Snapshot
-	case node.Spec.Validator != nil:
-		return node.Spec.Validator.Snapshot
-	case node.Spec.Replayer != nil:
-		return &node.Spec.Replayer.Snapshot
-	default:
-		return nil
-	}
-}

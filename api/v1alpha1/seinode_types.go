@@ -70,6 +70,21 @@ type SeiNodeSpec struct {
 	Validator *ValidatorSpec `json:"validator,omitempty"`
 }
 
+// SnapshotSource returns the SnapshotSource from whichever mode sub-spec is
+// populated, or nil if no snapshot is configured.
+func (s *SeiNodeSpec) SnapshotSource() *SnapshotSource {
+	switch {
+	case s.FullNode != nil:
+		return s.FullNode.Snapshot
+	case s.Validator != nil:
+		return s.Validator.Snapshot
+	case s.Replayer != nil:
+		return &s.Replayer.Snapshot
+	default:
+		return nil
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------

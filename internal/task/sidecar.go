@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // taskParamser is implemented by param structs that know how to convert
@@ -80,8 +81,11 @@ func (e *sidecarExecution[T]) Status(ctx context.Context) ExecutionStatus {
 		return e.status
 	}
 
+	logger := log.FromContext(ctx)
+
 	sc, err := e.ensureClient()
 	if err != nil {
+		logger.V(1).Info("sidecar client not ready, will retry", "task", e.id, "error", err)
 		return ExecutionRunning
 	}
 
@@ -97,6 +101,7 @@ func (e *sidecarExecution[T]) Status(ctx context.Context) ExecutionStatus {
 		if errors.Is(err, sidecar.ErrNotFound) {
 			return ExecutionRunning
 		}
+		logger.Info("sidecar GetTask error, will retry", "task", e.id, "error", err)
 		return e.status
 	}
 
