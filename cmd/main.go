@@ -22,6 +22,7 @@ import (
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
 	nodegroupcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodegroup"
 	nodepoolcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodepool"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
@@ -116,45 +117,45 @@ func main() {
 		os.Exit(1)
 	}
 
-	platform := nodecontroller.DefaultPlatformConfig()
+	platformCfg := platform.DefaultConfig()
 	if v := os.Getenv("SEI_NODEPOOL_NAME"); v != "" {
-		platform.NodepoolName = v
+		platformCfg.NodepoolName = v
 	}
 	if v := os.Getenv("SEI_TOLERATION_KEY"); v != "" {
-		platform.TolerationKey = v
+		platformCfg.TolerationKey = v
 	}
 	if v := os.Getenv("SEI_TOLERATION_VALUE"); v != "" {
-		platform.TolerationVal = v
+		platformCfg.TolerationVal = v
 	}
 	if v := os.Getenv("SEI_SERVICE_ACCOUNT"); v != "" {
-		platform.ServiceAccount = v
+		platformCfg.ServiceAccount = v
 	}
 	if v := os.Getenv("SEI_STORAGE_CLASS_PERF"); v != "" {
-		platform.StorageClassPerf = v
+		platformCfg.StorageClassPerf = v
 	}
 	if v := os.Getenv("SEI_STORAGE_CLASS_DEFAULT"); v != "" {
-		platform.StorageClassDefault = v
+		platformCfg.StorageClassDefault = v
 	}
 	if v := os.Getenv("SEI_STORAGE_SIZE_DEFAULT"); v != "" {
-		platform.StorageSizeDefault = v
+		platformCfg.StorageSizeDefault = v
 	}
 	if v := os.Getenv("SEI_STORAGE_SIZE_ARCHIVE"); v != "" {
-		platform.StorageSizeArchive = v
+		platformCfg.StorageSizeArchive = v
 	}
 	if v := os.Getenv("SEI_RESOURCE_CPU_ARCHIVE"); v != "" {
-		platform.ResourceCPUArchive = v
+		platformCfg.ResourceCPUArchive = v
 	}
 	if v := os.Getenv("SEI_RESOURCE_MEM_ARCHIVE"); v != "" {
-		platform.ResourceMemArchive = v
+		platformCfg.ResourceMemArchive = v
 	}
 	if v := os.Getenv("SEI_RESOURCE_CPU_DEFAULT"); v != "" {
-		platform.ResourceCPUDefault = v
+		platformCfg.ResourceCPUDefault = v
 	}
 	if v := os.Getenv("SEI_RESOURCE_MEM_DEFAULT"); v != "" {
-		platform.ResourceMemDefault = v
+		platformCfg.ResourceMemDefault = v
 	}
 	if v := os.Getenv("SEI_SNAPSHOT_REGION"); v != "" {
-		platform.SnapshotRegion = v
+		platformCfg.SnapshotRegion = v
 	}
 
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
@@ -163,14 +164,16 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: nodeRecorder,
-		Platform: platform,
+		Platform: platformCfg,
 		PlanExecutor: &planner.Executor{
-			Client: mgr.GetClient(),
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Platform: platformCfg,
 			BuildSidecarClient: func(
 				node *seiv1alpha1.SeiNode,
 			) (task.SidecarClient, error) {
 				return sidecar.NewSidecarClient(
-					planner.SidecarURLForPhase(node),
+					planner.SidecarURLForNode(node),
 				)
 			},
 		},

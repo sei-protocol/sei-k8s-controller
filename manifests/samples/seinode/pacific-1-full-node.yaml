@@ -1,7 +1,7 @@
 # SeiNode — Pacific-1 Full Node
 #
 # A chain-following full node that bootstraps from an S3 snapshot via
-# a PreInit Job, then block-syncs to tip. Exposes RPC for queries.
+# a bootstrap Job, then block-syncs to tip. Exposes RPC for queries.
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:

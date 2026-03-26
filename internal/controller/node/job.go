@@ -14,23 +14,23 @@ import (
 )
 
 const (
-	preInitTerminationGracePeriod = int64(120)
-	preInitPodHostname            = "seid"
+	bootstrapTerminationGracePeriod = int64(120)
+	bootstrapPodHostname            = "seid"
 )
 
-func preInitJobName(node *seiv1alpha1.SeiNode) string {
+func bootstrapJobName(node *seiv1alpha1.SeiNode) string {
 	return fmt.Sprintf("%s-pre-init", node.Name)
 }
 
-func generatePreInitJob(node *seiv1alpha1.SeiNode, platform PlatformConfig) *batchv1.Job {
-	labels := preInitLabelsForNode(node)
+func generateBootstrapJob(node *seiv1alpha1.SeiNode, platform PlatformConfig) *batchv1.Job {
+	labels := bootstrapLabelsForNode(node)
 
 	snap := planner.SnapshotSourceFor(node)
-	podSpec := buildPreInitPodSpec(node, snap, platform)
+	podSpec := buildBootstrapPodSpec(node, snap, platform)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      preInitJobName(node),
+			Name:      bootstrapJobName(node),
 			Namespace: node.Namespace,
 			Labels:    labels,
 		},
@@ -50,15 +50,15 @@ func generatePreInitJob(node *seiv1alpha1.SeiNode, platform PlatformConfig) *bat
 	}
 }
 
-// generatePreInitService creates a headless Service that enables pod DNS
-// resolution for the pre-init Job. The Job pod uses hostname/subdomain to
+// generateBootstrapService creates a headless Service that enables pod DNS
+// resolution for the bootstrap Job. The Job pod uses hostname/subdomain to
 // register as <hostname>.<service-name>.<namespace>.svc.cluster.local.
-func generatePreInitService(node *seiv1alpha1.SeiNode) *corev1.Service {
-	labels := preInitLabelsForNode(node)
+func generateBootstrapService(node *seiv1alpha1.SeiNode) *corev1.Service {
+	labels := bootstrapLabelsForNode(node)
 	port := sidecarPort(node)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      preInitJobName(node),
+			Name:      bootstrapJobName(node),
 			Namespace: node.Namespace,
 			Labels:    labels,
 		},
@@ -73,27 +73,27 @@ func generatePreInitService(node *seiv1alpha1.SeiNode) *corev1.Service {
 	}
 }
 
-// preInitSidecarURL returns the in-cluster DNS URL for the pre-init Job's sidecar.
-func preInitSidecarURL(node *seiv1alpha1.SeiNode) string {
-	return PreInitSidecarURL(node.Name, node.Namespace, sidecarPort(node))
+// bootstrapSidecarURL returns the in-cluster DNS URL for the bootstrap Job's sidecar.
+func bootstrapSidecarURL(node *seiv1alpha1.SeiNode) string {
+	return BootstrapSidecarURL(node.Name, node.Namespace, sidecarPort(node))
 }
 
-// PreInitSidecarURL builds the in-cluster DNS URL for a pre-init Job's sidecar
+// BootstrapSidecarURL builds the in-cluster DNS URL for a bootstrap Job's sidecar
 // given the node name, namespace, and port. Exported for use by the group controller.
-func PreInitSidecarURL(nodeName, namespace string, port int32) string {
+func BootstrapSidecarURL(nodeName, namespace string, port int32) string {
 	jobName := fmt.Sprintf("%s-pre-init", nodeName)
 	return fmt.Sprintf("http://%s.%s.%s.svc.cluster.local:%d",
-		preInitPodHostname, jobName, namespace, port)
+		bootstrapPodHostname, jobName, namespace, port)
 }
 
-// preInitWaitCommand returns a shell command that waits for the sidecar
+// bootstrapWaitCommand returns a shell command that waits for the sidecar
 // healthz to return 200 and then exec's seid with --halt-height.
 //
 // The bootstrap image's seid uses the Cosmos SDK halt-height mechanism:
 // after committing the block at haltHeight, seid sends itself SIGINT and
 // exits 0. This avoids the need for the sidecar to kill seid externally
 // and keeps the Job exit code clean without wrapper tricks.
-func preInitWaitCommand(port int32, haltHeight int64) (command []string, args []string) {
+func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args []string) {
 	script := fmt.Sprintf(
 		`echo "waiting for sidecar to become ready..."; `+
 			`while true; do `+
@@ -109,8 +109,8 @@ func preInitWaitCommand(port int32, haltHeight int64) (command []string, args []
 	return []string{"/bin/bash", "-c"}, []string{script}
 }
 
-func buildPreInitPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSource, platform PlatformConfig) corev1.PodSpec {
-	serviceName := preInitJobName(node)
+func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSource, platform PlatformConfig) corev1.PodSpec {
+	serviceName := bootstrapJobName(node)
 
 	dataVolume := corev1.Volume{
 		Name: "data",
@@ -149,7 +149,7 @@ func buildPreInitPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSo
 	}
 
 	haltHeight := snap.S3.TargetHeight
-	seidCmd, seidArgs := preInitWaitCommand(sidecarPort(node), haltHeight)
+	seidCmd, seidArgs := bootstrapWaitCommand(sidecarPort(node), haltHeight)
 	seidContainer := corev1.Container{
 		Name:    "seid",
 		Image:   bootstrapImage,
@@ -168,12 +168,12 @@ func buildPreInitPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSo
 	seidInit.Image = bootstrapImage
 
 	return corev1.PodSpec{
-		Hostname:                      preInitPodHostname,
+		Hostname:                      bootstrapPodHostname,
 		Subdomain:                     serviceName,
 		ServiceAccountName:            platform.ServiceAccount,
 		ShareProcessNamespace:         ptr.To(true),
 		RestartPolicy:                 corev1.RestartPolicyNever,
-		TerminationGracePeriodSeconds: ptr.To(preInitTerminationGracePeriod),
+		TerminationGracePeriodSeconds: ptr.To(bootstrapTerminationGracePeriod),
 		Tolerations: []corev1.Toleration{
 			{Key: platform.TolerationKey, Value: platform.TolerationVal, Effect: corev1.TaintEffectNoSchedule},
 		},

@@ -33,10 +33,14 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
-	return buildBasePlan(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, p.snapshotRegion, &task.ConfigApplyParams{
+	params := &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeFull),
 		Overrides: mergeOverrides(p.controllerOverrides(), node.Spec.Overrides),
-	})
+	}
+	if NeedsBootstrap(node) {
+		return buildBootstrapPlan(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, p.snapshotRegion, params)
+	}
+	return buildBasePlan(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, p.snapshotRegion, params)
 }
 
 func (p *replayerPlanner) controllerOverrides() map[string]string {

@@ -41,8 +41,12 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	v := node.Spec.Validator
-	return buildBasePlan(node, v.Peers, v.Snapshot, p.snapshotRegion, &task.ConfigApplyParams{
+	params := &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeValidator),
 		Overrides: mergeOverrides(nil, node.Spec.Overrides),
-	})
+	}
+	if NeedsBootstrap(node) {
+		return buildBootstrapPlan(node, v.Peers, v.Snapshot, p.snapshotRegion, params)
+	}
+	return buildBasePlan(node, v.Peers, v.Snapshot, p.snapshotRegion, params)
 }

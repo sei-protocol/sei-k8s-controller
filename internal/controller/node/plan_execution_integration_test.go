@@ -75,7 +75,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	node = fetch()
 	g.Expect(node.Status.InitPlan).NotTo(BeNil())
-	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhasePreInitializing))
+	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhaseInitializing))
 
 	ct := planner.CurrentTask(node.Status.InitPlan)
 	g.Expect(ct).NotTo(BeNil())

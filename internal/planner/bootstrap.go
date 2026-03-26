@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"slices"
 
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
@@ -17,34 +18,99 @@ const (
 	resultExportPrefix        = "shadow-results/"
 )
 
-// BuildPreInitPlan constructs the task plan for the PreInit Job. For
-// snapshot-bootstrap nodes, it builds the standard bootstrap sequence. For
-// all other nodes it returns an empty plan that resolves trivially.
-func BuildPreInitPlan(node *seiv1alpha1.SeiNode, planner NodePlanner) *seiv1alpha1.TaskPlan {
-	if !NeedsPreInit(node) {
-		return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: []seiv1alpha1.PlannedTask{}}
+// buildBootstrapPlan constructs a unified InitPlan for nodes that need a
+// bootstrap Job. The plan includes controller-side tasks for
+// Job/Service lifecycle, sidecar tasks that run on the bootstrap pod, and
+// post-bootstrap config tasks that run on the production StatefulSet pod.
+func buildBootstrapPlan(
+	node *seiv1alpha1.SeiNode,
+	peers []seiv1alpha1.PeerSource,
+	snap *seiv1alpha1.SnapshotSource,
+	snapshotRegion string,
+	configApplyParams *task.ConfigApplyParams,
+) *seiv1alpha1.TaskPlan {
+	attempts := map[string]int{}
+	nextAttempt := func(taskType string) int {
+		a := attempts[taskType]
+		attempts[taskType] = a + 1
+		return a
 	}
-	return planner.BuildPlan(node)
+
+	jobName := task.BootstrapJobName(node)
+	serviceName := node.Name
+
+	var tasks []seiv1alpha1.PlannedTask
+
+	// Phase 1: Deploy bootstrap infrastructure
+	tasks = append(tasks, buildPlannedTask(node, task.TaskTypeDeployBootstrapSvc, nextAttempt(task.TaskTypeDeployBootstrapSvc),
+		&task.DeployBootstrapServiceParams{ServiceName: serviceName, Namespace: node.Namespace}))
+	tasks = append(tasks, buildPlannedTask(node, task.TaskTypeDeployBootstrapJob, nextAttempt(task.TaskTypeDeployBootstrapJob),
+		&task.DeployBootstrapJobParams{JobName: jobName, Namespace: node.Namespace}))
+
+	// Phase 2: Sidecar tasks on bootstrap pod (same progression as base, minus mark-ready)
+	bootstrapProg := buildBootstrapProgression(peers, snap)
+	for _, taskType := range bootstrapProg {
+		tasks = append(tasks, buildPlannedTask(node, taskType, nextAttempt(taskType),
+			paramsForTaskType(node, taskType, peers, snap, snapshotRegion, configApplyParams)))
+	}
+
+	// Phase 3: Wait for seid to reach halt-height, then tear down
+	tasks = append(tasks, buildPlannedTask(node, task.TaskTypeAwaitBootstrapComplete, nextAttempt(task.TaskTypeAwaitBootstrapComplete),
+		&task.AwaitBootstrapCompleteParams{JobName: jobName, Namespace: node.Namespace}))
+	tasks = append(tasks, buildPlannedTask(node, task.TaskTypeTeardownBootstrap, nextAttempt(task.TaskTypeTeardownBootstrap),
+		&task.TeardownBootstrapParams{JobName: jobName, ServiceName: serviceName, Namespace: node.Namespace}))
+
+	// Phase 4: Post-bootstrap config on StatefulSet pod
+	postProg := buildPostBootstrapProgression(peers)
+	for _, taskType := range postProg {
+		tasks = append(tasks, buildPlannedTask(node, taskType, nextAttempt(taskType),
+			paramsForTaskType(node, taskType, peers, nil, "", configApplyParams)))
+	}
+
+	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}
 }
 
-// BuildPostBootstrapInitPlan constructs a reduced InitPlan for nodes that
-// completed a PreInit Job. The PVC already contains blockchain data synced
-// to the target height.
-func BuildPostBootstrapInitPlan(node *seiv1alpha1.SeiNode, configApplyParams *task.ConfigApplyParams) *seiv1alpha1.TaskPlan {
-	peers := PeersFor(node)
-	attempt := 0
+// buildBootstrapProgression returns the sidecar task sequence for the
+// bootstrap Job phase (everything except mark-ready).
+func buildBootstrapProgression(peers []seiv1alpha1.PeerSource, snap *seiv1alpha1.SnapshotSource) []string {
+	mode := bootstrapMode(snap)
+	prog := slices.Clone(baseProgression[mode])
 
+	prog = insertBefore(prog, TaskConfigApply, TaskConfigureGenesis)
+	if len(peers) > 0 {
+		prog = insertBefore(prog, TaskConfigValidate, TaskDiscoverPeers)
+	}
+	if snap != nil {
+		prog = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync)
+	}
+
+	// Remove mark-ready — the bootstrap pod isn't the production pod
+	return slices.DeleteFunc(prog, func(t string) bool { return t == TaskMarkReady })
+}
+
+// buildPostBootstrapProgression returns the sidecar task sequence for the
+// production StatefulSet after bootstrap teardown.
+func buildPostBootstrapProgression(peers []seiv1alpha1.PeerSource) []string {
 	prog := []string{TaskConfigureGenesis, TaskConfigApply}
 	if len(peers) > 0 {
 		prog = append(prog, TaskDiscoverPeers)
 	}
 	prog = append(prog, TaskConfigValidate, TaskMarkReady)
+	return prog
+}
 
-	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
-	for i, taskType := range prog {
-		tasks[i] = buildPlannedTask(node, taskType, attempt, paramsForTaskType(node, taskType, peers, nil, "", configApplyParams))
+// IsBootstrapComplete checks whether the teardown-bootstrap task in a plan
+// is marked Complete, indicating bootstrap infrastructure has been removed.
+func IsBootstrapComplete(plan *seiv1alpha1.TaskPlan) bool {
+	if plan == nil {
+		return false
 	}
-	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}
+	for _, t := range plan.Tasks {
+		if t.Type == task.TaskTypeTeardownBootstrap {
+			return t.Status == seiv1alpha1.PlannedTaskComplete
+		}
+	}
+	return true
 }
 
 // BuildGenesisInitPlan constructs the full Init plan for genesis ceremony

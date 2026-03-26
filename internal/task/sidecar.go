@@ -17,9 +17,12 @@ type taskParamser interface {
 }
 
 // sidecarExecution is a generic TaskExecution backed by the sidecar HTTP API.
-// T is the typed params struct. For fire-and-forget tasks (e.g., mark-ready,
-// config-validate), Execute succeeds and Status immediately returns Complete.
+// T is the typed params struct. The sidecar client is constructed lazily via
+// buildSC on first use, allowing the executor to remain task-type-agnostic.
+// For fire-and-forget tasks (e.g., mark-ready, config-validate), Execute
+// succeeds and Status immediately returns Complete.
 type sidecarExecution[T any] struct {
+	buildSC       func() (SidecarClient, error)
 	sc            SidecarClient
 	id            string
 	params        T
@@ -28,7 +31,25 @@ type sidecarExecution[T any] struct {
 	err           error
 }
 
+// ensureClient lazily constructs the sidecar client, caching it for reuse.
+func (e *sidecarExecution[T]) ensureClient() (SidecarClient, error) {
+	if e.sc != nil {
+		return e.sc, nil
+	}
+	sc, err := e.buildSC()
+	if err != nil {
+		return nil, err
+	}
+	e.sc = sc
+	return sc, nil
+}
+
 func (e *sidecarExecution[T]) Execute(ctx context.Context) error {
+	sc, err := e.ensureClient()
+	if err != nil {
+		return fmt.Errorf("building sidecar client: %w", err)
+	}
+
 	p, ok := any(&e.params).(taskParamser)
 	if !ok {
 		return fmt.Errorf("params type %T does not implement taskParamser", e.params)
@@ -39,7 +60,7 @@ func (e *sidecarExecution[T]) Execute(ctx context.Context) error {
 		Params: p.toRequestParams(),
 	}
 
-	_, err := e.sc.SubmitTask(ctx, req)
+	_, err = sc.SubmitTask(ctx, req)
 	if err != nil {
 		e.status = ExecutionFailed
 		e.err = fmt.Errorf("submitting %s: %w", req.Type, err)
@@ -59,6 +80,11 @@ func (e *sidecarExecution[T]) Status(ctx context.Context) ExecutionStatus {
 		return e.status
 	}
 
+	sc, err := e.ensureClient()
+	if err != nil {
+		return ExecutionRunning
+	}
+
 	taskID, err := uuid.Parse(e.id)
 	if err != nil {
 		e.status = ExecutionFailed
@@ -66,7 +92,7 @@ func (e *sidecarExecution[T]) Status(ctx context.Context) ExecutionStatus {
 		return e.status
 	}
 
-	result, err := e.sc.GetTask(ctx, taskID)
+	result, err := sc.GetTask(ctx, taskID)
 	if err != nil {
 		if errors.Is(err, sidecar.ErrNotFound) {
 			return ExecutionRunning

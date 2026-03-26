@@ -119,7 +119,7 @@ func setNodesReadyCondition(group *seiv1alpha1.SeiNodeGroup, ready, desired int3
 			switch nodes[i].Status.Phase {
 			case seiv1alpha1.PhaseFailed:
 				failed++
-			case seiv1alpha1.PhasePending, seiv1alpha1.PhasePreInitializing, seiv1alpha1.PhaseInitializing:
+			case seiv1alpha1.PhasePending, seiv1alpha1.PhaseInitializing:
 				initializing++
 			}
 		}

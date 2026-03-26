@@ -686,7 +686,7 @@ func TestPlannerForNode_NoSubSpec(t *testing.T) {
 
 // --- Phase transition tests ---
 
-func TestReconcilePending_NoBootstrap_SetsPreInitializingWithEmptyPlan(t *testing.T) {
+func TestReconcilePending_NoBootstrap_SetsInitializingWithPlan(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
 	r, c := newProgressionReconciler(t, mock, node)
@@ -701,21 +701,15 @@ func TestReconcilePending_NoBootstrap_SetsPreInitializingWithEmptyPlan(t *testin
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Phase != seiv1alpha1.PhasePreInitializing {
-		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhasePreInitializing)
+	if updated.Status.Phase != seiv1alpha1.PhaseInitializing {
+		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseInitializing)
 	}
 	if updated.Status.InitPlan == nil {
 		t.Fatal("expected InitPlan to be created")
 	}
-	if updated.Status.PreInitPlan == nil {
-		t.Fatal("expected PreInitPlan to be created (empty)")
-	}
-	if len(updated.Status.PreInitPlan.Tasks) != 0 {
-		t.Errorf("expected empty PreInitPlan tasks, got %d", len(updated.Status.PreInitPlan.Tasks))
-	}
 }
 
-func TestReconcilePending_WithBootstrap_SetsPreInitializing(t *testing.T) {
+func TestReconcilePending_WithBootstrap_SetsInitializing(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := replayerNode()
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImage
@@ -731,11 +725,8 @@ func TestReconcilePending_WithBootstrap_SetsPreInitializing(t *testing.T) {
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Phase != seiv1alpha1.PhasePreInitializing {
-		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhasePreInitializing)
-	}
-	if updated.Status.PreInitPlan == nil {
-		t.Fatal("expected PreInitPlan to be created")
+	if updated.Status.Phase != seiv1alpha1.PhaseInitializing {
+		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseInitializing)
 	}
 	if updated.Status.InitPlan == nil {
 		t.Fatal("expected InitPlan to be created")
@@ -855,7 +846,7 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 	}
 }
 
-// --- Pre-init flow tests ---
+// --- Bootstrap helpers ---
 
 func bootstrapReplayerNode() *seiv1alpha1.SeiNode {
 	n := replayerNode()
@@ -863,107 +854,9 @@ func bootstrapReplayerNode() *seiv1alpha1.SeiNode {
 	return n
 }
 
-func TestReconcilePreInitializing_EmptyPlan_TransitionsToInitializing(t *testing.T) {
-	mock := &mockSidecarClient{}
-	node := snapshotNode()
-	node.Status.Phase = seiv1alpha1.PhasePreInitializing
-	node.Status.PreInitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
+// --- NeedsBootstrap tests ---
 
-	r, c := newProgressionReconciler(t, mock, node)
-	p, _ := planner.ForNode(node, testSnapshotRegion)
-
-	result, err := r.reconcilePreInitializing(context.Background(), node, p)
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if result.RequeueAfter == 0 {
-		t.Error("expected requeue after marking empty plan complete")
-	}
-
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.PreInitPlan.Phase != seiv1alpha1.TaskPlanComplete {
-		t.Errorf("PreInitPlan.Phase = %q, want Complete", updated.Status.PreInitPlan.Phase)
-	}
-
-	result, err = r.reconcilePreInitializing(context.Background(), updated, p)
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if result.RequeueAfter == 0 {
-		t.Error("expected requeue after phase transition")
-	}
-
-	updated = fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Phase != seiv1alpha1.PhaseInitializing {
-		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseInitializing)
-	}
-
-	if len(mock.submitted) != 0 {
-		t.Errorf("expected no tasks submitted for empty plan, got %d", len(mock.submitted))
-	}
-}
-
-func TestReconcilePreInitializing_PlanComplete_CleansUpAndTransitions(t *testing.T) {
-	mock := &mockSidecarClient{}
-	node := bootstrapReplayerNode()
-	node.Status.Phase = seiv1alpha1.PhasePreInitializing
-	node.Status.PreInitPlan = &seiv1alpha1.TaskPlan{
-		Phase: seiv1alpha1.TaskPlanComplete,
-	}
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
-
-	r, c := newProgressionReconciler(t, mock, node)
-
-	svc := generatePreInitService(node)
-	if err := c.Create(context.Background(), svc); err != nil {
-		t.Fatalf("creating service: %v", err)
-	}
-
-	p, _ := planner.ForNode(node, testSnapshotRegion)
-	result, err := r.reconcilePreInitializing(context.Background(), node, p)
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if result.RequeueAfter == 0 {
-		t.Error("expected requeue after plan complete")
-	}
-
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Phase != seiv1alpha1.PhaseInitializing {
-		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseInitializing)
-	}
-}
-
-func TestReconcilePreInitializing_PlanFailed_CleansUpAndFails(t *testing.T) {
-	mock := &mockSidecarClient{}
-	node := bootstrapReplayerNode()
-	node.Status.Phase = seiv1alpha1.PhasePreInitializing
-	node.Status.PreInitPlan = &seiv1alpha1.TaskPlan{
-		Phase: seiv1alpha1.TaskPlanFailed,
-	}
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
-
-	r, c := newProgressionReconciler(t, mock, node)
-
-	p, _ := planner.ForNode(node, testSnapshotRegion)
-	result, err := r.reconcilePreInitializing(context.Background(), node, p)
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if result.RequeueAfter == 0 {
-		t.Error("expected requeue after plan failed")
-	}
-
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Phase != seiv1alpha1.PhaseFailed {
-		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseFailed)
-	}
-}
-
-// --- NeedsPreInit tests ---
-
-func TestNeedsPreInit(t *testing.T) {
+func TestNeedsBootstrap(t *testing.T) {
 	tests := []struct {
 		name string
 		node *seiv1alpha1.SeiNode
@@ -976,8 +869,8 @@ func TestNeedsPreInit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := planner.NeedsPreInit(tt.node); got != tt.want {
-				t.Errorf("NeedsPreInit() = %v, want %v", got, tt.want)
+			if got := planner.NeedsBootstrap(tt.node); got != tt.want {
+				t.Errorf("NeedsBootstrap() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -985,10 +878,10 @@ func TestNeedsPreInit(t *testing.T) {
 
 // --- Job builder tests ---
 
-func TestGeneratePreInitJob(t *testing.T) {
+func TestGenerateBootstrapJob(t *testing.T) {
 	node := replayerNode()
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
-	job := generatePreInitJob(node, DefaultPlatformConfig())
+	job := generateBootstrapJob(node, DefaultPlatformConfig())
 
 	if job.Name != "test-replayer-pre-init" {
 		t.Errorf("Job name = %q, want %q", job.Name, "test-replayer-pre-init")
@@ -1003,7 +896,7 @@ func TestGeneratePreInitJob(t *testing.T) {
 	}
 }
 
-func TestGeneratePreInitJob_SidecarResources(t *testing.T) {
+func TestGenerateBootstrapJob_SidecarResources(t *testing.T) {
 	node := replayerNode()
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{
@@ -1014,7 +907,7 @@ func TestGeneratePreInitJob_SidecarResources(t *testing.T) {
 			},
 		},
 	}
-	job := generatePreInitJob(node, DefaultPlatformConfig())
+	job := generateBootstrapJob(node, DefaultPlatformConfig())
 	spec := job.Spec.Template.Spec
 
 	sc := spec.InitContainers[1]
@@ -1024,12 +917,12 @@ func TestGeneratePreInitJob_SidecarResources(t *testing.T) {
 	}
 }
 
-func TestPreInitSidecarURL(t *testing.T) {
+func TestBootstrapSidecarURL(t *testing.T) {
 	node := replayerNode()
-	got := preInitSidecarURL(node)
+	got := bootstrapSidecarURL(node)
 	want := "http://seid.test-replayer-pre-init.default.svc.cluster.local:7777"
 	if got != want {
-		t.Errorf("preInitSidecarURL() = %q, want %q", got, want)
+		t.Errorf("bootstrapSidecarURL() = %q, want %q", got, want)
 	}
 }
 

@@ -69,6 +69,85 @@ spec:
                 - Delete
                 - Retain
                 type: string
+              genesis:
+                description: |-
+                  Genesis configures genesis ceremony orchestration for this group.
+                  When set, the controller generates GenesisCeremonyNodeConfig for each
+                  child SeiNode and coordinates assembly of the final genesis.json.
+                properties:
+                  accountBalance:
+                    default: 1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom
+                    description: AccountBalance is the initial balance for each validator's
+                      genesis account.
+                    type: string
+                  accounts:
+                    description: Accounts adds non-validator genesis accounts (e.g.
+                      for load test funding).
+                    items:
+                      description: GenesisAccount represents a non-validator genesis
+                        account to fund.
+                      properties:
+                        address:
+                          description: Address is the bech32-encoded account address.
+                          minLength: 1
+                          type: string
+                        balance:
+                          description: Balance is the initial balance in coin notation
+                            (e.g. "1000000usei").
+                          minLength: 1
+                          type: string
+                      required:
+                      - address
+                      - balance
+                      type: object
+                    type: array
+                  chainId:
+                    description: ChainID for the new network.
+                    maxLength: 64
+                    minLength: 1
+                    pattern: ^[a-z0-9][a-z0-9-]*[a-z0-9]$
+                    type: string
+                  genesisS3:
+                    description: |-
+                      GenesisS3 configures where genesis artifacts are stored.
+                      When omitted, inferred: bucket = "sei-genesis-artifacts",
+                      prefix = "<chainId>/<group-name>/", region from PlatformConfig.
+                    properties:
+                      bucket:
+                        description: Bucket is the S3 bucket name.
+                        minLength: 1
+                        type: string
+                      prefix:
+                        description: Prefix is an optional key prefix within the bucket.
+                        type: string
+                      region:
+                        description: Region is the AWS region for S3 access.
+                        minLength: 1
+                        type: string
+                    required:
+                    - bucket
+                    - region
+                    type: object
+                  maxCeremonyDuration:
+                    description: |-
+                      MaxCeremonyDuration is the maximum time from group creation to genesis
+                      assembly completion. Default: "15m".
+                    type: string
+                  overrides:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Overrides is a flat map of dotted key paths merged on top of sei-config's
+                      GenesisDefaults(). Applied BEFORE gentx generation.
+                    type: object
+                  stakingAmount:
+                    default: 10000000usei
+                    description: StakingAmount is the amount each validator self-delegates
+                      in its gentx.
+                    type: string
+                required:
+                - chainId
+                type: object
               monitoring:
                 description: |-
                   Monitoring configures observability resources shared across
@@ -134,74 +213,6 @@ spec:
                     - hostnames
                     - parentRef
                     type: object
-                  ingress:
-                    description: Ingress creates a networking.k8s.io/v1 Ingress resource.
-                    properties:
-                      annotations:
-                        additionalProperties:
-                          type: string
-                        description: Annotations are merged onto the Ingress metadata.
-                        type: object
-                      className:
-                        description: ClassName is the IngressClass (e.g. "alb", "nginx").
-                        type: string
-                      host:
-                        description: Host is the DNS hostname for the Ingress rule.
-                        minLength: 1
-                        type: string
-                      paths:
-                        description: |-
-                          Paths defines routing rules. When empty, "/" routes to the
-                          first Service port.
-                        items:
-                          description: IngressPath maps a URL path to a Service port.
-                          properties:
-                            path:
-                              minLength: 1
-                              type: string
-                            pathType:
-                              default: Prefix
-                              description: PathType represents the type of path referred
-                                to by a HTTPIngressPath.
-                              type: string
-                            portName:
-                              description: |-
-                                PortName is a well-known sei-node port identifier from sei-config.
-                                Values must match the Name field of seiconfig.NodePorts().
-                              enum:
-                              - rpc
-                              - evm-rpc
-                              - evm-ws
-                              - grpc
-                              - p2p
-                              - metrics
-                              type: string
-                          required:
-                          - path
-                          - portName
-                          type: object
-                        type: array
-                      tls:
-                        description: TLS configures TLS termination.
-                        properties:
-                          enabled:
-                            default: true
-                            description: Enabled controls whether TLS is configured.
-                            type: boolean
-                          secretName:
-                            description: |-
-                              SecretName references a TLS Secret. When omitted, the
-                              IngressClass default is used (e.g. ACM for ALB).
-                            type: string
-                        required:
-                        - enabled
-                        type: object
-                    required:
-                    - host
-                    type: object
-                    x-kubernetes-validations:
-                    - message: tls requires className to be set
-                      rule: '!has(self.tls) || !self.tls.enabled || has(self.className)'
                   isolation:
                     description: Isolation configures network-level access control
                       for node pods.
@@ -271,6 +282,7 @@ spec:
                           - metrics
                           type: string
                         type: array
+                        x-kubernetes-list-type: set
                       type:
                         default: ClusterIP
                         description: Type is the Kubernetes Service type.
@@ -282,12 +294,8 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-validations:
-                - message: ingress requires service to be configured
-                  rule: '!has(self.ingress) || has(self.service)'
                 - message: gateway requires service to be configured
                   rule: '!has(self.gateway) || has(self.service)'
-                - message: only one of ingress or gateway may be set
-                  rule: '!(has(self.ingress) && has(self.gateway))'
               replicas:
                 default: 1
                 description: Replicas is the number of SeiNode instances to create.
@@ -506,7 +514,7 @@ spec:
                                 type: integer
                               bootstrapImage:
                                 description: |-
-                                  BootstrapImage is a seid container image used for the PreInitPlan Job.
+                                  BootstrapImage is a seid container image used for the bootstrap Job.
                                   When set, the controller runs a one-shot Job with this image and the
                                   seictl sidecar to prepare the node's data PVC before the main StatefulSet
                                   starts. The Job restores a snapshot, applies config, and syncs to the
@@ -720,7 +728,7 @@ spec:
                                 type: integer
                               bootstrapImage:
                                 description: |-
-                                  BootstrapImage is a seid container image used for the PreInitPlan Job.
+                                  BootstrapImage is a seid container image used for the bootstrap Job.
                                   When set, the controller runs a one-shot Job with this image and the
                                   seictl sidecar to prepare the node's data PVC before the main StatefulSet
                                   starts. The Job restores a snapshot, applies config, and syncs to the
@@ -846,6 +854,65 @@ spec:
                         description: Validator configures a consensus-participating
                           validator node.
                         properties:
+                          genesisCeremony:
+                            description: |-
+                              GenesisCeremony indicates this validator participates in a group genesis
+                              ceremony. Set by the SeiNodeGroup controller — not intended for direct use.
+                            properties:
+                              accountBalance:
+                                description: |-
+                                  AccountBalance is the initial coin balance to fund this validator's
+                                  genesis account. The node's own address is discovered during identity
+                                  generation — no cross-node coordination needed.
+                                minLength: 1
+                                type: string
+                              artifactS3:
+                                description: ArtifactS3 is the S3 location where this
+                                  node uploads its genesis artifacts.
+                                properties:
+                                  bucket:
+                                    description: Bucket is the S3 bucket name.
+                                    minLength: 1
+                                    type: string
+                                  prefix:
+                                    description: Prefix is an optional key prefix
+                                      within the bucket.
+                                    type: string
+                                  region:
+                                    description: Region is the AWS region for S3 access.
+                                    minLength: 1
+                                    type: string
+                                required:
+                                - bucket
+                                - region
+                                type: object
+                              chainId:
+                                description: ChainID of the genesis network.
+                                minLength: 1
+                                type: string
+                              genesisParams:
+                                description: |-
+                                  GenesisParams is a JSON string of genesis parameter overrides merged
+                                  on top of sei-config's GenesisDefaults(). Applied before gentx generation.
+                                type: string
+                              index:
+                                description: Index is the node's ordinal within the
+                                  group (0-based).
+                                format: int32
+                                minimum: 0
+                                type: integer
+                              stakingAmount:
+                                description: StakingAmount is the self-delegation
+                                  amount for this validator's gentx.
+                                minLength: 1
+                                type: string
+                            required:
+                            - accountBalance
+                            - artifactS3
+                            - chainId
+                            - index
+                            - stakingAmount
+                            type: object
                           peers:
                             description: Peers configures how this node discovers
                               and connects to peers.
@@ -908,7 +975,7 @@ spec:
                                 type: integer
                               bootstrapImage:
                                 description: |-
-                                  BootstrapImage is a seid container image used for the PreInitPlan Job.
+                                  BootstrapImage is a seid container image used for the bootstrap Job.
                                   When set, the controller runs a one-shot Job with this image and the
                                   seictl sidecar to prepare the node's data PVC before the main StatefulSet
                                   starts. The Job restores a snapshot, applies config, and syncs to the
@@ -960,6 +1027,13 @@ spec:
             - replicas
             - template
             type: object
+            x-kubernetes-validations:
+            - message: networking.service.ports must include 'metrics' when monitoring.serviceMonitor
+                is configured
+              rule: '!(has(self.monitoring) && has(self.monitoring.serviceMonitor)
+                && has(self.networking) && has(self.networking.service) && has(self.networking.service.ports)
+                && size(self.networking.service.ports) > 0) || self.networking.service.ports.exists(p,
+                p == ''metrics'')'
           status:
             description: SeiNodeGroupStatus defines the observed state of a SeiNodeGroup.
             properties:
@@ -1022,6 +1096,66 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              genesisHash:
+                description: GenesisHash is the SHA-256 hex digest of the assembled
+                  genesis.json.
+                type: string
+              genesisS3URI:
+                description: GenesisS3URI is the S3 URI of the uploaded genesis.
+                type: string
+              initPlan:
+                description: InitPlan tracks group-level initialization tasks (e.g.
+                  genesis assembly).
+                properties:
+                  phase:
+                    description: Phase is the overall state of the plan.
+                    enum:
+                    - Active
+                    - Complete
+                    - Failed
+                    type: string
+                  tasks:
+                    description: Tasks is the ordered list of tasks to execute.
+                    items:
+                      description: |-
+                        PlannedTask is a single task within a TaskPlan. Each task carries its full
+                        payload so the plan executor can deserialize and run it without needing
+                        access to the planner or sidecar client factory.
+                      properties:
+                        error:
+                          description: Error is the error message if the task failed.
+                          type: string
+                        id:
+                          description: |-
+                            ID is a deterministic UUID v5 derived from nodeName/taskType/attempt.
+                            Used as the key for sidecar task submission and status polling.
+                          type: string
+                        params:
+                          description: |-
+                            Params is the opaque JSON payload for this task. Deserialized at
+                            execution time by task.Deserialize into the concrete task type.
+                          x-kubernetes-preserve-unknown-fields: true
+                        status:
+                          description: Status is the current state of this task.
+                          enum:
+                          - Pending
+                          - Complete
+                          - Failed
+                          type: string
+                        type:
+                          description: Type identifies the task (e.g. "snapshot-restore",
+                            "config-patch").
+                          type: string
+                      required:
+                      - id
+                      - status
+                      - type
+                      type: object
+                    type: array
+                required:
+                - phase
+                - tasks
+                type: object
               networkingStatus:
                 description: NetworkingStatus reports the observed state of networking
                   resources.
@@ -1109,7 +1243,6 @@ spec:
                       description: Phase is the SeiNode's current phase.
                       enum:
                       - Pending
-                      - PreInitializing
                       - Initializing
                       - Running
                       - Failed

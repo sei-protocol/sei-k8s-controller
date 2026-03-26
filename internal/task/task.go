@@ -8,6 +8,11 @@ import (
 
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
 // taskIDNamespace is a fixed UUID v5 namespace for generating deterministic
@@ -15,9 +20,15 @@ import (
 // produce a stable, collision-free ID for each task instance.
 var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
-// TaskTypeAwaitGenesisAssembly is defined here (not in seictl) because it's a
-// controller-managed task — the sidecar has no handler for it.
-const TaskTypeAwaitGenesisAssembly = "await-genesis-assembly"
+// Controller-managed task types — the sidecar has no handlers for these.
+const (
+	TaskTypeAwaitGenesisAssembly  = "await-genesis-assembly"
+	TaskTypeDeployBootstrapSvc    = "deploy-bootstrap-service"
+	TaskTypeDeployBootstrapJob    = "deploy-bootstrap-job"
+	TaskTypeAwaitBootstrapComplete = "await-bootstrap-complete"
+	TaskTypeTeardownBootstrap     = "teardown-bootstrap"
+)
+
 
 // ExecutionStatus represents the lifecycle state of a task execution.
 type ExecutionStatus string
@@ -69,48 +80,62 @@ type SidecarClient interface {
 	GetTask(ctx context.Context, id uuid.UUID) (*sidecar.TaskResult, error)
 }
 
-// ExecutionClients bundles the external clients needed by task executions.
-// New client types (e.g. object store for genesis assembly) are added here
-// without changing existing Deserialize call sites.
-type ExecutionClients struct {
-	Sidecar SidecarClient
+// ExecutionConfig bundles all dependencies needed by task executions:
+// external clients, runtime context, and platform configuration. New
+// dependencies are added here without changing Deserialize call sites.
+type ExecutionConfig struct {
+	BuildSidecarClient func() (SidecarClient, error)
+	KubeClient         client.Client
+	Scheme             *runtime.Scheme
+	Node               *seiv1alpha1.SeiNode
+	Platform           platform.Config
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD
-// representation. Clients are injected via the ExecutionClients bundle.
+// representation. Dependencies are injected via the ExecutionConfig bundle.
 // Returns UnknownTaskTypeError for unrecognized types.
-func Deserialize(taskType, id string, params json.RawMessage, clients ExecutionClients) (TaskExecution, error) {
-	sc := clients.Sidecar
+func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
+	buildSC := cfg.BuildSidecarClient
 	switch taskType {
 	// Bootstrap tasks
 	case sidecar.TaskTypeSnapshotRestore:
-		return deserializeSidecar[SnapshotRestoreParams](id, params, sc, false)
+		return deserializeSidecar[SnapshotRestoreParams](id, params, buildSC, false)
 	case sidecar.TaskTypeConfigureStateSync:
-		return deserializeSidecar[ConfigureStateSyncParams](id, params, sc, false)
+		return deserializeSidecar[ConfigureStateSyncParams](id, params, buildSC, false)
 	case sidecar.TaskTypeAwaitCondition:
-		return deserializeSidecar[AwaitConditionParams](id, params, sc, false)
+		return deserializeSidecar[AwaitConditionParams](id, params, buildSC, false)
 
 	// Config tasks
 	case sidecar.TaskTypeConfigApply:
-		return deserializeSidecar[ConfigApplyParams](id, params, sc, false)
+		return deserializeSidecar[ConfigApplyParams](id, params, buildSC, false)
 	case sidecar.TaskTypeConfigValidate:
-		return deserializeSidecar[ConfigValidateParams](id, params, sc, true)
+		return deserializeSidecar[ConfigValidateParams](id, params, buildSC, true)
 	case sidecar.TaskTypeConfigureGenesis:
-		return deserializeSidecar[ConfigureGenesisParams](id, params, sc, false)
+		return deserializeSidecar[ConfigureGenesisParams](id, params, buildSC, false)
 	case sidecar.TaskTypeDiscoverPeers:
-		return deserializeSidecar[DiscoverPeersParams](id, params, sc, false)
+		return deserializeSidecar[DiscoverPeersParams](id, params, buildSC, false)
 	case sidecar.TaskTypeMarkReady:
-		return deserializeSidecar[MarkReadyParams](id, params, sc, true)
+		return deserializeSidecar[MarkReadyParams](id, params, buildSC, true)
 
 	// Genesis ceremony tasks
 	case sidecar.TaskTypeGenerateIdentity:
-		return deserializeSidecar[GenerateIdentityParams](id, params, sc, false)
+		return deserializeSidecar[GenerateIdentityParams](id, params, buildSC, false)
 	case sidecar.TaskTypeGenerateGentx:
-		return deserializeSidecar[GenerateGentxParams](id, params, sc, false)
+		return deserializeSidecar[GenerateGentxParams](id, params, buildSC, false)
 	case sidecar.TaskTypeUploadGenesisArtifacts:
-		return deserializeSidecar[UploadGenesisArtifactsParams](id, params, sc, false)
+		return deserializeSidecar[UploadGenesisArtifactsParams](id, params, buildSC, false)
 	case TaskTypeAwaitGenesisAssembly:
 		return deserializeAwaitGenesisAssembly(id, params)
+
+	// Controller-side bootstrap tasks
+	case TaskTypeDeployBootstrapSvc:
+		return deserializeBootstrapService(id, params, cfg)
+	case TaskTypeDeployBootstrapJob:
+		return deserializeBootstrapJob(id, params, cfg)
+	case TaskTypeAwaitBootstrapComplete:
+		return deserializeBootstrapAwait(id, params, cfg)
+	case TaskTypeTeardownBootstrap:
+		return deserializeBootstrapTeardown(id, params, cfg)
 
 	default:
 		return nil, &UnknownTaskTypeError{Type: taskType}
@@ -118,8 +143,9 @@ func Deserialize(taskType, id string, params json.RawMessage, clients ExecutionC
 }
 
 // deserializeSidecar is a generic helper that unmarshals params into a typed
-// struct and wraps it in a sidecarExecution.
-func deserializeSidecar[T any](id string, params json.RawMessage, sc SidecarClient, fireAndForget bool) (TaskExecution, error) {
+// struct and wraps it in a sidecarExecution. The sidecar client is built
+// lazily on first Execute/Status call via the buildSC factory.
+func deserializeSidecar[T any](id string, params json.RawMessage, buildSC func() (SidecarClient, error), fireAndForget bool) (TaskExecution, error) {
 	var p T
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -127,7 +153,7 @@ func deserializeSidecar[T any](id string, params json.RawMessage, sc SidecarClie
 		}
 	}
 	return &sidecarExecution[T]{
-		sc:            sc,
+		buildSC:       buildSC,
 		id:            id,
 		params:        p,
 		fireAndForget: fireAndForget,

@@ -31,6 +31,13 @@ const (
 	TaskAwaitGenesisAssembly   = task.TaskTypeAwaitGenesisAssembly
 )
 
+// baseProgression defines the ordered task sequence for each bootstrap mode.
+var baseProgression = map[string][]string{
+	"snapshot":   {TaskSnapshotRestore, TaskConfigApply, TaskConfigValidate, TaskMarkReady},
+	"state-sync": {TaskConfigApply, TaskConfigValidate, TaskMarkReady},
+	"genesis":    {TaskConfigApply, TaskConfigValidate, TaskMarkReady},
+}
+
 // NodePlanner encapsulates mode-specific logic for validating a SeiNode
 // and building its initialization task plan with fully embedded params.
 type NodePlanner interface {
@@ -100,8 +107,9 @@ func PeersFor(node *seiv1alpha1.SeiNode) []seiv1alpha1.PeerSource {
 	}
 }
 
-// NeedsPreInit returns true when the node requires a PreInitPlan Job.
-func NeedsPreInit(node *seiv1alpha1.SeiNode) bool {
+// NeedsBootstrap returns true when the node requires a bootstrap Job to
+// populate the PVC before the StatefulSet takes over.
+func NeedsBootstrap(node *seiv1alpha1.SeiNode) bool {
 	snap := SnapshotSourceFor(node)
 	return snap != nil && snap.BootstrapImage != "" &&
 		snap.S3 != nil && snap.S3.TargetHeight > 0
@@ -167,23 +175,6 @@ func SidecarURLForNode(node *seiv1alpha1.SeiNode) string {
 		node.Name, node.Name, node.Namespace, sidecarPortForNode(node))
 }
 
-// PreInitSidecarURLForNode builds the in-cluster sidecar URL for a node's
-// pre-init Job pod (used during PreInitializing phase).
-func PreInitSidecarURLForNode(node *seiv1alpha1.SeiNode) string {
-	jobName := fmt.Sprintf("%s-pre-init", node.Name)
-	return fmt.Sprintf("http://seid.%s.%s.svc.cluster.local:%d",
-		jobName, node.Namespace, sidecarPortForNode(node))
-}
-
-// SidecarURLForPhase returns the correct sidecar URL based on the node's
-// current phase. PreInitializing targets the Job pod; all other phases
-// target the StatefulSet pod.
-func SidecarURLForPhase(node *seiv1alpha1.SeiNode) string {
-	if node.Status.Phase == seiv1alpha1.PhasePreInitializing {
-		return PreInitSidecarURLForNode(node)
-	}
-	return SidecarURLForNode(node)
-}
 
 func sidecarPortForNode(node *seiv1alpha1.SeiNode) int32 {
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
@@ -211,13 +202,6 @@ func buildPlannedTask(node *seiv1alpha1.SeiNode, taskType string, attempt int, p
 		Status: seiv1alpha1.PlannedTaskPending,
 		Params: marshalParams(params),
 	}
-}
-
-// baseProgression defines the ordered task sequence for each bootstrap mode.
-var baseProgression = map[string][]string{
-	"snapshot":   {TaskSnapshotRestore, TaskConfigApply, TaskConfigValidate, TaskMarkReady},
-	"state-sync": {TaskConfigApply, TaskConfigValidate, TaskMarkReady},
-	"genesis":    {TaskConfigApply, TaskConfigValidate, TaskMarkReady},
 }
 
 // buildBasePlan builds a TaskPlan by starting with the base progression for the

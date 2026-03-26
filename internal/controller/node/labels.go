@@ -24,10 +24,10 @@ func resourceLabelsForNode(node *seiv1alpha1.SeiNode) map[string]string {
 	return labels
 }
 
-func preInitLabelsForNode(node *seiv1alpha1.SeiNode) map[string]string {
+func bootstrapLabelsForNode(node *seiv1alpha1.SeiNode) map[string]string {
 	return map[string]string{
 		nodeLabel:      node.Name,
-		componentLabel: "pre-init",
+		componentLabel: "bootstrap",
 	}
 }
 

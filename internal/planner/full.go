@@ -30,10 +30,14 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 
 func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	fn := node.Spec.FullNode
-	return buildBasePlan(node, fn.Peers, fn.Snapshot, p.snapshotRegion, &task.ConfigApplyParams{
+	params := &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeFull),
 		Overrides: mergeOverrides(p.controllerOverrides(node), node.Spec.Overrides),
-	})
+	}
+	if NeedsBootstrap(node) {
+		return buildBootstrapPlan(node, fn.Peers, fn.Snapshot, p.snapshotRegion, params)
+	}
+	return buildBasePlan(node, fn.Peers, fn.Snapshot, p.snapshotRegion, params)
 }
 
 func (p *fullNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {

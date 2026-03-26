@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -23,10 +25,11 @@ const (
 // the current task from the plan's embedded params and calls Status/Execute.
 //
 // BuildSidecarClient is a factory that produces a SidecarClient for the
-// given node. The implementation is phase-aware: PreInitializing nodes
-// target the Job pod DNS while Initializing nodes target the StatefulSet.
+// given node. Only called for sidecar-driven tasks (not controller-side).
 type Executor struct {
 	Client             client.Client
+	Scheme             *runtime.Scheme
+	Platform           platform.Config
 	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
 }
 
@@ -68,10 +71,14 @@ func (e *Executor) ExecutePlan(
 		return ctrl.Result{RequeueAfter: ImmediateRequeue}, nil
 	}
 
-	sc, err := e.BuildSidecarClient(node)
-	if err != nil {
-		log.FromContext(ctx).Info("sidecar client unavailable, will retry", "error", err)
-		return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
+	cfg := task.ExecutionConfig{
+		BuildSidecarClient: func() (task.SidecarClient, error) {
+			return e.BuildSidecarClient(node)
+		},
+		KubeClient: e.Client,
+		Scheme:     e.Scheme,
+		Node:       node,
+		Platform:   e.Platform,
 	}
 
 	var paramsRaw []byte
@@ -79,7 +86,7 @@ func (e *Executor) ExecutePlan(
 		paramsRaw = t.Params.Raw
 	}
 
-	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, task.ExecutionClients{Sidecar: sc})
+	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, cfg)
 	if err != nil {
 		return e.failTask(ctx, node, plan, t, err.Error())
 	}

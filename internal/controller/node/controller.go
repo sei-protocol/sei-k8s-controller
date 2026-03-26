@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
@@ -29,42 +30,13 @@ const (
 	fieldOwner            = client.FieldOwner("seinode-controller")
 )
 
-// PlatformConfig holds infrastructure-level settings that vary per deployment
-// environment. Values are read from environment variables in main.go with
-// sensible defaults.
-type PlatformConfig struct {
-	NodepoolName        string
-	TolerationKey       string
-	TolerationVal       string
-	ServiceAccount      string
-	StorageClassPerf    string
-	StorageClassDefault string
-	StorageSizeDefault  string
-	StorageSizeArchive  string
-	ResourceCPUArchive  string
-	ResourceMemArchive  string
-	ResourceCPUDefault  string
-	ResourceMemDefault  string
-	SnapshotRegion      string
-}
+// PlatformConfig is an alias for platform.Config for backward compatibility
+// within the controller package.
+type PlatformConfig = platform.Config
 
-// DefaultPlatformConfig returns PlatformConfig with production defaults.
+// DefaultPlatformConfig returns platform.Config with production defaults.
 func DefaultPlatformConfig() PlatformConfig {
-	return PlatformConfig{
-		NodepoolName:        "sei-node",
-		TolerationKey:       "sei.io/workload",
-		TolerationVal:       "sei-node",
-		ServiceAccount:      "seid-node",
-		StorageClassPerf:    "gp3-10k-750",
-		StorageClassDefault: "gp3",
-		StorageSizeDefault:  "1000Gi",
-		StorageSizeArchive:  "2000Gi",
-		ResourceCPUArchive:  "16",
-		ResourceMemArchive:  "256Gi",
-		ResourceCPUDefault:  "4",
-		ResourceMemDefault:  "32Gi",
-		SnapshotRegion:      "eu-central-1",
-	}
+	return platform.DefaultConfig()
 }
 
 // SeiNodeReconciler reconciles a SeiNode object.
@@ -125,8 +97,6 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	switch node.Status.Phase {
 	case "", seiv1alpha1.PhasePending:
 		return r.reconcilePending(ctx, node, p)
-	case seiv1alpha1.PhasePreInitializing:
-		return r.reconcilePreInitializing(ctx, node, p)
 	case seiv1alpha1.PhaseInitializing:
 		return r.reconcileInitializing(ctx, node)
 	case seiv1alpha1.PhaseRunning:
@@ -138,55 +108,58 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 }
 
-// reconcilePending creates all plans up front and selects the starting phase.
-// The Init plan is always built here — for genesis ceremony nodes the S3
-// source is deterministic and discover-peers is unconditionally included.
-// Plan execution order is the single source of truth for orchestration.
+// reconcilePending builds the unified InitPlan and transitions to Initializing.
+// For genesis ceremony nodes the plan includes artifact generation and assembly
+// steps. For bootstrap nodes the plan includes controller-side Job lifecycle
+// tasks followed by production config. All orchestration lives in the plan.
 func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alpha1.SeiNode, p planner.NodePlanner) (ctrl.Result, error) {
 	patch := client.MergeFrom(node.DeepCopy())
 
-	node.Status.PreInitPlan = planner.BuildPreInitPlan(node, p)
 	if planner.IsGenesisCeremonyNode(node) {
 		node.Status.InitPlan = planner.BuildGenesisInitPlan(node)
-	} else if planner.NeedsPreInit(node) {
-		node.Status.InitPlan = planner.BuildPostBootstrapInitPlan(node, nil)
 	} else {
 		node.Status.InitPlan = p.BuildPlan(node)
 	}
-	node.Status.Phase = seiv1alpha1.PhasePreInitializing
+	node.Status.Phase = seiv1alpha1.PhaseInitializing
 
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("initializing plans: %w", err)
 	}
 
 	ns, name := node.Namespace, node.Name
-	nodePhaseTransitions.WithLabelValues(ns, string(seiv1alpha1.PhasePending), string(seiv1alpha1.PhasePreInitializing)).Inc()
-	emitNodePhase(ns, name, seiv1alpha1.PhasePreInitializing)
+	nodePhaseTransitions.WithLabelValues(ns, string(seiv1alpha1.PhasePending), string(seiv1alpha1.PhaseInitializing)).Inc()
+	emitNodePhase(ns, name, seiv1alpha1.PhaseInitializing)
 	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
-		"Phase changed from %s to %s", seiv1alpha1.PhasePending, seiv1alpha1.PhasePreInitializing)
+		"Phase changed from %s to %s", seiv1alpha1.PhasePending, seiv1alpha1.PhaseInitializing)
 
 	return ctrl.Result{RequeueAfter: planner.ImmediateRequeue}, nil
 }
 
-// reconcileInitializing ensures the StatefulSet and Service exist, then drives
-// the InitPlan to completion.
+// reconcileInitializing drives the unified InitPlan to completion. For
+// bootstrap nodes the StatefulSet and Service are created only after
+// bootstrap teardown is complete (to avoid RWO PVC conflicts). For
+// non-bootstrap nodes they are created immediately.
 func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
-	if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
-	}
-	if err := r.reconcileNodeService(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
+	plan := node.Status.InitPlan
+
+	if !planner.NeedsBootstrap(node) || planner.IsBootstrapComplete(plan) {
+		if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
+			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
+		}
+		if err := r.reconcileNodeService(ctx, node); err != nil {
+			return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
+		}
 	}
 
-	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.InitPlan)
+	result, err := r.PlanExecutor.ExecutePlan(ctx, node, plan)
 	if err != nil {
 		return result, err
 	}
 
-	if node.Status.InitPlan.Phase == seiv1alpha1.TaskPlanComplete {
+	if plan.Phase == seiv1alpha1.TaskPlanComplete {
 		return r.transitionPhase(ctx, node, seiv1alpha1.PhaseRunning)
 	}
-	if node.Status.InitPlan.Phase == seiv1alpha1.TaskPlanFailed {
+	if plan.Phase == seiv1alpha1.TaskPlanFailed {
 		return r.transitionPhase(ctx, node, seiv1alpha1.PhaseFailed)
 	}
 	return result, nil
