@@ -195,8 +195,8 @@ func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args 
 
 func bootstrapSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp %s/bin && cp /usr/bin/seid %s/bin/seid`,
-		bootstrapDataDir, node.Spec.ChainID, node.Spec.ChainID, bootstrapDataDir, bootstrapDataDir, bootstrapDataDir, bootstrapDataDir,
+		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
+		bootstrapDataDir, node.Spec.ChainID, node.Spec.ChainID, bootstrapDataDir, bootstrapDataDir,
 	)
 	return corev1.Container{
 		Name:  "seid-init",

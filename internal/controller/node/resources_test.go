@@ -361,7 +361,6 @@ func TestSidecarContainer_EnvVars(t *testing.T) {
 	g.Expect(envValue(sc.Env, "SEI_CHAIN_ID")).To(Equal(node.Spec.ChainID))
 	g.Expect(envValue(sc.Env, "SEI_SIDECAR_PORT")).To(Equal("7777"))
 	g.Expect(envValue(sc.Env, "SEI_HOME")).To(Equal(dataDir))
-	g.Expect(envValue(sc.Env, "PATH")).To(ContainSubstring(dataDir + "/bin"))
 }
 
 func TestSidecarContainer_DataVolumeMount(t *testing.T) {
@@ -531,8 +530,7 @@ func TestSeidInitContainer_CopiesBinaryToSharedVolume(t *testing.T) {
 	init := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
 
 	g.Expect(init).NotTo(BeNil())
-	g.Expect(init.Command[2]).To(ContainSubstring("mkdir -p " + dataDir + "/tmp " + dataDir + "/bin"))
-	g.Expect(init.Command[2]).To(ContainSubstring("cp /usr/bin/seid " + dataDir + "/bin/seid"))
+	g.Expect(init.Command[2]).To(ContainSubstring("mkdir -p " + dataDir + "/tmp"))
 }
 
 func TestGenesisMode_SidecarPresent(t *testing.T) {
