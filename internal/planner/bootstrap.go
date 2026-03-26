@@ -39,7 +39,9 @@ func buildBootstrapPlan(
 	jobName := task.BootstrapJobName(node)
 	serviceName := node.Name
 
-	var tasks []seiv1alpha1.PlannedTask
+	bootstrapProg := buildBootstrapProgression(peers, snap)
+	postProg := buildPostBootstrapProgression(peers)
+	tasks := make([]seiv1alpha1.PlannedTask, 0, 2+len(bootstrapProg)+2+len(postProg))
 
 	// Phase 1: Deploy bootstrap infrastructure
 	tasks = append(tasks, buildPlannedTask(node, task.TaskTypeDeployBootstrapSvc, nextAttempt(task.TaskTypeDeployBootstrapSvc),
@@ -48,7 +50,6 @@ func buildBootstrapPlan(
 		&task.DeployBootstrapJobParams{JobName: jobName, Namespace: node.Namespace}))
 
 	// Phase 2: Sidecar tasks on bootstrap pod (same progression as base, minus mark-ready)
-	bootstrapProg := buildBootstrapProgression(peers, snap)
 	for _, taskType := range bootstrapProg {
 		tasks = append(tasks, buildPlannedTask(node, taskType, nextAttempt(taskType),
 			paramsForTaskType(node, taskType, peers, snap, snapshotRegion, configApplyParams)))
@@ -61,7 +62,6 @@ func buildBootstrapPlan(
 		&task.TeardownBootstrapParams{JobName: jobName, ServiceName: serviceName, Namespace: node.Namespace}))
 
 	// Phase 4: Post-bootstrap config on StatefulSet pod
-	postProg := buildPostBootstrapProgression(peers)
 	for _, taskType := range postProg {
 		tasks = append(tasks, buildPlannedTask(node, taskType, nextAttempt(taskType),
 			paramsForTaskType(node, taskType, peers, nil, "", configApplyParams)))

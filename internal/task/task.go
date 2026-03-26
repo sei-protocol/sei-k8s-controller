@@ -22,13 +22,12 @@ var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
 // Controller-managed task types — the sidecar has no handlers for these.
 const (
-	TaskTypeAwaitGenesisAssembly  = "await-genesis-assembly"
-	TaskTypeDeployBootstrapSvc    = "deploy-bootstrap-service"
-	TaskTypeDeployBootstrapJob    = "deploy-bootstrap-job"
+	TaskTypeAwaitGenesisAssembly   = "await-genesis-assembly"
+	TaskTypeDeployBootstrapSvc     = "deploy-bootstrap-service"
+	TaskTypeDeployBootstrapJob     = "deploy-bootstrap-job"
 	TaskTypeAwaitBootstrapComplete = "await-bootstrap-complete"
-	TaskTypeTeardownBootstrap     = "teardown-bootstrap"
+	TaskTypeTeardownBootstrap      = "teardown-bootstrap"
 )
-
 
 // ExecutionStatus represents the lifecycle state of a task execution.
 type ExecutionStatus string

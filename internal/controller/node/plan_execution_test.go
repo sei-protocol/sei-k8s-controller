@@ -876,15 +876,20 @@ func TestNeedsBootstrap(t *testing.T) {
 	}
 }
 
-// --- Job builder tests ---
+// --- Bootstrap resource builder tests (task package) ---
 
-func TestGenerateBootstrapJob(t *testing.T) {
+func TestTaskGenerateBootstrapJob(t *testing.T) {
 	node := replayerNode()
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
-	job := generateBootstrapJob(node, DefaultPlatformConfig())
+	snap := planner.SnapshotSourceFor(node)
+	job, err := task.GenerateBootstrapJob(node, snap, DefaultPlatformConfig())
+	if err != nil {
+		t.Fatalf("GenerateBootstrapJob error: %v", err)
+	}
 
-	if job.Name != "test-replayer-pre-init" {
-		t.Errorf("Job name = %q, want %q", job.Name, "test-replayer-pre-init")
+	wantName := "test-replayer-bootstrap"
+	if job.Name != wantName {
+		t.Errorf("Job name = %q, want %q", job.Name, wantName)
 	}
 
 	spec := job.Spec.Template.Spec
@@ -896,7 +901,15 @@ func TestGenerateBootstrapJob(t *testing.T) {
 	}
 }
 
-func TestGenerateBootstrapJob_SidecarResources(t *testing.T) {
+func TestTaskGenerateBootstrapJob_NilSnapshot(t *testing.T) {
+	node := replayerNode()
+	_, err := task.GenerateBootstrapJob(node, nil, DefaultPlatformConfig())
+	if err == nil {
+		t.Fatal("expected error for nil snapshot, got nil")
+	}
+}
+
+func TestTaskGenerateBootstrapJob_SidecarResources(t *testing.T) {
 	node := replayerNode()
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{
@@ -907,7 +920,11 @@ func TestGenerateBootstrapJob_SidecarResources(t *testing.T) {
 			},
 		},
 	}
-	job := generateBootstrapJob(node, DefaultPlatformConfig())
+	snap := planner.SnapshotSourceFor(node)
+	job, err := task.GenerateBootstrapJob(node, snap, DefaultPlatformConfig())
+	if err != nil {
+		t.Fatalf("GenerateBootstrapJob error: %v", err)
+	}
 	spec := job.Spec.Template.Spec
 
 	sc := spec.InitContainers[1]
@@ -917,12 +934,12 @@ func TestGenerateBootstrapJob_SidecarResources(t *testing.T) {
 	}
 }
 
-func TestBootstrapSidecarURL(t *testing.T) {
+func TestSidecarURLForNode(t *testing.T) {
 	node := replayerNode()
-	got := bootstrapSidecarURL(node)
-	want := "http://seid.test-replayer-pre-init.default.svc.cluster.local:7777"
+	got := planner.SidecarURLForNode(node)
+	want := "http://test-replayer-0.test-replayer.default.svc.cluster.local:7777"
 	if got != want {
-		t.Errorf("bootstrapSidecarURL() = %q, want %q", got, want)
+		t.Errorf("SidecarURLForNode() = %q, want %q", got, want)
 	}
 }
 

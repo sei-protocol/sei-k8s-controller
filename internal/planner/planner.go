@@ -175,7 +175,6 @@ func SidecarURLForNode(node *seiv1alpha1.SeiNode) string {
 		node.Name, node.Name, node.Namespace, sidecarPortForNode(node))
 }
 
-
 func sidecarPortForNode(node *seiv1alpha1.SeiNode) int32 {
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
 		return node.Spec.Sidecar.Port

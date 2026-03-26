@@ -33,7 +33,7 @@ type SidecarStatusClient interface {
 
 // sidecarSubmitter is the subset of sidecar.SidecarClient that can submit and poll tasks.
 type sidecarSubmitter interface {
-	SubmitTask(ctx context.Context, task sidecar.TaskRequest) (interface{ String() string }, error)
+	SubmitTask(ctx context.Context, req sidecar.TaskRequest) (interface{ String() string }, error)
 	GetTask(ctx context.Context, id interface{ String() string }) (*sidecar.TaskResult, error)
 }
 
@@ -145,9 +145,9 @@ func (r *SeiNodeGroupReconciler) driveInitPlan(ctx context.Context, group *seiv1
 	}
 
 	plan := group.Status.InitPlan
-	task := &plan.Tasks[0]
+	currentTask := &plan.Tasks[0]
 
-	switch task.Status {
+	switch currentTask.Status {
 	case seiv1alpha1.PlannedTaskPending:
 		s3 := genesisS3Config(group)
 		nodeParams := make([]sidecar.GenesisNodeParam, len(nodes))
@@ -167,8 +167,8 @@ func (r *SeiNodeGroupReconciler) driveInitPlan(ctx context.Context, group *seiv1
 			return ctrl.Result{}, fmt.Errorf("submitting assembly task: %w", err)
 		}
 		patch := client.MergeFrom(group.DeepCopy())
-		task.Status = seiv1alpha1.PlannedTaskComplete
-		task.ID = id.String()
+		currentTask.Status = seiv1alpha1.PlannedTaskComplete
+		currentTask.ID = id.String()
 		if err := r.Status().Patch(ctx, group, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("recording assembly task submission: %w", err)
 		}

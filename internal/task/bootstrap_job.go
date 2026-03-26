@@ -46,7 +46,10 @@ func deserializeBootstrapJob(id string, params json.RawMessage, cfg ExecutionCon
 func (e *deployBootstrapJobExecution) Execute(ctx context.Context) error {
 	node := e.cfg.Node
 	snap := snapshotSourceFor(node)
-	job := GenerateBootstrapJob(node, snap, e.cfg.Platform)
+	job, err := GenerateBootstrapJob(node, snap, e.cfg.Platform)
+	if err != nil {
+		return fmt.Errorf("generating bootstrap job spec: %w", err)
+	}
 	if err := ctrl.SetControllerReference(node, job, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on bootstrap job: %w", err)
 	}

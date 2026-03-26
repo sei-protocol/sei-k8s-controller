@@ -42,7 +42,10 @@ func GenerateBootstrapJob(
 	node *seiv1alpha1.SeiNode,
 	snap *seiv1alpha1.SnapshotSource,
 	platformCfg platform.Config,
-) *batchv1.Job {
+) (*batchv1.Job, error) {
+	if snap == nil || snap.S3 == nil {
+		return nil, fmt.Errorf("bootstrap job requires an S3 snapshot source (node %s/%s)", node.Namespace, node.Name)
+	}
 	labels := BootstrapLabels(node)
 	podSpec := buildBootstrapPodSpec(node, snap, platformCfg)
 
@@ -65,7 +68,7 @@ func GenerateBootstrapJob(
 				Spec: podSpec,
 			},
 		},
-	}
+	}, nil
 }
 
 // GenerateBootstrapService creates a headless Service that provides stable DNS

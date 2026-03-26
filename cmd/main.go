@@ -22,8 +22,8 @@ import (
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
 	nodegroupcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodegroup"
 	nodepoolcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodepool"
-	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
