@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultGenesisBucket       = "sei-genesis-artifacts"
+	defaultGenesisBucket       = "sei-genesis-ceremony-artifacts"
 	defaultMaxCeremonyDuration = 15 * time.Minute
 	defaultP2PPort             = int32(26656)
 )
@@ -244,6 +244,6 @@ func genesisS3Config(group *seiv1alpha1.SeiNodeGroup) seiv1alpha1.GenesisS3Desti
 	return seiv1alpha1.GenesisS3Destination{
 		Bucket: defaultGenesisBucket,
 		Prefix: fmt.Sprintf("%s/%s/", gc.ChainID, group.Name),
-		Region: "us-east-2",
+		Region: "eu-central-1",
 	}
 }

@@ -83,8 +83,8 @@ func groupGenesisS3(group *seiv1alpha1.SeiNodeGroup) seiv1alpha1.GenesisS3Destin
 		return dest
 	}
 	return seiv1alpha1.GenesisS3Destination{
-		Bucket: "sei-genesis-artifacts",
+		Bucket: "sei-genesis-ceremony-artifacts",
 		Prefix: fmt.Sprintf("%s/%s/", gc.ChainID, group.Name),
-		Region: "us-east-2",
+		Region: "eu-central-1",
 	}
 }

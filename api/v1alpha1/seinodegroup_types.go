@@ -71,7 +71,7 @@ type GenesisCeremonyConfig struct {
 	Overrides map[string]string `json:"overrides,omitempty"`
 
 	// GenesisS3 configures where genesis artifacts are stored.
-	// When omitted, inferred: bucket = "sei-genesis-artifacts",
+	// When omitted, inferred: bucket = "sei-genesis-ceremony-artifacts",
 	// prefix = "<chainId>/<group-name>/", region from PlatformConfig.
 	// +optional
 	GenesisS3 *GenesisS3Destination `json:"genesisS3,omitempty"`

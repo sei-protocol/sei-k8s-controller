@@ -133,8 +133,8 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal params: %v", err)
 	}
-	if params.S3Bucket != "sei-genesis-artifacts" {
-		t.Errorf("S3Bucket = %q, want %q", params.S3Bucket, "sei-genesis-artifacts")
+	if params.S3Bucket != "sei-genesis-ceremony-artifacts" {
+		t.Errorf("S3Bucket = %q, want %q", params.S3Bucket, "sei-genesis-ceremony-artifacts")
 	}
 	if params.S3Prefix != "pacific-1/my-group/" {
 		t.Errorf("S3Prefix = %q, want %q", params.S3Prefix, "pacific-1/my-group/")
