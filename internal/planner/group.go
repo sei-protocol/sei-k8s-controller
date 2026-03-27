@@ -69,7 +69,7 @@ func buildGroupPlannedTask(groupName, taskType string, attempt int, params any) 
 	return seiv1alpha1.PlannedTask{
 		Type:   taskType,
 		ID:     id,
-		Status: seiv1alpha1.PlannedTaskPending,
+		Status: seiv1alpha1.TaskPending,
 		Params: p,
 	}, nil
 }

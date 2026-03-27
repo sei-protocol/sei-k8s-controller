@@ -137,7 +137,7 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 			{
 				Type:       sidecar.TaskTypeConfigureGenesis,
 				ID:         taskID,
-				Status:     seiv1alpha1.PlannedTaskPending,
+				Status:     seiv1alpha1.TaskPending,
 				Params:     configGenesisParams(t),
 				MaxRetries: 5,
 			},
@@ -166,7 +166,7 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 	}
 
 	tsk := &updated.Status.InitPlan.Tasks[0]
-	if tsk.Status != seiv1alpha1.PlannedTaskPending {
+	if tsk.Status != seiv1alpha1.TaskPending {
 		t.Errorf("task status = %q, want Pending (reset for retry)", tsk.Status)
 	}
 	if tsk.RetryCount != 1 {
@@ -205,7 +205,7 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 			{
 				Type:       sidecar.TaskTypeConfigureGenesis,
 				ID:         taskID,
-				Status:     seiv1alpha1.PlannedTaskPending,
+				Status:     seiv1alpha1.TaskPending,
 				Params:     configGenesisParams(t),
 				MaxRetries: 2,
 				RetryCount: 2,
@@ -233,7 +233,7 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 	if updated.Status.InitPlan.Phase != seiv1alpha1.TaskPlanFailed {
 		t.Errorf("plan phase = %q, want Failed", updated.Status.InitPlan.Phase)
 	}
-	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.PlannedTaskFailed {
+	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.TaskFailed {
 		t.Errorf("task status = %q, want Failed", updated.Status.InitPlan.Tasks[0].Status)
 	}
 }
@@ -278,7 +278,7 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 			{
 				Type:   sidecar.TaskTypeAssembleGenesis,
 				ID:     taskID,
-				Status: seiv1alpha1.PlannedTaskPending,
+				Status: seiv1alpha1.TaskPending,
 				Params: &apiextensionsv1.JSON{Raw: assembleParams},
 			},
 		},
@@ -317,7 +317,7 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		t.Fatalf("get group: %v", err)
 	}
 
-	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.PlannedTaskComplete {
+	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.TaskComplete {
 		t.Errorf("task status = %q, want Complete", updated.Status.InitPlan.Tasks[0].Status)
 	}
 	if result.RequeueAfter == 0 {

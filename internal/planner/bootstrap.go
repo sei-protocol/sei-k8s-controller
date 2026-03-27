@@ -12,7 +12,6 @@ import (
 
 const (
 	defaultSnapshotUploadCron = "0 0 * * *"
-	defaultResultExportCron   = "*/10 * * * *"
 	resultExportBucket        = "sei-node-mvp"
 	resultExportRegion        = "eu-central-1"
 	resultExportPrefix        = "shadow-results/"
@@ -126,7 +125,7 @@ func IsBootstrapComplete(plan *seiv1alpha1.TaskPlan) bool {
 	}
 	for _, t := range plan.Tasks {
 		if t.Type == task.TaskTypeTeardownBootstrap {
-			return t.Status == seiv1alpha1.PlannedTaskComplete
+			return t.Status == seiv1alpha1.TaskComplete
 		}
 	}
 	return true
@@ -247,16 +246,20 @@ func SnapshotUploadScheduledTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder 
 	}
 }
 
-// ResultExportScheduledTask returns a result-export task builder if applicable.
-func ResultExportScheduledTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+// ResultExportMonitorTask builds a TaskRequest for result-export comparison
+// mode. The sidecar compares local block results against the canonical RPC
+// and completes on app-hash divergence. Returns nil when the node has no
+// result-export config.
+func ResultExportMonitorTask(node *seiv1alpha1.SeiNode) *sidecar.TaskRequest {
 	if node.Spec.Replayer == nil || node.Spec.Replayer.ResultExport == nil {
 		return nil
 	}
-	cron := defaultResultExportCron
-	return sidecar.ResultExportTask{
-		Bucket:   resultExportBucket,
-		Prefix:   resultExportPrefix + node.Spec.ChainID + "/",
-		Region:   resultExportRegion,
-		Schedule: &sidecar.ScheduleConfig{Cron: &cron},
-	}
+	re := node.Spec.Replayer.ResultExport
+	req := sidecar.ResultExportTask{
+		Bucket:       resultExportBucket,
+		Prefix:       resultExportPrefix + node.Spec.ChainID + "/",
+		Region:       resultExportRegion,
+		CanonicalRPC: re.CanonicalRPC,
+	}.ToTaskRequest()
+	return &req
 }

@@ -42,7 +42,7 @@ func driveTask(
 	// Check if already complete (fire-and-forget tasks complete in one call)
 	node = fetch()
 	for _, pt := range node.Status.InitPlan.Tasks {
-		if pt.ID == taskUUID.String() && pt.Status == seiv1alpha1.PlannedTaskComplete {
+		if pt.ID == taskUUID.String() && pt.Status == seiv1alpha1.TaskComplete {
 			return
 		}
 	}
@@ -188,7 +188,7 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 
 	updated = fetch()
 	g.Expect(updated.Status.InitPlan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
-	g.Expect(updated.Status.InitPlan.Tasks[0].Status).To(Equal(seiv1alpha1.PlannedTaskFailed))
+	g.Expect(updated.Status.InitPlan.Tasks[0].Status).To(Equal(seiv1alpha1.TaskFailed))
 	g.Expect(updated.Status.InitPlan.Tasks[0].Error).To(Equal("S3 access denied"))
 
 	mock.submitted = nil
