@@ -18,7 +18,7 @@ import (
 const (
 	bootstrapTerminationGracePeriod = int64(120)
 	bootstrapDataDir                = "/sei"
-	bootstrapDefaultSidecarImage    = "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/seictl@sha256:54325467253ad86cb486a97f5e9e57789e7c17c1faf844e730c89f175374bfe1"
+	bootstrapDefaultSidecarImage    = "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/seictl@sha256:02f865099dc8623aba2f39683b5d1988bcb830ed719625db2bb7cec166d0f13b"
 	bootstrapNodeLabel              = "sei.io/node"
 	bootstrapComponentLabel         = "sei.io/component"
 )
