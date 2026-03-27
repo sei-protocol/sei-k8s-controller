@@ -10,7 +10,7 @@ import (
 type SeiNodeGroupSpec struct {
 	// Replicas is the number of SeiNode instances to create.
 	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=16
+	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:default=1
 	Replicas int32 `json:"replicas"`
 

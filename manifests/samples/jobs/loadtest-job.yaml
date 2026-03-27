@@ -13,12 +13,28 @@ data:
   profile.json: |
     {
       "chainId": 713714,
-      "seiChainId": "loadtest-1",
+      "seiChainId": "genesis-test-1",
       "endpoints": [
-        "http://loadtest-network-0-0.loadtest-network-0.default.svc.cluster.local:8545",
-        "http://loadtest-network-1-0.loadtest-network-1.default.svc.cluster.local:8545",
-        "http://loadtest-network-2-0.loadtest-network-2.default.svc.cluster.local:8545",
-        "http://loadtest-network-3-0.loadtest-network-3.default.svc.cluster.local:8545"
+        "http://genesis-test-0-0.genesis-test-0.default.svc.cluster.local:8545",
+        "http://genesis-test-1-0.genesis-test-1.default.svc.cluster.local:8545",
+        "http://genesis-test-2-0.genesis-test-2.default.svc.cluster.local:8545",
+        "http://genesis-test-3-0.genesis-test-3.default.svc.cluster.local:8545",
+        "http://genesis-test-4-0.genesis-test-4.default.svc.cluster.local:8545",
+        "http://genesis-test-5-0.genesis-test-5.default.svc.cluster.local:8545",
+        "http://genesis-test-6-0.genesis-test-6.default.svc.cluster.local:8545",
+        "http://genesis-test-7-0.genesis-test-7.default.svc.cluster.local:8545",
+        "http://genesis-test-8-0.genesis-test-8.default.svc.cluster.local:8545",
+        "http://genesis-test-9-0.genesis-test-9.default.svc.cluster.local:8545",
+        "http://genesis-test-10-0.genesis-test-10.default.svc.cluster.local:8545",
+        "http://genesis-test-11-0.genesis-test-11.default.svc.cluster.local:8545",
+        "http://genesis-test-12-0.genesis-test-12.default.svc.cluster.local:8545",
+        "http://genesis-test-13-0.genesis-test-13.default.svc.cluster.local:8545",
+        "http://genesis-test-14-0.genesis-test-14.default.svc.cluster.local:8545",
+        "http://genesis-test-15-0.genesis-test-15.default.svc.cluster.local:8545",
+        "http://genesis-test-16-0.genesis-test-16.default.svc.cluster.local:8545",
+        "http://genesis-test-17-0.genesis-test-17.default.svc.cluster.local:8545",
+        "http://genesis-test-18-0.genesis-test-18.default.svc.cluster.local:8545",
+        "http://genesis-test-19-0.genesis-test-19.default.svc.cluster.local:8545"
       ],
       "accounts": {
         "count": 50,

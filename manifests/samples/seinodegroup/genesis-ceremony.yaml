@@ -11,7 +11,7 @@ metadata:
   name: genesis-test
   namespace: default
 spec:
-  replicas: 5
+  replicas: 20
 
   genesis:
     chainId: genesis-test-1

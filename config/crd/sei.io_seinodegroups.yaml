@@ -110,7 +110,7 @@ spec:
                   genesisS3:
                     description: |-
                       GenesisS3 configures where genesis artifacts are stored.
-                      When omitted, inferred: bucket = "sei-genesis-artifacts",
+                      When omitted, inferred: bucket = "sei-genesis-ceremony-artifacts",
                       prefix = "<chainId>/<group-name>/", region from PlatformConfig.
                     properties:
                       bucket:
@@ -300,7 +300,7 @@ spec:
                 default: 1
                 description: Replicas is the number of SeiNode instances to create.
                 format: int32
-                maximum: 16
+                maximum: 100
                 minimum: 1
                 type: integer
               template:
@@ -311,7 +311,7 @@ spec:
                   metadata:
                     description: |-
                       Metadata allows setting labels and annotations on child SeiNodes.
-                      The controller always adds sei.io/group and sei.io/group-ordinal
+                      The controller always adds sei.io/nodegroup and sei.io/nodegroup-ordinal
                       labels; user-specified labels are merged.
                     properties:
                       annotations:
