@@ -139,6 +139,8 @@ func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfi
 		return deserializeSidecar[UploadGenesisArtifactsParams](id, params, buildSC, false)
 	case sidecar.TaskTypeAssembleGenesis:
 		return deserializeSidecar[AssembleAndUploadGenesisParams](id, params, buildSC, false)
+	case sidecar.TaskTypeSetGenesisPeers:
+		return deserializeSidecar[SetGenesisPeersParams](id, params, buildSC, false)
 
 	// Controller-side group tasks
 	case TaskTypeAwaitNodesRunning:
