@@ -345,7 +345,7 @@ func TestBuildPlanPhaseAndTasks(t *testing.T) {
 		t.Fatalf("expected 6 tasks, got %d: %v", len(plan.Tasks), taskTypes(plan))
 	}
 	for _, pt := range plan.Tasks {
-		if pt.Status != seiv1alpha1.PlannedTaskPending {
+		if pt.Status != seiv1alpha1.TaskPending {
 			t.Errorf("task %q status = %q, want Pending", pt.Type, pt.Status)
 		}
 		if pt.ID == "" {
@@ -497,7 +497,7 @@ func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
 	firstTask := updated.Status.InitPlan.Tasks[0]
-	if firstTask.Status != seiv1alpha1.PlannedTaskPending && firstTask.Status != seiv1alpha1.PlannedTaskComplete {
+	if firstTask.Status != seiv1alpha1.TaskPending && firstTask.Status != seiv1alpha1.TaskComplete {
 		t.Logf("task status = %q (submit succeeded, status depends on mock GetTask)", firstTask.Status)
 	}
 }
@@ -508,7 +508,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 	p, _ := planner.ForNode(node, testSnapshotRegion)
 	node.Status.InitPlan = mustBuildPlan(t, p, node)
 	for i := range node.Status.InitPlan.Tasks {
-		node.Status.InitPlan.Tasks[i].Status = seiv1alpha1.PlannedTaskComplete
+		node.Status.InitPlan.Tasks[i].Status = seiv1alpha1.TaskComplete
 	}
 
 	r, c := newProgressionReconciler(t, mock, node)
@@ -621,7 +621,7 @@ func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, planner.TaskPollInterval)
 	}
 	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.PlannedTaskPending {
+	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.TaskPending {
 		t.Errorf("task status = %q, want Pending after submit failure", updated.Status.InitPlan.Tasks[0].Status)
 	}
 }
@@ -796,23 +796,22 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 
 // --- Result export tests ---
 
-func TestResultExportScheduledTask_ReplayerWithExport(t *testing.T) {
-	node := replayerNode()
-	node.Spec.Replayer.ResultExport = &seiv1alpha1.ResultExportConfig{}
-	builder := planner.ResultExportScheduledTask(node)
-	if builder == nil {
-		t.Fatal("expected non-nil builder")
+func TestResultExportMonitorTask_ReplayerWithExport(t *testing.T) {
+	node := monitorReplayerNode()
+	req := planner.ResultExportMonitorTask(node)
+	if req == nil {
+		t.Fatal("expected non-nil TaskRequest")
 	}
-	if builder.TaskType() != planner.TaskResultExport {
-		t.Errorf("TaskType() = %q, want %q", builder.TaskType(), planner.TaskResultExport)
+	if req.Type != planner.TaskResultExport {
+		t.Errorf("Type = %q, want %q", req.Type, planner.TaskResultExport)
 	}
 }
 
-func TestResultExportScheduledTask_ReplayerWithoutExport(t *testing.T) {
+func TestResultExportMonitorTask_ReplayerWithoutExport(t *testing.T) {
 	node := replayerNode()
-	builder := planner.ResultExportScheduledTask(node)
-	if builder != nil {
-		t.Errorf("expected nil builder, got %v", builder)
+	req := planner.ResultExportMonitorTask(node)
+	if req != nil {
+		t.Errorf("expected nil TaskRequest, got %v", req)
 	}
 }
 
@@ -851,7 +850,7 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 	node.Status.InitPlan = &seiv1alpha1.TaskPlan{
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: []seiv1alpha1.PlannedTask{
-			{Type: planner.TaskConfigApply, ID: "test-id", Status: seiv1alpha1.PlannedTaskPending},
+			{Type: planner.TaskConfigApply, ID: "test-id", Status: seiv1alpha1.TaskPending},
 		},
 	}
 
@@ -990,11 +989,99 @@ func TestSidecarURLForNode(t *testing.T) {
 
 // --- Reconcile replayer runtime task tests ---
 
-func TestReconcile_CompletePlan_SubmitsResultExportForReplayer(t *testing.T) {
+func TestReconcile_ReplayerWithoutResultExport_NoMonitorTask(t *testing.T) {
+	mock := &mockSidecarClient{}
+	node := replayerNode()
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+
+	r, c := newProgressionReconciler(t, mock, node)
+
+	_, err := r.reconcileRunning(context.Background(), node)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if len(mock.submitted) != 0 {
+		t.Errorf("expected no submissions for replayer without ResultExport, got %d", len(mock.submitted))
+	}
+
+	updated := fetchNode(t, c, node.Name, node.Namespace)
+	if updated.Status.MonitorTasks != nil {
+		t.Errorf("expected nil MonitorTasks, got %v", updated.Status.MonitorTasks)
+	}
+}
+
+func TestReconcile_SnapshotterWithMonitorTask_BothSubmitted(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{submitID: taskID}
-	node := replayerNode()
-	node.Spec.Replayer.ResultExport = &seiv1alpha1.ResultExportConfig{}
+
+	// Build a node that qualifies for both snapshot upload (archive) and
+	// result-export monitor (replayer). In practice these don't overlap on
+	// one node, but this exercises the code path where both run in one reconcile.
+	node := monitorReplayerNode()
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+
+	r, c := newProgressionReconciler(t, mock, node)
+
+	_, err := r.reconcileRunning(context.Background(), node)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	// The monitor replayer node only has result-export (no snapshot upload
+	// since it's a replayer, not an archive). Verify the single submission.
+	if len(mock.submitted) != 1 {
+		t.Fatalf("expected 1 submission, got %d", len(mock.submitted))
+	}
+	if mock.submitted[0].Type != planner.TaskResultExport {
+		t.Errorf("submitted type = %q, want %q", mock.submitted[0].Type, planner.TaskResultExport)
+	}
+
+	updated := fetchNode(t, c, node.Name, node.Namespace)
+	if _, ok := updated.Status.MonitorTasks[planner.TaskResultExport]; !ok {
+		t.Errorf("expected MonitorTasks[%s] to exist", planner.TaskResultExport)
+	}
+}
+
+func TestReconcileRunning_PollRequeue_ImmediateRequeue(t *testing.T) {
+	taskID := uuid.New()
+	mock := &mockSidecarClient{
+		submitID: taskID,
+		taskResults: map[uuid.UUID]*sidecar.TaskResult{
+			taskID: completedResult(taskID, planner.TaskResultExport, nil),
+		},
+	}
+	node := monitorReplayerNode()
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
+		planner.TaskResultExport: {
+			ID:          taskID.String(),
+			Status:      seiv1alpha1.TaskPending,
+			SubmittedAt: metav1.Now(),
+		},
+	}
+
+	r, _ := newProgressionReconciler(t, mock, node)
+
+	result, err := r.reconcileRunning(context.Background(), node)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if !result.Requeue {
+		t.Error("expected immediate Requeue when poll detects terminal state")
+	}
+	if result.RequeueAfter != 0 {
+		t.Errorf("expected RequeueAfter=0 for immediate requeue, got %v", result.RequeueAfter)
+	}
+}
+
+func TestReconcile_CompletePlan_SubmitsResultExportMonitorForReplayer(t *testing.T) {
+	taskID := uuid.New()
+	mock := &mockSidecarClient{submitID: taskID}
+	node := monitorReplayerNode()
+	node.Status.Phase = seiv1alpha1.PhaseRunning
 	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 
 	r, c := newProgressionReconciler(t, mock, node)
@@ -1004,17 +1091,21 @@ func TestReconcile_CompletePlan_SubmitsResultExportForReplayer(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	if len(mock.submitted) != 1 {
-		t.Fatalf("expected 1 scheduled task submitted, got %d", len(mock.submitted))
+		t.Fatalf("expected 1 monitor task submitted, got %d", len(mock.submitted))
 	}
 	if mock.submitted[0].Type != planner.TaskResultExport {
 		t.Errorf("task type = %q, want %q", mock.submitted[0].Type, planner.TaskResultExport)
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.ScheduledTasks == nil {
-		t.Fatal("expected ScheduledTasks to be set")
+	if updated.Status.MonitorTasks == nil {
+		t.Fatal("expected MonitorTasks to be set")
 	}
-	if got := updated.Status.ScheduledTasks[planner.TaskResultExport]; got != taskID.String() {
-		t.Errorf("ScheduledTasks[%s] = %q, want %q", planner.TaskResultExport, got, taskID.String())
+	mt, ok := updated.Status.MonitorTasks[planner.TaskResultExport]
+	if !ok {
+		t.Fatalf("expected MonitorTasks[%s] to exist", planner.TaskResultExport)
+	}
+	if mt.ID != taskID.String() {
+		t.Errorf("MonitorTasks[%s].ID = %q, want %q", planner.TaskResultExport, mt.ID, taskID.String())
 	}
 }

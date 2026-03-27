@@ -99,14 +99,14 @@ const (
 	TaskPlanFailed   TaskPlanPhase = "Failed"
 )
 
-// PlannedTaskStatus represents the state of an individual task within a plan.
+// TaskStatus represents the lifecycle state of a task (plan, monitor, etc.).
 // +kubebuilder:validation:Enum=Pending;Complete;Failed
-type PlannedTaskStatus string
+type TaskStatus string
 
 const (
-	PlannedTaskPending  PlannedTaskStatus = "Pending"
-	PlannedTaskComplete PlannedTaskStatus = "Complete"
-	PlannedTaskFailed   PlannedTaskStatus = "Failed"
+	TaskPending  TaskStatus = "Pending"
+	TaskComplete TaskStatus = "Complete"
+	TaskFailed   TaskStatus = "Failed"
 )
 
 // PlannedTask is a single task within a TaskPlan. Each task carries its full
@@ -121,7 +121,7 @@ type PlannedTask struct {
 	ID string `json:"id"`
 
 	// Status is the current state of this task.
-	Status PlannedTaskStatus `json:"status"`
+	Status TaskStatus `json:"status"`
 
 	// Params is the opaque JSON payload for this task. Deserialized at
 	// execution time by task.Deserialize into the concrete task type.
@@ -165,6 +165,29 @@ const (
 	PhaseTerminating  SeiNodePhase = "Terminating"
 )
 
+// MonitorTask tracks a long-running sidecar task that the controller
+// actively polls for completion. Unlike ScheduledTasks (fire-and-forget),
+// completing a monitor task triggers a controller response (Event + Condition).
+// The map key in MonitorTasks serves as the task type identifier.
+type MonitorTask struct {
+	// ID is the sidecar-assigned task UUID.
+	ID string `json:"id"`
+
+	// Status tracks lifecycle: Pending → Complete or Failed.
+	Status TaskStatus `json:"status"`
+
+	// SubmittedAt is the time the task was submitted to the sidecar.
+	SubmittedAt metav1.Time `json:"submittedAt"`
+
+	// CompletedAt is the time the task reached a terminal state.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+
+	// Error is set when the task fails.
+	// +optional
+	Error string `json:"error,omitempty"`
+}
+
 // SeiNodeStatus defines the observed state of a SeiNode.
 type SeiNodeStatus struct {
 	// Phase is the high-level lifecycle state.
@@ -183,6 +206,11 @@ type SeiNodeStatus struct {
 	// scheduled task.
 	// +optional
 	ScheduledTasks map[string]string `json:"scheduledTasks,omitempty"`
+
+	// MonitorTasks tracks long-running sidecar tasks the controller polls
+	// for completion. Keyed by task type for idempotent submission.
+	// +optional
+	MonitorTasks map[string]MonitorTask `json:"monitorTasks,omitempty"`
 
 	// ConfigStatus reports the observed configuration state from the sidecar.
 	// +optional

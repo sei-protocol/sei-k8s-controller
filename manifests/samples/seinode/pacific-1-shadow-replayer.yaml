@@ -44,4 +44,5 @@ spec:
         targetHeight: 198740000
       bootstrapImage: "ghcr.io/sei-protocol/sei:v6.3.0"
       trustPeriod: "9999h0m0s"
-    resultExport: {}
+    resultExport:
+      canonicalRpc: "http://pacific-1-canonical-rpc.default.svc.cluster.local:26657"

@@ -204,7 +204,7 @@ func buildPlannedTask(node *seiv1alpha1.SeiNode, taskType string, attempt int, p
 	return seiv1alpha1.PlannedTask{
 		Type:   taskType,
 		ID:     id,
-		Status: seiv1alpha1.PlannedTaskPending,
+		Status: seiv1alpha1.TaskPending,
 		Params: p,
 	}, nil
 }

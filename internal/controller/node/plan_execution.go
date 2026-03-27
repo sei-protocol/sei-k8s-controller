@@ -4,6 +4,7 @@ import (
 	"context"
 
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -26,21 +27,43 @@ func (r *SeiNodeReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) task.S
 	return c
 }
 
-// reconcileRuntimeTasks ensures all scheduled tasks are submitted exactly
-// once. The sidecar owns execution cadence after that.
+// reconcileRuntimeTasks ensures all scheduled and monitor tasks are submitted
+// exactly once, and polls monitor tasks for completion on each reconcile.
 func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *seiv1alpha1.SeiNode, sc task.SidecarClient) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Snapshot upload: always a scheduled (cron) task.
 	if builder := planner.SnapshotUploadScheduledTask(node); builder != nil {
 		req := builder.ToTaskRequest()
 		if err := r.ensureScheduledTask(ctx, node, sc, req); err != nil {
-			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", req.Type, "error", err)
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
+			logger.Info("scheduled task submission failed, will retry", "task", req.Type, "error", err)
 		}
 	}
-	if builder := planner.ResultExportScheduledTask(node); builder != nil {
-		req := builder.ToTaskRequest()
-		if err := r.ensureScheduledTask(ctx, node, sc, req); err != nil {
-			log.FromContext(ctx).Info("scheduled task submission failed, will retry", "task", req.Type, "error", err)
+
+	// Result export: monitor task that compares block results against
+	// the canonical chain and completes on app-hash divergence.
+	if err := r.ensureMonitorTasks(ctx, node, sc); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
 		}
+		logger.Info("monitor task submission failed, will retry", "error", err)
 	}
+
+	// Poll all active monitor tasks for completion.
+	requeue, err := r.pollMonitorTasks(ctx, node, sc)
+	if err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		logger.Info("monitor task poll failed, will retry", "error", err)
+	}
+	if requeue {
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
 

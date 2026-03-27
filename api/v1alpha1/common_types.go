@@ -120,12 +120,23 @@ type S3SnapshotDestination struct {
 	Region string `json:"region"`
 }
 
-// ResultExportConfig enables periodic export of block execution results.
+// ResultExportConfig enables export of block execution results to S3.
 // The sidecar queries the local RPC endpoint for block results and uploads
 // them in compressed NDJSON pages to the platform S3 bucket, keyed by the
-// node's chain ID. Its presence on a node spec is sufficient to enable
-// export — no additional fields are required.
-type ResultExportConfig struct{}
+// node's chain ID.
+//
+// When CanonicalRPC is set, the sidecar additionally compares local results
+// against the canonical chain and the task completes when app-hash divergence
+// is detected (monitor mode). Without CanonicalRPC, results are exported
+// periodically on a cron schedule (scheduled mode).
+type ResultExportConfig struct {
+	// CanonicalRPC is the HTTP RPC endpoint of the canonical chain node
+	// to compare block execution results against. When set, the sidecar
+	// runs in comparison mode and the task completes when app-hash
+	// divergence is detected.
+	// +kubebuilder:validation:MinLength=1
+	CanonicalRPC string `json:"canonicalRpc"`
+}
 
 // GenesisConfiguration defines where genesis data is sourced.
 // At most one of PVC or S3 may be set. When neither is set and the chain ID

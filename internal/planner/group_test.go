@@ -54,7 +54,7 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 	if assembleTask.Type != TaskAssembleGenesis {
 		t.Errorf("task[0] type = %q, want %q", assembleTask.Type, TaskAssembleGenesis)
 	}
-	if assembleTask.Status != seiv1alpha1.PlannedTaskPending {
+	if assembleTask.Status != seiv1alpha1.TaskPending {
 		t.Errorf("task[0] status = %q, want Pending", assembleTask.Status)
 	}
 	if assembleTask.ID == "" {

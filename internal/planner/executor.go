@@ -44,7 +44,7 @@ type Executor[T client.Object] struct {
 // tasks are complete.
 func CurrentTask(plan *seiv1alpha1.TaskPlan) *seiv1alpha1.PlannedTask {
 	for i := range plan.Tasks {
-		if plan.Tasks[i].Status != seiv1alpha1.PlannedTaskComplete {
+		if plan.Tasks[i].Status != seiv1alpha1.TaskComplete {
 			return &plan.Tasks[i]
 		}
 	}
@@ -104,7 +104,7 @@ func executePlan(
 
 	status := exec.Status(ctx)
 
-	if status == task.ExecutionRunning && t.Status == seiv1alpha1.PlannedTaskPending {
+	if status == task.ExecutionRunning && t.Status == seiv1alpha1.TaskPending {
 		if err := exec.Execute(ctx); err != nil {
 			log.FromContext(ctx).Info("task submission failed, will retry",
 				"task", t.Type, "error", err)
@@ -119,7 +119,7 @@ func executePlan(
 
 	case task.ExecutionComplete:
 		patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
-		t.Status = seiv1alpha1.PlannedTaskComplete
+		t.Status = seiv1alpha1.TaskComplete
 		if err := kc.Status().Patch(ctx, obj, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking task complete: %w", err)
 		}
@@ -157,7 +157,7 @@ func retryTask(
 
 	resourceName := obj.GetName()
 	t.ID = task.DeterministicTaskID(resourceName, t.Type, t.RetryCount)
-	t.Status = seiv1alpha1.PlannedTaskPending
+	t.Status = seiv1alpha1.TaskPending
 	t.Error = ""
 
 	if err := kc.Status().Patch(ctx, obj, patch); err != nil {
@@ -180,7 +180,7 @@ func failTask(
 	log.FromContext(ctx).Error(fmt.Errorf("task failed: %s", errMsg), "task plan failed", "task", t.Type)
 
 	patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
-	t.Status = seiv1alpha1.PlannedTaskFailed
+	t.Status = seiv1alpha1.TaskFailed
 	t.Error = errMsg
 	plan.Phase = seiv1alpha1.TaskPlanFailed
 	if err := kc.Status().Patch(ctx, obj, patch); err != nil {
