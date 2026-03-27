@@ -1069,11 +1069,8 @@ func TestReconcileRunning_PollRequeue_ImmediateRequeue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if !result.Requeue {
-		t.Error("expected immediate Requeue when poll detects terminal state")
-	}
-	if result.RequeueAfter != 0 {
-		t.Errorf("expected RequeueAfter=0 for immediate requeue, got %v", result.RequeueAfter)
+	if result.RequeueAfter != planner.ResultRequeueImmediate.RequeueAfter {
+		t.Errorf("expected immediate requeue (%v), got RequeueAfter=%v", planner.ResultRequeueImmediate.RequeueAfter, result.RequeueAfter)
 	}
 }
 

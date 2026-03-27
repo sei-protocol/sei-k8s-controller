@@ -37,7 +37,7 @@ func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *sei
 		req := builder.ToTaskRequest()
 		if err := r.ensureScheduledTask(ctx, node, sc, req); err != nil {
 			if apierrors.IsConflict(err) {
-				return ctrl.Result{Requeue: true}, nil
+				return planner.ResultRequeueImmediate, nil
 			}
 			logger.Info("scheduled task submission failed, will retry", "task", req.Type, "error", err)
 		}
@@ -47,7 +47,7 @@ func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *sei
 	// the canonical chain and completes on app-hash divergence.
 	if err := r.ensureMonitorTasks(ctx, node, sc); err != nil {
 		if apierrors.IsConflict(err) {
-			return ctrl.Result{Requeue: true}, nil
+			return planner.ResultRequeueImmediate, nil
 		}
 		logger.Info("monitor task submission failed, will retry", "error", err)
 	}
@@ -56,12 +56,12 @@ func (r *SeiNodeReconciler) reconcileRuntimeTasks(ctx context.Context, node *sei
 	requeue, err := r.pollMonitorTasks(ctx, node, sc)
 	if err != nil {
 		if apierrors.IsConflict(err) {
-			return ctrl.Result{Requeue: true}, nil
+			return planner.ResultRequeueImmediate, nil
 		}
 		logger.Info("monitor task poll failed, will retry", "error", err)
 	}
 	if requeue {
-		return ctrl.Result{Requeue: true}, nil
+		return planner.ResultRequeueImmediate, nil
 	}
 
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
