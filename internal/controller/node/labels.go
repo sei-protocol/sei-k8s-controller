@@ -10,7 +10,7 @@ import (
 const (
 	nodeLabel           = "sei.io/node"
 	dataDir             = "/sei"
-	defaultSidecarImage = "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/seictl@sha256:fe5afa4772a692960ebfe15f0f24d47a454f428fced2c9bab2c264d34f607a1e"
+	defaultSidecarImage = "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/seictl@sha256:54325467253ad86cb486a97f5e9e57789e7c17c1faf844e730c89f175374bfe1"
 )
 
 // resourceLabelsForNode returns labels for the StatefulSet pod template.

@@ -33,6 +33,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		S3Region:       s3.Region,
 		ChainID:        group.Spec.Genesis.ChainID,
 		AccountBalance: group.Spec.Genesis.AccountBalance,
+		Namespace:      group.Namespace,
 		Nodes:          nodeParams,
 	}
 

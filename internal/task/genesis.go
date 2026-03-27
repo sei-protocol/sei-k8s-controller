@@ -72,6 +72,7 @@ type AssembleAndUploadGenesisParams struct {
 	S3Region       string             `json:"s3Region"`
 	ChainID        string             `json:"chainId"`
 	AccountBalance string             `json:"accountBalance"`
+	Namespace      string             `json:"namespace"`
 	Nodes          []GenesisNodeParam `json:"nodes"`
 }
 
@@ -82,6 +83,26 @@ type GenesisNodeParam struct {
 
 func (p *AssembleAndUploadGenesisParams) taskType() string {
 	return sidecar.TaskTypeAssembleGenesis
+}
+
+// SetGenesisPeersParams are the serialized fields for set-genesis-peers.
+// The task downloads a peers.json from S3 (produced by the assembler),
+// filters out the current node, and writes persistent_peers to config.toml.
+type SetGenesisPeersParams struct {
+	S3Bucket string `json:"s3Bucket"`
+	S3Key    string `json:"s3Key"`
+	S3Region string `json:"s3Region"`
+}
+
+func (p *SetGenesisPeersParams) taskType() string { return sidecar.TaskTypeSetGenesisPeers }
+
+func (p *SetGenesisPeersParams) toRequestParams() *map[string]any {
+	m := map[string]any{
+		"s3Bucket": p.S3Bucket,
+		"s3Key":    p.S3Key,
+		"s3Region": p.S3Region,
+	}
+	return &m
 }
 
 func (p *AssembleAndUploadGenesisParams) toRequestParams() *map[string]any {
@@ -95,6 +116,7 @@ func (p *AssembleAndUploadGenesisParams) toRequestParams() *map[string]any {
 		"s3Region":       p.S3Region,
 		"chainId":        p.ChainID,
 		"accountBalance": p.AccountBalance,
+		"namespace":      p.Namespace,
 		"nodes":          nodes,
 	}
 	return &m

@@ -152,7 +152,7 @@ func buildGenesisInitPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, err
 		TaskUploadGenesisArtifacts,
 		TaskConfigureGenesis,
 		TaskConfigApply,
-		TaskDiscoverPeers,
+		TaskSetGenesisPeers,
 		TaskConfigValidate,
 		TaskMarkReady,
 	}
@@ -203,8 +203,12 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 			Mode:      "validator",
 			Overrides: mergeOverrides(nil, node.Spec.Overrides),
 		}
-	case TaskDiscoverPeers:
-		return discoverPeersParams(PeersFor(node))
+	case TaskSetGenesisPeers:
+		return &task.SetGenesisPeersParams{
+			S3Bucket: gc.ArtifactS3.Bucket,
+			S3Key:    gc.ArtifactS3.Prefix + "peers.json",
+			S3Region: gc.ArtifactS3.Region,
+		}
 	case TaskConfigValidate:
 		return &task.ConfigValidateParams{}
 	case TaskMarkReady:

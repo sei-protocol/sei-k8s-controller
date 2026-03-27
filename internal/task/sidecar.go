@@ -32,6 +32,7 @@ var (
 	_ taskParamser = (*GenerateGentxParams)(nil)
 	_ taskParamser = (*UploadGenesisArtifactsParams)(nil)
 	_ taskParamser = (*AssembleAndUploadGenesisParams)(nil)
+	_ taskParamser = (*SetGenesisPeersParams)(nil)
 )
 
 // sidecarExecution is a generic TaskExecution backed by the sidecar HTTP API.

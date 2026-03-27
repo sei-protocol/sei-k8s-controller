@@ -83,6 +83,9 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 	if assembleParams.Nodes[0].Name != "node-0" {
 		t.Errorf("nodes[0].Name = %q, want %q", assembleParams.Nodes[0].Name, "node-0")
 	}
+	if assembleParams.Namespace != "default" {
+		t.Errorf("Namespace = %q, want %q", assembleParams.Namespace, "default")
+	}
 
 	// Task 1: await-nodes-running
 	awaitTask := plan.Tasks[1]

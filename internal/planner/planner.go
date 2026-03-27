@@ -29,6 +29,7 @@ const (
 	TaskGenerateGentx          = sidecar.TaskTypeGenerateGentx
 	TaskUploadGenesisArtifacts = sidecar.TaskTypeUploadGenesisArtifacts
 	TaskAssembleGenesis        = sidecar.TaskTypeAssembleGenesis
+	TaskSetGenesisPeers        = sidecar.TaskTypeSetGenesisPeers
 	TaskAwaitNodesRunning      = task.TaskTypeAwaitNodesRunning
 )
 
