@@ -6,6 +6,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 var allNodePhases = []string{
@@ -134,4 +135,5 @@ func cleanupNodeMetrics(namespace, name string) {
 	nodeLastInitDuration.DeleteLabelValues(namespace, name)
 	sidecarUnreachableTotal.DeleteLabelValues(namespace, name)
 	observability.ReconcileErrorsTotal.DeleteLabelValues(seiNodeControllerName, namespace, name)
+	cleanupMonitorTaskMetrics(namespace, name, []string{planner.TaskResultExport})
 }
