@@ -175,19 +175,17 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 }
 
 // bootstrapWaitCommand returns a shell command that waits for the sidecar
-// to be reachable and then exec's seid with --halt-height. Uses /v0/status
-// rather than /v0/healthz because the bootstrap sidecar never receives a
-// mark-ready task (healthz returns 503 until mark-ready runs).
+// healthz to return 200 and then exec's seid with --halt-height.
 func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args []string) {
 	script := fmt.Sprintf(
-		`echo "waiting for sidecar to become reachable..."; `+
+		`echo "waiting for sidecar to become ready..."; `+
 			`while true; do `+
 			`{ exec 3<>/dev/tcp/localhost/%d; } 2>/dev/null && `+
-			`printf "GET /v0/status HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && `+
+			`printf "GET /v0/healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && `+
 			`head -1 <&3 | grep -q "200" && break; `+
 			`exec 3>&-; sleep 5; done; `+
 			`exec 3>&-; `+
-			`echo "sidecar reachable, starting seid with halt-height %d"; `+
+			`echo "sidecar ready, starting seid with halt-height %d"; `+
 			`exec seid start --home %s --halt-height %d`,
 		port, haltHeight, bootstrapDataDir, haltHeight,
 	)
