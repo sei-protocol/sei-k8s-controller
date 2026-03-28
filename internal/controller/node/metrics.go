@@ -16,6 +16,12 @@ var allNodePhases = []string{
 	string(seiv1alpha1.PhaseTerminating),
 }
 
+var allTaskStatuses = []string{
+	string(seiv1alpha1.TaskPending),
+	string(seiv1alpha1.TaskComplete),
+	string(seiv1alpha1.TaskFailed),
+}
+
 var (
 	nodePhaseGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -66,6 +72,22 @@ var (
 		},
 		[]string{"namespace", "node"},
 	)
+
+	monitorTaskCompletedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "sei_controller_monitor_task_completed_total",
+			Help: "Monitor task terminal state transitions (DivergenceDetected, TaskFailed, TaskLost)",
+		},
+		[]string{"namespace", "node", "task_type", "reason"},
+	)
+
+	monitorTaskStatus = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "sei_controller_monitor_task_status",
+			Help: "Current status of each monitor task (1=active, 0=inactive)",
+		},
+		[]string{"namespace", "node", "task_type", "status"},
+	)
 )
 
 func init() {
@@ -76,11 +98,35 @@ func init() {
 		nodeLastInitDuration,
 		sidecarRequestDuration,
 		sidecarUnreachableTotal,
+		monitorTaskCompletedTotal,
+		monitorTaskStatus,
 	)
 }
 
 func emitNodePhase(ns, name string, phase seiv1alpha1.SeiNodePhase) {
 	observability.EmitPhaseGauge(nodePhaseGauge, ns, name, string(phase), allNodePhases)
+}
+
+func emitMonitorTaskTerminal(ns, node, taskType, reason string) {
+	monitorTaskCompletedTotal.WithLabelValues(ns, node, taskType, reason).Inc()
+}
+
+func emitMonitorTaskStatus(ns, node, taskType, status string) {
+	for _, s := range allTaskStatuses {
+		val := float64(0)
+		if s == status {
+			val = 1
+		}
+		monitorTaskStatus.WithLabelValues(ns, node, taskType, s).Set(val)
+	}
+}
+
+func cleanupMonitorTaskMetrics(ns, name string, taskTypes []string) {
+	for _, tt := range taskTypes {
+		for _, s := range allTaskStatuses {
+			monitorTaskStatus.DeleteLabelValues(ns, name, tt, s)
+		}
+	}
 }
 
 func cleanupNodeMetrics(namespace, name string) {
