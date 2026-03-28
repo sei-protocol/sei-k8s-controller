@@ -102,8 +102,7 @@ func buildBootstrapProgression(peers []seiv1alpha1.PeerSource, snap *seiv1alpha1
 		prog = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync)
 	}
 
-	// Remove mark-ready — the bootstrap pod isn't the production pod
-	return slices.DeleteFunc(prog, func(t string) bool { return t == TaskMarkReady })
+	return prog
 }
 
 // buildPostBootstrapProgression returns the sidecar task sequence for the
