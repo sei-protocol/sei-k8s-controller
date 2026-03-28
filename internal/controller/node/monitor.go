@@ -64,6 +64,7 @@ func (r *SeiNodeReconciler) ensureMonitorTask(ctx context.Context, node *seiv1al
 		Status:      seiv1alpha1.TaskPending,
 		SubmittedAt: now,
 	}
+	emitMonitorTaskStatus(node.Namespace, node.Name, req.Type, string(seiv1alpha1.TaskPending))
 	return r.Status().Patch(ctx, node, patch)
 }
 
@@ -121,6 +122,9 @@ func (r *SeiNodeReconciler) pollMonitorTasks(ctx context.Context, node *seiv1alp
 			patched = true
 			terminal = true
 
+			emitMonitorTaskTerminal(node.Namespace, node.Name, key, ReasonDivergenceDetected)
+			emitMonitorTaskStatus(node.Namespace, node.Name, key, string(seiv1alpha1.TaskComplete))
+
 			meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
 				Type:               ConditionResultExportComplete,
 				Status:             metav1.ConditionTrue,
@@ -156,6 +160,9 @@ func (r *SeiNodeReconciler) failMonitorTask(node *seiv1alpha1.SeiNode, key strin
 	mt.CompletedAt = &now
 	mt.Error = errMsg
 	node.Status.MonitorTasks[key] = mt
+
+	emitMonitorTaskTerminal(node.Namespace, node.Name, key, reason)
+	emitMonitorTaskStatus(node.Namespace, node.Name, key, string(seiv1alpha1.TaskFailed))
 
 	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
 		Type:               ConditionResultExportComplete,

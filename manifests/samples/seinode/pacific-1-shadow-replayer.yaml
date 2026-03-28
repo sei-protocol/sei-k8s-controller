@@ -1,9 +1,9 @@
 # SeiNode — Pacific-1 Shadow Replayer
 #
-# Identical to pacific-1-replay except the entrypoint passes
-# --skip-app-hash-validation so the node can block sync with a
-# different execution engine (V2 vs Giga). The node is queryable
-# via RPC for external comparison against the canonical chain.
+# Replays the canonical pacific-1 chain with a different execution engine
+# (Giga) via --skip-app-hash-validation. The sidecar continuously compares
+# block results against the canonical RPC and completes when app-hash
+# divergence is detected, uploading a DivergenceReport to S3.
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
@@ -14,7 +14,7 @@ spec:
   image: ghcr.io/bdchatham/sei-shadow@sha256:e29af54effc908c3b998655f93713765ae476e40e39765530dc7a271648257ca
 
   sidecar:
-    image: ghcr.io/sei-protocol/seictl@sha256:6314a5a05cf532841a181a4cd55c6d501db4c4c19bfe8173d887f8e435bc490c
+    image: ghcr.io/sei-protocol/seictl@sha256:63860a7cf1810e70cc8647d72ff705f87a203250b12bbdec2f88f26b850b628e
 
   entrypoint:
     command: ["seid"]
