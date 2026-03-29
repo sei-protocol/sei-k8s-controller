@@ -560,16 +560,6 @@ spec:
                         type: object
                     type: object
                 type: object
-              storage:
-                description: Storage controls PVC lifecycle.
-                properties:
-                  retainOnDelete:
-                    default: false
-                    description: |-
-                      RetainOnDelete prevents the data PVC from being deleted when the
-                      SeiNode is deleted.
-                    type: boolean
-                type: object
               validator:
                 description: Validator configures a consensus-participating validator
                   node.

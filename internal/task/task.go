@@ -156,6 +156,22 @@ func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfi
 	case TaskTypeTeardownBootstrap:
 		return deserializeBootstrapTeardown(id, params, cfg)
 
+	// Controller-side deployment tasks
+	case TaskTypeCreateGreenNodes:
+		return deserializeCreateGreenNodes(id, params, cfg)
+	case TaskTypeAwaitGreenRunning:
+		return deserializeAwaitGreenRunning(id, params, cfg)
+	case TaskTypeSubmitHaltSignal:
+		return deserializeSubmitHaltSignal(id, params, cfg)
+	case TaskTypeAwaitGreenAtHeight:
+		return deserializeAwaitGreenAtHeight(id, params, cfg)
+	case TaskTypeAwaitGreenCaughtUp:
+		return deserializeAwaitGreenCaughtUp(id, params, cfg)
+	case TaskTypeSwitchTraffic:
+		return deserializeSwitchTraffic(id, params, cfg)
+	case TaskTypeTeardownBlue:
+		return deserializeTeardownBlue(id, params, cfg)
+
 	default:
 		return nil, &UnknownTaskTypeError{Type: taskType}
 	}

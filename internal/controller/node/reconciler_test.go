@@ -247,30 +247,3 @@ func TestNodeDeletion_SnapshotNode_WithoutRetain_DeletesPVC(t *testing.T) {
 	err = c.Get(ctx, types.NamespacedName{Name: "data-snap-0", Namespace: "default"}, remaining)
 	g.Expect(err).To(HaveOccurred())
 }
-
-func TestNodeDeletion_SnapshotNode_WithRetain_KeepsPVC(t *testing.T) {
-	g := NewWithT(t)
-	ctx := context.Background()
-
-	node := newSnapshotNode("snap-0", "default")
-	node.Spec.Storage.RetainOnDelete = true
-	node.Finalizers = []string{nodeFinalizerName}
-
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "data-snap-0",
-			Namespace: "default",
-			Labels:    resourceLabelsForNode(node),
-		},
-	}
-
-	r, c := newNodeReconciler(t, node, pvc)
-	g.Expect(c.Delete(ctx, node)).To(Succeed())
-	_ = c.Get(ctx, types.NamespacedName{Name: "snap-0", Namespace: "default"}, node)
-
-	_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
-	g.Expect(err).NotTo(HaveOccurred())
-
-	remaining := &corev1.PersistentVolumeClaim{}
-	g.Expect(c.Get(ctx, types.NamespacedName{Name: "data-snap-0", Namespace: "default"}, remaining)).To(Succeed())
-}

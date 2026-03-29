@@ -34,7 +34,12 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 		})
 	}
 
-	group.Status.ObservedGeneration = group.Generation
+	// Only update ObservedGeneration during steady-state reconciliation.
+	// During deployment, ObservedGeneration is updated by the deployment
+	// handler upon plan completion.
+	if group.Spec.UpdateStrategy == nil {
+		group.Status.ObservedGeneration = group.Generation
+	}
 	group.Status.Replicas = group.Spec.Replicas
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses

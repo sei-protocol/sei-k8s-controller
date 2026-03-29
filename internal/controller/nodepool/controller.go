@@ -293,9 +293,6 @@ func generateSeiNode(sn *seiv1alpha1.SeiNodePool, ordinal int) *seiv1alpha1.SeiN
 					DataPVC: dataPVCName(sn, ordinal),
 				},
 			},
-			Storage: seiv1alpha1.SeiNodeStorageConfig{
-				RetainOnDelete: sn.Spec.Storage.RetainOnDelete,
-			},
 		},
 	}
 }

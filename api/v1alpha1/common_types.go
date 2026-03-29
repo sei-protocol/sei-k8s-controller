@@ -172,15 +172,6 @@ type GenesisS3Source struct {
 	Region string `json:"region,omitempty"`
 }
 
-// SeiNodeStorageConfig controls PVC lifecycle for SeiNode.
-type SeiNodeStorageConfig struct {
-	// RetainOnDelete prevents the data PVC from being deleted when the
-	// SeiNode is deleted.
-	// +optional
-	// +kubebuilder:default=false
-	RetainOnDelete bool `json:"retainOnDelete,omitempty"`
-}
-
 // SidecarConfig configures the sei-sidecar container.
 type SidecarConfig struct {
 	// Image overrides the sidecar container image.

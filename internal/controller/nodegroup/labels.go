@@ -11,6 +11,7 @@ import (
 const (
 	groupLabel          = "sei.io/nodegroup"
 	groupOrdinalLabel   = "sei.io/nodegroup-ordinal"
+	revisionLabel       = "sei.io/revision"
 	nodeLabel           = "sei.io/node"
 	managedByAnnotation = "sei.io/managed-by"
 )
@@ -19,15 +20,29 @@ func seiNodeName(group *seiv1alpha1.SeiNodeGroup, ordinal int) string {
 	return fmt.Sprintf("%s-%d", group.Name, ordinal)
 }
 
+// activeRevision returns the current active revision string for a group.
+// During a deployment, this comes from status; otherwise from the group's
+// generation.
+func activeRevision(group *seiv1alpha1.SeiNodeGroup) string {
+	if group.Status.Deployment != nil && group.Status.Deployment.ActiveRevision != "" {
+		return group.Status.Deployment.ActiveRevision
+	}
+	return strconv.FormatInt(group.Generation, 10)
+}
+
 func externalServiceName(group *seiv1alpha1.SeiNodeGroup) string {
 	return fmt.Sprintf("%s-external", group.Name)
 }
 
 // groupSelector returns the label selector used by the shared external
 // Service, AuthorizationPolicy, and ServiceMonitor to target all pods
-// in the group.
+// in the group. Includes the active revision label so that during a
+// blue-green deployment, only the active set receives traffic.
 func groupSelector(group *seiv1alpha1.SeiNodeGroup) map[string]string {
-	return map[string]string{groupLabel: group.Name}
+	return map[string]string{
+		groupLabel:    group.Name,
+		revisionLabel: activeRevision(group),
+	}
 }
 
 // seiNodeLabels builds the metadata labels for a child SeiNode.
@@ -40,6 +55,7 @@ func seiNodeLabels(group *seiv1alpha1.SeiNodeGroup, ordinal int) map[string]stri
 	}
 	labels[groupLabel] = group.Name
 	labels[groupOrdinalLabel] = strconv.Itoa(ordinal)
+	labels[revisionLabel] = activeRevision(group)
 	return labels
 }
 

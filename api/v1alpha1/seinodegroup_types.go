@@ -41,6 +41,49 @@ type SeiNodeGroupSpec struct {
 	// all replicas.
 	// +optional
 	Monitoring *MonitoringConfig `json:"monitoring,omitempty"`
+
+	// UpdateStrategy controls how changes to the template are rolled out
+	// to child SeiNodes. When set, the controller uses blue-green
+	// deployment orchestration instead of in-place updates.
+	// When not set, template changes are applied in-place via ensureSeiNode.
+	// +optional
+	UpdateStrategy *UpdateStrategy `json:"updateStrategy,omitempty"`
+}
+
+// UpdateStrategyType identifies the deployment strategy.
+// +kubebuilder:validation:Enum=BlueGreen;HardFork
+type UpdateStrategyType string
+
+const (
+	// UpdateStrategyBlueGreen performs a blue-green deployment once the
+	// green nodes have caught up to the chain tip (catching_up == false).
+	UpdateStrategyBlueGreen UpdateStrategyType = "BlueGreen"
+
+	// UpdateStrategyHardFork performs a blue-green deployment at a specific
+	// block height. The old binary halts via sidecar SIGTERM at the
+	// configured halt-height, and the new binary continues from that height.
+	UpdateStrategyHardFork UpdateStrategyType = "HardFork"
+)
+
+// UpdateStrategy controls how spec changes propagate to child SeiNodes.
+// +kubebuilder:validation:XValidation:rule="self.type != 'HardFork' || (has(self.hardFork) && self.hardFork.haltHeight > 0)",message="hardFork strategy requires haltHeight > 0"
+type UpdateStrategy struct {
+	// Type selects the deployment strategy.
+	Type UpdateStrategyType `json:"type"`
+
+	// HardFork configures blue-green deployment at a specific block height.
+	// Required when type is HardFork.
+	// +optional
+	HardFork *HardForkStrategy `json:"hardFork,omitempty"`
+}
+
+// HardForkStrategy configures a blue-green deployment at a specific block height.
+type HardForkStrategy struct {
+	// HaltHeight is the block height at which the old binary is stopped
+	// via sidecar SIGTERM. The new binary must include an upgrade handler
+	// that continues from this height.
+	// +kubebuilder:validation:Minimum=1
+	HaltHeight int64 `json:"haltHeight"`
 }
 
 // GenesisCeremonyConfig configures genesis ceremony orchestration for a node group.
@@ -121,13 +164,14 @@ type SeiNodeTemplateMeta struct {
 // ---------------------------------------------------------------------------
 
 // SeiNodeGroupPhase represents the high-level lifecycle state.
-// +kubebuilder:validation:Enum=Pending;Initializing;Ready;Degraded;Failed;Terminating
+// +kubebuilder:validation:Enum=Pending;Initializing;Ready;Upgrading;Degraded;Failed;Terminating
 type SeiNodeGroupPhase string
 
 const (
 	GroupPhasePending      SeiNodeGroupPhase = "Pending"
 	GroupPhaseInitializing SeiNodeGroupPhase = "Initializing"
 	GroupPhaseReady        SeiNodeGroupPhase = "Ready"
+	GroupPhaseUpgrading    SeiNodeGroupPhase = "Upgrading"
 	GroupPhaseDegraded     SeiNodeGroupPhase = "Degraded"
 	GroupPhaseFailed       SeiNodeGroupPhase = "Failed"
 	GroupPhaseTerminating  SeiNodeGroupPhase = "Terminating"
@@ -166,6 +210,11 @@ type SeiNodeGroupStatus struct {
 	// +optional
 	GenesisS3URI string `json:"genesisS3URI,omitempty"`
 
+	// Deployment tracks an in-progress blue-green deployment.
+	// Nil when no deployment is active.
+	// +optional
+	Deployment *DeploymentStatus `json:"deployment,omitempty"`
+
 	// NetworkingStatus reports the observed state of networking resources.
 	// +optional
 	NetworkingStatus *NetworkingStatus `json:"networkingStatus,omitempty"`
@@ -197,6 +246,26 @@ type NetworkingStatus struct {
 	LoadBalancerIngress []corev1.LoadBalancerIngress `json:"loadBalancerIngress,omitempty"`
 }
 
+// DeploymentStatus tracks the state of a blue-green deployment.
+type DeploymentStatus struct {
+	// Plan is the ordered task sequence driving the deployment.
+	Plan TaskPlan `json:"plan"`
+
+	// ActiveRevision identifies the generation of currently live nodes.
+	ActiveRevision string `json:"activeRevision"`
+
+	// IncomingRevision identifies the generation of green nodes being deployed.
+	IncomingRevision string `json:"incomingRevision"`
+
+	// BlueNodes lists the names of the original SeiNode resources.
+	// +optional
+	BlueNodes []string `json:"blueNodes,omitempty"`
+
+	// GreenNodes lists the names of the new SeiNode resources.
+	// +optional
+	GreenNodes []string `json:"greenNodes,omitempty"`
+}
+
 // Status condition types for SeiNodeGroup.
 const (
 	ConditionNodesReady              = "NodesReady"
@@ -205,6 +274,7 @@ const (
 	ConditionIsolationReady          = "IsolationReady"
 	ConditionServiceMonitorReady     = "ServiceMonitorReady"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
+	ConditionDeploymentInProgress    = "DeploymentInProgress"
 )
 
 // +kubebuilder:object:root=true
@@ -213,6 +283,7 @@ const (
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Revision",type=string,JSONPath=`.status.deployment.activeRevision`,priority=1
 // +kubebuilder:printcolumn:name="Host",type=string,JSONPath=`.spec.networking.gateway.hostnames[0]`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
