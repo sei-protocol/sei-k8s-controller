@@ -40,8 +40,6 @@ func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx context.Context, group 
 	return nil
 }
 
-// --- External Service ---
-
 func (r *SeiNodeGroupReconciler) reconcileExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Networking.Service == nil {
 		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
@@ -112,8 +110,6 @@ func externalServicePorts(portNames []seiv1alpha1.PortName) []corev1.ServicePort
 	}
 	return ports
 }
-
-// --- HTTPRoute (unstructured) ---
 
 func (r *SeiNodeGroupReconciler) reconcileRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Networking.Gateway == nil {

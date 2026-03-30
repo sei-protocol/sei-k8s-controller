@@ -5,17 +5,16 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 // reconcileSeiNodes ensures the desired set of child SeiNodes exist,
@@ -54,22 +53,20 @@ func (r *SeiNodeGroupReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNo
 	if group.Generation == group.Status.ObservedGeneration {
 		return
 	}
+	if group.Status.ObservedGeneration == 0 {
+		return // new group, never reconciled yet
+	}
 	if group.Status.Deployment != nil {
 		return
 	}
-
-	entrantRevision := strconv.FormatInt(group.Generation, 10)
-	incumbentRevision := strconv.FormatInt(group.Generation-1, 10)
-
-	entrantNames := make([]string, int(group.Spec.Replicas))
-	for i := range int(group.Spec.Replicas) {
-		entrantNames[i] = fmt.Sprintf("%s-g%d-%d", group.Name, group.Generation, i)
+	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		return
 	}
 
 	group.Status.Deployment = &seiv1alpha1.DeploymentStatus{
-		IncumbentRevision: incumbentRevision,
-		EntrantRevision:   entrantRevision,
-		EntrantNodes:      entrantNames,
+		IncumbentRevision: planner.IncumbentRevision(group),
+		EntrantRevision:   planner.EntrantRevision(group),
+		EntrantNodes:      planner.EntrantNodeNames(group),
 	}
 	group.Status.Phase = seiv1alpha1.GroupPhaseUpgrading
 }
@@ -95,17 +92,19 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
 
-	existing := &seiv1alpha1.SeiNode{}
-	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
-	if apierrors.IsNotFound(err) {
+	// Check if a node for this ordinal already exists (by label), regardless
+	// of naming convention. After a deployment, entrant nodes have a different
+	// name pattern but the same ordinal label.
+	existing, err := r.findNodeByOrdinal(ctx, group, ordinal)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
 		if createErr := r.Create(ctx, desired); createErr != nil {
 			return createErr
 		}
 		r.Recorder.Eventf(group, corev1.EventTypeNormal, "SeiNodeCreated", "Created SeiNode %s", desired.Name)
 		return nil
-	}
-	if err != nil {
-		return err
 	}
 
 	updated := false
@@ -149,6 +148,27 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 	return nil
 }
 
+// findNodeByOrdinal looks up a child SeiNode by its ordinal label,
+// regardless of naming convention. Returns nil if not found.
+func (r *SeiNodeGroupReconciler) findNodeByOrdinal(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, ordinal int) (*seiv1alpha1.SeiNode, error) {
+	nodeList := &seiv1alpha1.SeiNodeList{}
+	if err := r.List(ctx, nodeList,
+		client.InNamespace(group.Namespace),
+		client.MatchingLabels{
+			groupLabel:        group.Name,
+			groupOrdinalLabel: fmt.Sprintf("%d", ordinal),
+		},
+	); err != nil {
+		return nil, fmt.Errorf("listing nodes for ordinal %d: %w", ordinal, err)
+	}
+	for i := range nodeList.Items {
+		if metav1.IsControlledBy(&nodeList.Items[i], group) {
+			return &nodeList.Items[i], nil
+		}
+	}
+	return nil, nil
+}
+
 func generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.SeiNode {
 	labels := seiNodeLabels(group, ordinal)
 	annotations := seiNodeAnnotations(group)
@@ -158,6 +178,7 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.
 		spec.PodLabels = make(map[string]string)
 	}
 	spec.PodLabels[groupLabel] = group.Name
+	spec.PodLabels[revisionLabel] = activeRevision(group)
 
 	if gc := group.Spec.Genesis; gc != nil && spec.Validator != nil {
 		if spec.ChainID == "" {

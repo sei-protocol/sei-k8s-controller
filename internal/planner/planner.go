@@ -8,6 +8,7 @@ import (
 
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -79,7 +80,7 @@ func needsGenesisPlan(group *seiv1alpha1.SeiNodeGroup) bool {
 		return false
 	}
 	for _, c := range group.Status.Conditions {
-		if c.Type == "GenesisCeremonyComplete" && c.Status == "True" {
+		if c.Type == seiv1alpha1.ConditionGenesisCeremonyComplete && c.Status == metav1.ConditionTrue {
 			return false
 		}
 	}

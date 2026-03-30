@@ -34,16 +34,21 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 		})
 	}
 
-	// Only update ObservedGeneration during steady-state reconciliation.
-	// During deployment, ObservedGeneration is updated by the deployment
-	// handler upon plan completion.
-	if group.Spec.UpdateStrategy == nil {
+	// Update ObservedGeneration when no plan is active. During plan
+	// execution, ObservedGeneration is updated by completePlan.
+	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
 		group.Status.ObservedGeneration = group.Generation
 	}
 	group.Status.Replicas = group.Spec.Replicas
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses
-	group.Status.Phase = computeGroupPhase(readyReplicas, group.Spec.Replicas, nodes)
+
+	// Preserve Upgrading phase during active deployments.
+	if group.Status.Deployment != nil {
+		group.Status.Phase = seiv1alpha1.GroupPhaseUpgrading
+	} else {
+		group.Status.Phase = computeGroupPhase(readyReplicas, group.Spec.Replicas, nodes)
+	}
 
 	svc, svcErr := r.fetchExternalService(ctx, group)
 	group.Status.NetworkingStatus = buildNetworkingStatus(group, svc)

@@ -7,6 +7,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -44,7 +45,11 @@ func (e *switchTrafficExecution) Execute(ctx context.Context) error {
 		return e.fail(fmt.Errorf("no deployment status on group %s", e.params.GroupName))
 	}
 
+	patch := client.MergeFrom(group.DeepCopy())
 	group.Status.Deployment.IncumbentRevision = e.params.EntrantRevision
+	if err := e.cfg.KubeClient.Status().Patch(ctx, group, patch); err != nil {
+		return e.fail(fmt.Errorf("patching deployment revision: %w", err))
+	}
 
 	log.FromContext(ctx).Info("traffic switched to entrant revision",
 		"group", e.params.GroupName, "revision", e.params.EntrantRevision)
