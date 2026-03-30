@@ -76,6 +76,9 @@ func needsGenesisPlan(group *seiv1alpha1.SeiNodeGroup) bool {
 	if group.Spec.Genesis == nil {
 		return false
 	}
+	if group.Status.ObservedGeneration != 0 {
+		return false // genesis only runs on the first generation
+	}
 	if group.Status.Plan != nil {
 		return false
 	}
