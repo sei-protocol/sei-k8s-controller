@@ -11,7 +11,7 @@ metadata:
   name: genesis-test
   namespace: default
 spec:
-  replicas: 20
+  replicas: 4
 
   genesis:
     chainId: genesis-test-1
@@ -32,5 +32,9 @@ spec:
 
       sidecar:
         image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/seictl@sha256:d3962ce60c1a466d57086d6dff54750c2ea5c9227d40a6224e85f94de35b7379
+
+      # overrides:
+      #   evm.http_enabled: "true"
+      #   api.rest.enable: "true"
 
       validator: {}
