@@ -1,9 +1,12 @@
 package nodegroup
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"strconv"
+	"strings"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -17,12 +20,12 @@ const (
 )
 
 func seiNodeName(group *seiv1alpha1.SeiNodeGroup, ordinal int) string {
-	return fmt.Sprintf("%s-g%s-%d", group.Name, activeRevision(group), ordinal)
+	return fmt.Sprintf("%s-%d", group.Name, ordinal)
 }
 
-// activeRevision returns the current active revision string for a group.
-// During a deployment, this comes from status; otherwise from the group's
-// generation.
+// activeRevision returns the revision string for the currently active
+// node set. Used for traffic routing during deployments and for
+// observability labels on pods.
 func activeRevision(group *seiv1alpha1.SeiNodeGroup) string {
 	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
 		return group.Status.Deployment.IncumbentRevision
@@ -35,14 +38,24 @@ func externalServiceName(group *seiv1alpha1.SeiNodeGroup) string {
 }
 
 // groupSelector returns the label selector used by the shared external
-// Service, AuthorizationPolicy, and ServiceMonitor to target all pods
-// in the group. Includes the active revision label so that during a
-// blue-green deployment, only the active set receives traffic.
+// Service, AuthorizationPolicy, and ServiceMonitor. During an active
+// deployment, it includes the revision label to pin traffic to the
+// active set. At steady state, it selects by group membership only.
 func groupSelector(group *seiv1alpha1.SeiNodeGroup) map[string]string {
-	return map[string]string{
-		groupLabel:    group.Name,
-		revisionLabel: activeRevision(group),
+	if group.Status.Deployment != nil {
+		return map[string]string{
+			groupLabel:    group.Name,
+			revisionLabel: activeRevision(group),
+		}
 	}
+	return map[string]string{groupLabel: group.Name}
+}
+
+// groupOnlySelector returns a selector matching all nodes owned by the
+// group, regardless of revision. Used for listing and scale-down where
+// we need to see every child node.
+func groupOnlySelector(group *seiv1alpha1.SeiNodeGroup) map[string]string {
+	return map[string]string{groupLabel: group.Name}
 }
 
 // seiNodeLabels builds the metadata labels for a child SeiNode.
@@ -82,4 +95,18 @@ func resourceLabels(group *seiv1alpha1.SeiNodeGroup) map[string]string {
 // resources subject to periodic drift correction via polling reconciliation.
 func managedByAnnotations() map[string]string {
 	return map[string]string{managedByAnnotation: controllerName}
+}
+
+// templateHash computes a hash over spec fields that require new nodes
+// when changed. Fields that can be updated in-place on existing nodes
+// (sidecar, podLabels, overrides) are excluded.
+func templateHash(spec *seiv1alpha1.SeiNodeSpec) string {
+	h := sha256.New()
+	h.Write([]byte(spec.Image))
+	h.Write([]byte(spec.ChainID))
+	if spec.Entrypoint != nil {
+		h.Write([]byte(strings.Join(spec.Entrypoint.Command, "\x00")))
+		h.Write([]byte(strings.Join(spec.Entrypoint.Args, "\x00")))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }

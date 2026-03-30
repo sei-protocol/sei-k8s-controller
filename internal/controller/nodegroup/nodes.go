@@ -44,24 +44,27 @@ func (r *SeiNodeGroupReconciler) reconcileSeiNodes(ctx context.Context, group *s
 	return nil
 }
 
-// detectDeploymentNeeded checks if an update strategy is configured and
-// the generation has changed. If so, it prepares the Deployment metadata
-// on the group status so the planner can select the deployment strategy.
+// detectDeploymentNeeded checks if deployment-worthy fields have changed
+// by comparing the current template hash against the stored hash. Only
+// fields that require new nodes (image, entrypoint, chainId) are hashed;
+// sidecar, overrides, and replica changes propagate in-place.
 func (r *SeiNodeGroupReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeGroup) {
 	if group.Spec.UpdateStrategy == nil {
 		return
 	}
-	if group.Generation == group.Status.ObservedGeneration {
-		return
-	}
-	if group.Status.ObservedGeneration == 0 {
-		return // new group, never reconciled yet
+	if group.Status.TemplateHash == "" {
+		return // first reconcile, no baseline to compare against
 	}
 	if group.Status.Deployment != nil {
 		return
 	}
 	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
 		return
+	}
+
+	currentHash := templateHash(&group.Spec.Template.Spec)
+	if currentHash == group.Status.TemplateHash {
+		return // no deployment-worthy fields changed
 	}
 
 	group.Status.Deployment = &seiv1alpha1.DeploymentStatus{
@@ -203,7 +206,7 @@ func (r *SeiNodeGroupReconciler) scaleDown(ctx context.Context, group *seiv1alph
 	nodeList := &seiv1alpha1.SeiNodeList{}
 	if err := r.List(ctx, nodeList,
 		client.InNamespace(group.Namespace),
-		client.MatchingLabels(groupSelector(group)),
+		client.MatchingLabels(groupOnlySelector(group)),
 	); err != nil {
 		return fmt.Errorf("listing child SeiNodes: %w", err)
 	}

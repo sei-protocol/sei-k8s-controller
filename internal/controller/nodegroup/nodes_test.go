@@ -37,11 +37,11 @@ func TestGenerateSeiNode_NameAndNamespace(t *testing.T) {
 	group := newTestGroup("archive-rpc", "sei")
 
 	node := generateSeiNode(group, 0)
-	g.Expect(node.Name).To(Equal("archive-rpc-g0-0"))
+	g.Expect(node.Name).To(Equal("archive-rpc-0"))
 	g.Expect(node.Namespace).To(Equal("sei"))
 
 	node2 := generateSeiNode(group, 2)
-	g.Expect(node2.Name).To(Equal("archive-rpc-g0-2"))
+	g.Expect(node2.Name).To(Equal("archive-rpc-2"))
 }
 
 func TestGenerateSeiNode_SystemLabels(t *testing.T) {
@@ -113,7 +113,7 @@ func TestGenerateSeiNode_CopiesSpec(t *testing.T) {
 
 	node := generateSeiNode(group, 0)
 
-	g.Expect(node.Name).To(Equal("full-node-g0-0"))
+	g.Expect(node.Name).To(Equal("full-node-0"))
 	g.Expect(node.Namespace).To(Equal("pacific-1"))
 	g.Expect(node.Spec.ChainID).To(Equal("pacific-1"))
 	g.Expect(node.Spec.Image).To(Equal("ghcr.io/sei-protocol/seid:v1.0.0"))

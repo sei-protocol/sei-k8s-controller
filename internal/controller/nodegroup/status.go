@@ -34,10 +34,11 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 		})
 	}
 
-	// Update ObservedGeneration when no plan is active. During plan
-	// execution, ObservedGeneration is updated by completePlan.
+	// Update ObservedGeneration and TemplateHash when no plan is active.
+	// During plan execution, ObservedGeneration is updated by completePlan.
 	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
 		group.Status.ObservedGeneration = group.Generation
+		group.Status.TemplateHash = templateHash(&group.Spec.Template.Spec)
 	}
 	group.Status.Replicas = group.Spec.Replicas
 	group.Status.ReadyReplicas = readyReplicas

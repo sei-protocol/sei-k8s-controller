@@ -183,6 +183,13 @@ type SeiNodeGroupStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// TemplateHash is a hash of the spec fields that require deployment
+	// orchestration when changed (image, entrypoint, chainId). Updated
+	// during steady-state reconciliation. Compared against the current
+	// spec to detect deployment-worthy changes.
+	// +optional
+	TemplateHash string `json:"templateHash,omitempty"`
+
 	// Phase is the high-level lifecycle state.
 	Phase SeiNodeGroupPhase `json:"phase,omitempty"`
 
