@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"strconv"
-	"strings"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -103,10 +102,5 @@ func managedByAnnotations() map[string]string {
 func templateHash(spec *seiv1alpha1.SeiNodeSpec) string {
 	h := sha256.New()
 	h.Write([]byte(spec.Image))
-	h.Write([]byte(spec.ChainID))
-	if spec.Entrypoint != nil {
-		h.Write([]byte(strings.Join(spec.Entrypoint.Command, "\x00")))
-		h.Write([]byte(strings.Join(spec.Entrypoint.Args, "\x00")))
-	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
