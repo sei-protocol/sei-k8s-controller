@@ -91,7 +91,7 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 		return ctrl.Result{}, fmt.Errorf("reconciling plan: %w", planErr)
 	}
-	if planResult.RequeueAfter > 0 || planResult.Requeue {
+	if shouldRequeue(planResult) {
 		if err := r.updateStatus(ctx, group, statusBase); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 		}
@@ -170,6 +170,10 @@ func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv
 	finalizerPatch := client.MergeFrom(group.DeepCopy())
 	controllerutil.RemoveFinalizer(group, groupFinalizerName)
 	return ctrl.Result{}, r.Patch(ctx, group, finalizerPatch)
+}
+
+func shouldRequeue(result ctrl.Result) bool {
+	return result.RequeueAfter > 0 || result.Requeue
 }
 
 // SetupWithManager sets up the controller with the Manager.
