@@ -54,8 +54,12 @@ func (e *createEntrantNodesExecution) ensureEntrantNode(
 	ordinal int,
 ) error {
 	existing := &seiv1alpha1.SeiNode{}
-	if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, existing); err == nil {
-		return nil // already exists
+	err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, existing)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("checking if entrant node %s exists: %w", name, err)
 	}
 
 	spec := group.Spec.Template.Spec.DeepCopy()
@@ -63,6 +67,7 @@ func (e *createEntrantNodesExecution) ensureEntrantNode(
 		spec.PodLabels = make(map[string]string)
 	}
 	spec.PodLabels["sei.io/nodegroup"] = e.params.GroupName
+	spec.PodLabels["sei.io/revision"] = e.params.EntrantRevision
 
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{

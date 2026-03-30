@@ -77,10 +77,12 @@ func (r *SeiNodeGroupReconciler) completePlan(ctx context.Context, group *seiv1a
 	if group.Status.Deployment != nil {
 		group.Status.ObservedGeneration = group.Generation
 		if err := r.reconcileNetworking(ctx, group); err != nil {
-			logger.Error(err, "reconciling networking after deployment")
+			return ctrl.Result{}, fmt.Errorf("reconciling networking after deployment: %w", err)
 		}
+		group.Status.Deployment = nil
 	}
 
+	group.Status.Plan = nil
 	clearPlanInProgress(group, "PlanComplete", "Plan completed successfully")
 
 	r.Recorder.Event(group, corev1.EventTypeNormal, "PlanComplete", "Plan completed successfully")
@@ -96,6 +98,8 @@ func (r *SeiNodeGroupReconciler) failPlan(ctx context.Context, group *seiv1alpha
 	logger := log.FromContext(ctx)
 
 	group.Status.Phase = seiv1alpha1.GroupPhaseDegraded
+	group.Status.Plan = nil
+	group.Status.Deployment = nil
 	clearPlanInProgress(group, "PlanFailed", "Plan failed")
 
 	r.Recorder.Event(group, corev1.EventTypeWarning, "PlanFailed", "Plan failed")

@@ -39,12 +39,13 @@ func EntrantRevision(group *seiv1alpha1.SeiNodeGroup) string {
 	return strconv.FormatInt(group.Generation, 10)
 }
 
-// IncumbentRevision returns the revision string for the incumbent set.
+// IncumbentRevision returns the revision string for the incumbent set,
+// derived from the last successfully reconciled generation.
 func IncumbentRevision(group *seiv1alpha1.SeiNodeGroup) string {
 	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
 		return group.Status.Deployment.IncumbentRevision
 	}
-	return strconv.FormatInt(group.Generation-1, 10)
+	return strconv.FormatInt(group.Status.ObservedGeneration, 10)
 }
 
 // hardForkDeploymentPlanner builds a deployment plan for the HardFork strategy.

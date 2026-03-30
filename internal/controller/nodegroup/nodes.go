@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -16,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 // reconcileSeiNodes ensures the desired set of child SeiNodes exist,
@@ -54,24 +54,21 @@ func (r *SeiNodeGroupReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNo
 	if group.Generation == group.Status.ObservedGeneration {
 		return
 	}
+	if group.Status.ObservedGeneration == 0 {
+		return // new group, never reconciled yet
+	}
 	if group.Status.Deployment != nil {
 		return
 	}
-
-	entrantRevision := strconv.FormatInt(group.Generation, 10)
-	incumbentRevision := strconv.FormatInt(group.Generation-1, 10)
-
-	entrantNames := make([]string, int(group.Spec.Replicas))
-	for i := range int(group.Spec.Replicas) {
-		entrantNames[i] = fmt.Sprintf("%s-g%d-%d", group.Name, group.Generation, i)
+	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		return
 	}
 
 	group.Status.Deployment = &seiv1alpha1.DeploymentStatus{
-		IncumbentRevision: incumbentRevision,
-		EntrantRevision:   entrantRevision,
-		EntrantNodes:      entrantNames,
+		IncumbentRevision: planner.IncumbentRevision(group),
+		EntrantRevision:   planner.EntrantRevision(group),
+		EntrantNodes:      planner.EntrantNodeNames(group),
 	}
-	group.Status.Phase = seiv1alpha1.GroupPhaseUpgrading
 }
 
 // populateIncumbentNodes lists child SeiNodes and records their names
@@ -158,6 +155,7 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.
 		spec.PodLabels = make(map[string]string)
 	}
 	spec.PodLabels[groupLabel] = group.Name
+	spec.PodLabels[revisionLabel] = activeRevision(group)
 
 	if gc := group.Spec.Genesis; gc != nil && spec.Validator != nil {
 		if spec.ChainID == "" {
