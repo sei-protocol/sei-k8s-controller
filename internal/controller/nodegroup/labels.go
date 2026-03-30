@@ -17,7 +17,7 @@ const (
 )
 
 func seiNodeName(group *seiv1alpha1.SeiNodeGroup, ordinal int) string {
-	return fmt.Sprintf("%s-%d", group.Name, ordinal)
+	return fmt.Sprintf("%s-g%s-%d", group.Name, activeRevision(group), ordinal)
 }
 
 // activeRevision returns the current active revision string for a group.

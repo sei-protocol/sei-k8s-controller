@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -92,19 +93,17 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
 
-	// Check if a node for this ordinal already exists (by label), regardless
-	// of naming convention. After a deployment, entrant nodes have a different
-	// name pattern but the same ordinal label.
-	existing, err := r.findNodeByOrdinal(ctx, group, ordinal)
-	if err != nil {
-		return err
-	}
-	if existing == nil {
+	existing := &seiv1alpha1.SeiNode{}
+	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
+	if apierrors.IsNotFound(err) {
 		if createErr := r.Create(ctx, desired); createErr != nil {
 			return createErr
 		}
 		r.Recorder.Eventf(group, corev1.EventTypeNormal, "SeiNodeCreated", "Created SeiNode %s", desired.Name)
 		return nil
+	}
+	if err != nil {
+		return err
 	}
 
 	updated := false
@@ -146,27 +145,6 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 		return r.Update(ctx, existing)
 	}
 	return nil
-}
-
-// findNodeByOrdinal looks up a child SeiNode by its ordinal label,
-// regardless of naming convention. Returns nil if not found.
-func (r *SeiNodeGroupReconciler) findNodeByOrdinal(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, ordinal int) (*seiv1alpha1.SeiNode, error) {
-	nodeList := &seiv1alpha1.SeiNodeList{}
-	if err := r.List(ctx, nodeList,
-		client.InNamespace(group.Namespace),
-		client.MatchingLabels{
-			groupLabel:        group.Name,
-			groupOrdinalLabel: fmt.Sprintf("%d", ordinal),
-		},
-	); err != nil {
-		return nil, fmt.Errorf("listing nodes for ordinal %d: %w", ordinal, err)
-	}
-	for i := range nodeList.Items {
-		if metav1.IsControlledBy(&nodeList.Items[i], group) {
-			return &nodeList.Items[i], nil
-		}
-	}
-	return nil, nil
 }
 
 func generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.SeiNode {
