@@ -39,9 +39,6 @@ type SeiNodeGroupReconciler struct {
 
 	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeGroup]
-
-	// BuildSidecarClientFn overrides sidecar client construction for testing.
-	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) any
 }
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodegroups,verbs=get;list;watch;create;update;patch;delete
@@ -80,18 +77,6 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	statusBase := client.MergeFrom(group.DeepCopy())
 	ns, name := group.Namespace, group.Name
 
-	// Deployment orchestration gate: when a deployment is active or needed,
-	// skip normal ensureSeiNode to prevent mutating incumbent nodes.
-	if planner.IsDeploymentActive(group) || planner.NeedsDeployment(group) {
-		result, err := r.reconcileDeployment(ctx, group, statusBase)
-		if err != nil {
-			logger.Error(err, "reconciling deployment")
-			observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
-			return ctrl.Result{}, fmt.Errorf("reconciling deployment: %w", err)
-		}
-		return result, nil
-	}
-
 	if err := timeSubstep("reconcileSeiNodes", func() error {
 		return r.reconcileSeiNodes(ctx, group)
 	}); err != nil {
@@ -100,19 +85,17 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, fmt.Errorf("reconciling SeiNodes: %w", err)
 	}
 
-	if group.Spec.Genesis != nil {
-		result, err := r.reconcileGenesisAssembly(ctx, group)
-		if err != nil {
-			logger.Error(err, "reconciling genesis assembly")
-			observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
-			return ctrl.Result{}, fmt.Errorf("reconciling genesis assembly: %w", err)
+	planResult, planErr := r.reconcilePlan(ctx, group, statusBase)
+	if planErr != nil {
+		logger.Error(planErr, "reconciling plan")
+		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
+		return ctrl.Result{}, fmt.Errorf("reconciling plan: %w", planErr)
+	}
+	if shouldRequeue(planResult) {
+		if err := r.updateStatus(ctx, group, statusBase); err != nil {
+			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 		}
-		if result.RequeueAfter > 0 {
-			if err := r.updateStatus(ctx, group, statusBase); err != nil {
-				return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
-			}
-			return result, nil
-		}
+		return planResult, nil
 	}
 
 	if err := timeSubstep("reconcileNetworking", func() error {
@@ -187,6 +170,10 @@ func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv
 	finalizerPatch := client.MergeFrom(group.DeepCopy())
 	controllerutil.RemoveFinalizer(group, groupFinalizerName)
 	return ctrl.Result{}, r.Patch(ctx, group, finalizerPatch)
+}
+
+func shouldRequeue(result ctrl.Result) bool {
+	return result.RequeueAfter > 0 || result.Requeue
 }
 
 // SetupWithManager sets up the controller with the Manager.

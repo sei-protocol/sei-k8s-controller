@@ -198,9 +198,10 @@ type SeiNodeGroupStatus struct {
 	// +optional
 	Nodes []GroupNodeStatus `json:"nodes,omitempty"`
 
-	// InitPlan tracks group-level initialization tasks (e.g. genesis assembly).
+	// Plan tracks the active group-level task plan (genesis assembly,
+	// deployment, etc.). Nil when no plan is in progress.
 	// +optional
-	InitPlan *TaskPlan `json:"initPlan,omitempty"`
+	Plan *TaskPlan `json:"plan,omitempty"`
 
 	// GenesisHash is the SHA-256 hex digest of the assembled genesis.json.
 	// +optional
@@ -252,11 +253,9 @@ type NetworkingStatus struct {
 	LoadBalancerIngress []corev1.LoadBalancerIngress `json:"loadBalancerIngress,omitempty"`
 }
 
-// DeploymentStatus tracks the state of an in-progress deployment.
+// DeploymentStatus tracks metadata for an in-progress deployment.
+// The task plan itself lives in SeiNodeGroupStatus.Plan.
 type DeploymentStatus struct {
-	// Plan is the ordered task sequence driving the deployment.
-	Plan TaskPlan `json:"plan"`
-
 	// IncumbentRevision identifies the generation of the currently live nodes.
 	IncumbentRevision string `json:"incumbentRevision"`
 
@@ -276,7 +275,7 @@ const (
 	ConditionIsolationReady          = "IsolationReady"
 	ConditionServiceMonitorReady     = "ServiceMonitorReady"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
-	ConditionDeploymentInProgress    = "DeploymentInProgress"
+	ConditionPlanInProgress          = "PlanInProgress"
 )
 
 // +kubebuilder:object:root=true

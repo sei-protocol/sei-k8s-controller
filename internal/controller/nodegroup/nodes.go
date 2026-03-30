@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -17,13 +18,75 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
+// reconcileSeiNodes ensures the desired set of child SeiNodes exist,
+// populates IncumbentNodes on the group status, and detects spec changes
+// that require deployment orchestration. When a plan is in progress,
+// mutations are skipped to avoid interfering with active orchestration.
 func (r *SeiNodeGroupReconciler) reconcileSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
-	for i := range int(group.Spec.Replicas) {
-		if err := r.ensureSeiNode(ctx, group, i); err != nil {
-			return fmt.Errorf("ensuring SeiNode %d: %w", i, err)
+	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		for i := range int(group.Spec.Replicas) {
+			if err := r.ensureSeiNode(ctx, group, i); err != nil {
+				return fmt.Errorf("ensuring SeiNode %d: %w", i, err)
+			}
 		}
+		if err := r.scaleDown(ctx, group); err != nil {
+			return err
+		}
+	} else {
+		log.FromContext(ctx).Info("plan in progress, skipping SeiNode mutations")
 	}
-	return r.scaleDown(ctx, group)
+
+	if err := r.populateIncumbentNodes(ctx, group); err != nil {
+		return err
+	}
+
+	r.detectDeploymentNeeded(group)
+	return nil
+}
+
+// detectDeploymentNeeded checks if an update strategy is configured and
+// the generation has changed. If so, it prepares the Deployment metadata
+// on the group status so the planner can select the deployment strategy.
+func (r *SeiNodeGroupReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeGroup) {
+	if group.Spec.UpdateStrategy == nil {
+		return
+	}
+	if group.Generation == group.Status.ObservedGeneration {
+		return
+	}
+	if group.Status.Deployment != nil {
+		return
+	}
+
+	entrantRevision := strconv.FormatInt(group.Generation, 10)
+	incumbentRevision := strconv.FormatInt(group.Generation-1, 10)
+
+	entrantNames := make([]string, int(group.Spec.Replicas))
+	for i := range int(group.Spec.Replicas) {
+		entrantNames[i] = fmt.Sprintf("%s-g%d-%d", group.Name, group.Generation, i)
+	}
+
+	group.Status.Deployment = &seiv1alpha1.DeploymentStatus{
+		IncumbentRevision: incumbentRevision,
+		EntrantRevision:   entrantRevision,
+		EntrantNodes:      entrantNames,
+	}
+	group.Status.Phase = seiv1alpha1.GroupPhaseUpgrading
+}
+
+// populateIncumbentNodes lists child SeiNodes and records their names
+// on the group status so planners can read them from the group object.
+func (r *SeiNodeGroupReconciler) populateIncumbentNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+	nodes, err := r.listChildSeiNodes(ctx, group)
+	if err != nil {
+		return fmt.Errorf("listing child SeiNodes: %w", err)
+	}
+	names := make([]string, len(nodes))
+	for i := range nodes {
+		names[i] = nodes[i].Name
+	}
+	group.Status.IncumbentNodes = names
+	return nil
 }
 
 func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, ordinal int) error {

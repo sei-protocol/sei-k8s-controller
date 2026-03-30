@@ -145,6 +145,8 @@ func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfi
 	// Controller-side group tasks
 	case TaskTypeAwaitNodesRunning:
 		return deserializeAwaitNodesRunning(id, params, cfg)
+	case TaskTypeCollectAndSetPeers:
+		return deserializeCollectAndSetPeers(id, params, cfg)
 
 	// Controller-side bootstrap tasks
 	case TaskTypeDeployBootstrapSvc:
