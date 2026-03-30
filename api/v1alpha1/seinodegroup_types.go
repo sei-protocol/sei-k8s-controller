@@ -276,7 +276,7 @@ const (
 	ConditionIsolationReady          = "IsolationReady"
 	ConditionServiceMonitorReady     = "ServiceMonitorReady"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
-	ConditionDeploymentInProgress    = "DeploymentInProgress"
+	ConditionPlanInProgress          = "PlanInProgress"
 )
 
 // +kubebuilder:object:root=true

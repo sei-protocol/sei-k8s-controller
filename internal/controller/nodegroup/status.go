@@ -43,14 +43,6 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 	group.Status.Replicas = group.Spec.Replicas
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses
-
-	// Track incumbent node names so the deployment planner can read
-	// them directly from the group object.
-	incumbentNames := make([]string, len(nodes))
-	for i := range nodes {
-		incumbentNames[i] = nodes[i].Name
-	}
-	group.Status.IncumbentNodes = incumbentNames
 	group.Status.Phase = computeGroupPhase(readyReplicas, group.Spec.Replicas, nodes)
 
 	svc, svcErr := r.fetchExternalService(ctx, group)
@@ -173,6 +165,11 @@ func setExternalServiceCondition(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Se
 
 	setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionTrue,
 		"ServiceReady", fmt.Sprintf("External Service %s is ready", svc.Name))
+}
+
+func hasConditionTrue(group *seiv1alpha1.SeiNodeGroup, condType string) bool {
+	c := apimeta.FindStatusCondition(group.Status.Conditions, condType)
+	return c != nil && c.Status == metav1.ConditionTrue
 }
 
 func hasConditionReason(group *seiv1alpha1.SeiNodeGroup, condType, reason string) bool {

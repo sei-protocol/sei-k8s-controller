@@ -18,13 +18,14 @@ type genesisGroupPlanner struct{}
 //     they picked up the genesis.
 func (p *genesisGroupPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
-	nodes []seiv1alpha1.SeiNode,
+	_ []seiv1alpha1.SeiNode,
 ) (*seiv1alpha1.TaskPlan, error) {
 	s3 := groupGenesisS3(group)
+	incumbentNodes := group.Status.IncumbentNodes
 
-	nodeParams := make([]task.GenesisNodeParam, len(nodes))
-	for i := range nodes {
-		nodeParams[i] = task.GenesisNodeParam{Name: nodes[i].Name}
+	nodeParams := make([]task.GenesisNodeParam, len(incumbentNodes))
+	for i, name := range incumbentNodes {
+		nodeParams[i] = task.GenesisNodeParam{Name: name}
 	}
 
 	assembleParams := &task.AssembleAndUploadGenesisParams{
@@ -43,10 +44,24 @@ func (p *genesisGroupPlanner) BuildPlan(
 	}
 	assembleTask.MaxRetries = groupAssemblyMaxRetries
 
+	collectPeersParams := &task.CollectAndSetPeersParams{
+		GroupName: group.Name,
+		Namespace: group.Namespace,
+		NodeNames: incumbentNodes,
+		S3Bucket:  s3.Bucket,
+		S3Prefix:  s3.Prefix,
+		S3Region:  s3.Region,
+	}
+	collectPeersTask, err := buildGroupPlannedTask(group.Name, task.TaskTypeCollectAndSetPeers, collectPeersParams)
+	if err != nil {
+		return nil, err
+	}
+
 	awaitParams := &task.AwaitNodesRunningParams{
 		GroupName: group.Name,
 		Namespace: group.Namespace,
-		Expected:  len(nodes),
+		Expected:  len(incumbentNodes),
+		NodeNames: incumbentNodes,
 	}
 	awaitTask, err := buildGroupPlannedTask(group.Name, TaskAwaitNodesRunning, awaitParams)
 	if err != nil {
@@ -55,7 +70,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 
 	return &seiv1alpha1.TaskPlan{
 		Phase: seiv1alpha1.TaskPlanActive,
-		Tasks: []seiv1alpha1.PlannedTask{assembleTask, awaitTask},
+		Tasks: []seiv1alpha1.PlannedTask{assembleTask, collectPeersTask, awaitTask},
 	}, nil
 }
 

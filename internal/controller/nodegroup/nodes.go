@@ -17,13 +17,40 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
+// reconcileSeiNodes ensures the desired set of child SeiNodes exist and
+// populates IncumbentNodes on the group status. When a plan is in
+// progress, mutations are skipped to avoid interfering with active
+// orchestration.
 func (r *SeiNodeGroupReconciler) reconcileSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
-	for i := range int(group.Spec.Replicas) {
-		if err := r.ensureSeiNode(ctx, group, i); err != nil {
-			return fmt.Errorf("ensuring SeiNode %d: %w", i, err)
+	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		for i := range int(group.Spec.Replicas) {
+			if err := r.ensureSeiNode(ctx, group, i); err != nil {
+				return fmt.Errorf("ensuring SeiNode %d: %w", i, err)
+			}
 		}
+		if err := r.scaleDown(ctx, group); err != nil {
+			return err
+		}
+	} else {
+		log.FromContext(ctx).Info("plan in progress, skipping SeiNode mutations")
 	}
-	return r.scaleDown(ctx, group)
+
+	return r.populateIncumbentNodes(ctx, group)
+}
+
+// populateIncumbentNodes lists child SeiNodes and records their names
+// on the group status so planners can read them from the group object.
+func (r *SeiNodeGroupReconciler) populateIncumbentNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+	nodes, err := r.listChildSeiNodes(ctx, group)
+	if err != nil {
+		return fmt.Errorf("listing child SeiNodes: %w", err)
+	}
+	names := make([]string, len(nodes))
+	for i := range nodes {
+		names[i] = nodes[i].Name
+	}
+	group.Status.IncumbentNodes = names
+	return nil
 }
 
 func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, ordinal int) error {

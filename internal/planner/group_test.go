@@ -24,19 +24,16 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 				},
 			},
 		},
-	}
-
-	nodes := []seiv1alpha1.SeiNode{
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-2"}},
+		Status: seiv1alpha1.SeiNodeGroupStatus{
+			IncumbentNodes: []string{"node-0", "node-1", "node-2"},
+		},
 	}
 
 	p, err := ForGroup(group)
 	if err != nil {
 		t.Fatalf("ForGroup: %v", err)
 	}
-	plan, err := p.BuildPlan(group, nodes)
+	plan, err := p.BuildPlan(group, nil)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -45,8 +42,8 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 		t.Errorf("phase = %q, want Active", plan.Phase)
 	}
 
-	if len(plan.Tasks) != 2 {
-		t.Fatalf("expected 2 tasks, got %d", len(plan.Tasks))
+	if len(plan.Tasks) != 3 {
+		t.Fatalf("expected 3 tasks, got %d", len(plan.Tasks))
 	}
 
 	// Task 0: assemble-and-upload-genesis
@@ -87,13 +84,19 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 		t.Errorf("Namespace = %q, want %q", assembleParams.Namespace, "default")
 	}
 
-	// Task 1: await-nodes-running
-	awaitTask := plan.Tasks[1]
+	// Task 1: collect-and-set-peers
+	peersTask := plan.Tasks[1]
+	if peersTask.Type != task.TaskTypeCollectAndSetPeers {
+		t.Errorf("task[1] type = %q, want %q", peersTask.Type, task.TaskTypeCollectAndSetPeers)
+	}
+
+	// Task 2: await-nodes-running
+	awaitTask := plan.Tasks[2]
 	if awaitTask.Type != TaskAwaitNodesRunning {
-		t.Errorf("task[1] type = %q, want %q", awaitTask.Type, TaskAwaitNodesRunning)
+		t.Errorf("task[2] type = %q, want %q", awaitTask.Type, TaskAwaitNodesRunning)
 	}
 	if awaitTask.Params == nil {
-		t.Fatal("task[1] params should not be nil")
+		t.Fatal("task[2] params should not be nil")
 	}
 
 	var awaitParams task.AwaitNodesRunningParams
@@ -117,17 +120,16 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 				ChainID: "pacific-1",
 			},
 		},
-	}
-
-	nodes := []seiv1alpha1.SeiNode{
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}},
+		Status: seiv1alpha1.SeiNodeGroupStatus{
+			IncumbentNodes: []string{"node-0"},
+		},
 	}
 
 	p, err := ForGroup(group)
 	if err != nil {
 		t.Fatalf("ForGroup: %v", err)
 	}
-	plan, err := p.BuildPlan(group, nodes)
+	plan, err := p.BuildPlan(group, nil)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -153,28 +155,27 @@ func TestBuildGroupAssemblyPlan_DeterministicIDs(t *testing.T) {
 				ChainID: "test-chain",
 			},
 		},
-	}
-	nodes := []seiv1alpha1.SeiNode{
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}},
+		Status: seiv1alpha1.SeiNodeGroupStatus{
+			IncumbentNodes: []string{"node-0", "node-1"},
+		},
 	}
 
 	p, err := ForGroup(group)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan1, err := p.BuildPlan(group, nodes)
+	plan1, err := p.BuildPlan(group, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan2, err := p.BuildPlan(group, nodes)
+	plan2, err := p.BuildPlan(group, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan1.Tasks[0].ID != plan2.Tasks[0].ID {
 		t.Errorf("assemble IDs not deterministic: %q vs %q", plan1.Tasks[0].ID, plan2.Tasks[0].ID)
 	}
-	if plan1.Tasks[1].ID != plan2.Tasks[1].ID {
-		t.Errorf("await IDs not deterministic: %q vs %q", plan1.Tasks[1].ID, plan2.Tasks[1].ID)
+	if plan1.Tasks[2].ID != plan2.Tasks[2].ID {
+		t.Errorf("await IDs not deterministic: %q vs %q", plan1.Tasks[2].ID, plan2.Tasks[2].ID)
 	}
 }
