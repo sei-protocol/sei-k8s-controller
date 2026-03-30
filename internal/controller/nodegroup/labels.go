@@ -97,10 +97,13 @@ func managedByAnnotations() map[string]string {
 }
 
 // templateHash computes a hash over spec fields that require new nodes
-// when changed. Fields that can be updated in-place on existing nodes
-// (sidecar, podLabels, overrides) are excluded.
+// when changed. Any container image change triggers a full pod restart,
+// so both the chain binary and sidecar images are included.
 func templateHash(spec *seiv1alpha1.SeiNodeSpec) string {
 	h := sha256.New()
 	h.Write([]byte(spec.Image))
+	if spec.Sidecar != nil {
+		h.Write([]byte(spec.Sidecar.Image))
+	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
