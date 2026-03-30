@@ -272,7 +272,7 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		Nodes:    []task.GenesisNodeParam{{Name: "node-0"}, {Name: "node-1"}, {Name: "node-2"}},
 	})
 
-	group.Status.InitPlan = &seiv1alpha1.TaskPlan{
+	group.Status.Plan = &seiv1alpha1.TaskPlan{
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: []seiv1alpha1.PlannedTask{
 			{
@@ -303,7 +303,7 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	result, err := executor.ExecutePlan(ctx, group, group.Status.InitPlan)
+	result, err := executor.ExecutePlan(ctx, group, group.Status.Plan)
 	if err != nil {
 		t.Fatalf("ExecutePlan: %v", err)
 	}
@@ -317,8 +317,8 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		t.Fatalf("get group: %v", err)
 	}
 
-	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.TaskComplete {
-		t.Errorf("task status = %q, want Complete", updated.Status.InitPlan.Tasks[0].Status)
+	if updated.Status.Plan.Tasks[0].Status != seiv1alpha1.TaskComplete {
+		t.Errorf("task status = %q, want Complete", updated.Status.Plan.Tasks[0].Status)
 	}
 	if result.RequeueAfter == 0 {
 		t.Error("expected non-zero RequeueAfter after task completion")

@@ -8,21 +8,6 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// NeedsDeployment returns true when the group's template has changed
-// (generation mismatch) and an update strategy is configured.
-func NeedsDeployment(group *seiv1alpha1.SeiNodeGroup) bool {
-	if group.Spec.UpdateStrategy == nil {
-		return false
-	}
-	return group.Generation != group.Status.ObservedGeneration
-}
-
-// IsDeploymentActive returns true when a deployment plan is in progress.
-func IsDeploymentActive(group *seiv1alpha1.SeiNodeGroup) bool {
-	return group.Status.Deployment != nil &&
-		group.Status.Deployment.Plan.Phase == seiv1alpha1.TaskPlanActive
-}
-
 // ForDeployment returns the appropriate GroupPlanner for the group's
 // configured update strategy.
 func ForDeployment(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
@@ -67,7 +52,6 @@ type hardForkDeploymentPlanner struct{}
 
 func (p *hardForkDeploymentPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
-	_ []seiv1alpha1.SeiNode,
 ) (*seiv1alpha1.TaskPlan, error) {
 	haltHeight := group.Spec.UpdateStrategy.HardFork.HaltHeight
 	incumbentNodes := group.Status.IncumbentNodes
@@ -128,7 +112,6 @@ type blueGreenDeploymentPlanner struct{}
 
 func (p *blueGreenDeploymentPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
-	_ []seiv1alpha1.SeiNode,
 ) (*seiv1alpha1.TaskPlan, error) {
 	incumbentNodes := group.Status.IncumbentNodes
 	entrantNodes := EntrantNodeNames(group)

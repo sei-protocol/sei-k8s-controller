@@ -121,5 +121,23 @@ func (e *collectAndSetPeersExecution) fail(err error) error {
 	return err
 }
 
-func (e *collectAndSetPeersExecution) Status(_ context.Context) ExecutionStatus { return e.status }
-func (e *collectAndSetPeersExecution) Err() error                               { return e.err }
+func (e *collectAndSetPeersExecution) Status(ctx context.Context) ExecutionStatus {
+	if e.status != ExecutionComplete {
+		return e.status
+	}
+	// Verify peers were persisted on each validator node's spec.
+	for _, name := range e.params.NodeNames {
+		node := &seiv1alpha1.SeiNode{}
+		if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, node); err != nil {
+			return ExecutionRunning
+		}
+		if node.Spec.Validator == nil {
+			continue
+		}
+		if len(node.Spec.Validator.Peers) == 0 {
+			return ExecutionRunning
+		}
+	}
+	return ExecutionComplete
+}
+func (e *collectAndSetPeersExecution) Err() error { return e.err }

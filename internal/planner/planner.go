@@ -50,16 +50,40 @@ type NodePlanner interface {
 
 // GroupPlanner encapsulates logic for building a group-level task plan.
 type GroupPlanner interface {
-	BuildPlan(group *seiv1alpha1.SeiNodeGroup, nodes []seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
+	BuildPlan(group *seiv1alpha1.SeiNodeGroup) (*seiv1alpha1.TaskPlan, error)
 }
 
-// ForGroup returns the appropriate GroupPlanner based on which group-level
-// feature is configured.
+// ForGroup returns the appropriate GroupPlanner based on the group's
+// current state and spec. Returns (nil, nil) when no plan is needed.
 func ForGroup(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
-	if group.Spec.Genesis != nil {
+	// Genesis ceremony: needs a plan when genesis is configured, no plan
+	// exists yet, ceremony isn't complete, and all nodes are created.
+	if needsGenesisPlan(group) {
 		return &genesisGroupPlanner{}, nil
 	}
-	return nil, fmt.Errorf("no group planner for %s/%s: no genesis spec", group.Namespace, group.Name)
+
+	// Deployment: reconcileSeiNodes sets Deployment metadata when it
+	// detects a spec change requiring deployment orchestration.
+	if group.Status.Deployment != nil && group.Status.Plan == nil {
+		return ForDeployment(group)
+	}
+
+	return nil, nil
+}
+
+func needsGenesisPlan(group *seiv1alpha1.SeiNodeGroup) bool {
+	if group.Spec.Genesis == nil {
+		return false
+	}
+	if group.Status.Plan != nil {
+		return false
+	}
+	for _, c := range group.Status.Conditions {
+		if c.Type == "GenesisCeremonyComplete" && c.Status == "True" {
+			return false
+		}
+	}
+	return int32(len(group.Status.IncumbentNodes)) >= group.Spec.Replicas
 }
 
 // ForNode returns the appropriate NodePlanner based on which mode sub-spec

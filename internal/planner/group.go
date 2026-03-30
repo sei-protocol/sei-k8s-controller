@@ -18,7 +18,6 @@ type genesisGroupPlanner struct{}
 //     they picked up the genesis.
 func (p *genesisGroupPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
-	_ []seiv1alpha1.SeiNode,
 ) (*seiv1alpha1.TaskPlan, error) {
 	s3 := groupGenesisS3(group)
 	incumbentNodes := group.Status.IncumbentNodes

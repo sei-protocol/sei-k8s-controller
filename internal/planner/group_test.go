@@ -33,7 +33,7 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForGroup: %v", err)
 	}
-	plan, err := p.BuildPlan(group, nil)
+	plan, err := p.BuildPlan(group)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForGroup: %v", err)
 	}
-	plan, err := p.BuildPlan(group, nil)
+	plan, err := p.BuildPlan(group)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -164,11 +164,11 @@ func TestBuildGroupAssemblyPlan_DeterministicIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan1, err := p.BuildPlan(group, nil)
+	plan1, err := p.BuildPlan(group)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan2, err := p.BuildPlan(group, nil)
+	plan2, err := p.BuildPlan(group)
 	if err != nil {
 		t.Fatal(err)
 	}
