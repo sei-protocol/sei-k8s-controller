@@ -16,8 +16,6 @@ const (
 	defaultP2PPort             = int32(26656)
 )
 
-// CollectAndSetPeersParams holds parameters for collecting node IDs from
-// each node's sidecar and setting static peers on all validator nodes.
 type CollectAndSetPeersParams struct {
 	GroupName string   `json:"groupName"`
 	Namespace string   `json:"namespace"`
@@ -28,11 +26,9 @@ type CollectAndSetPeersParams struct {
 }
 
 type collectAndSetPeersExecution struct {
-	id     string
+	taskBase
 	params CollectAndSetPeersParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeCollectAndSetPeers(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -42,32 +38,36 @@ func deserializeCollectAndSetPeers(id string, params json.RawMessage, cfg Execut
 			return nil, fmt.Errorf("deserializing collect-and-set-peers params: %w", err)
 		}
 	}
-	return &collectAndSetPeersExecution{id: id, params: p, cfg: cfg, status: ExecutionRunning}, nil
+	return &collectAndSetPeersExecution{
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
+	}, nil
 }
 
 func (e *collectAndSetPeersExecution) Execute(ctx context.Context) error {
 	peers, err := e.collectPeers(ctx)
 	if err != nil {
-		return e.fail(fmt.Errorf("collecting peers: %w", err))
+		return fmt.Errorf("collecting peers: %w", err) // transient — sidecar may not be ready
 	}
 
 	if err := e.setPeersOnNodes(ctx, peers); err != nil {
-		return e.fail(fmt.Errorf("setting peers: %w", err))
+		return fmt.Errorf("setting peers: %w", err) // transient
 	}
 
 	group, err := ResourceAs[*seiv1alpha1.SeiNodeGroup](e.cfg)
 	if err != nil {
-		return e.fail(err)
+		return Terminal(err)
 	}
 
 	genesisURI := fmt.Sprintf("s3://%s/%sgenesis.json", e.params.S3Bucket, e.params.S3Prefix)
 	patch := client.MergeFrom(group.DeepCopy())
 	group.Status.GenesisS3URI = genesisURI
 	if err := e.cfg.KubeClient.Status().Patch(ctx, group, patch); err != nil {
-		return e.fail(fmt.Errorf("recording genesis S3 URI: %w", err))
+		return fmt.Errorf("recording genesis S3 URI: %w", err) // transient
 	}
 
-	e.status = ExecutionComplete
+	e.complete()
 	return nil
 }
 
@@ -115,13 +115,6 @@ func (e *collectAndSetPeersExecution) setPeersOnNodes(ctx context.Context, peers
 	return nil
 }
 
-func (e *collectAndSetPeersExecution) fail(err error) error {
-	e.status = ExecutionFailed
-	e.err = err
-	return err
-}
-
 func (e *collectAndSetPeersExecution) Status(_ context.Context) ExecutionStatus {
 	return e.status
 }
-func (e *collectAndSetPeersExecution) Err() error { return e.err }

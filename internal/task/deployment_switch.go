@@ -14,15 +14,11 @@ import (
 )
 
 // switchTrafficExecution updates the group's deployment status to reflect
-// the entrant revision as active. The group controller's networking
-// reconciliation uses the active revision in the Service selector, so
-// updating the status is sufficient to switch traffic.
+// the entrant revision as active.
 type switchTrafficExecution struct {
-	id     string
+	taskBase
 	params SwitchTrafficParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeSwitchTraffic(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -32,49 +28,45 @@ func deserializeSwitchTraffic(id string, params json.RawMessage, cfg ExecutionCo
 			return nil, fmt.Errorf("deserializing switch-traffic params: %w", err)
 		}
 	}
-	return &switchTrafficExecution{id: id, params: p, cfg: cfg, status: ExecutionRunning}, nil
+	return &switchTrafficExecution{
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
+	}, nil
 }
 
 func (e *switchTrafficExecution) Execute(ctx context.Context) error {
 	group, err := ResourceAs[*seiv1alpha1.SeiNodeGroup](e.cfg)
 	if err != nil {
-		return e.fail(err)
+		return Terminal(err)
 	}
 
 	if group.Status.Deployment == nil {
-		return e.fail(fmt.Errorf("no deployment status on group %s", e.params.GroupName))
+		return Terminal(fmt.Errorf("no deployment status on group %s", e.params.GroupName))
 	}
 
 	patch := client.MergeFrom(group.DeepCopy())
 	group.Status.Deployment.IncumbentRevision = e.params.EntrantRevision
 	if err := e.cfg.KubeClient.Status().Patch(ctx, group, patch); err != nil {
-		return e.fail(fmt.Errorf("patching deployment revision: %w", err))
+		return fmt.Errorf("patching deployment revision: %w", err) // transient
 	}
 
 	log.FromContext(ctx).Info("traffic switched to entrant revision",
 		"group", e.params.GroupName, "revision", e.params.EntrantRevision)
 
-	e.status = ExecutionComplete
+	e.complete()
 	return nil
 }
 
-func (e *switchTrafficExecution) fail(err error) error {
-	e.status = ExecutionFailed
-	e.err = err
-	return err
+func (e *switchTrafficExecution) Status(_ context.Context) ExecutionStatus {
+	return e.status
 }
 
-func (e *switchTrafficExecution) Status(_ context.Context) ExecutionStatus { return e.status }
-func (e *switchTrafficExecution) Err() error                               { return e.err }
-
-// teardownNodesExecution deletes incumbent SeiNode resources after
-// traffic has been switched to the entrant set.
+// teardownNodesExecution deletes incumbent SeiNode resources.
 type teardownNodesExecution struct {
-	id     string
+	taskBase
 	params TeardownNodesParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeTeardownNodes(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -84,7 +76,11 @@ func deserializeTeardownNodes(id string, params json.RawMessage, cfg ExecutionCo
 			return nil, fmt.Errorf("deserializing teardown-nodes params: %w", err)
 		}
 	}
-	return &teardownNodesExecution{id: id, params: p, cfg: cfg, status: ExecutionRunning}, nil
+	return &teardownNodesExecution{
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
+	}, nil
 }
 
 func (e *teardownNodesExecution) Execute(ctx context.Context) error {
@@ -92,12 +88,12 @@ func (e *teardownNodesExecution) Execute(ctx context.Context) error {
 
 	for _, name := range e.params.NodeNames {
 		if err := e.deleteNode(ctx, name); err != nil {
-			return e.fail(err)
+			return err // transient — kube API errors are retryable
 		}
 		logger.Info("deleted incumbent node", "node", name)
 	}
 
-	e.status = ExecutionComplete
+	e.complete()
 	return nil
 }
 
@@ -116,11 +112,6 @@ func (e *teardownNodesExecution) deleteNode(ctx context.Context, name string) er
 	return nil
 }
 
-func (e *teardownNodesExecution) fail(err error) error {
-	e.status = ExecutionFailed
-	e.err = err
-	return err
+func (e *teardownNodesExecution) Status(_ context.Context) ExecutionStatus {
+	return e.status
 }
-
-func (e *teardownNodesExecution) Status(_ context.Context) ExecutionStatus { return e.status }
-func (e *teardownNodesExecution) Err() error                               { return e.err }

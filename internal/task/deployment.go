@@ -13,8 +13,9 @@ const (
 )
 
 // deploymentTaskNamespace is a fixed UUID v5 namespace for generating
-// deterministic task IDs scoped to deployment operations.
-var deploymentTaskNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
+// deterministic task IDs scoped to deployment operations. Distinct from
+// taskIDNamespace to prevent cross-domain collisions.
+var deploymentTaskNamespace = uuid.MustParse("d4a7e1f3-8b29-4c6d-a5e0-2f1d3c4b5a6e")
 
 // CreateEntrantNodesParams holds parameters for creating entrant SeiNode resources.
 type CreateEntrantNodesParams struct {

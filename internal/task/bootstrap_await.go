@@ -10,19 +10,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// AwaitBootstrapCompleteParams holds the serialized parameters for the
-// await-bootstrap-complete task.
 type AwaitBootstrapCompleteParams struct {
 	JobName   string `json:"jobName"`
 	Namespace string `json:"namespace"`
 }
 
 type awaitBootstrapCompleteExecution struct {
-	id     string
+	taskBase
 	params AwaitBootstrapCompleteParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeBootstrapAwait(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -33,43 +29,37 @@ func deserializeBootstrapAwait(id string, params json.RawMessage, cfg ExecutionC
 		}
 	}
 	return &awaitBootstrapCompleteExecution{
-		id:     id,
-		params: p,
-		cfg:    cfg,
-		status: ExecutionRunning,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
-// Execute is a no-op — the Job is already running from a previous task.
 func (e *awaitBootstrapCompleteExecution) Execute(_ context.Context) error { return nil }
 
 func (e *awaitBootstrapCompleteExecution) Status(ctx context.Context) ExecutionStatus {
-	if e.status == ExecutionComplete || e.status == ExecutionFailed {
-		return e.status
+	if s, done := e.isTerminal(); done {
+		return s
 	}
 
 	job := &batchv1.Job{}
 	key := types.NamespacedName{Name: e.params.JobName, Namespace: e.params.Namespace}
 	if err := e.cfg.KubeClient.Get(ctx, key, job); err != nil {
 		if apierrors.IsNotFound(err) {
-			e.err = fmt.Errorf("bootstrap job %s not found", e.params.JobName)
-			e.status = ExecutionFailed
+			e.setFailed(fmt.Errorf("bootstrap job %s not found", e.params.JobName))
 			return ExecutionFailed
 		}
 		return ExecutionRunning
 	}
 
 	if IsJobComplete(job) {
-		e.status = ExecutionComplete
+		e.complete()
 		return ExecutionComplete
 	}
 	if IsJobFailed(job) {
-		e.err = fmt.Errorf("bootstrap job failed: %s", JobFailureReason(job))
-		e.status = ExecutionFailed
+		e.setFailed(fmt.Errorf("bootstrap job failed: %s", JobFailureReason(job)))
 		return ExecutionFailed
 	}
 
 	return ExecutionRunning
 }
-
-func (e *awaitBootstrapCompleteExecution) Err() error { return e.err }

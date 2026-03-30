@@ -2,6 +2,7 @@ package planner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -106,7 +107,11 @@ func executePlan(
 
 	if status == task.ExecutionRunning && t.Status == seiv1alpha1.TaskPending {
 		if err := exec.Execute(ctx); err != nil {
-			log.FromContext(ctx).Info("task submission failed, will retry",
+			var termErr *task.TerminalError
+			if errors.As(err, &termErr) {
+				return failTask(ctx, kc, obj, plan, t, err.Error())
+			}
+			log.FromContext(ctx).Info("task execution failed, will retry",
 				"task", t.Type, "error", err)
 			return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
 		}

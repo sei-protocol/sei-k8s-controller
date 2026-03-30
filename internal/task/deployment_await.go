@@ -14,14 +14,11 @@ import (
 )
 
 // awaitNodesAtHeightExecution submits await-condition(height=H) to each
-// node's sidecar and polls until all complete. Used by HardFork strategy.
+// node's sidecar and polls until all complete.
 type awaitNodesAtHeightExecution struct {
-	id        string
-	params    AwaitNodesAtHeightParams
-	cfg       ExecutionConfig
-	status    ExecutionStatus
-	err       error
-	submitted map[string]uuid.UUID
+	taskBase
+	params AwaitNodesAtHeightParams
+	cfg    ExecutionConfig
 }
 
 func deserializeAwaitNodesAtHeight(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -32,8 +29,9 @@ func deserializeAwaitNodesAtHeight(id string, params json.RawMessage, cfg Execut
 		}
 	}
 	return &awaitNodesAtHeightExecution{
-		id: id, params: p, cfg: cfg,
-		status: ExecutionRunning, submitted: make(map[string]uuid.UUID),
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -57,34 +55,29 @@ func (e *awaitNodesAtHeightExecution) Execute(ctx context.Context) error {
 			logger.Info("failed to submit await-height, will retry", "node", name, "error", err)
 			return err
 		}
-		e.submitted[name] = taskID
 	}
 	return nil
 }
 
+// Status polls each node's sidecar for the await-condition task using
+// deterministic IDs. No in-memory state is needed — task IDs are
+// recomputed on every call, making this restart-safe.
 func (e *awaitNodesAtHeightExecution) Status(ctx context.Context) ExecutionStatus {
-	if e.status == ExecutionComplete || e.status == ExecutionFailed {
-		return e.status
-	}
-	if len(e.submitted) == 0 {
-		return ExecutionRunning
+	if s, done := e.isTerminal(); done {
+		return s
 	}
 	for _, name := range e.params.NodeNames {
-		taskID, ok := e.submitted[name]
-		if !ok {
-			return ExecutionRunning
-		}
+		taskID := deterministicDeploymentTaskID(name, "await-height", e.id)
 		status, err := e.pollSidecarTask(ctx, name, taskID)
 		if err != nil {
-			e.err = err
-			e.status = ExecutionFailed
+			e.setFailed(err)
 			return ExecutionFailed
 		}
 		if status != ExecutionComplete {
 			return status
 		}
 	}
-	e.status = ExecutionComplete
+	e.complete()
 	return ExecutionComplete
 }
 
@@ -119,17 +112,11 @@ func (e *awaitNodesAtHeightExecution) sidecarForNode(ctx context.Context, name s
 	return sidecarClientForNode(node)
 }
 
-func (e *awaitNodesAtHeightExecution) Err() error { return e.err }
-
-// awaitNodesCaughtUpExecution polls node sidecars until all report
-// Ready status (sidecar transitions to Ready after mark-ready succeeds,
-// which requires seid to be synced and serving).
+// awaitNodesCaughtUpExecution polls node sidecars until all report Ready.
 type awaitNodesCaughtUpExecution struct {
-	id     string
+	taskBase
 	params AwaitNodesCaughtUpParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeAwaitNodesCaughtUp(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -139,21 +126,25 @@ func deserializeAwaitNodesCaughtUp(id string, params json.RawMessage, cfg Execut
 			return nil, fmt.Errorf("deserializing await-nodes-caught-up params: %w", err)
 		}
 	}
-	return &awaitNodesCaughtUpExecution{id: id, params: p, cfg: cfg, status: ExecutionRunning}, nil
+	return &awaitNodesCaughtUpExecution{
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
+	}, nil
 }
 
 func (e *awaitNodesCaughtUpExecution) Execute(_ context.Context) error { return nil }
 
 func (e *awaitNodesCaughtUpExecution) Status(ctx context.Context) ExecutionStatus {
-	if e.status == ExecutionComplete || e.status == ExecutionFailed {
-		return e.status
+	if s, done := e.isTerminal(); done {
+		return s
 	}
 	for _, name := range e.params.NodeNames {
 		if !e.isNodeReady(ctx, name) {
 			return ExecutionRunning
 		}
 	}
-	e.status = ExecutionComplete
+	e.complete()
 	return ExecutionComplete
 }
 
@@ -172,8 +163,6 @@ func (e *awaitNodesCaughtUpExecution) isNodeReady(ctx context.Context, name stri
 	}
 	return resp.Status == sidecar.Ready
 }
-
-func (e *awaitNodesCaughtUpExecution) Err() error { return e.err }
 
 // sidecarClientForNode constructs a SidecarClient from a SeiNode's
 // pod DNS name and sidecar port.

@@ -25,11 +25,9 @@ type AwaitNodesRunningParams struct {
 }
 
 type awaitNodesRunningExecution struct {
-	id     string
+	taskBase
 	params AwaitNodesRunningParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeAwaitNodesRunning(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -40,18 +38,17 @@ func deserializeAwaitNodesRunning(id string, params json.RawMessage, cfg Executi
 		}
 	}
 	return &awaitNodesRunningExecution{
-		id:     id,
-		params: p,
-		cfg:    cfg,
-		status: ExecutionRunning,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
 func (e *awaitNodesRunningExecution) Execute(_ context.Context) error { return nil }
 
 func (e *awaitNodesRunningExecution) Status(ctx context.Context) ExecutionStatus {
-	if e.status == ExecutionComplete || e.status == ExecutionFailed {
-		return e.status
+	if s, done := e.isTerminal(); done {
+		return s
 	}
 
 	nodes, err := e.listTargetNodes(ctx)
@@ -65,14 +62,13 @@ func (e *awaitNodesRunningExecution) Status(ctx context.Context) ExecutionStatus
 		case seiv1alpha1.PhaseRunning:
 			running++
 		case seiv1alpha1.PhaseFailed:
-			e.err = fmt.Errorf("node %s is in Failed phase", nodes[i].Name)
-			e.status = ExecutionFailed
+			e.setFailed(fmt.Errorf("node %s is in Failed phase", nodes[i].Name))
 			return ExecutionFailed
 		}
 	}
 
 	if running >= e.params.Expected {
-		e.status = ExecutionComplete
+		e.complete()
 		return ExecutionComplete
 	}
 	return ExecutionRunning
@@ -99,5 +95,3 @@ func (e *awaitNodesRunningExecution) listTargetNodes(ctx context.Context) ([]sei
 	}
 	return nodeList.Items, nil
 }
-
-func (e *awaitNodesRunningExecution) Err() error { return e.err }
