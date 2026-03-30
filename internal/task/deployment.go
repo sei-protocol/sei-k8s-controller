@@ -1,63 +1,62 @@
 package task
 
+import "github.com/google/uuid"
+
 // Controller-managed deployment task types.
 const (
-	TaskTypeCreateGreenNodes   = "create-green-nodes"
-	TaskTypeAwaitGreenRunning  = "await-green-running"
-	TaskTypeSubmitHaltSignal   = "submit-halt-signal-blue"
-	TaskTypeAwaitGreenAtHeight = "await-green-at-height"
-	TaskTypeAwaitGreenCaughtUp = "await-green-caught-up"
+	TaskTypeCreateEntrantNodes = "create-entrant-nodes"
+	TaskTypeSubmitHaltSignal   = "submit-halt-signal"
+	TaskTypeAwaitNodesAtHeight = "await-nodes-at-height"
+	TaskTypeAwaitNodesCaughtUp = "await-nodes-caught-up"
 	TaskTypeSwitchTraffic      = "switch-traffic"
-	TaskTypeTeardownBlue       = "teardown-blue"
+	TaskTypeTeardownNodes      = "teardown-nodes"
 )
 
-// CreateGreenNodesParams holds parameters for creating green SeiNode resources.
-type CreateGreenNodesParams struct {
-	GroupName        string   `json:"groupName"`
-	Namespace        string   `json:"namespace"`
-	IncomingRevision string   `json:"incomingRevision"`
-	NodeNames        []string `json:"nodeNames"`
+// deploymentTaskNamespace is a fixed UUID v5 namespace for generating
+// deterministic task IDs scoped to deployment operations.
+var deploymentTaskNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
+
+// CreateEntrantNodesParams holds parameters for creating entrant SeiNode resources.
+type CreateEntrantNodesParams struct {
+	GroupName       string   `json:"groupName"`
+	Namespace       string   `json:"namespace"`
+	EntrantRevision string   `json:"entrantRevision"`
+	NodeNames       []string `json:"nodeNames"`
 }
 
-// AwaitGreenRunningParams holds parameters for waiting until green nodes reach Running.
-type AwaitGreenRunningParams struct {
-	Namespace string   `json:"namespace"`
-	NodeNames []string `json:"nodeNames"`
+// AwaitNodesAtHeightParams holds parameters for waiting until nodes
+// reach a specific block height.
+type AwaitNodesAtHeightParams struct {
+	Namespace    string   `json:"namespace"`
+	NodeNames    []string `json:"nodeNames"`
+	TargetHeight int64    `json:"targetHeight"`
 }
 
-// SubmitHaltSignalParams holds parameters for submitting await-condition(SIGTERM)
-// to blue node sidecars.
+// SubmitHaltSignalParams holds parameters for submitting
+// await-condition(SIGTERM) to incumbent node sidecars.
 type SubmitHaltSignalParams struct {
 	Namespace  string   `json:"namespace"`
 	NodeNames  []string `json:"nodeNames"`
 	HaltHeight int64    `json:"haltHeight"`
 }
 
-// AwaitGreenAtHeightParams holds parameters for waiting until green nodes
-// reach a specific block height.
-type AwaitGreenAtHeightParams struct {
-	Namespace  string   `json:"namespace"`
-	NodeNames  []string `json:"nodeNames"`
-	HaltHeight int64    `json:"haltHeight"`
-}
-
-// AwaitGreenCaughtUpParams holds parameters for waiting until green nodes
+// AwaitNodesCaughtUpParams holds parameters for waiting until nodes
 // report catching_up == false (fully synced to chain tip).
-type AwaitGreenCaughtUpParams struct {
+type AwaitNodesCaughtUpParams struct {
 	Namespace string   `json:"namespace"`
 	NodeNames []string `json:"nodeNames"`
 }
 
 // SwitchTrafficParams holds parameters for switching the Service selector
-// from the active revision to the incoming revision.
+// to the entrant revision.
 type SwitchTrafficParams struct {
-	GroupName        string `json:"groupName"`
-	Namespace        string `json:"namespace"`
-	IncomingRevision string `json:"incomingRevision"`
+	GroupName       string `json:"groupName"`
+	Namespace       string `json:"namespace"`
+	EntrantRevision string `json:"entrantRevision"`
 }
 
-// TeardownBlueParams holds parameters for deleting old (blue) SeiNode resources.
-type TeardownBlueParams struct {
+// TeardownNodesParams holds parameters for deleting incumbent SeiNode resources.
+type TeardownNodesParams struct {
 	Namespace string   `json:"namespace"`
 	NodeNames []string `json:"nodeNames"`
 }

@@ -8,9 +8,6 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// DeploymentPlanner builds a TaskPlan for blue-green deployment orchestration.
-type DeploymentPlanner struct{}
-
 // NeedsDeployment returns true when the group's template has changed
 // (generation mismatch) and an update strategy is configured.
 func NeedsDeployment(group *seiv1alpha1.SeiNodeGroup) bool {
@@ -26,177 +23,156 @@ func IsDeploymentActive(group *seiv1alpha1.SeiNodeGroup) bool {
 		group.Status.Deployment.Plan.Phase == seiv1alpha1.TaskPlanActive
 }
 
-// BuildDeploymentPlan builds the task plan for a blue-green deployment
-// based on the configured update strategy.
-func BuildDeploymentPlan(
-	group *seiv1alpha1.SeiNodeGroup,
-	blueNodes []string,
-) (*seiv1alpha1.DeploymentStatus, error) {
-	strategy := group.Spec.UpdateStrategy
-	if strategy == nil {
-		return nil, fmt.Errorf("no update strategy configured on %s/%s", group.Namespace, group.Name)
+// ForDeployment returns the appropriate GroupPlanner for the group's
+// configured update strategy.
+func ForDeployment(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
+	if group.Spec.UpdateStrategy == nil {
+		return nil, fmt.Errorf("no update strategy on %s/%s", group.Namespace, group.Name)
 	}
-
-	incomingRevision := strconv.FormatInt(group.Generation, 10)
-
-	// Determine active revision from existing blue nodes' labels or current status.
-	activeRevision := ""
-	if group.Status.Deployment != nil && group.Status.Deployment.ActiveRevision != "" {
-		activeRevision = group.Status.Deployment.ActiveRevision
-	} else {
-		// First deployment: the active revision is the previous generation.
-		activeRevision = strconv.FormatInt(group.Generation-1, 10)
-	}
-
-	greenNames := make([]string, int(group.Spec.Replicas))
-	for i := range int(group.Spec.Replicas) {
-		greenNames[i] = fmt.Sprintf("%s-g%d-%d", group.Name, group.Generation, i)
-	}
-
-	var tasks []seiv1alpha1.PlannedTask
-	var err error
-
-	switch strategy.Type {
+	switch group.Spec.UpdateStrategy.Type {
 	case seiv1alpha1.UpdateStrategyHardFork:
-		tasks, err = buildHardForkTasks(group, blueNodes, greenNames)
+		return &hardForkDeploymentPlanner{}, nil
 	case seiv1alpha1.UpdateStrategyBlueGreen:
-		tasks, err = buildBlueGreenTasks(group, blueNodes, greenNames)
+		return &blueGreenDeploymentPlanner{}, nil
 	default:
-		return nil, fmt.Errorf("unknown update strategy type %q", strategy.Type)
+		return nil, fmt.Errorf("unknown update strategy type %q", group.Spec.UpdateStrategy.Type)
 	}
-	if err != nil {
-		return nil, err
-	}
-
-	return &seiv1alpha1.DeploymentStatus{
-		Plan: seiv1alpha1.TaskPlan{
-			Phase: seiv1alpha1.TaskPlanActive,
-			Tasks: tasks,
-		},
-		ActiveRevision:   activeRevision,
-		IncomingRevision: incomingRevision,
-		BlueNodes:        blueNodes,
-		GreenNodes:       greenNames,
-	}, nil
 }
 
-func buildHardForkTasks(
+// EntrantNodeNames generates the names for entrant SeiNodes based on the
+// group's name and generation.
+func EntrantNodeNames(group *seiv1alpha1.SeiNodeGroup) []string {
+	names := make([]string, int(group.Spec.Replicas))
+	for i := range int(group.Spec.Replicas) {
+		names[i] = fmt.Sprintf("%s-g%d-%d", group.Name, group.Generation, i)
+	}
+	return names
+}
+
+// EntrantRevision returns the revision string for the entrant set.
+func EntrantRevision(group *seiv1alpha1.SeiNodeGroup) string {
+	return strconv.FormatInt(group.Generation, 10)
+}
+
+// IncumbentRevision returns the revision string for the incumbent set.
+func IncumbentRevision(group *seiv1alpha1.SeiNodeGroup) string {
+	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
+		return group.Status.Deployment.IncumbentRevision
+	}
+	return strconv.FormatInt(group.Generation-1, 10)
+}
+
+// hardForkDeploymentPlanner builds a deployment plan for the HardFork strategy.
+type hardForkDeploymentPlanner struct{}
+
+func (p *hardForkDeploymentPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
-	blueNodes, greenNames []string,
-) ([]seiv1alpha1.PlannedTask, error) {
+	_ []seiv1alpha1.SeiNode,
+) (*seiv1alpha1.TaskPlan, error) {
 	haltHeight := group.Spec.UpdateStrategy.HardFork.HaltHeight
-	groupName := group.Name
+	incumbentNodes := group.Status.IncumbentNodes
+	entrantNodes := EntrantNodeNames(group)
+	entrantRevision := EntrantRevision(group)
 	ns := group.Namespace
-	incomingRevision := strconv.FormatInt(group.Generation, 10)
-	attempt := 0
 
 	prog := []struct {
 		taskType string
 		params   any
 	}{
-		{task.TaskTypeCreateGreenNodes, &task.CreateGreenNodesParams{
-			GroupName:        groupName,
-			Namespace:        ns,
-			IncomingRevision: incomingRevision,
-			NodeNames:        greenNames,
+		{task.TaskTypeCreateEntrantNodes, &task.CreateEntrantNodesParams{
+			GroupName:       group.Name,
+			Namespace:       ns,
+			EntrantRevision: entrantRevision,
+			NodeNames:       entrantNodes,
 		}},
-		{task.TaskTypeAwaitGreenRunning, &task.AwaitGreenRunningParams{
+		{task.TaskTypeAwaitNodesRunning, &task.AwaitNodesRunningParams{
+			GroupName: group.Name,
 			Namespace: ns,
-			NodeNames: greenNames,
+			Expected:  len(entrantNodes),
+			NodeNames: entrantNodes,
 		}},
 		{task.TaskTypeSubmitHaltSignal, &task.SubmitHaltSignalParams{
 			Namespace:  ns,
-			NodeNames:  blueNodes,
+			NodeNames:  incumbentNodes,
 			HaltHeight: haltHeight,
 		}},
-		{task.TaskTypeAwaitGreenAtHeight, &task.AwaitGreenAtHeightParams{
-			Namespace:  ns,
-			NodeNames:  greenNames,
-			HaltHeight: haltHeight,
+		{task.TaskTypeAwaitNodesAtHeight, &task.AwaitNodesAtHeightParams{
+			Namespace:    ns,
+			NodeNames:    entrantNodes,
+			TargetHeight: haltHeight,
 		}},
 		{task.TaskTypeSwitchTraffic, &task.SwitchTrafficParams{
-			GroupName:        groupName,
-			Namespace:        ns,
-			IncomingRevision: incomingRevision,
+			GroupName:       group.Name,
+			Namespace:       ns,
+			EntrantRevision: entrantRevision,
 		}},
-		{task.TaskTypeTeardownBlue, &task.TeardownBlueParams{
+		{task.TaskTypeTeardownNodes, &task.TeardownNodesParams{
 			Namespace: ns,
-			NodeNames: blueNodes,
+			NodeNames: incumbentNodes,
 		}},
 	}
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, p := range prog {
-		t, err := buildPlannedTask2(groupName, p.taskType, attempt, p.params)
+		t, err := buildGroupPlannedTask(group.Name, p.taskType, p.params)
 		if err != nil {
 			return nil, err
 		}
 		tasks[i] = t
 	}
-	return tasks, nil
+	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
 }
 
-func buildBlueGreenTasks(
+// blueGreenDeploymentPlanner builds a deployment plan for the BlueGreen strategy.
+type blueGreenDeploymentPlanner struct{}
+
+func (p *blueGreenDeploymentPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
-	blueNodes, greenNames []string,
-) ([]seiv1alpha1.PlannedTask, error) {
-	groupName := group.Name
+	_ []seiv1alpha1.SeiNode,
+) (*seiv1alpha1.TaskPlan, error) {
+	incumbentNodes := group.Status.IncumbentNodes
+	entrantNodes := EntrantNodeNames(group)
+	entrantRevision := EntrantRevision(group)
 	ns := group.Namespace
-	incomingRevision := strconv.FormatInt(group.Generation, 10)
-	attempt := 0
 
 	prog := []struct {
 		taskType string
 		params   any
 	}{
-		{task.TaskTypeCreateGreenNodes, &task.CreateGreenNodesParams{
-			GroupName:        groupName,
-			Namespace:        ns,
-			IncomingRevision: incomingRevision,
-			NodeNames:        greenNames,
+		{task.TaskTypeCreateEntrantNodes, &task.CreateEntrantNodesParams{
+			GroupName:       group.Name,
+			Namespace:       ns,
+			EntrantRevision: entrantRevision,
+			NodeNames:       entrantNodes,
 		}},
-		{task.TaskTypeAwaitGreenRunning, &task.AwaitGreenRunningParams{
+		{task.TaskTypeAwaitNodesRunning, &task.AwaitNodesRunningParams{
+			GroupName: group.Name,
 			Namespace: ns,
-			NodeNames: greenNames,
+			Expected:  len(entrantNodes),
+			NodeNames: entrantNodes,
 		}},
-		{task.TaskTypeAwaitGreenCaughtUp, &task.AwaitGreenCaughtUpParams{
+		{task.TaskTypeAwaitNodesCaughtUp, &task.AwaitNodesCaughtUpParams{
 			Namespace: ns,
-			NodeNames: greenNames,
+			NodeNames: entrantNodes,
 		}},
 		{task.TaskTypeSwitchTraffic, &task.SwitchTrafficParams{
-			GroupName:        groupName,
-			Namespace:        ns,
-			IncomingRevision: incomingRevision,
+			GroupName:       group.Name,
+			Namespace:       ns,
+			EntrantRevision: entrantRevision,
 		}},
-		{task.TaskTypeTeardownBlue, &task.TeardownBlueParams{
+		{task.TaskTypeTeardownNodes, &task.TeardownNodesParams{
 			Namespace: ns,
-			NodeNames: blueNodes,
+			NodeNames: incumbentNodes,
 		}},
 	}
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, p := range prog {
-		t, err := buildPlannedTask2(groupName, p.taskType, attempt, p.params)
+		t, err := buildGroupPlannedTask(group.Name, p.taskType, p.params)
 		if err != nil {
 			return nil, err
 		}
 		tasks[i] = t
 	}
-	return tasks, nil
-}
-
-// buildPlannedTask2 is like buildPlannedTask but uses the group name
-// instead of node name for deterministic IDs.
-func buildPlannedTask2(resourceName, taskType string, attempt int, params any) (seiv1alpha1.PlannedTask, error) {
-	id := task.DeterministicTaskID(resourceName, taskType, attempt)
-	p, err := marshalParams(params)
-	if err != nil {
-		return seiv1alpha1.PlannedTask{}, fmt.Errorf("task %s: %w", taskType, err)
-	}
-	return seiv1alpha1.PlannedTask{
-		Type:   taskType,
-		ID:     id,
-		Status: seiv1alpha1.TaskPending,
-		Params: p,
-	}, nil
+	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
 }

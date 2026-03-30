@@ -26,7 +26,7 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.deployment.activeRevision
+    - jsonPath: .status.deployment.entrantRevision
       name: Revision
       priority: 1
       type: string
@@ -1139,27 +1139,21 @@ spec:
                 x-kubernetes-list-type: map
               deployment:
                 description: |-
-                  Deployment tracks an in-progress blue-green deployment.
+                  Deployment tracks an in-progress deployment.
                   Nil when no deployment is active.
                 properties:
-                  activeRevision:
-                    description: ActiveRevision identifies the generation of currently
-                      live nodes.
+                  entrantNodes:
+                    description: EntrantNodes lists the names of the new SeiNode resources.
+                    items:
+                      type: string
+                    type: array
+                  entrantRevision:
+                    description: EntrantRevision identifies the generation of the
+                      new nodes being deployed.
                     type: string
-                  blueNodes:
-                    description: BlueNodes lists the names of the original SeiNode
-                      resources.
-                    items:
-                      type: string
-                    type: array
-                  greenNodes:
-                    description: GreenNodes lists the names of the new SeiNode resources.
-                    items:
-                      type: string
-                    type: array
-                  incomingRevision:
-                    description: IncomingRevision identifies the generation of green
-                      nodes being deployed.
+                  incumbentRevision:
+                    description: IncumbentRevision identifies the generation of the
+                      currently live nodes.
                     type: string
                   plan:
                     description: Plan is the ordered task sequence driving the deployment.
@@ -1225,8 +1219,8 @@ spec:
                     - tasks
                     type: object
                 required:
-                - activeRevision
-                - incomingRevision
+                - entrantRevision
+                - incumbentRevision
                 - plan
                 type: object
               genesisHash:
@@ -1236,6 +1230,14 @@ spec:
               genesisS3URI:
                 description: GenesisS3URI is the S3 URI of the uploaded genesis.
                 type: string
+              incumbentNodes:
+                description: |-
+                  IncumbentNodes lists the names of the currently active SeiNode resources.
+                  Set during steady-state reconciliation so that the deployment planner
+                  can read the current node set directly from the group object.
+                items:
+                  type: string
+                type: array
               initPlan:
                 description: InitPlan tracks group-level initialization tasks (e.g.
                   genesis assembly).

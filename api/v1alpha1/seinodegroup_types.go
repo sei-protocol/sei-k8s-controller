@@ -210,7 +210,13 @@ type SeiNodeGroupStatus struct {
 	// +optional
 	GenesisS3URI string `json:"genesisS3URI,omitempty"`
 
-	// Deployment tracks an in-progress blue-green deployment.
+	// IncumbentNodes lists the names of the currently active SeiNode resources.
+	// Set during steady-state reconciliation so that the deployment planner
+	// can read the current node set directly from the group object.
+	// +optional
+	IncumbentNodes []string `json:"incumbentNodes,omitempty"`
+
+	// Deployment tracks an in-progress deployment.
 	// Nil when no deployment is active.
 	// +optional
 	Deployment *DeploymentStatus `json:"deployment,omitempty"`
@@ -246,24 +252,20 @@ type NetworkingStatus struct {
 	LoadBalancerIngress []corev1.LoadBalancerIngress `json:"loadBalancerIngress,omitempty"`
 }
 
-// DeploymentStatus tracks the state of a blue-green deployment.
+// DeploymentStatus tracks the state of an in-progress deployment.
 type DeploymentStatus struct {
 	// Plan is the ordered task sequence driving the deployment.
 	Plan TaskPlan `json:"plan"`
 
-	// ActiveRevision identifies the generation of currently live nodes.
-	ActiveRevision string `json:"activeRevision"`
+	// IncumbentRevision identifies the generation of the currently live nodes.
+	IncumbentRevision string `json:"incumbentRevision"`
 
-	// IncomingRevision identifies the generation of green nodes being deployed.
-	IncomingRevision string `json:"incomingRevision"`
+	// EntrantRevision identifies the generation of the new nodes being deployed.
+	EntrantRevision string `json:"entrantRevision"`
 
-	// BlueNodes lists the names of the original SeiNode resources.
+	// EntrantNodes lists the names of the new SeiNode resources.
 	// +optional
-	BlueNodes []string `json:"blueNodes,omitempty"`
-
-	// GreenNodes lists the names of the new SeiNode resources.
-	// +optional
-	GreenNodes []string `json:"greenNodes,omitempty"`
+	EntrantNodes []string `json:"entrantNodes,omitempty"`
 }
 
 // Status condition types for SeiNodeGroup.
@@ -283,7 +285,7 @@ const (
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Revision",type=string,JSONPath=`.status.deployment.activeRevision`,priority=1
+// +kubebuilder:printcolumn:name="Revision",type=string,JSONPath=`.status.deployment.entrantRevision`,priority=1
 // +kubebuilder:printcolumn:name="Host",type=string,JSONPath=`.spec.networking.gateway.hostnames[0]`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

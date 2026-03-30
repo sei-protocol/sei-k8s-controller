@@ -80,26 +80,14 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	statusBase := client.MergeFrom(group.DeepCopy())
 	ns, name := group.Namespace, group.Name
 
-	// --- Deployment orchestration gate ---
-	// When a deployment is active, skip normal ensureSeiNode reconciliation
-	// to prevent the reconciler from mutating blue nodes to the new template.
-	if planner.IsDeploymentActive(group) {
+	// Deployment orchestration gate: when a deployment is active or needed,
+	// skip normal ensureSeiNode to prevent mutating incumbent nodes.
+	if planner.IsDeploymentActive(group) || planner.NeedsDeployment(group) {
 		result, err := r.reconcileDeployment(ctx, group, statusBase)
 		if err != nil {
 			logger.Error(err, "reconciling deployment")
 			observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 			return ctrl.Result{}, fmt.Errorf("reconciling deployment: %w", err)
-		}
-		return result, nil
-	}
-
-	// Detect if a new deployment is needed: generation changed + strategy set.
-	if planner.NeedsDeployment(group) {
-		result, err := r.startDeployment(ctx, group, statusBase)
-		if err != nil {
-			logger.Error(err, "starting deployment")
-			observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
-			return ctrl.Result{}, fmt.Errorf("starting deployment: %w", err)
 		}
 		return result, nil
 	}

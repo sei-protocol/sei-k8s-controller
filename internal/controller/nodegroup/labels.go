@@ -24,8 +24,8 @@ func seiNodeName(group *seiv1alpha1.SeiNodeGroup, ordinal int) string {
 // During a deployment, this comes from status; otherwise from the group's
 // generation.
 func activeRevision(group *seiv1alpha1.SeiNodeGroup) string {
-	if group.Status.Deployment != nil && group.Status.Deployment.ActiveRevision != "" {
-		return group.Status.Deployment.ActiveRevision
+	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
+		return group.Status.Deployment.IncumbentRevision
 	}
 	return strconv.FormatInt(group.Generation, 10)
 }

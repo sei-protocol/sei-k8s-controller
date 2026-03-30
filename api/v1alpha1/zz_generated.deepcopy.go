@@ -107,13 +107,8 @@ func (in *ConfigStatus) DeepCopy() *ConfigStatus {
 func (in *DeploymentStatus) DeepCopyInto(out *DeploymentStatus) {
 	*out = *in
 	in.Plan.DeepCopyInto(&out.Plan)
-	if in.BlueNodes != nil {
-		in, out := &in.BlueNodes, &out.BlueNodes
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
-	if in.GreenNodes != nil {
-		in, out := &in.GreenNodes, &out.GreenNodes
+	if in.EntrantNodes != nil {
+		in, out := &in.EntrantNodes, &out.EntrantNodes
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
@@ -846,6 +841,11 @@ func (in *SeiNodeGroupStatus) DeepCopyInto(out *SeiNodeGroupStatus) {
 		in, out := &in.InitPlan, &out.InitPlan
 		*out = new(TaskPlan)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.IncumbentNodes != nil {
+		in, out := &in.IncumbentNodes, &out.IncumbentNodes
+		*out = make([]string, len(*in))
+		copy(*out, *in)
 	}
 	if in.Deployment != nil {
 		in, out := &in.Deployment, &out.Deployment

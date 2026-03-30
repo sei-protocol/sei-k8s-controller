@@ -37,7 +37,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		Nodes:          nodeParams,
 	}
 
-	assembleTask, err := buildGroupPlannedTask(group.Name, TaskAssembleGenesis, 0, assembleParams)
+	assembleTask, err := buildGroupPlannedTask(group.Name, TaskAssembleGenesis, assembleParams)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		Namespace: group.Namespace,
 		Expected:  len(nodes),
 	}
-	awaitTask, err := buildGroupPlannedTask(group.Name, TaskAwaitNodesRunning, 0, awaitParams)
+	awaitTask, err := buildGroupPlannedTask(group.Name, TaskAwaitNodesRunning, awaitParams)
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +60,8 @@ func (p *genesisGroupPlanner) BuildPlan(
 }
 
 // buildGroupPlannedTask is the group-level equivalent of buildPlannedTask.
-func buildGroupPlannedTask(groupName, taskType string, attempt int, params any) (seiv1alpha1.PlannedTask, error) {
-	id := task.DeterministicTaskID(groupName, taskType, attempt)
+func buildGroupPlannedTask(groupName, taskType string, params any) (seiv1alpha1.PlannedTask, error) {
+	id := task.DeterministicTaskID(groupName, taskType, 0)
 	p, err := marshalParams(params)
 	if err != nil {
 		return seiv1alpha1.PlannedTask{}, fmt.Errorf("task %s: %w", taskType, err)
