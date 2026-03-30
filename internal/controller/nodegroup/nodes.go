@@ -69,7 +69,6 @@ func (r *SeiNodeGroupReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNo
 		EntrantRevision:   planner.EntrantRevision(group),
 		EntrantNodes:      planner.EntrantNodeNames(group),
 	}
-	group.Status.Phase = seiv1alpha1.GroupPhaseUpgrading
 }
 
 // populateIncumbentNodes lists child SeiNodes and records their names

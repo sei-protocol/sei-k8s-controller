@@ -43,12 +43,7 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses
 
-	// Preserve Upgrading phase during active deployments.
-	if group.Status.Deployment != nil {
-		group.Status.Phase = seiv1alpha1.GroupPhaseUpgrading
-	} else {
-		group.Status.Phase = computeGroupPhase(readyReplicas, group.Spec.Replicas, nodes)
-	}
+	group.Status.Phase = computeGroupPhase(group, readyReplicas, group.Spec.Replicas, nodes)
 
 	svc, svcErr := r.fetchExternalService(ctx, group)
 	group.Status.NetworkingStatus = buildNetworkingStatus(group, svc)
@@ -59,7 +54,14 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 	return r.Status().Patch(ctx, group, statusBase)
 }
 
-func computeGroupPhase(ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1alpha1.SeiNodeGroupPhase {
+func computeGroupPhase(group *seiv1alpha1.SeiNodeGroup, ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1alpha1.SeiNodeGroupPhase {
+	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		if group.Status.Deployment != nil {
+			return seiv1alpha1.GroupPhaseUpgrading
+		}
+		return seiv1alpha1.GroupPhaseInitializing
+	}
+
 	if len(nodes) == 0 {
 		return seiv1alpha1.GroupPhasePending
 	}
@@ -172,7 +174,7 @@ func setExternalServiceCondition(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Se
 		"ServiceReady", fmt.Sprintf("External Service %s is ready", svc.Name))
 }
 
-func hasConditionTrue(group *seiv1alpha1.SeiNodeGroup, condType string) bool {
+func hasConditionTrue(group *seiv1alpha1.SeiNodeGroup, condType string) bool { //nolint:unparam // general-purpose utility
 	c := apimeta.FindStatusCondition(group.Status.Conditions, condType)
 	return c != nil && c.Status == metav1.ConditionTrue
 }
