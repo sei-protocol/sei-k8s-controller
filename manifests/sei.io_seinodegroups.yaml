@@ -26,6 +26,10 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.deployment.entrantRevision
+      name: Revision
+      priority: 1
+      type: string
     - jsonPath: .spec.networking.gateway.hostnames[0]
       name: Host
       priority: 1
@@ -851,16 +855,6 @@ spec:
                                 type: object
                             type: object
                         type: object
-                      storage:
-                        description: Storage controls PVC lifecycle.
-                        properties:
-                          retainOnDelete:
-                            default: false
-                            description: |-
-                              RetainOnDelete prevents the data PVC from being deleted when the
-                              SeiNode is deleted.
-                            type: boolean
-                        type: object
                       validator:
                         description: Validator configures a consensus-participating
                           validator node.
@@ -1034,6 +1028,42 @@ spec:
                 required:
                 - spec
                 type: object
+              updateStrategy:
+                description: |-
+                  UpdateStrategy controls how changes to the template are rolled out
+                  to child SeiNodes. When set, the controller uses blue-green
+                  deployment orchestration instead of in-place updates.
+                  When not set, template changes are applied in-place via ensureSeiNode.
+                properties:
+                  hardFork:
+                    description: |-
+                      HardFork configures blue-green deployment at a specific block height.
+                      Required when type is HardFork.
+                    properties:
+                      haltHeight:
+                        description: |-
+                          HaltHeight is the block height at which the old binary is stopped
+                          via sidecar SIGTERM. The new binary must include an upgrade handler
+                          that continues from this height.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                    required:
+                    - haltHeight
+                    type: object
+                  type:
+                    description: Type selects the deployment strategy.
+                    enum:
+                    - BlueGreen
+                    - HardFork
+                    type: string
+                required:
+                - type
+                type: object
+                x-kubernetes-validations:
+                - message: hardFork strategy requires haltHeight > 0
+                  rule: self.type != 'HardFork' || (has(self.hardFork) && self.hardFork.haltHeight
+                    > 0)
             required:
             - replicas
             - template
@@ -1107,6 +1137,92 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              deployment:
+                description: |-
+                  Deployment tracks an in-progress deployment.
+                  Nil when no deployment is active.
+                properties:
+                  entrantNodes:
+                    description: EntrantNodes lists the names of the new SeiNode resources.
+                    items:
+                      type: string
+                    type: array
+                  entrantRevision:
+                    description: EntrantRevision identifies the generation of the
+                      new nodes being deployed.
+                    type: string
+                  incumbentRevision:
+                    description: IncumbentRevision identifies the generation of the
+                      currently live nodes.
+                    type: string
+                  plan:
+                    description: Plan is the ordered task sequence driving the deployment.
+                    properties:
+                      phase:
+                        description: Phase is the overall state of the plan.
+                        enum:
+                        - Active
+                        - Complete
+                        - Failed
+                        type: string
+                      tasks:
+                        description: Tasks is the ordered list of tasks to execute.
+                        items:
+                          description: |-
+                            PlannedTask is a single task within a TaskPlan. Each task carries its full
+                            payload so the plan executor can deserialize and run it without needing
+                            access to the planner or sidecar client factory.
+                          properties:
+                            error:
+                              description: Error is the error message if the task
+                                failed.
+                              type: string
+                            id:
+                              description: |-
+                                ID is a deterministic UUID v5 derived from nodeName/taskType/attempt.
+                                Used as the key for sidecar task submission and status polling.
+                              type: string
+                            maxRetries:
+                              description: |-
+                                MaxRetries is the maximum number of times this task can be retried after
+                                failure. When 0 (default), failures are terminal. Used for tasks like
+                                configure-genesis that may need to wait for upstream data to appear.
+                              type: integer
+                            params:
+                              description: |-
+                                Params is the opaque JSON payload for this task. Deserialized at
+                                execution time by task.Deserialize into the concrete task type.
+                              x-kubernetes-preserve-unknown-fields: true
+                            retryCount:
+                              description: RetryCount is the current retry attempt
+                                number.
+                              type: integer
+                            status:
+                              description: Status is the current state of this task.
+                              enum:
+                              - Pending
+                              - Complete
+                              - Failed
+                              type: string
+                            type:
+                              description: Type identifies the task (e.g. "snapshot-restore",
+                                "config-patch").
+                              type: string
+                          required:
+                          - id
+                          - status
+                          - type
+                          type: object
+                        type: array
+                    required:
+                    - phase
+                    - tasks
+                    type: object
+                required:
+                - entrantRevision
+                - incumbentRevision
+                - plan
+                type: object
               genesisHash:
                 description: GenesisHash is the SHA-256 hex digest of the assembled
                   genesis.json.
@@ -1114,6 +1230,14 @@ spec:
               genesisS3URI:
                 description: GenesisS3URI is the S3 URI of the uploaded genesis.
                 type: string
+              incumbentNodes:
+                description: |-
+                  IncumbentNodes lists the names of the currently active SeiNode resources.
+                  Set during steady-state reconciliation so that the deployment planner
+                  can read the current node set directly from the group object.
+                items:
+                  type: string
+                type: array
               initPlan:
                 description: InitPlan tracks group-level initialization tasks (e.g.
                   genesis assembly).
@@ -1286,6 +1410,7 @@ spec:
                 - Pending
                 - Initializing
                 - Ready
+                - Upgrading
                 - Degraded
                 - Failed
                 - Terminating

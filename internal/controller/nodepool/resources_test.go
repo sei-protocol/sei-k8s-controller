@@ -59,15 +59,6 @@ func TestGenerateSeiNode(t *testing.T) {
 	g.Expect(node.Spec.FullNode).To(BeNil())
 }
 
-func TestGenerateSeiNode_RetainOnDeletePropagated(t *testing.T) {
-	g := NewWithT(t)
-	sn := newSeiNodePool("my-net", "default", 1)
-	sn.Spec.Storage.RetainOnDelete = true
-
-	node := generateSeiNode(sn, 0)
-	g.Expect(node.Spec.Storage.RetainOnDelete).To(BeTrue())
-}
-
 func TestGenerateDataPVC(t *testing.T) {
 	g := NewWithT(t)
 	sn := newSeiNodePool("testnet", "ns1", 2)

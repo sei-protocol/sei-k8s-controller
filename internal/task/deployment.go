@@ -1,0 +1,62 @@
+package task
+
+import "github.com/google/uuid"
+
+// Controller-managed deployment task types.
+const (
+	TaskTypeCreateEntrantNodes = "create-entrant-nodes"
+	TaskTypeSubmitHaltSignal   = "submit-halt-signal"
+	TaskTypeAwaitNodesAtHeight = "await-nodes-at-height"
+	TaskTypeAwaitNodesCaughtUp = "await-nodes-caught-up"
+	TaskTypeSwitchTraffic      = "switch-traffic"
+	TaskTypeTeardownNodes      = "teardown-nodes"
+)
+
+// deploymentTaskNamespace is a fixed UUID v5 namespace for generating
+// deterministic task IDs scoped to deployment operations.
+var deploymentTaskNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
+
+// CreateEntrantNodesParams holds parameters for creating entrant SeiNode resources.
+type CreateEntrantNodesParams struct {
+	GroupName       string   `json:"groupName"`
+	Namespace       string   `json:"namespace"`
+	EntrantRevision string   `json:"entrantRevision"`
+	NodeNames       []string `json:"nodeNames"`
+}
+
+// AwaitNodesAtHeightParams holds parameters for waiting until nodes
+// reach a specific block height.
+type AwaitNodesAtHeightParams struct {
+	Namespace    string   `json:"namespace"`
+	NodeNames    []string `json:"nodeNames"`
+	TargetHeight int64    `json:"targetHeight"`
+}
+
+// SubmitHaltSignalParams holds parameters for submitting
+// await-condition(SIGTERM) to incumbent node sidecars.
+type SubmitHaltSignalParams struct {
+	Namespace  string   `json:"namespace"`
+	NodeNames  []string `json:"nodeNames"`
+	HaltHeight int64    `json:"haltHeight"`
+}
+
+// AwaitNodesCaughtUpParams holds parameters for waiting until nodes
+// report catching_up == false (fully synced to chain tip).
+type AwaitNodesCaughtUpParams struct {
+	Namespace string   `json:"namespace"`
+	NodeNames []string `json:"nodeNames"`
+}
+
+// SwitchTrafficParams holds parameters for switching the Service selector
+// to the entrant revision.
+type SwitchTrafficParams struct {
+	GroupName       string `json:"groupName"`
+	Namespace       string `json:"namespace"`
+	EntrantRevision string `json:"entrantRevision"`
+}
+
+// TeardownNodesParams holds parameters for deleting incumbent SeiNode resources.
+type TeardownNodesParams struct {
+	Namespace string   `json:"namespace"`
+	NodeNames []string `json:"nodeNames"`
+}

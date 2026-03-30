@@ -156,6 +156,20 @@ func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfi
 	case TaskTypeTeardownBootstrap:
 		return deserializeBootstrapTeardown(id, params, cfg)
 
+	// Controller-side deployment tasks
+	case TaskTypeCreateEntrantNodes:
+		return deserializeCreateEntrantNodes(id, params, cfg)
+	case TaskTypeSubmitHaltSignal:
+		return deserializeSubmitHaltSignal(id, params, cfg)
+	case TaskTypeAwaitNodesAtHeight:
+		return deserializeAwaitNodesAtHeight(id, params, cfg)
+	case TaskTypeAwaitNodesCaughtUp:
+		return deserializeAwaitNodesCaughtUp(id, params, cfg)
+	case TaskTypeSwitchTraffic:
+		return deserializeSwitchTraffic(id, params, cfg)
+	case TaskTypeTeardownNodes:
+		return deserializeTeardownNodes(id, params, cfg)
+
 	default:
 		return nil, &UnknownTaskTypeError{Type: taskType}
 	}

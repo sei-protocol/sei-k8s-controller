@@ -80,6 +80,18 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	statusBase := client.MergeFrom(group.DeepCopy())
 	ns, name := group.Namespace, group.Name
 
+	// Deployment orchestration gate: when a deployment is active or needed,
+	// skip normal ensureSeiNode to prevent mutating incumbent nodes.
+	if planner.IsDeploymentActive(group) || planner.NeedsDeployment(group) {
+		result, err := r.reconcileDeployment(ctx, group, statusBase)
+		if err != nil {
+			logger.Error(err, "reconciling deployment")
+			observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
+			return ctrl.Result{}, fmt.Errorf("reconciling deployment: %w", err)
+		}
+		return result, nil
+	}
+
 	if err := timeSubstep("reconcileSeiNodes", func() error {
 		return r.reconcileSeiNodes(ctx, group)
 	}); err != nil {

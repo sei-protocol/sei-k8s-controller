@@ -34,10 +34,23 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 		})
 	}
 
-	group.Status.ObservedGeneration = group.Generation
+	// Only update ObservedGeneration during steady-state reconciliation.
+	// During deployment, ObservedGeneration is updated by the deployment
+	// handler upon plan completion.
+	if group.Spec.UpdateStrategy == nil {
+		group.Status.ObservedGeneration = group.Generation
+	}
 	group.Status.Replicas = group.Spec.Replicas
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses
+
+	// Track incumbent node names so the deployment planner can read
+	// them directly from the group object.
+	incumbentNames := make([]string, len(nodes))
+	for i := range nodes {
+		incumbentNames[i] = nodes[i].Name
+	}
+	group.Status.IncumbentNodes = incumbentNames
 	group.Status.Phase = computeGroupPhase(readyReplicas, group.Spec.Replicas, nodes)
 
 	svc, svcErr := r.fetchExternalService(ctx, group)

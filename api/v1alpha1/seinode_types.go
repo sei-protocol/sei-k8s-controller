@@ -29,10 +29,6 @@ type SeiNodeSpec struct {
 	// +optional
 	Genesis GenesisConfiguration `json:"genesis,omitempty"`
 
-	// Storage controls PVC lifecycle.
-	// +optional
-	Storage SeiNodeStorageConfig `json:"storage,omitempty"`
-
 	// Overrides is a flat map of dotted TOML key paths to string values.
 	// Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
 	// These are applied on top of mode defaults during config-apply.

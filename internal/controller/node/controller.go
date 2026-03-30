@@ -238,7 +238,7 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 	}
 
 	// Non-genesis SeiNodes own their data PVC; genesis PVCs are owned by SeiNodePool.
-	if !hasGenesisPVC(node) && !node.Spec.Storage.RetainOnDelete {
+	if !hasGenesisPVC(node) {
 		if err := r.deleteNodeDataPVC(ctx, node); err != nil {
 			return ctrl.Result{}, fmt.Errorf("deleting data PVC: %w", err)
 		}
