@@ -13,19 +13,15 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// DeployBootstrapJobParams holds the serialized parameters for the
-// deploy-bootstrap-job task.
 type DeployBootstrapJobParams struct {
 	JobName   string `json:"jobName"`
 	Namespace string `json:"namespace"`
 }
 
 type deployBootstrapJobExecution struct {
-	id     string
+	taskBase
 	params DeployBootstrapJobParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeBootstrapJob(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -36,10 +32,9 @@ func deserializeBootstrapJob(id string, params json.RawMessage, cfg ExecutionCon
 		}
 	}
 	return &deployBootstrapJobExecution{
-		id:     id,
-		params: p,
-		cfg:    cfg,
-		status: ExecutionRunning,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -58,25 +53,23 @@ func (e *deployBootstrapJobExecution) Execute(ctx context.Context) error {
 	}
 	if err := e.cfg.KubeClient.Create(ctx, job); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			e.status = ExecutionComplete
+			e.complete()
 			return nil
 		}
 		return fmt.Errorf("creating bootstrap job: %w", err)
 	}
-	e.status = ExecutionComplete
+	e.complete()
 	return nil
 }
 
 func (e *deployBootstrapJobExecution) Status(ctx context.Context) ExecutionStatus {
-	if e.status == ExecutionComplete {
-		return ExecutionComplete
+	if s, done := e.isTerminal(); done {
+		return s
 	}
 	existing := &batchv1.Job{}
 	key := types.NamespacedName{Name: e.params.JobName, Namespace: e.params.Namespace}
 	if err := e.cfg.KubeClient.Get(ctx, key, existing); err == nil {
-		e.status = ExecutionComplete
+		e.complete()
 	}
 	return e.status
 }
-
-func (e *deployBootstrapJobExecution) Err() error { return e.err }

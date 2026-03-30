@@ -13,8 +13,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// TeardownBootstrapParams holds the serialized parameters for the
-// teardown-bootstrap task.
 type TeardownBootstrapParams struct {
 	JobName     string `json:"jobName"`
 	ServiceName string `json:"serviceName"`
@@ -22,11 +20,9 @@ type TeardownBootstrapParams struct {
 }
 
 type teardownBootstrapExecution struct {
-	id     string
+	taskBase
 	params TeardownBootstrapParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeBootstrapTeardown(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -37,10 +33,9 @@ func deserializeBootstrapTeardown(id string, params json.RawMessage, cfg Executi
 		}
 	}
 	return &teardownBootstrapExecution{
-		id:     id,
-		params: p,
-		cfg:    cfg,
-		status: ExecutionRunning,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -73,32 +68,19 @@ func (e *teardownBootstrapExecution) Execute(ctx context.Context) error {
 }
 
 func (e *teardownBootstrapExecution) Status(ctx context.Context) ExecutionStatus {
-	if e.status == ExecutionComplete {
-		return ExecutionComplete
+	if s, done := e.isTerminal(); done {
+		return s
 	}
 
 	kc := e.cfg.KubeClient
 	ns := e.params.Namespace
 
-	job := &batchv1.Job{}
-	jobKey := types.NamespacedName{Name: e.params.JobName, Namespace: ns}
-	jobGone := false
-	if err := kc.Get(ctx, jobKey, job); apierrors.IsNotFound(err) {
-		jobGone = true
-	}
-
-	svc := &corev1.Service{}
-	svcKey := types.NamespacedName{Name: e.params.ServiceName, Namespace: ns}
-	svcGone := false
-	if err := kc.Get(ctx, svcKey, svc); apierrors.IsNotFound(err) {
-		svcGone = true
-	}
+	jobGone := apierrors.IsNotFound(kc.Get(ctx, types.NamespacedName{Name: e.params.JobName, Namespace: ns}, &batchv1.Job{}))
+	svcGone := apierrors.IsNotFound(kc.Get(ctx, types.NamespacedName{Name: e.params.ServiceName, Namespace: ns}, &corev1.Service{}))
 
 	if jobGone && svcGone {
-		e.status = ExecutionComplete
+		e.complete()
 		return ExecutionComplete
 	}
 	return ExecutionRunning
 }
-
-func (e *teardownBootstrapExecution) Err() error { return e.err }

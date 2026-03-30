@@ -16,11 +16,9 @@ import (
 // await-condition(height=H, action=SIGTERM) to each incumbent node's
 // sidecar. Completes immediately after submission (best-effort).
 type submitHaltSignalExecution struct {
-	id     string
+	taskBase
 	params SubmitHaltSignalParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeSubmitHaltSignal(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -30,7 +28,11 @@ func deserializeSubmitHaltSignal(id string, params json.RawMessage, cfg Executio
 			return nil, fmt.Errorf("deserializing submit-halt-signal params: %w", err)
 		}
 	}
-	return &submitHaltSignalExecution{id: id, params: p, cfg: cfg, status: ExecutionRunning}, nil
+	return &submitHaltSignalExecution{
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
+	}, nil
 }
 
 func (e *submitHaltSignalExecution) Execute(ctx context.Context) error {
@@ -40,9 +42,7 @@ func (e *submitHaltSignalExecution) Execute(ctx context.Context) error {
 		e.submitToNode(ctx, logger, name)
 	}
 
-	// Best-effort: always complete. For a real hard fork, consensus
-	// halts at the height regardless of whether SIGTERM was delivered.
-	e.status = ExecutionComplete
+	e.complete()
 	return nil
 }
 
@@ -82,5 +82,3 @@ func (e *submitHaltSignalExecution) submitToNode(ctx context.Context, logger int
 func (e *submitHaltSignalExecution) Status(_ context.Context) ExecutionStatus {
 	return e.status
 }
-
-func (e *submitHaltSignalExecution) Err() error { return e.err }

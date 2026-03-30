@@ -13,19 +13,15 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// DeployBootstrapServiceParams holds the serialized parameters for the
-// deploy-bootstrap-service task.
 type DeployBootstrapServiceParams struct {
 	ServiceName string `json:"serviceName"`
 	Namespace   string `json:"namespace"`
 }
 
 type deployBootstrapServiceExecution struct {
-	id     string
+	taskBase
 	params DeployBootstrapServiceParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeBootstrapService(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -36,10 +32,9 @@ func deserializeBootstrapService(id string, params json.RawMessage, cfg Executio
 		}
 	}
 	return &deployBootstrapServiceExecution{
-		id:     id,
-		params: p,
-		cfg:    cfg,
-		status: ExecutionRunning,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -54,25 +49,23 @@ func (e *deployBootstrapServiceExecution) Execute(ctx context.Context) error {
 	}
 	if err := e.cfg.KubeClient.Create(ctx, svc); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			e.status = ExecutionComplete
+			e.complete()
 			return nil
 		}
 		return fmt.Errorf("creating bootstrap service: %w", err)
 	}
-	e.status = ExecutionComplete
+	e.complete()
 	return nil
 }
 
 func (e *deployBootstrapServiceExecution) Status(ctx context.Context) ExecutionStatus {
-	if e.status == ExecutionComplete {
-		return ExecutionComplete
+	if s, done := e.isTerminal(); done {
+		return s
 	}
 	existing := &corev1.Service{}
 	key := types.NamespacedName{Name: e.params.ServiceName, Namespace: e.params.Namespace}
 	if err := e.cfg.KubeClient.Get(ctx, key, existing); err == nil {
-		e.status = ExecutionComplete
+		e.complete()
 	}
 	return e.status
 }
-
-func (e *deployBootstrapServiceExecution) Err() error { return e.err }

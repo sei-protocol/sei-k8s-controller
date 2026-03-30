@@ -42,14 +42,68 @@ const (
 var ErrTaskNotFound = errors.New("task not found on sidecar")
 
 // TaskExecution defines how the plan executor drives a single task.
-// Execute is a command (called once to submit). Status is a query
-// (called on every reconcile to poll progress). Err returns details
-// when Status reports ExecutionFailed.
+// Execute is a command (called once to submit — must be idempotent).
+// Status is a query (called on every reconcile to poll progress).
+// Err returns details when Status reports ExecutionFailed.
+//
+// Execute error semantics:
+//   - Return a plain error for transient failures — the executor retries.
+//   - Return Terminal(err) for permanent failures — the executor fails the plan.
+//
+// Implementations should embed taskBase for terminal-state caching and Err().
 type TaskExecution interface {
 	Execute(ctx context.Context) error
 	Status(ctx context.Context) ExecutionStatus
 	Err() error
 }
+
+// TerminalError wraps an error to signal that the failure is permanent
+// and the task should not be retried. The executor checks for this via
+// errors.As to decide whether to retry or fail the plan.
+type TerminalError struct {
+	Err error
+}
+
+func (e *TerminalError) Error() string { return e.Err.Error() }
+func (e *TerminalError) Unwrap() error { return e.Err }
+
+// Terminal wraps an error to mark it as non-retryable.
+func Terminal(err error) error {
+	return &TerminalError{Err: err}
+}
+
+// taskBase provides standard lifecycle helpers for TaskExecution
+// implementations. Embed it to get terminal-state caching, error
+// tracking, and the Err() method.
+type taskBase struct {
+	id     string
+	status ExecutionStatus
+	err    error
+}
+
+// isTerminal returns the cached status and true if the task has reached
+// a terminal state. Call at the top of Status() to short-circuit polling.
+func (b *taskBase) isTerminal() (ExecutionStatus, bool) {
+	if b.status == ExecutionComplete || b.status == ExecutionFailed {
+		return b.status, true
+	}
+	return "", false
+}
+
+// complete marks the task as successfully completed.
+func (b *taskBase) complete() {
+	b.status = ExecutionComplete
+}
+
+// setFailed marks the task as failed with the given error.
+// Used by Status() methods to record failures detected during polling.
+func (b *taskBase) setFailed(err error) {
+	b.status = ExecutionFailed
+	b.err = err
+}
+
+// Err returns the error that caused failure, or nil.
+func (b *taskBase) Err() error { return b.err }
 
 // UnknownTaskTypeError is returned by Deserialize for unrecognized task types.
 // The executor should treat this as a permanent failure.

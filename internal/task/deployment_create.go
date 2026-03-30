@@ -14,11 +14,9 @@ import (
 )
 
 type createEntrantNodesExecution struct {
-	id     string
+	taskBase
 	params CreateEntrantNodesParams
 	cfg    ExecutionConfig
-	status ExecutionStatus
-	err    error
 }
 
 func deserializeCreateEntrantNodes(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -28,22 +26,26 @@ func deserializeCreateEntrantNodes(id string, params json.RawMessage, cfg Execut
 			return nil, fmt.Errorf("deserializing create-entrant-nodes params: %w", err)
 		}
 	}
-	return &createEntrantNodesExecution{id: id, params: p, cfg: cfg, status: ExecutionRunning}, nil
+	return &createEntrantNodesExecution{
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
+	}, nil
 }
 
 func (e *createEntrantNodesExecution) Execute(ctx context.Context) error {
 	group, err := ResourceAs[*seiv1alpha1.SeiNodeGroup](e.cfg)
 	if err != nil {
-		return e.fail(err)
+		return Terminal(err)
 	}
 
 	for i, name := range e.params.NodeNames {
 		if err := e.ensureEntrantNode(ctx, group, name, i); err != nil {
-			return e.fail(err)
+			return err // transient — kube API errors are retryable
 		}
 	}
 
-	e.status = ExecutionComplete
+	e.complete()
 	return nil
 }
 
@@ -92,14 +94,6 @@ func (e *createEntrantNodesExecution) ensureEntrantNode(
 	return nil
 }
 
-func (e *createEntrantNodesExecution) fail(err error) error {
-	e.status = ExecutionFailed
-	e.err = err
-	return err
-}
-
 func (e *createEntrantNodesExecution) Status(_ context.Context) ExecutionStatus {
 	return e.status
 }
-
-func (e *createEntrantNodesExecution) Err() error { return e.err }

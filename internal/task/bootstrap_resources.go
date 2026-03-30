@@ -187,7 +187,7 @@ func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args 
 		`echo "waiting for sidecar to become ready..."; `+
 			`while true; do `+
 			`{ exec 3<>/dev/tcp/localhost/%d; } 2>/dev/null && `+
-			`printf "GET /v0/healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && `+
+			`printf "GET /v0/status HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && `+
 			`head -1 <&3 | grep -q "200" && break; `+
 			`exec 3>&-; sleep 5; done; `+
 			`exec 3>&-; `+
