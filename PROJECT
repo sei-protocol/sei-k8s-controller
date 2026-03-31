@@ -15,15 +15,6 @@ resources:
   controller: true
   domain: sei.io
   group: sei
-  kind: SeiNodePool
-  path: github.com/sei-protocol/sei-k8s-controller/api/v1alpha1
-  version: v1alpha1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: sei.io
-  group: sei
   kind: SeiNode
   path: github.com/sei-protocol/sei-k8s-controller/api/v1alpha1
   version: v1alpha1
