@@ -112,54 +112,30 @@ func main() {
 		os.Exit(1)
 	}
 
-	platformCfg := platform.DefaultConfig()
-	if v := os.Getenv("SEI_NODEPOOL_NAME"); v != "" {
-		platformCfg.NodepoolName = v
+	platformCfg := platform.Config{
+		NodepoolName:        os.Getenv("SEI_NODEPOOL_NAME"),
+		TolerationKey:       os.Getenv("SEI_TOLERATION_KEY"),
+		TolerationVal:       os.Getenv("SEI_TOLERATION_VALUE"),
+		ServiceAccount:      os.Getenv("SEI_SERVICE_ACCOUNT"),
+		StorageClassPerf:    os.Getenv("SEI_STORAGE_CLASS_PERF"),
+		StorageClassDefault: os.Getenv("SEI_STORAGE_CLASS_DEFAULT"),
+		StorageSizeDefault:  os.Getenv("SEI_STORAGE_SIZE_DEFAULT"),
+		StorageSizeArchive:  os.Getenv("SEI_STORAGE_SIZE_ARCHIVE"),
+		ResourceCPUArchive:  os.Getenv("SEI_RESOURCE_CPU_ARCHIVE"),
+		ResourceMemArchive:  os.Getenv("SEI_RESOURCE_MEM_ARCHIVE"),
+		ResourceCPUDefault:  os.Getenv("SEI_RESOURCE_CPU_DEFAULT"),
+		ResourceMemDefault:  os.Getenv("SEI_RESOURCE_MEM_DEFAULT"),
+		SnapshotRegion:      os.Getenv("SEI_SNAPSHOT_REGION"),
+		ResultExportBucket:  os.Getenv("SEI_RESULT_EXPORT_BUCKET"),
+		ResultExportRegion:  os.Getenv("SEI_RESULT_EXPORT_REGION"),
+		ResultExportPrefix:  os.Getenv("SEI_RESULT_EXPORT_PREFIX"),
+		GenesisBucket:       os.Getenv("SEI_GENESIS_BUCKET"),
+		GenesisRegion:       os.Getenv("SEI_GENESIS_REGION"),
 	}
-	if v := os.Getenv("SEI_TOLERATION_KEY"); v != "" {
-		platformCfg.TolerationKey = v
-	}
-	if v := os.Getenv("SEI_TOLERATION_VALUE"); v != "" {
-		platformCfg.TolerationVal = v
-	}
-	if v := os.Getenv("SEI_SERVICE_ACCOUNT"); v != "" {
-		platformCfg.ServiceAccount = v
-	}
-	if v := os.Getenv("SEI_STORAGE_CLASS_PERF"); v != "" {
-		platformCfg.StorageClassPerf = v
-	}
-	if v := os.Getenv("SEI_STORAGE_CLASS_DEFAULT"); v != "" {
-		platformCfg.StorageClassDefault = v
-	}
-	if v := os.Getenv("SEI_STORAGE_SIZE_DEFAULT"); v != "" {
-		platformCfg.StorageSizeDefault = v
-	}
-	if v := os.Getenv("SEI_STORAGE_SIZE_ARCHIVE"); v != "" {
-		platformCfg.StorageSizeArchive = v
-	}
-	if v := os.Getenv("SEI_RESOURCE_CPU_ARCHIVE"); v != "" {
-		platformCfg.ResourceCPUArchive = v
-	}
-	if v := os.Getenv("SEI_RESOURCE_MEM_ARCHIVE"); v != "" {
-		platformCfg.ResourceMemArchive = v
-	}
-	if v := os.Getenv("SEI_RESOURCE_CPU_DEFAULT"); v != "" {
-		platformCfg.ResourceCPUDefault = v
-	}
-	if v := os.Getenv("SEI_RESOURCE_MEM_DEFAULT"); v != "" {
-		platformCfg.ResourceMemDefault = v
-	}
-	if v := os.Getenv("SEI_SNAPSHOT_REGION"); v != "" {
-		platformCfg.SnapshotRegion = v
-	}
-	if v := os.Getenv("SEI_RESULT_EXPORT_BUCKET"); v != "" {
-		platformCfg.ResultExportBucket = v
-	}
-	if v := os.Getenv("SEI_RESULT_EXPORT_REGION"); v != "" {
-		platformCfg.ResultExportRegion = v
-	}
-	if v := os.Getenv("SEI_RESULT_EXPORT_PREFIX"); v != "" {
-		platformCfg.ResultExportPrefix = v
+
+	if err := platformCfg.Validate(); err != nil {
+		setupLog.Error(err, "Invalid platform configuration")
+		os.Exit(1)
 	}
 
 	objectStore := platform.NewS3ObjectStore()

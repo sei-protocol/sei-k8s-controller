@@ -13,7 +13,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
-	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
 
 // monitorReplayerNode returns a replayer node with canonicalRpc set,
@@ -38,7 +38,7 @@ func TestEnsureMonitorTask_SubmitsOnce(t *testing.T) {
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
+	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	if req == nil {
 		t.Fatal("expected non-nil monitor task request")
 	}
@@ -90,7 +90,7 @@ func TestEnsureMonitorTask_Idempotent(t *testing.T) {
 	r, _ := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
+	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	if err := r.ensureMonitorTask(ctx, node, mock, *req); err != nil {
 		t.Fatalf("ensureMonitorTask: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestEnsureMonitorTask_SubmitError(t *testing.T) {
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
+	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	err := r.ensureMonitorTask(ctx, node, mock, *req)
 	if err == nil {
 		t.Fatal("expected error from failed submit")
@@ -523,7 +523,7 @@ func TestReconcileRunning_MonitorMode_SubmitsMonitorTask(t *testing.T) {
 
 func TestResultExportMonitorTask_ReturnsRequest(t *testing.T) {
 	node := monitorReplayerNode()
-	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
+	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	if req == nil {
 		t.Fatal("expected non-nil TaskRequest")
 	}
@@ -544,7 +544,7 @@ func TestResultExportMonitorTask_ReturnsRequest(t *testing.T) {
 
 func TestResultExportMonitorTask_NilWithoutResultExport(t *testing.T) {
 	node := replayerNode()
-	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
+	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	if req != nil {
 		t.Errorf("expected nil, got %v", req)
 	}
@@ -552,7 +552,7 @@ func TestResultExportMonitorTask_NilWithoutResultExport(t *testing.T) {
 
 func TestResultExportMonitorTask_NilForNonReplayer(t *testing.T) {
 	node := snapshotNode()
-	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
+	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	if req != nil {
 		t.Errorf("expected nil, got %v", req)
 	}

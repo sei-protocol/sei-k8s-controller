@@ -34,11 +34,6 @@ const (
 // within the controller package.
 type PlatformConfig = platform.Config
 
-// DefaultPlatformConfig returns platform.Config with production defaults.
-func DefaultPlatformConfig() PlatformConfig {
-	return platform.DefaultConfig()
-}
-
 // SeiNodeReconciler reconciles a SeiNode object.
 type SeiNodeReconciler struct {
 	client.Client

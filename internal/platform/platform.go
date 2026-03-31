@@ -1,8 +1,10 @@
 package platform
 
+import "fmt"
+
 // Config holds infrastructure-level settings that vary per deployment
-// environment. Values are read from environment variables in main.go with
-// sensible defaults.
+// environment. All fields are required and read from environment variables
+// in main.go. See platformtest.Config() for test fixtures.
 type Config struct {
 	NodepoolName        string
 	TolerationKey       string
@@ -21,26 +23,37 @@ type Config struct {
 	ResultExportBucket string
 	ResultExportRegion string
 	ResultExportPrefix string
+
+	GenesisBucket string
+	GenesisRegion string
 }
 
-// DefaultConfig returns Config with production defaults.
-func DefaultConfig() Config {
-	return Config{
-		NodepoolName:        "sei-node",
-		TolerationKey:       "sei.io/workload",
-		TolerationVal:       "sei-node",
-		ServiceAccount:      "seid-node",
-		StorageClassPerf:    "gp3-10k-750",
-		StorageClassDefault: "gp3",
-		StorageSizeDefault:  "2000Gi",
-		StorageSizeArchive:  "4000Gi",
-		ResourceCPUArchive:  "16",
-		ResourceMemArchive:  "256Gi",
-		ResourceCPUDefault:  "4",
-		ResourceMemDefault:  "32Gi",
-		SnapshotRegion:      "eu-central-1",
-		ResultExportBucket:  "sei-node-mvp",
-		ResultExportRegion:  "eu-central-1",
-		ResultExportPrefix:  "shadow-results/",
+// Validate returns an error if required fields are missing.
+func (c Config) Validate() error {
+	required := map[string]string{
+		"SEI_NODEPOOL_NAME":         c.NodepoolName,
+		"SEI_TOLERATION_KEY":        c.TolerationKey,
+		"SEI_TOLERATION_VALUE":      c.TolerationVal,
+		"SEI_SERVICE_ACCOUNT":       c.ServiceAccount,
+		"SEI_STORAGE_CLASS_PERF":    c.StorageClassPerf,
+		"SEI_STORAGE_CLASS_DEFAULT": c.StorageClassDefault,
+		"SEI_STORAGE_SIZE_DEFAULT":  c.StorageSizeDefault,
+		"SEI_STORAGE_SIZE_ARCHIVE":  c.StorageSizeArchive,
+		"SEI_RESOURCE_CPU_ARCHIVE":  c.ResourceCPUArchive,
+		"SEI_RESOURCE_MEM_ARCHIVE":  c.ResourceMemArchive,
+		"SEI_RESOURCE_CPU_DEFAULT":  c.ResourceCPUDefault,
+		"SEI_RESOURCE_MEM_DEFAULT":  c.ResourceMemDefault,
+		"SEI_SNAPSHOT_REGION":       c.SnapshotRegion,
+		"SEI_RESULT_EXPORT_BUCKET":  c.ResultExportBucket,
+		"SEI_RESULT_EXPORT_REGION":  c.ResultExportRegion,
+		"SEI_RESULT_EXPORT_PREFIX":  c.ResultExportPrefix,
+		"SEI_GENESIS_BUCKET":        c.GenesisBucket,
+		"SEI_GENESIS_REGION":        c.GenesisRegion,
 	}
+	for name, val := range required {
+		if val == "" {
+			return fmt.Errorf("%s is required", name)
+		}
+	}
+	return nil
 }

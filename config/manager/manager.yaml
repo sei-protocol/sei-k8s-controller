@@ -60,13 +60,17 @@ spec:
           - name: SEI_RESOURCE_MEM_DEFAULT
             value: 32Gi
           - name: SEI_SNAPSHOT_REGION
-            value: eu-central-1
+            value: us-east-2
           - name: SEI_RESULT_EXPORT_BUCKET
-            value: sei-node-mvp
+            value: dev-sei-shadow-results
           - name: SEI_RESULT_EXPORT_REGION
-            value: eu-central-1
+            value: us-east-2
           - name: SEI_RESULT_EXPORT_PREFIX
             value: shadow-results/
+          - name: SEI_GENESIS_BUCKET
+            value: dev-sei-k8s-genesis-artifacts
+          - name: SEI_GENESIS_REGION
+            value: us-east-2
           - name: SEI_CONTROLLER_SA_PRINCIPAL
             value: "cluster.local/ns/sei-k8s-controller-system/sa/sei-k8s-controller-manager"
         ports:

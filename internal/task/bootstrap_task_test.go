@@ -16,7 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
 
 func testScheme(t *testing.T) *k8sruntime.Scheme {
@@ -58,7 +58,7 @@ func testCfg(t *testing.T, objs ...client.Object) ExecutionConfig {
 		KubeClient: c,
 		Scheme:     s,
 		Resource:   testNode(),
-		Platform:   platform.DefaultConfig(),
+		Platform:   platformtest.Config(),
 	}
 }
 
@@ -161,7 +161,7 @@ func TestDeployBootstrapJob_Execute_NilSnapshot(t *testing.T) {
 		KubeClient: c,
 		Scheme:     s,
 		Resource:   node,
-		Platform:   platform.DefaultConfig(),
+		Platform:   platformtest.Config(),
 	}
 
 	params := DeployBootstrapJobParams{JobName: BootstrapJobName(node), Namespace: node.Namespace}

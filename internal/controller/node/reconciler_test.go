@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
@@ -46,7 +47,7 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		Client:   c,
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
-		Platform: DefaultPlatformConfig(),
+		Platform: platformtest.Config(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			Client: c,
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
@@ -55,7 +56,7 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 					KubeClient:         c,
 					Scheme:             s,
 					Resource:           node,
-					Platform:           DefaultPlatformConfig(),
+					Platform:           platformtest.Config(),
 				}
 			},
 		},

@@ -22,7 +22,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
-	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -110,7 +110,7 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 		Client:   c,
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
-		Platform: DefaultPlatformConfig(),
+		Platform: platformtest.Config(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			Client: c,
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
@@ -119,7 +119,7 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 					KubeClient:         c,
 					Scheme:             s,
 					Resource:           node,
-					Platform:           DefaultPlatformConfig(),
+					Platform:           platformtest.Config(),
 				}
 			},
 		},
@@ -799,7 +799,7 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 
 func TestResultExportMonitorTask_ReplayerWithExport(t *testing.T) {
 	node := monitorReplayerNode()
-	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
+	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	if req == nil {
 		t.Fatal("expected non-nil TaskRequest")
 	}
@@ -810,7 +810,7 @@ func TestResultExportMonitorTask_ReplayerWithExport(t *testing.T) {
 
 func TestResultExportMonitorTask_ReplayerWithoutExport(t *testing.T) {
 	node := replayerNode()
-	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
+	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	if req != nil {
 		t.Errorf("expected nil TaskRequest, got %v", req)
 	}
@@ -865,7 +865,7 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 		Client:   c,
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
-		Platform: DefaultPlatformConfig(),
+		Platform: platformtest.Config(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			Client: c,
 			ConfigFor: func(_ context.Context, n *seiv1alpha1.SeiNode) task.ExecutionConfig {
@@ -876,7 +876,7 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 					KubeClient: c,
 					Scheme:     s,
 					Resource:   n,
-					Platform:   DefaultPlatformConfig(),
+					Platform:   platformtest.Config(),
 				}
 			},
 		},
@@ -927,7 +927,7 @@ func TestTaskGenerateBootstrapJob(t *testing.T) {
 	node := replayerNode()
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
 	snap := node.Spec.SnapshotSource()
-	job, err := task.GenerateBootstrapJob(node, snap, DefaultPlatformConfig())
+	job, err := task.GenerateBootstrapJob(node, snap, platformtest.Config())
 	if err != nil {
 		t.Fatalf("GenerateBootstrapJob error: %v", err)
 	}
@@ -948,7 +948,7 @@ func TestTaskGenerateBootstrapJob(t *testing.T) {
 
 func TestTaskGenerateBootstrapJob_NilSnapshot(t *testing.T) {
 	node := replayerNode()
-	_, err := task.GenerateBootstrapJob(node, nil, DefaultPlatformConfig())
+	_, err := task.GenerateBootstrapJob(node, nil, platformtest.Config())
 	if err == nil {
 		t.Fatal("expected error for nil snapshot, got nil")
 	}
@@ -966,7 +966,7 @@ func TestTaskGenerateBootstrapJob_SidecarResources(t *testing.T) {
 		},
 	}
 	snap := node.Spec.SnapshotSource()
-	job, err := task.GenerateBootstrapJob(node, snap, DefaultPlatformConfig())
+	job, err := task.GenerateBootstrapJob(node, snap, platformtest.Config())
 	if err != nil {
 		t.Fatalf("GenerateBootstrapJob error: %v", err)
 	}
