@@ -359,9 +359,12 @@ func TestSidecarContainer_EnvVars(t *testing.T) {
 	sts := generateNodeStatefulSet(node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
+	cfg := platformtest.Config()
 	g.Expect(envValue(sc.Env, "SEI_CHAIN_ID")).To(Equal(node.Spec.ChainID))
 	g.Expect(envValue(sc.Env, "SEI_SIDECAR_PORT")).To(Equal("7777"))
 	g.Expect(envValue(sc.Env, "SEI_HOME")).To(Equal(dataDir))
+	g.Expect(envValue(sc.Env, "SEI_GENESIS_BUCKET")).To(Equal(cfg.GenesisBucket))
+	g.Expect(envValue(sc.Env, "SEI_GENESIS_REGION")).To(Equal(cfg.GenesisRegion))
 }
 
 func TestSidecarContainer_DataVolumeMount(t *testing.T) {
@@ -630,52 +633,3 @@ func TestParseS3URI(t *testing.T) {
 	}
 }
 
-// --- Genesis configuration ---
-
-func TestGenesisConfiguration_PVCOnly(t *testing.T) {
-	g := NewWithT(t)
-	gc := seiv1alpha1.GenesisConfiguration{
-		PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-0"},
-	}
-	count := genesisSourceCount(gc)
-	g.Expect(count).To(Equal(1), "PVC-only should have exactly one source set")
-}
-
-func TestGenesisConfiguration_S3Only(t *testing.T) {
-	g := NewWithT(t)
-	gc := seiv1alpha1.GenesisConfiguration{
-		S3: &seiv1alpha1.GenesisS3Source{URI: "s3://bucket/genesis.json", Region: "us-east-1"},
-	}
-	count := genesisSourceCount(gc)
-	g.Expect(count).To(Equal(1), "S3-only should have exactly one source set")
-}
-
-func TestGenesisConfiguration_RejectsBoth(t *testing.T) {
-	g := NewWithT(t)
-	gc := seiv1alpha1.GenesisConfiguration{
-		PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-0"},
-		S3:  &seiv1alpha1.GenesisS3Source{URI: "s3://bucket/genesis.json", Region: "us-east-1"},
-	}
-	count := genesisSourceCount(gc)
-	g.Expect(count).To(Equal(2), "both PVC and S3 set should violate at-most-one-of")
-}
-
-func TestGenesisConfiguration_AllowsNeither(t *testing.T) {
-	g := NewWithT(t)
-	gc := seiv1alpha1.GenesisConfiguration{}
-	count := genesisSourceCount(gc)
-	g.Expect(count).To(Equal(0), "neither PVC nor S3 is valid (uses default genesis)")
-}
-
-// genesisSourceCount counts how many genesis source fields are set,
-// mirroring the CEL rule: (has(pvc)?1:0) + (has(s3)?1:0) <= 1
-func genesisSourceCount(gc seiv1alpha1.GenesisConfiguration) int {
-	count := 0
-	if gc.PVC != nil {
-		count++
-	}
-	if gc.S3 != nil {
-		count++
-	}
-	return count
-}

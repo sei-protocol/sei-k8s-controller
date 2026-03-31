@@ -111,27 +111,6 @@ spec:
                     minLength: 1
                     pattern: ^[a-z0-9][a-z0-9-]*[a-z0-9]$
                     type: string
-                  genesisS3:
-                    description: |-
-                      GenesisS3 configures where genesis artifacts are stored.
-                      When omitted, inferred: bucket = "sei-genesis-ceremony-artifacts",
-                      prefix = "<chainId>/<group-name>/", region from PlatformConfig.
-                    properties:
-                      bucket:
-                        description: Bucket is the S3 bucket name.
-                        minLength: 1
-                        type: string
-                      prefix:
-                        description: Prefix is an optional key prefix within the bucket.
-                        type: string
-                      region:
-                        description: Region is the AWS region for S3 access.
-                        minLength: 1
-                        type: string
-                    required:
-                    - bucket
-                    - region
-                    type: object
                   maxCeremonyDuration:
                     description: |-
                       MaxCeremonyDuration is the maximum time from group creation to genesis
@@ -871,26 +850,6 @@ spec:
                                   generation — no cross-node coordination needed.
                                 minLength: 1
                                 type: string
-                              artifactS3:
-                                description: ArtifactS3 is the S3 location where this
-                                  node uploads its genesis artifacts.
-                                properties:
-                                  bucket:
-                                    description: Bucket is the S3 bucket name.
-                                    minLength: 1
-                                    type: string
-                                  prefix:
-                                    description: Prefix is an optional key prefix
-                                      within the bucket.
-                                    type: string
-                                  region:
-                                    description: Region is the AWS region for S3 access.
-                                    minLength: 1
-                                    type: string
-                                required:
-                                - bucket
-                                - region
-                                type: object
                               chainId:
                                 description: ChainID of the genesis network.
                                 minLength: 1
@@ -913,7 +872,6 @@ spec:
                                 type: string
                             required:
                             - accountBalance
-                            - artifactS3
                             - chainId
                             - index
                             - stakingAmount

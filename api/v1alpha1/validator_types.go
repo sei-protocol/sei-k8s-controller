@@ -43,22 +43,4 @@ type GenesisCeremonyNodeConfig struct {
 	// Index is the node's ordinal within the group (0-based).
 	// +kubebuilder:validation:Minimum=0
 	Index int32 `json:"index"`
-
-	// ArtifactS3 is the S3 location where this node uploads its genesis artifacts.
-	ArtifactS3 GenesisS3Destination `json:"artifactS3"`
-}
-
-// GenesisS3Destination configures where genesis artifacts are stored in S3.
-type GenesisS3Destination struct {
-	// Bucket is the S3 bucket name.
-	// +kubebuilder:validation:MinLength=1
-	Bucket string `json:"bucket"`
-
-	// Prefix is an optional key prefix within the bucket.
-	// +optional
-	Prefix string `json:"prefix,omitempty"`
-
-	// Region is the AWS region for S3 access.
-	// +kubebuilder:validation:MinLength=1
-	Region string `json:"region"`
 }

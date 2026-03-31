@@ -26,9 +26,6 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 		if gc.StakingAmount == "" {
 			return fmt.Errorf("validator: genesisCeremony.stakingAmount is required")
 		}
-		if gc.ArtifactS3.Bucket == "" || gc.ArtifactS3.Region == "" {
-			return fmt.Errorf("validator: genesisCeremony.artifactS3 bucket and region are required")
-		}
 		return nil
 	}
 	if snap := node.Spec.Validator.Snapshot; snap != nil && snap.BootstrapImage != "" {

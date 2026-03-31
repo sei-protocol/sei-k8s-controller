@@ -17,11 +17,6 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 			Replicas: 3,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: "arctic-1",
-				GenesisS3: &seiv1alpha1.GenesisS3Destination{
-					Bucket: "test-bucket",
-					Prefix: "arctic-1/test-group/",
-					Region: "us-east-2",
-				},
 			},
 		},
 		Status: seiv1alpha1.SeiNodeGroupStatus{

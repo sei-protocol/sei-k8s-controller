@@ -165,9 +165,6 @@ func peerSyncNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{
-				S3: &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/atlantic-2/genesis.json", Region: "us-east-2"},
-			},
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Peers: []seiv1alpha1.PeerSource{
 					{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
@@ -228,9 +225,6 @@ func replayerNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "pacific-1",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{
-				S3: &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/pacific-1/genesis.json", Region: "us-east-2"},
-			},
 			Replayer: &seiv1alpha1.ReplayerSpec{
 				Snapshot: seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
