@@ -316,14 +316,8 @@ func snapshotRestoreParams(snap *seiv1alpha1.SnapshotSource, chainID, region str
 	}
 }
 
-func configureGenesisParams(node *seiv1alpha1.SeiNode) *task.ConfigureGenesisParams {
-	if node.Spec.Genesis.S3 == nil {
-		return &task.ConfigureGenesisParams{}
-	}
-	return &task.ConfigureGenesisParams{
-		URI:    node.Spec.Genesis.S3.URI,
-		Region: node.Spec.Genesis.S3.Region,
-	}
+func configureGenesisParams(_ *seiv1alpha1.SeiNode) *task.ConfigureGenesisParams {
+	return &task.ConfigureGenesisParams{}
 }
 
 func discoverPeersParams(peers []seiv1alpha1.PeerSource) *task.DiscoverPeersParams {

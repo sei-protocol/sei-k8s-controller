@@ -87,10 +87,7 @@ func testNode() *seiv1alpha1.SeiNode {
 
 func configGenesisParams(t *testing.T) *apiextensionsv1.JSON {
 	t.Helper()
-	raw, err := json.Marshal(task.ConfigureGenesisParams{
-		URI:    "s3://bucket/prefix/genesis.json",
-		Region: "us-east-2",
-	})
+	raw, err := json.Marshal(task.ConfigureGenesisParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,11 +262,7 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	}
 
 	assembleParams, _ := json.Marshal(task.AssembleAndUploadGenesisParams{
-		S3Bucket: "bucket",
-		S3Prefix: "prefix/",
-		S3Region: "us-east-2",
-		ChainID:  "test-chain",
-		Nodes:    []task.GenesisNodeParam{{Name: "node-0"}, {Name: "node-1"}, {Name: "node-2"}},
+		Nodes: []task.GenesisNodeParam{{Name: "node-0"}, {Name: "node-1"}, {Name: "node-2"}},
 	})
 
 	group.Status.Plan = &seiv1alpha1.TaskPlan{

@@ -179,6 +179,7 @@ func main() {
 		Client:       kc,
 		Scheme:       mgr.GetScheme(),
 		Recorder:     recorder,
+		Platform:     platformCfg,
 		ControllerSA: controllerSA,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeGroup]{
 			Client: kc,

@@ -80,7 +80,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1
 	spec.ShareProcessNamespace = ptr.To(true)
 	spec.InitContainers = []corev1.Container{
 		buildSeidInitContainer(node),
-		buildSidecarContainer(node),
+		buildSidecarContainer(node, platform),
 	}
 	spec.Containers = []corev1.Container{buildSidecarMainContainer(node, platform)}
 
@@ -103,7 +103,7 @@ func sidecarPort(node *seiv1alpha1.SeiNode) int32 {
 
 // buildSidecarContainer constructs the sei-sidecar as a restartable init
 // container that runs alongside seid for the pod's lifetime.
-func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
+func buildSidecarContainer(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1.Container {
 	port := sidecarPort(node)
 	c := corev1.Container{
 		Name:          "sei-sidecar",
@@ -114,6 +114,8 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 			{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
 			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
 			{Name: "SEI_HOME", Value: dataDir},
+			{Name: "SEI_GENESIS_BUCKET", Value: platform.GenesisBucket},
+			{Name: "SEI_GENESIS_REGION", Value: platform.GenesisRegion},
 		},
 		Ports: []corev1.ContainerPort{
 			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},

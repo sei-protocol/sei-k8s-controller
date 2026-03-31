@@ -68,12 +68,6 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 	if err := json.Unmarshal(assembleTask.Params.Raw, &assembleParams); err != nil {
 		t.Fatalf("unmarshal assemble params: %v", err)
 	}
-	if assembleParams.S3Bucket != "test-bucket" {
-		t.Errorf("S3Bucket = %q, want %q", assembleParams.S3Bucket, "test-bucket")
-	}
-	if assembleParams.ChainID != "arctic-1" {
-		t.Errorf("ChainID = %q, want %q", assembleParams.ChainID, "arctic-1")
-	}
 	if len(assembleParams.Nodes) != 3 {
 		t.Errorf("expected 3 nodes, got %d", len(assembleParams.Nodes))
 	}
@@ -138,11 +132,11 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal params: %v", err)
 	}
-	if params.S3Bucket != "sei-genesis-ceremony-artifacts" {
-		t.Errorf("S3Bucket = %q, want %q", params.S3Bucket, "sei-genesis-ceremony-artifacts")
+	if params.Namespace != "default" {
+		t.Errorf("Namespace = %q, want %q", params.Namespace, "default")
 	}
-	if params.S3Prefix != "pacific-1/my-group/" {
-		t.Errorf("S3Prefix = %q, want %q", params.S3Prefix, "pacific-1/my-group/")
+	if len(params.Nodes) != 1 {
+		t.Errorf("expected 1 node, got %d", len(params.Nodes))
 	}
 }
 

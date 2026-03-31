@@ -43,10 +43,8 @@ func (p *GenerateGentxParams) toRequestParams() *map[string]any {
 }
 
 // UploadGenesisArtifactsParams are the serialized fields for upload-genesis-artifacts.
+// S3 coordinates are derived by the sidecar from its environment.
 type UploadGenesisArtifactsParams struct {
-	S3Bucket string `json:"s3Bucket"`
-	S3Prefix string `json:"s3Prefix"`
-	S3Region string `json:"s3Region"`
 	NodeName string `json:"nodeName"`
 }
 
@@ -56,9 +54,6 @@ func (p *UploadGenesisArtifactsParams) taskType() string {
 
 func (p *UploadGenesisArtifactsParams) toRequestParams() *map[string]any {
 	m := map[string]any{
-		"s3Bucket": p.S3Bucket,
-		"s3Prefix": p.S3Prefix,
-		"s3Region": p.S3Region,
 		"nodeName": p.NodeName,
 	}
 	return &m
@@ -66,11 +61,8 @@ func (p *UploadGenesisArtifactsParams) toRequestParams() *map[string]any {
 
 // AssembleAndUploadGenesisParams are the serialized fields for the
 // group-level assemble-and-upload-genesis sidecar task.
+// S3 coordinates are derived by the sidecar from its environment.
 type AssembleAndUploadGenesisParams struct {
-	S3Bucket       string             `json:"s3Bucket"`
-	S3Prefix       string             `json:"s3Prefix"`
-	S3Region       string             `json:"s3Region"`
-	ChainID        string             `json:"chainId"`
 	AccountBalance string             `json:"accountBalance"`
 	Namespace      string             `json:"namespace"`
 	Nodes          []GenesisNodeParam `json:"nodes"`
@@ -85,39 +77,23 @@ func (p *AssembleAndUploadGenesisParams) taskType() string {
 	return sidecar.TaskTypeAssembleGenesis
 }
 
-// SetGenesisPeersParams are the serialized fields for set-genesis-peers.
-// The task downloads a peers.json from S3 (produced by the assembler),
-// filters out the current node, and writes persistent_peers to config.toml.
-type SetGenesisPeersParams struct {
-	S3Bucket string `json:"s3Bucket"`
-	S3Key    string `json:"s3Key"`
-	S3Region string `json:"s3Region"`
-}
-
-func (p *SetGenesisPeersParams) taskType() string { return sidecar.TaskTypeSetGenesisPeers }
-
-func (p *SetGenesisPeersParams) toRequestParams() *map[string]any {
-	m := map[string]any{
-		"s3Bucket": p.S3Bucket,
-		"s3Key":    p.S3Key,
-		"s3Region": p.S3Region,
-	}
-	return &m
-}
-
 func (p *AssembleAndUploadGenesisParams) toRequestParams() *map[string]any {
 	nodes := make([]map[string]any, len(p.Nodes))
 	for i, n := range p.Nodes {
 		nodes[i] = map[string]any{"name": n.Name}
 	}
 	m := map[string]any{
-		"s3Bucket":       p.S3Bucket,
-		"s3Prefix":       p.S3Prefix,
-		"s3Region":       p.S3Region,
-		"chainId":        p.ChainID,
 		"accountBalance": p.AccountBalance,
 		"namespace":      p.Namespace,
 		"nodes":          nodes,
 	}
 	return &m
 }
+
+// SetGenesisPeersParams are the serialized fields for set-genesis-peers.
+// S3 coordinates are derived by the sidecar from its environment.
+type SetGenesisPeersParams struct{}
+
+func (p *SetGenesisPeersParams) taskType() string { return sidecar.TaskTypeSetGenesisPeers }
+
+func (p *SetGenesisPeersParams) toRequestParams() *map[string]any { return nil }

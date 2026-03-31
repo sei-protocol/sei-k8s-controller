@@ -179,28 +179,17 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 		}
 	case TaskUploadGenesisArtifacts:
 		return &task.UploadGenesisArtifactsParams{
-			S3Bucket: gc.ArtifactS3.Bucket,
-			S3Prefix: gc.ArtifactS3.Prefix,
-			S3Region: gc.ArtifactS3.Region,
 			NodeName: node.Name,
 		}
 	case TaskConfigureGenesis:
-		s3URI := fmt.Sprintf("s3://%s/%sgenesis.json", gc.ArtifactS3.Bucket, gc.ArtifactS3.Prefix)
-		return &task.ConfigureGenesisParams{
-			URI:    s3URI,
-			Region: gc.ArtifactS3.Region,
-		}
+		return &task.ConfigureGenesisParams{}
 	case TaskConfigApply:
 		return &task.ConfigApplyParams{
 			Mode:      "validator",
 			Overrides: mergeOverrides(nil, node.Spec.Overrides),
 		}
 	case TaskSetGenesisPeers:
-		return &task.SetGenesisPeersParams{
-			S3Bucket: gc.ArtifactS3.Bucket,
-			S3Key:    gc.ArtifactS3.Prefix + "peers.json",
-			S3Region: gc.ArtifactS3.Region,
-		}
+		return &task.SetGenesisPeersParams{}
 	case TaskConfigValidate:
 		return &task.ConfigValidateParams{}
 	case TaskMarkReady:

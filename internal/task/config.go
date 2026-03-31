@@ -37,23 +37,12 @@ func (p *ConfigValidateParams) taskType() string { return sidecar.TaskTypeConfig
 func (p *ConfigValidateParams) toRequestParams() *map[string]any { return nil }
 
 // ConfigureGenesisParams are the serialized fields for configure-genesis.
-type ConfigureGenesisParams struct {
-	URI    string `json:"uri,omitempty"`
-	Region string `json:"region,omitempty"`
-}
+// The sidecar resolves genesis from the chain ID autonomously — no params needed.
+type ConfigureGenesisParams struct{}
 
 func (p *ConfigureGenesisParams) taskType() string { return sidecar.TaskTypeConfigureGenesis }
 
-func (p *ConfigureGenesisParams) toRequestParams() *map[string]any {
-	if p.URI == "" {
-		return nil
-	}
-	m := map[string]any{
-		"uri":    p.URI,
-		"region": p.Region,
-	}
-	return &m
-}
+func (p *ConfigureGenesisParams) toRequestParams() *map[string]any { return nil }
 
 // DiscoverPeersParams are the serialized fields for discover-peers.
 type DiscoverPeersParams struct {
