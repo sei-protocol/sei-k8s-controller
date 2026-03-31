@@ -90,7 +90,7 @@ func (r *SeiNodeGroupReconciler) populateIncumbentNodes(ctx context.Context, gro
 }
 
 func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, ordinal int) error {
-	desired := generateSeiNode(group, ordinal)
+	desired := r.generateSeiNode(group, ordinal)
 	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
@@ -149,7 +149,7 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 	return nil
 }
 
-func generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.SeiNode {
+func (r *SeiNodeGroupReconciler) generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.SeiNode {
 	labels := seiNodeLabels(group, ordinal)
 	annotations := seiNodeAnnotations(group)
 
