@@ -516,11 +516,6 @@ func TestReconcileRunning_MonitorMode_SubmitsMonitorTask(t *testing.T) {
 	if _, ok := updated.Status.MonitorTasks[planner.TaskResultExport]; !ok {
 		t.Errorf("expected MonitorTasks[%s] to exist", planner.TaskResultExport)
 	}
-	if updated.Status.ScheduledTasks != nil {
-		if _, ok := updated.Status.ScheduledTasks[planner.TaskResultExport]; ok {
-			t.Error("result-export should not be in ScheduledTasks")
-		}
-	}
 }
 
 // --- Planner builder tests ---

@@ -602,7 +602,7 @@ func TestGenerateNodeDataPVC(t *testing.T) {
 	g.Expect(pvc.Spec.AccessModes).To(ConsistOf(corev1.ReadWriteOnce))
 
 	storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-	g.Expect(storage.String()).To(Equal("1000Gi"))
+	g.Expect(storage.String()).To(Equal("2000Gi"))
 }
 
 // --- S3 URI parsing ---

@@ -31,8 +31,14 @@ const (
 func (r *SeiNodeReconciler) ensureMonitorTasks(ctx context.Context, node *seiv1alpha1.SeiNode, sc task.SidecarClient) error {
 	var firstErr error
 
-	if req := planner.ResultExportMonitorTask(node); req != nil {
+	if req := planner.SnapshotUploadMonitorTask(node); req != nil {
 		if err := r.ensureMonitorTask(ctx, node, sc, *req); err != nil {
+			firstErr = err
+		}
+	}
+
+	if req := planner.ResultExportMonitorTask(node); req != nil {
+		if err := r.ensureMonitorTask(ctx, node, sc, *req); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

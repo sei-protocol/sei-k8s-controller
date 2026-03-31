@@ -11,10 +11,9 @@ import (
 )
 
 const (
-	defaultSnapshotUploadCron = "0 0 * * *"
-	resultExportBucket        = "sei-node-mvp"
-	resultExportRegion        = "eu-central-1"
-	resultExportPrefix        = "shadow-results/"
+	resultExportBucket = "sei-node-mvp"
+	resultExportRegion = "eu-central-1"
+	resultExportPrefix = "shadow-results/"
 )
 
 // buildBootstrapPlan constructs a unified InitPlan for nodes that need a
@@ -229,20 +228,21 @@ func AwaitConditionParams(node *seiv1alpha1.SeiNode) (*task.AwaitConditionParams
 	}, nil
 }
 
-// SnapshotUploadScheduledTask returns a snapshot-upload task builder if applicable.
-func SnapshotUploadScheduledTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+// SnapshotUploadMonitorTask returns a snapshot-upload TaskRequest if applicable.
+// The sidecar handler runs in a loop at its configured interval (SEI_SNAPSHOT_UPLOAD_INTERVAL).
+// The controller submits this once and tracks it as a monitor task.
+func SnapshotUploadMonitorTask(node *seiv1alpha1.SeiNode) *sidecar.TaskRequest {
 	sg := SnapshotGeneration(node)
 	if sg == nil || sg.Destination == nil || sg.Destination.S3 == nil {
 		return nil
 	}
 	dest := sg.Destination.S3
-	cron := defaultSnapshotUploadCron
-	return sidecar.SnapshotUploadTask{
-		Bucket:   dest.Bucket,
-		Prefix:   dest.Prefix,
-		Region:   dest.Region,
-		Schedule: &sidecar.ScheduleConfig{Cron: &cron},
-	}
+	req := sidecar.SnapshotUploadTask{
+		Bucket: dest.Bucket,
+		Prefix: dest.Prefix,
+		Region: dest.Region,
+	}.ToTaskRequest()
+	return &req
 }
 
 // ResultExportMonitorTask builds a TaskRequest for result-export comparison

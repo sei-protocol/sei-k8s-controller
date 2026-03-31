@@ -162,7 +162,7 @@ const (
 )
 
 // MonitorTask tracks a long-running sidecar task that the controller
-// actively polls for completion. Unlike ScheduledTasks (fire-and-forget),
+// actively polls for completion. Unlike fire-and-forget tasks,
 // completing a monitor task triggers a controller response (Event + Condition).
 // The map key in MonitorTasks serves as the task type identifier.
 type MonitorTask struct {
@@ -197,11 +197,6 @@ type SeiNodeStatus struct {
 	// InitPlan tracks the initialization task sequence for this node.
 	// +optional
 	InitPlan *TaskPlan `json:"initPlan,omitempty"`
-
-	// ScheduledTasks maps task type to the sidecar-assigned UUID of its
-	// scheduled task.
-	// +optional
-	ScheduledTasks map[string]string `json:"scheduledTasks,omitempty"`
 
 	// MonitorTasks tracks long-running sidecar tasks the controller polls
 	// for completion. Keyed by task type for idempotent submission.

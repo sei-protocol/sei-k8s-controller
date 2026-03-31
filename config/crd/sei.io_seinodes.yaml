@@ -903,7 +903,7 @@ spec:
                 additionalProperties:
                   description: |-
                     MonitorTask tracks a long-running sidecar task that the controller
-                    actively polls for completion. Unlike ScheduledTasks (fire-and-forget),
+                    actively polls for completion. Unlike fire-and-forget tasks,
                     completing a monitor task triggers a controller response (Event + Condition).
                     The map key in MonitorTasks serves as the task type identifier.
                   properties:
@@ -949,13 +949,6 @@ spec:
                 - Failed
                 - Terminating
                 type: string
-              scheduledTasks:
-                additionalProperties:
-                  type: string
-                description: |-
-                  ScheduledTasks maps task type to the sidecar-assigned UUID of its
-                  scheduled task.
-                type: object
             type: object
         type: object
     served: true
