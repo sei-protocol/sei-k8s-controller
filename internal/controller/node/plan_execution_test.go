@@ -22,6 +22,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -798,7 +799,7 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 
 func TestResultExportMonitorTask_ReplayerWithExport(t *testing.T) {
 	node := monitorReplayerNode()
-	req := planner.ResultExportMonitorTask(node)
+	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
 	if req == nil {
 		t.Fatal("expected non-nil TaskRequest")
 	}
@@ -809,7 +810,7 @@ func TestResultExportMonitorTask_ReplayerWithExport(t *testing.T) {
 
 func TestResultExportMonitorTask_ReplayerWithoutExport(t *testing.T) {
 	node := replayerNode()
-	req := planner.ResultExportMonitorTask(node)
+	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
 	if req != nil {
 		t.Errorf("expected nil TaskRequest, got %v", req)
 	}

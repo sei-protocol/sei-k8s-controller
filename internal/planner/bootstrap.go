@@ -7,13 +7,8 @@ import (
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
-)
-
-const (
-	resultExportBucket = "sei-node-mvp"
-	resultExportRegion = "eu-central-1"
-	resultExportPrefix = "shadow-results/"
 )
 
 // buildBootstrapPlan constructs a unified InitPlan for nodes that need a
@@ -249,15 +244,15 @@ func SnapshotUploadMonitorTask(node *seiv1alpha1.SeiNode) *sidecar.TaskRequest {
 // mode. The sidecar compares local block results against the canonical RPC
 // and completes on app-hash divergence. Returns nil when the node has no
 // result-export config.
-func ResultExportMonitorTask(node *seiv1alpha1.SeiNode) *sidecar.TaskRequest {
+func ResultExportMonitorTask(node *seiv1alpha1.SeiNode, platformCfg platform.Config) *sidecar.TaskRequest {
 	if node.Spec.Replayer == nil || node.Spec.Replayer.ResultExport == nil {
 		return nil
 	}
 	re := node.Spec.Replayer.ResultExport
 	req := sidecar.ResultExportTask{
-		Bucket:       resultExportBucket,
-		Prefix:       resultExportPrefix + node.Spec.ChainID + "/",
-		Region:       resultExportRegion,
+		Bucket:       platformCfg.ResultExportBucket,
+		Prefix:       platformCfg.ResultExportPrefix + node.Spec.ChainID + "/",
+		Region:       platformCfg.ResultExportRegion,
 		CanonicalRPC: re.CanonicalRPC,
 	}.ToTaskRequest()
 	return &req

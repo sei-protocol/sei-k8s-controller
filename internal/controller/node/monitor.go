@@ -37,7 +37,7 @@ func (r *SeiNodeReconciler) ensureMonitorTasks(ctx context.Context, node *seiv1a
 		}
 	}
 
-	if req := planner.ResultExportMonitorTask(node); req != nil {
+	if req := planner.ResultExportMonitorTask(node, r.Platform); req != nil {
 		if err := r.ensureMonitorTask(ctx, node, sc, *req); err != nil && firstErr == nil {
 			firstErr = err
 		}
