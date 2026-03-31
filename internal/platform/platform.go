@@ -17,6 +17,10 @@ type Config struct {
 	ResourceCPUDefault  string
 	ResourceMemDefault  string
 	SnapshotRegion      string
+
+	ResultExportBucket string
+	ResultExportRegion string
+	ResultExportPrefix string
 }
 
 // DefaultConfig returns Config with production defaults.
@@ -35,5 +39,8 @@ func DefaultConfig() Config {
 		ResourceCPUDefault:  "4",
 		ResourceMemDefault:  "32Gi",
 		SnapshotRegion:      "eu-central-1",
+		ResultExportBucket:  "sei-node-mvp",
+		ResultExportRegion:  "eu-central-1",
+		ResultExportPrefix:  "shadow-results/",
 	}
 }

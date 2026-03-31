@@ -1085,13 +1085,6 @@ func (in *SeiNodeStatus) DeepCopyInto(out *SeiNodeStatus) {
 		*out = new(TaskPlan)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.ScheduledTasks != nil {
-		in, out := &in.ScheduledTasks, &out.ScheduledTasks
-		*out = make(map[string]string, len(*in))
-		for key, val := range *in {
-			(*out)[key] = val
-		}
-	}
 	if in.MonitorTasks != nil {
 		in, out := &in.MonitorTasks, &out.MonitorTasks
 		*out = make(map[string]MonitorTask, len(*in))

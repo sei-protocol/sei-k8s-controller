@@ -7,14 +7,8 @@ import (
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
-)
-
-const (
-	defaultSnapshotUploadCron = "0 0 * * *"
-	resultExportBucket        = "sei-node-mvp"
-	resultExportRegion        = "eu-central-1"
-	resultExportPrefix        = "shadow-results/"
 )
 
 // buildBootstrapPlan constructs a unified InitPlan for nodes that need a
@@ -229,35 +223,36 @@ func AwaitConditionParams(node *seiv1alpha1.SeiNode) (*task.AwaitConditionParams
 	}, nil
 }
 
-// SnapshotUploadScheduledTask returns a snapshot-upload task builder if applicable.
-func SnapshotUploadScheduledTask(node *seiv1alpha1.SeiNode) sidecar.TaskBuilder {
+// SnapshotUploadMonitorTask returns a snapshot-upload TaskRequest if applicable.
+// The sidecar handler runs in a loop at its configured interval (SEI_SNAPSHOT_UPLOAD_INTERVAL).
+// The controller submits this once and tracks it as a monitor task.
+func SnapshotUploadMonitorTask(node *seiv1alpha1.SeiNode) *sidecar.TaskRequest {
 	sg := SnapshotGeneration(node)
 	if sg == nil || sg.Destination == nil || sg.Destination.S3 == nil {
 		return nil
 	}
 	dest := sg.Destination.S3
-	cron := defaultSnapshotUploadCron
-	return sidecar.SnapshotUploadTask{
-		Bucket:   dest.Bucket,
-		Prefix:   dest.Prefix,
-		Region:   dest.Region,
-		Schedule: &sidecar.ScheduleConfig{Cron: &cron},
-	}
+	req := sidecar.SnapshotUploadTask{
+		Bucket: dest.Bucket,
+		Prefix: dest.Prefix,
+		Region: dest.Region,
+	}.ToTaskRequest()
+	return &req
 }
 
 // ResultExportMonitorTask builds a TaskRequest for result-export comparison
 // mode. The sidecar compares local block results against the canonical RPC
 // and completes on app-hash divergence. Returns nil when the node has no
 // result-export config.
-func ResultExportMonitorTask(node *seiv1alpha1.SeiNode) *sidecar.TaskRequest {
+func ResultExportMonitorTask(node *seiv1alpha1.SeiNode, platformCfg platform.Config) *sidecar.TaskRequest {
 	if node.Spec.Replayer == nil || node.Spec.Replayer.ResultExport == nil {
 		return nil
 	}
 	re := node.Spec.Replayer.ResultExport
 	req := sidecar.ResultExportTask{
-		Bucket:       resultExportBucket,
-		Prefix:       resultExportPrefix + node.Spec.ChainID + "/",
-		Region:       resultExportRegion,
+		Bucket:       platformCfg.ResultExportBucket,
+		Prefix:       platformCfg.ResultExportPrefix + node.Spec.ChainID + "/",
+		Region:       platformCfg.ResultExportRegion,
 		CanonicalRPC: re.CanonicalRPC,
 	}.ToTaskRequest()
 	return &req

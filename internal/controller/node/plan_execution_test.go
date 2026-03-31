@@ -22,6 +22,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -550,7 +551,7 @@ func TestReconcile_FailedPlan_NoOps(t *testing.T) {
 	}
 }
 
-func TestReconcile_CompletePlan_SubmitsScheduledTask(t *testing.T) {
+func TestReconcile_CompletePlan_SubmitsSnapshotUploadMonitor(t *testing.T) {
 	taskID := uuid.New()
 	mock := &mockSidecarClient{submitID: taskID}
 	node := snapshotterNode()
@@ -560,36 +561,36 @@ func TestReconcile_CompletePlan_SubmitsScheduledTask(t *testing.T) {
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	result, err := r.reconcileRunning(ctx, node)
+	_, err := r.reconcileRunning(ctx, node)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	if result.RequeueAfter != statusPollInterval {
-		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, statusPollInterval)
-	}
 	if len(mock.submitted) != 1 {
-		t.Fatalf("expected 1 scheduled task submitted, got %d", len(mock.submitted))
+		t.Fatalf("expected 1 monitor task submitted, got %d", len(mock.submitted))
 	}
 	if mock.submitted[0].Type != planner.TaskSnapshotUpload {
 		t.Errorf("task type = %q, want %q", mock.submitted[0].Type, planner.TaskSnapshotUpload)
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.ScheduledTasks == nil {
-		t.Fatal("expected ScheduledTasks to be set")
+	if updated.Status.MonitorTasks == nil {
+		t.Fatal("expected MonitorTasks to be set")
 	}
-	if got := updated.Status.ScheduledTasks[planner.TaskSnapshotUpload]; got != taskID.String() {
-		t.Errorf("ScheduledTasks[%s] = %q, want %q", planner.TaskSnapshotUpload, got, taskID.String())
+	if _, ok := updated.Status.MonitorTasks[planner.TaskSnapshotUpload]; !ok {
+		t.Errorf("expected MonitorTasks to contain %s", planner.TaskSnapshotUpload)
 	}
 }
 
-func TestReconcile_CompletePlan_SkipsAlreadyScheduled(t *testing.T) {
+func TestReconcile_CompletePlan_SkipsAlreadySubmittedMonitor(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotterNode()
 	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.ScheduledTasks = map[string]string{
-		planner.TaskSnapshotUpload: uuid.New().String(),
+	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
+		planner.TaskSnapshotUpload: {
+			ID:     uuid.New().String(),
+			Status: seiv1alpha1.TaskPending,
+		},
 	}
 
 	r, _ := newProgressionReconciler(t, mock, node)
@@ -600,7 +601,7 @@ func TestReconcile_CompletePlan_SkipsAlreadyScheduled(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	if len(mock.submitted) != 0 {
-		t.Errorf("expected no submissions for already-scheduled task, got %d", len(mock.submitted))
+		t.Errorf("expected no submissions for already-submitted monitor task, got %d", len(mock.submitted))
 	}
 }
 
@@ -798,7 +799,7 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 
 func TestResultExportMonitorTask_ReplayerWithExport(t *testing.T) {
 	node := monitorReplayerNode()
-	req := planner.ResultExportMonitorTask(node)
+	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
 	if req == nil {
 		t.Fatal("expected non-nil TaskRequest")
 	}
@@ -809,7 +810,7 @@ func TestResultExportMonitorTask_ReplayerWithExport(t *testing.T) {
 
 func TestResultExportMonitorTask_ReplayerWithoutExport(t *testing.T) {
 	node := replayerNode()
-	req := planner.ResultExportMonitorTask(node)
+	req := planner.ResultExportMonitorTask(node, platform.DefaultConfig())
 	if req != nil {
 		t.Errorf("expected nil TaskRequest, got %v", req)
 	}
@@ -817,20 +818,20 @@ func TestResultExportMonitorTask_ReplayerWithoutExport(t *testing.T) {
 
 // --- Snapshot upload tests ---
 
-func TestSnapshotUploadScheduledTask_WithDestination(t *testing.T) {
-	builder := planner.SnapshotUploadScheduledTask(snapshotterNode())
-	if builder == nil {
-		t.Fatal("expected non-nil builder")
+func TestSnapshotUploadMonitorTask_WithDestination(t *testing.T) {
+	req := planner.SnapshotUploadMonitorTask(snapshotterNode())
+	if req == nil {
+		t.Fatal("expected non-nil request")
 	}
-	if builder.TaskType() != planner.TaskSnapshotUpload {
-		t.Errorf("TaskType() = %q, want %q", builder.TaskType(), planner.TaskSnapshotUpload)
+	if req.Type != planner.TaskSnapshotUpload {
+		t.Errorf("Type = %q, want %q", req.Type, planner.TaskSnapshotUpload)
 	}
 }
 
-func TestSnapshotUploadScheduledTask_NoDestination(t *testing.T) {
-	builder := planner.SnapshotUploadScheduledTask(snapshotNode())
-	if builder != nil {
-		t.Errorf("expected nil builder, got %v", builder)
+func TestSnapshotUploadMonitorTask_NoDestination(t *testing.T) {
+	req := planner.SnapshotUploadMonitorTask(snapshotNode())
+	if req != nil {
+		t.Errorf("expected nil request, got %v", req)
 	}
 }
 

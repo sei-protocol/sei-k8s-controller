@@ -161,6 +161,15 @@ func main() {
 	if v := os.Getenv("SEI_SNAPSHOT_REGION"); v != "" {
 		platformCfg.SnapshotRegion = v
 	}
+	if v := os.Getenv("SEI_RESULT_EXPORT_BUCKET"); v != "" {
+		platformCfg.ResultExportBucket = v
+	}
+	if v := os.Getenv("SEI_RESULT_EXPORT_REGION"); v != "" {
+		platformCfg.ResultExportRegion = v
+	}
+	if v := os.Getenv("SEI_RESULT_EXPORT_PREFIX"); v != "" {
+		platformCfg.ResultExportPrefix = v
+	}
 
 	objectStore := platform.NewS3ObjectStore()
 	kc := mgr.GetClient()
