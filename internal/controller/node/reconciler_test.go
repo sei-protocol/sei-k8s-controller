@@ -17,8 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
