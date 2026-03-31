@@ -172,6 +172,17 @@ type GenesisS3Source struct {
 	Region string `json:"region,omitempty"`
 }
 
+// EntrypointConfig defines the command and arguments for the node process.
+type EntrypointConfig struct {
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	Command []string `json:"command"`
+
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	Args []string `json:"args,omitempty"`
+}
+
 // SidecarConfig configures the sei-sidecar container.
 type SidecarConfig struct {
 	// Image overrides the sidecar container image.

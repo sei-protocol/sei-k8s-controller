@@ -16,7 +16,7 @@ manifests: ## Generate CRD and RBAC manifests.
 	controller-gen rbac:roleName=manager-role crd webhook paths="./..." \
 		output:crd:artifacts:config=config/crd \
 		output:rbac:artifacts:config=config/rbac
-	cp config/crd/sei.io_seinodes.yaml config/crd/sei.io_seinodepools.yaml config/crd/sei.io_seinodegroups.yaml manifests/
+	cp config/crd/sei.io_seinodes.yaml config/crd/sei.io_seinodegroups.yaml manifests/
 	cp config/rbac/role.yaml manifests/
 
 generate: ## Generate DeepCopy implementations.

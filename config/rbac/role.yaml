@@ -7,7 +7,13 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - configmaps
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumeclaims
   - services
   verbs:
@@ -18,13 +24,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
 - apiGroups:
   - ""
   resources:
@@ -82,18 +81,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - networking.k8s.io
-  resources:
-  - networkpolicies
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - security.istio.io
   resources:
   - authorizationpolicies
@@ -109,7 +96,6 @@ rules:
   - sei.io
   resources:
   - seinodegroups
-  - seinodepools
   - seinodes
   verbs:
   - create
@@ -123,7 +109,6 @@ rules:
   - sei.io
   resources:
   - seinodegroups/finalizers
-  - seinodepools/finalizers
   - seinodes/finalizers
   verbs:
   - update
@@ -131,7 +116,6 @@ rules:
   - sei.io
   resources:
   - seinodegroups/status
-  - seinodepools/status
   - seinodes/status
   verbs:
   - get
