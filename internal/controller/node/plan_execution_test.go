@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	. "github.com/onsi/gomega"
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	corev1 "k8s.io/api/core/v1"
@@ -385,6 +386,7 @@ func TestBuildPlan_ParamsRoundTrip(t *testing.T) {
 }
 
 func TestConfigApply_ParamsFromPlan(t *testing.T) {
+	g := NewWithT(t)
 	node := snapshotNode()
 	node.Spec.Overrides = map[string]string{
 		"giga_executor.enabled": "true",
@@ -399,20 +401,12 @@ func TestConfigApply_ParamsFromPlan(t *testing.T) {
 			break
 		}
 	}
-	if configTask == nil {
-		t.Fatal("no config-apply task in plan")
-	}
+	g.Expect(configTask).NotTo(BeNil(), "no config-apply task in plan")
 
 	var params task.ConfigApplyParams
-	if err := json.Unmarshal(configTask.Params.Raw, &params); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
-	}
-	if params.Mode != string(seiconfig.ModeFull) {
-		t.Errorf("Mode = %q, want %q", params.Mode, seiconfig.ModeFull)
-	}
-	if params.Overrides["giga_executor.enabled"] != "true" {
-		t.Errorf("missing user override giga_executor.enabled")
-	}
+	g.Expect(json.Unmarshal(configTask.Params.Raw, &params)).To(Succeed())
+	g.Expect(params.Mode).To(Equal(string(seiconfig.ModeFull)))
+	g.Expect(params.Overrides["giga_executor.enabled"]).To(Equal("true"))
 }
 
 func assertProgression(t *testing.T, got, want []string) {
@@ -788,14 +782,11 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 // --- Result export tests ---
 
 func TestResultExportMonitorTask_ReplayerWithExport(t *testing.T) {
+	g := NewWithT(t)
 	node := monitorReplayerNode()
 	req := planner.ResultExportMonitorTask(node, platformtest.Config())
-	if req == nil {
-		t.Fatal("expected non-nil TaskRequest")
-	}
-	if req.Type != planner.TaskResultExport {
-		t.Errorf("Type = %q, want %q", req.Type, planner.TaskResultExport)
-	}
+	g.Expect(req).NotTo(BeNil())
+	g.Expect(req.Type).To(Equal(planner.TaskResultExport))
 }
 
 func TestResultExportMonitorTask_ReplayerWithoutExport(t *testing.T) {
@@ -809,13 +800,10 @@ func TestResultExportMonitorTask_ReplayerWithoutExport(t *testing.T) {
 // --- Snapshot upload tests ---
 
 func TestSnapshotUploadMonitorTask_WithDestination(t *testing.T) {
+	g := NewWithT(t)
 	req := planner.SnapshotUploadMonitorTask(snapshotterNode())
-	if req == nil {
-		t.Fatal("expected non-nil request")
-	}
-	if req.Type != planner.TaskSnapshotUpload {
-		t.Errorf("Type = %q, want %q", req.Type, planner.TaskSnapshotUpload)
-	}
+	g.Expect(req).NotTo(BeNil())
+	g.Expect(req.Type).To(Equal(planner.TaskSnapshotUpload))
 }
 
 func TestSnapshotUploadMonitorTask_NoDestination(t *testing.T) {
