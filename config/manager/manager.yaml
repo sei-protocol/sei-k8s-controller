@@ -59,6 +59,8 @@ spec:
             value: "4"
           - name: SEI_RESOURCE_MEM_DEFAULT
             value: 32Gi
+          - name: SEI_SNAPSHOT_BUCKET
+            value: dev-sei-snapshots
           - name: SEI_SNAPSHOT_REGION
             value: us-east-2
           - name: SEI_RESULT_EXPORT_BUCKET

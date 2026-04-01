@@ -11,6 +11,7 @@ import (
 )
 
 type archiveNodePlanner struct {
+	snapshotBucket string
 	snapshotRegion string
 }
 
@@ -24,7 +25,7 @@ func (p *archiveNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	return buildBasePlan(node, node.Spec.Archive.Peers, p.snapshotSource(), p.snapshotRegion, &task.ConfigApplyParams{
+	return buildBasePlan(node, node.Spec.Archive.Peers, p.snapshotSource(), p.snapshotBucket, p.snapshotRegion, &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeArchive),
 		Overrides: mergeOverrides(p.controllerOverrides(node), node.Spec.Overrides),
 	})

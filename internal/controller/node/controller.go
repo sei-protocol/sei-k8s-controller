@@ -75,7 +75,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	p, err := planner.ForNode(node, r.Platform.SnapshotRegion)
+	p, err := planner.ForNode(node, r.Platform)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving planner: %w", err)
 	}

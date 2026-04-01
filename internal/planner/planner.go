@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -92,16 +93,19 @@ func needsGenesisPlan(group *seiv1alpha1.SeiNodeGroup) bool {
 
 // ForNode returns the appropriate NodePlanner based on which mode sub-spec
 // is populated on the SeiNode.
-func ForNode(node *seiv1alpha1.SeiNode, snapshotRegion string) (NodePlanner, error) {
+func ForNode(node *seiv1alpha1.SeiNode, cfg platform.Config) (NodePlanner, error) {
+	bucket := cfg.SnapshotBucket
+	region := cfg.SnapshotRegion
+
 	switch {
 	case node.Spec.FullNode != nil:
-		return &fullNodePlanner{snapshotRegion: snapshotRegion}, nil
+		return &fullNodePlanner{snapshotBucket: bucket, snapshotRegion: region}, nil
 	case node.Spec.Archive != nil:
-		return &archiveNodePlanner{snapshotRegion: snapshotRegion}, nil
+		return &archiveNodePlanner{snapshotBucket: bucket, snapshotRegion: region}, nil
 	case node.Spec.Replayer != nil:
-		return &replayerPlanner{snapshotRegion: snapshotRegion}, nil
+		return &replayerPlanner{snapshotBucket: bucket, snapshotRegion: region}, nil
 	case node.Spec.Validator != nil:
-		return &validatorPlanner{snapshotRegion: snapshotRegion}, nil
+		return &validatorPlanner{snapshotBucket: bucket, snapshotRegion: region}, nil
 	default:
 		return nil, fmt.Errorf("no mode sub-spec set on SeiNode %s/%s", node.Namespace, node.Name)
 	}
@@ -243,7 +247,7 @@ func buildBasePlan(
 	node *seiv1alpha1.SeiNode,
 	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
-	snapshotRegion string,
+	snapshotBucket, snapshotRegion string,
 	configApplyParams *task.ConfigApplyParams,
 ) (*seiv1alpha1.TaskPlan, error) {
 	mode := bootstrapMode(snap)
@@ -260,7 +264,7 @@ func buildBasePlan(
 	attempt := 0
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(node, taskType, attempt, paramsForTaskType(node, taskType, peers, snap, snapshotRegion, configApplyParams))
+		t, err := buildPlannedTask(node, taskType, attempt, paramsForTaskType(node, taskType, peers, snap, snapshotBucket, snapshotRegion, configApplyParams))
 		if err != nil {
 			return nil, err
 		}
@@ -278,12 +282,12 @@ func paramsForTaskType(
 	taskType string,
 	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
-	snapshotRegion string,
+	snapshotBucket, snapshotRegion string,
 	configApplyParams *task.ConfigApplyParams,
 ) any {
 	switch taskType {
 	case TaskSnapshotRestore:
-		return snapshotRestoreParams(snap, node.Spec.ChainID, snapshotRegion)
+		return snapshotRestoreParams(snap, node.Spec.ChainID, snapshotBucket, snapshotRegion)
 	case TaskConfigureGenesis:
 		return configureGenesisParams(node)
 	case TaskConfigApply:
@@ -304,13 +308,13 @@ func paramsForTaskType(
 	}
 }
 
-func snapshotRestoreParams(snap *seiv1alpha1.SnapshotSource, chainID, region string) *task.SnapshotRestoreParams {
+func snapshotRestoreParams(snap *seiv1alpha1.SnapshotSource, chainID, bucket, region string) *task.SnapshotRestoreParams {
 	if snap == nil || snap.S3 == nil {
 		return &task.SnapshotRestoreParams{}
 	}
 	return &task.SnapshotRestoreParams{
-		Bucket:  chainID + "-snapshots",
-		Prefix:  "state-sync/",
+		Bucket:  bucket,
+		Prefix:  chainID + "/state-sync/",
 		Region:  region,
 		ChainID: chainID,
 	}

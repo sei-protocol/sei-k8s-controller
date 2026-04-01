@@ -125,6 +125,7 @@ func main() {
 		ResourceMemArchive:  os.Getenv("SEI_RESOURCE_MEM_ARCHIVE"),
 		ResourceCPUDefault:  os.Getenv("SEI_RESOURCE_CPU_DEFAULT"),
 		ResourceMemDefault:  os.Getenv("SEI_RESOURCE_MEM_DEFAULT"),
+		SnapshotBucket:      os.Getenv("SEI_SNAPSHOT_BUCKET"),
 		SnapshotRegion:      os.Getenv("SEI_SNAPSHOT_REGION"),
 		ResultExportBucket:  os.Getenv("SEI_RESULT_EXPORT_BUCKET"),
 		ResultExportRegion:  os.Getenv("SEI_RESULT_EXPORT_REGION"),

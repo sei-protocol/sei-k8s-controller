@@ -11,6 +11,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
 
 // driveTask submits one task and completes it. For fire-and-forget tasks
@@ -59,7 +60,7 @@ func driveTask(
 func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 	g := NewGomegaWithT(t)
 	node := snapshotNode()
-	p, _ := planner.ForNode(node, testSnapshotRegion)
+	p, _ := planner.ForNode(node, platformtest.Config())
 	mock := &mockSidecarClient{}
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -108,7 +109,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 	g := NewGomegaWithT(t)
 	node := genesisNode()
-	p, _ := planner.ForNode(node, testSnapshotRegion)
+	p, _ := planner.ForNode(node, platformtest.Config())
 	mock := &mockSidecarClient{}
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -154,7 +155,7 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 	g := NewGomegaWithT(t)
 	node := snapshotNode()
-	p, _ := planner.ForNode(node, testSnapshotRegion)
+	p, _ := planner.ForNode(node, platformtest.Config())
 	mock := &mockSidecarClient{}
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()

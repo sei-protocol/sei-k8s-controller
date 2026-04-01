@@ -19,6 +19,7 @@ func Config() platform.Config {
 		ResourceMemArchive:  "256Gi",
 		ResourceCPUDefault:  "4",
 		ResourceMemDefault:  "32Gi",
+		SnapshotBucket:      "test-sei-snapshots",
 		SnapshotRegion:      "us-east-2",
 		ResultExportBucket:  "test-sei-shadow-results",
 		ResultExportRegion:  "us-east-2",

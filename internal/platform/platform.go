@@ -27,6 +27,7 @@ type Config struct {
 	ResourceMemArchive  string
 	ResourceCPUDefault  string
 	ResourceMemDefault  string
+	SnapshotBucket      string
 	SnapshotRegion      string
 
 	ResultExportBucket string
@@ -52,6 +53,7 @@ func (c Config) Validate() error {
 		"SEI_RESOURCE_MEM_ARCHIVE":  c.ResourceMemArchive,
 		"SEI_RESOURCE_CPU_DEFAULT":  c.ResourceCPUDefault,
 		"SEI_RESOURCE_MEM_DEFAULT":  c.ResourceMemDefault,
+		"SEI_SNAPSHOT_BUCKET":       c.SnapshotBucket,
 		"SEI_SNAPSHOT_REGION":       c.SnapshotRegion,
 		"SEI_RESULT_EXPORT_BUCKET":  c.ResultExportBucket,
 		"SEI_RESULT_EXPORT_REGION":  c.ResultExportRegion,
