@@ -308,43 +308,6 @@ spec:
                     - keepRecent
                     type: object
                 type: object
-              genesis:
-                description: |-
-                  Genesis configures where the genesis configuration is sourced from.
-                  When omitted for a well-known chain (pacific-1, atlantic-2, arctic-1),
-                  the sidecar writes the embedded genesis from sei-config.
-                properties:
-                  pvc:
-                    description: PVC references a pre-provisioned PVC populated by
-                      SeiNodePool's genesis ceremony.
-                    properties:
-                      dataPVC:
-                        description: DataPVC is the name of the pre-populated PVC
-                          in the same namespace.
-                        minLength: 1
-                        type: string
-                    required:
-                    - dataPVC
-                    type: object
-                  s3:
-                    description: S3 configures the sidecar to download genesis.json
-                      from an S3 bucket.
-                    properties:
-                      region:
-                        description: Region is the AWS region for S3 access.
-                        type: string
-                      uri:
-                        description: URI is the S3 URI of the genesis.json file (s3://bucket/key
-                          format).
-                        minLength: 1
-                        type: string
-                    required:
-                    - uri
-                    type: object
-                type: object
-                x-kubernetes-validations:
-                - message: at most one of pvc or s3 may be set
-                  rule: '(has(self.pvc) ? 1 : 0) + (has(self.s3) ? 1 : 0) <= 1'
               image:
                 description: Image is the seid container image.
                 maxLength: 512

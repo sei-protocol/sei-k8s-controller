@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"fmt"
 	"slices"
 
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
@@ -197,19 +196,6 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 	default:
 		return nil
 	}
-}
-
-// AwaitConditionParams builds await-condition params from a node's snapshot source.
-func AwaitConditionParams(node *seiv1alpha1.SeiNode) (*task.AwaitConditionParams, error) {
-	snap := node.Spec.SnapshotSource()
-	if snap == nil || snap.S3 == nil || snap.S3.TargetHeight <= 0 {
-		return nil, fmt.Errorf("node %s/%s has no valid S3 targetHeight", node.Namespace, node.Name)
-	}
-	return &task.AwaitConditionParams{
-		Condition:    sidecar.ConditionHeight,
-		TargetHeight: snap.S3.TargetHeight,
-		Action:       sidecar.ActionSIGTERM,
-	}, nil
 }
 
 // SnapshotUploadMonitorTask returns a snapshot-upload TaskRequest if applicable.

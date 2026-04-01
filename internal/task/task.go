@@ -3,7 +3,6 @@ package task
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -35,11 +34,6 @@ const (
 	ExecutionComplete ExecutionStatus = "Complete"
 	ExecutionFailed   ExecutionStatus = "Failed"
 )
-
-// ErrTaskNotFound is returned by Status when the sidecar has no record of
-// the task. The executor uses this sentinel to distinguish "not yet submitted"
-// from "submitted and running".
-var ErrTaskNotFound = errors.New("task not found on sidecar")
 
 // TaskExecution defines how the plan executor drives a single task.
 // Execute is a command (called once to submit — must be idempotent).

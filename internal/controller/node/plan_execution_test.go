@@ -147,7 +147,7 @@ func snapshotNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{},
+
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3:          &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
@@ -182,11 +182,8 @@ func genesisNode() *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node", Namespace: "default", Generation: 1},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "arctic-1",
-			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{
-				PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-pvc"},
-			},
+			ChainID:   "arctic-1",
+			Image:     "sei:latest",
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
 		},
@@ -199,7 +196,7 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{},
+
 			Archive: &seiv1alpha1.ArchiveSpec{
 				Peers: []seiv1alpha1.PeerSource{{
 					EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
@@ -685,7 +682,7 @@ func TestPlannerForNode_NoSubSpec(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "test",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{},
+
 		},
 	}
 	_, err := planner.ForNode(node, testSnapshotRegion)

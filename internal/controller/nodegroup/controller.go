@@ -76,7 +76,7 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Snapshot the status before any reconciliation mutates it in memory.
 	// Conditions set during networking/monitoring reconciliation are captured
 	// in the diff when updateStatus patches against this base.
-	statusBase := client.MergeFrom(group.DeepCopy())
+	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
 	if err := timeSubstep("reconcileSeiNodes", func() error {

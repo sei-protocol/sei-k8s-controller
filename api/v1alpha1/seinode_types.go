@@ -23,12 +23,6 @@ type SeiNodeSpec struct {
 	// +optional
 	Entrypoint *EntrypointConfig `json:"entrypoint,omitempty"`
 
-	// Genesis configures where the genesis configuration is sourced from.
-	// When omitted for a well-known chain (pacific-1, atlantic-2, arctic-1),
-	// the sidecar writes the embedded genesis from sei-config.
-	// +optional
-	Genesis GenesisConfiguration `json:"genesis,omitempty"`
-
 	// Overrides is a flat map of dotted TOML key paths to string values.
 	// Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
 	// These are applied on top of mode defaults during config-apply.

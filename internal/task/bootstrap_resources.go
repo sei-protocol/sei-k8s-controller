@@ -233,9 +233,6 @@ func bootstrapSidecarPort(node *seiv1alpha1.SeiNode) int32 {
 }
 
 func bootstrapPVCClaimName(node *seiv1alpha1.SeiNode) string {
-	if node.Spec.Genesis.PVC != nil {
-		return node.Spec.Genesis.PVC.DataPVC
-	}
 	return fmt.Sprintf("data-%s", node.Name)
 }
 

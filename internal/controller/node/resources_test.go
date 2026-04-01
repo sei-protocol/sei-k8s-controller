@@ -23,9 +23,6 @@ func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unpa
 				Command: []string{"seid"},
 				Args:    []string{"start"},
 			},
-			Genesis: seiv1alpha1.GenesisConfiguration{
-				PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-mynet-0"},
-			},
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
@@ -38,7 +35,6 @@ func newSnapshotNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unp
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "sei-test",
 			Image:   "ghcr.io/sei-protocol/seid:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{},
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{
@@ -611,25 +607,4 @@ func TestGenerateNodeDataPVC(t *testing.T) {
 
 // --- S3 URI parsing ---
 
-func TestParseS3URI(t *testing.T) {
-	tests := []struct {
-		uri        string
-		wantBucket string
-		wantPrefix string
-	}{
-		{"s3://my-bucket/path/to/prefix", "my-bucket", "path/to/prefix"},
-		{"s3://my-bucket/", "my-bucket", ""},
-		{"s3://my-bucket", "my-bucket", ""},
-		{"not-a-uri", "not-a-uri", ""},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.uri, func(t *testing.T) {
-			g := NewWithT(t)
-			bucket, prefix := parseS3URI(tc.uri)
-			g.Expect(bucket).To(Equal(tc.wantBucket))
-			g.Expect(prefix).To(Equal(tc.wantPrefix))
-		})
-	}
-}
 

@@ -30,8 +30,8 @@ const (
 	fieldOwner            = client.FieldOwner("seinode-controller")
 )
 
-// PlatformConfig is an alias for platform.Config for backward compatibility
-// within the controller package.
+// PlatformConfig is an alias for platform.Config, used throughout the node
+// controller package to avoid repeating the full import path.
 type PlatformConfig = platform.Config
 
 // SeiNodeReconciler reconciles a SeiNode object.
@@ -83,10 +83,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("validating spec: %w", err)
 	}
 
-	if !hasGenesisPVC(node) {
-		if err := r.ensureNodeDataPVC(ctx, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("ensuring data PVC: %w", err)
-		}
+	if err := r.ensureNodeDataPVC(ctx, node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensuring data PVC: %w", err)
 	}
 
 	switch node.Status.Phase {
@@ -97,6 +95,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	case seiv1alpha1.PhaseRunning:
 		return r.reconcileRunning(ctx, node)
 	case seiv1alpha1.PhaseFailed:
+		r.Recorder.Eventf(node, corev1.EventTypeWarning, "NodeFailed",
+			"SeiNode is in Failed state. Delete and recreate the resource to retry.")
 		return ctrl.Result{}, nil
 	default:
 		return ctrl.Result{}, nil
@@ -232,11 +232,8 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 		return ctrl.Result{}, fmt.Errorf("setting terminating status: %w", err)
 	}
 
-	// Non-genesis SeiNodes own their data PVC; genesis PVCs are owned by SeiNodePool.
-	if !hasGenesisPVC(node) {
-		if err := r.deleteNodeDataPVC(ctx, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("deleting data PVC: %w", err)
-		}
+	if err := r.deleteNodeDataPVC(ctx, node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("deleting data PVC: %w", err)
 	}
 
 	cleanupNodeMetrics(node.Namespace, node.Name)
@@ -291,6 +288,3 @@ func (r *SeiNodeReconciler) reconcileNodeService(ctx context.Context, node *seiv
 	return r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 }
 
-func hasGenesisPVC(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.Genesis.PVC != nil
-}

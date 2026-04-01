@@ -64,6 +64,7 @@ func (e *teardownBootstrapExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("fetching bootstrap service for deletion: %w", err)
 	}
 
+	e.complete()
 	return nil
 }
 
