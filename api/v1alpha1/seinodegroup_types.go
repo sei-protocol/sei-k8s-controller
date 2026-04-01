@@ -117,6 +117,25 @@ type GenesisCeremonyConfig struct {
 	// assembly completion. Default: "15m".
 	// +optional
 	MaxCeremonyDuration *metav1.Duration `json:"maxCeremonyDuration,omitempty"`
+
+	// Fork configures this genesis ceremony to fork from an existing
+	// chain's exported state rather than building genesis from scratch.
+	// When set, the assembler downloads the exported state, rewrites
+	// the chain identity, strips old validators, and runs collect-gentxs
+	// with the new validator set.
+	// +optional
+	Fork *ForkConfig `json:"fork,omitempty"`
+}
+
+// ForkConfig identifies the source chain to fork from. The exported
+// genesis state is expected at {sourceChainId}/exported-state.json in
+// the platform genesis bucket. The assembled fork genesis is written
+// to {newChainId}/{groupName}/genesis.json — same convention as a
+// standard genesis ceremony.
+type ForkConfig struct {
+	// SourceChainID is the chain ID of the network being forked.
+	// +kubebuilder:validation:MinLength=1
+	SourceChainID string `json:"sourceChainId"`
 }
 
 // GenesisAccount represents a non-validator genesis account to fund.
@@ -270,13 +289,15 @@ type DeploymentStatus struct {
 
 // Status condition types for SeiNodeGroup.
 const (
-	ConditionNodesReady              = "NodesReady"
-	ConditionExternalServiceReady    = "ExternalServiceReady"
-	ConditionRouteReady              = "RouteReady"
-	ConditionIsolationReady          = "IsolationReady"
-	ConditionServiceMonitorReady     = "ServiceMonitorReady"
-	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
-	ConditionPlanInProgress          = "PlanInProgress"
+	ConditionNodesReady                = "NodesReady"
+	ConditionExternalServiceReady      = "ExternalServiceReady"
+	ConditionRouteReady                = "RouteReady"
+	ConditionIsolationReady            = "IsolationReady"
+	ConditionServiceMonitorReady       = "ServiceMonitorReady"
+	ConditionGenesisCeremonyComplete   = "GenesisCeremonyComplete"
+	ConditionPlanInProgress            = "PlanInProgress"
+	ConditionGenesisCeremonyNeeded     = "GenesisCeremonyNeeded"
+	ConditionForkGenesisCeremonyNeeded = "ForkGenesisCeremonyNeeded"
 )
 
 // +kubebuilder:object:root=true

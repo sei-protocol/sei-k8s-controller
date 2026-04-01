@@ -111,6 +111,22 @@ spec:
                     minLength: 1
                     pattern: ^[a-z0-9][a-z0-9-]*[a-z0-9]$
                     type: string
+                  fork:
+                    description: |-
+                      Fork configures this genesis ceremony to fork from an existing
+                      chain's exported state rather than building genesis from scratch.
+                      When set, the assembler downloads the exported state, rewrites
+                      the chain identity, strips old validators, and runs collect-gentxs
+                      with the new validator set.
+                    properties:
+                      sourceChainId:
+                        description: SourceChainID is the chain ID of the network
+                          being forked.
+                        minLength: 1
+                        type: string
+                    required:
+                    - sourceChainId
+                    type: object
                   maxCeremonyDuration:
                     description: |-
                       MaxCeremonyDuration is the maximum time from group creation to genesis

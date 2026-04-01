@@ -21,6 +21,9 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeGroupStatus{
 			IncumbentNodes: []string{"node-0", "node-1", "node-2"},
+			Conditions: []metav1.Condition{
+				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
+			},
 		},
 	}
 
@@ -111,6 +114,9 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeGroupStatus{
 			IncumbentNodes: []string{"node-0"},
+			Conditions: []metav1.Condition{
+				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
+			},
 		},
 	}
 
@@ -146,6 +152,9 @@ func TestBuildGroupAssemblyPlan_DeterministicIDs(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeGroupStatus{
 			IncumbentNodes: []string{"node-0", "node-1"},
+			Conditions: []metav1.Condition{
+				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
+			},
 		},
 	}
 

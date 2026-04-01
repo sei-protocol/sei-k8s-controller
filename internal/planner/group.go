@@ -7,7 +7,10 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-const groupAssemblyMaxRetries = 60
+const (
+	groupAssemblyMaxRetries = 60
+	TaskAssembleForkGenesis = "assemble-fork-genesis"
+)
 
 type genesisGroupPlanner struct{}
 
@@ -26,13 +29,28 @@ func (p *genesisGroupPlanner) BuildPlan(
 		nodeParams[i] = task.GenesisNodeParam{Name: name}
 	}
 
-	assembleParams := &task.AssembleAndUploadGenesisParams{
-		AccountBalance: group.Spec.Genesis.AccountBalance,
-		Namespace:      group.Namespace,
-		Nodes:          nodeParams,
+	// Select assembler task based on whether this is a fork ceremony.
+	assembleTaskType := TaskAssembleGenesis
+	var assembleParams any
+
+	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) {
+		assembleTaskType = TaskAssembleForkGenesis
+		assembleParams = &task.AssembleForkGenesisParams{
+			SourceChainID:  group.Spec.Genesis.Fork.SourceChainID,
+			ChainID:        group.Spec.Genesis.ChainID,
+			AccountBalance: group.Spec.Genesis.AccountBalance,
+			Namespace:      group.Namespace,
+			Nodes:          nodeParams,
+		}
+	} else {
+		assembleParams = &task.AssembleAndUploadGenesisParams{
+			AccountBalance: group.Spec.Genesis.AccountBalance,
+			Namespace:      group.Namespace,
+			Nodes:          nodeParams,
+		}
 	}
 
-	assembleTask, err := buildGroupPlannedTask(group.Name, TaskAssembleGenesis, assembleParams)
+	assembleTask, err := buildGroupPlannedTask(group.Name, assembleTaskType, assembleParams)
 	if err != nil {
 		return nil, err
 	}

@@ -58,8 +58,6 @@ type GroupPlanner interface {
 // ForGroup returns the appropriate GroupPlanner based on the group's
 // current state and spec. Returns (nil, nil) when no plan is needed.
 func ForGroup(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
-	// Genesis ceremony: needs a plan when genesis is configured, no plan
-	// exists yet, ceremony isn't complete, and all nodes are created.
 	if needsGenesisPlan(group) {
 		return &genesisGroupPlanner{}, nil
 	}
@@ -73,22 +71,30 @@ func ForGroup(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
 	return nil, nil
 }
 
+// needsGenesisPlan returns true when either GenesisCeremonyNeeded or
+// ForkGenesisCeremonyNeeded condition is set with sufficient nodes.
 func needsGenesisPlan(group *seiv1alpha1.SeiNodeGroup) bool {
 	if group.Spec.Genesis == nil {
 		return false
 	}
-	if group.Status.ObservedGeneration != 0 {
-		return false // genesis only runs on the first generation
-	}
 	if group.Status.Plan != nil {
 		return false
 	}
-	for _, c := range group.Status.Conditions {
-		if c.Type == seiv1alpha1.ConditionGenesisCeremonyComplete && c.Status == metav1.ConditionTrue {
-			return false
-		}
+	genesisNeeded := hasCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
+	forkNeeded := hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded)
+	if !genesisNeeded && !forkNeeded {
+		return false
 	}
 	return int32(len(group.Status.IncumbentNodes)) >= group.Spec.Replicas
+}
+
+func hasCondition(group *seiv1alpha1.SeiNodeGroup, condType string) bool {
+	for _, c := range group.Status.Conditions {
+		if c.Type == condType && c.Status == metav1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 // ForNode returns the appropriate NodePlanner based on which mode sub-spec
