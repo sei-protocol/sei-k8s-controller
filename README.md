@@ -110,6 +110,8 @@ make manifests generate       # Regenerate CRDs, RBAC, DeepCopy after type chang
 
 The controller image is built and pushed to ECR by GitHub Actions on every push to `main`.
 
+**Deployment ordering**: When adding new environment variables to the sidecar, the controller must be deployed first — it injects env vars into pod specs. If the sidecar image is updated before the controller, existing pods will crash because they lack the new env vars. The safe sequence is: (1) deploy the controller, (2) then update the sidecar image in SeiNode specs.
+
 The `config/` directory follows the standard [Kubebuilder](https://book.kubebuilder.io) layout:
 
 ```
