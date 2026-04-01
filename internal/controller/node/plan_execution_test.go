@@ -682,7 +682,6 @@ func TestPlannerForNode_NoSubSpec(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "test",
 			Image:   "sei:latest",
-
 		},
 	}
 	_, err := planner.ForNode(node, testSnapshotRegion)

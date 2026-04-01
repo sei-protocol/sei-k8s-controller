@@ -46,4 +46,3 @@ func DeletePhaseGauge(gauge *prometheus.GaugeVec, ns, name string, allPhases []s
 		gauge.DeleteLabelValues(ns, name, p)
 	}
 }
-

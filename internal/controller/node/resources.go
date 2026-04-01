@@ -304,4 +304,3 @@ func servicePorts() []corev1.ServicePort {
 	}
 	return ports
 }
-

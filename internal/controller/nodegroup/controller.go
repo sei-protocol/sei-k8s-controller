@@ -16,7 +16,6 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
-	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
@@ -32,7 +31,6 @@ type SeiNodeGroupReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
-	Platform platform.Config
 
 	// ControllerSA is the SPIFFE principal of the controller's ServiceAccount.
 	// It is auto-injected into every AuthorizationPolicy to ensure the
@@ -175,7 +173,7 @@ func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv
 }
 
 func shouldRequeue(result ctrl.Result) bool {
-	return result.RequeueAfter > 0 || result.Requeue
+	return result.RequeueAfter > 0
 }
 
 // SetupWithManager sets up the controller with the Manager.

@@ -287,4 +287,3 @@ func (r *SeiNodeReconciler) reconcileNodeService(ctx context.Context, node *seiv
 	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
 	return r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 }
-

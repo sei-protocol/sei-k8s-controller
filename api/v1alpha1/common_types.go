@@ -138,7 +138,6 @@ type ResultExportConfig struct {
 	CanonicalRPC string `json:"canonicalRpc"`
 }
 
-
 // EntrypointConfig defines the command and arguments for the node process.
 type EntrypointConfig struct {
 	// +kubebuilder:validation:MinItems=1
