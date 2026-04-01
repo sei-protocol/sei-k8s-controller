@@ -203,15 +203,10 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 // The controller submits this once and tracks it as a monitor task.
 func SnapshotUploadMonitorTask(node *seiv1alpha1.SeiNode) *sidecar.TaskRequest {
 	sg := SnapshotGeneration(node)
-	if sg == nil || sg.Destination == nil || sg.Destination.S3 == nil {
+	if sg == nil {
 		return nil
 	}
-	dest := sg.Destination.S3
-	req := sidecar.SnapshotUploadTask{
-		Bucket: dest.Bucket,
-		Prefix: dest.Prefix,
-		Region: dest.Region,
-	}.ToTaskRequest()
+	req := sidecar.SnapshotUploadTask{}.ToTaskRequest()
 	return &req
 }
 

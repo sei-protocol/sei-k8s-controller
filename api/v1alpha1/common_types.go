@@ -83,41 +83,15 @@ type S3SnapshotSource struct {
 type StateSyncSource struct{}
 
 // SnapshotGenerationConfig configures a node to produce Tendermint state-sync
-// snapshots and optionally upload them to remote storage. The controller sets
-// archival pruning and a system-default snapshot-interval in app.toml.
+// snapshots and upload them to the platform's snapshot bucket. The controller
+// sets archival pruning and a system-default snapshot-interval in app.toml.
+// Uploads go to {SEI_SNAPSHOT_BUCKET}/{chainID}/ automatically.
 type SnapshotGenerationConfig struct {
 	// KeepRecent is the number of recent snapshots to retain on disk.
 	// Must be at least 2 so the upload algorithm can select the
 	// second-to-latest completed snapshot.
 	// +kubebuilder:validation:Minimum=2
 	KeepRecent int32 `json:"keepRecent"`
-
-	// Destination configures where generated snapshots are uploaded.
-	// When set, the controller submits a scheduled upload task to the sidecar.
-	// +optional
-	Destination *SnapshotDestination `json:"destination,omitempty"`
-}
-
-// SnapshotDestination configures where generated snapshots are uploaded.
-// Exactly one destination type must be set.
-type SnapshotDestination struct {
-	// S3 uploads snapshots to an S3 bucket.
-	S3 *S3SnapshotDestination `json:"s3"`
-}
-
-// S3SnapshotDestination configures S3 as the upload target for snapshots.
-type S3SnapshotDestination struct {
-	// Bucket is the S3 bucket name.
-	// +kubebuilder:validation:MinLength=1
-	Bucket string `json:"bucket"`
-
-	// Prefix is an optional key prefix within the bucket (e.g. "state-sync/").
-	// +optional
-	Prefix string `json:"prefix,omitempty"`
-
-	// Region is the AWS region of the bucket.
-	// +kubebuilder:validation:MinLength=1
-	Region string `json:"region"`
 }
 
 // ResultExportConfig enables export of block execution results to S3.

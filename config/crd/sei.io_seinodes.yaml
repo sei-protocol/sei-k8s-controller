@@ -106,33 +106,6 @@ spec:
                     description: SnapshotGeneration configures periodic snapshot creation
                       and optional upload.
                     properties:
-                      destination:
-                        description: |-
-                          Destination configures where generated snapshots are uploaded.
-                          When set, the controller submits a scheduled upload task to the sidecar.
-                        properties:
-                          s3:
-                            description: S3 uploads snapshots to an S3 bucket.
-                            properties:
-                              bucket:
-                                description: Bucket is the S3 bucket name.
-                                minLength: 1
-                                type: string
-                              prefix:
-                                description: Prefix is an optional key prefix within
-                                  the bucket (e.g. "state-sync/").
-                                type: string
-                              region:
-                                description: Region is the AWS region of the bucket.
-                                minLength: 1
-                                type: string
-                            required:
-                            - bucket
-                            - region
-                            type: object
-                        required:
-                        - s3
-                        type: object
                       keepRecent:
                         description: |-
                           KeepRecent is the number of recent snapshots to retain on disk.
@@ -269,33 +242,6 @@ spec:
                       SnapshotGeneration configures periodic snapshot creation and optional upload.
                       When set, the controller disables pruning and enables snapshot intervals.
                     properties:
-                      destination:
-                        description: |-
-                          Destination configures where generated snapshots are uploaded.
-                          When set, the controller submits a scheduled upload task to the sidecar.
-                        properties:
-                          s3:
-                            description: S3 uploads snapshots to an S3 bucket.
-                            properties:
-                              bucket:
-                                description: Bucket is the S3 bucket name.
-                                minLength: 1
-                                type: string
-                              prefix:
-                                description: Prefix is an optional key prefix within
-                                  the bucket (e.g. "state-sync/").
-                                type: string
-                              region:
-                                description: Region is the AWS region of the bucket.
-                                minLength: 1
-                                type: string
-                            required:
-                            - bucket
-                            - region
-                            type: object
-                        required:
-                        - s3
-                        type: object
                       keepRecent:
                         description: |-
                           KeepRecent is the number of recent snapshots to retain on disk.

@@ -207,9 +207,6 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 				}},
 				SnapshotGeneration: &seiv1alpha1.SnapshotGenerationConfig{
 					KeepRecent: 5,
-					Destination: &seiv1alpha1.SnapshotDestination{
-						S3: &seiv1alpha1.S3SnapshotDestination{Bucket: "atlantic-2-snapshots", Prefix: "state-sync", Region: "eu-central-1"},
-					},
 				},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
