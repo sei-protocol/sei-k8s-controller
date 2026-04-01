@@ -7,13 +7,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
-
-func testGenerateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.SeiNode {
-	r := &SeiNodeGroupReconciler{Platform: platformtest.Config()}
-	return r.generateSeiNode(group, ordinal)
-}
 
 func newTestGroup(name, namespace string) *seiv1alpha1.SeiNodeGroup {
 	return &seiv1alpha1.SeiNodeGroup{
@@ -42,11 +36,11 @@ func TestGenerateSeiNode_NameAndNamespace(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
 
-	node := testGenerateSeiNode(group, 0)
+	node := generateSeiNode(group, 0)
 	g.Expect(node.Name).To(Equal("archive-rpc-0"))
 	g.Expect(node.Namespace).To(Equal("sei"))
 
-	node2 := testGenerateSeiNode(group, 2)
+	node2 := generateSeiNode(group, 2)
 	g.Expect(node2.Name).To(Equal("archive-rpc-2"))
 }
 
@@ -54,7 +48,7 @@ func TestGenerateSeiNode_SystemLabels(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
 
-	node := testGenerateSeiNode(group, 1)
+	node := generateSeiNode(group, 1)
 
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupOrdinalLabel, "1"))
@@ -70,7 +64,7 @@ func TestGenerateSeiNode_UserLabelsAreMerged(t *testing.T) {
 		},
 	}
 
-	node := testGenerateSeiNode(group, 0)
+	node := generateSeiNode(group, 0)
 
 	g.Expect(node.Labels).To(HaveKeyWithValue("team", "platform"))
 	g.Expect(node.Labels).To(HaveKeyWithValue("env", "production"))
@@ -86,7 +80,7 @@ func TestGenerateSeiNode_SystemLabelsOverrideUser(t *testing.T) {
 		},
 	}
 
-	node := testGenerateSeiNode(group, 0)
+	node := generateSeiNode(group, 0)
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
 }
 
@@ -94,7 +88,7 @@ func TestGenerateSeiNode_InjectsPodLabels(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
 
-	node := testGenerateSeiNode(group, 0)
+	node := generateSeiNode(group, 0)
 
 	g.Expect(node.Spec.PodLabels).NotTo(BeNil())
 	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
@@ -107,7 +101,7 @@ func TestGenerateSeiNode_PreservesExistingPodLabels(t *testing.T) {
 		"existing": "value",
 	}
 
-	node := testGenerateSeiNode(group, 0)
+	node := generateSeiNode(group, 0)
 
 	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue("existing", "value"))
 	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
@@ -117,7 +111,7 @@ func TestGenerateSeiNode_CopiesSpec(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("full-node", "pacific-1")
 
-	node := testGenerateSeiNode(group, 0)
+	node := generateSeiNode(group, 0)
 
 	g.Expect(node.Name).To(Equal("full-node-0"))
 	g.Expect(node.Namespace).To(Equal("pacific-1"))
@@ -135,7 +129,7 @@ func TestGenerateSeiNode_Annotations(t *testing.T) {
 		},
 	}
 
-	node := testGenerateSeiNode(group, 0)
+	node := generateSeiNode(group, 0)
 	g.Expect(node.Annotations).To(HaveKeyWithValue("example.com/team", "platform"))
 }
 
@@ -143,7 +137,7 @@ func TestGenerateSeiNode_NoAnnotationsWhenNil(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
 
-	node := testGenerateSeiNode(group, 0)
+	node := generateSeiNode(group, 0)
 	g.Expect(node.Annotations).To(BeNil())
 }
 
@@ -154,7 +148,7 @@ func TestGenerateSeiNode_DeepCopiesTemplate(t *testing.T) {
 		"evm.http_port": "8545",
 	}
 
-	node := testGenerateSeiNode(group, 0)
+	node := generateSeiNode(group, 0)
 	node.Spec.Overrides["modified"] = "true"
 
 	g.Expect(group.Spec.Template.Spec.Overrides).NotTo(HaveKey("modified"),
