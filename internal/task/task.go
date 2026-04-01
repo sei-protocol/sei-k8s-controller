@@ -220,6 +220,16 @@ func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfi
 	case TaskTypeTeardownNodes:
 		return deserializeTeardownNodes(id, params, cfg)
 
+	// Controller-side fork tasks
+	case "assemble-fork-genesis":
+		return deserializeSidecar[AssembleForkGenesisParams](id, params, buildSC, false)
+	case TaskTypeDeployForkJob:
+		return deserializeDeployForkJob(id, params, cfg)
+	case TaskTypeAwaitForkExport:
+		return deserializeAwaitForkExport(id, params, cfg)
+	case TaskTypeTeardownForkJob:
+		return deserializeTeardownForkJob(id, params, cfg)
+
 	default:
 		return nil, &UnknownTaskTypeError{Type: taskType}
 	}

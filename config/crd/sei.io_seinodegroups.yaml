@@ -111,6 +111,134 @@ spec:
                     minLength: 1
                     pattern: ^[a-z0-9][a-z0-9-]*[a-z0-9]$
                     type: string
+                  fork:
+                    description: |-
+                      Fork configures this genesis ceremony to fork from an existing chain
+                      rather than building genesis from scratch. When set, the controller
+                      prepends state export and transformation tasks to the genesis plan.
+                    properties:
+                      exportJob:
+                        description: |-
+                          ExportJob configures the controller to run a bootstrap Job that
+                          restores a snapshot and executes seid export (Phase 2).
+                          Mutually exclusive with StateExport.
+                        properties:
+                          image:
+                            description: |-
+                              Image is the seid container image compatible with the source chain
+                              at SourceHeight.
+                            minLength: 1
+                            type: string
+                          snapshot:
+                            description: Snapshot configures the snapshot source for
+                              the export Job.
+                            properties:
+                              targetHeight:
+                                description: TargetHeight is the block height the
+                                  node should sync to after restoring.
+                                format: int64
+                                minimum: 1
+                                type: integer
+                            required:
+                            - targetHeight
+                            type: object
+                        required:
+                        - image
+                        - snapshot
+                        type: object
+                      mutations:
+                        description: |-
+                          Mutations is an ordered list of transformations applied to the
+                          exported genesis state before validator injection.
+                        items:
+                          description: |-
+                            GenesisMutation describes a single transformation applied to exported
+                            state during fork genesis assembly.
+                          properties:
+                            address:
+                              description: |-
+                                Address is the bech32 account address to fund.
+                                Required when Type is FundAccount.
+                              type: string
+                            balance:
+                              description: |-
+                                Balance is the coin balance in SDK notation (e.g. "1000000usei").
+                                Required when Type is FundAccount.
+                              type: string
+                            key:
+                              description: |-
+                                Key is the dotted parameter path (e.g. "staking.params.bond_denom").
+                                Required when Type is SetParam.
+                              type: string
+                            type:
+                              description: Type selects the mutation kind.
+                              enum:
+                              - SetParam
+                              - FundAccount
+                              type: string
+                            value:
+                              description: |-
+                                Value is the parameter value as a JSON-encoded string.
+                                Required when Type is SetParam.
+                              type: string
+                          required:
+                          - type
+                          type: object
+                          x-kubernetes-validations:
+                          - message: SetParam requires key and value
+                            rule: 'self.type == ''SetParam'' ? (has(self.key) && has(self.value))
+                              : true'
+                          - message: FundAccount requires address and balance
+                            rule: 'self.type == ''FundAccount'' ? (has(self.address)
+                              && has(self.balance)) : true'
+                        maxItems: 100
+                        type: array
+                      sourceChainId:
+                        description: SourceChainID is the chain ID of the network
+                          being forked.
+                        maxLength: 64
+                        minLength: 1
+                        type: string
+                      sourceHeight:
+                        description: |-
+                          SourceHeight is the block height at which the source chain state
+                          was (or will be) exported.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                      stateExport:
+                        description: |-
+                          StateExport provides pre-exported state from S3 (Phase 1).
+                          Mutually exclusive with ExportJob.
+                        properties:
+                          bucket:
+                            description: Bucket is the S3 bucket containing the exported
+                              state.
+                            minLength: 1
+                            type: string
+                          key:
+                            description: Key is the S3 object key for the exported
+                              state JSON file.
+                            minLength: 1
+                            type: string
+                          region:
+                            description: Region is the AWS region of the S3 bucket.
+                            minLength: 1
+                            type: string
+                        required:
+                        - bucket
+                        - key
+                        - region
+                        type: object
+                    required:
+                    - sourceChainId
+                    - sourceHeight
+                    type: object
+                    x-kubernetes-validations:
+                    - message: one of stateExport or exportJob must be set
+                      rule: has(self.stateExport) || has(self.exportJob)
+                    - message: stateExport and exportJob are mutually exclusive
+                      rule: '!(has(self.stateExport) && has(self.exportJob))'
                   maxCeremonyDuration:
                     description: |-
                       MaxCeremonyDuration is the maximum time from group creation to genesis

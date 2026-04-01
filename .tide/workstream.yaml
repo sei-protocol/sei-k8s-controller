@@ -1,0 +1,38 @@
+workstream:
+  description: "Fork existing chain to private network — extend genesis ceremony with state export and transformation"
+  tier: system
+  started: "2026-04-01T20:00:00Z"
+  updated: "2026-04-01T20:30:00Z"
+
+phases:
+  - name: "Impact Analysis"
+    status: completed
+    completed_at: "2026-04-01T20:10:00Z"
+    outputs:
+      - ".tide/lld-chain-fork.md"
+    notes: "2 repos affected (controller + seictl), 2 new sidecar tasks, 1 new planner, 3 new controller-side tasks (Phase 2), CRD type additions"
+
+  - name: "Component Design"
+    status: completed
+    completed_at: "2026-04-01T20:30:00Z"
+    outputs:
+      - ".tide/lld-chain-fork.md (full LLD with exact type definitions)"
+    notes: "K8s specialist designed controller/CRD/planner. Platform engineer designed sidecar tasks. Cross-reviewed for interface alignment."
+    one_way_doors:
+      - "ForkConfig CRD field name on GenesisCeremonyConfig — approved by user"
+      - "GenesisMutation type names (SetParam, FundAccount) — approved by user"
+
+  - name: "Cross-Review"
+    status: completed
+    completed_at: "2026-04-01T20:30:00Z"
+    notes: "Interface alignment verified between controller task params and sidecar request types"
+
+  - name: "Implementation"
+    status: pending
+    remaining:
+      - "Controller: CRD types, condition detection, fork planner, task types"
+      - "Seictl: export-state task, assemble-fork-genesis task, client builders"
+      - "Tests for both repos"
+
+outstanding_findings: []
+escalations: []

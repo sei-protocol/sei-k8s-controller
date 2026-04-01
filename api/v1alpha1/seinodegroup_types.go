@@ -86,6 +86,104 @@ type HardForkStrategy struct {
 	HaltHeight int64 `json:"haltHeight"`
 }
 
+// ForkConfig configures forking an existing chain's state into a new
+// private network. The controller orchestrates state export (or ingestion
+// of pre-exported state), genesis transformation, and network bootstrap.
+// +kubebuilder:validation:XValidation:rule="has(self.stateExport) || has(self.exportJob)",message="one of stateExport or exportJob must be set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.stateExport) && has(self.exportJob))",message="stateExport and exportJob are mutually exclusive"
+type ForkConfig struct {
+	// SourceChainID is the chain ID of the network being forked.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	SourceChainID string `json:"sourceChainId"`
+
+	// SourceHeight is the block height at which the source chain state
+	// was (or will be) exported.
+	// +kubebuilder:validation:Minimum=1
+	SourceHeight int64 `json:"sourceHeight"`
+
+	// StateExport provides pre-exported state from S3 (Phase 1).
+	// Mutually exclusive with ExportJob.
+	// +optional
+	StateExport *ForkStateExport `json:"stateExport,omitempty"`
+
+	// ExportJob configures the controller to run a bootstrap Job that
+	// restores a snapshot and executes seid export (Phase 2).
+	// Mutually exclusive with StateExport.
+	// +optional
+	ExportJob *ForkExportJob `json:"exportJob,omitempty"`
+
+	// Mutations is an ordered list of transformations applied to the
+	// exported genesis state before validator injection.
+	// +optional
+	// +kubebuilder:validation:MaxItems=100
+	Mutations []GenesisMutation `json:"mutations,omitempty"`
+}
+
+// ForkStateExport references a pre-exported genesis state file in S3.
+type ForkStateExport struct {
+	// Bucket is the S3 bucket containing the exported state.
+	// +kubebuilder:validation:MinLength=1
+	Bucket string `json:"bucket"`
+
+	// Key is the S3 object key for the exported state JSON file.
+	// +kubebuilder:validation:MinLength=1
+	Key string `json:"key"`
+
+	// Region is the AWS region of the S3 bucket.
+	// +kubebuilder:validation:MinLength=1
+	Region string `json:"region"`
+}
+
+// ForkExportJob configures automated seid export via a bootstrap Job (Phase 2).
+type ForkExportJob struct {
+	// Image is the seid container image compatible with the source chain
+	// at SourceHeight.
+	// +kubebuilder:validation:MinLength=1
+	Image string `json:"image"`
+
+	// Snapshot configures the snapshot source for the export Job.
+	Snapshot S3SnapshotSource `json:"snapshot"`
+}
+
+// GenesisMutationType identifies the kind of genesis transformation.
+// +kubebuilder:validation:Enum=SetParam;FundAccount
+type GenesisMutationType string
+
+const (
+	MutationSetParam    GenesisMutationType = "SetParam"
+	MutationFundAccount GenesisMutationType = "FundAccount"
+)
+
+// GenesisMutation describes a single transformation applied to exported
+// state during fork genesis assembly.
+// +kubebuilder:validation:XValidation:rule="self.type == 'SetParam' ? (has(self.key) && has(self.value)) : true",message="SetParam requires key and value"
+// +kubebuilder:validation:XValidation:rule="self.type == 'FundAccount' ? (has(self.address) && has(self.balance)) : true",message="FundAccount requires address and balance"
+type GenesisMutation struct {
+	// Type selects the mutation kind.
+	Type GenesisMutationType `json:"type"`
+
+	// Key is the dotted parameter path (e.g. "staking.params.bond_denom").
+	// Required when Type is SetParam.
+	// +optional
+	Key string `json:"key,omitempty"`
+
+	// Value is the parameter value as a JSON-encoded string.
+	// Required when Type is SetParam.
+	// +optional
+	Value string `json:"value,omitempty"`
+
+	// Address is the bech32 account address to fund.
+	// Required when Type is FundAccount.
+	// +optional
+	Address string `json:"address,omitempty"`
+
+	// Balance is the coin balance in SDK notation (e.g. "1000000usei").
+	// Required when Type is FundAccount.
+	// +optional
+	Balance string `json:"balance,omitempty"`
+}
+
 // GenesisCeremonyConfig configures genesis ceremony orchestration for a node group.
 type GenesisCeremonyConfig struct {
 	// ChainID for the new network.
@@ -117,6 +215,12 @@ type GenesisCeremonyConfig struct {
 	// assembly completion. Default: "15m".
 	// +optional
 	MaxCeremonyDuration *metav1.Duration `json:"maxCeremonyDuration,omitempty"`
+
+	// Fork configures this genesis ceremony to fork from an existing chain
+	// rather than building genesis from scratch. When set, the controller
+	// prepends state export and transformation tasks to the genesis plan.
+	// +optional
+	Fork *ForkConfig `json:"fork,omitempty"`
 }
 
 // GenesisAccount represents a non-validator genesis account to fund.
@@ -277,6 +381,7 @@ const (
 	ConditionServiceMonitorReady     = "ServiceMonitorReady"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
 	ConditionPlanInProgress          = "PlanInProgress"
+	ConditionForkNeeded              = "ForkNeeded"
 )
 
 // +kubebuilder:object:root=true

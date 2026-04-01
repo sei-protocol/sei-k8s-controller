@@ -58,8 +58,12 @@ type GroupPlanner interface {
 // ForGroup returns the appropriate GroupPlanner based on the group's
 // current state and spec. Returns (nil, nil) when no plan is needed.
 func ForGroup(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
-	// Genesis ceremony: needs a plan when genesis is configured, no plan
-	// exists yet, ceremony isn't complete, and all nodes are created.
+	// Fork plan takes priority — it's a specialization of genesis ceremony.
+	if needsForkPlan(group) {
+		return &forkGroupPlanner{}, nil
+	}
+
+	// Standard genesis ceremony.
 	if needsGenesisPlan(group) {
 		return &genesisGroupPlanner{}, nil
 	}
@@ -73,9 +77,27 @@ func ForGroup(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
 	return nil, nil
 }
 
+func needsForkPlan(group *seiv1alpha1.SeiNodeGroup) bool {
+	if group.Spec.Genesis == nil || group.Spec.Genesis.Fork == nil {
+		return false
+	}
+	if group.Status.Plan != nil {
+		return false
+	}
+	for _, c := range group.Status.Conditions {
+		if c.Type == seiv1alpha1.ConditionForkNeeded && c.Status == metav1.ConditionTrue {
+			return int32(len(group.Status.IncumbentNodes)) >= group.Spec.Replicas
+		}
+	}
+	return false
+}
+
 func needsGenesisPlan(group *seiv1alpha1.SeiNodeGroup) bool {
 	if group.Spec.Genesis == nil {
 		return false
+	}
+	if group.Spec.Genesis.Fork != nil {
+		return false // fork is handled by needsForkPlan
 	}
 	if group.Status.ObservedGeneration != 0 {
 		return false // genesis only runs on the first generation

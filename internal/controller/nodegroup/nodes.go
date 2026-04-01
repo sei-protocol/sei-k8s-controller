@@ -41,7 +41,27 @@ func (r *SeiNodeGroupReconciler) reconcileSeiNodes(ctx context.Context, group *s
 	}
 
 	r.detectDeploymentNeeded(group)
+	r.detectForkNeeded(group)
 	return nil
+}
+
+// detectForkNeeded sets the ForkNeeded condition when the group has a fork
+// config and the genesis ceremony hasn't started yet.
+func (r *SeiNodeGroupReconciler) detectForkNeeded(group *seiv1alpha1.SeiNodeGroup) {
+	if group.Spec.Genesis == nil || group.Spec.Genesis.Fork == nil {
+		removeCondition(group, seiv1alpha1.ConditionForkNeeded)
+		return
+	}
+	if hasConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
+		removeCondition(group, seiv1alpha1.ConditionForkNeeded)
+		return
+	}
+	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		return
+	}
+	setCondition(group, seiv1alpha1.ConditionForkNeeded, metav1.ConditionTrue,
+		"ForkConfigured", fmt.Sprintf("Fork from %s at height %d",
+			group.Spec.Genesis.Fork.SourceChainID, group.Spec.Genesis.Fork.SourceHeight))
 }
 
 // detectDeploymentNeeded checks if deployment-worthy fields have changed
