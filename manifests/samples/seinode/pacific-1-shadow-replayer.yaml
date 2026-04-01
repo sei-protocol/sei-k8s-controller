@@ -20,17 +20,9 @@ spec:
     command: ["seid"]
     args: ["start", "--home", "/sei", "--skip-app-hash-validation"]
 
-  genesis:
-    s3:
-      uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
-      region: us-east-2
-
   overrides:
     giga_executor.enabled: "true"
     giga_executor.occ_enabled: "true"
-
-  storage:
-    retainOnDelete: true
 
   replayer:
     peers:
