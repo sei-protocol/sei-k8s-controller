@@ -3,21 +3,20 @@ package task
 import sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 // SnapshotRestoreParams are the serialized fields for snapshot-restore.
+// S3 coordinates are derived by the sidecar from its environment.
+// TargetHeight selects the highest available snapshot <= that height.
 type SnapshotRestoreParams struct {
-	Bucket  string `json:"bucket"`
-	Prefix  string `json:"prefix"`
-	Region  string `json:"region"`
-	ChainID string `json:"chainId"`
+	TargetHeight int64 `json:"targetHeight,omitempty"`
 }
 
 func (p *SnapshotRestoreParams) taskType() string { return sidecar.TaskTypeSnapshotRestore }
 
 func (p *SnapshotRestoreParams) toRequestParams() *map[string]any {
+	if p.TargetHeight <= 0 {
+		return nil
+	}
 	m := map[string]any{
-		"bucket":  p.Bucket,
-		"prefix":  p.Prefix,
-		"region":  p.Region,
-		"chainId": p.ChainID,
+		"targetHeight": p.TargetHeight,
 	}
 	return &m
 }

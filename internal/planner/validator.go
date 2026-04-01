@@ -10,8 +10,6 @@ import (
 )
 
 type validatorPlanner struct {
-	snapshotBucket string
-	snapshotRegion string
 }
 
 func (p *validatorPlanner) Mode() string { return string(seiconfig.ModeValidator) }
@@ -47,7 +45,7 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Ta
 		Overrides: mergeOverrides(nil, node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, v.Peers, v.Snapshot, p.snapshotBucket, p.snapshotRegion, params)
+		return buildBootstrapPlan(node, v.Peers, v.Snapshot, params)
 	}
-	return buildBasePlan(node, v.Peers, v.Snapshot, p.snapshotBucket, p.snapshotRegion, params)
+	return buildBasePlan(node, v.Peers, v.Snapshot, params)
 }

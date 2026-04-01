@@ -115,6 +115,8 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, platform PlatformConfig) c
 			{Name: "SEI_HOME", Value: dataDir},
 			{Name: "SEI_GENESIS_BUCKET", Value: platform.GenesisBucket},
 			{Name: "SEI_GENESIS_REGION", Value: platform.GenesisRegion},
+			{Name: "SEI_SNAPSHOT_BUCKET", Value: platform.SnapshotBucket},
+			{Name: "SEI_SNAPSHOT_REGION", Value: platform.SnapshotRegion},
 		},
 		Ports: []corev1.ContainerPort{
 			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},

@@ -11,8 +11,6 @@ import (
 )
 
 type fullNodePlanner struct {
-	snapshotBucket string
-	snapshotRegion string
 }
 
 func (p *fullNodePlanner) Mode() string { return string(seiconfig.ModeFull) }
@@ -36,9 +34,9 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 		Overrides: mergeOverrides(p.controllerOverrides(node), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, fn.Peers, fn.Snapshot, p.snapshotBucket, p.snapshotRegion, params)
+		return buildBootstrapPlan(node, fn.Peers, fn.Snapshot, params)
 	}
-	return buildBasePlan(node, fn.Peers, fn.Snapshot, p.snapshotBucket, p.snapshotRegion, params)
+	return buildBasePlan(node, fn.Peers, fn.Snapshot, params)
 }
 
 func (p *fullNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
