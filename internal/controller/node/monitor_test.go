@@ -33,7 +33,7 @@ func TestEnsureMonitorTask_SubmitsOnce(t *testing.T) {
 	mock := &mockSidecarClient{submitID: taskID}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -79,7 +79,7 @@ func TestEnsureMonitorTask_Idempotent(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
 		planner.TaskResultExport: {
 			ID:          existingID.String(),
@@ -112,7 +112,7 @@ func TestPollMonitorTasks_Completed(t *testing.T) {
 	}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
 		planner.TaskResultExport: {
 			ID:          taskID.String(),
@@ -166,7 +166,7 @@ func TestPollMonitorTasks_Failed(t *testing.T) {
 	}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
 		planner.TaskResultExport: {
 			ID:          taskID.String(),
@@ -226,7 +226,7 @@ func TestPollMonitorTasks_StillRunning(t *testing.T) {
 	}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
 		planner.TaskResultExport: {
 			ID:          taskID.String(),
@@ -259,7 +259,7 @@ func TestPollMonitorTasks_SkipsCompletedTasks(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
 		planner.TaskResultExport: {
 			ID:          taskID.String(),
@@ -288,7 +288,7 @@ func TestPollMonitorTasks_SidecarLostTask(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
 		planner.TaskResultExport: {
 			ID:          taskID.String(),
@@ -333,7 +333,7 @@ func TestEnsureMonitorTask_SubmitError(t *testing.T) {
 	mock := &mockSidecarClient{submitErr: fmt.Errorf("connection refused")}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -357,7 +357,7 @@ func TestPollMonitorTasks_EmptyMap(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 
 	r, _ := newProgressionReconciler(t, mock, node)
 
@@ -374,7 +374,7 @@ func TestPollMonitorTasks_InvalidUUID(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
 		planner.TaskResultExport: {
 			ID:          "not-a-uuid",
@@ -419,7 +419,7 @@ func TestPollMonitorTasks_TransientGetTaskError(t *testing.T) {
 	}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
 		planner.TaskResultExport: {
 			ID:          taskID.String(),
@@ -463,7 +463,7 @@ func TestPollMonitorTasks_FailedWithUnknownError(t *testing.T) {
 	}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	node.Status.MonitorTasks = map[string]seiv1alpha1.MonitorTask{
 		planner.TaskResultExport: {
 			ID:          taskID.String(),
@@ -499,7 +499,7 @@ func TestReconcileRunning_MonitorMode_SubmitsMonitorTask(t *testing.T) {
 	mock := &mockSidecarClient{submitID: taskID}
 	node := monitorReplayerNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
+	node.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 
 	r, c := newProgressionReconciler(t, mock, node)
 

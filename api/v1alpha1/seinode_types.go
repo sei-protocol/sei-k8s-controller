@@ -189,9 +189,10 @@ type SeiNodeStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// InitPlan tracks the initialization task sequence for this node.
+	// Plan tracks the active task sequence for this node. A planner generates
+	// the plan based on the node's current state and conditions.
 	// +optional
-	InitPlan *TaskPlan `json:"initPlan,omitempty"`
+	Plan *TaskPlan `json:"plan,omitempty"`
 
 	// MonitorTasks tracks long-running sidecar tasks the controller polls
 	// for completion. Keyed by task type for idempotent submission.

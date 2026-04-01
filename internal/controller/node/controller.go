@@ -103,18 +103,18 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 }
 
-// reconcilePending builds the unified InitPlan and transitions to Initializing.
+// reconcilePending builds the unified Plan and transitions to Initializing.
 // For genesis ceremony nodes the plan includes artifact generation and assembly
 // steps. For bootstrap nodes the plan includes controller-side Job lifecycle
 // tasks followed by production config. All orchestration lives in the plan.
 func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alpha1.SeiNode, p planner.NodePlanner) (ctrl.Result, error) {
 	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 
-	initPlan, err := p.BuildPlan(node)
+	plan, err := p.BuildPlan(node)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("building init plan: %w", err)
+		return ctrl.Result{}, fmt.Errorf("building plan: %w", err)
 	}
-	node.Status.InitPlan = initPlan
+	node.Status.Plan = plan
 	node.Status.Phase = seiv1alpha1.PhaseInitializing
 
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
@@ -130,12 +130,12 @@ func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alp
 	return planner.ResultRequeueImmediate, nil
 }
 
-// reconcileInitializing drives the unified InitPlan to completion. For
+// reconcileInitializing drives the unified Plan to completion. For
 // bootstrap nodes the StatefulSet and Service are created only after
 // bootstrap teardown is complete (to avoid RWO PVC conflicts). For
 // non-bootstrap nodes they are created immediately.
 func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
-	plan := node.Status.InitPlan
+	plan := node.Status.Plan
 
 	if !planner.NeedsBootstrap(node) || planner.IsBootstrapComplete(plan) {
 		if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
