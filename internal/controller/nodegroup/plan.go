@@ -82,6 +82,12 @@ func (r *SeiNodeGroupReconciler) completePlan(ctx context.Context, group *seiv1a
 		group.Status.Deployment = nil
 	}
 
+	// Genesis/fork ceremony finalization.
+	if group.Spec.Genesis != nil && group.Status.Deployment == nil {
+		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue,
+			"CeremonyComplete", "Genesis ceremony completed")
+	}
+
 	group.Status.Plan = nil
 	clearPlanInProgress(group, "PlanComplete", "Plan completed successfully")
 

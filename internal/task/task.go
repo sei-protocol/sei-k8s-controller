@@ -221,7 +221,7 @@ func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfi
 		return deserializeTeardownNodes(id, params, cfg)
 
 	// Fork genesis assembly (sidecar task)
-	case "assemble-fork-genesis":
+	case "assemble-genesis-fork":
 		return deserializeSidecar[AssembleForkGenesisParams](id, params, buildSC, false)
 
 	default:

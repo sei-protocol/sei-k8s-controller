@@ -12,7 +12,7 @@ type AssembleForkGenesisParams struct {
 	Nodes          []GenesisNodeParam `json:"nodes"`
 }
 
-func (p *AssembleForkGenesisParams) taskType() string { return "assemble-fork-genesis" }
+func (p *AssembleForkGenesisParams) taskType() string { return "assemble-genesis-fork" }
 
 func (p *AssembleForkGenesisParams) toRequestParams() *map[string]any {
 	nodes := make([]any, len(p.Nodes))

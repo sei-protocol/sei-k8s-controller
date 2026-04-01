@@ -9,7 +9,7 @@ import (
 
 const (
 	groupAssemblyMaxRetries = 60
-	TaskAssembleForkGenesis = "assemble-fork-genesis"
+	TaskAssembleGenesisFork = "assemble-genesis-fork"
 )
 
 type genesisGroupPlanner struct{}
@@ -34,7 +34,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 	var assembleParams any
 
 	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) {
-		assembleTaskType = TaskAssembleForkGenesis
+		assembleTaskType = TaskAssembleGenesisFork
 		assembleParams = &task.AssembleForkGenesisParams{
 			SourceChainID:  group.Spec.Genesis.Fork.SourceChainID,
 			ChainID:        group.Spec.Genesis.ChainID,
