@@ -29,8 +29,3 @@ spec:
 
     snapshotGeneration:
       keepRecent: 5
-      destination:
-        s3:
-          bucket: dev-sei-snapshots
-          prefix: pacific-1/
-          region: us-east-2
