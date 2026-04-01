@@ -164,24 +164,12 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.
 		if spec.ChainID == "" {
 			spec.ChainID = gc.ChainID
 		}
-		s3 := genesisS3Config(group)
 		spec.Validator.GenesisCeremony = &seiv1alpha1.GenesisCeremonyNodeConfig{
 			ChainID:        gc.ChainID,
 			StakingAmount:  gc.StakingAmount,
 			AccountBalance: gc.AccountBalance,
 			GenesisParams:  marshalOverrides(gc.Overrides),
 			Index:          int32(ordinal),
-			ArtifactS3: seiv1alpha1.GenesisS3Destination{
-				Bucket: s3.Bucket,
-				Prefix: s3.Prefix,
-				Region: s3.Region,
-			},
-		}
-		spec.Genesis = seiv1alpha1.GenesisConfiguration{
-			S3: &seiv1alpha1.GenesisS3Source{
-				URI:    fmt.Sprintf("s3://%s/%sgenesis.json", s3.Bucket, s3.Prefix),
-				Region: s3.Region,
-			},
 		}
 	}
 

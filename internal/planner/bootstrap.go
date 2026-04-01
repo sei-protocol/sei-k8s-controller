@@ -1,9 +1,9 @@
 package planner
 
 import (
-	"fmt"
 	"slices"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -179,28 +179,17 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 		}
 	case TaskUploadGenesisArtifacts:
 		return &task.UploadGenesisArtifactsParams{
-			S3Bucket: gc.ArtifactS3.Bucket,
-			S3Prefix: gc.ArtifactS3.Prefix,
-			S3Region: gc.ArtifactS3.Region,
 			NodeName: node.Name,
 		}
 	case TaskConfigureGenesis:
-		s3URI := fmt.Sprintf("s3://%s/%sgenesis.json", gc.ArtifactS3.Bucket, gc.ArtifactS3.Prefix)
-		return &task.ConfigureGenesisParams{
-			URI:    s3URI,
-			Region: gc.ArtifactS3.Region,
-		}
+		return &task.ConfigureGenesisParams{}
 	case TaskConfigApply:
 		return &task.ConfigApplyParams{
-			Mode:      "validator",
+			Mode:      string(seiconfig.ModeValidator),
 			Overrides: mergeOverrides(nil, node.Spec.Overrides),
 		}
 	case TaskSetGenesisPeers:
-		return &task.SetGenesisPeersParams{
-			S3Bucket: gc.ArtifactS3.Bucket,
-			S3Key:    gc.ArtifactS3.Prefix + "peers.json",
-			S3Region: gc.ArtifactS3.Region,
-		}
+		return &task.SetGenesisPeersParams{}
 	case TaskConfigValidate:
 		return &task.ConfigValidateParams{}
 	case TaskMarkReady:
@@ -208,19 +197,6 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 	default:
 		return nil
 	}
-}
-
-// AwaitConditionParams builds await-condition params from a node's snapshot source.
-func AwaitConditionParams(node *seiv1alpha1.SeiNode) (*task.AwaitConditionParams, error) {
-	snap := node.Spec.SnapshotSource()
-	if snap == nil || snap.S3 == nil || snap.S3.TargetHeight <= 0 {
-		return nil, fmt.Errorf("node %s/%s has no valid S3 targetHeight", node.Namespace, node.Name)
-	}
-	return &task.AwaitConditionParams{
-		Condition:    sidecar.ConditionHeight,
-		TargetHeight: snap.S3.TargetHeight,
-		Action:       sidecar.ActionSIGTERM,
-	}, nil
 }
 
 // SnapshotUploadMonitorTask returns a snapshot-upload TaskRequest if applicable.

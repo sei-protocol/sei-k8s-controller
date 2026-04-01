@@ -1,9 +1,6 @@
 package observability
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
@@ -47,41 +44,5 @@ func EmitPhaseGauge(gauge *prometheus.GaugeVec, ns, name, current string, allPha
 func DeletePhaseGauge(gauge *prometheus.GaugeVec, ns, name string, allPhases []string) {
 	for _, p := range allPhases {
 		gauge.DeleteLabelValues(ns, name, p)
-	}
-}
-
-// Known sidecar route templates for label normalization.
-var knownRoutes = map[string]string{
-	"/v0/tasks":   "/v0/tasks",
-	"/v0/healthz": "/v0/healthz",
-	"/v0/status":  "/v0/status",
-}
-
-// NormalizeRoute maps raw HTTP paths to bounded route templates
-// to prevent unbounded cardinality from parameterised paths.
-func NormalizeRoute(path string) string {
-	if r, ok := knownRoutes[path]; ok {
-		return r
-	}
-	if strings.HasPrefix(path, "/v0/tasks/") {
-		return "/v0/tasks/:id"
-	}
-	return "other"
-}
-
-// NormalizeStatusCode buckets HTTP status codes into bounded classes
-// to prevent unbounded cardinality from unexpected status codes.
-func NormalizeStatusCode(code int) string {
-	switch {
-	case code >= 200 && code < 300:
-		return "2xx"
-	case code >= 300 && code < 400:
-		return "3xx"
-	case code >= 400 && code < 500:
-		return "4xx"
-	case code >= 500 && code < 600:
-		return "5xx"
-	default:
-		return fmt.Sprintf("%dxx", code/100)
 	}
 }

@@ -101,7 +101,16 @@ func managedByAnnotations() map[string]string {
 // so both the chain binary and sidecar images are included.
 func templateHash(spec *seiv1alpha1.SeiNodeSpec) string {
 	h := sha256.New()
+	h.Write([]byte(spec.ChainID))
 	h.Write([]byte(spec.Image))
+	if spec.Entrypoint != nil {
+		for _, c := range spec.Entrypoint.Command {
+			h.Write([]byte(c))
+		}
+		for _, a := range spec.Entrypoint.Args {
+			h.Write([]byte(a))
+		}
+	}
 	if spec.Sidecar != nil {
 		h.Write([]byte(spec.Sidecar.Image))
 	}

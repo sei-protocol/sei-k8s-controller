@@ -90,7 +90,7 @@ func TestNodeReconcile_NotFound(t *testing.T) {
 	g.Expect(res).To(Equal(ctrl.Result{}))
 }
 
-func TestNodeReconcile_GenesisNode_CreateStatefulSetAndService(t *testing.T) {
+func TestNodeReconcile_ValidatorNode_CreateStatefulSetAndService(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
@@ -114,31 +114,16 @@ func TestNodeReconcile_GenesisNode_CreateStatefulSetAndService(t *testing.T) {
 	g.Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
 }
 
-func TestNodeReconcile_GenesisNode_NoPVCCreated(t *testing.T) {
+func TestNodeReconcile_AddsFinalizer(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := newGenesisNode("mynet-0", "default")
+	node := newSnapshotNode("snap-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
-	g.Expect(err).NotTo(HaveOccurred())
+	_, _ = r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
 
-	pvcList := &corev1.PersistentVolumeClaimList{}
-	g.Expect(c.List(ctx, pvcList, client.InNamespace("default"))).To(Succeed())
-	g.Expect(pvcList.Items).To(BeEmpty())
-}
-
-func TestNodeReconcile_GenesisNode_AddsFinalizer(t *testing.T) {
-	g := NewWithT(t)
-	ctx := context.Background()
-
-	node := newGenesisNode("mynet-0", "default")
-	r, c := newNodeReconciler(t, node)
-
-	_, _ = r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
-
-	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
+	fetched := getSeiNode(t, ctx, c, "snap-0", "default")
 	g.Expect(fetched.Finalizers).To(ContainElement(nodeFinalizerName))
 }
 
@@ -146,12 +131,12 @@ func TestNodeReconcile_StatefulSet_Idempotent(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := newGenesisNode("mynet-0", "default")
+	node := newSnapshotNode("snap-0", "default")
 	r, c := newNodeReconciler(t, node)
 
 	// Drive through Pending -> Initializing, then one more for idempotency.
 	for range 5 {
-		_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
+		_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())
 	}
 
@@ -193,33 +178,6 @@ func TestNodeReconcile_SnapshotNode_StatefulSetHasInitContainers(t *testing.T) {
 	g.Expect(sts.Spec.Template.Spec.InitContainers).To(HaveLen(2))
 	g.Expect(sts.Spec.Template.Spec.InitContainers[0].Name).To(Equal("seid-init"))
 	g.Expect(sts.Spec.Template.Spec.InitContainers[1].Name).To(Equal("sei-sidecar"))
-}
-
-func TestNodeDeletion_GenesisNode_RemovesFinalizerNoPVCDeletion(t *testing.T) {
-	g := NewWithT(t)
-	ctx := context.Background()
-
-	node := newGenesisNode("mynet-0", "default")
-	node.Finalizers = []string{nodeFinalizerName}
-
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: "data-mynet-0", Namespace: "default"},
-	}
-
-	r, c := newNodeReconciler(t, node, pvc)
-
-	g.Expect(c.Delete(ctx, node)).To(Succeed())
-	_ = c.Get(ctx, types.NamespacedName{Name: "mynet-0", Namespace: "default"}, node)
-
-	_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
-	g.Expect(err).NotTo(HaveOccurred())
-
-	remaining := &corev1.PersistentVolumeClaim{}
-	g.Expect(c.Get(ctx, types.NamespacedName{Name: "data-mynet-0", Namespace: "default"}, remaining)).To(Succeed())
-
-	fetched := &seiv1alpha1.SeiNode{}
-	_ = c.Get(ctx, types.NamespacedName{Name: "mynet-0", Namespace: "default"}, fetched)
-	g.Expect(fetched.Finalizers).NotTo(ContainElement(nodeFinalizerName))
 }
 
 func TestNodeDeletion_SnapshotNode_WithoutRetain_DeletesPVC(t *testing.T) {

@@ -17,8 +17,8 @@ import (
 
 const (
 	bootstrapTerminationGracePeriod = int64(120)
-	bootstrapDataDir                = "/sei"
-	bootstrapDefaultSidecarImage    = "ghcr.io/sei-protocol/seictl@sha256:63860a7cf1810e70cc8647d72ff705f87a203250b12bbdec2f88f26b850b628e"
+	bootstrapDataDir                = platform.DataDir
+	bootstrapDefaultSidecarImage    = platform.DefaultSidecarImage
 	bootstrapNodeLabel              = "sei.io/node"
 	bootstrapComponentLabel         = "sei.io/component"
 )
@@ -122,6 +122,8 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 			{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
 			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
 			{Name: "SEI_HOME", Value: bootstrapDataDir},
+			{Name: "SEI_GENESIS_BUCKET", Value: platformCfg.GenesisBucket},
+			{Name: "SEI_GENESIS_REGION", Value: platformCfg.GenesisRegion},
 		},
 		Ports: []corev1.ContainerPort{
 			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
@@ -231,9 +233,6 @@ func bootstrapSidecarPort(node *seiv1alpha1.SeiNode) int32 {
 }
 
 func bootstrapPVCClaimName(node *seiv1alpha1.SeiNode) string {
-	if node.Spec.Genesis.PVC != nil {
-		return node.Spec.Genesis.PVC.DataPVC
-	}
 	return fmt.Sprintf("data-%s", node.Name)
 }
 

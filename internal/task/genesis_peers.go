@@ -20,9 +20,6 @@ type CollectAndSetPeersParams struct {
 	GroupName string   `json:"groupName"`
 	Namespace string   `json:"namespace"`
 	NodeNames []string `json:"nodeNames"`
-	S3Bucket  string   `json:"s3Bucket"`
-	S3Prefix  string   `json:"s3Prefix"`
-	S3Region  string   `json:"s3Region"`
 }
 
 type collectAndSetPeersExecution struct {
@@ -53,18 +50,6 @@ func (e *collectAndSetPeersExecution) Execute(ctx context.Context) error {
 
 	if err := e.setPeersOnNodes(ctx, peers); err != nil {
 		return fmt.Errorf("setting peers: %w", err) // transient
-	}
-
-	group, err := ResourceAs[*seiv1alpha1.SeiNodeGroup](e.cfg)
-	if err != nil {
-		return Terminal(err)
-	}
-
-	genesisURI := fmt.Sprintf("s3://%s/%sgenesis.json", e.params.S3Bucket, e.params.S3Prefix)
-	patch := client.MergeFrom(group.DeepCopy())
-	group.Status.GenesisS3URI = genesisURI
-	if err := e.cfg.KubeClient.Status().Patch(ctx, group, patch); err != nil {
-		return fmt.Errorf("recording genesis S3 URI: %w", err) // transient
 	}
 
 	e.complete()

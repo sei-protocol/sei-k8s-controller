@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	. "github.com/onsi/gomega"
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	corev1 "k8s.io/api/core/v1"
@@ -147,7 +148,7 @@ func snapshotNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{},
+
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3:          &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
@@ -165,9 +166,6 @@ func peerSyncNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{
-				S3: &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/atlantic-2/genesis.json", Region: "us-east-2"},
-			},
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Peers: []seiv1alpha1.PeerSource{
 					{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
@@ -185,11 +183,8 @@ func genesisNode() *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node", Namespace: "default", Generation: 1},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "arctic-1",
-			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{
-				PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-pvc"},
-			},
+			ChainID:   "arctic-1",
+			Image:     "sei:latest",
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
 		},
@@ -202,7 +197,7 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{},
+
 			Archive: &seiv1alpha1.ArchiveSpec{
 				Peers: []seiv1alpha1.PeerSource{{
 					EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
@@ -228,9 +223,6 @@ func replayerNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "pacific-1",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{
-				S3: &seiv1alpha1.GenesisS3Source{URI: "s3://sei-testnet-genesis-config/pacific-1/genesis.json", Region: "us-east-2"},
-			},
 			Replayer: &seiv1alpha1.ReplayerSpec{
 				Snapshot: seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
@@ -394,6 +386,7 @@ func TestBuildPlan_ParamsRoundTrip(t *testing.T) {
 }
 
 func TestConfigApply_ParamsFromPlan(t *testing.T) {
+	g := NewWithT(t)
 	node := snapshotNode()
 	node.Spec.Overrides = map[string]string{
 		"giga_executor.enabled": "true",
@@ -408,20 +401,12 @@ func TestConfigApply_ParamsFromPlan(t *testing.T) {
 			break
 		}
 	}
-	if configTask == nil {
-		t.Fatal("no config-apply task in plan")
-	}
+	g.Expect(configTask).NotTo(BeNil(), "no config-apply task in plan")
 
 	var params task.ConfigApplyParams
-	if err := json.Unmarshal(configTask.Params.Raw, &params); err != nil {
-		t.Fatalf("unmarshal error: %v", err)
-	}
-	if params.Mode != string(seiconfig.ModeFull) {
-		t.Errorf("Mode = %q, want %q", params.Mode, seiconfig.ModeFull)
-	}
-	if params.Overrides["giga_executor.enabled"] != "true" {
-		t.Errorf("missing user override giga_executor.enabled")
-	}
+	g.Expect(json.Unmarshal(configTask.Params.Raw, &params)).To(Succeed())
+	g.Expect(params.Mode).To(Equal(string(seiconfig.ModeFull)))
+	g.Expect(params.Overrides["giga_executor.enabled"]).To(Equal("true"))
 }
 
 func assertProgression(t *testing.T, got, want []string) {
@@ -691,7 +676,6 @@ func TestPlannerForNode_NoSubSpec(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "test",
 			Image:   "sei:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{},
 		},
 	}
 	_, err := planner.ForNode(node, testSnapshotRegion)
@@ -798,14 +782,11 @@ func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
 // --- Result export tests ---
 
 func TestResultExportMonitorTask_ReplayerWithExport(t *testing.T) {
+	g := NewWithT(t)
 	node := monitorReplayerNode()
 	req := planner.ResultExportMonitorTask(node, platformtest.Config())
-	if req == nil {
-		t.Fatal("expected non-nil TaskRequest")
-	}
-	if req.Type != planner.TaskResultExport {
-		t.Errorf("Type = %q, want %q", req.Type, planner.TaskResultExport)
-	}
+	g.Expect(req).NotTo(BeNil())
+	g.Expect(req.Type).To(Equal(planner.TaskResultExport))
 }
 
 func TestResultExportMonitorTask_ReplayerWithoutExport(t *testing.T) {
@@ -819,13 +800,10 @@ func TestResultExportMonitorTask_ReplayerWithoutExport(t *testing.T) {
 // --- Snapshot upload tests ---
 
 func TestSnapshotUploadMonitorTask_WithDestination(t *testing.T) {
+	g := NewWithT(t)
 	req := planner.SnapshotUploadMonitorTask(snapshotterNode())
-	if req == nil {
-		t.Fatal("expected non-nil request")
-	}
-	if req.Type != planner.TaskSnapshotUpload {
-		t.Errorf("Type = %q, want %q", req.Type, planner.TaskSnapshotUpload)
-	}
+	g.Expect(req).NotTo(BeNil())
+	g.Expect(req.Type).To(Equal(planner.TaskSnapshotUpload))
 }
 
 func TestSnapshotUploadMonitorTask_NoDestination(t *testing.T) {

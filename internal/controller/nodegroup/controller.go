@@ -74,7 +74,7 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Snapshot the status before any reconciliation mutates it in memory.
 	// Conditions set during networking/monitoring reconciliation are captured
 	// in the diff when updateStatus patches against this base.
-	statusBase := client.MergeFrom(group.DeepCopy())
+	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
 	if err := timeSubstep("reconcileSeiNodes", func() error {
@@ -173,7 +173,7 @@ func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv
 }
 
 func shouldRequeue(result ctrl.Result) bool {
-	return result.RequeueAfter > 0 || result.Requeue
+	return result.RequeueAfter > 0
 }
 
 // SetupWithManager sets up the controller with the Manager.

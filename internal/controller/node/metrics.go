@@ -57,15 +57,6 @@ var (
 		[]string{"namespace", "name"},
 	)
 
-	sidecarRequestDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "sei_controller_sidecar_request_duration_seconds",
-			Help:    "Duration of HTTP requests to the seictl sidecar",
-			Buckets: observability.ReconcileBuckets,
-		},
-		[]string{"namespace", "method", "route", "status_code"},
-	)
-
 	sidecarUnreachableTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "sei_controller_sidecar_unreachable_total",
@@ -97,7 +88,6 @@ func init() {
 		nodePhaseTransitions,
 		nodeInitDuration,
 		nodeLastInitDuration,
-		sidecarRequestDuration,
 		sidecarUnreachableTotal,
 		monitorTaskCompletedTotal,
 		monitorTaskStatus,

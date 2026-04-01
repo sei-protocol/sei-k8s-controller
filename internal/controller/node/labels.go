@@ -5,12 +5,13 @@ import (
 	"maps"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
 const (
 	nodeLabel           = "sei.io/node"
-	dataDir             = "/sei"
-	defaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:63860a7cf1810e70cc8647d72ff705f87a203250b12bbdec2f88f26b850b628e"
+	dataDir             = platform.DataDir
+	defaultSidecarImage = platform.DefaultSidecarImage
 )
 
 // resourceLabelsForNode returns labels for the StatefulSet pod template.

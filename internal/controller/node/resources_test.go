@@ -23,9 +23,6 @@ func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unpa
 				Command: []string{"seid"},
 				Args:    []string{"start"},
 			},
-			Genesis: seiv1alpha1.GenesisConfiguration{
-				PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-mynet-0"},
-			},
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
@@ -38,7 +35,6 @@ func newSnapshotNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unp
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "sei-test",
 			Image:   "ghcr.io/sei-protocol/seid:latest",
-			Genesis: seiv1alpha1.GenesisConfiguration{},
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{
@@ -359,9 +355,12 @@ func TestSidecarContainer_EnvVars(t *testing.T) {
 	sts := generateNodeStatefulSet(node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
+	cfg := platformtest.Config()
 	g.Expect(envValue(sc.Env, "SEI_CHAIN_ID")).To(Equal(node.Spec.ChainID))
 	g.Expect(envValue(sc.Env, "SEI_SIDECAR_PORT")).To(Equal("7777"))
 	g.Expect(envValue(sc.Env, "SEI_HOME")).To(Equal(dataDir))
+	g.Expect(envValue(sc.Env, "SEI_GENESIS_BUCKET")).To(Equal(cfg.GenesisBucket))
+	g.Expect(envValue(sc.Env, "SEI_GENESIS_REGION")).To(Equal(cfg.GenesisRegion))
 }
 
 func TestSidecarContainer_DataVolumeMount(t *testing.T) {
@@ -604,78 +603,4 @@ func TestGenerateNodeDataPVC(t *testing.T) {
 
 	storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 	g.Expect(storage.String()).To(Equal("2000Gi"))
-}
-
-// --- S3 URI parsing ---
-
-func TestParseS3URI(t *testing.T) {
-	tests := []struct {
-		uri        string
-		wantBucket string
-		wantPrefix string
-	}{
-		{"s3://my-bucket/path/to/prefix", "my-bucket", "path/to/prefix"},
-		{"s3://my-bucket/", "my-bucket", ""},
-		{"s3://my-bucket", "my-bucket", ""},
-		{"not-a-uri", "not-a-uri", ""},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.uri, func(t *testing.T) {
-			g := NewWithT(t)
-			bucket, prefix := parseS3URI(tc.uri)
-			g.Expect(bucket).To(Equal(tc.wantBucket))
-			g.Expect(prefix).To(Equal(tc.wantPrefix))
-		})
-	}
-}
-
-// --- Genesis configuration ---
-
-func TestGenesisConfiguration_PVCOnly(t *testing.T) {
-	g := NewWithT(t)
-	gc := seiv1alpha1.GenesisConfiguration{
-		PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-0"},
-	}
-	count := genesisSourceCount(gc)
-	g.Expect(count).To(Equal(1), "PVC-only should have exactly one source set")
-}
-
-func TestGenesisConfiguration_S3Only(t *testing.T) {
-	g := NewWithT(t)
-	gc := seiv1alpha1.GenesisConfiguration{
-		S3: &seiv1alpha1.GenesisS3Source{URI: "s3://bucket/genesis.json", Region: "us-east-1"},
-	}
-	count := genesisSourceCount(gc)
-	g.Expect(count).To(Equal(1), "S3-only should have exactly one source set")
-}
-
-func TestGenesisConfiguration_RejectsBoth(t *testing.T) {
-	g := NewWithT(t)
-	gc := seiv1alpha1.GenesisConfiguration{
-		PVC: &seiv1alpha1.GenesisPVCSource{DataPVC: "data-0"},
-		S3:  &seiv1alpha1.GenesisS3Source{URI: "s3://bucket/genesis.json", Region: "us-east-1"},
-	}
-	count := genesisSourceCount(gc)
-	g.Expect(count).To(Equal(2), "both PVC and S3 set should violate at-most-one-of")
-}
-
-func TestGenesisConfiguration_AllowsNeither(t *testing.T) {
-	g := NewWithT(t)
-	gc := seiv1alpha1.GenesisConfiguration{}
-	count := genesisSourceCount(gc)
-	g.Expect(count).To(Equal(0), "neither PVC nor S3 is valid (uses default genesis)")
-}
-
-// genesisSourceCount counts how many genesis source fields are set,
-// mirroring the CEL rule: (has(pvc)?1:0) + (has(s3)?1:0) <= 1
-func genesisSourceCount(gc seiv1alpha1.GenesisConfiguration) int {
-	count := 0
-	if gc.PVC != nil {
-		count++
-	}
-	if gc.S3 != nil {
-		count++
-	}
-	return count
 }

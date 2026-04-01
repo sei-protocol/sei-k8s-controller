@@ -138,40 +138,6 @@ type ResultExportConfig struct {
 	CanonicalRPC string `json:"canonicalRpc"`
 }
 
-// GenesisConfiguration defines where genesis data is sourced.
-// At most one of PVC or S3 may be set. When neither is set and the chain ID
-// is a well-known network (pacific-1, atlantic-2, arctic-1), the sidecar
-// writes the embedded genesis from sei-config. Unknown chains fall back to
-// the default genesis produced by seid init.
-// +kubebuilder:validation:XValidation:rule="(has(self.pvc) ? 1 : 0) + (has(self.s3) ? 1 : 0) <= 1",message="at most one of pvc or s3 may be set"
-type GenesisConfiguration struct {
-	// PVC references a pre-provisioned PVC populated by SeiNodePool's genesis ceremony.
-	// +optional
-	PVC *GenesisPVCSource `json:"pvc,omitempty"`
-
-	// S3 configures the sidecar to download genesis.json from an S3 bucket.
-	// +optional
-	S3 *GenesisS3Source `json:"s3,omitempty"`
-}
-
-// GenesisPVCSource references a data PVC that SeiNodePool's prep Job already populated.
-type GenesisPVCSource struct {
-	// DataPVC is the name of the pre-populated PVC in the same namespace.
-	// +kubebuilder:validation:MinLength=1
-	DataPVC string `json:"dataPVC"`
-}
-
-// GenesisS3Source configures download of genesis.json from an S3 bucket.
-type GenesisS3Source struct {
-	// URI is the S3 URI of the genesis.json file (s3://bucket/key format).
-	// +kubebuilder:validation:MinLength=1
-	URI string `json:"uri"`
-
-	// Region is the AWS region for S3 access.
-	// +optional
-	Region string `json:"region,omitempty"`
-}
-
 // EntrypointConfig defines the command and arguments for the node process.
 type EntrypointConfig struct {
 	// +kubebuilder:validation:MinItems=1

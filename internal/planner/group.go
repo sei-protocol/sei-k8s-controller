@@ -14,12 +14,11 @@ type genesisGroupPlanner struct{}
 // BuildPlan constructs a TaskPlan for the SeiNodeGroup that:
 //  1. Assembles all per-node genesis artifacts into a final genesis.json
 //     (retried until the sidecar succeeds).
-//  2. Waits for all child SeiNodes to reach PhaseRunning, confirming
-//     they picked up the genesis.
+//  2. Collects node IDs and sets persistent_peers on each child node.
+//  3. Waits for all child SeiNodes to reach PhaseRunning.
 func (p *genesisGroupPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
 ) (*seiv1alpha1.TaskPlan, error) {
-	s3 := groupGenesisS3(group)
 	incumbentNodes := group.Status.IncumbentNodes
 
 	nodeParams := make([]task.GenesisNodeParam, len(incumbentNodes))
@@ -28,10 +27,6 @@ func (p *genesisGroupPlanner) BuildPlan(
 	}
 
 	assembleParams := &task.AssembleAndUploadGenesisParams{
-		S3Bucket:       s3.Bucket,
-		S3Prefix:       s3.Prefix,
-		S3Region:       s3.Region,
-		ChainID:        group.Spec.Genesis.ChainID,
 		AccountBalance: group.Spec.Genesis.AccountBalance,
 		Namespace:      group.Namespace,
 		Nodes:          nodeParams,
@@ -47,9 +42,6 @@ func (p *genesisGroupPlanner) BuildPlan(
 		GroupName: group.Name,
 		Namespace: group.Namespace,
 		NodeNames: incumbentNodes,
-		S3Bucket:  s3.Bucket,
-		S3Prefix:  s3.Prefix,
-		S3Region:  s3.Region,
 	}
 	collectPeersTask, err := buildGroupPlannedTask(group.Name, task.TaskTypeCollectAndSetPeers, collectPeersParams)
 	if err != nil {
@@ -86,21 +78,4 @@ func buildGroupPlannedTask(groupName, taskType string, params any) (seiv1alpha1.
 		Status: seiv1alpha1.TaskPending,
 		Params: p,
 	}, nil
-}
-
-// groupGenesisS3 returns the S3 destination for a group's genesis artifacts.
-func groupGenesisS3(group *seiv1alpha1.SeiNodeGroup) seiv1alpha1.GenesisS3Destination {
-	gc := group.Spec.Genesis
-	if gc.GenesisS3 != nil {
-		dest := *gc.GenesisS3
-		if dest.Prefix == "" {
-			dest.Prefix = fmt.Sprintf("%s/%s/", gc.ChainID, group.Name)
-		}
-		return dest
-	}
-	return seiv1alpha1.GenesisS3Destination{
-		Bucket: "sei-genesis-ceremony-artifacts",
-		Prefix: fmt.Sprintf("%s/%s/", gc.ChainID, group.Name),
-		Region: "eu-central-1",
-	}
 }

@@ -41,6 +41,7 @@ func TestEnsureMonitorTask_SubmitsOnce(t *testing.T) {
 	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	if req == nil {
 		t.Fatal("expected non-nil monitor task request")
+		return
 	}
 
 	if err := r.ensureMonitorTask(ctx, node, mock, *req); err != nil {
@@ -146,6 +147,7 @@ func TestPollMonitorTasks_Completed(t *testing.T) {
 	cond := meta.FindStatusCondition(updated.Status.Conditions, ConditionResultExportComplete)
 	if cond == nil {
 		t.Fatal("expected ResultExportComplete condition")
+		return
 	}
 	if cond.Status != metav1.ConditionTrue {
 		t.Errorf("condition status = %q, want True", cond.Status)
@@ -199,6 +201,7 @@ func TestPollMonitorTasks_Failed(t *testing.T) {
 	cond := meta.FindStatusCondition(updated.Status.Conditions, ConditionResultExportComplete)
 	if cond == nil {
 		t.Fatal("expected ResultExportComplete condition")
+		return
 	}
 	if cond.Status != metav1.ConditionFalse {
 		t.Errorf("condition status = %q, want False", cond.Status)
@@ -317,6 +320,7 @@ func TestPollMonitorTasks_SidecarLostTask(t *testing.T) {
 	cond := meta.FindStatusCondition(updated.Status.Conditions, ConditionResultExportComplete)
 	if cond == nil {
 		t.Fatal("expected ResultExportComplete condition")
+		return
 	}
 	if cond.Reason != ReasonTaskLost {
 		t.Errorf("condition reason = %q, want %q", cond.Reason, ReasonTaskLost)
@@ -401,6 +405,7 @@ func TestPollMonitorTasks_InvalidUUID(t *testing.T) {
 	cond := meta.FindStatusCondition(updated.Status.Conditions, ConditionResultExportComplete)
 	if cond == nil {
 		t.Fatal("expected ResultExportComplete condition")
+		return
 	}
 	if cond.Reason != ReasonTaskFailed {
 		t.Errorf("condition reason = %q, want %q", cond.Reason, ReasonTaskFailed)
@@ -526,12 +531,14 @@ func TestResultExportMonitorTask_ReturnsRequest(t *testing.T) {
 	req := planner.ResultExportMonitorTask(node, platformtest.Config())
 	if req == nil {
 		t.Fatal("expected non-nil TaskRequest")
+		return
 	}
 	if req.Type != planner.TaskResultExport {
 		t.Errorf("Type = %q, want %q", req.Type, planner.TaskResultExport)
 	}
 	if req.Params == nil {
 		t.Fatal("expected non-nil params")
+		return
 	}
 	params := *req.Params
 	if params["canonicalRpc"] != "http://canonical-rpc:26657" {

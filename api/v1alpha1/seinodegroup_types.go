@@ -113,12 +113,6 @@ type GenesisCeremonyConfig struct {
 	// +optional
 	Overrides map[string]string `json:"overrides,omitempty"`
 
-	// GenesisS3 configures where genesis artifacts are stored.
-	// When omitted, inferred: bucket = "sei-genesis-ceremony-artifacts",
-	// prefix = "<chainId>/<group-name>/", region from PlatformConfig.
-	// +optional
-	GenesisS3 *GenesisS3Destination `json:"genesisS3,omitempty"`
-
 	// MaxCeremonyDuration is the maximum time from group creation to genesis
 	// assembly completion. Default: "15m".
 	// +optional

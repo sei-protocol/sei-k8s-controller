@@ -2,7 +2,6 @@ package node
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
 	seiconfig "github.com/sei-protocol/sei-config"
@@ -80,7 +79,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1
 	spec.ShareProcessNamespace = ptr.To(true)
 	spec.InitContainers = []corev1.Container{
 		buildSeidInitContainer(node),
-		buildSidecarContainer(node),
+		buildSidecarContainer(node, platform),
 	}
 	spec.Containers = []corev1.Container{buildSidecarMainContainer(node, platform)}
 
@@ -103,7 +102,7 @@ func sidecarPort(node *seiv1alpha1.SeiNode) int32 {
 
 // buildSidecarContainer constructs the sei-sidecar as a restartable init
 // container that runs alongside seid for the pod's lifetime.
-func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
+func buildSidecarContainer(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1.Container {
 	port := sidecarPort(node)
 	c := corev1.Container{
 		Name:          "sei-sidecar",
@@ -114,6 +113,8 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 			{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
 			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
 			{Name: "SEI_HOME", Value: dataDir},
+			{Name: "SEI_GENESIS_BUCKET", Value: platform.GenesisBucket},
+			{Name: "SEI_GENESIS_REGION", Value: platform.GenesisRegion},
 		},
 		Ports: []corev1.ContainerPort{
 			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
@@ -183,12 +184,7 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 }
 
 // nodeDataPVCClaimName returns the PVC name to mount as the data volume.
-// Genesis nodes reference the PVC pre-provisioned by SeiNodePool's prep Job.
-// Snapshot nodes reference the PVC created by the SeiNode controller.
 func nodeDataPVCClaimName(node *seiv1alpha1.SeiNode) string {
-	if hasGenesisPVC(node) {
-		return node.Spec.Genesis.PVC.DataPVC
-	}
 	return nodeDataPVCName(node)
 }
 
@@ -228,7 +224,7 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 }
 
 // buildSeidInitContainer creates the init container that bootstraps the seid
-// home directory. When a SeiNodePool prep job has already populated the PVC
+// home directory. When a genesis PVC has already been populated
 // (genesis.json, validator keys, config, etc.), running "seid init --overwrite"
 // would destroy that state and produce an empty genesis with no validators.
 // The genesis.json guard below is a stopgap; ideally the SeiNode spec should
@@ -307,15 +303,4 @@ func servicePorts() []corev1.ServicePort {
 		ports[i] = corev1.ServicePort{Name: p.Name, Port: p.Port, TargetPort: intstr.FromInt32(p.Port), Protocol: corev1.ProtocolTCP}
 	}
 	return ports
-}
-
-// parseS3URI splits an s3://bucket/prefix URI into its bucket and prefix parts.
-func parseS3URI(uri string) (bucket, prefix string) {
-	u, err := url.Parse(uri)
-	if err != nil || u.Host == "" {
-		return uri, ""
-	}
-	bucket = u.Host
-	prefix = strings.TrimPrefix(u.Path, "/")
-	return bucket, prefix
 }
