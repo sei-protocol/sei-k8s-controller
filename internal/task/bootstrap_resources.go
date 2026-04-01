@@ -124,6 +124,8 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 			{Name: "SEI_HOME", Value: bootstrapDataDir},
 			{Name: "SEI_GENESIS_BUCKET", Value: platformCfg.GenesisBucket},
 			{Name: "SEI_GENESIS_REGION", Value: platformCfg.GenesisRegion},
+			{Name: "SEI_SNAPSHOT_BUCKET", Value: platformCfg.SnapshotBucket},
+			{Name: "SEI_SNAPSHOT_REGION", Value: platformCfg.SnapshotRegion},
 		},
 		Ports: []corev1.ContainerPort{
 			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},

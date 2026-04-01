@@ -250,7 +250,7 @@ func TestBootstrapMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p, _ := planner.ForNode(snapshotNode(), platformtest.Config())
+			p, _ := planner.ForNode(snapshotNode())
 			plan := mustBuildPlan(t, p, snapshotNode())
 			if plan == nil {
 				t.Fatal("expected non-nil plan")
@@ -263,7 +263,7 @@ func TestBootstrapMode(t *testing.T) {
 // --- Plan building tests ---
 
 func TestBuildPlan_Snapshot(t *testing.T) {
-	p, _ := planner.ForNode(snapshotNode(), platformtest.Config())
+	p, _ := planner.ForNode(snapshotNode())
 	plan := mustBuildPlan(t, p, snapshotNode())
 	got := taskTypes(plan)
 	want := []string{planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
@@ -275,7 +275,7 @@ func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 	node.Spec.FullNode.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "atlantic-2"}}},
 	}
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	plan := mustBuildPlan(t, p, node)
 	got := taskTypes(plan)
 	want := []string{planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
@@ -283,7 +283,7 @@ func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 }
 
 func TestBuildPlan_StateSync(t *testing.T) {
-	p, _ := planner.ForNode(peerSyncNode(), platformtest.Config())
+	p, _ := planner.ForNode(peerSyncNode())
 	plan := mustBuildPlan(t, p, peerSyncNode())
 	got := taskTypes(plan)
 	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
@@ -291,7 +291,7 @@ func TestBuildPlan_StateSync(t *testing.T) {
 }
 
 func TestBuildPlan_Genesis(t *testing.T) {
-	p, _ := planner.ForNode(genesisNode(), platformtest.Config())
+	p, _ := planner.ForNode(genesisNode())
 	plan := mustBuildPlan(t, p, genesisNode())
 	got := taskTypes(plan)
 	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigValidate, planner.TaskMarkReady}
@@ -303,7 +303,7 @@ func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 	node.Spec.Validator.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "arctic-1"}}},
 	}
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	plan := mustBuildPlan(t, p, node)
 	got := taskTypes(plan)
 	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigValidate, planner.TaskMarkReady}
@@ -312,7 +312,7 @@ func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 
 func TestBuildPlan_Replayer(t *testing.T) {
 	node := replayerNode()
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	plan := mustBuildPlan(t, p, node)
 	got := taskTypes(plan)
 	want := []string{planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
@@ -321,7 +321,7 @@ func TestBuildPlan_Replayer(t *testing.T) {
 
 func TestBuildPlan_Archive(t *testing.T) {
 	node := snapshotterNode()
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	plan := mustBuildPlan(t, p, node)
 	got := taskTypes(plan)
 	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
@@ -329,7 +329,7 @@ func TestBuildPlan_Archive(t *testing.T) {
 }
 
 func TestBuildPlanPhaseAndTasks(t *testing.T) {
-	p, _ := planner.ForNode(snapshotNode(), platformtest.Config())
+	p, _ := planner.ForNode(snapshotNode())
 	plan := mustBuildPlan(t, p, snapshotNode())
 	if plan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", plan.Phase)
@@ -355,7 +355,7 @@ func TestBuildPlanPhaseAndTasks(t *testing.T) {
 
 func TestBuildPlan_DeterministicIDs(t *testing.T) {
 	node := snapshotNode()
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	plan1 := mustBuildPlan(t, p, node)
 	plan2 := mustBuildPlan(t, p, node)
 	for i := range plan1.Tasks {
@@ -367,7 +367,7 @@ func TestBuildPlan_DeterministicIDs(t *testing.T) {
 
 func TestBuildPlan_ParamsRoundTrip(t *testing.T) {
 	node := snapshotNode()
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	plan := mustBuildPlan(t, p, node)
 	firstTask := plan.Tasks[0]
 	if firstTask.Type != planner.TaskSnapshotRestore {
@@ -377,11 +377,8 @@ func TestBuildPlan_ParamsRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(firstTask.Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal error: %v", err)
 	}
-	if params.Bucket != platformtest.Config().SnapshotBucket {
-		t.Errorf("Bucket = %q, want %q", params.Bucket, platformtest.Config().SnapshotBucket)
-	}
-	if params.Region != platformtest.Config().SnapshotRegion {
-		t.Errorf("Region = %q, want %q", params.Region, platformtest.Config().SnapshotRegion)
+	if params.TargetHeight != 100000000 {
+		t.Errorf("TargetHeight = %d, want 100000000", params.TargetHeight)
 	}
 }
 
@@ -391,7 +388,7 @@ func TestConfigApply_ParamsFromPlan(t *testing.T) {
 	node.Spec.Overrides = map[string]string{
 		"giga_executor.enabled": "true",
 	}
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	plan := mustBuildPlan(t, p, node)
 
 	var configTask *seiv1alpha1.PlannedTask
@@ -434,7 +431,7 @@ func taskTypes(plan *seiv1alpha1.TaskPlan) []string {
 func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
@@ -467,7 +464,7 @@ func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
 func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	node.Status.Plan = mustBuildPlan(t, p, node)
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
@@ -491,7 +488,7 @@ func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := genesisNode()
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	node.Status.Plan = mustBuildPlan(t, p, node)
 	for i := range node.Status.Plan.Tasks {
 		node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
@@ -517,7 +514,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 func TestReconcile_FailedPlan_NoOps(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	node.Status.Plan = mustBuildPlan(t, p, node)
 	node.Status.Plan.Phase = seiv1alpha1.TaskPlanFailed
 
@@ -593,7 +590,7 @@ func TestReconcile_CompletePlan_SkipsAlreadySubmittedMonitor(t *testing.T) {
 func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 	mock := &mockSidecarClient{submitErr: fmt.Errorf("connection refused")}
 	node := snapshotNode()
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	node.Status.Plan = mustBuildPlan(t, p, node)
 
 	r, c := newProgressionReconciler(t, mock, node)
@@ -629,7 +626,7 @@ func TestExecutePlan_NilPlan_ReturnsError(t *testing.T) {
 
 func TestPlannerForNode_FullNode(t *testing.T) {
 	node := snapshotNode()
-	p, err := planner.ForNode(node, platformtest.Config())
+	p, err := planner.ForNode(node)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -640,7 +637,7 @@ func TestPlannerForNode_FullNode(t *testing.T) {
 
 func TestPlannerForNode_Archive(t *testing.T) {
 	node := snapshotterNode()
-	p, err := planner.ForNode(node, platformtest.Config())
+	p, err := planner.ForNode(node)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +648,7 @@ func TestPlannerForNode_Archive(t *testing.T) {
 
 func TestPlannerForNode_Validator(t *testing.T) {
 	node := genesisNode()
-	p, err := planner.ForNode(node, platformtest.Config())
+	p, err := planner.ForNode(node)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +659,7 @@ func TestPlannerForNode_Validator(t *testing.T) {
 
 func TestPlannerForNode_Replayer(t *testing.T) {
 	node := replayerNode()
-	p, err := planner.ForNode(node, platformtest.Config())
+	p, err := planner.ForNode(node)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,7 +675,7 @@ func TestPlannerForNode_NoSubSpec(t *testing.T) {
 			Image:   "sei:latest",
 		},
 	}
-	_, err := planner.ForNode(node, platformtest.Config())
+	_, err := planner.ForNode(node)
 	if err == nil {
 		t.Error("expected error for node with no sub-spec")
 	}
@@ -691,7 +688,7 @@ func TestReconcilePending_NoBootstrap_SetsInitializingWithPlan(t *testing.T) {
 	node := snapshotNode()
 	r, c := newProgressionReconciler(t, mock, node)
 
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	result, err := r.reconcilePending(context.Background(), node, p)
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
@@ -715,7 +712,7 @@ func TestReconcilePending_WithBootstrap_SetsInitializing(t *testing.T) {
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImage
 	r, c := newProgressionReconciler(t, mock, node)
 
-	p, _ := planner.ForNode(node, platformtest.Config())
+	p, _ := planner.ForNode(node)
 	result, err := r.reconcilePending(context.Background(), node, p)
 	if err != nil {
 		t.Fatalf("reconcilePending error: %v", err)
