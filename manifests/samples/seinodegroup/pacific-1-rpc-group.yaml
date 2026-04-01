@@ -2,12 +2,8 @@
 #
 # Three full nodes behind a shared Service with Gateway API routing,
 # Istio network isolation, and Prometheus monitoring. Each SeiNode
-# bootstraps from an S3 snapshot and block-syncs to tip.
-#
-# The HTTPRoute attaches to the shared sei-gateway (NLB-backed) in
-# istio-system, giving external clients a stable hostname. The
-# AuthorizationPolicy restricts pod access to the gateway and the
-# default namespace for peer communication.
+# bootstraps from an S3 snapshot and block-syncs to tip. Genesis is
+# resolved automatically by the sidecar.
 apiVersion: sei.io/v1alpha1
 kind: SeiNodeGroup
 metadata:
@@ -31,14 +27,6 @@ spec:
 
       sidecar:
         image: ghcr.io/sei-protocol/seictl@sha256:594fcb6ec84266059bc7b0d3f0049450eaad9142ce0a9605e1d796a7b61e6391
-
-      genesis:
-        s3:
-          uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
-          region: us-east-2
-
-      storage:
-        retainOnDelete: true
 
       fullNode:
         peers:

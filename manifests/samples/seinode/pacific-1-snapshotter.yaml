@@ -2,6 +2,7 @@
 #
 # Archive node for pacific-1 that bootstraps via Tendermint state sync,
 # discovers peers, produces Tendermint snapshots, and uploads them to S3.
+# Genesis is resolved automatically by the sidecar.
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
@@ -18,14 +19,6 @@ spec:
     command: ["seid"]
     args: ["start", "--home", "/sei"]
 
-  genesis:
-    s3:
-      uri: s3://sei-testnet-genesis-config/pacific-1/genesis.json
-      region: us-east-2
-
-  storage:
-    retainOnDelete: true
-
   archive:
     peers:
       - ec2Tags:
@@ -38,6 +31,6 @@ spec:
       keepRecent: 5
       destination:
         s3:
-          bucket: sei-node-mvp
+          bucket: dev-sei-snapshots
           prefix: snapshot/
-          region: eu-central-1
+          region: us-east-2
