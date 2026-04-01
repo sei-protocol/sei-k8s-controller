@@ -61,7 +61,8 @@ type SeiNodeSpec struct {
 }
 
 // SnapshotSource returns the SnapshotSource from whichever mode sub-spec is
-// populated, or nil if no snapshot is configured.
+// populated, or nil if no snapshot is configured. Archive nodes always return
+// nil because they use state sync (configured internally by the planner).
 func (s *SeiNodeSpec) SnapshotSource() *SnapshotSource {
 	switch {
 	case s.FullNode != nil:

@@ -1,12 +1,12 @@
 # sei-k8s-controller
 
-Kubernetes operator for managing Sei blockchain nodes. Single binary, two controllers: `SeiNodePool` (genesis network orchestration) and `SeiNode` (individual node lifecycle).
+Kubernetes operator for managing Sei blockchain nodes. Single binary, two controllers: `SeiNodeGroup` (fleet orchestration, genesis ceremonies, deployments) and `SeiNode` (individual node lifecycle).
 
 ## Architecture
 
 - **API group**: `sei.io/v1alpha1`
-- **CRD types**: `SeiNodePool`, `SeiNode` (defined in `api/v1alpha1/`)
-- **Controllers**: `internal/controller/nodepool/`, `internal/controller/node/`
+- **CRD types**: `SeiNodeGroup`, `SeiNode` (defined in `api/v1alpha1/`)
+- **Controllers**: `internal/controller/nodegroup/`, `internal/controller/node/`
 - **Entry point**: `cmd/main.go` — thin binary that creates a `manager.Manager` and registers both controllers
 - **Framework**: controller-runtime v0.23.1 / kubebuilder v4.12.0
 
@@ -28,11 +28,11 @@ Always use the available subagents for relevant work:
 
 ### Testing
 - Tests use `testing` + `gomega` for assertions.
-- Controller tests use envtest (kubebuilder test assets in `bin/k8s/`).
+- Test fixtures for platform config live in `internal/platform/platformtest/`.
 - Run tests with `make test` before submitting changes.
 
 ### CRD Changes
-- Edit types in `api/v1alpha1/` (e.g., `seinode_types.go`, `seinodepool_types.go`).
+- Edit types in `api/v1alpha1/` (e.g., `seinode_types.go`, `seinodegroup_types.go`, `validator_types.go`).
 - After any type change, run `make manifests generate` to regenerate CRD YAML and DeepCopy methods.
 - Never hand-edit files in `manifests/` or `zz_generated.deepcopy.go`.
 
@@ -53,7 +53,9 @@ make docker-push IMG=<image>  # Push container image
 
 ## Key Patterns
 
-- **SeiNodePool** creates and owns **SeiNode** resources. They run in the same binary sharing one informer cache and leader election lease.
+- **SeiNodeGroup** creates and owns **SeiNode** resources. Groups orchestrate genesis ceremonies, manage deployments, and coordinate networking/monitoring.
 - **SeiNode** creates StatefulSets (replicas=1), headless Services, and PVCs via server-side apply (fieldOwner: `seinode-controller`).
+- **Platform config** is fully environment-driven — all fields in `platform.Config` must be set via env vars (no defaults). See `internal/platform/platform.go` for the full list.
+- **Genesis resolution** is handled by the sidecar autonomously: embedded sei-config for well-known chains, S3 fallback at `{SEI_GENESIS_BUCKET}/{chainID}/genesis.json` for custom chains.
 - Sidecar bootstrap progression is driven by the node controller polling the sidecar HTTP API and submitting tasks in sequence.
 - Config keys in seid's `config.toml` use **hyphens** (e.g., `persistent-peers`, `trust-height`), not underscores.

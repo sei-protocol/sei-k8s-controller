@@ -604,7 +604,3 @@ func TestGenerateNodeDataPVC(t *testing.T) {
 	storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 	g.Expect(storage.String()).To(Equal("2000Gi"))
 }
-
-// --- S3 URI parsing ---
-
-
