@@ -39,6 +39,6 @@ spec:
       keepRecent: 5
       destination:
         s3:
-          bucket: sei-node-mvp
-          prefix: snapshot/
-          region: eu-central-1
+          bucket: dev-sei-snapshots
+          prefix: pacific-1/
+          region: us-east-2

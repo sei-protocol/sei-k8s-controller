@@ -314,7 +314,7 @@ func snapshotRestoreParams(snap *seiv1alpha1.SnapshotSource, chainID, bucket, re
 	}
 	return &task.SnapshotRestoreParams{
 		Bucket:  bucket,
-		Prefix:  chainID + "/state-sync/",
+		Prefix:  chainID + "/",
 		Region:  region,
 		ChainID: chainID,
 	}
