@@ -38,7 +38,7 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if isGenesisCeremonyNode(node) {
-		return buildGenesisInitPlan(node)
+		return buildGenesisPlan(node)
 	}
 	v := node.Spec.Validator
 	params := &task.ConfigApplyParams{

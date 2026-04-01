@@ -869,8 +869,8 @@ func (in *SeiNodeStatus) DeepCopyInto(out *SeiNodeStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	if in.InitPlan != nil {
-		in, out := &in.InitPlan, &out.InitPlan
+	if in.Plan != nil {
+		in, out := &in.Plan, &out.Plan
 		*out = new(TaskPlan)
 		(*in).DeepCopyInto(*out)
 	}

@@ -11,7 +11,7 @@ A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) b
 - **One StatefulSet per node** — each `SeiNode` gets its own single-replica StatefulSet rather than pooling nodes. Groups exist for fleet coordination.
 - **Dedicated node scheduling** — pods require `karpenter.sh/nodepool=sei-node` and tolerate `sei.io/workload=sei-node:NoSchedule`, keeping blockchain workloads off general-purpose nodes.
 - **Sidecar architecture** — every node runs a [seictl](https://github.com/sei-protocol/seictl) sidecar as a restartable init container that drives bootstrap tasks before seid starts and handles runtime operations afterward.
-- **InitPlan model** — bootstrap is driven by a `TaskPlan` stored in `status.initPlan`. The controller builds a task sequence based on the node's mode, submits tasks to the sidecar one at a time, and advances through the plan.
+- **Plan model** — bootstrap is driven by a `TaskPlan` stored in `status.plan`. The controller builds a task sequence based on the node's mode, submits tasks to the sidecar one at a time, and advances through the plan.
 - **Environment-driven genesis** — genesis resolution is handled by the sidecar autonomously. Embedded sei-config is checked first for well-known chains (pacific-1, atlantic-2, arctic-1), then S3 fallback at `{SEI_GENESIS_BUCKET}/{chainID}/genesis.json`.
 
 ## CRDs

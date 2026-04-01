@@ -11,7 +11,7 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// buildBootstrapPlan constructs a unified InitPlan for nodes that need a
+// buildBootstrapPlan constructs a unified Plan for nodes that need a
 // bootstrap Job. The plan includes controller-side tasks for
 // Job/Service lifecycle, sidecar tasks that run on the bootstrap pod, and
 // post-bootstrap config tasks that run on the production StatefulSet pod.
@@ -130,11 +130,11 @@ func IsBootstrapComplete(plan *seiv1alpha1.TaskPlan) bool {
 // genesis.json.
 const genesisConfigureMaxRetries = 180
 
-// buildGenesisInitPlan constructs the full Init plan for genesis ceremony
+// buildGenesisPlan constructs the full plan for genesis ceremony
 // nodes. Per-node artifact generation and upload runs first, then
 // configure-genesis retries until the group controller has assembled and
 // uploaded genesis.json to S3.
-func buildGenesisInitPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	gc := node.Spec.Validator.GenesisCeremony
 	attempt := 0
 

@@ -128,7 +128,7 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 		postSubmitResults: map[uuid.UUID]*sidecar.TaskResult{parsedID: failedResult},
 	}
 
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{
+	node.Status.Plan = &seiv1alpha1.TaskPlan{
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: []seiv1alpha1.PlannedTask{
 			{
@@ -148,7 +148,7 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 	executor := nodeExecutor(builder, s, mock)
 
 	ctx := context.Background()
-	result, err := executor.ExecutePlan(ctx, node, node.Status.InitPlan)
+	result, err := executor.ExecutePlan(ctx, node, node.Status.Plan)
 	if err != nil {
 		t.Fatalf("ExecutePlan: %v", err)
 	}
@@ -162,14 +162,14 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 		t.Fatalf("get node: %v", err)
 	}
 
-	tsk := &updated.Status.InitPlan.Tasks[0]
+	tsk := &updated.Status.Plan.Tasks[0]
 	if tsk.Status != seiv1alpha1.TaskPending {
 		t.Errorf("task status = %q, want Pending (reset for retry)", tsk.Status)
 	}
 	if tsk.RetryCount != 1 {
 		t.Errorf("RetryCount = %d, want 1", tsk.RetryCount)
 	}
-	if updated.Status.InitPlan.Phase == seiv1alpha1.TaskPlanFailed {
+	if updated.Status.Plan.Phase == seiv1alpha1.TaskPlanFailed {
 		t.Error("plan should NOT be failed — retries remain")
 	}
 	if result.RequeueAfter == 0 {
@@ -196,7 +196,7 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 		postSubmitResults: map[uuid.UUID]*sidecar.TaskResult{parsedID: failedResult},
 	}
 
-	node.Status.InitPlan = &seiv1alpha1.TaskPlan{
+	node.Status.Plan = &seiv1alpha1.TaskPlan{
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: []seiv1alpha1.PlannedTask{
 			{
@@ -217,7 +217,7 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 	executor := nodeExecutor(builder, s, mock)
 
 	ctx := context.Background()
-	_, err := executor.ExecutePlan(ctx, node, node.Status.InitPlan)
+	_, err := executor.ExecutePlan(ctx, node, node.Status.Plan)
 	if err != nil {
 		t.Fatalf("ExecutePlan: %v", err)
 	}
@@ -227,11 +227,11 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 		t.Fatalf("get node: %v", err)
 	}
 
-	if updated.Status.InitPlan.Phase != seiv1alpha1.TaskPlanFailed {
-		t.Errorf("plan phase = %q, want Failed", updated.Status.InitPlan.Phase)
+	if updated.Status.Plan.Phase != seiv1alpha1.TaskPlanFailed {
+		t.Errorf("plan phase = %q, want Failed", updated.Status.Plan.Phase)
 	}
-	if updated.Status.InitPlan.Tasks[0].Status != seiv1alpha1.TaskFailed {
-		t.Errorf("task status = %q, want Failed", updated.Status.InitPlan.Tasks[0].Status)
+	if updated.Status.Plan.Tasks[0].Status != seiv1alpha1.TaskFailed {
+		t.Errorf("task status = %q, want Failed", updated.Status.Plan.Tasks[0].Status)
 	}
 }
 
