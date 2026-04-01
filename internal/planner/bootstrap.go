@@ -3,6 +3,7 @@ package planner
 import (
 	"slices"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -184,7 +185,7 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 		return &task.ConfigureGenesisParams{}
 	case TaskConfigApply:
 		return &task.ConfigApplyParams{
-			Mode:      "validator",
+			Mode:      string(seiconfig.ModeValidator),
 			Overrides: mergeOverrides(nil, node.Spec.Overrides),
 		}
 	case TaskSetGenesisPeers:
