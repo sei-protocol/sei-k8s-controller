@@ -32,7 +32,7 @@ spec:
           - --metrics-bind-address=:8080
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller:d554bffbc56c4b3a7abc39c7e27699375f0191ff
+        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller:c4ac566832e1814d858cb32546f96b3b4bf3c466
         name: manager
         env:
           - name: SEI_NODEPOOL_NAME
@@ -78,6 +78,9 @@ spec:
         ports:
         - containerPort: 8080
           name: metrics
+          protocol: TCP
+        - containerPort: 8081
+          name: health
           protocol: TCP
         securityContext:
           readOnlyRootFilesystem: true
