@@ -10,7 +10,7 @@ require (
 	github.com/onsi/gomega v1.38.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sei-protocol/sei-config v0.0.9
-	github.com/sei-protocol/seictl v0.0.26
+	github.com/sei-protocol/seictl v0.0.29
 	k8s.io/api v0.35.0
 	k8s.io/apiextensions-apiserver v0.35.0
 	k8s.io/apimachinery v0.35.0

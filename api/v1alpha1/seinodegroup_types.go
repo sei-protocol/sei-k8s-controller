@@ -117,6 +117,35 @@ type GenesisCeremonyConfig struct {
 	// assembly completion. Default: "15m".
 	// +optional
 	MaxCeremonyDuration *metav1.Duration `json:"maxCeremonyDuration,omitempty"`
+
+	// Fork configures this genesis ceremony to fork from an existing
+	// chain's exported state rather than building genesis from scratch.
+	// When set, the assembler downloads the exported state, rewrites
+	// the chain identity, strips old validators, and runs collect-gentxs
+	// with the new validator set.
+	// +optional
+	Fork *ForkConfig `json:"fork,omitempty"`
+}
+
+// ForkConfig configures forking from an existing chain. The controller
+// creates a temporary exporter SeiNode that bootstraps from the source
+// chain (using the same pipeline as replayers), then the group plan
+// submits seid export to the exporter's sidecar and uploads the result.
+type ForkConfig struct {
+	// SourceChainID is the chain ID of the network being forked.
+	// +kubebuilder:validation:MinLength=1
+	SourceChainID string `json:"sourceChainId"`
+
+	// SourceImage is the seid container image compatible with the source
+	// chain at ExportHeight. Used as both the bootstrap and main image
+	// for the temporary exporter node.
+	// +kubebuilder:validation:MinLength=1
+	SourceImage string `json:"sourceImage"`
+
+	// ExportHeight is the block height at which to export state.
+	// seid export --height N reads committed state at exactly this height.
+	// +kubebuilder:validation:Minimum=1
+	ExportHeight int64 `json:"exportHeight"`
 }
 
 // GenesisAccount represents a non-validator genesis account to fund.
@@ -270,13 +299,15 @@ type DeploymentStatus struct {
 
 // Status condition types for SeiNodeGroup.
 const (
-	ConditionNodesReady              = "NodesReady"
-	ConditionExternalServiceReady    = "ExternalServiceReady"
-	ConditionRouteReady              = "RouteReady"
-	ConditionIsolationReady          = "IsolationReady"
-	ConditionServiceMonitorReady     = "ServiceMonitorReady"
-	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
-	ConditionPlanInProgress          = "PlanInProgress"
+	ConditionNodesReady                = "NodesReady"
+	ConditionExternalServiceReady      = "ExternalServiceReady"
+	ConditionRouteReady                = "RouteReady"
+	ConditionIsolationReady            = "IsolationReady"
+	ConditionServiceMonitorReady       = "ServiceMonitorReady"
+	ConditionGenesisCeremonyComplete   = "GenesisCeremonyComplete"
+	ConditionPlanInProgress            = "PlanInProgress"
+	ConditionGenesisCeremonyNeeded     = "GenesisCeremonyNeeded"
+	ConditionForkGenesisCeremonyNeeded = "ForkGenesisCeremonyNeeded"
 )
 
 // +kubebuilder:object:root=true

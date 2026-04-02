@@ -74,7 +74,7 @@ func (e *collectAndSetPeersExecution) collectPeers(ctx context.Context) ([]strin
 			return nil, fmt.Errorf("getting node ID for %s: %w", name, err)
 		}
 
-		dns := fmt.Sprintf("%s.%s.svc.cluster.local", name, e.params.Namespace)
+		dns := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local", name, name, e.params.Namespace)
 		peers = append(peers, fmt.Sprintf("%s@%s:%d", nodeID, dns, defaultP2PPort))
 	}
 	return peers, nil

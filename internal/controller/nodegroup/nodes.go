@@ -41,7 +41,40 @@ func (r *SeiNodeGroupReconciler) reconcileSeiNodes(ctx context.Context, group *s
 	}
 
 	r.detectDeploymentNeeded(group)
+	r.detectGenesisCeremonyNeeded(group)
 	return nil
+}
+
+// detectGenesisCeremonyNeeded sets either GenesisCeremonyNeeded or
+// ForkGenesisCeremonyNeeded depending on whether the group has a fork
+// config. The genesis planner reads this condition to select the
+// appropriate assembler task.
+func (r *SeiNodeGroupReconciler) detectGenesisCeremonyNeeded(group *seiv1alpha1.SeiNodeGroup) {
+	// Clear both conditions when not applicable.
+	if group.Spec.Genesis == nil {
+		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
+		removeCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded)
+		return
+	}
+	if hasConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
+		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
+		removeCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded)
+		return
+	}
+	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		return
+	}
+
+	if group.Spec.Genesis.Fork != nil {
+		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
+		setCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded, metav1.ConditionTrue,
+			"ForkConfigured", fmt.Sprintf("Fork genesis from %s",
+				group.Spec.Genesis.Fork.SourceChainID))
+	} else {
+		removeCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded)
+		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded, metav1.ConditionTrue,
+			"GenesisConfigured", "Genesis ceremony configured")
+	}
 }
 
 // detectDeploymentNeeded checks if deployment-worthy fields have changed
@@ -75,15 +108,18 @@ func (r *SeiNodeGroupReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNo
 }
 
 // populateIncumbentNodes lists child SeiNodes and records their names
-// on the group status so planners can read them from the group object.
+// on the group status. Exporter nodes are excluded.
 func (r *SeiNodeGroupReconciler) populateIncumbentNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	nodes, err := r.listChildSeiNodes(ctx, group)
 	if err != nil {
 		return fmt.Errorf("listing child SeiNodes: %w", err)
 	}
-	names := make([]string, len(nodes))
+	names := make([]string, 0, len(nodes))
 	for i := range nodes {
-		names[i] = nodes[i].Name
+		if nodes[i].Labels["sei.io/role"] == "exporter" {
+			continue
+		}
+		names = append(names, nodes[i].Name)
 	}
 	group.Status.IncumbentNodes = names
 	return nil

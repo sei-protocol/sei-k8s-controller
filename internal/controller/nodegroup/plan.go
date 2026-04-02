@@ -73,13 +73,19 @@ func (r *SeiNodeGroupReconciler) startPlan(ctx context.Context, group *seiv1alph
 func (r *SeiNodeGroupReconciler) completePlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, statusBase client.Patch) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Deployment-specific finalization.
-	if group.Status.Deployment != nil {
+	isDeploymentPlan := group.Status.Deployment != nil
+
+	if isDeploymentPlan {
 		group.Status.ObservedGeneration = group.Generation
 		if err := r.reconcileNetworking(ctx, group); err != nil {
 			return ctrl.Result{}, fmt.Errorf("reconciling networking after deployment: %w", err)
 		}
 		group.Status.Deployment = nil
+	}
+
+	if group.Spec.Genesis != nil && !isDeploymentPlan {
+		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue,
+			"CeremonyComplete", "Genesis ceremony completed")
 	}
 
 	group.Status.Plan = nil
