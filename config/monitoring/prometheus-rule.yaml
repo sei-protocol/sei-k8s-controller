@@ -11,6 +11,17 @@ spec:
   groups:
     - name: sei-controller
       rules:
+        - alert: SeiNodeFailed
+          expr: sei_controller_seinode_phase{phase="Failed"} == 1
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} has failed"
+            description: "Node entered Failed phase. Check task plan and sidecar logs."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodefailed
+
         - alert: SeiNodeGroupDegraded
           expr: sei_controller_seinodegroup_phase{phase="Degraded"} == 1
           for: 10m
@@ -20,6 +31,7 @@ spec:
           annotations:
             summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} is degraded"
             description: "Some nodes are not ready. Check child SeiNode status."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodegroupdegraded
 
         - alert: SeiNodeGroupFailed
           expr: sei_controller_seinodegroup_phase{phase="Failed"} == 1
@@ -30,6 +42,7 @@ spec:
           annotations:
             summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} has failed"
             description: "All nodes have failed. Immediate investigation required."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodegroupfailed
 
         - alert: SeiNodeStuckInitializing
           expr: sei_controller_seinode_phase{phase="Initializing"} == 1
@@ -40,6 +53,7 @@ spec:
           annotations:
             summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} stuck initializing"
             description: "Node has been in Initializing phase for over 30 minutes."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodestuckinitializing
 
         - alert: SeiNodeStuckPending
           expr: max by (namespace, name) (sei_controller_seinode_phase{phase="Pending"}) == 1
@@ -50,6 +64,7 @@ spec:
           annotations:
             summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} stuck pending"
             description: "Node has been in Pending phase for over 15 minutes."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodestuckpending
 
         - alert: SidecarUnreachableHigh
           expr: rate(sei_controller_sidecar_unreachable_total[5m]) > 0.5
@@ -60,6 +75,7 @@ spec:
           annotations:
             summary: "Sidecar for {{ $labels.namespace }}/{{ $labels.node }} is frequently unreachable"
             description: "Sidecar connectivity failures sustained above 0.5/s for 10 minutes."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#sidecarunreachablehigh
 
         - alert: ControllerReconcileErrors
           expr: increase(sei_controller_reconcile_errors_total[15m]) > 5
@@ -70,6 +86,7 @@ spec:
           annotations:
             summary: "Controller {{ $labels.controller }} has elevated reconcile errors"
             description: "More than 5 reconcile errors in the last 15 minutes for {{ $labels.namespace }}/{{ $labels.name }}."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#controllerreconcileerrors
 
         - alert: ControllerHighReconcileLatency
           expr: histogram_quantile(0.99, rate(sei_controller_seinodegroup_reconcile_substep_duration_seconds_bucket[5m])) > 10
@@ -80,6 +97,7 @@ spec:
           annotations:
             summary: "SeiNodeGroup reconcile substep {{ $labels.substep }} is slow"
             description: "p99 latency above 10s for 10 minutes."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#controllerhighreconcilelatency
 
         - alert: ControllerMetricsDown
           expr: up{job=~".*sei-k8s-controller.*"} == 0
@@ -90,3 +108,4 @@ spec:
           annotations:
             summary: "sei-k8s-controller metrics endpoint is down"
             description: "Prometheus has been unable to scrape the controller for 5 minutes. All other controller alerts are blind."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#controllermetricsdown
