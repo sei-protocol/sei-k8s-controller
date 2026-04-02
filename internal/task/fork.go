@@ -1,5 +1,7 @@
 package task
 
+import sidecar "github.com/sei-protocol/seictl/sidecar/client"
+
 // AssembleForkGenesisParams are the serialized fields for the
 // assemble-fork-genesis sidecar task. The sidecar downloads exported
 // state from the platform genesis bucket at {sourceChainId}/exported-state.json,
@@ -12,7 +14,7 @@ type AssembleForkGenesisParams struct {
 	Nodes          []GenesisNodeParam `json:"nodes"`
 }
 
-func (p *AssembleForkGenesisParams) taskType() string { return "assemble-genesis-fork" }
+func (p *AssembleForkGenesisParams) taskType() string { return sidecar.TaskTypeAssembleGenesisFork }
 
 func (p *AssembleForkGenesisParams) toRequestParams() *map[string]any {
 	nodes := make([]any, len(p.Nodes))
