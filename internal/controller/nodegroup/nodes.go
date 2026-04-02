@@ -29,6 +29,11 @@ func (r *SeiNodeGroupReconciler) reconcileSeiNodes(ctx context.Context, group *s
 				return fmt.Errorf("ensuring SeiNode %d: %w", i, err)
 			}
 		}
+		if r.needsForkExporter(group) {
+			if err := r.ensureForkExporter(ctx, group); err != nil {
+				return fmt.Errorf("ensuring fork exporter: %w", err)
+			}
+		}
 		if err := r.scaleDown(ctx, group); err != nil {
 			return err
 		}
@@ -107,16 +112,82 @@ func (r *SeiNodeGroupReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNo
 	}
 }
 
+// needsForkExporter returns true when the group has a fork config,
+// the genesis ceremony hasn't completed, and the exporter hasn't been
+// created yet.
+func (r *SeiNodeGroupReconciler) needsForkExporter(group *seiv1alpha1.SeiNodeGroup) bool {
+	if group.Spec.Genesis == nil || group.Spec.Genesis.Fork == nil {
+		return false
+	}
+	if hasConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
+		return false
+	}
+	return true
+}
+
+// ensureForkExporter creates the temporary exporter SeiNode if it doesn't exist.
+func (r *SeiNodeGroupReconciler) ensureForkExporter(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+	desired := generateForkExporter(group)
+	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
+		return fmt.Errorf("setting owner reference on exporter: %w", err)
+	}
+
+	existing := &seiv1alpha1.SeiNode{}
+	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
+	if apierrors.IsNotFound(err) {
+		if createErr := r.Create(ctx, desired); createErr != nil {
+			return createErr
+		}
+		r.Recorder.Eventf(group, corev1.EventTypeNormal, "ExporterCreated", "Created fork exporter %s", desired.Name)
+		return nil
+	}
+	return err
+}
+
+func generateForkExporter(group *seiv1alpha1.SeiNodeGroup) *seiv1alpha1.SeiNode {
+	fork := group.Spec.Genesis.Fork
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      forkExporterName(group),
+			Namespace: group.Namespace,
+			Labels: map[string]string{
+				groupLabel:    group.Name,
+				"sei.io/role": "exporter",
+			},
+		},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: fork.SourceChainID,
+			Image:   fork.SourceImage,
+			Sidecar: group.Spec.Template.Spec.Sidecar,
+			FullNode: &seiv1alpha1.FullNodeSpec{
+				Snapshot: &seiv1alpha1.SnapshotSource{
+					S3: &seiv1alpha1.S3SnapshotSource{
+						TargetHeight: fork.ExportHeight,
+					},
+					BootstrapImage: fork.SourceImage,
+				},
+			},
+		},
+	}
+}
+
+func forkExporterName(group *seiv1alpha1.SeiNodeGroup) string {
+	return fmt.Sprintf("%s-exporter", group.Name)
+}
+
 // populateIncumbentNodes lists child SeiNodes and records their names
-// on the group status so planners can read them from the group object.
+// on the group status. Exporter nodes are excluded.
 func (r *SeiNodeGroupReconciler) populateIncumbentNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	nodes, err := r.listChildSeiNodes(ctx, group)
 	if err != nil {
 		return fmt.Errorf("listing child SeiNodes: %w", err)
 	}
-	names := make([]string, len(nodes))
+	names := make([]string, 0, len(nodes))
 	for i := range nodes {
-		names[i] = nodes[i].Name
+		if nodes[i].Labels["sei.io/role"] == "exporter" {
+			continue
+		}
+		names = append(names, nodes[i].Name)
 	}
 	group.Status.IncumbentNodes = names
 	return nil

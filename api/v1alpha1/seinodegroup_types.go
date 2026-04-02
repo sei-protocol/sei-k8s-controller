@@ -127,15 +127,25 @@ type GenesisCeremonyConfig struct {
 	Fork *ForkConfig `json:"fork,omitempty"`
 }
 
-// ForkConfig identifies the source chain to fork from. The exported
-// genesis state is expected at {sourceChainId}/exported-state.json in
-// the platform genesis bucket. The assembled fork genesis is written
-// to {newChainId}/{groupName}/genesis.json — same convention as a
-// standard genesis ceremony.
+// ForkConfig configures forking from an existing chain. The controller
+// creates a temporary exporter SeiNode that bootstraps from the source
+// chain (using the same pipeline as replayers), then the group plan
+// submits seid export to the exporter's sidecar and uploads the result.
 type ForkConfig struct {
 	// SourceChainID is the chain ID of the network being forked.
 	// +kubebuilder:validation:MinLength=1
 	SourceChainID string `json:"sourceChainId"`
+
+	// SourceImage is the seid container image compatible with the source
+	// chain at ExportHeight. Used as both the bootstrap and main image
+	// for the temporary exporter node.
+	// +kubebuilder:validation:MinLength=1
+	SourceImage string `json:"sourceImage"`
+
+	// ExportHeight is the block height at which to export state.
+	// seid export --height N reads committed state at exactly this height.
+	// +kubebuilder:validation:Minimum=1
+	ExportHeight int64 `json:"exportHeight"`
 }
 
 // GenesisAccount represents a non-validator genesis account to fund.

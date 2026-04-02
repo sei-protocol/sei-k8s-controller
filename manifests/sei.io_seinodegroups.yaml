@@ -119,13 +119,29 @@ spec:
                       the chain identity, strips old validators, and runs collect-gentxs
                       with the new validator set.
                     properties:
+                      exportHeight:
+                        description: |-
+                          ExportHeight is the block height at which to export state.
+                          seid export --height N reads committed state at exactly this height.
+                        format: int64
+                        minimum: 1
+                        type: integer
                       sourceChainId:
                         description: SourceChainID is the chain ID of the network
                           being forked.
                         minLength: 1
                         type: string
+                      sourceImage:
+                        description: |-
+                          SourceImage is the seid container image compatible with the source
+                          chain at ExportHeight. Used as both the bootstrap and main image
+                          for the temporary exporter node.
+                        minLength: 1
+                        type: string
                     required:
+                    - exportHeight
                     - sourceChainId
+                    - sourceImage
                     type: object
                   maxCeremonyDuration:
                     description: |-

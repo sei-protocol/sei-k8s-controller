@@ -207,12 +207,7 @@ func SnapshotUploadMonitorTask(node *seiv1alpha1.SeiNode) *sidecar.TaskRequest {
 	if sg == nil || sg.Destination == nil || sg.Destination.S3 == nil {
 		return nil
 	}
-	dest := sg.Destination.S3
-	req := sidecar.SnapshotUploadTask{
-		Bucket: dest.Bucket,
-		Prefix: dest.Prefix,
-		Region: dest.Region,
-	}.ToTaskRequest()
+	req := sidecar.SnapshotUploadTask{}.ToTaskRequest()
 	return &req
 }
 
