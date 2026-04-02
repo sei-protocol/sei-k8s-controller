@@ -101,6 +101,7 @@ func (e *createExporterExecution) Execute(ctx context.Context) error {
 			ChainID: e.params.SourceChainID,
 			Image:   e.params.SourceImage,
 			Sidecar: group.Spec.Template.Spec.Sidecar,
+			Peers:   group.Spec.Template.Spec.Peers,
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{
