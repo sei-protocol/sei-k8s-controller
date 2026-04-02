@@ -5,7 +5,7 @@ import (
 )
 
 // PeerSource is a union type — exactly one field must be set.
-// +kubebuilder:validation:XValidation:rule="(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1 : 0) == 1",message="exactly one of ec2Tags or static must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1 : 0) + (has(self.label) ? 1 : 0) == 1",message="exactly one of ec2Tags, static, or label must be set"
 type PeerSource struct {
 	// EC2Tags discovers peers by querying EC2 for running instances
 	// matching the specified tags.
@@ -15,6 +15,30 @@ type PeerSource struct {
 	// Static provides a fixed list of peer addresses.
 	// +optional
 	Static *StaticPeerSource `json:"static,omitempty"`
+
+	// Label discovers peers by selecting SeiNode resources via
+	// Kubernetes labels. The controller resolves matching nodes to
+	// stable headless Service DNS names and tracks them in
+	// status.resolvedPeers. The sidecar queries each for its
+	// Tendermint node ID at task execution time.
+	// +optional
+	Label *LabelPeerSource `json:"label,omitempty"`
+}
+
+// LabelPeerSource discovers peers by selecting SeiNode resources via
+// Kubernetes labels. The controller resolves matching nodes to their
+// headless Service DNS names ({name}-0.{name}.{namespace}.svc.cluster.local)
+// and writes them to status.resolvedPeers on every reconcile.
+type LabelPeerSource struct {
+	// Selector is a set of key-value label pairs. SeiNode resources
+	// matching ALL labels are included as peers.
+	// +kubebuilder:validation:MinProperties=1
+	Selector map[string]string `json:"selector"`
+
+	// Namespace restricts discovery to a specific namespace.
+	// When empty, defaults to the namespace of the discovering node.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // EC2TagsPeerSource discovers peers via EC2 tag filters in a specific region.

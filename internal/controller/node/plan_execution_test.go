@@ -166,10 +166,10 @@ func peerSyncNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
+			Peers: []seiv1alpha1.PeerSource{
+				{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
+			},
 			FullNode: &seiv1alpha1.FullNodeSpec{
-				Peers: []seiv1alpha1.PeerSource{
-					{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "atlantic-2"}}},
-				},
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					StateSync: &seiv1alpha1.StateSyncSource{},
 				},
@@ -197,14 +197,13 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "atlantic-2",
 			Image:   "sei:latest",
-
+			Peers: []seiv1alpha1.PeerSource{{
+				EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
+					Region: "eu-central-1",
+					Tags:   map[string]string{"ChainIdentifier": "atlantic-2"},
+				},
+			}},
 			Archive: &seiv1alpha1.ArchiveSpec{
-				Peers: []seiv1alpha1.PeerSource{{
-					EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
-						Region: "eu-central-1",
-						Tags:   map[string]string{"ChainIdentifier": "atlantic-2"},
-					},
-				}},
 				SnapshotGeneration: &seiv1alpha1.SnapshotGenerationConfig{
 					KeepRecent: 5,
 				},
@@ -220,12 +219,12 @@ func replayerNode() *seiv1alpha1.SeiNode {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "pacific-1",
 			Image:   "sei:latest",
+			Peers: []seiv1alpha1.PeerSource{
+				{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "pacific-1"}}},
+			},
 			Replayer: &seiv1alpha1.ReplayerSpec{
 				Snapshot: seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
-				},
-				Peers: []seiv1alpha1.PeerSource{
-					{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"ChainIdentifier": "pacific-1"}}},
 				},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},
@@ -269,7 +268,7 @@ func TestBuildPlan_Snapshot(t *testing.T) {
 
 func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 	node := snapshotNode()
-	node.Spec.FullNode.Peers = []seiv1alpha1.PeerSource{
+	node.Spec.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "atlantic-2"}}},
 	}
 	p, _ := planner.ForNode(node)
@@ -297,7 +296,7 @@ func TestBuildPlan_Genesis(t *testing.T) {
 
 func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 	node := genesisNode()
-	node.Spec.Validator.Peers = []seiv1alpha1.PeerSource{
+	node.Spec.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "arctic-1"}}},
 	}
 	p, _ := planner.ForNode(node)

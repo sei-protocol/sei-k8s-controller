@@ -9,6 +9,7 @@ import (
 // Exactly one mode sub-spec (fullNode, archive, replayer, validator) must be set;
 // the populated field determines the node's operating mode.
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, or validator must be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// +kubebuilder:validation:MinLength=1
@@ -18,6 +19,11 @@ type SeiNodeSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=512
 	Image string `json:"image"`
+
+	// Peers configures how this node discovers and connects to network peers.
+	// Applies to all node modes. Required for replayer nodes.
+	// +optional
+	Peers []PeerSource `json:"peers,omitempty"`
 
 	// Entrypoint overrides the image command for the running node process.
 	// +optional
@@ -198,6 +204,12 @@ type SeiNodeStatus struct {
 	// for completion. Keyed by task type for idempotent submission.
 	// +optional
 	MonitorTasks map[string]MonitorTask `json:"monitorTasks,omitempty"`
+
+	// ResolvedPeers is the current set of peer DNS hostnames discovered
+	// from label-based peer sources. Reconciled continuously so that
+	// future peer-update plans can detect drift.
+	// +optional
+	ResolvedPeers []string `json:"resolvedPeers,omitempty"`
 
 	// ConfigStatus reports the observed configuration state from the sidecar.
 	// +optional

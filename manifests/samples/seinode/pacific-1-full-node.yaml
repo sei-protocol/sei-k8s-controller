@@ -19,13 +19,14 @@ spec:
   sidecar:
     image: ghcr.io/sei-protocol/seictl@sha256:594fcb6ec84266059bc7b0d3f0049450eaad9142ce0a9605e1d796a7b61e6391
 
+  peers:
+    - ec2Tags:
+        region: eu-central-1
+        tags:
+          ChainIdentifier: pacific-1
+          Component: state-syncer
+
   fullNode:
-    peers:
-      - ec2Tags:
-          region: eu-central-1
-          tags:
-            ChainIdentifier: pacific-1
-            Component: state-syncer
     snapshot:
       s3:
         targetHeight: 198740000
