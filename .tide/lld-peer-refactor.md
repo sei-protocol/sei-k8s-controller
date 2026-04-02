@@ -34,11 +34,6 @@ type LabelPeerSource struct {
     // When empty, defaults to the namespace of the discovering node.
     // +optional
     Namespace string `json:"namespace,omitempty"`
-
-    // ExcludeSelf removes the discovering node from the result set.
-    // +optional
-    // +kubebuilder:default=true
-    ExcludeSelf *bool `json:"excludeSelf,omitempty"`
 }
 ```
 

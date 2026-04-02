@@ -253,7 +253,7 @@ func buildBasePlan(
 	attempt := 0
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(node, taskType, attempt, paramsForTaskType(node, taskType, peers, snap, configApplyParams))
+		t, err := buildPlannedTask(node, taskType, attempt, paramsForTaskType(node, taskType, snap, configApplyParams))
 		if err != nil {
 			return nil, err
 		}
@@ -269,7 +269,6 @@ func buildBasePlan(
 func paramsForTaskType(
 	node *seiv1alpha1.SeiNode,
 	taskType string,
-	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
 	configApplyParams *task.ConfigApplyParams,
 ) any {
@@ -284,7 +283,7 @@ func paramsForTaskType(
 		}
 		return &task.ConfigApplyParams{}
 	case TaskDiscoverPeers:
-		return discoverPeersParams(peers, node.Status.ResolvedPeers)
+		return discoverPeersParams(node)
 	case TaskConfigureStateSync:
 		return configureStateSyncParams(snap)
 	case TaskConfigValidate:
@@ -309,12 +308,12 @@ func configureGenesisParams(_ *seiv1alpha1.SeiNode) *task.ConfigureGenesisParams
 	return &task.ConfigureGenesisParams{}
 }
 
-func discoverPeersParams(peers []seiv1alpha1.PeerSource, resolvedPeers []string) *task.DiscoverPeersParams {
-	if len(peers) == 0 && len(resolvedPeers) == 0 {
+func discoverPeersParams(node *seiv1alpha1.SeiNode) *task.DiscoverPeersParams {
+	if len(node.Spec.Peers) == 0 {
 		return &task.DiscoverPeersParams{}
 	}
 	var sources []task.PeerSourceParam
-	for _, s := range peers {
+	for _, s := range node.Spec.Peers {
 		switch {
 		case s.EC2Tags != nil:
 			sources = append(sources, task.PeerSourceParam{
@@ -328,15 +327,11 @@ func discoverPeersParams(peers []seiv1alpha1.PeerSource, resolvedPeers []string)
 				Addresses: s.Static.Addresses,
 			})
 		case s.Label != nil:
-			// Label sources are resolved by reconcilePeers into
-			// status.resolvedPeers — handled below.
+			sources = append(sources, task.PeerSourceParam{
+				Type:      "dnsEndpoints",
+				Endpoints: node.Status.ResolvedPeers,
+			})
 		}
-	}
-	if len(resolvedPeers) > 0 {
-		sources = append(sources, task.PeerSourceParam{
-			Type:      "dnsEndpoints",
-			Endpoints: resolvedPeers,
-		})
 	}
 	return &task.DiscoverPeersParams{Sources: sources}
 }

@@ -56,7 +56,7 @@ func buildBootstrapPlan(
 
 	// Phase 2: Sidecar tasks on bootstrap pod (same progression as base, minus mark-ready)
 	for _, taskType := range bootstrapProg {
-		if err := appendTask(taskType, paramsForTaskType(node, taskType, peers, snap, configApplyParams)); err != nil {
+		if err := appendTask(taskType, paramsForTaskType(node, taskType, snap, configApplyParams)); err != nil {
 			return nil, err
 		}
 	}
@@ -73,7 +73,7 @@ func buildBootstrapPlan(
 
 	// Phase 4: Post-bootstrap config on StatefulSet pod
 	for _, taskType := range postProg {
-		if err := appendTask(taskType, paramsForTaskType(node, taskType, peers, nil, configApplyParams)); err != nil {
+		if err := appendTask(taskType, paramsForTaskType(node, taskType, nil, configApplyParams)); err != nil {
 			return nil, err
 		}
 	}

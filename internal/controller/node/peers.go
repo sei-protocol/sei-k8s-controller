@@ -53,8 +53,6 @@ func (r *SeiNodeReconciler) resolveLabelPeers(
 		ns = src.Namespace
 	}
 
-	excludeSelf := src.ExcludeSelf == nil || *src.ExcludeSelf
-
 	var nodeList seiv1alpha1.SeiNodeList
 	if err := r.List(ctx, &nodeList,
 		client.InNamespace(ns),
@@ -66,7 +64,7 @@ func (r *SeiNodeReconciler) resolveLabelPeers(
 	var endpoints []string
 	for i := range nodeList.Items {
 		peer := &nodeList.Items[i]
-		if excludeSelf && peer.Name == node.Name {
+		if peer.Name == node.Name {
 			continue
 		}
 		dns := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local",

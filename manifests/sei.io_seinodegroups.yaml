@@ -504,11 +504,6 @@ spec:
                                 status.resolvedPeers. The sidecar queries each for its
                                 Tendermint node ID at task execution time.
                               properties:
-                                excludeSelf:
-                                  default: true
-                                  description: ExcludeSelf removes the discovering
-                                    node from the result set.
-                                  type: boolean
                                 namespace:
                                   description: |-
                                     Namespace restricts discovery to a specific namespace.
