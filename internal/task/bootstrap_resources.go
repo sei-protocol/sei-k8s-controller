@@ -179,23 +179,24 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 }
 
 // bootstrapWaitCommand returns a shell command that waits for the sidecar
-// to be reachable and then runs seid with --halt-height. Uses /v0/status
-// rather than /v0/healthz because the bootstrap sidecar never receives a
-// mark-ready task (healthz returns 503 until mark-ready runs).
+// to report healthy and then runs seid with --halt-height. Polls /v0/healthz
+// which returns 503 until the mark-ready task completes, ensuring all
+// bootstrap sidecar tasks (snapshot-restore, configure-genesis, config-apply,
+// discover-peers, config-validate) have finished before seid starts.
 //
 // Cosmos SDK's halt-height sends SIGINT to itself after committing the
 // target block, producing exit code 130. The wrapper treats 130 as
 // success so the Job completes cleanly.
 func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args []string) {
 	script := fmt.Sprintf(
-		`echo "waiting for sidecar to become ready..."; `+
+		`echo "waiting for sidecar bootstrap tasks to complete..."; `+
 			`while true; do `+
 			`{ exec 3<>/dev/tcp/localhost/%d; } 2>/dev/null && `+
-			`printf "GET /v0/status HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && `+
+			`printf "GET /v0/healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && `+
 			`head -1 <&3 | grep -q "200" && break; `+
 			`exec 3>&-; sleep 5; done; `+
 			`exec 3>&-; `+
-			`echo "sidecar reachable, starting seid with halt-height %d"; `+
+			`echo "sidecar healthy, starting seid with halt-height %d"; `+
 			`seid start --home %s --halt-height %d; `+
 			`rc=$?; if [ $rc -eq 130 ]; then echo "seid halted at target height (exit 130), treating as success"; exit 0; fi; exit $rc`,
 		port, haltHeight, bootstrapDataDir, haltHeight,
