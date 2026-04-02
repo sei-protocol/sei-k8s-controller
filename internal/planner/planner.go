@@ -328,7 +328,7 @@ func discoverPeersParams(node *seiv1alpha1.SeiNode) *task.DiscoverPeersParams {
 			})
 		case s.Label != nil:
 			sources = append(sources, task.PeerSourceParam{
-				Type:      "dnsEndpoints",
+				Type:      string(sidecar.PeerSourceDNSEndpoints),
 				Endpoints: node.Status.ResolvedPeers,
 			})
 		}
