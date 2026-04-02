@@ -9,6 +9,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 var allGroupPhases = []string{
@@ -119,5 +120,5 @@ func cleanupGroupMetrics(namespace, name string) {
 		}
 	}
 	observability.ReconcileErrorsTotal.DeleteLabelValues(controllerName, namespace, name)
-tplanner.CleanupPlanMetrics("seinodegroup", namespace, name)
+	planner.CleanupPlanMetrics("seinodegroup", namespace, name)
 }

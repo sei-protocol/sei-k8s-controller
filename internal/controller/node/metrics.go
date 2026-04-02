@@ -126,5 +126,5 @@ func cleanupNodeMetrics(namespace, name string) {
 	sidecarUnreachableTotal.DeleteLabelValues(namespace, name)
 	observability.ReconcileErrorsTotal.DeleteLabelValues(seiNodeControllerName, namespace, name)
 	cleanupMonitorTaskMetrics(namespace, name, []string{planner.TaskResultExport})
-tplanner.CleanupPlanMetrics("seinode", namespace, name)
+	planner.CleanupPlanMetrics("seinode", namespace, name)
 }
