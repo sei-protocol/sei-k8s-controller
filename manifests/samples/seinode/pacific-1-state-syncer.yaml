@@ -12,7 +12,7 @@ spec:
   image: "ghcr.io/sei-protocol/sei:v6.3.0"
 
   sidecar:
-    image: ghcr.io/sei-protocol/seictl@sha256:594fcb6ec84266059bc7b0d3f0049450eaad9142ce0a9605e1d796a7b61e6391
+    image: ghcr.io/sei-protocol/seictl@sha256:22639286ad0898fdeced42b850a8b07fa0f9267401c62b993df1cc0f1ddaca9a
 
   entrypoint:
     command: ["seid"]
