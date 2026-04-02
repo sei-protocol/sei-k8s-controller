@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	groupAssemblyMaxRetries = 60
+	groupAssemblyMaxRetries = 180
 	TaskAssembleGenesisFork = sidecar.TaskTypeAssembleGenesisFork
 )
 
