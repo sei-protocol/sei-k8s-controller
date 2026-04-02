@@ -1,0 +1,43 @@
+# SeiNodeGroup — Fork Genesis Ceremony
+#
+# Forks an existing chain's state into a new private network.
+# The group controller:
+#   1. Creates a temporary exporter node that bootstraps from the source chain
+#   2. Exports state at the specified height and uploads to S3
+#   3. Tears down the exporter
+#   4. Assembles fork genesis (rewrites chain ID, strips old validators, runs collect-gentxs)
+#   5. Each validator downloads the fork genesis and starts the new chain
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeGroup
+metadata:
+  name: fork-test
+  namespace: default
+spec:
+  replicas: 3
+
+  genesis:
+    chainId: fork-test-1
+    stakingAmount: "10000000usei"
+    accountBalance: "1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom"
+
+    fork:
+      sourceChainId: pacific-1
+      sourceImage: "ghcr.io/sei-protocol/sei:v5.9.0"
+      exportHeight: 100000000
+
+  template:
+    metadata:
+      labels:
+        sei.io/role: validator
+    spec:
+      chainId: fork-test-1
+      image: "ghcr.io/sei-protocol/sei:v6.3.0"
+
+      entrypoint:
+        command: ["seid"]
+        args: ["start", "--home", "/sei"]
+
+      sidecar:
+        image: "ghcr.io/sei-protocol/seictl:v0.0.29"
+
+      validator: {}

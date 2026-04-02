@@ -18,7 +18,7 @@ A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) b
 
 ### SeiNodeGroup
 
-Orchestrates fleets of `SeiNode` resources with optional genesis ceremony support.
+Orchestrates fleets of `SeiNode` resources with optional genesis ceremony support, including forking from an existing chain's exported state.
 
 ```yaml
 apiVersion: sei.io/v1alpha1
@@ -30,13 +30,18 @@ spec:
   genesis:
     chainId: my-devnet
     stakingAmount: "10000000usei"
+    # Optional: fork from an existing chain instead of fresh genesis
+    # fork:
+    #   sourceChainId: pacific-1
+    #   sourceImage: "ghcr.io/sei-protocol/sei:v5.9.0"
+    #   exportHeight: 100000000
   template:
     spec:
       chainId: my-devnet
-      image: sei-protocol/seid:v5.0.0
+      image: sei-protocol/seid:v6.3.0
       validator: {}
       sidecar:
-        image: ghcr.io/sei-protocol/seictl:v0.0.26
+        image: ghcr.io/sei-protocol/seictl:v0.0.29
 ```
 
 ### SeiNode
@@ -90,6 +95,7 @@ The controller reads all infrastructure-level settings from environment variable
 | `SEI_RESOURCE_MEM_ARCHIVE` | Memory request for archive nodes |
 | `SEI_RESOURCE_CPU_DEFAULT` | CPU request for full/validator nodes |
 | `SEI_RESOURCE_MEM_DEFAULT` | Memory request for full/validator nodes |
+| `SEI_SNAPSHOT_BUCKET` | S3 bucket for snapshot storage |
 | `SEI_SNAPSHOT_REGION` | AWS region for snapshot S3 operations |
 | `SEI_RESULT_EXPORT_BUCKET` | S3 bucket for shadow result exports |
 | `SEI_RESULT_EXPORT_REGION` | AWS region for result export bucket |
