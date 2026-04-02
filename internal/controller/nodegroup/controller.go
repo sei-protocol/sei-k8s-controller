@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -180,7 +181,7 @@ func shouldRequeue(result ctrl.Result) bool {
 func (r *SeiNodeGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&seiv1alpha1.SeiNodeGroup{}).
-		Owns(&seiv1alpha1.SeiNode{}).
+		Owns(&seiv1alpha1.SeiNode{}, builder.WithPredicates(childPhaseChangedPredicate())).
 		Owns(&corev1.Service{}).
 		Named(controllerName).
 		Complete(r)
