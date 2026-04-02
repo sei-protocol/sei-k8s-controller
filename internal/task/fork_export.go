@@ -170,9 +170,8 @@ func (e *awaitExporterRunningExecution) Status(ctx context.Context) ExecutionSta
 		Name: e.params.ExporterName, Namespace: e.params.Namespace,
 	}, node)
 	if apierrors.IsNotFound(err) {
-		// Exporter should exist at this point — keep polling to let the
-		// informer cache catch up after creation.
-		return ExecutionRunning
+		e.setFailed(fmt.Errorf("exporter %s not found — create-exporter may have failed", e.params.ExporterName))
+		return ExecutionFailed
 	}
 	if err != nil {
 		return ExecutionRunning

@@ -262,7 +262,7 @@ func TestAwaitExporterRunning_Failed(t *testing.T) {
 	}
 }
 
-func TestAwaitExporterRunning_NotFound_KeepsPolling(t *testing.T) {
+func TestAwaitExporterRunning_NotFound_Fails(t *testing.T) {
 	group := testGroup()
 	cfg := testGroupCfg(t, group)
 
@@ -273,8 +273,11 @@ func TestAwaitExporterRunning_NotFound_KeepsPolling(t *testing.T) {
 		t.Fatalf("deserialize: %v", err)
 	}
 
-	if exec.Status(context.Background()) != ExecutionRunning {
-		t.Fatal("expected Running when exporter not found (cache lag)")
+	if exec.Status(context.Background()) != ExecutionFailed {
+		t.Fatal("expected Failed when exporter not found")
+	}
+	if exec.Err() == nil {
+		t.Fatal("expected non-nil error")
 	}
 }
 
