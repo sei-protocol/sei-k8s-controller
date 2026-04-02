@@ -78,6 +78,12 @@ func (p *DiscoverPeersParams) toRequestParams() *map[string]any {
 				addrs[j] = a
 			}
 			m["addresses"] = addrs
+		case "dnsEndpoints": // TODO: use sidecar.PeerSourceDNSEndpoints after seictl bump
+			eps := make([]any, len(src.Endpoints))
+			for j, e := range src.Endpoints {
+				eps[j] = e
+			}
+			m["endpoints"] = eps
 		}
 		sources[i] = m
 	}
