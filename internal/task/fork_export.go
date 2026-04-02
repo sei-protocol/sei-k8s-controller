@@ -5,17 +5,115 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/uuid"
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 const (
+	TaskTypeCreateExporter       = "create-exporter"
 	TaskTypeAwaitExporterRunning = "await-exporter-running"
 	TaskTypeSubmitExportState    = "submit-export-state"
 	TaskTypeTeardownExporter     = "teardown-exporter"
 )
+
+// CreateExporterParams holds parameters for creating the temporary
+// exporter SeiNode.
+type CreateExporterParams struct {
+	GroupName     string `json:"groupName"`
+	ExporterName  string `json:"exporterName"`
+	Namespace     string `json:"namespace"`
+	SourceChainID string `json:"sourceChainId"`
+	SourceImage   string `json:"sourceImage"`
+	ExportHeight  int64  `json:"exportHeight"`
+}
+
+type createExporterExecution struct {
+	taskBase
+	params CreateExporterParams
+	cfg    ExecutionConfig
+}
+
+func deserializeCreateExporter(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
+	var p CreateExporterParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("deserializing create-exporter params: %w", err)
+		}
+	}
+	return &createExporterExecution{
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
+	}, nil
+}
+
+func (e *createExporterExecution) Execute(ctx context.Context) error {
+	group, err := ResourceAs[*seiv1alpha1.SeiNodeGroup](e.cfg)
+	if err != nil {
+		return Terminal(err)
+	}
+
+	existing := &seiv1alpha1.SeiNode{}
+	err = e.cfg.KubeClient.Get(ctx, types.NamespacedName{
+		Name: e.params.ExporterName, Namespace: e.params.Namespace,
+	}, existing)
+	if err == nil {
+		e.complete()
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("checking exporter existence: %w", err)
+	}
+
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      e.params.ExporterName,
+			Namespace: e.params.Namespace,
+			Labels: map[string]string{
+				"sei.io/nodegroup": e.params.GroupName,
+				"sei.io/role":      "exporter",
+			},
+		},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: e.params.SourceChainID,
+			Image:   e.params.SourceImage,
+			Sidecar: group.Spec.Template.Spec.Sidecar,
+			FullNode: &seiv1alpha1.FullNodeSpec{
+				Snapshot: &seiv1alpha1.SnapshotSource{
+					S3: &seiv1alpha1.S3SnapshotSource{
+						TargetHeight: e.params.ExportHeight,
+					},
+					BootstrapImage: e.params.SourceImage,
+				},
+			},
+		},
+	}
+
+	if err := ctrl.SetControllerReference(group, node, e.cfg.Scheme); err != nil {
+		return Terminal(fmt.Errorf("setting owner reference: %w", err))
+	}
+
+	if err := e.cfg.KubeClient.Create(ctx, node); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			e.complete()
+			return nil
+		}
+		return fmt.Errorf("creating exporter: %w", err)
+	}
+
+	e.complete()
+	return nil
+}
+
+func (e *createExporterExecution) Status(_ context.Context) ExecutionStatus {
+	return e.status
+}
 
 // AwaitExporterRunningParams holds parameters for polling the exporter
 // SeiNode until it reaches Running phase.
@@ -112,12 +210,12 @@ func (e *submitExportStateExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("getting exporter node: %w", err)
 	}
 
-	sc, err := e.cfg.BuildSidecarClient()
+	sc, err := sidecarClientForNode(node)
 	if err != nil {
 		return fmt.Errorf("building sidecar client for exporter: %w", err)
 	}
 
-	// Build the export-state sidecar task request.
+	taskID := uuid.MustParse(DeterministicTaskID(e.params.ExporterName, "export-state", 0))
 	exportParams := map[string]any{
 		"height":   e.params.ExportHeight,
 		"chainId":  e.params.SourceChainID,
@@ -126,17 +224,17 @@ func (e *submitExportStateExecution) Execute(ctx context.Context) error {
 		"s3Region": e.cfg.Platform.GenesisRegion,
 	}
 
-	taskID := DeterministicTaskID(e.params.ExporterName, "export-state", 0)
-
-	// TODO: Submit via sidecar client once we have the sidecar client
-	// built for the exporter node (not the group's resource).
-	// For now, store the task ID for polling.
-	_ = sc
-	_ = exportParams
-	_ = taskID
+	req := sidecar.TaskRequest{
+		Id:     &taskID,
+		Type:   sidecar.TaskTypeExportState,
+		Params: &exportParams,
+	}
+	if _, err := sc.SubmitTask(ctx, req); err != nil {
+		return fmt.Errorf("submitting export-state to exporter: %w", err)
+	}
 
 	e.submitted = true
-	e.taskID = taskID
+	e.taskID = taskID.String()
 	return nil
 }
 
@@ -147,9 +245,43 @@ func (e *submitExportStateExecution) Status(ctx context.Context) ExecutionStatus
 	if !e.submitted {
 		return ExecutionRunning
 	}
-	// TODO: Poll sidecar for export task completion.
-	// For now, return Running (the task will be re-submitted on restart).
-	return ExecutionRunning
+
+	node := &seiv1alpha1.SeiNode{}
+	if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{
+		Name: e.params.ExporterName, Namespace: e.params.Namespace,
+	}, node); err != nil {
+		return ExecutionRunning
+	}
+
+	sc, err := sidecarClientForNode(node)
+	if err != nil {
+		return ExecutionRunning
+	}
+
+	taskID, err := uuid.Parse(e.taskID)
+	if err != nil {
+		return ExecutionRunning
+	}
+
+	result, err := sc.GetTask(ctx, taskID)
+	if err != nil {
+		return ExecutionRunning
+	}
+
+	switch result.Status {
+	case sidecar.Completed:
+		e.complete()
+		return ExecutionComplete
+	case sidecar.Failed:
+		errMsg := "unknown error"
+		if result.Error != nil {
+			errMsg = *result.Error
+		}
+		e.setFailed(fmt.Errorf("export-state failed: %s", errMsg))
+		return ExecutionFailed
+	default:
+		return ExecutionRunning
+	}
 }
 
 // TeardownExporterParams holds parameters for deleting the exporter SeiNode.

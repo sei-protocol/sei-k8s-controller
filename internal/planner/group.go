@@ -81,9 +81,23 @@ func (p *genesisGroupPlanner) BuildPlan(
 
 	var tasks []seiv1alpha1.PlannedTask
 
-	// For fork ceremonies, prepend export tasks if the exporter exists.
+	// For fork ceremonies, prepend exporter lifecycle tasks.
 	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) && group.Spec.Genesis.Fork != nil {
+		fork := group.Spec.Genesis.Fork
 		exporterName := fmt.Sprintf("%s-exporter", group.Name)
+
+		createExporter, err := buildGroupPlannedTask(group.Name, task.TaskTypeCreateExporter,
+			&task.CreateExporterParams{
+				GroupName:     group.Name,
+				ExporterName:  exporterName,
+				Namespace:     group.Namespace,
+				SourceChainID: fork.SourceChainID,
+				SourceImage:   fork.SourceImage,
+				ExportHeight:  fork.ExportHeight,
+			})
+		if err != nil {
+			return nil, err
+		}
 
 		awaitExporter, err := buildGroupPlannedTask(group.Name, task.TaskTypeAwaitExporterRunning,
 			&task.AwaitExporterRunningParams{
@@ -114,7 +128,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 			return nil, err
 		}
 
-		tasks = append(tasks, awaitExporter, submitExport, teardownExporter)
+		tasks = append(tasks, createExporter, awaitExporter, submitExport, teardownExporter)
 	}
 
 	tasks = append(tasks, assembleTask, collectPeersTask, awaitTask)

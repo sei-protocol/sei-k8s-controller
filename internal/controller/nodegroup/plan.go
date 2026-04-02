@@ -82,7 +82,9 @@ func (r *SeiNodeGroupReconciler) completePlan(ctx context.Context, group *seiv1a
 		group.Status.Deployment = nil
 	}
 
-	// Genesis/fork ceremony finalization.
+	// Mark genesis ceremony complete when the completed plan was a
+	// genesis/fork plan (not a deployment plan). The Deployment field
+	// is only set for deployment plans, so its absence indicates genesis.
 	if group.Spec.Genesis != nil && group.Status.Deployment == nil {
 		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue,
 			"CeremonyComplete", "Genesis ceremony completed")

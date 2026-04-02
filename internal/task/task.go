@@ -152,87 +152,68 @@ func ResourceAs[T client.Object](cfg ExecutionConfig) (T, error) {
 	return r, nil
 }
 
+// taskDeserializer reconstructs a TaskExecution from serialized params.
+type taskDeserializer func(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error)
+
+// sidecarTask creates a deserializer for a sidecar-backed task type.
+func sidecarTask[T any](fireAndForget bool) taskDeserializer {
+	return func(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
+		return deserializeSidecar[T](id, params, cfg.BuildSidecarClient, fireAndForget)
+	}
+}
+
+// registry maps task type strings to their deserializers.
+var registry = map[string]taskDeserializer{
+	// Sidecar tasks
+	sidecar.TaskTypeSnapshotRestore:        sidecarTask[SnapshotRestoreParams](false),
+	sidecar.TaskTypeConfigureStateSync:     sidecarTask[ConfigureStateSyncParams](false),
+	sidecar.TaskTypeAwaitCondition:         sidecarTask[AwaitConditionParams](false),
+	sidecar.TaskTypeConfigApply:            sidecarTask[ConfigApplyParams](false),
+	sidecar.TaskTypeConfigValidate:         sidecarTask[ConfigValidateParams](true),
+	sidecar.TaskTypeConfigureGenesis:       sidecarTask[ConfigureGenesisParams](false),
+	sidecar.TaskTypeDiscoverPeers:          sidecarTask[DiscoverPeersParams](false),
+	sidecar.TaskTypeMarkReady:              sidecarTask[MarkReadyParams](true),
+	sidecar.TaskTypeGenerateIdentity:       sidecarTask[GenerateIdentityParams](false),
+	sidecar.TaskTypeGenerateGentx:          sidecarTask[GenerateGentxParams](false),
+	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[UploadGenesisArtifactsParams](false),
+	sidecar.TaskTypeAssembleGenesis:        sidecarTask[AssembleAndUploadGenesisParams](false),
+	sidecar.TaskTypeSetGenesisPeers:        sidecarTask[SetGenesisPeersParams](false),
+	sidecar.TaskTypeAssembleGenesisFork:    sidecarTask[AssembleForkGenesisParams](false),
+
+	// Controller-side group tasks
+	TaskTypeAwaitNodesRunning:  deserializeAwaitNodesRunning,
+	TaskTypeCollectAndSetPeers: deserializeCollectAndSetPeers,
+
+	// Controller-side bootstrap tasks
+	TaskTypeDeployBootstrapSvc:     deserializeBootstrapService,
+	TaskTypeDeployBootstrapJob:     deserializeBootstrapJob,
+	TaskTypeAwaitBootstrapComplete: deserializeBootstrapAwait,
+	TaskTypeTeardownBootstrap:      deserializeBootstrapTeardown,
+
+	// Controller-side deployment tasks
+	TaskTypeCreateEntrantNodes: deserializeCreateEntrantNodes,
+	TaskTypeSubmitHaltSignal:   deserializeSubmitHaltSignal,
+	TaskTypeAwaitNodesAtHeight: deserializeAwaitNodesAtHeight,
+	TaskTypeAwaitNodesCaughtUp: deserializeAwaitNodesCaughtUp,
+	TaskTypeSwitchTraffic:      deserializeSwitchTraffic,
+	TaskTypeTeardownNodes:      deserializeTeardownNodes,
+
+	// Controller-side fork tasks
+	TaskTypeCreateExporter:       deserializeCreateExporter,
+	TaskTypeAwaitExporterRunning: deserializeAwaitExporterRunning,
+	TaskTypeSubmitExportState:    deserializeSubmitExportState,
+	TaskTypeTeardownExporter:     deserializeTeardownExporter,
+}
+
 // Deserialize reconstructs a TaskExecution from its serialized CRD
 // representation. Dependencies are injected via the ExecutionConfig bundle.
 // Returns UnknownTaskTypeError for unrecognized types.
 func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
-	buildSC := cfg.BuildSidecarClient
-	switch taskType {
-	// Bootstrap tasks
-	case sidecar.TaskTypeSnapshotRestore:
-		return deserializeSidecar[SnapshotRestoreParams](id, params, buildSC, false)
-	case sidecar.TaskTypeConfigureStateSync:
-		return deserializeSidecar[ConfigureStateSyncParams](id, params, buildSC, false)
-	case sidecar.TaskTypeAwaitCondition:
-		return deserializeSidecar[AwaitConditionParams](id, params, buildSC, false)
-
-	// Config tasks
-	case sidecar.TaskTypeConfigApply:
-		return deserializeSidecar[ConfigApplyParams](id, params, buildSC, false)
-	case sidecar.TaskTypeConfigValidate:
-		return deserializeSidecar[ConfigValidateParams](id, params, buildSC, true)
-	case sidecar.TaskTypeConfigureGenesis:
-		return deserializeSidecar[ConfigureGenesisParams](id, params, buildSC, false)
-	case sidecar.TaskTypeDiscoverPeers:
-		return deserializeSidecar[DiscoverPeersParams](id, params, buildSC, false)
-	case sidecar.TaskTypeMarkReady:
-		return deserializeSidecar[MarkReadyParams](id, params, buildSC, true)
-
-	// Genesis ceremony tasks
-	case sidecar.TaskTypeGenerateIdentity:
-		return deserializeSidecar[GenerateIdentityParams](id, params, buildSC, false)
-	case sidecar.TaskTypeGenerateGentx:
-		return deserializeSidecar[GenerateGentxParams](id, params, buildSC, false)
-	case sidecar.TaskTypeUploadGenesisArtifacts:
-		return deserializeSidecar[UploadGenesisArtifactsParams](id, params, buildSC, false)
-	case sidecar.TaskTypeAssembleGenesis:
-		return deserializeSidecar[AssembleAndUploadGenesisParams](id, params, buildSC, false)
-	case sidecar.TaskTypeSetGenesisPeers:
-		return deserializeSidecar[SetGenesisPeersParams](id, params, buildSC, false)
-
-	// Controller-side group tasks
-	case TaskTypeAwaitNodesRunning:
-		return deserializeAwaitNodesRunning(id, params, cfg)
-	case TaskTypeCollectAndSetPeers:
-		return deserializeCollectAndSetPeers(id, params, cfg)
-
-	// Controller-side bootstrap tasks
-	case TaskTypeDeployBootstrapSvc:
-		return deserializeBootstrapService(id, params, cfg)
-	case TaskTypeDeployBootstrapJob:
-		return deserializeBootstrapJob(id, params, cfg)
-	case TaskTypeAwaitBootstrapComplete:
-		return deserializeBootstrapAwait(id, params, cfg)
-	case TaskTypeTeardownBootstrap:
-		return deserializeBootstrapTeardown(id, params, cfg)
-
-	// Controller-side deployment tasks
-	case TaskTypeCreateEntrantNodes:
-		return deserializeCreateEntrantNodes(id, params, cfg)
-	case TaskTypeSubmitHaltSignal:
-		return deserializeSubmitHaltSignal(id, params, cfg)
-	case TaskTypeAwaitNodesAtHeight:
-		return deserializeAwaitNodesAtHeight(id, params, cfg)
-	case TaskTypeAwaitNodesCaughtUp:
-		return deserializeAwaitNodesCaughtUp(id, params, cfg)
-	case TaskTypeSwitchTraffic:
-		return deserializeSwitchTraffic(id, params, cfg)
-	case TaskTypeTeardownNodes:
-		return deserializeTeardownNodes(id, params, cfg)
-
-	// Fork genesis tasks
-	case sidecar.TaskTypeAssembleGenesisFork:
-		return deserializeSidecar[AssembleForkGenesisParams](id, params, buildSC, false)
-	case TaskTypeAwaitExporterRunning:
-		return deserializeAwaitExporterRunning(id, params, cfg)
-	case TaskTypeSubmitExportState:
-		return deserializeSubmitExportState(id, params, cfg)
-	case TaskTypeTeardownExporter:
-		return deserializeTeardownExporter(id, params, cfg)
-
-	default:
+	fn, ok := registry[taskType]
+	if !ok {
 		return nil, &UnknownTaskTypeError{Type: taskType}
 	}
+	return fn(id, params, cfg)
 }
 
 // deserializeSidecar is a generic helper that unmarshals params into a typed
