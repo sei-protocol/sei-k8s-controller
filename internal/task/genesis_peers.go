@@ -86,11 +86,8 @@ func (e *collectAndSetPeersExecution) setPeersOnNodes(ctx context.Context, peers
 		if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, node); err != nil {
 			return fmt.Errorf("getting node %s: %w", name, err)
 		}
-		if node.Spec.Validator == nil {
-			continue
-		}
 		patch := client.MergeFrom(node.DeepCopy())
-		node.Spec.Validator.Peers = []seiv1alpha1.PeerSource{
+		node.Spec.Peers = []seiv1alpha1.PeerSource{
 			{Static: &seiv1alpha1.StaticPeerSource{Addresses: peers}},
 		}
 		if err := e.cfg.KubeClient.Patch(ctx, node, patch); err != nil {

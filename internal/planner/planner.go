@@ -131,22 +131,6 @@ func insertBefore(prog []string, target, taskType string) []string {
 	return prog
 }
 
-// PeersFor extracts the PeerSource list from whichever node mode is set.
-func PeersFor(node *seiv1alpha1.SeiNode) []seiv1alpha1.PeerSource {
-	switch {
-	case node.Spec.FullNode != nil:
-		return node.Spec.FullNode.Peers
-	case node.Spec.Validator != nil:
-		return node.Spec.Validator.Peers
-	case node.Spec.Replayer != nil:
-		return node.Spec.Replayer.Peers
-	case node.Spec.Archive != nil:
-		return node.Spec.Archive.Peers
-	default:
-		return nil
-	}
-}
-
 // NeedsBootstrap returns true when the node requires a bootstrap Job to
 // populate the PVC before the StatefulSet takes over.
 func NeedsBootstrap(node *seiv1alpha1.SeiNode) bool {
@@ -300,7 +284,7 @@ func paramsForTaskType(
 		}
 		return &task.ConfigApplyParams{}
 	case TaskDiscoverPeers:
-		return discoverPeersParams(peers)
+		return discoverPeersParams(peers, node.Status.ResolvedPeers)
 	case TaskConfigureStateSync:
 		return configureStateSyncParams(snap)
 	case TaskConfigValidate:
@@ -325,25 +309,34 @@ func configureGenesisParams(_ *seiv1alpha1.SeiNode) *task.ConfigureGenesisParams
 	return &task.ConfigureGenesisParams{}
 }
 
-func discoverPeersParams(peers []seiv1alpha1.PeerSource) *task.DiscoverPeersParams {
-	if len(peers) == 0 {
+func discoverPeersParams(peers []seiv1alpha1.PeerSource, resolvedPeers []string) *task.DiscoverPeersParams {
+	if len(peers) == 0 && len(resolvedPeers) == 0 {
 		return &task.DiscoverPeersParams{}
 	}
 	var sources []task.PeerSourceParam
 	for _, s := range peers {
-		if s.EC2Tags != nil {
+		switch {
+		case s.EC2Tags != nil:
 			sources = append(sources, task.PeerSourceParam{
 				Type:   string(sidecar.PeerSourceEC2Tags),
 				Region: s.EC2Tags.Region,
 				Tags:   s.EC2Tags.Tags,
 			})
-		}
-		if s.Static != nil {
+		case s.Static != nil:
 			sources = append(sources, task.PeerSourceParam{
 				Type:      string(sidecar.PeerSourceStatic),
 				Addresses: s.Static.Addresses,
 			})
+		case s.Label != nil:
+			// Label sources are resolved by reconcilePeers into
+			// status.resolvedPeers — handled below.
 		}
+	}
+	if len(resolvedPeers) > 0 {
+		sources = append(sources, task.PeerSourceParam{
+			Type:      "dnsEndpoints",
+			Endpoints: resolvedPeers,
+		})
 	}
 	return &task.DiscoverPeersParams{Sources: sources}
 }

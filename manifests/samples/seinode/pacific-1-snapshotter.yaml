@@ -19,13 +19,13 @@ spec:
     command: ["seid"]
     args: ["start", "--home", "/sei"]
 
-  archive:
-    peers:
-      - ec2Tags:
-          region: eu-central-1
-          tags:
-            ChainIdentifier: pacific-1
-            Component: state-syncer
+  peers:
+    - ec2Tags:
+        region: eu-central-1
+        tags:
+          ChainIdentifier: pacific-1
+          Component: state-syncer
 
+  archive:
     snapshotGeneration:
       keepRecent: 5

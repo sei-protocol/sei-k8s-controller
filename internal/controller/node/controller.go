@@ -83,6 +83,10 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("validating spec: %w", err)
 	}
 
+	if err := r.reconcilePeers(ctx, node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
+	}
+
 	if err := r.ensureNodeDataPVC(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensuring data PVC: %w", err)
 	}

@@ -25,7 +25,7 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if snap.S3.TargetHeight <= 0 {
 		return fmt.Errorf("replayer: s3.targetHeight must be > 0")
 	}
-	if len(node.Spec.Replayer.Peers) == 0 {
+	if len(node.Spec.Peers) == 0 {
 		return fmt.Errorf("replayer requires at least one peer source for block sync")
 	}
 	return nil
@@ -37,9 +37,9 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 		Overrides: mergeOverrides(p.controllerOverrides(), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, params)
+		return buildBootstrapPlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, params)
 	}
-	return buildBasePlan(node, node.Spec.Replayer.Peers, &node.Spec.Replayer.Snapshot, params)
+	return buildBasePlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, params)
 }
 
 func (p *replayerPlanner) controllerOverrides() map[string]string {

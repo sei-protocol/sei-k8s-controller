@@ -55,6 +55,7 @@ type PeerSourceParam struct {
 	Region    string            `json:"region,omitempty"`
 	Tags      map[string]string `json:"tags,omitempty"`
 	Addresses []string          `json:"addresses,omitempty"`
+	Endpoints []string          `json:"endpoints,omitempty"`
 }
 
 func (p *DiscoverPeersParams) taskType() string { return sidecar.TaskTypeDiscoverPeers }

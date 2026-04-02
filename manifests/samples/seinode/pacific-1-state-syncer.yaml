@@ -26,14 +26,15 @@ spec:
   storage:
     retainOnDelete: true
 
+  peers:
+    - ec2Tags:
+        region: eu-central-1
+        tags:
+          ChainIdentifier: pacific-1
+          Component: state-syncer
+
   fullNode:
     snapshot:
       stateSync: {}
-    peers:
-      - ec2Tags:
-          region: eu-central-1
-          tags:
-            ChainIdentifier: pacific-1
-            Component: state-syncer
     snapshotGeneration:
       keepRecent: 5

@@ -55,53 +55,6 @@ spec:
                 description: Archive configures an archive node with full history
                   and no pruning.
                 properties:
-                  peers:
-                    description: Peers configures how the archive node discovers peers
-                      for block sync.
-                    items:
-                      description: PeerSource is a union type — exactly one field
-                        must be set.
-                      properties:
-                        ec2Tags:
-                          description: |-
-                            EC2Tags discovers peers by querying EC2 for running instances
-                            matching the specified tags.
-                          properties:
-                            region:
-                              description: Region is the AWS region to query for EC2
-                                instances.
-                              minLength: 1
-                              type: string
-                            tags:
-                              additionalProperties:
-                                type: string
-                              description: Tags are the EC2 instance tags to filter
-                                on.
-                              minProperties: 1
-                              type: object
-                          required:
-                          - region
-                          - tags
-                          type: object
-                        static:
-                          description: Static provides a fixed list of peer addresses.
-                          properties:
-                            addresses:
-                              description: Addresses is a list of peer addresses in
-                                "nodeId@host:port" format.
-                              items:
-                                type: string
-                              minItems: 1
-                              type: array
-                          required:
-                          - addresses
-                          type: object
-                      type: object
-                      x-kubernetes-validations:
-                      - message: exactly one of ec2Tags or static must be set
-                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
-                          : 0) == 1'
-                    type: array
                   snapshotGeneration:
                     description: SnapshotGeneration configures periodic snapshot creation
                       and optional upload.
@@ -144,53 +97,6 @@ spec:
                 description: FullNode configures a chain-following full node (absorbs
                   the "rpc" role).
                 properties:
-                  peers:
-                    description: Peers configures how this node discovers and connects
-                      to peers.
-                    items:
-                      description: PeerSource is a union type — exactly one field
-                        must be set.
-                      properties:
-                        ec2Tags:
-                          description: |-
-                            EC2Tags discovers peers by querying EC2 for running instances
-                            matching the specified tags.
-                          properties:
-                            region:
-                              description: Region is the AWS region to query for EC2
-                                instances.
-                              minLength: 1
-                              type: string
-                            tags:
-                              additionalProperties:
-                                type: string
-                              description: Tags are the EC2 instance tags to filter
-                                on.
-                              minProperties: 1
-                              type: object
-                          required:
-                          - region
-                          - tags
-                          type: object
-                        static:
-                          description: Static provides a fixed list of peer addresses.
-                          properties:
-                            addresses:
-                              description: Addresses is a list of peer addresses in
-                                "nodeId@host:port" format.
-                              items:
-                                type: string
-                              minItems: 1
-                              type: array
-                          required:
-                          - addresses
-                          type: object
-                      type: object
-                      x-kubernetes-validations:
-                      - message: exactly one of ec2Tags or static must be set
-                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
-                          : 0) == 1'
-                    type: array
                   snapshot:
                     description: |-
                       Snapshot configures how the node obtains its initial chain state.
@@ -267,6 +173,81 @@ spec:
                   Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
                   These are applied on top of mode defaults during config-apply.
                 type: object
+              peers:
+                description: |-
+                  Peers configures how this node discovers and connects to network peers.
+                  Applies to all node modes. Required for replayer nodes.
+                items:
+                  description: PeerSource is a union type — exactly one field must
+                    be set.
+                  properties:
+                    ec2Tags:
+                      description: |-
+                        EC2Tags discovers peers by querying EC2 for running instances
+                        matching the specified tags.
+                      properties:
+                        region:
+                          description: Region is the AWS region to query for EC2 instances.
+                          minLength: 1
+                          type: string
+                        tags:
+                          additionalProperties:
+                            type: string
+                          description: Tags are the EC2 instance tags to filter on.
+                          minProperties: 1
+                          type: object
+                      required:
+                      - region
+                      - tags
+                      type: object
+                    label:
+                      description: |-
+                        Label discovers peers by selecting SeiNode resources via
+                        Kubernetes labels. The controller resolves matching nodes to
+                        stable headless Service DNS names and tracks them in
+                        status.resolvedPeers. The sidecar queries each for its
+                        Tendermint node ID at task execution time.
+                      properties:
+                        excludeSelf:
+                          default: true
+                          description: ExcludeSelf removes the discovering node from
+                            the result set.
+                          type: boolean
+                        namespace:
+                          description: |-
+                            Namespace restricts discovery to a specific namespace.
+                            When empty, defaults to the namespace of the discovering node.
+                          type: string
+                        selector:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Selector is a set of key-value label pairs. SeiNode resources
+                            matching ALL labels are included as peers.
+                          minProperties: 1
+                          type: object
+                      required:
+                      - selector
+                      type: object
+                    static:
+                      description: Static provides a fixed list of peer addresses.
+                      properties:
+                        addresses:
+                          description: Addresses is a list of peer addresses in "nodeId@host:port"
+                            format.
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                      required:
+                      - addresses
+                      type: object
+                  type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of ec2Tags, static, or label must be set
+                    rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1 : 0)
+                      + (has(self.label) ? 1 : 0) == 1'
+                type: array
               podLabels:
                 additionalProperties:
                   type: string
@@ -281,55 +262,6 @@ spec:
                 description: Replayer configures an ephemeral replay workload that
                   restores from a snapshot.
                 properties:
-                  peers:
-                    description: |-
-                      Peers configures how the replayer discovers peers for block sync
-                      after restoring from the snapshot.
-                    items:
-                      description: PeerSource is a union type — exactly one field
-                        must be set.
-                      properties:
-                        ec2Tags:
-                          description: |-
-                            EC2Tags discovers peers by querying EC2 for running instances
-                            matching the specified tags.
-                          properties:
-                            region:
-                              description: Region is the AWS region to query for EC2
-                                instances.
-                              minLength: 1
-                              type: string
-                            tags:
-                              additionalProperties:
-                                type: string
-                              description: Tags are the EC2 instance tags to filter
-                                on.
-                              minProperties: 1
-                              type: object
-                          required:
-                          - region
-                          - tags
-                          type: object
-                        static:
-                          description: Static provides a fixed list of peer addresses.
-                          properties:
-                            addresses:
-                              description: Addresses is a list of peer addresses in
-                                "nodeId@host:port" format.
-                              items:
-                                type: string
-                              minItems: 1
-                              type: array
-                          required:
-                          - addresses
-                          type: object
-                      type: object
-                      x-kubernetes-validations:
-                      - message: exactly one of ec2Tags or static must be set
-                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
-                          : 0) == 1'
-                    minItems: 1
-                    type: array
                   resultExport:
                     description: |-
                       ResultExport configures periodic export of block execution results to S3.
@@ -394,7 +326,6 @@ spec:
                       rule: '(has(self.s3) ? 1 : 0) + (has(self.stateSync) ? 1 : 0)
                         == 1'
                 required:
-                - peers
                 - snapshot
                 type: object
               sidecar:
@@ -511,53 +442,6 @@ spec:
                     - index
                     - stakingAmount
                     type: object
-                  peers:
-                    description: Peers configures how this node discovers and connects
-                      to peers.
-                    items:
-                      description: PeerSource is a union type — exactly one field
-                        must be set.
-                      properties:
-                        ec2Tags:
-                          description: |-
-                            EC2Tags discovers peers by querying EC2 for running instances
-                            matching the specified tags.
-                          properties:
-                            region:
-                              description: Region is the AWS region to query for EC2
-                                instances.
-                              minLength: 1
-                              type: string
-                            tags:
-                              additionalProperties:
-                                type: string
-                              description: Tags are the EC2 instance tags to filter
-                                on.
-                              minProperties: 1
-                              type: object
-                          required:
-                          - region
-                          - tags
-                          type: object
-                        static:
-                          description: Static provides a fixed list of peer addresses.
-                          properties:
-                            addresses:
-                              description: Addresses is a list of peer addresses in
-                                "nodeId@host:port" format.
-                              items:
-                                type: string
-                              minItems: 1
-                              type: array
-                          required:
-                          - addresses
-                          type: object
-                      type: object
-                      x-kubernetes-validations:
-                      - message: exactly one of ec2Tags or static must be set
-                        rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1
-                          : 0) == 1'
-                    type: array
                   snapshot:
                     description: |-
                       Snapshot configures how the node obtains its initial chain state.
@@ -614,6 +498,9 @@ spec:
                 be set
               rule: '(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) +
                 (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1'
+            - message: peers is required when replayer mode is set
+              rule: '!has(self.replayer) || (has(self.peers) && size(self.peers) >
+                0)'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:
@@ -838,6 +725,14 @@ spec:
                 - phase
                 - tasks
                 type: object
+              resolvedPeers:
+                description: |-
+                  ResolvedPeers is the current set of peer DNS hostnames discovered
+                  from label-based peer sources. Reconciled continuously so that
+                  future peer-update plans can detect drift.
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true
