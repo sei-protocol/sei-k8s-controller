@@ -142,6 +142,8 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 }
 
 func TestBuildGroupForkPlan(t *testing.T) {
+	const sourceChain = "pacific-1"
+
 	group := &seiv1alpha1.SeiNodeGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "fork-group", Namespace: "default"},
 		Spec: seiv1alpha1.SeiNodeGroupSpec{
@@ -150,7 +152,7 @@ func TestBuildGroupForkPlan(t *testing.T) {
 				ChainID:        "fork-1",
 				AccountBalance: "1000usei",
 				Fork: &seiv1alpha1.ForkConfig{
-					SourceChainID: "pacific-1",
+					SourceChainID: sourceChain,
 					SourceImage:   "sei:v5.0.0",
 					ExportHeight:  100000,
 				},
@@ -214,8 +216,8 @@ func TestBuildGroupForkPlan(t *testing.T) {
 	if createParams.ExporterName != "fork-group-exporter" {
 		t.Errorf("ExporterName = %q, want %q", createParams.ExporterName, "fork-group-exporter")
 	}
-	if createParams.SourceChainID != "pacific-1" {
-		t.Errorf("SourceChainID = %q, want %q", createParams.SourceChainID, "pacific-1")
+	if createParams.SourceChainID != sourceChain {
+		t.Errorf("SourceChainID = %q, want %q", createParams.SourceChainID, sourceChain)
 	}
 	if createParams.SourceImage != "sei:v5.0.0" {
 		t.Errorf("SourceImage = %q, want %q", createParams.SourceImage, "sei:v5.0.0")
@@ -229,8 +231,8 @@ func TestBuildGroupForkPlan(t *testing.T) {
 	if err := json.Unmarshal(plan.Tasks[2].Params.Raw, &submitParams); err != nil {
 		t.Fatalf("unmarshal submit-export-state params: %v", err)
 	}
-	if submitParams.SourceChainID != "pacific-1" {
-		t.Errorf("submit SourceChainID = %q, want %q", submitParams.SourceChainID, "pacific-1")
+	if submitParams.SourceChainID != sourceChain {
+		t.Errorf("submit SourceChainID = %q, want %q", submitParams.SourceChainID, sourceChain)
 	}
 
 	// Verify assemble-genesis-fork params
@@ -238,8 +240,8 @@ func TestBuildGroupForkPlan(t *testing.T) {
 	if err := json.Unmarshal(plan.Tasks[4].Params.Raw, &assembleParams); err != nil {
 		t.Fatalf("unmarshal assemble-genesis-fork params: %v", err)
 	}
-	if assembleParams.SourceChainID != "pacific-1" {
-		t.Errorf("assemble SourceChainID = %q, want %q", assembleParams.SourceChainID, "pacific-1")
+	if assembleParams.SourceChainID != sourceChain {
+		t.Errorf("assemble SourceChainID = %q, want %q", assembleParams.SourceChainID, sourceChain)
 	}
 	if len(assembleParams.Nodes) != 2 {
 		t.Errorf("assemble Nodes = %d, want 2", len(assembleParams.Nodes))
