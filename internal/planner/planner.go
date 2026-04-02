@@ -85,6 +85,10 @@ func needsGenesisPlan(group *seiv1alpha1.SeiNodeGroup) bool {
 	if !genesisNeeded && !forkNeeded {
 		return false
 	}
+	return allReplicasCreated(group)
+}
+
+func allReplicasCreated(group *seiv1alpha1.SeiNodeGroup) bool {
 	return int32(len(group.Status.IncumbentNodes)) >= group.Spec.Replicas
 }
 
