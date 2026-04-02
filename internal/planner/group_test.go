@@ -141,6 +141,153 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 	}
 }
 
+func TestBuildGroupForkPlan(t *testing.T) {
+	group := &seiv1alpha1.SeiNodeGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "fork-group", Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeGroupSpec{
+			Replicas: 2,
+			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+				ChainID:        "fork-1",
+				AccountBalance: "1000usei",
+				Fork: &seiv1alpha1.ForkConfig{
+					SourceChainID: "pacific-1",
+					SourceImage:   "sei:v5.0.0",
+					ExportHeight:  100000,
+				},
+			},
+		},
+		Status: seiv1alpha1.SeiNodeGroupStatus{
+			IncumbentNodes: []string{"fork-group-0", "fork-group-1"},
+			Conditions: []metav1.Condition{
+				{Type: seiv1alpha1.ConditionForkGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	p, err := ForGroup(group)
+	if err != nil {
+		t.Fatalf("ForGroup: %v", err)
+	}
+	plan, err := p.BuildPlan(group)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	if plan.Phase != seiv1alpha1.TaskPlanActive {
+		t.Errorf("phase = %q, want Active", plan.Phase)
+	}
+
+	// Fork plan: 4 exporter tasks + 3 shared tasks = 7
+	if len(plan.Tasks) != 7 {
+		t.Fatalf("expected 7 tasks, got %d", len(plan.Tasks))
+	}
+
+	expectedTypes := []string{
+		task.TaskTypeCreateExporter,
+		task.TaskTypeAwaitExporterRunning,
+		task.TaskTypeSubmitExportState,
+		task.TaskTypeTeardownExporter,
+		TaskAssembleGenesisFork,
+		task.TaskTypeCollectAndSetPeers,
+		TaskAwaitNodesRunning,
+	}
+	for i, wantType := range expectedTypes {
+		if plan.Tasks[i].Type != wantType {
+			t.Errorf("task[%d] type = %q, want %q", i, plan.Tasks[i].Type, wantType)
+		}
+		if plan.Tasks[i].Status != seiv1alpha1.TaskPending {
+			t.Errorf("task[%d] status = %q, want Pending", i, plan.Tasks[i].Status)
+		}
+		if plan.Tasks[i].ID == "" {
+			t.Errorf("task[%d] ID should not be empty", i)
+		}
+	}
+
+	// Verify create-exporter params
+	var createParams task.CreateExporterParams
+	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &createParams); err != nil {
+		t.Fatalf("unmarshal create-exporter params: %v", err)
+	}
+	if createParams.GroupName != "fork-group" {
+		t.Errorf("GroupName = %q, want %q", createParams.GroupName, "fork-group")
+	}
+	if createParams.ExporterName != "fork-group-exporter" {
+		t.Errorf("ExporterName = %q, want %q", createParams.ExporterName, "fork-group-exporter")
+	}
+	if createParams.SourceChainID != "pacific-1" {
+		t.Errorf("SourceChainID = %q, want %q", createParams.SourceChainID, "pacific-1")
+	}
+	if createParams.SourceImage != "sei:v5.0.0" {
+		t.Errorf("SourceImage = %q, want %q", createParams.SourceImage, "sei:v5.0.0")
+	}
+	if createParams.ExportHeight != 100000 {
+		t.Errorf("ExportHeight = %d, want %d", createParams.ExportHeight, 100000)
+	}
+
+	// Verify submit-export-state params
+	var submitParams task.SubmitExportStateParams
+	if err := json.Unmarshal(plan.Tasks[2].Params.Raw, &submitParams); err != nil {
+		t.Fatalf("unmarshal submit-export-state params: %v", err)
+	}
+	if submitParams.SourceChainID != "pacific-1" {
+		t.Errorf("submit SourceChainID = %q, want %q", submitParams.SourceChainID, "pacific-1")
+	}
+
+	// Verify assemble-genesis-fork params
+	var assembleParams task.AssembleForkGenesisParams
+	if err := json.Unmarshal(plan.Tasks[4].Params.Raw, &assembleParams); err != nil {
+		t.Fatalf("unmarshal assemble-genesis-fork params: %v", err)
+	}
+	if assembleParams.SourceChainID != "pacific-1" {
+		t.Errorf("assemble SourceChainID = %q, want %q", assembleParams.SourceChainID, "pacific-1")
+	}
+	if len(assembleParams.Nodes) != 2 {
+		t.Errorf("assemble Nodes = %d, want 2", len(assembleParams.Nodes))
+	}
+
+	// Verify assemble task has MaxRetries
+	if plan.Tasks[4].MaxRetries != groupAssemblyMaxRetries {
+		t.Errorf("assemble MaxRetries = %d, want %d", plan.Tasks[4].MaxRetries, groupAssemblyMaxRetries)
+	}
+}
+
+func TestBuildGroupForkPlan_NilForkSpecNoExporterTasks(t *testing.T) {
+	// ForkGenesisCeremonyNeeded condition is set but Fork spec is nil.
+	// The planner should fall back to the standard genesis plan.
+	group := &seiv1alpha1.SeiNodeGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "edge-group", Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeGroupSpec{
+			Replicas: 1,
+			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+				ChainID: "test-1",
+			},
+		},
+		Status: seiv1alpha1.SeiNodeGroupStatus{
+			IncumbentNodes: []string{"edge-group-0"},
+			Conditions: []metav1.Condition{
+				{Type: seiv1alpha1.ConditionForkGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	p, err := ForGroup(group)
+	if err != nil {
+		t.Fatalf("ForGroup: %v", err)
+	}
+	plan, err := p.BuildPlan(group)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	// Should fall back to standard genesis (3 tasks, no exporter)
+	if len(plan.Tasks) != 3 {
+		t.Fatalf("expected 3 tasks (standard genesis fallback), got %d", len(plan.Tasks))
+	}
+	if plan.Tasks[0].Type != TaskAssembleGenesis {
+		t.Errorf("task[0] type = %q, want %q", plan.Tasks[0].Type, TaskAssembleGenesis)
+	}
+}
+
 func TestBuildGroupAssemblyPlan_DeterministicIDs(t *testing.T) {
 	group := &seiv1alpha1.SeiNodeGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "det-group", Namespace: "default"},

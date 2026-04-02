@@ -3,7 +3,7 @@ package task
 import sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 // AssembleForkGenesisParams are the serialized fields for the
-// assemble-fork-genesis sidecar task. The sidecar downloads exported
+// assemble-genesis-fork sidecar task. The sidecar downloads exported
 // state from the platform genesis bucket at {sourceChainId}/exported-state.json,
 // strips old validators, rewrites chain identity, and runs collect-gentxs.
 type AssembleForkGenesisParams struct {

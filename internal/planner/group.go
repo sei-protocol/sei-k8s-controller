@@ -35,7 +35,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 	assembleTaskType := TaskAssembleGenesis
 	var assembleParams any
 
-	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) {
+	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) && group.Spec.Genesis.Fork != nil {
 		assembleTaskType = TaskAssembleGenesisFork
 		assembleParams = &task.AssembleForkGenesisParams{
 			SourceChainID:  group.Spec.Genesis.Fork.SourceChainID,

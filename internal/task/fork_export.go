@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
@@ -14,6 +15,11 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
+
+// exportStateTimeout is the maximum time the export-state task can run
+// before the controller fails the plan. Generous because seid export
+// on large chains can take hours.
+const exportStateTimeout = 6 * time.Hour
 
 const (
 	TaskTypeCreateExporter       = "create-exporter"
@@ -64,6 +70,14 @@ func (e *createExporterExecution) Execute(ctx context.Context) error {
 		Name: e.params.ExporterName, Namespace: e.params.Namespace,
 	}, existing)
 	if err == nil {
+		// If a previous attempt left a failed exporter, delete it so we
+		// can create a fresh one on the next reconcile.
+		if existing.Status.Phase == seiv1alpha1.PhaseFailed {
+			if delErr := e.cfg.KubeClient.Delete(ctx, existing); delErr != nil && !apierrors.IsNotFound(delErr) {
+				return fmt.Errorf("deleting failed exporter: %w", delErr)
+			}
+			return nil // next reconcile will re-enter Execute and create a new exporter
+		}
 		e.complete()
 		return nil
 	}
@@ -71,6 +85,9 @@ func (e *createExporterExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("checking exporter existence: %w", err)
 	}
 
+	// The exporter uses the source chain's binary (SourceImage) paired
+	// with the group's sidecar config. The sidecar is chain-agnostic —
+	// it only needs to talk to seid's RPC and manage files on disk.
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      e.params.ExporterName,
@@ -153,8 +170,9 @@ func (e *awaitExporterRunningExecution) Status(ctx context.Context) ExecutionSta
 		Name: e.params.ExporterName, Namespace: e.params.Namespace,
 	}, node)
 	if apierrors.IsNotFound(err) {
-		e.complete()
-		return ExecutionComplete
+		// Exporter should exist at this point — keep polling to let the
+		// informer cache catch up after creation.
+		return ExecutionRunning
 	}
 	if err != nil {
 		return ExecutionRunning
@@ -182,10 +200,8 @@ type SubmitExportStateParams struct {
 
 type submitExportStateExecution struct {
 	taskBase
-	params    SubmitExportStateParams
-	cfg       ExecutionConfig
-	submitted bool
-	taskID    string
+	params SubmitExportStateParams
+	cfg    ExecutionConfig
 }
 
 func deserializeSubmitExportState(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
@@ -202,6 +218,13 @@ func deserializeSubmitExportState(id string, params json.RawMessage, cfg Executi
 	}, nil
 }
 
+// sidecarTaskID returns the deterministic UUID used for the export-state
+// submission to the exporter's sidecar. Recomputed on every call so it
+// survives re-deserialization across reconcile boundaries.
+func (e *submitExportStateExecution) sidecarTaskID() uuid.UUID {
+	return uuid.MustParse(DeterministicTaskID(e.params.ExporterName, "export-state", 0))
+}
+
 func (e *submitExportStateExecution) Execute(ctx context.Context) error {
 	node := &seiv1alpha1.SeiNode{}
 	if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{
@@ -215,7 +238,7 @@ func (e *submitExportStateExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("building sidecar client for exporter: %w", err)
 	}
 
-	taskID := uuid.MustParse(DeterministicTaskID(e.params.ExporterName, "export-state", 0))
+	taskID := e.sidecarTaskID()
 	exportParams := map[string]any{
 		"height":   e.params.ExportHeight,
 		"chainId":  e.params.SourceChainID,
@@ -233,17 +256,12 @@ func (e *submitExportStateExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("submitting export-state to exporter: %w", err)
 	}
 
-	e.submitted = true
-	e.taskID = taskID.String()
 	return nil
 }
 
 func (e *submitExportStateExecution) Status(ctx context.Context) ExecutionStatus {
 	if s, done := e.isTerminal(); done {
 		return s
-	}
-	if !e.submitted {
-		return ExecutionRunning
 	}
 
 	node := &seiv1alpha1.SeiNode{}
@@ -253,16 +271,18 @@ func (e *submitExportStateExecution) Status(ctx context.Context) ExecutionStatus
 		return ExecutionRunning
 	}
 
+	// Timeout: fail if the exporter has been alive longer than the limit.
+	if !node.CreationTimestamp.IsZero() && time.Since(node.CreationTimestamp.Time) > exportStateTimeout {
+		e.setFailed(fmt.Errorf("export-state timed out after %s", exportStateTimeout))
+		return ExecutionFailed
+	}
+
 	sc, err := sidecarClientForNode(node)
 	if err != nil {
 		return ExecutionRunning
 	}
 
-	taskID, err := uuid.Parse(e.taskID)
-	if err != nil {
-		return ExecutionRunning
-	}
-
+	taskID := e.sidecarTaskID()
 	result, err := sc.GetTask(ctx, taskID)
 	if err != nil {
 		return ExecutionRunning
