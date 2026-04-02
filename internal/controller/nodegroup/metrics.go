@@ -119,4 +119,5 @@ func cleanupGroupMetrics(namespace, name string) {
 		}
 	}
 	observability.ReconcileErrorsTotal.DeleteLabelValues(controllerName, namespace, name)
+tplanner.CleanupPlanMetrics("seinodegroup", namespace, name)
 }

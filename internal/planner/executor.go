@@ -164,7 +164,7 @@ func retryTask(
 	patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 
 	t.RetryCount++
-	taskRetriesTotal.WithLabelValues(controller, t.Type).Inc()
+	taskRetriesTotal.WithLabelValues(controller, obj.GetNamespace(), t.Type).Inc()
 	log.FromContext(ctx).Info("retrying failed task",
 		"task", t.Type, "attempt", t.RetryCount, "maxRetries", t.MaxRetries, "lastError", errMsg)
 
@@ -193,7 +193,7 @@ func failTask(
 ) (ctrl.Result, error) {
 	log.FromContext(ctx).Error(fmt.Errorf("task failed: %s", errMsg), "task plan failed", "task", t.Type)
 
-	taskFailuresTotal.WithLabelValues(controller, t.Type).Inc()
+	taskFailuresTotal.WithLabelValues(controller, obj.GetNamespace(), t.Type).Inc()
 
 	patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 	t.Status = seiv1alpha1.TaskFailed
