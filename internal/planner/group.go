@@ -62,7 +62,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		fork := group.Spec.Genesis.Fork
 		exporterName := fmt.Sprintf("%s-exporter", group.Name)
 
-		createExporter, err := buildGroupPlannedTask(planID, task.TaskTypeCreateExporter, planIndex,
+		createExporter, err := buildPlannedTask(planID, task.TaskTypeCreateExporter, planIndex,
 			&task.CreateExporterParams{
 				GroupName:     group.Name,
 				ExporterName:  exporterName,
@@ -76,7 +76,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		}
 		planIndex++
 
-		awaitExporter, err := buildGroupPlannedTask(planID, task.TaskTypeAwaitExporterRunning, planIndex,
+		awaitExporter, err := buildPlannedTask(planID, task.TaskTypeAwaitExporterRunning, planIndex,
 			&task.AwaitExporterRunningParams{
 				ExporterName: exporterName,
 				Namespace:    group.Namespace,
@@ -86,7 +86,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		}
 		planIndex++
 
-		submitExport, err := buildGroupPlannedTask(planID, task.TaskTypeSubmitExportState, planIndex,
+		submitExport, err := buildPlannedTask(planID, task.TaskTypeSubmitExportState, planIndex,
 			&task.SubmitExportStateParams{
 				ExporterName:  exporterName,
 				Namespace:     group.Namespace,
@@ -98,7 +98,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		}
 		planIndex++
 
-		teardownExporter, err := buildGroupPlannedTask(planID, task.TaskTypeTeardownExporter, planIndex,
+		teardownExporter, err := buildPlannedTask(planID, task.TaskTypeTeardownExporter, planIndex,
 			&task.TeardownExporterParams{
 				ExporterName: exporterName,
 				Namespace:    group.Namespace,
@@ -111,7 +111,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		tasks = append(tasks, createExporter, awaitExporter, submitExport, teardownExporter)
 	}
 
-	assembleTask, err := buildGroupPlannedTask(planID, assembleTaskType, planIndex, assembleParams)
+	assembleTask, err := buildPlannedTask(planID, assembleTaskType, planIndex, assembleParams)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		Namespace: group.Namespace,
 		NodeNames: incumbentNodes,
 	}
-	collectPeersTask, err := buildGroupPlannedTask(planID, task.TaskTypeCollectAndSetPeers, planIndex, collectPeersParams)
+	collectPeersTask, err := buildPlannedTask(planID, task.TaskTypeCollectAndSetPeers, planIndex, collectPeersParams)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 		Expected:  len(incumbentNodes),
 		NodeNames: incumbentNodes,
 	}
-	awaitTask, err := buildGroupPlannedTask(planID, TaskAwaitNodesRunning, planIndex, awaitParams)
+	awaitTask, err := buildPlannedTask(planID, TaskAwaitNodesRunning, planIndex, awaitParams)
 	if err != nil {
 		return nil, err
 	}
@@ -146,20 +146,5 @@ func (p *genesisGroupPlanner) BuildPlan(
 		ID:    planID,
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: tasks,
-	}, nil
-}
-
-// buildGroupPlannedTask is the group-level equivalent of buildPlannedTask.
-func buildGroupPlannedTask(planID, taskType string, planIndex int, params any) (seiv1alpha1.PlannedTask, error) {
-	id := task.DeterministicTaskID(planID, taskType, planIndex)
-	p, err := marshalParams(params)
-	if err != nil {
-		return seiv1alpha1.PlannedTask{}, fmt.Errorf("task %s: %w", taskType, err)
-	}
-	return seiv1alpha1.PlannedTask{
-		Type:   taskType,
-		ID:     id,
-		Status: seiv1alpha1.TaskPending,
-		Params: p,
 	}, nil
 }
