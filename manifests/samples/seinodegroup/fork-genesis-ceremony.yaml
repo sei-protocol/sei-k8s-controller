@@ -40,4 +40,11 @@ spec:
       sidecar:
         image: "ghcr.io/bdchatham/seictl@sha256:f20bc2a2d37d8a780653da50fec2b920ece594fc83ffc0ff3bd43aa60035c6dd"
 
+      peers:
+        - ec2Tags:
+            region: eu-central-1
+            tags:
+              ChainIdentifier: pacific-1
+              Component: state-syncer
+
       validator: {}
