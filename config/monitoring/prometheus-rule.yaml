@@ -1,0 +1,131 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: controller-alerts
+  namespace: system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: sei-k8s-controller
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  groups:
+    - name: SeiNode Lifecycle
+      rules:
+        - alert: SeiNodeFailed
+          expr: sei_controller_seinode_phase{phase="Failed"} == 1
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} has failed"
+            description: "Node entered Failed phase. Check task plan and sidecar logs."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodefailed
+
+        - alert: SeiNodeGroupDegraded
+          expr: sei_controller_seinodegroup_phase{phase="Degraded"} == 1
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} is degraded"
+            description: "Some nodes are not ready. Check child SeiNode status."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodegroupdegraded
+
+        - alert: SeiNodeGroupFailed
+          expr: sei_controller_seinodegroup_phase{phase="Failed"} == 1
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} has failed"
+            description: "All nodes have failed. Immediate investigation required."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodegroupfailed
+
+        - alert: SeiNodeStuckInitializing
+          expr: |
+            sei_controller_seinode_phase{phase="Initializing"} == 1
+            unless on (namespace, name) sei_controller_plan_active == 1
+          for: 30m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} stuck initializing"
+            description: "Node in Initializing phase for 30+ minutes with no active plan. Suppressed during genesis ceremonies and bootstrap."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodestuckinitializing
+
+        - alert: SeiNodeStuckPending
+          expr: sei_controller_seinode_phase{phase="Pending"} == 1
+          for: 15m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} stuck pending"
+            description: "Node in Pending phase for 15+ minutes. Check Karpenter capacity and PVC binding."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodestuckpending
+
+    - name: Controller Health
+      rules:
+        - alert: SidecarUnreachableHigh
+          expr: rate(sei_controller_sidecar_unreachable_total[5m]) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Sidecar for {{ $labels.namespace }}/{{ $labels.node }} is frequently unreachable"
+            description: "Sidecar connectivity failures sustained for 10 minutes."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#sidecarunreachablehigh
+
+        - alert: ControllerReconcileErrors
+          expr: increase(sei_controller_reconcile_errors_total[15m]) > 5
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Controller {{ $labels.controller }} has elevated reconcile errors"
+            description: "More than 5 reconcile errors in the last 15 minutes for {{ $labels.namespace }}/{{ $labels.name }}."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#controllerreconcileerrors
+
+        - alert: ControllerHighReconcileLatency
+          expr: |
+            histogram_quantile(0.99,
+              sum by (controller, substep, le) (
+                rate(sei_controller_seinodegroup_reconcile_substep_duration_seconds_bucket[5m])
+              )
+            ) > 10
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "SeiNodeGroup reconcile substep {{ $labels.substep }} is slow"
+            description: "p99 latency above 10s for 10 minutes."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#controllerhighreconcilelatency
+
+        - alert: TaskFailureRateHigh
+          expr: increase(sei_controller_task_failures_total[15m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Task {{ $labels.task_type }} has elevated failure rate"
+            description: "More than 3 terminal task failures in 15 minutes. Early warning before nodes reach Failed phase."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#taskfailureratehigh
+
+        - alert: ControllerMetricsDown
+          expr: up{job=~".*sei-k8s-controller.*"} == 0
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "sei-k8s-controller metrics endpoint is down"
+            description: "Prometheus cannot scrape the controller for 5 minutes. All other controller alerts are blind."
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#controllermetricsdown
