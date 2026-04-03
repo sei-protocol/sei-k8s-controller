@@ -102,7 +102,7 @@ func (p *hardForkDeploymentPlanner) BuildPlan(
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, p := range prog {
-		t, err := buildGroupPlannedTask(planID, p.taskType, i, p.params)
+		t, err := buildPlannedTask(planID, p.taskType, i, p.params)
 		if err != nil {
 			return nil, err
 		}
@@ -156,7 +156,7 @@ func (p *blueGreenDeploymentPlanner) BuildPlan(
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, p := range prog {
-		t, err := buildGroupPlannedTask(planID, p.taskType, i, p.params)
+		t, err := buildPlannedTask(planID, p.taskType, i, p.params)
 		if err != nil {
 			return nil, err
 		}
