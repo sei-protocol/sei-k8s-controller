@@ -187,21 +187,21 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 // Cosmos SDK's halt-height sends SIGINT to itself after committing the
 // target block, producing exit code 130. The wrapper treats 130 as
 // success so the Job completes cleanly.
+//
+// Uses /bin/sh (POSIX) and wget for the health check because the seid
+// container image does not include bash.
 func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args []string) {
 	script := fmt.Sprintf(
 		`echo "waiting for sidecar bootstrap tasks to complete..."; `+
 			`while true; do `+
-			`{ exec 3<>/dev/tcp/localhost/%d; } 2>/dev/null && `+
-			`printf "GET /v0/healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && `+
-			`head -1 <&3 | grep -q "200" && break; `+
-			`exec 3>&-; sleep 5; done; `+
-			`exec 3>&-; `+
+			`wget -q -O /dev/null http://localhost:%d/v0/healthz && break; `+
+			`sleep 5; done; `+
 			`echo "sidecar healthy, starting seid with halt-height %d"; `+
 			`seid start --home %s --halt-height %d; `+
 			`rc=$?; if [ $rc -eq 130 ]; then echo "seid halted at target height (exit 130), treating as success"; exit 0; fi; exit $rc`,
 		port, haltHeight, bootstrapDataDir, haltHeight,
 	)
-	return []string{"/bin/bash", "-c"}, []string{script}
+	return []string{"/bin/sh", "-c"}, []string{script}
 }
 
 func bootstrapSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
