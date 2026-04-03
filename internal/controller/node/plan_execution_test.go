@@ -349,15 +349,26 @@ func TestBuildPlanPhaseAndTasks(t *testing.T) {
 	}
 }
 
-func TestBuildPlan_DeterministicIDs(t *testing.T) {
+func TestBuildPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
 	node := snapshotNode()
 	p, _ := planner.ForNode(node)
 	plan1 := mustBuildPlan(t, p, node)
 	plan2 := mustBuildPlan(t, p, node)
+	if plan1.ID == plan2.ID {
+		t.Errorf("plan IDs should differ across rebuilds: both %q", plan1.ID)
+	}
 	for i := range plan1.Tasks {
-		if plan1.Tasks[i].ID != plan2.Tasks[i].ID {
-			t.Errorf("task %d ID not deterministic: %q vs %q", i, plan1.Tasks[i].ID, plan2.Tasks[i].ID)
+		if plan1.Tasks[i].ID == plan2.Tasks[i].ID {
+			t.Errorf("task %d ID should differ across rebuilds: both %q", i, plan1.Tasks[i].ID)
 		}
+	}
+	// Verify task IDs are unique within a single plan.
+	seen := map[string]bool{}
+	for _, tsk := range plan1.Tasks {
+		if seen[tsk.ID] {
+			t.Errorf("duplicate task ID within plan: %q", tsk.ID)
+		}
+		seen[tsk.ID] = true
 	}
 }
 

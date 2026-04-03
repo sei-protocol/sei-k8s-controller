@@ -14,7 +14,7 @@ import (
 )
 
 // taskIDNamespace is a fixed UUID v5 namespace for generating deterministic
-// task IDs. The controller seeds this with nodeName/taskType/attempt to
+// task IDs. The controller seeds this with planID/taskType/planIndex to
 // produce a stable, collision-free ID for each task instance.
 var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
@@ -109,11 +109,11 @@ func (e *UnknownTaskTypeError) Error() string {
 	return fmt.Sprintf("unknown task type %q", e.Type)
 }
 
-// DeterministicTaskID generates a UUID v5 from node name, task type, and
-// attempt counter. The attempt counter prevents ID collisions when a failed
-// plan is rebuilt and the same task type runs again.
-func DeterministicTaskID(nodeName, taskType string, attempt int) string {
-	seed := fmt.Sprintf("%s/%s/%d", nodeName, taskType, attempt)
+// DeterministicTaskID generates a UUID v5 from plan ID, task type, and
+// plan index. Each plan gets a unique planID (UUID v4), so task IDs are
+// unique across plan rebuilds while remaining deterministic within a plan.
+func DeterministicTaskID(planID, taskType string, planIndex int) string {
+	seed := fmt.Sprintf("%s/%s/%d", planID, taskType, planIndex)
 	return uuid.NewSHA1(taskIDNamespace, []byte(seed)).String()
 }
 

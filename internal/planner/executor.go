@@ -142,43 +142,23 @@ func executePlan(
 			errMsg = exec.Err().Error()
 		}
 		if t.MaxRetries > 0 && t.RetryCount < t.MaxRetries {
-			return retryTask(ctx, kc, obj, cn, t, errMsg)
+			taskRetriesTotal.WithLabelValues(cn, obj.GetNamespace(), t.Type).Inc()
+			patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
+			t.RetryCount++
+			t.Status = seiv1alpha1.TaskPending
+			t.Error = ""
+			log.FromContext(ctx).Info("retrying failed task",
+				"task", t.Type, "retry", t.RetryCount, "maxRetries", t.MaxRetries, "lastError", errMsg)
+			if err := kc.Status().Patch(ctx, obj, patch); err != nil {
+				return ctrl.Result{}, fmt.Errorf("resetting task for retry: %w", err)
+			}
+			return ctrl.Result{RequeueAfter: retryBackoff(t.RetryCount)}, nil
 		}
 		return failTask(ctx, kc, obj, cn, plan, t, errMsg)
 
 	default:
 		return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
 	}
-}
-
-// retryTask resets a failed task for another attempt with a new deterministic
-// ID, so the sidecar treats it as a fresh submission.
-func retryTask(
-	ctx context.Context,
-	kc client.Client,
-	obj client.Object,
-	controller string,
-	t *seiv1alpha1.PlannedTask,
-	errMsg string,
-) (ctrl.Result, error) {
-	patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
-
-	t.RetryCount++
-	taskRetriesTotal.WithLabelValues(controller, obj.GetNamespace(), t.Type).Inc()
-	log.FromContext(ctx).Info("retrying failed task",
-		"task", t.Type, "attempt", t.RetryCount, "maxRetries", t.MaxRetries, "lastError", errMsg)
-
-	resourceName := obj.GetName()
-	t.ID = task.DeterministicTaskID(resourceName, t.Type, t.RetryCount)
-	t.Status = seiv1alpha1.TaskPending
-	t.Error = ""
-
-	if err := kc.Status().Patch(ctx, obj, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("resetting task for retry: %w", err)
-	}
-
-	backoff := retryBackoff(t.RetryCount)
-	return ctrl.Result{RequeueAfter: backoff}, nil
 }
 
 // failTask marks an individual task and the overall plan as Failed.
@@ -199,6 +179,19 @@ func failTask(
 	t.Status = seiv1alpha1.TaskFailed
 	t.Error = errMsg
 	plan.Phase = seiv1alpha1.TaskPlanFailed
+	for i := range plan.Tasks {
+		if plan.Tasks[i].ID == t.ID {
+			plan.FailedTaskIndex = &i
+			break
+		}
+	}
+	plan.FailedTaskDetail = &seiv1alpha1.FailedTaskInfo{
+		Type:       t.Type,
+		ID:         t.ID,
+		Error:      errMsg,
+		RetryCount: t.RetryCount,
+		MaxRetries: t.MaxRetries,
+	}
 	if err := kc.Status().Patch(ctx, obj, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("marking task failed: %w", err)
 	}

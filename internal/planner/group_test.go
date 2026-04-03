@@ -290,7 +290,7 @@ func TestBuildGroupForkPlan_NilForkSpecNoExporterTasks(t *testing.T) {
 	}
 }
 
-func TestBuildGroupAssemblyPlan_DeterministicIDs(t *testing.T) {
+func TestBuildGroupAssemblyPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
 	group := &seiv1alpha1.SeiNodeGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "det-group", Namespace: "default"},
 		Spec: seiv1alpha1.SeiNodeGroupSpec{
@@ -319,10 +319,13 @@ func TestBuildGroupAssemblyPlan_DeterministicIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan1.Tasks[0].ID != plan2.Tasks[0].ID {
-		t.Errorf("assemble IDs not deterministic: %q vs %q", plan1.Tasks[0].ID, plan2.Tasks[0].ID)
+	if plan1.ID == plan2.ID {
+		t.Errorf("plan IDs should differ across rebuilds: both %q", plan1.ID)
 	}
-	if plan1.Tasks[2].ID != plan2.Tasks[2].ID {
-		t.Errorf("await IDs not deterministic: %q vs %q", plan1.Tasks[2].ID, plan2.Tasks[2].ID)
+	if plan1.Tasks[0].ID == plan2.Tasks[0].ID {
+		t.Errorf("assemble task IDs should differ across rebuilds: both %q", plan1.Tasks[0].ID)
+	}
+	if plan1.Tasks[2].ID == plan2.Tasks[2].ID {
+		t.Errorf("await task IDs should differ across rebuilds: both %q", plan1.Tasks[2].ID)
 	}
 }
