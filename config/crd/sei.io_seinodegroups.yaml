@@ -1145,6 +1145,12 @@ spec:
                           - Complete
                           - Failed
                           type: string
+                        submittedAt:
+                          description: |-
+                            SubmittedAt is when the task was first submitted to the sidecar.
+                            Nil means the task has not been submitted yet.
+                          format: date-time
+                          type: string
                         type:
                           description: Type identifies the task (e.g. "snapshot-restore",
                             "config-patch").

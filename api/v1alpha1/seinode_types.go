@@ -125,6 +125,11 @@ type PlannedTask struct {
 	// +optional
 	Params *apiextensionsv1.JSON `json:"params,omitempty"`
 
+	// SubmittedAt is when the task was first submitted to the sidecar.
+	// Nil means the task has not been submitted yet.
+	// +optional
+	SubmittedAt *metav1.Time `json:"submittedAt,omitempty"`
+
 	// Error is the error message if the task failed.
 	// +optional
 	Error string `json:"error,omitempty"`

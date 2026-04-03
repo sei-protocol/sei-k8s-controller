@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -121,6 +122,11 @@ func executePlan(
 				"task", t.Type, "error", err)
 			return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
 		}
+		if t.SubmittedAt == nil {
+			now := metav1.Now()
+			t.SubmittedAt = &now
+		}
+		log.FromContext(ctx).Info("task submitted to sidecar", "task", t.Type, "id", t.ID)
 		status = exec.Status(ctx)
 	}
 
@@ -147,6 +153,7 @@ func executePlan(
 			t.RetryCount++
 			t.Status = seiv1alpha1.TaskPending
 			t.Error = ""
+			t.SubmittedAt = nil
 			log.FromContext(ctx).Info("retrying failed task",
 				"task", t.Type, "retry", t.RetryCount, "maxRetries", t.MaxRetries, "lastError", errMsg)
 			if err := kc.Status().Patch(ctx, obj, patch); err != nil {
