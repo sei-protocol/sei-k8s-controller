@@ -113,7 +113,8 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 	s := testScheme(t)
 	node := testNode()
 
-	taskID := task.DeterministicTaskID(node.Name, sidecar.TaskTypeConfigureGenesis, 0)
+	const planID = "test-plan-retry"
+	taskID := task.DeterministicTaskID(planID, sidecar.TaskTypeConfigureGenesis, 0)
 	parsedID, _ := uuid.Parse(taskID)
 
 	failedResult := &sidecar.TaskResult{
@@ -129,6 +130,7 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 	}
 
 	node.Status.Plan = &seiv1alpha1.TaskPlan{
+		ID:    planID,
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: []seiv1alpha1.PlannedTask{
 			{
@@ -169,6 +171,9 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 	if tsk.RetryCount != 1 {
 		t.Errorf("RetryCount = %d, want 1", tsk.RetryCount)
 	}
+	if tsk.ID != taskID {
+		t.Errorf("task ID changed after retry: got %q, want %q", tsk.ID, taskID)
+	}
 	if updated.Status.Plan.Phase == seiv1alpha1.TaskPlanFailed {
 		t.Error("plan should NOT be failed — retries remain")
 	}
@@ -181,7 +186,8 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 	s := testScheme(t)
 	node := testNode()
 
-	taskID := task.DeterministicTaskID(node.Name, sidecar.TaskTypeConfigureGenesis, 2)
+	const planID = "test-plan-exhausted"
+	taskID := task.DeterministicTaskID(planID, sidecar.TaskTypeConfigureGenesis, 0)
 	parsedID, _ := uuid.Parse(taskID)
 
 	failedResult := &sidecar.TaskResult{
@@ -197,6 +203,7 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 	}
 
 	node.Status.Plan = &seiv1alpha1.TaskPlan{
+		ID:    planID,
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: []seiv1alpha1.PlannedTask{
 			{
@@ -233,6 +240,24 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 	if updated.Status.Plan.Tasks[0].Status != seiv1alpha1.TaskFailed {
 		t.Errorf("task status = %q, want Failed", updated.Status.Plan.Tasks[0].Status)
 	}
+	if updated.Status.Plan.FailedTaskIndex == nil {
+		t.Fatal("FailedTaskIndex should not be nil")
+	}
+	if *updated.Status.Plan.FailedTaskIndex != 0 {
+		t.Errorf("FailedTaskIndex = %d, want 0", *updated.Status.Plan.FailedTaskIndex)
+	}
+	if updated.Status.Plan.FailedTaskDetail == nil {
+		t.Fatal("FailedTaskDetail should not be nil")
+	}
+	if updated.Status.Plan.FailedTaskDetail.Type != sidecar.TaskTypeConfigureGenesis {
+		t.Errorf("FailedTaskDetail.Type = %q, want %q", updated.Status.Plan.FailedTaskDetail.Type, sidecar.TaskTypeConfigureGenesis)
+	}
+	if updated.Status.Plan.FailedTaskDetail.RetryCount != 2 {
+		t.Errorf("FailedTaskDetail.RetryCount = %d, want 2", updated.Status.Plan.FailedTaskDetail.RetryCount)
+	}
+	if updated.Status.Plan.FailedTaskDetail.MaxRetries != 2 {
+		t.Errorf("FailedTaskDetail.MaxRetries = %d, want 2", updated.Status.Plan.FailedTaskDetail.MaxRetries)
+	}
 }
 
 func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
@@ -244,7 +269,8 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		},
 	}
 
-	taskID := task.DeterministicTaskID(group.Name, sidecar.TaskTypeAssembleGenesis, 0)
+	const planID = "test-group-plan"
+	taskID := task.DeterministicTaskID(planID, sidecar.TaskTypeAssembleGenesis, 0)
 	parsedID, _ := uuid.Parse(taskID)
 
 	now := time.Now()
@@ -266,6 +292,7 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	})
 
 	group.Status.Plan = &seiv1alpha1.TaskPlan{
+		ID:    planID,
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: []seiv1alpha1.PlannedTask{
 			{

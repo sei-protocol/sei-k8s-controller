@@ -113,7 +113,7 @@ type PlannedTask struct {
 	// Type identifies the task (e.g. "snapshot-restore", "config-patch").
 	Type string `json:"type"`
 
-	// ID is a deterministic UUID v5 derived from nodeName/taskType/attempt.
+	// ID is a deterministic UUID v5 derived from planID/taskType/planIndex.
 	// Used as the key for sidecar task submission and status polling.
 	ID string `json:"id"`
 
@@ -140,14 +140,40 @@ type PlannedTask struct {
 	RetryCount int `json:"retryCount,omitempty"`
 }
 
+// FailedTaskInfo records details about a task failure for observability.
+type FailedTaskInfo struct {
+	// Type is the task type that failed.
+	Type string `json:"type"`
+	// ID is the task ID that failed.
+	ID string `json:"id"`
+	// Error is the error message from the failed execution.
+	Error string `json:"error"`
+	// RetryCount is the number of retries that were attempted.
+	RetryCount int `json:"retryCount"`
+	// MaxRetries is the configured retry limit.
+	MaxRetries int `json:"maxRetries"`
+}
+
 // TaskPlan tracks an ordered sequence of sidecar tasks that the controller
 // executes to initialize a node.
 type TaskPlan struct {
+	// ID is a unique identifier for this plan instance.
+	// +optional
+	ID string `json:"id,omitempty"`
+
 	// Phase is the overall state of the plan.
 	Phase TaskPlanPhase `json:"phase"`
 
 	// Tasks is the ordered list of tasks to execute.
 	Tasks []PlannedTask `json:"tasks"`
+
+	// FailedTaskIndex is the index of the task that caused the plan to fail.
+	// +optional
+	FailedTaskIndex *int `json:"failedTaskIndex,omitempty"`
+
+	// FailedTaskDetail records diagnostics about the task that caused the plan to fail.
+	// +optional
+	FailedTaskDetail *FailedTaskInfo `json:"failedTaskDetail,omitempty"`
 }
 
 // SeiNodePhase represents the high-level lifecycle state of a SeiNode.

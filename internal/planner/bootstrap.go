@@ -3,6 +3,7 @@ package planner
 import (
 	"slices"
 
+	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
@@ -21,12 +22,8 @@ func buildBootstrapPlan(
 	snap *seiv1alpha1.SnapshotSource,
 	configApplyParams *task.ConfigApplyParams,
 ) (*seiv1alpha1.TaskPlan, error) {
-	attempts := map[string]int{}
-	nextAttempt := func(taskType string) int {
-		a := attempts[taskType]
-		attempts[taskType] = a + 1
-		return a
-	}
+	planID := uuid.New().String()
+	planIndex := 0
 
 	jobName := task.BootstrapJobName(node)
 	serviceName := node.Name
@@ -36,11 +33,12 @@ func buildBootstrapPlan(
 	tasks := make([]seiv1alpha1.PlannedTask, 0, 2+len(bootstrapProg)+2+len(postProg))
 
 	appendTask := func(taskType string, params any) error {
-		t, err := buildPlannedTask(node, taskType, nextAttempt(taskType), params)
+		t, err := buildPlannedTask(planID, taskType, planIndex, params)
 		if err != nil {
 			return err
 		}
 		tasks = append(tasks, t)
+		planIndex++
 		return nil
 	}
 
@@ -78,7 +76,7 @@ func buildBootstrapPlan(
 		}
 	}
 
-	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
+	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
 }
 
 // buildBootstrapProgression returns the sidecar task sequence for the
@@ -135,7 +133,7 @@ const genesisConfigureMaxRetries = 180
 // uploaded genesis.json to S3.
 func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	gc := node.Spec.Validator.GenesisCeremony
-	attempt := 0
+	planID := uuid.New().String()
 
 	prog := []string{
 		TaskGenerateIdentity,
@@ -150,7 +148,7 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(node, taskType, attempt, genesisParamsForTaskType(node, gc, taskType))
+		t, err := buildPlannedTask(planID, taskType, i, genesisParamsForTaskType(node, gc, taskType))
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +157,7 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		}
 		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
+	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
 }
 
 func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.GenesisCeremonyNodeConfig, taskType string) any {

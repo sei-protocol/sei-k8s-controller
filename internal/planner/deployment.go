@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/google/uuid"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
@@ -54,6 +56,7 @@ type hardForkDeploymentPlanner struct{}
 func (p *hardForkDeploymentPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
 ) (*seiv1alpha1.TaskPlan, error) {
+	planID := uuid.New().String()
 	haltHeight := group.Spec.UpdateStrategy.HardFork.HaltHeight
 	incumbentNodes := group.Status.IncumbentNodes
 	entrantNodes := EntrantNodeNames(group)
@@ -99,13 +102,13 @@ func (p *hardForkDeploymentPlanner) BuildPlan(
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, p := range prog {
-		t, err := buildGroupPlannedTask(group.Name, p.taskType, p.params)
+		t, err := buildGroupPlannedTask(planID, p.taskType, i, p.params)
 		if err != nil {
 			return nil, err
 		}
 		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
+	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
 }
 
 // blueGreenDeploymentPlanner builds a deployment plan for the BlueGreen strategy.
@@ -114,6 +117,7 @@ type blueGreenDeploymentPlanner struct{}
 func (p *blueGreenDeploymentPlanner) BuildPlan(
 	group *seiv1alpha1.SeiNodeGroup,
 ) (*seiv1alpha1.TaskPlan, error) {
+	planID := uuid.New().String()
 	incumbentNodes := group.Status.IncumbentNodes
 	entrantNodes := EntrantNodeNames(group)
 	entrantRevision := EntrantRevision(group)
@@ -152,11 +156,11 @@ func (p *blueGreenDeploymentPlanner) BuildPlan(
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, p := range prog {
-		t, err := buildGroupPlannedTask(group.Name, p.taskType, p.params)
+		t, err := buildGroupPlannedTask(planID, p.taskType, i, p.params)
 		if err != nil {
 			return nil, err
 		}
 		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
+	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -217,8 +218,8 @@ func marshalParams(v any) (*apiextensionsv1.JSON, error) {
 
 // buildPlannedTask constructs a PlannedTask with deterministic ID and
 // serialized params.
-func buildPlannedTask(node *seiv1alpha1.SeiNode, taskType string, attempt int, params any) (seiv1alpha1.PlannedTask, error) {
-	id := task.DeterministicTaskID(node.Name, taskType, attempt)
+func buildPlannedTask(planID, taskType string, planIndex int, params any) (seiv1alpha1.PlannedTask, error) {
+	id := task.DeterministicTaskID(planID, taskType, planIndex)
 	p, err := marshalParams(params)
 	if err != nil {
 		return seiv1alpha1.PlannedTask{}, fmt.Errorf("task %s: %w", taskType, err)
@@ -250,16 +251,17 @@ func buildBasePlan(
 		prog = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync)
 	}
 
-	attempt := 0
+	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(node, taskType, attempt, paramsForTaskType(node, taskType, snap, configApplyParams))
+		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, snap, configApplyParams))
 		if err != nil {
 			return nil, err
 		}
 		tasks[i] = t
 	}
 	return &seiv1alpha1.TaskPlan{
+		ID:    planID,
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: tasks,
 	}, nil

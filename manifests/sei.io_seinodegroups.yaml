@@ -1067,6 +1067,40 @@ spec:
                   Plan tracks the active group-level task plan (genesis assembly,
                   deployment, etc.). Nil when no plan is in progress.
                 properties:
+                  failedTaskDetail:
+                    description: FailedTaskDetail records diagnostics about the task
+                      that caused the plan to fail.
+                    properties:
+                      error:
+                        description: Error is the error message from the failed execution.
+                        type: string
+                      id:
+                        description: ID is the task ID that failed.
+                        type: string
+                      maxRetries:
+                        description: MaxRetries is the configured retry limit.
+                        type: integer
+                      retryCount:
+                        description: RetryCount is the number of retries that were
+                          attempted.
+                        type: integer
+                      type:
+                        description: Type is the task type that failed.
+                        type: string
+                    required:
+                    - error
+                    - id
+                    - maxRetries
+                    - retryCount
+                    - type
+                    type: object
+                  failedTaskIndex:
+                    description: FailedTaskIndex is the index of the task that caused
+                      the plan to fail.
+                    type: integer
+                  id:
+                    description: ID is a unique identifier for this plan instance.
+                    type: string
                   phase:
                     description: Phase is the overall state of the plan.
                     enum:
@@ -1087,7 +1121,7 @@ spec:
                           type: string
                         id:
                           description: |-
-                            ID is a deterministic UUID v5 derived from nodeName/taskType/attempt.
+                            ID is a deterministic UUID v5 derived from planID/taskType/planIndex.
                             Used as the key for sidecar task submission and status polling.
                           type: string
                         maxRetries:
