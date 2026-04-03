@@ -124,6 +124,28 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, platform PlatformConfig) c
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
 		},
+		LivenessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/v0/livez",
+					Port: intstr.FromInt32(port),
+				},
+			},
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       10,
+			FailureThreshold:    3,
+		},
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/v0/healthz",
+					Port: intstr.FromInt32(port),
+				},
+			},
+			InitialDelaySeconds: 2,
+			PeriodSeconds:       5,
+			FailureThreshold:    6,
+		},
 	}
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Resources != nil {
 		c.Resources = *node.Spec.Sidecar.Resources
