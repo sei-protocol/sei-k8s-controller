@@ -23,7 +23,7 @@ spec:
     fork:
       sourceChainId: pacific-1
       sourceImage: "ghcr.io/sei-protocol/sei:v5.9.0"
-      exportHeight: 100000000
+      exportHeight: 200450000
 
   template:
     metadata:
@@ -38,6 +38,6 @@ spec:
         args: ["start", "--home", "/sei"]
 
       sidecar:
-        image: "ghcr.io/sei-protocol/seictl:v0.0.29"
+        image: "ghcr.io/bdchatham/seictl@sha256:f20bc2a2d37d8a780653da50fec2b920ece594fc83ffc0ff3bd43aa60035c6dd"
 
       validator: {}
