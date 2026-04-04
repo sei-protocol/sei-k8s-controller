@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
@@ -180,7 +181,7 @@ func shouldRequeue(result ctrl.Result) bool {
 // SetupWithManager sets up the controller with the Manager.
 func (r *SeiNodeGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&seiv1alpha1.SeiNodeGroup{}).
+		For(&seiv1alpha1.SeiNodeGroup{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&seiv1alpha1.SeiNode{}, builder.WithPredicates(childPhaseChangedPredicate())).
 		Owns(&corev1.Service{}).
 		Named(controllerName).
