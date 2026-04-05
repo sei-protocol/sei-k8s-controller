@@ -22,7 +22,7 @@ spec:
 
     fork:
       sourceChainId: pacific-1
-      sourceImage: "ghcr.io/bdchatham/sei-shadow@sha256:5dee59eaf2d0841a6e6c0f155bbafa5519a283295dd36e4271c6012f751afcd6"
+      sourceImage: "ghcr.io/sei-protocol/sei:v6.3.0"
       exportHeight: 200950000
 
   template:
