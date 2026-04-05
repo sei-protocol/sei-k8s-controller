@@ -45,6 +45,6 @@ spec:
             region: eu-central-1
             tags:
               ChainIdentifier: pacific-1
-              Component: snapshotter
+              Component: state-syncer
 
       validator: {}
