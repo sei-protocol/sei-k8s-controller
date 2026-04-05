@@ -110,9 +110,10 @@ func executePlan(
 		return failTask(ctx, kc, obj, cn, plan, t, err.Error())
 	}
 
-	status := exec.Status(ctx)
-
-	if status == task.ExecutionRunning && t.Status == seiv1alpha1.TaskPending {
+	// When the CRD task status is Pending (fresh or retried), submit to
+	// the sidecar before polling. The sidecar's cloud-API Submit handles
+	// both new tasks and re-execution of failed tasks transparently.
+	if t.Status == seiv1alpha1.TaskPending {
 		if err := exec.Execute(ctx); err != nil {
 			var termErr *task.TerminalError
 			if errors.As(err, &termErr) {
@@ -127,8 +128,9 @@ func executePlan(
 			t.SubmittedAt = &now
 		}
 		log.FromContext(ctx).Info("task submitted to sidecar", "task", t.Type, "id", t.ID)
-		status = exec.Status(ctx)
 	}
+
+	status := exec.Status(ctx)
 
 	switch status {
 	case task.ExecutionRunning:
