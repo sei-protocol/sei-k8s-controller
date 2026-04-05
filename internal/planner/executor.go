@@ -42,6 +42,16 @@ type Executor[T client.Object] struct {
 	ConfigFor func(ctx context.Context, obj T) task.ExecutionConfig
 }
 
+// needsSubmission reports whether the task should be submitted (or resubmitted)
+// to the sidecar. This is true when the CRD task status is Pending, which
+// covers both first-time submission and retries after failure. We submit
+// before polling Status because the sidecar may still hold a stale Failed
+// result from a previous run — the sidecar's cloud-API Submit transparently
+// re-executes failed tasks when resubmitted with the same stable ID.
+func needsSubmission(t *seiv1alpha1.PlannedTask) bool {
+	return t.Status == seiv1alpha1.TaskPending
+}
+
 // CurrentTask returns the first non-Complete task in the plan, or nil if all
 // tasks are complete.
 func CurrentTask(plan *seiv1alpha1.TaskPlan) *seiv1alpha1.PlannedTask {
@@ -110,10 +120,7 @@ func executePlan(
 		return failTask(ctx, kc, obj, cn, plan, t, err.Error())
 	}
 
-	// When the CRD task status is Pending (fresh or retried), submit to
-	// the sidecar before polling. The sidecar's cloud-API Submit handles
-	// both new tasks and re-execution of failed tasks transparently.
-	if t.Status == seiv1alpha1.TaskPending {
+	if needsSubmission(t) {
 		if err := exec.Execute(ctx); err != nil {
 			var termErr *task.TerminalError
 			if errors.As(err, &termErr) {
