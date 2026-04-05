@@ -34,7 +34,7 @@ spec:
   replayer:
     snapshot:
       s3:
-        targetHeight: 200440000
+        targetHeight: 200940000
       bootstrapImage: "ghcr.io/sei-protocol/sei:v6.3.0"
       trustPeriod: "9999h0m0s"
     resultExport:
