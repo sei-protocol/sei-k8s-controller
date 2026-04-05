@@ -194,17 +194,14 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 	script := fmt.Sprintf(
 		`echo "waiting for sidecar to become ready..."; `+
 			`while true; do `+
-			`{ exec 3<>/dev/tcp/localhost/%d; } 2>/dev/null && `+
-			`printf "GET /v0/healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && `+
-			`head -1 <&3 | grep -q "200" && break; `+
-			`exec 3>&-; sleep 5; done; `+
-			`exec 3>&-; `+
+			`wget -q -O /dev/null http://localhost:%d/v0/healthz && break; `+
+			`sleep 5; done; `+
 			`echo "sidecar ready, starting seid"; `+
 			`exec %s`,
 		sidecarPort(node), b.String(),
 	)
 
-	return []string{"/bin/bash", "-c"}, []string{script}
+	return []string{"/bin/sh", "-c"}, []string{script}
 }
 
 // nodeDataPVCClaimName returns the PVC name to mount as the data volume.
