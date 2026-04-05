@@ -29,7 +29,7 @@ spec:
         region: eu-central-1
         tags:
           ChainIdentifier: pacific-1
-          Component: snapshotter
+          Component: state-syncer
 
   replayer:
     snapshot:
@@ -38,4 +38,4 @@ spec:
       bootstrapImage: "ghcr.io/sei-protocol/sei:v6.3.0"
       trustPeriod: "9999h0m0s"
     resultExport:
-      canonicalRpc: "http://pacific-1-canonical-rpc.default.svc.cluster.local:26657"
+      canonicalRpc: "http://pacific-1-archive-0.pacific-1-archive.default.svc.cluster.local:26657"
