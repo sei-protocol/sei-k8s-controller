@@ -38,7 +38,7 @@ spec:
         args: ["start", "--home", "/sei"]
 
       sidecar:
-        image: "ghcr.io/bdchatham/seictl@sha256:4882fe7aba24c902e6cb8ed47ae41b5c7ff4273514dd005fa5aee6160b0672f7"
+        image: "ghcr.io/sei-protocol/seictl@sha256:2cb320dd583000765520293d4e28ecc79fed4432c76760923d3aaa47803a4dbf"
 
       peers:
         - ec2Tags:
