@@ -1,0 +1,57 @@
+# VirtualService: Routes RPC traffic from the Istio ingress gateway
+# to the EC2 backend (primary) with 100% mirror to K8s-managed nodes.
+#
+# Mirrored responses are discarded by Envoy. The K8s nodes serve as
+# shadow validation targets -- the sidecar's result-compare task
+# verifies execution correctness independently.
+#
+# WebSocket traffic is handled separately because Istio cannot mirror
+# WebSocket connections. During the mirror phase, WebSocket goes 100%
+# to EC2. During canary/cutover, split WebSocket with weighted routing.
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: pacific-1-rpc-mirror
+  namespace: default
+  labels:
+    sei.io/chain: pacific-1
+    sei.io/component: rpc-mirror
+spec:
+  hosts:
+    - rpc.pacific-1.sei.io
+  gateways:
+    - istio-system/sei-gateway
+  http:
+    # Rule 1: WebSocket -- route to EC2 only (no mirror possible)
+    - name: websocket-ec2
+      match:
+        - headers:
+            upgrade:
+              exact: websocket
+      route:
+        - destination:
+            host: ec2-rpc.pacific-1.internal
+            port:
+              number: 26657
+          weight: 100
+      timeout: 0s  # WebSocket connections are long-lived
+
+    # Rule 2: HTTP RPC -- route to EC2, mirror to K8s
+    - name: rpc-mirror-to-k8s
+      route:
+        - destination:
+            host: ec2-rpc.pacific-1.internal
+            port:
+              number: 26657
+          weight: 100
+      mirror:
+        host: pacific-1-rpc-external.default.svc.cluster.local
+        port:
+          number: 26657
+      mirrorPercentage:
+        value: 100.0
+      timeout: 30s
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: connect-failure,refused-stream,503

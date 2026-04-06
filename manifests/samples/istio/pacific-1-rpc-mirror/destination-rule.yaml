@@ -1,0 +1,28 @@
+# DestinationRule: Traffic policy for the EC2 RPC backend.
+#
+# Disables mTLS (EC2 is outside the mesh), prevents HTTP/2 upgrade
+# (CometBFT RPC is HTTP/1.1), and configures outlier detection to
+# eject unhealthy endpoints.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: pacific-1-ec2-rpc
+  namespace: default
+  labels:
+    sei.io/chain: pacific-1
+    sei.io/component: ec2-rpc
+spec:
+  host: ec2-rpc.pacific-1.internal
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+    connectionPool:
+      http:
+        h2UpgradePolicy: DO_NOT_UPGRADE
+      tcp:
+        maxConnections: 100
+        connectTimeout: 5s
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 60s

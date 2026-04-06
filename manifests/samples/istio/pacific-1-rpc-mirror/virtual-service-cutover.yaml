@@ -1,0 +1,63 @@
+# VirtualService: Progressive cutover from EC2 to K8s.
+#
+# Apply this AFTER the mirror phase validates that K8s nodes produce
+# correct results. Adjust weights incrementally:
+#
+#   Phase 2 (canary):   EC2=99, K8s=1    -- hold 1h, verify error rate
+#   Phase 3a:           EC2=90, K8s=10   -- hold 1h
+#   Phase 3b:           EC2=75, K8s=25   -- hold 1h
+#   Phase 3c:           EC2=50, K8s=50   -- hold 2h
+#   Phase 4 (cutover):  EC2=0,  K8s=100  -- keep EC2 warm 48h
+#
+# This manifest shows Phase 3c (50/50 split). Edit weights for each phase.
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: pacific-1-rpc-mirror
+  namespace: default
+  labels:
+    sei.io/chain: pacific-1
+    sei.io/component: rpc-mirror
+spec:
+  hosts:
+    - rpc.pacific-1.sei.io
+  gateways:
+    - istio-system/sei-gateway
+  http:
+    # WebSocket: same weight split as HTTP RPC
+    - name: websocket-split
+      match:
+        - headers:
+            upgrade:
+              exact: websocket
+      route:
+        - destination:
+            host: ec2-rpc.pacific-1.internal
+            port:
+              number: 26657
+          weight: 50
+        - destination:
+            host: pacific-1-rpc-external.default.svc.cluster.local
+            port:
+              number: 26657
+          weight: 50
+      timeout: 0s
+
+    # HTTP RPC: weighted split (no mirror needed once canary starts)
+    - name: rpc-weighted-split
+      route:
+        - destination:
+            host: ec2-rpc.pacific-1.internal
+            port:
+              number: 26657
+          weight: 50
+        - destination:
+            host: pacific-1-rpc-external.default.svc.cluster.local
+            port:
+              number: 26657
+          weight: 50
+      timeout: 30s
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: connect-failure,refused-stream,503

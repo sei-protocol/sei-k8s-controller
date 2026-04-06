@@ -1,0 +1,25 @@
+# Telemetry: Access logging for mirror traffic analysis.
+#
+# Logs requests with response code >= 400 or latency > 5s.
+# Mirrored requests arrive with Host header suffixed "-shadow"
+# (e.g., rpc.pacific-1.sei.io-shadow), making them filterable
+# in log analysis.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: pacific-1-rpc-logging
+  namespace: default
+  labels:
+    sei.io/chain: pacific-1
+    sei.io/component: rpc-mirror
+spec:
+  selector:
+    matchLabels:
+      sei.io/nodegroup: pacific-1-rpc
+  accessLogging:
+    - providers:
+        - name: envoy
+      filter:
+        expression: >-
+          response.code >= 400 ||
+          request.duration > duration("5s")

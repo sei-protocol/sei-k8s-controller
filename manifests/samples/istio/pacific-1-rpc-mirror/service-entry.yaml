@@ -1,0 +1,30 @@
+# ServiceEntry: Registers the EC2 RPC ALB as a mesh-external destination
+# so Istio VirtualService rules can route to it.
+#
+# The synthetic hostname ec2-rpc.pacific-1.internal is used only for
+# mesh-internal routing. It does NOT affect external DNS.
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: pacific-1-ec2-rpc
+  namespace: default
+  labels:
+    sei.io/chain: pacific-1
+    sei.io/component: ec2-rpc
+spec:
+  hosts:
+    - ec2-rpc.pacific-1.internal
+  location: MESH_EXTERNAL
+  ports:
+    - number: 26657
+      name: rpc-http
+      protocol: HTTP
+    - number: 8545
+      name: evm-rpc
+      protocol: HTTP
+    - number: 9090
+      name: grpc
+      protocol: GRPC
+  resolution: DNS
+  endpoints:
+    - address: pacific-1-rpc-alb.eu-central-1.elb.amazonaws.com
