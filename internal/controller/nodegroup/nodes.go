@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -153,30 +153,8 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 		existing.Annotations = desired.Annotations
 		updated = true
 	}
-	if existing.Spec.Image != desired.Spec.Image {
-		existing.Spec.Image = desired.Spec.Image
-		updated = true
-	}
-	if desired.Spec.Entrypoint == nil && existing.Spec.Entrypoint != nil {
-		existing.Spec.Entrypoint = nil
-		updated = true
-	} else if desired.Spec.Entrypoint != nil && (existing.Spec.Entrypoint == nil ||
-		!slices.Equal(existing.Spec.Entrypoint.Command, desired.Spec.Entrypoint.Command) ||
-		!slices.Equal(existing.Spec.Entrypoint.Args, desired.Spec.Entrypoint.Args)) {
-		existing.Spec.Entrypoint = desired.Spec.Entrypoint
-		updated = true
-	}
-	if desired.Spec.Sidecar == nil && existing.Spec.Sidecar != nil {
-		existing.Spec.Sidecar = nil
-		updated = true
-	} else if desired.Spec.Sidecar != nil && (existing.Spec.Sidecar == nil ||
-		existing.Spec.Sidecar.Image != desired.Spec.Sidecar.Image ||
-		existing.Spec.Sidecar.Port != desired.Spec.Sidecar.Port) {
-		existing.Spec.Sidecar = desired.Spec.Sidecar
-		updated = true
-	}
-	if !maps.Equal(existing.Spec.PodLabels, desired.Spec.PodLabels) {
-		existing.Spec.PodLabels = desired.Spec.PodLabels
+	if !equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+		existing.Spec = desired.Spec
 		updated = true
 	}
 	if updated {

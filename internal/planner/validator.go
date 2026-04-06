@@ -35,15 +35,19 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	return nil
 }
 
+func (p *validatorPlanner) ConfigApplyParams(node *seiv1alpha1.SeiNode) *task.ConfigApplyParams {
+	return &task.ConfigApplyParams{
+		Mode:      string(seiconfig.ModeValidator),
+		Overrides: mergeOverrides(nil, node.Spec.Overrides),
+	}
+}
+
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if isGenesisCeremonyNode(node) {
 		return buildGenesisPlan(node)
 	}
 	v := node.Spec.Validator
-	params := &task.ConfigApplyParams{
-		Mode:      string(seiconfig.ModeValidator),
-		Overrides: mergeOverrides(nil, node.Spec.Overrides),
-	}
+	params := p.ConfigApplyParams(node)
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, v.Snapshot, params)
 	}

@@ -27,12 +27,16 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	return nil
 }
 
-func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	fn := node.Spec.FullNode
-	params := &task.ConfigApplyParams{
+func (p *fullNodePlanner) ConfigApplyParams(node *seiv1alpha1.SeiNode) *task.ConfigApplyParams {
+	return &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeFull),
 		Overrides: mergeOverrides(p.controllerOverrides(node), node.Spec.Overrides),
 	}
+}
+
+func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	fn := node.Spec.FullNode
+	params := p.ConfigApplyParams(node)
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, fn.Snapshot, params)
 	}

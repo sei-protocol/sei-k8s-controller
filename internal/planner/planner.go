@@ -48,6 +48,11 @@ type NodePlanner interface {
 	Validate(node *seiv1alpha1.SeiNode) error
 	BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
 	Mode() string
+
+	// ConfigApplyParams returns the config-apply task parameters for this
+	// node's mode, including controller-generated and user-specified overrides.
+	// Used by both the init plan and runtime reconfiguration plans.
+	ConfigApplyParams(node *seiv1alpha1.SeiNode) *task.ConfigApplyParams
 }
 
 // GroupPlanner encapsulates logic for building a group-level task plan.
@@ -308,6 +313,12 @@ func snapshotRestoreParams(snap *seiv1alpha1.SnapshotSource) *task.SnapshotResto
 
 func configureGenesisParams(_ *seiv1alpha1.SeiNode) *task.ConfigureGenesisParams {
 	return &task.ConfigureGenesisParams{}
+}
+
+// BuildDiscoverPeersParams constructs the DiscoverPeersParams for a node's
+// current spec. Exported for use by the config drift detector.
+func BuildDiscoverPeersParams(node *seiv1alpha1.SeiNode) *task.DiscoverPeersParams {
+	return discoverPeersParams(node)
 }
 
 func discoverPeersParams(node *seiv1alpha1.SeiNode) *task.DiscoverPeersParams {

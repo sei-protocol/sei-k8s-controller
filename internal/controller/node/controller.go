@@ -9,6 +9,8 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -85,6 +87,10 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
+	}
+
+	if err := r.detectConfigDrift(ctx, node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("detecting config drift: %w", err)
 	}
 
 	if err := r.ensureNodeDataPVC(ctx, node); err != nil {
@@ -164,8 +170,30 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 	return result, nil
 }
 
-// reconcileRunning handles runtime tasks (scheduled uploads, exports).
+// reconcileRunning drives active plans, builds new plans from conditions,
+// and handles long-running monitor tasks (scheduled uploads, exports).
 func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	// Drive an active plan to completion.
+	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
+		result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
+		if err != nil {
+			return result, err
+		}
+		switch node.Status.Plan.Phase {
+		case seiv1alpha1.TaskPlanComplete:
+			return r.completePlan(ctx, node)
+		case seiv1alpha1.TaskPlanFailed:
+			return r.failPlan(ctx, node)
+		}
+		return result, nil
+	}
+
+	// No active plan — check if a condition needs one.
+	if hasNodeCondition(node, ConditionConfigUpdateNeeded) {
+		return r.buildConfigUpdatePlan(ctx, node)
+	}
+
+	// Normal running path: sidecar client + monitor tasks.
 	sc := r.buildSidecarClient(node)
 	if sc == nil {
 		sidecarUnreachableTotal.WithLabelValues(node.Namespace, node.Name).Inc()
@@ -173,6 +201,89 @@ func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alp
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 	return r.reconcileRuntimeTasks(ctx, node, sc)
+}
+
+// buildConfigUpdatePlan resolves the node's planner and constructs a
+// reconfiguration plan from the current spec.
+func (r *SeiNodeReconciler) buildConfigUpdatePlan(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	p, err := planner.ForNode(node)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("resolving planner for config update: %w", err)
+	}
+
+	plan, err := planner.BuildConfigUpdatePlan(node, p.ConfigApplyParams(node))
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("building config update plan: %w", err)
+	}
+
+	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	node.Status.Plan = plan
+	if err := r.Status().Patch(ctx, node, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("writing config update plan: %w", err)
+	}
+
+	r.Recorder.Event(node, corev1.EventTypeNormal, "ConfigUpdatePlanStarted",
+		"Config update plan started")
+	return planner.ResultRequeueImmediate, nil
+}
+
+// completePlan handles successful plan completion on a Running node.
+// It clears the plan, updates the applied config snapshot, and removes
+// the ConfigUpdateNeeded condition.
+func (r *SeiNodeReconciler) completePlan(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	peerParams, err := MarshalPeerParams(node)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("marshaling peer params after plan: %w", err)
+	}
+
+	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	node.Status.Plan = nil
+	node.Status.ObservedGeneration = node.Generation
+	node.Status.LastAppliedPeerParams = peerParams
+	meta.RemoveStatusCondition(&node.Status.Conditions, ConditionConfigUpdateNeeded)
+
+	if err := r.Status().Patch(ctx, node, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("updating status after plan completion: %w", err)
+	}
+
+	r.Recorder.Event(node, corev1.EventTypeNormal, "ConfigUpdateComplete",
+		"Config update plan completed successfully")
+	logger.Info("config update plan completed")
+	return planner.ResultRequeueImmediate, nil
+}
+
+// failPlan handles plan failure on a Running node. The node stays
+// Running — the existing config is still functional. The condition
+// remains True so a future spec update can trigger a retry.
+func (r *SeiNodeReconciler) failPlan(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	failMsg := "plan failed"
+	if node.Status.Plan.FailedTaskDetail != nil {
+		failMsg = fmt.Sprintf("plan failed: task %s: %s",
+			node.Status.Plan.FailedTaskDetail.Type,
+			node.Status.Plan.FailedTaskDetail.Error)
+	}
+
+	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	node.Status.Plan = nil
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:               ConditionConfigUpdateNeeded,
+		Status:             metav1.ConditionTrue,
+		Reason:             ReasonConfigUpdateFailed,
+		Message:            failMsg,
+		ObservedGeneration: node.Generation,
+	})
+
+	if err := r.Status().Patch(ctx, node, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("updating status after plan failure: %w", err)
+	}
+
+	r.Recorder.Eventf(node, corev1.EventTypeWarning, "ConfigUpdateFailed", failMsg)
+	logger.Info("config update plan failed", "detail", failMsg)
+	return ctrl.Result{}, nil
 }
 
 // transitionPhase transitions the node to a new phase and emits the associated
@@ -185,6 +296,19 @@ func (r *SeiNodeReconciler) transitionPhase(ctx context.Context, node *seiv1alph
 
 	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	node.Status.Phase = phase
+	node.Status.Plan = nil
+
+	// Snapshot the applied config when entering Running so future
+	// reconciles can detect drift against this baseline.
+	if phase == seiv1alpha1.PhaseRunning {
+		node.Status.ObservedGeneration = node.Generation
+		peerParams, err := MarshalPeerParams(node)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("marshaling peer params: %w", err)
+		}
+		node.Status.LastAppliedPeerParams = peerParams
+	}
+
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting phase to %s: %w", phase, err)
 	}

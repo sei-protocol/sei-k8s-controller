@@ -221,6 +221,12 @@ type SeiNodeStatus struct {
 	// Phase is the high-level lifecycle state.
 	Phase SeiNodePhase `json:"phase,omitempty"`
 
+	// ObservedGeneration is the most recent spec generation the controller
+	// has fully reconciled. Compared against metadata.generation to detect
+	// spec drift on Running nodes that may require a reconfiguration plan.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -241,6 +247,12 @@ type SeiNodeStatus struct {
 	// future peer-update plans can detect drift.
 	// +optional
 	ResolvedPeers []string `json:"resolvedPeers,omitempty"`
+
+	// LastAppliedPeerParams is the serialized DiscoverPeersParams from the
+	// last successful peer configuration. Compared against the current spec
+	// to detect peer config drift on Running nodes.
+	// +optional
+	LastAppliedPeerParams *apiextensionsv1.JSON `json:"lastAppliedPeerParams,omitempty"`
 
 	// ConfigStatus reports the observed configuration state from the sidecar.
 	// +optional

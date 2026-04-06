@@ -31,11 +31,15 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	return nil
 }
 
-func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	params := &task.ConfigApplyParams{
+func (p *replayerPlanner) ConfigApplyParams(node *seiv1alpha1.SeiNode) *task.ConfigApplyParams {
+	return &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeFull),
 		Overrides: mergeOverrides(p.controllerOverrides(), node.Spec.Overrides),
 	}
+}
+
+func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	params := p.ConfigApplyParams(node)
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, params)
 	}
