@@ -9,7 +9,7 @@ apiVersion: sei.io/v1alpha1
 kind: SeiNodeGroup
 metadata:
   name: arctic-1-archive
-  namespace: default
+  namespace: protocol
 spec:
   replicas: 1
   deletionPolicy: Retain
