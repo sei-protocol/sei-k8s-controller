@@ -461,9 +461,11 @@ func TestSidecarMainContainer_WaitWrapper_PollsHealthzBeforeExec(t *testing.T) {
 	sts := generateNodeStatefulSet(node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
-	g.Expect(seid.Command).To(Equal([]string{"/bin/sh", "-c"}))
+	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
 	g.Expect(seid.Args).To(HaveLen(1))
-	g.Expect(seid.Args[0]).To(ContainSubstring("wget -q -O /dev/null http://localhost:7777/v0/healthz"))
+	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/7777"))
+	g.Expect(seid.Args[0]).To(ContainSubstring("GET /v0/healthz HTTP/1.0"))
+	g.Expect(seid.Args[0]).To(ContainSubstring(`grep -q "200"`))
 	g.Expect(seid.Args[0]).To(ContainSubstring("exec seid"))
 }
 
@@ -488,7 +490,7 @@ func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeidStart(t *test
 	sts := generateNodeStatefulSet(node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
-	g.Expect(seid.Command).To(Equal([]string{"/bin/sh", "-c"}))
+	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
 	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "/sei"`))
 }
 
@@ -501,7 +503,7 @@ func TestSidecarMainContainer_NilSidecarConfig_UsesDefaults(t *testing.T) {
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(int(seiconfig.PortSidecar)))
-	g.Expect(seid.Args[0]).To(ContainSubstring("wget -q -O /dev/null http://localhost:7777/v0/healthz"))
+	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/7777"))
 
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 	g.Expect(sc.Image).To(Equal(defaultSidecarImage))
@@ -516,7 +518,7 @@ func TestSidecarMainContainer_WaitWrapper_UsesCustomPort(t *testing.T) {
 	sts := generateNodeStatefulSet(node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
-	g.Expect(seid.Args[0]).To(ContainSubstring("wget -q -O /dev/null http://localhost:9999/v0/healthz"))
+	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/9999"))
 }
 
 // --- Genesis mode specifics ---

@@ -176,7 +176,14 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, platform PlatformConfi
 }
 
 // sidecarWaitCommand wraps the node's entrypoint in a shell polling loop
-// that blocks until the sidecar's /healthz returns 200, then exec's seid.
+// that blocks until the sidecar's /healthz returns HTTP 200, then exec's seid.
+//
+// Uses bash's /dev/tcp to make raw HTTP requests instead of wget/curl, which
+// are not available on all sei images. The HTTP check (not just TCP) is
+// required because the sidecar binds its port immediately on startup but
+// returns 503 from /healthz until the mark-ready task completes — meaning
+// all init tasks (snapshot restore, config apply, peer discovery, etc.)
+// have finished.
 func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []string) {
 	cmd := "seid"
 	cmdArgs := []string{"start", "--home", dataDir}
@@ -194,14 +201,18 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 	script := fmt.Sprintf(
 		`echo "waiting for sidecar to become ready..."; `+
 			`while true; do `+
-			`wget -q -O /dev/null http://localhost:%d/v0/healthz && break; `+
+			`if exec 3<>/dev/tcp/localhost/%d 2>/dev/null; then `+
+			`printf "GET /v0/healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; `+
+			`read -r status <&3; exec 3>&-; `+
+			`echo "$status" | grep -q "200" && break; `+
+			`fi; `+
 			`sleep 5; done; `+
 			`echo "sidecar ready, starting seid"; `+
 			`exec %s`,
 		sidecarPort(node), b.String(),
 	)
 
-	return []string{"/bin/sh", "-c"}, []string{script}
+	return []string{"/bin/bash", "-c"}, []string{script}
 }
 
 // nodeDataPVCClaimName returns the PVC name to mount as the data volume.
