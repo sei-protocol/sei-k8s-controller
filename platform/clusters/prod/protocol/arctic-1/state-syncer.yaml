@@ -2,11 +2,17 @@
 #
 # Full node that bootstraps via state sync and serves as a peer for
 # other nodes in the network. Keeps recent blocks for state sync serving.
+#
+# Deployed first. Uses EC2 peers only — no label source because there
+# are no K8s siblings yet at deploy time (chicken-and-egg: the label
+# source hard-fails in the sidecar if endpoints are empty at plan build).
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
   name: arctic-1-state-syncer
   namespace: default
+  labels:
+    sei.io/chain: arctic-1
 spec:
   chainId: arctic-1
   image: "ghcr.io/sei-protocol/sei:v6.3.0"

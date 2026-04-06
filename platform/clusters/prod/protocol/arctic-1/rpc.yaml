@@ -1,7 +1,11 @@
 # SeiNodeGroup — Arctic-1 RPC Nodes
 #
 # Fleet of full nodes serving RPC traffic. Bootstraps via state sync
-# from EC2 state-syncer peers.
+# from EC2 state-syncer peers. Label source enables peering with K8s
+# siblings (state-syncer, archive, other RPC nodes).
+#
+# Deploy after the state-syncer reaches Running so the label source
+# resolves at least one K8s peer at plan build time.
 apiVersion: sei.io/v1alpha1
 kind: SeiNodeGroup
 metadata:
@@ -13,6 +17,7 @@ spec:
   template:
     metadata:
       labels:
+        sei.io/chain: arctic-1
         sei.io/role: rpc
     spec:
       chainId: arctic-1
@@ -31,6 +36,9 @@ spec:
             tags:
               ChainIdentifier: arctic-1
               Component: state-syncer
+        - label:
+            selector:
+              sei.io/chain: arctic-1
 
       fullNode:
         snapshot:

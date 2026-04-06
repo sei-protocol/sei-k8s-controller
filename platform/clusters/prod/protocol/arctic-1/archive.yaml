@@ -2,11 +2,18 @@
 #
 # Archive node that retains full block history and generates periodic
 # snapshots for consumption by other nodes.
+#
+# Deploy after the state-syncer reaches Running so the label source
+# resolves at least one K8s peer (the state-syncer). EC2 peers provide
+# the initial state sync source; the label source enables ongoing
+# peering with K8s siblings.
 apiVersion: sei.io/v1alpha1
 kind: SeiNode
 metadata:
   name: arctic-1-archive
   namespace: default
+  labels:
+    sei.io/chain: arctic-1
 spec:
   chainId: arctic-1
   image: "ghcr.io/sei-protocol/sei:v6.3.0"
@@ -24,6 +31,9 @@ spec:
         tags:
           ChainIdentifier: arctic-1
           Component: state-syncer
+    - label:
+        selector:
+          sei.io/chain: arctic-1
 
   archive:
     snapshotGeneration:
