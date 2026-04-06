@@ -43,6 +43,9 @@ func (p *validatorPlanner) ConfigApplyParams(node *seiv1alpha1.SeiNode) *task.Co
 }
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if needsPeerUpdatePlan(node) {
+		return buildPeerUpdatePlan(node, p.ConfigApplyParams(node))
+	}
 	if isGenesisCeremonyNode(node) {
 		return buildGenesisPlan(node)
 	}

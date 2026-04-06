@@ -248,12 +248,6 @@ type SeiNodeStatus struct {
 	// +optional
 	ResolvedPeers []string `json:"resolvedPeers,omitempty"`
 
-	// LastAppliedPeerParams is the serialized DiscoverPeersParams from the
-	// last successful peer configuration. Compared against the current spec
-	// to detect peer config drift on Running nodes.
-	// +optional
-	LastAppliedPeerParams *apiextensionsv1.JSON `json:"lastAppliedPeerParams,omitempty"`
-
 	// ConfigStatus reports the observed configuration state from the sidecar.
 	// +optional
 	ConfigStatus *ConfigStatus `json:"configStatus,omitempty"`

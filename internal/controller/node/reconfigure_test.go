@@ -12,7 +12,7 @@ import (
 )
 
 func newRunningFullNode(name, namespace string) *seiv1alpha1.SeiNode {
-	node := &seiv1alpha1.SeiNode{
+	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       name,
 			Namespace:  namespace,
@@ -34,140 +34,129 @@ func newRunningFullNode(name, namespace string) *seiv1alpha1.SeiNode {
 			ObservedGeneration: 1,
 		},
 	}
-	return node
 }
 
-func TestDetectConfigDrift_NoDrift(t *testing.T) {
+func TestDetectPeerDrift_NoDrift(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
 	node := newRunningFullNode("node-0", "default")
-	// Set LastAppliedPeerParams to match current spec (no peers).
-	peerParams, err := MarshalPeerParams(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	node.Status.LastAppliedPeerParams = peerParams
-
+	// Generation == ObservedGeneration → no drift.
 	r, c := newNodeReconciler(t, node)
 
-	err = r.detectConfigDrift(ctx, node)
+	err := r.detectPeerDrift(ctx, node)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	fetched := getSeiNode(t, ctx, c, "node-0", "default")
-	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionConfigUpdateNeeded)
-	g.Expect(cond).To(BeNil(), "no condition should be set when there is no drift")
+	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionPeerUpdateNeeded)
+	g.Expect(cond).To(BeNil())
 }
 
-func TestDetectConfigDrift_PeersAdded(t *testing.T) {
+func TestDetectPeerDrift_PeersAdded(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
 	node := newRunningFullNode("node-0", "default")
-	// LastAppliedPeerParams is nil (no peers at init time).
-	node.Status.LastAppliedPeerParams = nil
-
-	// Now add peers to the spec.
+	// Simulate spec change: generation advances, peers added.
+	node.Generation = 2
 	node.Spec.Peers = []seiv1alpha1.PeerSource{
 		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{"abc@1.2.3.4:26656"}}},
 	}
-	node.Generation = 2
 
 	r, c := newNodeReconciler(t, node)
 
-	err := r.detectConfigDrift(ctx, node)
+	err := r.detectPeerDrift(ctx, node)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	fetched := getSeiNode(t, ctx, c, "node-0", "default")
-	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionConfigUpdateNeeded)
+	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionPeerUpdateNeeded)
 	g.Expect(cond).NotTo(BeNil())
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(cond.Reason).To(Equal(ReasonConfigDriftDetected))
+	g.Expect(cond.Reason).To(Equal(ReasonPeerSpecChanged))
 }
 
-func TestDetectConfigDrift_SkippedWhenPlanActive(t *testing.T) {
+func TestDetectPeerDrift_SkippedWhenPlanActive(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
 	node := newRunningFullNode("node-0", "default")
+	node.Generation = 2
+	node.Spec.Peers = []seiv1alpha1.PeerSource{
+		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{"abc@1.2.3.4:26656"}}},
+	}
 	node.Status.Plan = &seiv1alpha1.TaskPlan{
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: []seiv1alpha1.PlannedTask{},
 	}
-	// Introduce drift.
-	node.Spec.Peers = []seiv1alpha1.PeerSource{
-		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{"abc@1.2.3.4:26656"}}},
-	}
 
 	r, c := newNodeReconciler(t, node)
 
-	err := r.detectConfigDrift(ctx, node)
+	err := r.detectPeerDrift(ctx, node)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	fetched := getSeiNode(t, ctx, c, "node-0", "default")
-	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionConfigUpdateNeeded)
+	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionPeerUpdateNeeded)
 	g.Expect(cond).To(BeNil(), "should not set condition when plan is active")
 }
 
-func TestDetectConfigDrift_SkippedWhenNotRunning(t *testing.T) {
+func TestDetectPeerDrift_SkippedWhenNotRunning(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
 	node := newRunningFullNode("node-0", "default")
 	node.Status.Phase = seiv1alpha1.PhaseInitializing
+	node.Generation = 2
 	node.Spec.Peers = []seiv1alpha1.PeerSource{
 		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{"abc@1.2.3.4:26656"}}},
 	}
 
 	r, c := newNodeReconciler(t, node)
 
-	err := r.detectConfigDrift(ctx, node)
+	err := r.detectPeerDrift(ctx, node)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	fetched := getSeiNode(t, ctx, c, "node-0", "default")
-	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionConfigUpdateNeeded)
+	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionPeerUpdateNeeded)
 	g.Expect(cond).To(BeNil(), "should not set condition when not running")
 }
 
-func TestDetectConfigDrift_ClearsConditionOnRevert(t *testing.T) {
+func TestDetectPeerDrift_SkippedWhenNoPeers(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
 	node := newRunningFullNode("node-0", "default")
-	// Simulate: condition was set, but spec was reverted back to match lastApplied.
-	peerParams, err := MarshalPeerParams(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	node.Status.LastAppliedPeerParams = peerParams
-	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
-		Type:   ConditionConfigUpdateNeeded,
-		Status: metav1.ConditionTrue,
-		Reason: ReasonConfigDriftDetected,
-	})
+	// Generation changed but no peers configured.
+	node.Generation = 2
 
 	r, c := newNodeReconciler(t, node)
 
-	err = r.detectConfigDrift(ctx, node)
+	err := r.detectPeerDrift(ctx, node)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	fetched := getSeiNode(t, ctx, c, "node-0", "default")
-	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionConfigUpdateNeeded)
-	g.Expect(cond).To(BeNil(), "condition should be cleared when spec matches lastApplied")
+	cond := meta.FindStatusCondition(fetched.Status.Conditions, ConditionPeerUpdateNeeded)
+	g.Expect(cond).To(BeNil(), "should not set condition when no peers are configured")
 }
 
-func TestPeerParamsEqual(t *testing.T) {
+func TestDetectPeerDrift_AlreadyFlagged(t *testing.T) {
 	g := NewWithT(t)
+	ctx := context.Background()
 
 	node := newRunningFullNode("node-0", "default")
+	node.Generation = 2
+	node.Spec.Peers = []seiv1alpha1.PeerSource{
+		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{"abc@1.2.3.4:26656"}}},
+	}
+	// Condition already set.
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:   ConditionPeerUpdateNeeded,
+		Status: metav1.ConditionTrue,
+		Reason: ReasonPeerSpecChanged,
+	})
 
-	// Both nil — equal.
-	g.Expect(peerParamsEqual(nil, nil)).To(BeTrue())
+	r, _ := newNodeReconciler(t, node)
 
-	// One nil — not equal.
-	params, err := MarshalPeerParams(node)
+	// Should be a no-op (no patch attempted).
+	err := r.detectPeerDrift(ctx, node)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(peerParamsEqual(nil, params)).To(BeFalse())
-	g.Expect(peerParamsEqual(params, nil)).To(BeFalse())
-
-	// Same — equal.
-	params2, err := MarshalPeerParams(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(peerParamsEqual(params, params2)).To(BeTrue())
 }

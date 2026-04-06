@@ -35,6 +35,9 @@ func (p *fullNodePlanner) ConfigApplyParams(node *seiv1alpha1.SeiNode) *task.Con
 }
 
 func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if needsPeerUpdatePlan(node) {
+		return buildPeerUpdatePlan(node, p.ConfigApplyParams(node))
+	}
 	fn := node.Spec.FullNode
 	params := p.ConfigApplyParams(node)
 	if NeedsBootstrap(node) {

@@ -39,6 +39,9 @@ func (p *replayerPlanner) ConfigApplyParams(node *seiv1alpha1.SeiNode) *task.Con
 }
 
 func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if needsPeerUpdatePlan(node) {
+		return buildPeerUpdatePlan(node, p.ConfigApplyParams(node))
+	}
 	params := p.ConfigApplyParams(node)
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, params)

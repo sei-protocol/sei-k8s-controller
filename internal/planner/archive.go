@@ -30,6 +30,9 @@ func (p *archiveNodePlanner) ConfigApplyParams(node *seiv1alpha1.SeiNode) *task.
 }
 
 func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if needsPeerUpdatePlan(node) {
+		return buildPeerUpdatePlan(node, p.ConfigApplyParams(node))
+	}
 	return buildBasePlan(node, node.Spec.Peers, p.snapshotSource(), p.ConfigApplyParams(node))
 }
 

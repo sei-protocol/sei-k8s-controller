@@ -315,12 +315,6 @@ func configureGenesisParams(_ *seiv1alpha1.SeiNode) *task.ConfigureGenesisParams
 	return &task.ConfigureGenesisParams{}
 }
 
-// BuildDiscoverPeersParams constructs the DiscoverPeersParams for a node's
-// current spec. Exported for use by the config drift detector.
-func BuildDiscoverPeersParams(node *seiv1alpha1.SeiNode) *task.DiscoverPeersParams {
-	return discoverPeersParams(node)
-}
-
 func discoverPeersParams(node *seiv1alpha1.SeiNode) *task.DiscoverPeersParams {
 	if len(node.Spec.Peers) == 0 {
 		return &task.DiscoverPeersParams{}
