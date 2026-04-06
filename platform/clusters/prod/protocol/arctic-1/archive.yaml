@@ -1,0 +1,30 @@
+# SeiNode — Arctic-1 Archive (Snapshotter)
+#
+# Archive node that retains full block history and generates periodic
+# snapshots for consumption by other nodes.
+apiVersion: sei.io/v1alpha1
+kind: SeiNode
+metadata:
+  name: arctic-1-archive
+  namespace: default
+spec:
+  chainId: arctic-1
+  image: "ghcr.io/sei-protocol/sei:v6.3.0"
+
+  sidecar:
+    image: ghcr.io/sei-protocol/seictl@sha256:2cb320dd583000765520293d4e28ecc79fed4432c76760923d3aaa47803a4dbf
+
+  entrypoint:
+    command: ["seid"]
+    args: ["start", "--home", "/sei"]
+
+  peers:
+    - ec2Tags:
+        region: us-east-2
+        tags:
+          ChainIdentifier: arctic-1
+          Component: state-syncer
+
+  archive:
+    snapshotGeneration:
+      keepRecent: 5
