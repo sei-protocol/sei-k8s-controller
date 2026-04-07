@@ -200,11 +200,18 @@ spec:
                           type: string
                         description: Annotations are merged onto the HTTPRoute metadata.
                         type: object
+                      baseDomain:
+                        description: |-
+                          BaseDomain generates HTTPRoutes for all standard Sei protocols
+                          using conventional subdomain prefixes (rpc.*, rest.*, grpc.*,
+                          evm-rpc.*, evm-ws.*), each routing to the correct backend port.
+                        type: string
                       hostnames:
-                        description: Hostnames are the DNS hostnames for the HTTPRoute.
+                        description: |-
+                          Hostnames routes all listed hostnames to the RPC port (26657).
+                          For multi-protocol routing, use BaseDomain instead.
                         items:
                           type: string
-                        minItems: 1
                         type: array
                       parentRef:
                         description: ParentRef identifies the shared Gateway.
@@ -225,9 +232,12 @@ spec:
                         - namespace
                         type: object
                     required:
-                    - hostnames
                     - parentRef
                     type: object
+                    x-kubernetes-validations:
+                    - message: at least one of hostnames or baseDomain must be set
+                      rule: has(self.hostnames) && size(self.hostnames) > 0 || has(self.baseDomain)
+                        && self.baseDomain != ”
                   isolation:
                     description: Isolation configures network-level access control
                       for node pods.
@@ -290,6 +300,7 @@ spec:
                             Values must match the Name field of seiconfig.NodePorts().
                           enum:
                           - rpc
+                          - rest
                           - evm-rpc
                           - evm-ws
                           - grpc

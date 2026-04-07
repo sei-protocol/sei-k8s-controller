@@ -172,6 +172,18 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, platform PlatformConfi
 		PeriodSeconds:       5,
 		FailureThreshold:    86400,
 	}
+	container.ReadinessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/lag_status",
+				Port: intstr.FromInt32(seiconfig.PortRPC),
+			},
+		},
+		InitialDelaySeconds: 30,
+		PeriodSeconds:       10,
+		FailureThreshold:    3,
+		TimeoutSeconds:      5,
+	}
 	return container
 }
 

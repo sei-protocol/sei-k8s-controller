@@ -6,7 +6,7 @@ import (
 
 // PortName is a well-known sei-node port identifier from sei-config.
 // Values must match the Name field of seiconfig.NodePorts().
-// +kubebuilder:validation:Enum=rpc;evm-rpc;evm-ws;grpc;p2p;metrics
+// +kubebuilder:validation:Enum=rpc;rest;evm-rpc;evm-ws;grpc;p2p;metrics
 type PortName string
 
 // DeletionPolicy controls what happens to managed networking resources
@@ -62,13 +62,21 @@ type ExternalServiceConfig struct {
 
 // GatewayRouteConfig creates a gateway.networking.k8s.io/v1 HTTPRoute
 // that references a shared Gateway resource.
+// +kubebuilder:validation:XValidation:rule="has(self.hostnames) && size(self.hostnames) > 0 || has(self.baseDomain) && self.baseDomain != ”",message="at least one of hostnames or baseDomain must be set"
 type GatewayRouteConfig struct {
 	// ParentRef identifies the shared Gateway.
 	ParentRef GatewayParentRef `json:"parentRef"`
 
-	// Hostnames are the DNS hostnames for the HTTPRoute.
-	// +kubebuilder:validation:MinItems=1
-	Hostnames []string `json:"hostnames"`
+	// Hostnames routes all listed hostnames to the RPC port (26657).
+	// For multi-protocol routing, use BaseDomain instead.
+	// +optional
+	Hostnames []string `json:"hostnames,omitempty"`
+
+	// BaseDomain generates HTTPRoutes for all standard Sei protocols
+	// using conventional subdomain prefixes (rpc.*, rest.*, grpc.*,
+	// evm-rpc.*, evm-ws.*), each routing to the correct backend port.
+	// +optional
+	BaseDomain string `json:"baseDomain,omitempty"`
 
 	// Annotations are merged onto the HTTPRoute metadata.
 	// +optional

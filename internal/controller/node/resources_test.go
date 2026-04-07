@@ -454,6 +454,25 @@ func TestSidecarMainContainer_StartupProbeUsesCustomPort(t *testing.T) {
 	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(9999))
 }
 
+func TestSidecarMainContainer_ReadinessProbeTargetsLagStatus(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("sc-0", "default")
+
+	sts := generateNodeStatefulSet(node, platformtest.Config())
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+
+	g.Expect(seid).NotTo(BeNil())
+	probe := seid.ReadinessProbe
+	g.Expect(probe).NotTo(BeNil())
+	g.Expect(probe.HTTPGet).NotTo(BeNil())
+	g.Expect(probe.HTTPGet.Path).To(Equal("/lag_status"))
+	g.Expect(probe.HTTPGet.Port.IntValue()).To(Equal(26657))
+	g.Expect(probe.InitialDelaySeconds).To(Equal(int32(30)))
+	g.Expect(probe.PeriodSeconds).To(Equal(int32(10)))
+	g.Expect(probe.FailureThreshold).To(Equal(int32(3)))
+	g.Expect(probe.TimeoutSeconds).To(Equal(int32(5)))
+}
+
 func TestSidecarMainContainer_WaitWrapper_PollsHealthzBeforeExec(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
