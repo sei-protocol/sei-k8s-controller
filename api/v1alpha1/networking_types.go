@@ -4,11 +4,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// PortName is a well-known sei-node port identifier from sei-config.
-// Values must match the Name field of seiconfig.NodePorts().
-// +kubebuilder:validation:Enum=rpc;evm-rpc;evm-ws;grpc;p2p;metrics
-type PortName string
-
 // DeletionPolicy controls what happens to managed networking resources
 // and child SeiNodes when their parent is deleted.
 // +kubebuilder:validation:Enum=Delete;Retain
@@ -42,6 +37,8 @@ type NetworkingConfig struct {
 }
 
 // ExternalServiceConfig defines the shared non-headless Service.
+// Ports are derived automatically from the node mode via
+// seiconfig.NodePortsForMode — no manual port selection needed.
 type ExternalServiceConfig struct {
 	// Type is the Kubernetes Service type.
 	// +optional
@@ -49,46 +46,31 @@ type ExternalServiceConfig struct {
 	// +kubebuilder:validation:Enum=ClusterIP;LoadBalancer;NodePort
 	Type corev1.ServiceType `json:"type,omitempty"`
 
-	// Ports selects which node ports to expose. When empty, all
-	// standard sei-config ports are exposed.
-	// +optional
-	// +listType=set
-	Ports []PortName `json:"ports,omitempty"`
-
 	// Annotations are merged onto the Service metadata.
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// GatewayRouteConfig creates a gateway.networking.k8s.io/v1 HTTPRoute
-// that references a shared Gateway resource.
+// GatewayRouteConfig creates gateway.networking.k8s.io/v1 HTTPRoute resources
+// targeting the platform Gateway (configured via SEI_GATEWAY_NAME and
+// SEI_GATEWAY_NAMESPACE environment variables on the controller).
+//
+// +kubebuilder:validation:XValidation:rule="(has(self.hostnames) && size(self.hostnames) > 0) || (has(self.baseDomain) && self.baseDomain != ”)",message="at least one of hostnames or baseDomain must be set"
 type GatewayRouteConfig struct {
-	// ParentRef identifies the shared Gateway.
-	ParentRef GatewayParentRef `json:"parentRef"`
+	// Hostnames routes all listed hostnames to the RPC port (26657).
+	// For multi-protocol routing, use BaseDomain instead.
+	// +optional
+	Hostnames []string `json:"hostnames,omitempty"`
 
-	// Hostnames are the DNS hostnames for the HTTPRoute.
-	// +kubebuilder:validation:MinItems=1
-	Hostnames []string `json:"hostnames"`
+	// BaseDomain generates HTTPRoutes for all standard Sei protocols
+	// using conventional subdomain prefixes (rpc.*, rest.*, grpc.*,
+	// evm-rpc.*, evm-ws.*), each routing to the correct backend port.
+	// +optional
+	BaseDomain string `json:"baseDomain,omitempty"`
 
 	// Annotations are merged onto the HTTPRoute metadata.
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
-}
-
-// GatewayParentRef identifies a gateway.networking.k8s.io/v1 Gateway resource.
-// Note: this targets the Kubernetes Gateway API Gateway, not the
-// Istio-native networking.istio.io/v1 Gateway.
-type GatewayParentRef struct {
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// +kubebuilder:validation:MinLength=1
-	Namespace string `json:"namespace"`
-
-	// SectionName targets a specific listener on the Gateway (e.g. "https").
-	// When omitted, the HTTPRoute attaches to all compatible listeners.
-	// +optional
-	SectionName *string `json:"sectionName,omitempty"`
 }
 
 // NetworkIsolationConfig defines network-level access control.

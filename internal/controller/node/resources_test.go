@@ -454,6 +454,25 @@ func TestSidecarMainContainer_StartupProbeUsesCustomPort(t *testing.T) {
 	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(9999))
 }
 
+func TestSidecarMainContainer_ReadinessProbeTargetsLagStatus(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("sc-0", "default")
+
+	sts := generateNodeStatefulSet(node, platformtest.Config())
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+
+	g.Expect(seid).NotTo(BeNil())
+	probe := seid.ReadinessProbe
+	g.Expect(probe).NotTo(BeNil())
+	g.Expect(probe.HTTPGet).NotTo(BeNil())
+	g.Expect(probe.HTTPGet.Path).To(Equal("/lag_status"))
+	g.Expect(probe.HTTPGet.Port.IntValue()).To(Equal(26657))
+	g.Expect(probe.InitialDelaySeconds).To(Equal(int32(30)))
+	g.Expect(probe.PeriodSeconds).To(Equal(int32(10)))
+	g.Expect(probe.FailureThreshold).To(Equal(int32(3)))
+	g.Expect(probe.TimeoutSeconds).To(Equal(int32(5)))
+}
+
 func TestSidecarMainContainer_WaitWrapper_PollsHealthzBeforeExec(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
@@ -569,24 +588,24 @@ func TestGenerateNodeHeadlessService(t *testing.T) {
 	g.Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
 	g.Expect(svc.Spec.PublishNotReadyAddresses).To(BeTrue())
 	g.Expect(svc.Spec.Selector).To(HaveKeyWithValue(nodeLabel, "mynet-0"))
-	g.Expect(svc.Spec.Ports).To(HaveLen(6))
+	g.Expect(svc.Spec.Ports).To(HaveLen(7))
 }
 
-func TestServicePorts_SixExpectedPorts(t *testing.T) {
+func TestServicePorts_SevenExpectedPorts(t *testing.T) {
 	g := NewWithT(t)
 	ports := servicePorts()
-	g.Expect(ports).To(HaveLen(6))
+	g.Expect(ports).To(HaveLen(7))
 	portNums := make([]int32, len(ports))
 	for i, p := range ports {
 		portNums[i] = p.Port
 	}
-	g.Expect(portNums).To(ConsistOf(int32(8545), int32(8546), int32(9090), int32(26656), int32(26657), int32(26660)))
+	g.Expect(portNums).To(ConsistOf(int32(1317), int32(8545), int32(8546), int32(9090), int32(26656), int32(26657), int32(26660)))
 }
 
-func TestContainerPorts_SixExpectedPorts(t *testing.T) {
+func TestContainerPorts_SevenExpectedPorts(t *testing.T) {
 	g := NewWithT(t)
 	ports := containerPorts()
-	g.Expect(ports).To(HaveLen(6))
+	g.Expect(ports).To(HaveLen(7))
 }
 
 // --- PVC generation ---

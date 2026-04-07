@@ -200,34 +200,24 @@ spec:
                           type: string
                         description: Annotations are merged onto the HTTPRoute metadata.
                         type: object
+                      baseDomain:
+                        description: |-
+                          BaseDomain generates HTTPRoutes for all standard Sei protocols
+                          using conventional subdomain prefixes (rpc.*, rest.*, grpc.*,
+                          evm-rpc.*, evm-ws.*), each routing to the correct backend port.
+                        type: string
                       hostnames:
-                        description: Hostnames are the DNS hostnames for the HTTPRoute.
+                        description: |-
+                          Hostnames routes all listed hostnames to the RPC port (26657).
+                          For multi-protocol routing, use BaseDomain instead.
                         items:
                           type: string
-                        minItems: 1
                         type: array
-                      parentRef:
-                        description: ParentRef identifies the shared Gateway.
-                        properties:
-                          name:
-                            minLength: 1
-                            type: string
-                          namespace:
-                            minLength: 1
-                            type: string
-                          sectionName:
-                            description: |-
-                              SectionName targets a specific listener on the Gateway (e.g. "https").
-                              When omitted, the HTTPRoute attaches to all compatible listeners.
-                            type: string
-                        required:
-                        - name
-                        - namespace
-                        type: object
-                    required:
-                    - hostnames
-                    - parentRef
                     type: object
+                    x-kubernetes-validations:
+                    - message: at least one of hostnames or baseDomain must be set
+                      rule: (has(self.hostnames) && size(self.hostnames) > 0) || (has(self.baseDomain)
+                        && self.baseDomain != ”)
                   isolation:
                     description: Isolation configures network-level access control
                       for node pods.
@@ -280,24 +270,6 @@ spec:
                           type: string
                         description: Annotations are merged onto the Service metadata.
                         type: object
-                      ports:
-                        description: |-
-                          Ports selects which node ports to expose. When empty, all
-                          standard sei-config ports are exposed.
-                        items:
-                          description: |-
-                            PortName is a well-known sei-node port identifier from sei-config.
-                            Values must match the Name field of seiconfig.NodePorts().
-                          enum:
-                          - rpc
-                          - evm-rpc
-                          - evm-ws
-                          - grpc
-                          - p2p
-                          - metrics
-                          type: string
-                        type: array
-                        x-kubernetes-list-type: set
                       type:
                         default: ClusterIP
                         description: Type is the Kubernetes Service type.
@@ -841,13 +813,6 @@ spec:
             - replicas
             - template
             type: object
-            x-kubernetes-validations:
-            - message: networking.service.ports must include 'metrics' when monitoring.serviceMonitor
-                is configured
-              rule: '!(has(self.monitoring) && has(self.monitoring.serviceMonitor)
-                && has(self.networking) && has(self.networking.service) && has(self.networking.service.ports)
-                && size(self.networking.service.ports) > 0) || self.networking.service.ports.exists(p,
-                p == ''metrics'')'
           status:
             description: SeiNodeGroupStatus defines the observed state of a SeiNodeGroup.
             properties:

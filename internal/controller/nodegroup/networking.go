@@ -20,6 +20,23 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
+var seiProtocolRoutes = []struct {
+	Prefix string
+	Port   int32
+}{
+	{"rpc", seiconfig.PortRPC},
+	{"rest", seiconfig.PortREST},
+	{"grpc", seiconfig.PortGRPC},
+	{"evm-rpc", seiconfig.PortEVMHTTP},
+	{"evm-ws", seiconfig.PortEVMWS},
+}
+
+type effectiveRoute struct {
+	Name      string
+	Hostnames []string
+	Port      int32
+}
+
 func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Networking == nil {
 		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
@@ -58,7 +75,6 @@ func (r *SeiNodeGroupReconciler) reconcileExternalService(ctx context.Context, g
 func generateExternalService(group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
 	svcConfig := group.Spec.Networking.Service
 	labels := resourceLabels(group)
-
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      externalServiceName(group),
@@ -68,7 +84,7 @@ func generateExternalService(group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
 		Spec: corev1.ServiceSpec{
 			Type:     svcConfig.Type,
 			Selector: groupSelector(group),
-			Ports:    externalServicePorts(svcConfig.Ports),
+			Ports:    portsForMode(groupMode(group)),
 		},
 	}
 	if len(svcConfig.Annotations) > 0 {
@@ -78,34 +94,26 @@ func generateExternalService(group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
 	return svc
 }
 
-func externalServicePorts(portNames []seiv1alpha1.PortName) []corev1.ServicePort {
-	allPorts := seiconfig.NodePorts()
-
-	if len(portNames) == 0 {
-		ports := make([]corev1.ServicePort, len(allPorts))
-		for i, p := range allPorts {
-			ports[i] = corev1.ServicePort{
-				Name: p.Name, Port: p.Port,
-				TargetPort: intstr.FromInt32(p.Port),
-				Protocol:   corev1.ProtocolTCP,
-			}
-		}
-		return ports
+func groupMode(group *seiv1alpha1.SeiNodeGroup) seiconfig.NodeMode {
+	spec := group.Spec.Template.Spec
+	switch {
+	case spec.Archive != nil:
+		return seiconfig.ModeArchive
+	case spec.Validator != nil:
+		return seiconfig.ModeValidator
+	default:
+		return seiconfig.ModeFull
 	}
+}
 
-	wanted := make(map[string]bool, len(portNames))
-	for _, pn := range portNames {
-		wanted[string(pn)] = true
-	}
-
-	var ports []corev1.ServicePort
-	for _, p := range allPorts {
-		if wanted[p.Name] {
-			ports = append(ports, corev1.ServicePort{
-				Name: p.Name, Port: p.Port,
-				TargetPort: intstr.FromInt32(p.Port),
-				Protocol:   corev1.ProtocolTCP,
-			})
+func portsForMode(mode seiconfig.NodeMode) []corev1.ServicePort {
+	np := seiconfig.NodePortsForMode(mode)
+	ports := make([]corev1.ServicePort, len(np))
+	for i, p := range np {
+		ports[i] = corev1.ServicePort{
+			Name: p.Name, Port: p.Port,
+			TargetPort: intstr.FromInt32(p.Port),
+			Protocol:   corev1.ProtocolTCP,
 		}
 	}
 	return ports
@@ -114,53 +122,122 @@ func externalServicePorts(portNames []seiv1alpha1.PortName) []corev1.ServicePort
 func (r *SeiNodeGroupReconciler) reconcileRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
 	if group.Spec.Networking.Gateway == nil {
 		removeCondition(group, seiv1alpha1.ConditionRouteReady)
-		return r.deleteUnstructured(ctx, group, httpRouteGVK())
+		return r.deleteHTTPRoutesByLabel(ctx, group)
 	}
 	return r.reconcileHTTPRoute(ctx, group)
 }
 
-func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
-	desired := generateHTTPRoute(group)
-	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on HTTPRoute: %w", err)
-	}
-
-	//nolint:staticcheck // migrating unstructured SSA to typed ApplyConfiguration is a separate effort
-	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
+func (r *SeiNodeGroupReconciler) deleteHTTPRoutesByLabel(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(httpRouteGVK())
+	err := r.List(ctx, list, client.InNamespace(group.Namespace), client.MatchingLabels(resourceLabels(group)))
 	if meta.IsNoMatchError(err) {
-		if !hasConditionReason(group, seiv1alpha1.ConditionRouteReady, "CRDNotInstalled") {
-			r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed; HTTPRoute will not be created")
-		}
-		setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionFalse,
-			"CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed")
 		return nil
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("listing HTTPRoutes for deletion: %w", err)
 	}
+	for i := range list.Items {
+		if err := r.Delete(ctx, &list.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting HTTPRoute %s: %w", list.Items[i].GetName(), err)
+		}
+	}
+	return nil
+}
+
+func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeGroup) []effectiveRoute {
+	cfg := group.Spec.Networking.Gateway
+	if cfg.BaseDomain != "" {
+		routes := make([]effectiveRoute, len(seiProtocolRoutes))
+		for i, p := range seiProtocolRoutes {
+			routes[i] = effectiveRoute{
+				Name:      fmt.Sprintf("%s-%s", group.Name, p.Prefix),
+				Hostnames: []string{fmt.Sprintf("%s.%s", p.Prefix, cfg.BaseDomain)},
+				Port:      p.Port,
+			}
+		}
+		return routes
+	}
+	return []effectiveRoute{{
+		Name:      group.Name,
+		Hostnames: cfg.Hostnames,
+		Port:      seiconfig.PortRPC,
+	}}
+}
+
+func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+	routes := resolveEffectiveRoutes(group)
+
+	desiredNames := make(map[string]bool, len(routes))
+	for _, er := range routes {
+		desiredNames[er.Name] = true
+	}
+
+	for _, er := range routes {
+		desired := generateHTTPRoute(group, er, r.GatewayName, r.GatewayNamespace)
+		if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
+			return fmt.Errorf("setting owner reference on HTTPRoute %s: %w", er.Name, err)
+		}
+
+		//nolint:staticcheck // migrating unstructured SSA to typed ApplyConfiguration is a separate effort
+		err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
+		if meta.IsNoMatchError(err) {
+			if !hasConditionReason(group, seiv1alpha1.ConditionRouteReady, "CRDNotInstalled") {
+				r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed; HTTPRoute will not be created")
+			}
+			setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionFalse,
+				"CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed")
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("applying HTTPRoute %s: %w", er.Name, err)
+		}
+	}
+
+	if err := r.deleteOrphanedHTTPRoutes(ctx, group, desiredNames); err != nil {
+		return fmt.Errorf("cleaning up orphaned HTTPRoutes: %w", err)
+	}
+
 	if !hasConditionReason(group, seiv1alpha1.ConditionRouteReady, "HTTPRouteReady") {
 		r.Recorder.Event(group, corev1.EventTypeNormal, "HTTPRouteReady", "HTTPRoute reconciled successfully")
 	}
 	setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionTrue,
-		"HTTPRouteReady", "HTTPRoute reconciled successfully")
+		"HTTPRouteReady", fmt.Sprintf("%d HTTPRoute(s) reconciled successfully", len(routes)))
 	return nil
 }
 
-func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructured {
-	cfg := group.Spec.Networking.Gateway
+func (r *SeiNodeGroupReconciler) deleteOrphanedHTTPRoutes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, desiredNames map[string]bool) error {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(httpRouteGVK())
+	err := r.List(ctx, list, client.InNamespace(group.Namespace), client.MatchingLabels(resourceLabels(group)))
+	if meta.IsNoMatchError(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("listing HTTPRoutes: %w", err)
+	}
+	for i := range list.Items {
+		route := &list.Items[i]
+		if !desiredNames[route.GetName()] {
+			if err := r.Delete(ctx, route); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("deleting orphaned HTTPRoute %s: %w", route.GetName(), err)
+			}
+		}
+	}
+	return nil
+}
+
+func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup, er effectiveRoute, gatewayName, gatewayNamespace string) *unstructured.Unstructured {
 	svcName := externalServiceName(group)
 
-	hostnames := make([]any, len(cfg.Hostnames))
-	for i, h := range cfg.Hostnames {
+	hostnames := make([]any, len(er.Hostnames))
+	for i, h := range er.Hostnames {
 		hostnames[i] = h
 	}
 
 	parentRef := map[string]any{
-		"name":      cfg.ParentRef.Name,
-		"namespace": cfg.ParentRef.Namespace,
-	}
-	if cfg.ParentRef.SectionName != nil {
-		parentRef["sectionName"] = *cfg.ParentRef.SectionName
+		"name":      gatewayName,
+		"namespace": gatewayNamespace,
 	}
 
 	route := &unstructured.Unstructured{
@@ -168,7 +245,7 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructur
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "HTTPRoute",
 			"metadata": map[string]any{
-				"name":        group.Name,
+				"name":        er.Name,
 				"namespace":   group.Namespace,
 				"labels":      toStringInterfaceMap(resourceLabels(group)),
 				"annotations": toStringInterfaceMap(managedByAnnotations()),
@@ -181,7 +258,7 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructur
 						"backendRefs": []any{
 							map[string]any{
 								"name": svcName,
-								"port": int64(seiconfig.PortRPC),
+								"port": int64(er.Port),
 							},
 						},
 					},
@@ -190,10 +267,10 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructur
 		},
 	}
 
-	if len(cfg.Annotations) > 0 {
+	if gw := group.Spec.Networking.Gateway; gw != nil && len(gw.Annotations) > 0 {
 		metadata := route.Object["metadata"].(map[string]any)
 		annotations := metadata["annotations"].(map[string]any)
-		for k, v := range cfg.Annotations {
+		for k, v := range gw.Annotations {
 			annotations[k] = v
 		}
 	}
@@ -345,7 +422,10 @@ func (r *SeiNodeGroupReconciler) deleteNetworkingResources(ctx context.Context, 
 		return err
 	}
 
-	for _, gvk := range []schema.GroupVersionKind{httpRouteGVK(), authPolicyGVK(), serviceMonitorGVK()} {
+	if err := r.deleteHTTPRoutesByLabel(ctx, group); err != nil {
+		return fmt.Errorf("deleting HTTPRoutes: %w", err)
+	}
+	for _, gvk := range []schema.GroupVersionKind{authPolicyGVK(), serviceMonitorGVK()} {
 		if err := r.deleteUnstructured(ctx, group, gvk); err != nil {
 			return fmt.Errorf("deleting %s: %w", gvk.Kind, err)
 		}
@@ -376,7 +456,21 @@ func (r *SeiNodeGroupReconciler) orphanNetworkingResources(ctx context.Context, 
 		return fmt.Errorf("fetching external Service for orphan: %w", err)
 	}
 
-	for _, gvk := range []schema.GroupVersionKind{httpRouteGVK(), authPolicyGVK(), serviceMonitorGVK()} {
+	httpRoutes := &unstructured.UnstructuredList{}
+	httpRoutes.SetGroupVersionKind(httpRouteGVK())
+	listErr := r.List(ctx, httpRoutes, client.InNamespace(group.Namespace), client.MatchingLabels(resourceLabels(group)))
+	if listErr != nil && !meta.IsNoMatchError(listErr) {
+		return fmt.Errorf("listing HTTPRoutes for orphan: %w", listErr)
+	}
+	if listErr == nil {
+		for i := range httpRoutes.Items {
+			if err := r.removeOwnerRef(ctx, &httpRoutes.Items[i], group); err != nil {
+				return fmt.Errorf("orphaning HTTPRoute %s: %w", httpRoutes.Items[i].GetName(), err)
+			}
+		}
+	}
+
+	for _, gvk := range []schema.GroupVersionKind{authPolicyGVK(), serviceMonitorGVK()} {
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(gvk)
 		err := r.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: group.Namespace}, obj)

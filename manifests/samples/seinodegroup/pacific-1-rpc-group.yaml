@@ -46,14 +46,7 @@ spec:
       type: ClusterIP
 
     gateway:
-      parentRef:
-        name: sei-gateway
-        namespace: istio-system
-        sectionName: http
-      hostnames:
-        - rpc.pacific-1.sei.io
-      annotations:
-        external-dns.alpha.kubernetes.io/hostname: rpc.pacific-1.sei.io
+      baseDomain: pacific-1.sei.io
 
     isolation:
       authorizationPolicy:

@@ -174,13 +174,21 @@ func main() {
 	}
 
 	controllerSA := os.Getenv("SEI_CONTROLLER_SA_PRINCIPAL")
+	gatewayName := os.Getenv("SEI_GATEWAY_NAME")
+	gatewayNamespace := os.Getenv("SEI_GATEWAY_NAMESPACE")
+	if gatewayName == "" || gatewayNamespace == "" {
+		setupLog.Error(nil, "SEI_GATEWAY_NAME and SEI_GATEWAY_NAMESPACE are required")
+		os.Exit(1)
+	}
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodegroup-controller")
 	if err := (&nodegroupcontroller.SeiNodeGroupReconciler{
-		Client:       kc,
-		Scheme:       mgr.GetScheme(),
-		Recorder:     recorder,
-		ControllerSA: controllerSA,
+		Client:           kc,
+		Scheme:           mgr.GetScheme(),
+		Recorder:         recorder,
+		ControllerSA:     controllerSA,
+		GatewayName:      gatewayName,
+		GatewayNamespace: gatewayNamespace,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeGroup]{
 			Client: kc,
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) task.ExecutionConfig {
