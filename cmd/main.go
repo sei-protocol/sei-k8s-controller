@@ -132,6 +132,8 @@ func main() {
 		ResultExportPrefix:  os.Getenv("SEI_RESULT_EXPORT_PREFIX"),
 		GenesisBucket:       os.Getenv("SEI_GENESIS_BUCKET"),
 		GenesisRegion:       os.Getenv("SEI_GENESIS_REGION"),
+		GatewayName:         os.Getenv("SEI_GATEWAY_NAME"),
+		GatewayNamespace:    os.Getenv("SEI_GATEWAY_NAMESPACE"),
 	}
 
 	if err := platformCfg.Validate(); err != nil {
@@ -174,12 +176,6 @@ func main() {
 	}
 
 	controllerSA := os.Getenv("SEI_CONTROLLER_SA_PRINCIPAL")
-	gatewayName := os.Getenv("SEI_GATEWAY_NAME")
-	gatewayNamespace := os.Getenv("SEI_GATEWAY_NAMESPACE")
-	if gatewayName == "" || gatewayNamespace == "" {
-		setupLog.Error(nil, "SEI_GATEWAY_NAME and SEI_GATEWAY_NAMESPACE are required")
-		os.Exit(1)
-	}
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodegroup-controller")
 	if err := (&nodegroupcontroller.SeiNodeGroupReconciler{
@@ -187,8 +183,8 @@ func main() {
 		Scheme:           mgr.GetScheme(),
 		Recorder:         recorder,
 		ControllerSA:     controllerSA,
-		GatewayName:      gatewayName,
-		GatewayNamespace: gatewayNamespace,
+		GatewayName:      platformCfg.GatewayName,
+		GatewayNamespace: platformCfg.GatewayNamespace,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeGroup]{
 			Client: kc,
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) task.ExecutionConfig {

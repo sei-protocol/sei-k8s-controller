@@ -26,5 +26,7 @@ func Config() platform.Config {
 		ResultExportPrefix:  "shadow-results/",
 		GenesisBucket:       "test-sei-k8s-genesis-artifacts",
 		GenesisRegion:       "us-east-2",
+		GatewayName:         "sei-gateway",
+		GatewayNamespace:    "istio-system",
 	}
 }

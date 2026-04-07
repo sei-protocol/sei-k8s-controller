@@ -63,6 +63,8 @@ func (c Config) Validate() error {
 		"SEI_RESULT_EXPORT_PREFIX":  c.ResultExportPrefix,
 		"SEI_GENESIS_BUCKET":        c.GenesisBucket,
 		"SEI_GENESIS_REGION":        c.GenesisRegion,
+		"SEI_GATEWAY_NAME":          c.GatewayName,
+		"SEI_GATEWAY_NAMESPACE":     c.GatewayNamespace,
 	}
 	for name, val := range required {
 		if val == "" {
