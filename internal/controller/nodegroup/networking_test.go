@@ -37,16 +37,15 @@ func TestGenerateExternalService_AllPortsWhenEmpty(t *testing.T) {
 	}
 
 	svc := generateExternalService(group)
-	g.Expect(svc.Spec.Ports).To(HaveLen(6))
+	g.Expect(svc.Spec.Ports).To(HaveLen(7))
 }
 
-func TestGenerateExternalService_FilteredPorts(t *testing.T) {
+func TestGenerateExternalService_ValidatorModePorts(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
+	group := newTestGroup("pacific-1-val", "sei")
+	group.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{
-			Ports: []seiv1alpha1.PortName{"rpc", "evm-rpc"},
-		},
+		Service: &seiv1alpha1.ExternalServiceConfig{},
 	}
 
 	svc := generateExternalService(group)
@@ -56,7 +55,7 @@ func TestGenerateExternalService_FilteredPorts(t *testing.T) {
 	for i, p := range svc.Spec.Ports {
 		portNames[i] = p.Name
 	}
-	g.Expect(portNames).To(ConsistOf("rpc", "evm-rpc"))
+	g.Expect(portNames).To(ConsistOf("p2p", "metrics"))
 }
 
 func TestGenerateExternalService_Annotations(t *testing.T) {
@@ -263,35 +262,9 @@ func TestResolveEffectiveRoutes_BaseDomainTakesPrecedence(t *testing.T) {
 	g.Expect(routes[0].Hostnames).To(Equal([]string{"rpc.pacific-1.sei.io"}))
 }
 
-func TestExternalServicePorts_IncludesRestWhenBaseDomain(t *testing.T) {
+func TestGenerateExternalService_FullModeIncludesAllPorts(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			BaseDomain: "pacific-1.sei.io",
-		},
-	}
-
-	svc := generateExternalService(group)
-	portNames := make([]string, len(svc.Spec.Ports))
-	for i, p := range svc.Spec.Ports {
-		portNames[i] = p.Name
-	}
-	g.Expect(portNames).To(ContainElement("rest"))
-
-	var restPort corev1.ServicePort
-	for _, p := range svc.Spec.Ports {
-		if p.Name == "rest" {
-			restPort = p
-		}
-	}
-	g.Expect(restPort.Port).To(Equal(int32(1317)))
-}
-
-func TestExternalServicePorts_NoRestWithoutBaseDomain(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
+	group := newTestGroup("pacific-1-rpc", "sei")
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
 	}
@@ -301,7 +274,7 @@ func TestExternalServicePorts_NoRestWithoutBaseDomain(t *testing.T) {
 	for i, p := range svc.Spec.Ports {
 		portNames[i] = p.Name
 	}
-	g.Expect(portNames).NotTo(ContainElement("rest"))
+	g.Expect(portNames).To(ConsistOf("evm-rpc", "evm-ws", "grpc", "rest", "p2p", "rpc", "metrics"))
 }
 
 // --- AuthorizationPolicy ---

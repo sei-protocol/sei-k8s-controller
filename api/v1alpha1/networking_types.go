@@ -4,11 +4,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// PortName is a well-known sei-node port identifier from sei-config.
-// Values must match the Name field of seiconfig.NodePorts().
-// +kubebuilder:validation:Enum=rpc;rest;evm-rpc;evm-ws;grpc;p2p;metrics
-type PortName string
-
 // DeletionPolicy controls what happens to managed networking resources
 // and child SeiNodes when their parent is deleted.
 // +kubebuilder:validation:Enum=Delete;Retain
@@ -42,18 +37,14 @@ type NetworkingConfig struct {
 }
 
 // ExternalServiceConfig defines the shared non-headless Service.
+// Ports are derived automatically from the node mode via
+// seiconfig.NodePortsForMode — no manual port selection needed.
 type ExternalServiceConfig struct {
 	// Type is the Kubernetes Service type.
 	// +optional
 	// +kubebuilder:default=ClusterIP
 	// +kubebuilder:validation:Enum=ClusterIP;LoadBalancer;NodePort
 	Type corev1.ServiceType `json:"type,omitempty"`
-
-	// Ports selects which node ports to expose. When empty, all
-	// standard sei-config ports are exposed.
-	// +optional
-	// +listType=set
-	Ports []PortName `json:"ports,omitempty"`
 
 	// Annotations are merged onto the Service metadata.
 	// +optional

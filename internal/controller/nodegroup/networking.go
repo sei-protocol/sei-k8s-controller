@@ -20,17 +20,15 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-const portRest = int32(1317)
-
 var seiProtocolRoutes = []struct {
 	Prefix string
 	Port   int32
 }{
 	{"rpc", seiconfig.PortRPC},
-	{"rest", portRest},
-	{"grpc", 9090},
-	{"evm-rpc", 8545},
-	{"evm-ws", 8546},
+	{"rest", seiconfig.PortREST},
+	{"grpc", seiconfig.PortGRPC},
+	{"evm-rpc", seiconfig.PortEVMHTTP},
+	{"evm-ws", seiconfig.PortEVMWS},
 }
 
 type effectiveRoute struct {
@@ -77,8 +75,6 @@ func (r *SeiNodeGroupReconciler) reconcileExternalService(ctx context.Context, g
 func generateExternalService(group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
 	svcConfig := group.Spec.Networking.Service
 	labels := resourceLabels(group)
-	includeRest := group.Spec.Networking.Gateway != nil && group.Spec.Networking.Gateway.BaseDomain != ""
-
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      externalServiceName(group),
@@ -88,7 +84,7 @@ func generateExternalService(group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
 		Spec: corev1.ServiceSpec{
 			Type:     svcConfig.Type,
 			Selector: groupSelector(group),
-			Ports:    externalServicePorts(svcConfig.Ports, includeRest),
+			Ports:    portsForMode(groupMode(group)),
 		},
 	}
 	if len(svcConfig.Annotations) > 0 {
@@ -98,49 +94,27 @@ func generateExternalService(group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
 	return svc
 }
 
-func externalServicePorts(portNames []seiv1alpha1.PortName, includeRest bool) []corev1.ServicePort {
-	allPorts := seiconfig.NodePorts()
-
-	if len(portNames) == 0 {
-		ports := make([]corev1.ServicePort, len(allPorts))
-		for i, p := range allPorts {
-			ports[i] = corev1.ServicePort{
-				Name: p.Name, Port: p.Port,
-				TargetPort: intstr.FromInt32(p.Port),
-				Protocol:   corev1.ProtocolTCP,
-			}
-		}
-		if includeRest {
-			ports = append(ports, corev1.ServicePort{
-				Name: "rest", Port: portRest,
-				TargetPort: intstr.FromInt32(portRest),
-				Protocol:   corev1.ProtocolTCP,
-			})
-		}
-		return ports
+func groupMode(group *seiv1alpha1.SeiNodeGroup) seiconfig.NodeMode {
+	spec := group.Spec.Template.Spec
+	switch {
+	case spec.Archive != nil:
+		return seiconfig.ModeArchive
+	case spec.Validator != nil:
+		return seiconfig.ModeValidator
+	default:
+		return seiconfig.ModeFull
 	}
+}
 
-	wanted := make(map[string]bool, len(portNames))
-	for _, pn := range portNames {
-		wanted[string(pn)] = true
-	}
-
-	var ports []corev1.ServicePort
-	for _, p := range allPorts {
-		if wanted[p.Name] {
-			ports = append(ports, corev1.ServicePort{
-				Name: p.Name, Port: p.Port,
-				TargetPort: intstr.FromInt32(p.Port),
-				Protocol:   corev1.ProtocolTCP,
-			})
-		}
-	}
-	if wanted["rest"] {
-		ports = append(ports, corev1.ServicePort{
-			Name: "rest", Port: portRest,
-			TargetPort: intstr.FromInt32(portRest),
+func portsForMode(mode seiconfig.NodeMode) []corev1.ServicePort {
+	np := seiconfig.NodePortsForMode(mode)
+	ports := make([]corev1.ServicePort, len(np))
+	for i, p := range np {
+		ports[i] = corev1.ServicePort{
+			Name: p.Name, Port: p.Port,
+			TargetPort: intstr.FromInt32(p.Port),
 			Protocol:   corev1.ProtocolTCP,
-		})
+		}
 	}
 	return ports
 }
@@ -192,14 +166,6 @@ func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeGroup) []effectiveRoute {
 }
 
 func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
-	if r.GatewayName == "" || r.GatewayNamespace == "" {
-		setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionFalse,
-			"GatewayNotConfigured", "SEI_GATEWAY_NAME and SEI_GATEWAY_NAMESPACE must be set")
-		r.Recorder.Event(group, corev1.EventTypeWarning, "GatewayNotConfigured",
-			"gateway routing requires SEI_GATEWAY_NAME and SEI_GATEWAY_NAMESPACE environment variables")
-		return nil
-	}
-
 	routes := resolveEffectiveRoutes(group)
 
 	desiredNames := make(map[string]bool, len(routes))
