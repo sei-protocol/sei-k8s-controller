@@ -60,13 +60,12 @@ type ExternalServiceConfig struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// GatewayRouteConfig creates a gateway.networking.k8s.io/v1 HTTPRoute
-// that references a shared Gateway resource.
-// +kubebuilder:validation:XValidation:rule="has(self.hostnames) && size(self.hostnames) > 0 || has(self.baseDomain) && self.baseDomain != ”",message="at least one of hostnames or baseDomain must be set"
+// GatewayRouteConfig creates gateway.networking.k8s.io/v1 HTTPRoute resources
+// targeting the platform Gateway (configured via SEI_GATEWAY_NAME and
+// SEI_GATEWAY_NAMESPACE environment variables on the controller).
+//
+// +kubebuilder:validation:XValidation:rule="(has(self.hostnames) && size(self.hostnames) > 0) || (has(self.baseDomain) && self.baseDomain != ”)",message="at least one of hostnames or baseDomain must be set"
 type GatewayRouteConfig struct {
-	// ParentRef identifies the shared Gateway.
-	ParentRef GatewayParentRef `json:"parentRef"`
-
 	// Hostnames routes all listed hostnames to the RPC port (26657).
 	// For multi-protocol routing, use BaseDomain instead.
 	// +optional
@@ -81,22 +80,6 @@ type GatewayRouteConfig struct {
 	// Annotations are merged onto the HTTPRoute metadata.
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
-}
-
-// GatewayParentRef identifies a gateway.networking.k8s.io/v1 Gateway resource.
-// Note: this targets the Kubernetes Gateway API Gateway, not the
-// Istio-native networking.istio.io/v1 Gateway.
-type GatewayParentRef struct {
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// +kubebuilder:validation:MinLength=1
-	Namespace string `json:"namespace"`
-
-	// SectionName targets a specific listener on the Gateway (e.g. "https").
-	// When omitted, the HTTPRoute attaches to all compatible listeners.
-	// +optional
-	SectionName *string `json:"sectionName,omitempty"`
 }
 
 // NetworkIsolationConfig defines network-level access control.

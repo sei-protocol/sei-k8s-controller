@@ -107,17 +107,13 @@ func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
 		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:      "istio-gateway",
-				Namespace: "istio-system",
-			},
 			Hostnames: []string{"rpc.pacific-1.sei.io"},
 		},
 	}
 
 	routes := resolveEffectiveRoutes(group)
 	g.Expect(routes).To(HaveLen(1))
-	route := generateHTTPRoute(group, routes[0])
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
 
 	g.Expect(route.GetName()).To(Equal("archive-rpc"))
 	g.Expect(route.GetNamespace()).To(Equal("sei"))
@@ -127,60 +123,11 @@ func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
 	g.Expect(parentRefs).To(HaveLen(1))
 
 	ref := parentRefs[0].(map[string]any)
-	g.Expect(ref["name"]).To(Equal("istio-gateway"))
+	g.Expect(ref["name"]).To(Equal("sei-gateway"))
 	g.Expect(ref["namespace"]).To(Equal("istio-system"))
 
 	hostnames := spec["hostnames"].([]any)
 	g.Expect(hostnames).To(ConsistOf("rpc.pacific-1.sei.io"))
-}
-
-func TestGenerateHTTPRoute_SectionName(t *testing.T) {
-	g := NewWithT(t)
-	section := "https"
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:        "sei-gateway",
-				Namespace:   "istio-system",
-				SectionName: &section,
-			},
-			Hostnames: []string{"rpc.pacific-1.sei.io"},
-		},
-	}
-
-	routes := resolveEffectiveRoutes(group)
-	route := generateHTTPRoute(group, routes[0])
-
-	spec := route.Object["spec"].(map[string]any)
-	parentRefs := spec["parentRefs"].([]any)
-	ref := parentRefs[0].(map[string]any)
-	g.Expect(ref["sectionName"]).To(Equal("https"))
-}
-
-func TestGenerateHTTPRoute_NoSectionName(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:      "sei-gateway",
-				Namespace: "istio-system",
-			},
-			Hostnames: []string{"rpc.pacific-1.sei.io"},
-		},
-	}
-
-	routes := resolveEffectiveRoutes(group)
-	route := generateHTTPRoute(group, routes[0])
-
-	spec := route.Object["spec"].(map[string]any)
-	parentRefs := spec["parentRefs"].([]any)
-	ref := parentRefs[0].(map[string]any)
-	_, hasSectionName := ref["sectionName"]
-	g.Expect(hasSectionName).To(BeFalse())
 }
 
 func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
@@ -189,16 +136,12 @@ func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
 		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:      "gw",
-				Namespace: "istio-system",
-			},
 			Hostnames: []string{"rpc.sei.io"},
 		},
 	}
 
 	routes := resolveEffectiveRoutes(group)
-	route := generateHTTPRoute(group, routes[0])
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
 	g.Expect(route.GetAnnotations()).To(HaveKeyWithValue("sei.io/managed-by", "seinodegroup"))
 }
 
@@ -208,16 +151,12 @@ func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
 		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:      "gw",
-				Namespace: "istio-system",
-			},
 			Hostnames: []string{"rpc.sei.io"},
 		},
 	}
 
 	routes := resolveEffectiveRoutes(group)
-	route := generateHTTPRoute(group, routes[0])
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
 
 	spec := route.Object["spec"].(map[string]any)
 	rules := spec["rules"].([]any)
@@ -239,10 +178,6 @@ func TestResolveEffectiveRoutes_BaseDomain_FiveRoutes(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
 		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:      "gw",
-				Namespace: "istio-system",
-			},
 			BaseDomain: "pacific-1.sei.io",
 		},
 	}
@@ -275,10 +210,6 @@ func TestGenerateHTTPRoute_BaseDomain_CorrectHostnamesAndPorts(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
 		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:      "gw",
-				Namespace: "istio-system",
-			},
 			BaseDomain: "pacific-1.sei.io",
 		},
 	}
@@ -286,7 +217,7 @@ func TestGenerateHTTPRoute_BaseDomain_CorrectHostnamesAndPorts(t *testing.T) {
 	routes := resolveEffectiveRoutes(group)
 	g.Expect(routes).To(HaveLen(5))
 
-	grpcRoute := generateHTTPRoute(group, routes[2])
+	grpcRoute := generateHTTPRoute(group, routes[2], "sei-gateway", "istio-system")
 	g.Expect(grpcRoute.GetName()).To(Equal("pacific-1-rpc-grpc"))
 
 	spec := grpcRoute.Object["spec"].(map[string]any)
@@ -305,10 +236,6 @@ func TestResolveEffectiveRoutes_LegacyHostnames_SingleRoute(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
 		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:      "gw",
-				Namespace: "istio-system",
-			},
 			Hostnames: []string{"rpc.sei.io"},
 		},
 	}
@@ -326,10 +253,6 @@ func TestResolveEffectiveRoutes_BaseDomainTakesPrecedence(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
 		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:      "gw",
-				Namespace: "istio-system",
-			},
 			Hostnames:  []string{"rpc.sei.io"},
 			BaseDomain: "pacific-1.sei.io",
 		},
@@ -346,10 +269,6 @@ func TestExternalServicePorts_IncludesRestWhenBaseDomain(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
 		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			ParentRef: seiv1alpha1.GatewayParentRef{
-				Name:      "gw",
-				Namespace: "istio-system",
-			},
 			BaseDomain: "pacific-1.sei.io",
 		},
 	}

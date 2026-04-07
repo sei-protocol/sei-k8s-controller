@@ -192,6 +192,14 @@ func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeGroup) []effectiveRoute {
 }
 
 func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+	if r.GatewayName == "" || r.GatewayNamespace == "" {
+		setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionFalse,
+			"GatewayNotConfigured", "SEI_GATEWAY_NAME and SEI_GATEWAY_NAMESPACE must be set")
+		r.Recorder.Event(group, corev1.EventTypeWarning, "GatewayNotConfigured",
+			"gateway routing requires SEI_GATEWAY_NAME and SEI_GATEWAY_NAMESPACE environment variables")
+		return nil
+	}
+
 	routes := resolveEffectiveRoutes(group)
 
 	desiredNames := make(map[string]bool, len(routes))
@@ -200,7 +208,7 @@ func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *
 	}
 
 	for _, er := range routes {
-		desired := generateHTTPRoute(group, er)
+		desired := generateHTTPRoute(group, er, r.GatewayName, r.GatewayNamespace)
 		if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
 			return fmt.Errorf("setting owner reference on HTTPRoute %s: %w", er.Name, err)
 		}
@@ -253,8 +261,7 @@ func (r *SeiNodeGroupReconciler) deleteOrphanedHTTPRoutes(ctx context.Context, g
 	return nil
 }
 
-func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup, er effectiveRoute) *unstructured.Unstructured {
-	cfg := group.Spec.Networking.Gateway
+func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup, er effectiveRoute, gatewayName, gatewayNamespace string) *unstructured.Unstructured {
 	svcName := externalServiceName(group)
 
 	hostnames := make([]any, len(er.Hostnames))
@@ -263,11 +270,8 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup, er effectiveRoute) *unst
 	}
 
 	parentRef := map[string]any{
-		"name":      cfg.ParentRef.Name,
-		"namespace": cfg.ParentRef.Namespace,
-	}
-	if cfg.ParentRef.SectionName != nil {
-		parentRef["sectionName"] = *cfg.ParentRef.SectionName
+		"name":      gatewayName,
+		"namespace": gatewayNamespace,
 	}
 
 	route := &unstructured.Unstructured{
@@ -297,10 +301,10 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup, er effectiveRoute) *unst
 		},
 	}
 
-	if len(cfg.Annotations) > 0 {
+	if gw := group.Spec.Networking.Gateway; gw != nil && len(gw.Annotations) > 0 {
 		metadata := route.Object["metadata"].(map[string]any)
 		annotations := metadata["annotations"].(map[string]any)
-		for k, v := range cfg.Annotations {
+		for k, v := range gw.Annotations {
 			annotations[k] = v
 		}
 	}
