@@ -201,10 +201,8 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 	script := fmt.Sprintf(
 		`echo "waiting for sidecar to become ready..."; `+
 			`while true; do `+
-			`if exec 3<>/dev/tcp/localhost/%d 2>/dev/null; then `+
-			`printf "GET /v0/healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; `+
-			`read -r status <&3; exec 3>&-; `+
-			`echo "$status" | grep -q "200" && break; `+
+			`if (exec 3<>/dev/tcp/localhost/%d && printf "GET /v0/healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3 && head -1 <&3 | grep -q "200") 2>/dev/null; then `+
+			`break; `+
 			`fi; `+
 			`sleep 5; done; `+
 			`echo "sidecar ready, starting seid"; `+
