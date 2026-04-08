@@ -351,6 +351,17 @@ func configureStateSyncParams(snap *seiv1alpha1.SnapshotSource) *task.ConfigureS
 	return p
 }
 
+// commonOverrides returns controller overrides derived from node status
+// that apply to all node modes (e.g., external P2P address from the LB).
+func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
+	if node.Status.ExternalAddress == "" {
+		return nil
+	}
+	return map[string]string{
+		keyP2PExternalAddress: node.Status.ExternalAddress,
+	}
+}
+
 // mergeOverrides combines controller-generated overrides with user-specified
 // overrides. User overrides take precedence.
 func mergeOverrides(controllerOverrides, userOverrides map[string]string) map[string]string {

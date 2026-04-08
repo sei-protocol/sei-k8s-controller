@@ -34,7 +34,7 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	params := &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeFull),
-		Overrides: mergeOverrides(p.controllerOverrides(), node.Spec.Overrides),
+		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides()), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, params)

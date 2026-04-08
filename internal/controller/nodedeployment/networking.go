@@ -43,6 +43,14 @@ const (
 	keyP2PExternalAddress  = "p2p.external_address"
 )
 
+// needsExternalAddress returns true when node creation should wait for
+// a LoadBalancer external address before proceeding.
+func (r *SeiNodeDeploymentReconciler) needsExternalAddress(group *seiv1alpha1.SeiNodeDeployment) bool {
+	return group.Spec.Networking != nil &&
+		group.Spec.Networking.Service != nil &&
+		group.Spec.Networking.Service.Type == corev1.ServiceTypeLoadBalancer
+}
+
 func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking == nil {
 		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
@@ -67,8 +75,8 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, g
 }
 
 // reconcileExternalAddress propagates the external P2P address from the
-// LoadBalancer Service to child SeiNode overrides so that CometBFT
-// advertises a routable address for gossip-based peer discovery.
+// LoadBalancer Service to child SeiNode status so that the planner can
+// inject p2p.external_address into CometBFT config at plan build time.
 func (r *SeiNodeDeploymentReconciler) reconcileExternalAddress(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	addr := r.resolveExternalP2PAddress(ctx, group)
 	if addr == "" {
@@ -82,19 +90,15 @@ func (r *SeiNodeDeploymentReconciler) reconcileExternalAddress(ctx context.Conte
 
 	for i := range nodes {
 		node := &nodes[i]
-		current := node.Spec.Overrides[keyP2PExternalAddress]
-		if current == addr {
+		if node.Status.ExternalAddress == addr {
 			continue
 		}
 		patch := client.MergeFrom(node.DeepCopy())
-		if node.Spec.Overrides == nil {
-			node.Spec.Overrides = make(map[string]string)
+		node.Status.ExternalAddress = addr
+		if err := r.Status().Patch(ctx, node, patch); err != nil {
+			return fmt.Errorf("patching external address status on SeiNode %s: %w", node.Name, err)
 		}
-		node.Spec.Overrides[keyP2PExternalAddress] = addr
-		if err := r.Patch(ctx, node, patch); err != nil {
-			return fmt.Errorf("patching external address on SeiNode %s: %w", node.Name, err)
-		}
-		log.FromContext(ctx).Info("set P2P external address", "node", node.Name, "address", addr)
+		log.FromContext(ctx).Info("set P2P external address on status", "node", node.Name, "address", addr)
 	}
 	return nil
 }
