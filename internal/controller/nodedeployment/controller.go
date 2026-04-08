@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -84,6 +85,29 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
+	// Networking runs before node creation so that the external P2P
+	// address (from the LoadBalancer ingress) is known at plan build time.
+	if err := timeSubstep("reconcileNetworking", func() error {
+		return r.reconcileNetworking(ctx, group)
+	}); err != nil {
+		logger.Error(err, "reconciling networking")
+		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
+		return ctrl.Result{}, fmt.Errorf("reconciling networking: %w", err)
+	}
+
+	// Gate: if a LoadBalancer Service is configured, wait for the external
+	// address before creating nodes. This ensures the P2P address is baked
+	// into the SeiNode's overrides at plan build time (plans are immutable).
+	if r.needsExternalAddress(group) && r.resolveExternalP2PAddress(ctx, group) == "" {
+		logger.Info("waiting for LoadBalancer to provision external address")
+		setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionFalse,
+			"LoadBalancerPending", "Waiting for LoadBalancer to provision external P2P address")
+		if err := r.updateStatus(ctx, group, statusBase); err != nil {
+			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	if err := timeSubstep("reconcileSeiNodes", func() error {
 		return r.reconcileSeiNodes(ctx, group)
 	}); err != nil {
@@ -103,14 +127,6 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 		}
 		return planResult, nil
-	}
-
-	if err := timeSubstep("reconcileNetworking", func() error {
-		return r.reconcileNetworking(ctx, group)
-	}); err != nil {
-		logger.Error(err, "reconciling networking")
-		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
-		return ctrl.Result{}, fmt.Errorf("reconciling networking: %w", err)
 	}
 
 	if err := timeSubstep("reconcileMonitoring", func() error {

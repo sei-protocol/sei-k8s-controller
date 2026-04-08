@@ -242,6 +242,13 @@ type SeiNodeStatus struct {
 	// +optional
 	ResolvedPeers []string `json:"resolvedPeers,omitempty"`
 
+	// ExternalAddress is the routable P2P address (host:port) for this node,
+	// populated by the SeiNodeDeployment controller from the LoadBalancer
+	// ingress. Used by the planner to set p2p.external_address in CometBFT
+	// config so the node advertises a reachable address for gossip discovery.
+	// +optional
+	ExternalAddress string `json:"externalAddress,omitempty"`
+
 	// ConfigStatus reports the observed configuration state from the sidecar.
 	// +optional
 	ConfigStatus *ConfigStatus `json:"configStatus,omitempty"`

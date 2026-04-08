@@ -31,7 +31,7 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 	fn := node.Spec.FullNode
 	params := &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeFull),
-		Overrides: mergeOverrides(p.controllerOverrides(node), node.Spec.Overrides),
+		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, fn.Snapshot, params)

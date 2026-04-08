@@ -183,7 +183,7 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 	case TaskConfigApply:
 		return &task.ConfigApplyParams{
 			Mode:      string(seiconfig.ModeValidator),
-			Overrides: mergeOverrides(nil, node.Spec.Overrides),
+			Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
 		}
 	case TaskSetGenesisPeers:
 		return &task.SetGenesisPeersParams{}

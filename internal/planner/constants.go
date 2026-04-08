@@ -15,7 +15,9 @@ const (
 	keySCSnapshotKeepRecent      = "storage.state_commit.memiavl.snapshot_keep_recent"
 	keySCSnapshotMinTimeInterval = "storage.state_commit.memiavl.snapshot_min_time_interval"
 
-	valCustom  = "custom"
+	keyP2PExternalAddress = "p2p.external_address"
+
+	valCustom = "custom"
 	valNothing = "nothing"
 
 	defaultConcurrencyWorkers = "500"
