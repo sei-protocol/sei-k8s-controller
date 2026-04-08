@@ -34,13 +34,12 @@ func (p *archiveNodePlanner) snapshotSource() *seiv1alpha1.SnapshotSource {
 }
 
 func (p *archiveNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
-	overrides := map[string]string{
-		keyConcurrencyWorkers: defaultConcurrencyWorkers,
-	}
 	sg := node.Spec.Archive.SnapshotGeneration
-	if sg != nil {
-		overrides[keySnapshotInterval] = strconv.FormatInt(defaultSnapshotInterval, 10)
-		overrides[keySnapshotKeepRecent] = strconv.FormatInt(int64(sg.KeepRecent), 10)
+	if sg == nil {
+		return nil
 	}
-	return overrides
+	return map[string]string{
+		seiconfig.KeySnapshotInterval:   strconv.FormatInt(seiconfig.DefaultSnapshotInterval, 10),
+		seiconfig.KeySnapshotKeepRecent: strconv.FormatInt(int64(sg.KeepRecent), 10),
+	}
 }

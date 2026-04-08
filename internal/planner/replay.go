@@ -44,12 +44,6 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 
 func (p *replayerPlanner) controllerOverrides() map[string]string {
 	return map[string]string{
-		keyConcurrencyWorkers: defaultConcurrencyWorkers,
-		keyPruning:            valCustom,
-		keyPruningKeepRecent:  "86400",
-		keyPruningKeepEvery:   "500",
-		keyPruningInterval:    "10",
-
 		keySCAsyncCommitBuffer:       "100",
 		keySCSnapshotKeepRecent:      "2",
 		keySCSnapshotMinTimeInterval: "3600",

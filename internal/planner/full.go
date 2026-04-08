@@ -2,8 +2,6 @@ package planner
 
 import (
 	"fmt"
-	"maps"
-	"strconv"
 
 	seiconfig "github.com/sei-protocol/sei-config"
 
@@ -41,23 +39,9 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 }
 
 func (p *fullNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
-	overrides := map[string]string{
-		keyConcurrencyWorkers: defaultConcurrencyWorkers,
-		keyPruning:            valCustom,
-		keyPruningInterval:    "10",
-	}
-
 	sg := node.Spec.FullNode.SnapshotGeneration
-	if sg != nil {
-		overrides[keyPruningKeepRecent] = "50000"
-		overrides[keyPruningKeepEvery] = "0"
-		overrides[keyMinRetainBlocks] = "50000"
-		overrides[keySnapshotInterval] = strconv.FormatInt(defaultSnapshotInterval, 10)
-		overrides[keySnapshotKeepRecent] = strconv.FormatInt(int64(sg.KeepRecent), 10)
-		maps.Copy(overrides, seiconfig.StateSyncerOverrides())
-	} else {
-		overrides[keyPruningKeepRecent] = "86400"
-		overrides[keyPruningKeepEvery] = "500"
+	if sg == nil {
+		return nil
 	}
-	return overrides
+	return seiconfig.SnapshotGenerationOverrides(sg.KeepRecent)
 }
