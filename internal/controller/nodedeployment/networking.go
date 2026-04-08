@@ -104,7 +104,16 @@ func (r *SeiNodeDeploymentReconciler) reconcileExternalAddress(ctx context.Conte
 // deployment's nodes, or "" if not yet available.
 func (r *SeiNodeDeploymentReconciler) resolveExternalP2PAddress(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) string {
 	svc, err := r.fetchExternalService(ctx, group)
-	if err != nil || svc == nil {
+	if err != nil {
+		return ""
+	}
+	return externalAddressFromService(svc)
+}
+
+// externalAddressFromService extracts the P2P address from a Service's
+// LoadBalancer ingress. Prefers hostname (DNS) over IP.
+func externalAddressFromService(svc *corev1.Service) string {
+	if svc == nil {
 		return ""
 	}
 	for _, ingress := range svc.Status.LoadBalancer.Ingress {
