@@ -94,7 +94,7 @@ func (e *createExporterExecution) Execute(ctx context.Context) error {
 			Namespace: e.params.Namespace,
 			Labels: map[string]string{
 				"sei.io/nodedeployment": e.params.GroupName,
-				"sei.io/role":      "exporter",
+				"sei.io/role":           "exporter",
 			},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{

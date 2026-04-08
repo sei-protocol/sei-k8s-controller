@@ -228,7 +228,7 @@ func TestReconcilePeers_DeduplicatesOverlappingSources(t *testing.T) {
 			Name: "peer-1", Namespace: "default",
 			Labels: map[string]string{
 				"sei.io/nodedeployment": "validators",
-				"sei.io/chain":     "test-1",
+				"sei.io/chain":          "test-1",
 			},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{ChainID: "test-1", Image: "sei:latest", FullNode: &seiv1alpha1.FullNodeSpec{}},

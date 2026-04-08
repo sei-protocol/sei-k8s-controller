@@ -90,14 +90,14 @@ func TestResourceLabelsForNode_MergesPodLabels(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	node.Spec.PodLabels = map[string]string{
 		"sei.io/nodedeployment": "my-group",
-		"team":             "platform",
+		"team":                  "platform",
 	}
 	labels := resourceLabelsForNode(node)
 
 	g.Expect(labels).To(Equal(map[string]string{
-		nodeLabel:          "snap-0",
+		nodeLabel:               "snap-0",
 		"sei.io/nodedeployment": "my-group",
-		"team":             "platform",
+		"team":                  "platform",
 	}))
 }
 

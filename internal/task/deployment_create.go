@@ -78,7 +78,7 @@ func (e *createEntrantNodesExecution) ensureEntrantNode(
 			Labels: map[string]string{
 				"sei.io/nodedeployment":         e.params.GroupName,
 				"sei.io/nodedeployment-ordinal": fmt.Sprintf("%d", ordinal),
-				"sei.io/revision":          e.params.EntrantRevision,
+				"sei.io/revision":               e.params.EntrantRevision,
 			},
 		},
 		Spec: *spec,
