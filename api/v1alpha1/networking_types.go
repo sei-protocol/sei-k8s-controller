@@ -55,7 +55,7 @@ type ExternalServiceConfig struct {
 // targeting the platform Gateway (configured via SEI_GATEWAY_NAME and
 // SEI_GATEWAY_NAMESPACE environment variables on the controller).
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.hostnames) && size(self.hostnames) > 0) || (has(self.baseDomain) && self.baseDomain != ”)",message="at least one of hostnames or baseDomain must be set"
+// +kubebuilder:validation:XValidation:rule=”(has(self.hostnames) && size(self.hostnames) > 0) || (has(self.baseDomain) && size(self.baseDomain) > 0)”,message=”at least one of hostnames or baseDomain must be set”
 type GatewayRouteConfig struct {
 	// Hostnames routes all listed hostnames to the RPC port (26657).
 	// For multi-protocol routing, use BaseDomain instead.
