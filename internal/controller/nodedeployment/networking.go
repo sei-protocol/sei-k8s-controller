@@ -39,9 +39,12 @@ type effectiveRoute struct {
 	Port      int32
 }
 
-// hasExternalService returns true when the deployment has an external Service configured.
+// hasExternalService returns true when the deployment has a LoadBalancer
+// Service that will produce an external address to gate on.
 func (r *SeiNodeDeploymentReconciler) hasExternalService(group *seiv1alpha1.SeiNodeDeployment) bool {
-	return group.Spec.Networking != nil && group.Spec.Networking.Service != nil
+	return group.Spec.Networking != nil &&
+		group.Spec.Networking.Service != nil &&
+		group.Spec.Networking.Service.Type == corev1.ServiceTypeLoadBalancer
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
