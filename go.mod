@@ -9,7 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.38.2
 	github.com/prometheus/client_golang v1.23.2
-	github.com/sei-protocol/sei-config v0.0.11-0.20260408213910-bc516eb7b8d1
+	github.com/sei-protocol/sei-config v0.0.11
 	github.com/sei-protocol/seictl v0.0.30
 	k8s.io/api v0.35.0
 	k8s.io/apiextensions-apiserver v0.35.0

@@ -183,6 +183,8 @@ github.com/sei-protocol/sei-config v0.0.11-0.20260408212904-8bedcac21cc5 h1:m/kU
 github.com/sei-protocol/sei-config v0.0.11-0.20260408212904-8bedcac21cc5/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
 github.com/sei-protocol/sei-config v0.0.11-0.20260408213910-bc516eb7b8d1 h1:1rYFDdfMQFI7sYIp+VnVNBkGZFrDPqkOKfcaV9GYy5w=
 github.com/sei-protocol/sei-config v0.0.11-0.20260408213910-bc516eb7b8d1/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
+github.com/sei-protocol/sei-config v0.0.11 h1:bq+YGCREipBlsvPLm/qY2l8qFBVJyjx/EHSYNEBzTzk=
+github.com/sei-protocol/sei-config v0.0.11/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
 github.com/sei-protocol/seictl v0.0.30 h1:Y230GU92OFlMsNUe5yUZcbvBTQaQqO+nhVgb8I4d3zY=
 github.com/sei-protocol/seictl v0.0.30/go.mod h1:ffv0EkvWfTeJB5LbMdPEe83P5NYRcGW5TMVNo30LteY=
 github.com/sei-protocol/seilog v0.0.3 h1:Zi7oWXdX5jv92dY8n482xH032LtNebC89Y+qYZlBn0Y=
