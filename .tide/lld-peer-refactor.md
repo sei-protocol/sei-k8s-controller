@@ -209,7 +209,7 @@ Works naturally — PeerSource is a list:
 peers:
   - label:
       selector:
-        sei.io/nodegroup: my-validators
+        sei.io/nodedeployment: my-validators
   - ec2Tags:
       region: us-east-1
       tags: { Chain: pacific-1 }
@@ -228,7 +228,7 @@ spec:
   peers:
     - label:
         selector:
-          sei.io/nodegroup: atlantic-validators
+          sei.io/nodedeployment: atlantic-validators
   validator:
     snapshot:
       s3:

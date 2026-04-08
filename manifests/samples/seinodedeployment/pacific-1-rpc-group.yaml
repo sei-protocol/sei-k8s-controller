@@ -1,11 +1,11 @@
-# SeiNodeGroup — Pacific-1 RPC Fleet
+# SeiNodeDeployment — Pacific-1 RPC Fleet
 #
 # Three full nodes behind a shared Service with Gateway API routing,
 # Istio network isolation, and Prometheus monitoring. Each SeiNode
 # bootstraps from an S3 snapshot and block-syncs to tip. Genesis is
 # resolved automatically by the sidecar.
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
+kind: SeiNodeDeployment
 metadata:
   name: pacific-1-rpc
   namespace: default

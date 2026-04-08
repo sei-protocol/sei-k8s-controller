@@ -95,7 +95,7 @@ rules:
 - apiGroups:
   - sei.io
   resources:
-  - seinodegroups
+  - seinodedeployments
   - seinodes
   verbs:
   - create
@@ -108,14 +108,14 @@ rules:
 - apiGroups:
   - sei.io
   resources:
-  - seinodegroups/finalizers
+  - seinodedeployments/finalizers
   - seinodes/finalizers
   verbs:
   - update
 - apiGroups:
   - sei.io
   resources:
-  - seinodegroups/status
+  - seinodedeployments/status
   - seinodes/status
   verbs:
   - get

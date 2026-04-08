@@ -1,6 +1,6 @@
 # Load Test Job
 #
-# Runs sei-load against a SeiNodeGroup genesis network using EVM transfers.
+# Runs sei-load against a SeiNodeDeployment genesis network using EVM transfers.
 # Requires the genesis network to be running (all nodes healthy).
 #
 # Endpoint pattern: <pool>-<ordinal>-0.<pool>-<ordinal>.<namespace>.svc.cluster.local:8545

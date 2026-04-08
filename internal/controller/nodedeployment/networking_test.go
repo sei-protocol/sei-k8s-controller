@@ -141,7 +141,7 @@ func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
 
 	routes := resolveEffectiveRoutes(group)
 	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
-	g.Expect(route.GetAnnotations()).To(HaveKeyWithValue("sei.io/managed-by", "seinodegroup"))
+	g.Expect(route.GetAnnotations()).To(HaveKeyWithValue("sei.io/managed-by", "seinodedeployment"))
 }
 
 func TestGenerateHTTPRoute_BackendRef(t *testing.T) {

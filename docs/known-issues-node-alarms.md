@@ -1,6 +1,6 @@
 # Known Issues: Node Startup Alarms
 
-Recurring alerts observed during SeiNode and SeiNodeGroup deployments. These are expected during the bootstrap lifecycle but represent areas for improvement.
+Recurring alerts observed during SeiNode and SeiNodeDeployment deployments. These are expected during the bootstrap lifecycle but represent areas for improvement.
 
 ## 1. SeiNodeFailed: Fork Genesis Validators Exhaust Retries
 

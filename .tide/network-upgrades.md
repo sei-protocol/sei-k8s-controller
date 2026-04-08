@@ -15,7 +15,7 @@ Pre-Tide — Operational prerequisite. Network upgrades are the most coordinatio
 
 ## Purpose
 
-Enable the `sei-k8s-controller` to orchestrate governance-driven software upgrades across managed `SeiNode` and `SeiNodeGroup` resources. The orchestration must handle both **major** (hard stop at a block height) and **minor** (rolling, pre-height) upgrades with zero missed blocks beyond the mandatory consensus halt, and zero risk of running an incompatible binary at the wrong height.
+Enable the `sei-k8s-controller` to orchestrate governance-driven software upgrades across managed `SeiNode` and `SeiNodeDeployment` resources. The orchestration must handle both **major** (hard stop at a block height) and **minor** (rolling, pre-height) upgrades with zero missed blocks beyond the mandatory consensus halt, and zero risk of running an incompatible binary at the wrong height.
 
 ---
 
@@ -61,11 +61,11 @@ The `x/upgrade` module is the standard mechanism for coordinated chain upgrades:
 | `spec.image` on SeiNode | Exists — controls container image |
 | `spec.entrypoint` on SeiNode | Exists — controls seid start command/args |
 | StatefulSet reconciliation in Running phase | **NOT IMPLEMENTED** — image changes don't roll pods after phase=Running |
-| SeiNodeGroup image push to children | Exists — pushes `image`, `entrypoint`, `sidecar` to child SeiNodes |
+| SeiNodeDeployment image push to children | Exists — pushes `image`, `entrypoint`, `sidecar` to child SeiNodes |
 | `halt-height` on running pods | **NOT IMPLEMENTED** — only used in pre-init Jobs for snapshot bootstrap |
 | Chain height in status | **NOT IMPLEMENTED** — `SeiNodePool.status.nodeStatuses.blockHeight` field exists but is never populated |
 | Upgrade plan detection | **NOT IMPLEMENTED** — no chain RPC queries |
-| Coordinated rollout across nodes | **NOT IMPLEMENTED** — SeiNodeGroup updates all children simultaneously |
+| Coordinated rollout across nodes | **NOT IMPLEMENTED** — SeiNodeDeployment updates all children simultaneously |
 
 ---
 
@@ -173,10 +173,10 @@ type ChainStatus struct {
 }
 ```
 
-### SeiNodeGroup Upgrade Coordination
+### SeiNodeDeployment Upgrade Coordination
 
 ```go
-// SeiNodeGroupSpec additions
+// SeiNodeDeploymentSpec additions
 type GroupUpgradePolicy struct {
     // Strategy inherited by all child SeiNodes unless overridden.
     // +optional
@@ -299,7 +299,7 @@ stateDiagram-v2
 | Observed plan + phase | `SeiNode.status.upgrade` | Controller |
 | Target image | `SeiNode.status.upgrade.targetImage` (resolved from `spec.upgradePolicy.imageMap`) | CRD |
 | Current block height | `SeiNode.status.chain.blockHeight` | Chain via RPC |
-| Image map | `SeiNode.spec.upgradePolicy.imageMap` or `SeiNodeGroup.spec.upgradePolicy.imageMap` | Operator-managed |
+| Image map | `SeiNode.spec.upgradePolicy.imageMap` or `SeiNodeDeployment.spec.upgradePolicy.imageMap` | Operator-managed |
 
 ---
 
@@ -352,7 +352,7 @@ When upgrade is minor and strategy is Auto:
 ```
 1. Update spec.image to targetImage immediately (no halt needed)
 2. Reconcile StatefulSet (triggers rolling restart)
-3. For SeiNodeGroup with minorStrategy=Rolling:
+3. For SeiNodeDeployment with minorStrategy=Rolling:
    a. Update one child SeiNode's image at a time
    b. Wait for it to reach Running and height > plan.Height
    c. Proceed to next node
@@ -381,7 +381,7 @@ func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alp
 }
 ```
 
-### 5. SeiNodeGroup Coordination
+### 5. SeiNodeDeployment Coordination
 
 For major upgrades, all nodes must halt at the same height. The group controller:
 
@@ -438,8 +438,8 @@ For minor upgrades with Rolling strategy:
 | Test | Setup | Action | Expected |
 |---|---|---|---|
 | `TestMajorUpgradeE2E` | SeiNode running at height H-10, plan at H, Auto strategy with imageMap | Wait for height approach | Node halts at H-1, restarts with new image, resumes at H |
-| `TestGroupMajorUpgrade` | SeiNodeGroup with 3 nodes, all detect same plan | Wait | All nodes halt at H-1, all swap, all resume |
-| `TestGroupMinorRolling` | SeiNodeGroup with 3 nodes, minor plan, Rolling | Trigger | Nodes updated one at a time, each healthy before next |
+| `TestGroupMajorUpgrade` | SeiNodeDeployment with 3 nodes, all detect same plan | Wait | All nodes halt at H-1, all swap, all resume |
+| `TestGroupMinorRolling` | SeiNodeDeployment with 3 nodes, minor plan, Rolling | Trigger | Nodes updated one at a time, each healthy before next |
 | `TestUpgradePanicFallback` | halt-height injection fails, node crashes at H | Reconcile after crash | Controller detects crash, swaps image, pod restarts successfully |
 
 ---
@@ -451,7 +451,7 @@ For minor upgrades with Rolling strategy:
 1. **Phase 1 — Foundation**: Populate `status.chain.blockHeight` from sidecar RPC. Reconcile StatefulSet in Running phase. These are prerequisites with value independent of upgrades.
 2. **Phase 2 — Detection**: Add `UpgradePolicy` and `UpgradeStatus` CRD fields. Implement upgrade plan detection via RPC. Manual strategy only.
 3. **Phase 3 — Major Auto**: Implement halt-height injection, image swap, and the full major upgrade state machine.
-4. **Phase 4 — Minor + Group**: Implement minor rolling upgrades and SeiNodeGroup coordination.
+4. **Phase 4 — Minor + Group**: Implement minor rolling upgrades and SeiNodeDeployment coordination.
 
 ### Testnet vs Mainnet
 
@@ -484,6 +484,6 @@ For minor upgrades with Rolling strategy:
 | **Automatic image building** | Out of scope — CI/CD concern. Controller consumes pre-built images. |
 | **Governance proposal submission** | Controller is an observer/executor, not a governance participant. |
 | **Hard fork management** | Separate mechanism with chain-ID-specific logic. Not governance-driven. |
-| **Cross-chain upgrade coordination** | Single chain per SeiNodeGroup. Multi-chain is future work. |
+| **Cross-chain upgrade coordination** | Single chain per SeiNodeDeployment. Multi-chain is future work. |
 | **Rollback automation** | Cosmos upgrades are forward-only. Rollback requires governance cancel + manual intervention. |
 | **Auto-discovery of image from plan.Info URL** | Cosmovisor supports download URLs in plan.Info, but pulling arbitrary binaries into containers is an anti-pattern in Kubernetes. Use imageMap instead. |

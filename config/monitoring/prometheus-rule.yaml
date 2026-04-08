@@ -22,27 +22,27 @@ spec:
             description: "Node entered Failed phase. Check task plan and sidecar logs."
             runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodefailed
 
-        - alert: SeiNodeGroupDegraded
-          expr: sei_controller_seinodegroup_phase{phase="Degraded"} == 1
+        - alert: SeiNodeDeploymentDegraded
+          expr: sei_controller_seinodedeployment_phase{phase="Degraded"} == 1
           for: 10m
           labels:
             severity: warning
             team: platform
           annotations:
-            summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} is degraded"
+            summary: "SeiNodeDeployment {{ $labels.namespace }}/{{ $labels.name }} is degraded"
             description: "Some nodes are not ready. Check child SeiNode status."
-            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodegroupdegraded
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodedeploymentdegraded
 
-        - alert: SeiNodeGroupFailed
-          expr: sei_controller_seinodegroup_phase{phase="Failed"} == 1
+        - alert: SeiNodeDeploymentFailed
+          expr: sei_controller_seinodedeployment_phase{phase="Failed"} == 1
           for: 5m
           labels:
             severity: critical
             team: platform
           annotations:
-            summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} has failed"
+            summary: "SeiNodeDeployment {{ $labels.namespace }}/{{ $labels.name }} has failed"
             description: "All nodes have failed. Immediate investigation required."
-            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodegroupfailed
+            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodedeploymentfailed
 
         - alert: SeiNodeStuckInitializing
           expr: |
@@ -96,7 +96,7 @@ spec:
           expr: |
             histogram_quantile(0.99,
               sum by (controller, substep, le) (
-                rate(sei_controller_seinodegroup_reconcile_substep_duration_seconds_bucket[5m])
+                rate(sei_controller_seinodedeployment_reconcile_substep_duration_seconds_bucket[5m])
               )
             ) > 10
           for: 10m
@@ -104,7 +104,7 @@ spec:
             severity: warning
             team: platform
           annotations:
-            summary: "SeiNodeGroup reconcile substep {{ $labels.substep }} is slow"
+            summary: "SeiNodeDeployment reconcile substep {{ $labels.substep }} is slow"
             description: "p99 latency above 10s for 10 minutes."
             runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#controllerhighreconcilelatency
 

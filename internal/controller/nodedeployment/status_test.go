@@ -8,8 +8,8 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-func emptyGroup() *seiv1alpha1.SeiNodeGroup {
-	return &seiv1alpha1.SeiNodeGroup{}
+func emptyGroup() *seiv1alpha1.SeiNodeDeployment {
+	return &seiv1alpha1.SeiNodeDeployment{}
 }
 
 func TestComputeGroupPhase_NoNodes(t *testing.T) {

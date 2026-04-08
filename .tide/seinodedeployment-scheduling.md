@@ -1,4 +1,4 @@
-# Component: SeiNodeGroup Scheduling and Topology
+# Component: SeiNodeDeployment Scheduling and Topology
 
 ## Owner
 
@@ -7,20 +7,20 @@ Kubernetes Specialist + Platform Engineer (joint ownership)
 ## Phase
 
 - **Phase 1**: Implicit AZ spread for grouped nodes (no API change)
-- **Phase 2**: Explicit `placement` field on SeiNodeGroup CRD
+- **Phase 2**: Explicit `placement` field on SeiNodeDeployment CRD
 - **Phase 3**: Full scheduling override (future, deferred)
 
 ## Purpose
 
-SeiNodeGroups serving RPC traffic via HTTPRoute must survive availability zone failures without manual intervention. Today, all scheduling is hardcoded in `PlatformConfig` (Karpenter nodepool affinity + toleration) with no topology spread constraints and no pod anti-affinity. A 3-replica group could land entirely in one AZ, making the NLB-backed HTTPRoute a single point of failure at the zone level.
+SeiNodeDeployments serving RPC traffic via HTTPRoute must survive availability zone failures without manual intervention. Today, all scheduling is hardcoded in `PlatformConfig` (Karpenter nodepool affinity + toleration) with no topology spread constraints and no pod anti-affinity. A 3-replica group could land entirely in one AZ, making the NLB-backed HTTPRoute a single point of failure at the zone level.
 
-This component adds topology-aware scheduling to the SeiNode controller so that pods belonging to the same SeiNodeGroup are automatically spread across availability zones. It also introduces a PodDisruptionBudget per group so voluntary disruptions (node upgrades, Karpenter consolidation) cannot take down all replicas simultaneously.
+This component adds topology-aware scheduling to the SeiNode controller so that pods belonging to the same SeiNodeDeployment are automatically spread across availability zones. It also introduces a PodDisruptionBudget per group so voluntary disruptions (node upgrades, Karpenter consolidation) cannot take down all replicas simultaneously.
 
-**Business need**: Production RPC availability during AZ failures for SeiNodeGroups with `replicas > 1`.
+**Business need**: Production RPC availability during AZ failures for SeiNodeDeployments with `replicas > 1`.
 
 ## Dependencies
 
-- **SeiNodeGroup controller** (`sei-node-controller-networking/internal/controller/nodegroup/`) — creates child SeiNode resources with `sei.io/group` pod label
+- **SeiNodeDeployment controller** (`sei-node-controller-networking/internal/controller/nodedeployment/`) — creates child SeiNode resources with `sei.io/group` pod label
 - **SeiNode controller** (`sei-node-controller-networking/internal/controller/node/`) — translates SeiNodeSpec into StatefulSet pod spec via `buildNodePodSpec()`. **Note**: The production binary is `sei-node-controller-networking`, which already has `PodLabels` on `SeiNodeSpec` and merges them into pod template labels via `resourceLabelsForNode`. The `sei-k8s-controller` repo's version does NOT have `PodLabels` support. All Phase 1 changes target the networking controller repo.
 - **Karpenter NodePool** — provisions nodes with `karpenter.sh/nodepool` label; respects topology spread constraints when choosing which zone to provision into
 - **EBS CSI driver** — creates gp3 RWO PVCs that are zone-bound after initial provisioning. **Prerequisite**: The StorageClass must use `volumeBindingMode: WaitForFirstConsumer` for topology-aware scheduling to work. Immediate binding defeats the spread by binding PVCs to a random zone before the scheduler evaluates topology spread constraints.
@@ -67,7 +67,7 @@ Design decisions for Phase 1:
 
 **Karpenter interaction note**: With `ScheduleAnyway`, Karpenter treats the constraint as a soft preference during batch provisioning. Combined with `karpenter.sh/do-not-disrupt: "true"` on all sei-node pods, the initial placement is permanent — Karpenter will never rebalance pods across zones after creation. Operators should verify AZ distribution after initial group creation with `kubectl get pods -l sei.io/group={name} -o wide` and consider recreating pods if the spread is poor. Phase 2's `DoNotSchedule` option provides stronger guarantees.
 
-**PodDisruptionBudget** (Phase 1 — created by SeiNodeGroup controller):
+**PodDisruptionBudget** (Phase 1 — created by SeiNodeDeployment controller):
 
 ```go
 type: policy/v1
@@ -84,7 +84,7 @@ spec:
 
 The PDB uses `maxUnavailable: 1` (not `minAvailable`) to cap simultaneous disruptions at exactly 1 pod regardless of group size. This is the standard practice for availability-critical workloads — with `minAvailable: 1` a 5-replica group would allow 4 simultaneous disruptions, creating a capacity cliff behind the NLB.
 
-The PDB is created by the SeiNodeGroup controller (not the SeiNode controller) because it spans all pods in the group. It is only created when `replicas > 1` (a PDB on a single-replica group would block all voluntary disruptions).
+The PDB is created by the SeiNodeDeployment controller (not the SeiNode controller) because it spans all pods in the group. It is only created when `replicas > 1` (a PDB on a single-replica group would block all voluntary disruptions).
 
 **Scale-up transient**: When scaling from 1 to N replicas, the PDB is created immediately but only 1 pod may be Ready. With `maxUnavailable: 1`, `disruptionsAllowed` may be 0 until new pods complete their multi-hour startup (snapshot restore, state sync). This blocks voluntary disruptions (Karpenter consolidation, node drain) during the scale-up window. This is acceptable — protecting running workloads during scale-up is the safer default. Document this in operational runbooks.
 
@@ -95,7 +95,7 @@ New types added to `api/v1alpha1/`:
 ```go
 // placement_types.go
 
-// PlacementConfig controls how pods in a SeiNodeGroup are scheduled
+// PlacementConfig controls how pods in a SeiNodeDeployment are scheduled
 // across the cluster topology.
 type PlacementConfig struct {
     // TopologySpread controls how pods are distributed across failure
@@ -155,10 +155,10 @@ type PDBConfig struct {
 }
 ```
 
-**SeiNodeGroupSpec change:**
+**SeiNodeDeploymentSpec change:**
 
 ```go
-type SeiNodeGroupSpec struct {
+type SeiNodeDeploymentSpec struct {
     Replicas        int32              `json:"replicas"`
     Template        SeiNodeTemplate    `json:"template"`
     DeletionPolicy  DeletionPolicy     `json:"deletionPolicy,omitempty"`
@@ -176,8 +176,8 @@ type SeiNodeSpec struct {
     // ... existing fields ...
 
     // Scheduling holds pod scheduling directives passed down from the
-    // SeiNodeGroup. Not intended for direct user configuration on
-    // standalone SeiNodes — set via SeiNodeGroup.spec.placement instead.
+    // SeiNodeDeployment. Not intended for direct user configuration on
+    // standalone SeiNodes — set via SeiNodeDeployment.spec.placement instead.
     // +optional
     Scheduling *SchedulingConfig `json:"scheduling,omitempty"`
 }
@@ -192,25 +192,25 @@ type SchedulingConfig struct {
 
 **One-way door**: The CRD field names `placement`, `topologySpread`, and `scheduling` become part of the API contract once controllers depend on them. The names are chosen to align with Kubernetes terminology (`placement` is the user-facing group concept; `scheduling` is the lower-level pod concept passed through).
 
-### Cross-Component Interface: SeiNodeGroup → SeiNode → StatefulSet
+### Cross-Component Interface: SeiNodeDeployment → SeiNode → StatefulSet
 
 ```
-SeiNodeGroup.spec.placement
-    ↓ (SeiNodeGroup controller: generateSeiNode)
+SeiNodeDeployment.spec.placement
+    ↓ (SeiNodeDeployment controller: generateSeiNode)
 SeiNode.spec.scheduling.topologySpreadConstraints
     ↓ (SeiNode controller: buildNodePodSpec)
 StatefulSet.spec.template.spec.topologySpreadConstraints
 ```
 
-In Phase 1, the SeiNode controller infers the constraint from `sei.io/group` in `PodLabels`. In Phase 2, the SeiNodeGroup controller explicitly sets `SeiNode.spec.scheduling.topologySpreadConstraints` from the resolved placement config, and the SeiNode controller passes it through to the pod spec.
+In Phase 1, the SeiNode controller infers the constraint from `sei.io/group` in `PodLabels`. In Phase 2, the SeiNodeDeployment controller explicitly sets `SeiNode.spec.scheduling.topologySpreadConstraints` from the resolved placement config, and the SeiNode controller passes it through to the pod spec.
 
 **Phase 2 invariant**: `buildNodePodSpec` MUST check `node.Spec.Scheduling` FIRST and skip the Phase 1 `sei.io/group` label inference when `Scheduling` is non-nil. This prevents duplicate topology spread constraints during the Phase 1→2 transition.
 
-**Phase 2 rollout window**: During the brief period where the new SeiNodeGroup controller writes `spec.scheduling` but the old SeiNode controller ignores it, the system falls back to Phase 1 inference. This is safe and produces identical behavior.
+**Phase 2 rollout window**: During the brief period where the new SeiNodeDeployment controller writes `spec.scheduling` but the old SeiNode controller ignores it, the system falls back to Phase 1 inference. This is safe and produces identical behavior.
 
 ### Status Condition: ConditionPDBReady
 
-A new status condition `PDBReady` is added to `SeiNodeGroup`, following the pattern of `ExternalServiceReady`, `RouteReady`, `IsolationReady`, and `ServiceMonitorReady`:
+A new status condition `PDBReady` is added to `SeiNodeDeployment`, following the pattern of `ExternalServiceReady`, `RouteReady`, `IsolationReady`, and `ServiceMonitorReady`:
 
 ```go
 const ConditionPDBReady = "PDBReady"
@@ -226,8 +226,8 @@ const ConditionPDBReady = "PDBReady"
 
 | State | Location | Source of Truth |
 |-------|----------|-----------------|
-| Desired spread config | `SeiNodeGroup.spec.placement` | User / GitOps |
-| Resolved per-node constraints | `SeiNode.spec.scheduling` | SeiNodeGroup controller |
+| Desired spread config | `SeiNodeDeployment.spec.placement` | User / GitOps |
+| Resolved per-node constraints | `SeiNode.spec.scheduling` | SeiNodeDeployment controller |
 | Applied pod constraints | `StatefulSet.spec.template.spec.topologySpreadConstraints` | SeiNode controller |
 | Actual pod zone | `pod.spec.nodeName` → node's `topology.kubernetes.io/zone` label | Kubernetes scheduler |
 
@@ -235,9 +235,9 @@ const ConditionPDBReady = "PDBReady"
 
 | State | Location | Source of Truth |
 |-------|----------|-----------------|
-| Desired PDB config | `SeiNodeGroup.spec.placement.podDisruptionBudget` | User / GitOps |
-| PDB resource | `PodDisruptionBudget/{group-name}` in group namespace | SeiNodeGroup controller |
-| PDB health condition | `SeiNodeGroup.status.conditions[type=PDBReady]` | SeiNodeGroup controller |
+| Desired PDB config | `SeiNodeDeployment.spec.placement.podDisruptionBudget` | User / GitOps |
+| PDB resource | `PodDisruptionBudget/{group-name}` in group namespace | SeiNodeDeployment controller |
+| PDB health condition | `SeiNodeDeployment.status.conditions[type=PDBReady]` | SeiNodeDeployment controller |
 | Disruption budget | `PDB.status.disruptionsAllowed` | Kubernetes PDB controller |
 
 ### State Transitions
@@ -245,10 +245,10 @@ const ConditionPDBReady = "PDBReady"
 PDB lifecycle:
 
 ```
-SeiNodeGroup created (replicas > 1)        → PDB created (maxUnavailable=1), ConditionPDBReady=True
-SeiNodeGroup scaled to 1                   → PDB deleted, ConditionPDBReady removed
-SeiNodeGroup deleted (DeletionPolicy=Delete)→ PDB cascade-deleted via owner reference
-SeiNodeGroup deleted (DeletionPolicy=Retain)→ PDB orphaned (owner reference removed), survives with retained pods
+SeiNodeDeployment created (replicas > 1)        → PDB created (maxUnavailable=1), ConditionPDBReady=True
+SeiNodeDeployment scaled to 1                   → PDB deleted, ConditionPDBReady removed
+SeiNodeDeployment deleted (DeletionPolicy=Delete)→ PDB cascade-deleted via owner reference
+SeiNodeDeployment deleted (DeletionPolicy=Retain)→ PDB orphaned (owner reference removed), survives with retained pods
 ```
 
 ## Internal Design
@@ -302,12 +302,12 @@ const (
 )
 ```
 
-The existing unexported constants in `nodegroup/labels.go` (`groupLabel`, `groupOrdinalLabel`, `nodeLabel`) must be updated to reference these exported constants to prevent drift.
+The existing unexported constants in `nodedeployment/labels.go` (`groupLabel`, `groupOrdinalLabel`, `nodeLabel`) must be updated to reference these exported constants to prevent drift.
 
-#### SeiNodeGroup Controller: PDB reconciliation (pdb.go — new file)
+#### SeiNodeDeployment Controller: PDB reconciliation (pdb.go — new file)
 
 ```go
-func (r *SeiNodeGroupReconciler) reconcilePDB(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) reconcilePDB(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
     if group.Spec.Replicas <= 1 {
         removeCondition(group, ConditionPDBReady)
         return r.deletePDB(ctx, group)
@@ -341,7 +341,7 @@ func (r *SeiNodeGroupReconciler) reconcilePDB(ctx context.Context, group *seiv1a
     return nil
 }
 
-func (r *SeiNodeGroupReconciler) deletePDB(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) deletePDB(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
     pdb := &policyv1.PodDisruptionBudget{}
     err := r.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: group.Namespace}, pdb)
     if apierrors.IsNotFound(err) {
@@ -357,12 +357,12 @@ func (r *SeiNodeGroupReconciler) deletePDB(ctx context.Context, group *seiv1alph
 }
 ```
 
-#### SeiNodeGroup Controller: handleDeletion — PDB under Retain policy
+#### SeiNodeDeployment Controller: handleDeletion — PDB under Retain policy
 
 The PDB must be handled in `handleDeletion` for `DeletionPolicy=Retain`. Without this, the owner reference causes cascade deletion, removing disruption protection from retained pods:
 
 ```go
-func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) handleDeletion(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
     // ... existing status patch ...
 
     if policy == seiv1alpha1.DeletionPolicyRetain {
@@ -378,7 +378,7 @@ func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv
     // ... existing finalizer removal ...
 }
 
-func (r *SeiNodeGroupReconciler) orphanPDB(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) orphanPDB(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
     pdb := &policyv1.PodDisruptionBudget{}
     err := r.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: group.Namespace}, pdb)
     if apierrors.IsNotFound(err) {
@@ -410,7 +410,7 @@ RBAC marker addition:
 Owns(&policyv1.PodDisruptionBudget{}).
 ```
 
-#### SeiNodeGroup Controller: nodes.go update field propagation
+#### SeiNodeDeployment Controller: nodes.go update field propagation
 
 Add `scheduling` to the narrow set of fields that `ensureSeiNode` propagates on update. In Phase 1 this is a no-op (both sides are nil), but prepares for Phase 2:
 
@@ -430,7 +430,7 @@ Import: `apiequality "k8s.io/apimachinery/pkg/api/equality"`
 
 1. Add `PlacementConfig`, `TopologySpreadConfig`, `PDBConfig` types to `api/v1alpha1/placement_types.go`
 2. Add `Scheduling *SchedulingConfig` to `SeiNodeSpec`
-3. Add `Placement *PlacementConfig` to `SeiNodeGroupSpec`
+3. Add `Placement *PlacementConfig` to `SeiNodeDeploymentSpec`
 4. In `generateSeiNode`, resolve placement config into `SeiNode.spec.scheduling.topologySpreadConstraints`
 5. In `buildNodePodSpec`: check `node.Spec.Scheduling` FIRST; if non-nil, use directly and skip `sei.io/group` inference. This prevents duplicate constraints.
 6. In `reconcilePDB`, read `maxUnavailable` from `placement.podDisruptionBudget` if set
@@ -477,31 +477,31 @@ Import: `apiequality "k8s.io/apimachinery/pkg/api/equality"`
 
 #### Test: PDB_MultiReplica_Created
 
-- **Setup**: Create SeiNodeGroup with `replicas: 3`
+- **Setup**: Create SeiNodeDeployment with `replicas: 3`
 - **Action**: Reconcile and list PodDisruptionBudgets in the namespace
 - **Expected**: PDB exists with name matching group name, `maxUnavailable: 1`, selector `sei.io/group: {name}`, owner reference to the group, `ConditionPDBReady=True`
 
 #### Test: PDB_SingleReplica_NotCreated
 
-- **Setup**: Create SeiNodeGroup with `replicas: 1`
+- **Setup**: Create SeiNodeDeployment with `replicas: 1`
 - **Action**: Reconcile and list PodDisruptionBudgets
 - **Expected**: No PDB exists for this group, no `ConditionPDBReady` in status
 
 #### Test: PDB_ScaleDownToOne_Deleted
 
-- **Setup**: Create SeiNodeGroup with `replicas: 3`, reconcile (PDB created). Then update to `replicas: 1`.
+- **Setup**: Create SeiNodeDeployment with `replicas: 3`, reconcile (PDB created). Then update to `replicas: 1`.
 - **Action**: Reconcile again
 - **Expected**: PDB is deleted, `ConditionPDBReady` removed from status
 
 #### Test: PDB_GroupDeletion_Cascades
 
-- **Setup**: Create SeiNodeGroup with `replicas: 3`, reconcile (PDB created). Delete the group with `DeletionPolicy=Delete`.
+- **Setup**: Create SeiNodeDeployment with `replicas: 3`, reconcile (PDB created). Delete the group with `DeletionPolicy=Delete`.
 - **Action**: Observe PDB
 - **Expected**: PDB is garbage collected via owner reference
 
 #### Test: PDB_GroupDeletion_RetainOrphans
 
-- **Setup**: Create SeiNodeGroup with `replicas: 3`, `DeletionPolicy=Retain`, reconcile (PDB created). Delete the group.
+- **Setup**: Create SeiNodeDeployment with `replicas: 3`, `DeletionPolicy=Retain`, reconcile (PDB created). Delete the group.
 - **Action**: Observe PDB
 - **Expected**: PDB survives with owner reference removed, continues protecting retained pods
 
@@ -509,37 +509,37 @@ Import: `apiequality "k8s.io/apimachinery/pkg/api/equality"`
 
 #### Test: Placement_CustomMaxSkew
 
-- **Setup**: SeiNodeGroup with `placement.topologySpread.maxSkew: 2`
+- **Setup**: SeiNodeDeployment with `placement.topologySpread.maxSkew: 2`
 - **Action**: Reconcile, inspect generated SeiNode's `spec.scheduling`
 - **Expected**: TopologySpreadConstraint has `MaxSkew=2`
 
 #### Test: Placement_DoNotSchedule
 
-- **Setup**: SeiNodeGroup with `placement.topologySpread.whenUnsatisfiable: DoNotSchedule`
+- **Setup**: SeiNodeDeployment with `placement.topologySpread.whenUnsatisfiable: DoNotSchedule`
 - **Action**: Reconcile, inspect pod spec
 - **Expected**: TopologySpreadConstraint has `WhenUnsatisfiable=DoNotSchedule`
 
 #### Test: Placement_Disabled
 
-- **Setup**: SeiNodeGroup with `placement.topologySpread.disabled: true`
+- **Setup**: SeiNodeDeployment with `placement.topologySpread.disabled: true`
 - **Action**: Reconcile, inspect pod spec
 - **Expected**: No topology spread constraints on the pod
 
 #### Test: Placement_CustomPDB
 
-- **Setup**: SeiNodeGroup with `replicas: 5`, `placement.podDisruptionBudget.maxUnavailable: 2`
+- **Setup**: SeiNodeDeployment with `replicas: 5`, `placement.podDisruptionBudget.maxUnavailable: 2`
 - **Action**: Reconcile, inspect PDB
 - **Expected**: PDB has `maxUnavailable: 2`
 
 #### Test: Placement_PDBDisabled
 
-- **Setup**: SeiNodeGroup with `placement.podDisruptionBudget.disabled: true`
+- **Setup**: SeiNodeDeployment with `placement.podDisruptionBudget.disabled: true`
 - **Action**: Reconcile
 - **Expected**: No PDB created, no `ConditionPDBReady`
 
 #### Test: Placement_Nil_DefaultBehavior
 
-- **Setup**: SeiNodeGroup with no `placement` field, `replicas: 3`
+- **Setup**: SeiNodeDeployment with no `placement` field, `replicas: 3`
 - **Action**: Reconcile
 - **Expected**: Default topology spread (MaxSkew=1, ScheduleAnyway) and default PDB (maxUnavailable=1)
 
@@ -553,7 +553,7 @@ Import: `apiequality "k8s.io/apimachinery/pkg/api/equality"`
 
 ```yaml
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
+kind: SeiNodeDeployment
 metadata:
   name: pacific-1-rpc
   namespace: default
@@ -593,19 +593,19 @@ spec:
 
 - All changes target `sei-node-controller-networking` (the production binary)
 - SeiNode controller: `resources.go` (inject topology spread)
-- SeiNodeGroup controller: new `pdb.go`, `controller.go` (add `reconcilePDB`, `orphanPDB`, `Owns` for PDB)
-- Shared: `api/v1alpha1/constants.go` (exported label constants), `nodegroup/labels.go` (reference shared constants)
+- SeiNodeDeployment controller: new `pdb.go`, `controller.go` (add `reconcilePDB`, `orphanPDB`, `Owns` for PDB)
+- Shared: `api/v1alpha1/constants.go` (exported label constants), `nodedeployment/labels.go` (reference shared constants)
 - No CRD regeneration required
 - **Migration**: Existing StatefulSets created by this controller already have `sei.io/group` in their selector and pod template labels. Adding `TopologySpreadConstraints` only changes the pod template, which SSA updates cleanly. However, this triggers a RollingUpdate of existing pods. For seid pods with multi-hour startup, coordinate the rollout during a maintenance window.
 - **Rollout**: Deploy updated controller image. Existing StatefulSets are updated via Server-Side Apply on next reconcile cycle (30s).
 
 ### Phase 2
 
-- CRD changes: run `controller-gen` to regenerate `sei.io_seinodegroups.yaml` and `sei.io_seinodes.yaml`
+- CRD changes: run `controller-gen` to regenerate `sei.io_seinodedeployments.yaml` and `sei.io_seinodes.yaml`
 - Requires CRD apply before controller deploy (new fields must exist before controller writes them)
 - **Rollout order**: CRDs → controller image
 - Backward compatible — `placement: nil` produces identical behavior to Phase 1 defaults
-- During the brief rollout window, the SeiNodeGroup controller may write `spec.scheduling` before the SeiNode controller is updated to read it. This is safe — the old controller falls back to Phase 1 label inference.
+- During the brief rollout window, the SeiNodeDeployment controller may write `spec.scheduling` before the SeiNode controller is updated to read it. This is safe — the old controller falls back to Phase 1 label inference.
 
 ## Deferred (Do Not Build)
 
@@ -617,7 +617,7 @@ spec:
 | Rack-aware topology | EKS doesn't expose rack topology. Revisit if moving to bare metal. |
 | Weighted spread across zones | `MaxSkew=1` is sufficient. Weighted policies add complexity without proportional value. |
 | Automatic PVC migration on zone failure | Fundamental Kubernetes limitation. Requires snapshot + restore workflow, not a scheduling feature. |
-| Multi-cluster scheduling | Out of scope for single-cluster SeiNodeGroup. |
+| Multi-cluster scheduling | Out of scope for single-cluster SeiNodeDeployment. |
 | Percentage-based PDB values | Ambiguous at small replica counts (50% of 3 = 1.5). Integer-only simplifies validation and avoids confusion. |
 
 ## Decision Log
@@ -625,8 +625,8 @@ spec:
 | # | Decision | Rationale | Reversibility |
 |---|----------|-----------|---------------|
 | 1 | `ScheduleAnyway` as Phase 1 default | Pods stuck Pending is worse than imperfect spread for initial rollout. Users can opt into `DoNotSchedule` in Phase 2. | Two-way: can change default in Phase 2 without migration |
-| 2 | PDB owned by SeiNodeGroup (not SeiNode) | PDB spans all pods in the group; creating per-SeiNode PDBs would be incorrect. Owner reference on the group provides cascade cleanup. | Two-way: ownership can be changed by deleting and recreating PDB |
-| 3 | `placement` at SeiNodeGroup level, `scheduling` at SeiNode level | Clean separation: group-level intent (placement) vs. pod-level mechanics (scheduling). Mirrors K8s concepts: Deployment has strategy, Pod has scheduling. | One-way: CRD field names become API contract. Names chosen carefully. |
+| 2 | PDB owned by SeiNodeDeployment (not SeiNode) | PDB spans all pods in the group; creating per-SeiNode PDBs would be incorrect. Owner reference on the group provides cascade cleanup. | Two-way: ownership can be changed by deleting and recreating PDB |
+| 3 | `placement` at SeiNodeDeployment level, `scheduling` at SeiNode level | Clean separation: group-level intent (placement) vs. pod-level mechanics (scheduling). Mirrors K8s concepts: Deployment has strategy, Pod has scheduling. | One-way: CRD field names become API contract. Names chosen carefully. |
 | 4 | Infer topology spread from `sei.io/group` label in Phase 1 | No CRD change, no migration, immediate value. Phase 2 makes it explicit. | Two-way: Phase 2 overrides the inference path |
 | 5 | `maxUnavailable: 1` PDB default (not `minAvailable`) | Caps simultaneous disruptions at 1 regardless of group size. `minAvailable: 1` on a 5-replica group allows 4 simultaneous disruptions. | Two-way: config value |
 | 6 | PDB orphaned under DeletionPolicy=Retain | Consistent with how SeiNodes and networking resources are orphaned. Retained pods need disruption protection. | Two-way: PDB can be manually deleted after group deletion |
@@ -670,10 +670,10 @@ spec:
 **Estimated effort**: 1-2 days
 
 1. Add exported label constants to `api/v1alpha1/constants.go` (`LabelGroup`, `LabelGroupOrdinal`, `LabelNode`)
-2. Update `nodegroup/labels.go` to reference shared constants
+2. Update `nodedeployment/labels.go` to reference shared constants
 3. Modify `buildNodePodSpec` in `resources.go` to inject topology spread when `sei.io/group` is present in PodLabels
 4. Add unit tests for topology spread injection (3 test cases)
-5. Add `pdb.go` to `internal/controller/nodegroup/` with `reconcilePDB`, `deletePDB`, `orphanPDB`
+5. Add `pdb.go` to `internal/controller/nodedeployment/` with `reconcilePDB`, `deletePDB`, `orphanPDB`
 6. Add `ConditionPDBReady` constant to status condition types
 7. Wire `reconcilePDB` into `controller.go` reconcile loop, `orphanPDB` into `handleDeletion` Retain path
 8. Add RBAC markers and `Owns(&policyv1.PodDisruptionBudget{})` to `SetupWithManager`
@@ -686,7 +686,7 @@ spec:
 
 1. Add `placement_types.go` with `PlacementConfig`, `TopologySpreadConfig`, `PDBConfig`
 2. Add `Scheduling *SchedulingConfig` to `SeiNodeSpec`
-3. Add `Placement *PlacementConfig` to `SeiNodeGroupSpec`
+3. Add `Placement *PlacementConfig` to `SeiNodeDeploymentSpec`
 4. Update `generateSeiNode` to resolve placement → scheduling
 5. Update `buildNodePodSpec` to check `node.Spec.Scheduling` FIRST, skip label inference when non-nil
 6. Update `reconcilePDB` to read from placement config

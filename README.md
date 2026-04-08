@@ -1,10 +1,10 @@
 # sei-k8s-controller
 
-A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) blockchain infrastructure. It defines two CRDs — `SeiNodeGroup` and `SeiNode` — under the `sei.io/v1alpha1` API group.
+A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) blockchain infrastructure. It defines two CRDs — `SeiNodeDeployment` and `SeiNode` — under the `sei.io/v1alpha1` API group.
 
 ## Overview
 
-`SeiNodeGroup` orchestrates fleets of nodes: it manages genesis ceremonies, coordinates deployments, and provisions networking and monitoring. `SeiNode` manages a single Sei node — its PVC, StatefulSet, headless Service, and sidecar-driven bootstrap.
+`SeiNodeDeployment` orchestrates fleets of nodes: it manages genesis ceremonies, coordinates deployments, and provisions networking and monitoring. `SeiNode` manages a single Sei node — its PVC, StatefulSet, headless Service, and sidecar-driven bootstrap.
 
 ### Key design decisions
 
@@ -16,13 +16,13 @@ A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) b
 
 ## CRDs
 
-### SeiNodeGroup
+### SeiNodeDeployment
 
 Orchestrates fleets of `SeiNode` resources with optional genesis ceremony support, including forking from an existing chain's exported state.
 
 ```yaml
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
+kind: SeiNodeDeployment
 metadata:
   name: devnet
 spec:
@@ -122,7 +122,7 @@ The `config/` directory follows the standard [Kubebuilder](https://book.kubebuil
 
 ```
 config/
-├── crd/              # Generated CRD manifests (SeiNode, SeiNodeGroup)
+├── crd/              # Generated CRD manifests (SeiNode, SeiNodeDeployment)
 ├── rbac/             # ServiceAccount, ClusterRole, bindings, leader election
 ├── manager/          # Deployment and metrics Service
 ├── monitoring/       # PrometheusRule and ServiceMonitor

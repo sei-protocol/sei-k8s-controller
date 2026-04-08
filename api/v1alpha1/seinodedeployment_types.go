@@ -5,8 +5,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// SeiNodeGroupSpec defines the desired state of a SeiNodeGroup.
-type SeiNodeGroupSpec struct {
+// SeiNodeDeploymentSpec defines the desired state of a SeiNodeDeployment.
+type SeiNodeDeploymentSpec struct {
 	// Replicas is the number of SeiNode instances to create.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
@@ -18,7 +18,7 @@ type SeiNodeGroupSpec struct {
 	Template SeiNodeTemplate `json:"template"`
 
 	// DeletionPolicy controls what happens to child SeiNodes and managed
-	// networking/monitoring resources when the SeiNodeGroup is deleted.
+	// networking/monitoring resources when the SeiNodeDeployment is deleted.
 	// "Delete" (default) cascades deletion. "Retain" orphans children
 	// and networking resources so they continue running independently.
 	// +optional
@@ -185,22 +185,22 @@ type SeiNodeTemplateMeta struct {
 // Status
 // ---------------------------------------------------------------------------
 
-// SeiNodeGroupPhase represents the high-level lifecycle state.
+// SeiNodeDeploymentPhase represents the high-level lifecycle state.
 // +kubebuilder:validation:Enum=Pending;Initializing;Ready;Upgrading;Degraded;Failed;Terminating
-type SeiNodeGroupPhase string
+type SeiNodeDeploymentPhase string
 
 const (
-	GroupPhasePending      SeiNodeGroupPhase = "Pending"
-	GroupPhaseInitializing SeiNodeGroupPhase = "Initializing"
-	GroupPhaseReady        SeiNodeGroupPhase = "Ready"
-	GroupPhaseUpgrading    SeiNodeGroupPhase = "Upgrading"
-	GroupPhaseDegraded     SeiNodeGroupPhase = "Degraded"
-	GroupPhaseFailed       SeiNodeGroupPhase = "Failed"
-	GroupPhaseTerminating  SeiNodeGroupPhase = "Terminating"
+	GroupPhasePending      SeiNodeDeploymentPhase = "Pending"
+	GroupPhaseInitializing SeiNodeDeploymentPhase = "Initializing"
+	GroupPhaseReady        SeiNodeDeploymentPhase = "Ready"
+	GroupPhaseUpgrading    SeiNodeDeploymentPhase = "Upgrading"
+	GroupPhaseDegraded     SeiNodeDeploymentPhase = "Degraded"
+	GroupPhaseFailed       SeiNodeDeploymentPhase = "Failed"
+	GroupPhaseTerminating  SeiNodeDeploymentPhase = "Terminating"
 )
 
-// SeiNodeGroupStatus defines the observed state of a SeiNodeGroup.
-type SeiNodeGroupStatus struct {
+// SeiNodeDeploymentStatus defines the observed state of a SeiNodeDeployment.
+type SeiNodeDeploymentStatus struct {
 	// ObservedGeneration is the most recent generation observed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -213,7 +213,7 @@ type SeiNodeGroupStatus struct {
 	TemplateHash string `json:"templateHash,omitempty"`
 
 	// Phase is the high-level lifecycle state.
-	Phase SeiNodeGroupPhase `json:"phase,omitempty"`
+	Phase SeiNodeDeploymentPhase `json:"phase,omitempty"`
 
 	// Replicas is the desired number of SeiNodes.
 	Replicas int32 `json:"replicas,omitempty"`
@@ -283,7 +283,7 @@ type NetworkingStatus struct {
 }
 
 // DeploymentStatus tracks metadata for an in-progress deployment.
-// The task plan itself lives in SeiNodeGroupStatus.Plan.
+// The task plan itself lives in SeiNodeDeploymentStatus.Plan.
 type DeploymentStatus struct {
 	// IncumbentRevision identifies the generation of the currently live nodes.
 	IncumbentRevision string `json:"incumbentRevision"`
@@ -296,7 +296,7 @@ type DeploymentStatus struct {
 	EntrantNodes []string `json:"entrantNodes,omitempty"`
 }
 
-// Status condition types for SeiNodeGroup.
+// Status condition types for SeiNodeDeployment.
 const (
 	ConditionNodesReady                = "NodesReady"
 	ConditionExternalServiceReady      = "ExternalServiceReady"
@@ -319,24 +319,24 @@ const (
 // +kubebuilder:printcolumn:name="Host",type=string,JSONPath=`.spec.networking.gateway.hostnames[0]`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// SeiNodeGroup is the Schema for the seinodegroups API.
-type SeiNodeGroup struct {
+// SeiNodeDeployment is the Schema for the seinodedeployments API.
+type SeiNodeDeployment struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   SeiNodeGroupSpec   `json:"spec,omitempty"`
-	Status SeiNodeGroupStatus `json:"status,omitempty"`
+	Spec   SeiNodeDeploymentSpec   `json:"spec,omitempty"`
+	Status SeiNodeDeploymentStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// SeiNodeGroupList contains a list of SeiNodeGroup.
-type SeiNodeGroupList struct {
+// SeiNodeDeploymentList contains a list of SeiNodeDeployment.
+type SeiNodeDeploymentList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []SeiNodeGroup `json:"items"`
+	Items           []SeiNodeDeployment `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&SeiNodeGroup{}, &SeiNodeGroupList{})
+	SchemeBuilder.Register(&SeiNodeDeployment{}, &SeiNodeDeploymentList{})
 }

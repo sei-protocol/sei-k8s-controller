@@ -4,16 +4,16 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: seinodegroups.sei.io
+  name: seinodedeployments.sei.io
 spec:
   group: sei.io
   names:
-    kind: SeiNodeGroup
-    listKind: SeiNodeGroupList
-    plural: seinodegroups
+    kind: SeiNodeDeployment
+    listKind: SeiNodeDeploymentList
+    plural: seinodedeployments
     shortNames:
     - sng
-    singular: seinodegroup
+    singular: seinodedeployment
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -40,7 +40,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: SeiNodeGroup is the Schema for the seinodegroups API.
+        description: SeiNodeDeployment is the Schema for the seinodedeployments API.
         properties:
           apiVersion:
             description: |-
@@ -60,13 +60,13 @@ spec:
           metadata:
             type: object
           spec:
-            description: SeiNodeGroupSpec defines the desired state of a SeiNodeGroup.
+            description: SeiNodeDeploymentSpec defines the desired state of a SeiNodeDeployment.
             properties:
               deletionPolicy:
                 default: Delete
                 description: |-
                   DeletionPolicy controls what happens to child SeiNodes and managed
-                  networking/monitoring resources when the SeiNodeGroup is deleted.
+                  networking/monitoring resources when the SeiNodeDeployment is deleted.
                   "Delete" (default) cascades deletion. "Retain" orphans children
                   and networking resources so they continue running independently.
                 enum:
@@ -215,9 +215,9 @@ spec:
                         type: array
                     type: object
                     x-kubernetes-validations:
-                    - message: at least one of hostnames or baseDomain must be set
-                      rule: '(has(self.hostnames) && size(self.hostnames) > 0) ||
-                        (has(self.baseDomain) && size(self.baseDomain) > 0)'
+                    - message: ”at least one of hostnames or baseDomain must be set”
+                      rule: ”(has(self.hostnames) && size(self.hostnames) > 0) ||
+                        (has(self.baseDomain) && size(self.baseDomain) > 0)”
                   isolation:
                     description: Isolation configures network-level access control
                       for node pods.
@@ -674,7 +674,7 @@ spec:
                           genesisCeremony:
                             description: |-
                               GenesisCeremony indicates this validator participates in a group genesis
-                              ceremony. Set by the SeiNodeGroup controller — not intended for direct use.
+                              ceremony. Set by the SeiNodeDeployment controller — not intended for direct use.
                             properties:
                               accountBalance:
                                 description: |-
@@ -814,7 +814,7 @@ spec:
             - template
             type: object
           status:
-            description: SeiNodeGroupStatus defines the observed state of a SeiNodeGroup.
+            description: SeiNodeDeploymentStatus defines the observed state of a SeiNodeDeployment.
             properties:
               conditions:
                 items:

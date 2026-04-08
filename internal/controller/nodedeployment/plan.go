@@ -18,7 +18,7 @@ import (
 // reconcilePlan is the single entry point for plan-driven orchestration.
 // It drives an active plan to completion, or builds a new plan if the
 // planner determines one is needed.
-func (r *SeiNodeGroupReconciler) reconcilePlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, statusBase client.Patch) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) reconcilePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
 	// Drive active plan.
 	if group.Status.Plan != nil && group.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		return r.drivePlan(ctx, group, statusBase)
@@ -38,7 +38,7 @@ func (r *SeiNodeGroupReconciler) reconcilePlan(ctx context.Context, group *seiv1
 	return r.startPlan(ctx, group, statusBase, plan)
 }
 
-func (r *SeiNodeGroupReconciler) drivePlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, statusBase client.Patch) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) drivePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
 	result, err := r.PlanExecutor.ExecutePlan(ctx, group, group.Status.Plan)
 	if err != nil {
 		return result, err
@@ -54,7 +54,7 @@ func (r *SeiNodeGroupReconciler) drivePlan(ctx context.Context, group *seiv1alph
 	return result, nil
 }
 
-func (r *SeiNodeGroupReconciler) startPlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, statusBase client.Patch, plan *seiv1alpha1.TaskPlan) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) startPlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch, plan *seiv1alpha1.TaskPlan) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	group.Status.Plan = plan
@@ -70,7 +70,7 @@ func (r *SeiNodeGroupReconciler) startPlan(ctx context.Context, group *seiv1alph
 	return planner.ResultRequeueImmediate, nil
 }
 
-func (r *SeiNodeGroupReconciler) completePlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, statusBase client.Patch) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	isDeploymentPlan := group.Status.Deployment != nil
@@ -100,7 +100,7 @@ func (r *SeiNodeGroupReconciler) completePlan(ctx context.Context, group *seiv1a
 	return planner.ResultRequeueImmediate, nil
 }
 
-func (r *SeiNodeGroupReconciler) failPlan(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, statusBase client.Patch) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	group.Status.Phase = seiv1alpha1.GroupPhaseDegraded
@@ -117,7 +117,7 @@ func (r *SeiNodeGroupReconciler) failPlan(ctx context.Context, group *seiv1alpha
 	return ctrl.Result{}, nil
 }
 
-func setPlanInProgress(group *seiv1alpha1.SeiNodeGroup, reason, message string) {
+func setPlanInProgress(group *seiv1alpha1.SeiNodeDeployment, reason, message string) {
 	apimeta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:               seiv1alpha1.ConditionPlanInProgress,
 		Status:             metav1.ConditionTrue,
@@ -127,7 +127,7 @@ func setPlanInProgress(group *seiv1alpha1.SeiNodeGroup, reason, message string) 
 	})
 }
 
-func clearPlanInProgress(group *seiv1alpha1.SeiNodeGroup, reason, message string) {
+func clearPlanInProgress(group *seiv1alpha1.SeiNodeDeployment, reason, message string) {
 	apimeta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:               seiv1alpha1.ConditionPlanInProgress,
 		Status:             metav1.ConditionFalse,

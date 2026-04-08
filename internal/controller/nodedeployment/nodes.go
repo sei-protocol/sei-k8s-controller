@@ -22,7 +22,7 @@ import (
 // populates IncumbentNodes on the group status, and detects spec changes
 // that require deployment orchestration. When a plan is in progress,
 // mutations are skipped to avoid interfering with active orchestration.
-func (r *SeiNodeGroupReconciler) reconcileSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
 		for i := range int(group.Spec.Replicas) {
 			if err := r.ensureSeiNode(ctx, group, i); err != nil {
@@ -49,7 +49,7 @@ func (r *SeiNodeGroupReconciler) reconcileSeiNodes(ctx context.Context, group *s
 // ForkGenesisCeremonyNeeded depending on whether the group has a fork
 // config. The genesis planner reads this condition to select the
 // appropriate assembler task.
-func (r *SeiNodeGroupReconciler) detectGenesisCeremonyNeeded(group *seiv1alpha1.SeiNodeGroup) {
+func (r *SeiNodeDeploymentReconciler) detectGenesisCeremonyNeeded(group *seiv1alpha1.SeiNodeDeployment) {
 	// Clear both conditions when not applicable.
 	if group.Spec.Genesis == nil {
 		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
@@ -81,7 +81,7 @@ func (r *SeiNodeGroupReconciler) detectGenesisCeremonyNeeded(group *seiv1alpha1.
 // by comparing the current template hash against the stored hash. Only
 // fields that require new nodes (image, entrypoint, chainId) are hashed;
 // sidecar, overrides, and replica changes propagate in-place.
-func (r *SeiNodeGroupReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeGroup) {
+func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeDeployment) {
 	if group.Spec.UpdateStrategy == nil {
 		return
 	}
@@ -109,7 +109,7 @@ func (r *SeiNodeGroupReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNo
 
 // populateIncumbentNodes lists child SeiNodes and records their names
 // on the group status. Exporter nodes are excluded.
-func (r *SeiNodeGroupReconciler) populateIncumbentNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) populateIncumbentNodes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	nodes, err := r.listChildSeiNodes(ctx, group)
 	if err != nil {
 		return fmt.Errorf("listing child SeiNodes: %w", err)
@@ -125,7 +125,7 @@ func (r *SeiNodeGroupReconciler) populateIncumbentNodes(ctx context.Context, gro
 	return nil
 }
 
-func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, ordinal int) error {
+func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, ordinal int) error {
 	desired := generateSeiNode(group, ordinal)
 	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
@@ -185,7 +185,7 @@ func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx context.Context, group *seiv1
 	return nil
 }
 
-func generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.SeiNode {
+func generateSeiNode(group *seiv1alpha1.SeiNodeDeployment, ordinal int) *seiv1alpha1.SeiNode {
 	labels := seiNodeLabels(group, ordinal)
 	annotations := seiNodeAnnotations(group)
 
@@ -221,7 +221,7 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeGroup, ordinal int) *seiv1alpha1.
 }
 
 // scaleDown deletes SeiNodes with ordinals >= the desired replica count.
-func (r *SeiNodeGroupReconciler) scaleDown(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) scaleDown(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Replicas <= 0 {
 		log.FromContext(ctx).Info("refusing scale-down: desired replicas is zero or negative")
 		return nil
@@ -257,7 +257,7 @@ func (r *SeiNodeGroupReconciler) scaleDown(ctx context.Context, group *seiv1alph
 	return nil
 }
 
-func (r *SeiNodeGroupReconciler) listChildSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) ([]seiv1alpha1.SeiNode, error) {
+func (r *SeiNodeDeploymentReconciler) listChildSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) ([]seiv1alpha1.SeiNode, error) {
 	nodeList := &seiv1alpha1.SeiNodeList{}
 	if err := r.List(ctx, nodeList,
 		client.InNamespace(group.Namespace),

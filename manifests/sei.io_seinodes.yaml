@@ -402,7 +402,7 @@ spec:
                   genesisCeremony:
                     description: |-
                       GenesisCeremony indicates this validator participates in a group genesis
-                      ceremony. Set by the SeiNodeGroup controller — not intended for direct use.
+                      ceremony. Set by the SeiNodeDeployment controller — not intended for direct use.
                     properties:
                       accountBalance:
                         description: |-

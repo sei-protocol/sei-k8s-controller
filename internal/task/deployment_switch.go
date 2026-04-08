@@ -36,7 +36,7 @@ func deserializeSwitchTraffic(id string, params json.RawMessage, cfg ExecutionCo
 }
 
 func (e *switchTrafficExecution) Execute(ctx context.Context) error {
-	group, err := ResourceAs[*seiv1alpha1.SeiNodeGroup](e.cfg)
+	group, err := ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
 	if err != nil {
 		return Terminal(err)
 	}

@@ -17,13 +17,13 @@ const (
 
 type genesisGroupPlanner struct{}
 
-// BuildPlan constructs a TaskPlan for the SeiNodeGroup that:
+// BuildPlan constructs a TaskPlan for the SeiNodeDeployment that:
 //  1. Assembles all per-node genesis artifacts into a final genesis.json
 //     (retried until the sidecar succeeds).
 //  2. Collects node IDs and sets persistent_peers on each child node.
 //  3. Waits for all child SeiNodes to reach PhaseRunning.
 func (p *genesisGroupPlanner) BuildPlan(
-	group *seiv1alpha1.SeiNodeGroup,
+	group *seiv1alpha1.SeiNodeDeployment,
 ) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	planIndex := 0

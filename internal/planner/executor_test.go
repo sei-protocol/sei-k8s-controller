@@ -262,9 +262,9 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 
 func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	s := testScheme(t)
-	group := &seiv1alpha1.SeiNodeGroup{
+	group := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-group", Namespace: "default", Generation: 1},
-		Spec: seiv1alpha1.SeiNodeGroupSpec{
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 3,
 		},
 	}
@@ -307,12 +307,12 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	fc := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(group).
-		WithStatusSubresource(&seiv1alpha1.SeiNodeGroup{}).
+		WithStatusSubresource(&seiv1alpha1.SeiNodeDeployment{}).
 		Build()
 
-	executor := &Executor[*seiv1alpha1.SeiNodeGroup]{
+	executor := &Executor[*seiv1alpha1.SeiNodeDeployment]{
 		Client: fc,
-		ConfigFor: func(_ context.Context, g *seiv1alpha1.SeiNodeGroup) task.ExecutionConfig {
+		ConfigFor: func(_ context.Context, g *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 			return task.ExecutionConfig{
 				BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
 				KubeClient:         fc,
@@ -332,7 +332,7 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		t.Fatalf("expected 1 submission, got %d", len(mock.submitted))
 	}
 
-	updated := &seiv1alpha1.SeiNodeGroup{}
+	updated := &seiv1alpha1.SeiNodeDeployment{}
 	if err := fc.Get(ctx, keyForGroup(group), updated); err != nil {
 		t.Fatalf("get group: %v", err)
 	}
@@ -363,6 +363,6 @@ func keyFor(node *seiv1alpha1.SeiNode) types.NamespacedName {
 	return types.NamespacedName{Name: node.Name, Namespace: node.Namespace}
 }
 
-func keyForGroup(group *seiv1alpha1.SeiNodeGroup) types.NamespacedName {
+func keyForGroup(group *seiv1alpha1.SeiNodeDeployment) types.NamespacedName {
 	return types.NamespacedName{Name: group.Name, Namespace: group.Namespace}
 }

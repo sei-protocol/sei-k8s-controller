@@ -15,10 +15,10 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
 
-func testGroup() *seiv1alpha1.SeiNodeGroup {
-	return &seiv1alpha1.SeiNodeGroup{
+func testGroup() *seiv1alpha1.SeiNodeDeployment {
+	return &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "fork-group", Namespace: "default", UID: "uid-group"},
-		Spec: seiv1alpha1.SeiNodeGroupSpec{
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 2,
 			Template: seiv1alpha1.SeiNodeTemplate{
 				Spec: seiv1alpha1.SeiNodeSpec{
@@ -41,7 +41,7 @@ func testGroup() *seiv1alpha1.SeiNodeGroup {
 	}
 }
 
-func testGroupCfg(t *testing.T, group *seiv1alpha1.SeiNodeGroup, objs ...metav1.Object) ExecutionConfig {
+func testGroupCfg(t *testing.T, group *seiv1alpha1.SeiNodeDeployment, objs ...metav1.Object) ExecutionConfig {
 	t.Helper()
 	s := testScheme(t)
 	clientObjs := make([]interface{ GetName() string }, 0, len(objs)+1)

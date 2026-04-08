@@ -9,10 +9,10 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-func newTestGroup(name, namespace string) *seiv1alpha1.SeiNodeGroup {
-	return &seiv1alpha1.SeiNodeGroup{
+func newTestGroup(name, namespace string) *seiv1alpha1.SeiNodeDeployment {
+	return &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-		Spec: seiv1alpha1.SeiNodeGroupSpec{
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 3,
 			Template: seiv1alpha1.SeiNodeTemplate{
 				Spec: seiv1alpha1.SeiNodeSpec{

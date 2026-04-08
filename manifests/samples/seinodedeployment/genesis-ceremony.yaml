@@ -1,4 +1,4 @@
-# SeiNodeGroup — Genesis Ceremony (dev testnet)
+# SeiNodeDeployment — Genesis Ceremony (dev testnet)
 #
 # Three validator nodes that bootstrap a new chain from scratch via
 # the genesis ceremony workflow. The group controller coordinates:
@@ -6,7 +6,7 @@
 #   2. Group assembles final genesis.json from all artifacts
 #   3. Each node downloads genesis and starts the chain
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
+kind: SeiNodeDeployment
 metadata:
   name: genesis-test
   namespace: default

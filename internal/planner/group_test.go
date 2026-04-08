@@ -11,15 +11,15 @@ import (
 )
 
 func TestBuildGroupAssemblyPlan(t *testing.T) {
-	group := &seiv1alpha1.SeiNodeGroup{
+	group := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeGroupSpec{
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 3,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: "arctic-1",
 			},
 		},
-		Status: seiv1alpha1.SeiNodeGroupStatus{
+		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"node-0", "node-1", "node-2"},
 			Conditions: []metav1.Condition{
 				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
@@ -104,15 +104,15 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 }
 
 func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
-	group := &seiv1alpha1.SeiNodeGroup{
+	group := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeGroupSpec{
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 1,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: "pacific-1",
 			},
 		},
-		Status: seiv1alpha1.SeiNodeGroupStatus{
+		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"node-0"},
 			Conditions: []metav1.Condition{
 				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
@@ -144,9 +144,9 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 func TestBuildGroupForkPlan(t *testing.T) {
 	const sourceChain = "pacific-1"
 
-	group := &seiv1alpha1.SeiNodeGroup{
+	group := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "fork-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeGroupSpec{
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 2,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
 				ChainID:        "fork-1",
@@ -158,7 +158,7 @@ func TestBuildGroupForkPlan(t *testing.T) {
 				},
 			},
 		},
-		Status: seiv1alpha1.SeiNodeGroupStatus{
+		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"fork-group-0", "fork-group-1"},
 			Conditions: []metav1.Condition{
 				{Type: seiv1alpha1.ConditionForkGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
@@ -256,15 +256,15 @@ func TestBuildGroupForkPlan(t *testing.T) {
 func TestBuildGroupForkPlan_NilForkSpecNoExporterTasks(t *testing.T) {
 	// ForkGenesisCeremonyNeeded condition is set but Fork spec is nil.
 	// The planner should fall back to the standard genesis plan.
-	group := &seiv1alpha1.SeiNodeGroup{
+	group := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "edge-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeGroupSpec{
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 1,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: "test-1",
 			},
 		},
-		Status: seiv1alpha1.SeiNodeGroupStatus{
+		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"edge-group-0"},
 			Conditions: []metav1.Condition{
 				{Type: seiv1alpha1.ConditionForkGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
@@ -291,15 +291,15 @@ func TestBuildGroupForkPlan_NilForkSpecNoExporterTasks(t *testing.T) {
 }
 
 func TestBuildGroupAssemblyPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
-	group := &seiv1alpha1.SeiNodeGroup{
+	group := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "det-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeGroupSpec{
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 2,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: "test-chain",
 			},
 		},
-		Status: seiv1alpha1.SeiNodeGroupStatus{
+		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"node-0", "node-1"},
 			Conditions: []metav1.Condition{
 				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},

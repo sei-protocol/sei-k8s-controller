@@ -17,7 +17,7 @@ EC2 ALB                 K8s NLB
 EC2 RPC nodes         Istio IngressGateway
                            |
                       K8s Service
-                      (SeiNodeGroup)
+                      (SeiNodeDeployment)
 ```
 
 Key simplification: Istio fronts K8s only. It does not sit in the EC2 path. Traffic splitting is done at DNS level via Route53 weighted record sets. This avoids ServiceEntry complexity, mTLS termination issues to EC2, and keeps the EC2 path completely unchanged during migration.
@@ -650,7 +650,7 @@ These are evaluated independently from the composite score as hard circuit break
 1. **Error rate spike**: K8s 5xx rate > 5% for 5 consecutive minutes
 2. **Latency regression**: K8s p99 > 3x EC2 p99 for 10 consecutive minutes
 3. **Block height stall**: K8s block height not advancing for 2 minutes
-4. **Pod failure**: SeiNodeGroup phase == Degraded or Failed
+4. **Pod failure**: SeiNodeDeployment phase == Degraded or Failed
 
 The progression script checks these independently:
 
@@ -670,10 +670,10 @@ check_circuit_breakers() {
         return 1
     fi
 
-    # SeiNodeGroup health
+    # SeiNodeDeployment health
     group_phase=$(kubectl get sng -n sei -o jsonpath='{.items[0].status.phase}')
     if [[ "$group_phase" == "Failed" || "$group_phase" == "Degraded" ]]; then
-        echo "BREAKER: SeiNodeGroup phase=$group_phase"
+        echo "BREAKER: SeiNodeDeployment phase=$group_phase"
         return 1
     fi
 
@@ -687,7 +687,7 @@ check_circuit_breakers() {
 
 ### Prerequisites (before clock starts)
 
-- SeiNodeGroup deployed, all nodes synced (`catching_up: false`)
+- SeiNodeDeployment deployed, all nodes synced (`catching_up: false`)
 - Istio sidecar injection on, Gateway + HTTPRoute working
 - ServiceMonitor scraping K8s nodes
 - YACE exporting EC2 ALB CloudWatch metrics
@@ -760,7 +760,7 @@ No custom Go code. No new CRDs. No Argo/Flagger dependencies. The entire system 
 ### What changes in sei-k8s-controller: nothing
 
 The controller already provisions:
-- `SeiNodeGroup` with `networking.service` (type: LoadBalancer) -- this creates the K8s NLB
+- `SeiNodeDeployment` with `networking.service` (type: LoadBalancer) -- this creates the K8s NLB
 - `networking.gateway` with HTTPRoute -- Istio routes internal mesh traffic
 - `monitoring.serviceMonitor` -- Prometheus scrapes K8s nodes
 - `NetworkingStatus.LoadBalancerIngress` -- reports the NLB address

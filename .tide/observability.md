@@ -12,7 +12,7 @@ Phase 3 (deferred): Distributed tracing, cost attribution
 Make the sei-k8s-controller and its seictl sidecar operationally ergonomic by wiring
 Prometheus metrics, Kubernetes events, structured logging, self-monitoring, dashboards,
 and alerting throughout the system. Today the controller emits zero custom metrics, only
-the SeiNodeGroup reconciler produces Kubernetes events, the sidecar has no `/metrics`
+the SeiNodeDeployment reconciler produces Kubernetes events, the sidecar has no `/metrics`
 endpoint, and no dashboards or alert rules exist. Operators have no signal beyond
 `kubectl logs` and manual status inspection to understand fleet health.
 
@@ -30,7 +30,7 @@ endpoint, and no dashboards or alert rules exist. Operators have no signal beyon
 - **Grafana sidecar** — Dashboard auto-discovery from ConfigMaps (currently disabled)
 
 ### Internal Tide components consumed
-- **SeiNodeGroup controller** — already has EventRecorder; metrics hook points in reconcile loop
+- **SeiNodeDeployment controller** — already has EventRecorder; metrics hook points in reconcile loop
 - **SeiNode controller** — needs EventRecorder; metrics hook points in reconcile/plan execution
 - **SeiNodePool controller** — needs EventRecorder; metrics hook points in genesis lifecycle
 - **seictl sidecar** — task execution engine; needs `/metrics` HTTP handler (Phase 2)
@@ -54,11 +54,11 @@ All metrics use the `sei_controller_` prefix. Labels follow controller-runtime c
 ```go
 // Gauges — per-resource state (cleaned up on deletion via §1e)
 sei_controller_seinode_phase{namespace, name, phase}                   gauge   // 1.0 for current phase, 0.0 for others
-sei_controller_seinodegroup_phase{namespace, name, phase}              gauge   // same pattern
+sei_controller_seinodedeployment_phase{namespace, name, phase}              gauge   // same pattern
 sei_controller_seinodepool_phase{namespace, name, phase}               gauge   // same pattern
-sei_controller_seinodegroup_replicas{namespace, name, type}            gauge   // type=desired|ready|initializing|failed
+sei_controller_seinodedeployment_replicas{namespace, name, type}            gauge   // type=desired|ready|initializing|failed
 sei_controller_seinodepool_replicas{namespace, name, type}             gauge   // type=total|ready
-sei_controller_seinodegroup_condition{namespace, name, type, status}   gauge   // 1.0 when condition matches
+sei_controller_seinodedeployment_condition{namespace, name, type, status}   gauge   // 1.0 when condition matches
 
 // Counters
 sei_controller_reconcile_errors_total{controller, namespace, name}     counter // reconcile errors beyond what controller-runtime tracks
@@ -67,7 +67,7 @@ sei_controller_seinode_phase_transitions_total{namespace, name, from, to}  count
 // Histograms — aggregate across resources for meaningful percentiles
 sei_controller_seinode_init_duration_seconds{namespace, chain_id}          histogram // time from Pending to Running (no `name` label — aggregates across all nodes for a chain)
 sei_controller_seinode_last_init_duration_seconds{namespace, name}         gauge     // per-node init duration for debugging (set once when node reaches Running)
-sei_controller_seinodegroup_reconcile_substep_duration_seconds{controller, substep}  histogram // per-substep timing
+sei_controller_seinodedeployment_reconcile_substep_duration_seconds{controller, substep}  histogram // per-substep timing
 ```
 
 **Histogram bucket selection:** Custom buckets for all histograms to cover the full range of
@@ -113,9 +113,9 @@ sei_controller_networking_crd_available{crd}                                    
 `prometheus.NewGaugeVec` / `NewCounterVec` / `NewHistogramVec` from `github.com/prometheus/client_golang`.
 Registered with controller-runtime's default registry (`metrics.Registry`).
 
-**Cardinality budget:** Phase labels are bounded enums (6 phases for SeiNode, 6 for SeiNodeGroup,
+**Cardinality budget:** Phase labels are bounded enums (6 phases for SeiNode, 6 for SeiNodeDeployment,
 4 for SeiNodePool). `namespace` × `name` cardinality is bounded by cluster size (target: <100
-SeiNodes, <20 SeiNodeGroups, <10 SeiNodePools). `from` × `to` transition pairs are bounded by
+SeiNodes, <20 SeiNodeDeployments, <10 SeiNodePools). `from` × `to` transition pairs are bounded by
 the state machine (max 30 combinations). `route` is bounded by the allowlist (4 values + "other").
 
 The 0/1-per-phase gauge pattern follows the kube-state-metrics convention (e.g., `kube_pod_status_phase`)
@@ -164,7 +164,7 @@ Then run `make manifests` to regenerate the ClusterRole.
 ```
 Then run `make manifests` to regenerate the ClusterRole.
 
-#### SeiNodeGroup Events (existing, extended)
+#### SeiNodeDeployment Events (existing, extended)
 
 Add to existing event set:
 
@@ -354,7 +354,7 @@ All controllers and the sidecar follow these conventions:
 ```
 Logger hierarchy:
   controller.seinode          — SeiNode reconciler
-  controller.seinodegroup     — SeiNodeGroup reconciler
+  controller.seinodedeployment     — SeiNodeDeployment reconciler
   controller.seinodepool      — SeiNodePool reconciler
   sidecar.engine              — seictl task engine
   sidecar.task.<type>         — per-task-type logger
@@ -431,7 +431,7 @@ Then dashboards can be deployed as labeled ConfigMaps to any namespace.
 #### Dashboard 1: Fleet Overview
 
 Panels:
-- SeiNodeGroup count by phase (pie/stat)
+- SeiNodeDeployment count by phase (pie/stat)
 - SeiNode count by phase (pie/stat)
 - SeiNodePool count by phase (pie/stat)
 - Replicas desired vs ready per group (timeseries)
@@ -473,21 +473,21 @@ spec:
   groups:
     - name: sei-controller
       rules:
-        - alert: SeiNodeGroupDegraded
-          expr: sei_controller_seinodegroup_phase{phase="Degraded"} == 1
+        - alert: SeiNodeDeploymentDegraded
+          expr: sei_controller_seinodedeployment_phase{phase="Degraded"} == 1
           for: 10m
           labels:
             severity: warning
           annotations:
-            summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} is degraded"
+            summary: "SeiNodeDeployment {{ $labels.namespace }}/{{ $labels.name }} is degraded"
 
-        - alert: SeiNodeGroupFailed
-          expr: sei_controller_seinodegroup_phase{phase="Failed"} == 1
+        - alert: SeiNodeDeploymentFailed
+          expr: sei_controller_seinodedeployment_phase{phase="Failed"} == 1
           for: 5m
           labels:
             severity: critical
           annotations:
-            summary: "SeiNodeGroup {{ $labels.namespace }}/{{ $labels.name }} has failed"
+            summary: "SeiNodeDeployment {{ $labels.namespace }}/{{ $labels.name }} has failed"
 
         - alert: SeiNodeStuckInitializing
           expr: sei_controller_seinode_phase{phase="Initializing"} == 1
@@ -569,8 +569,8 @@ spec:
 Each controller package gets a `metrics.go` file:
 
 ```go
-// internal/controller/nodegroup/metrics.go
-package nodegroup
+// internal/controller/nodedeployment/metrics.go
+package nodedeployment
 
 import (
     "github.com/prometheus/client_golang/prometheus"
@@ -582,23 +582,23 @@ var reconcileBuckets = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 
 var (
     groupPhaseGauge = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
-            Name: "sei_controller_seinodegroup_phase",
-            Help: "Current phase of each SeiNodeGroup (1=active, 0=inactive)",
+            Name: "sei_controller_seinodedeployment_phase",
+            Help: "Current phase of each SeiNodeDeployment (1=active, 0=inactive)",
         },
         []string{"namespace", "name", "phase"},
     )
 
     groupReplicasGauge = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
-            Name: "sei_controller_seinodegroup_replicas",
-            Help: "Replica counts for each SeiNodeGroup",
+            Name: "sei_controller_seinodedeployment_replicas",
+            Help: "Replica counts for each SeiNodeDeployment",
         },
         []string{"namespace", "name", "type"},
     )
 
     reconcileSubstepDuration = prometheus.NewHistogramVec(
         prometheus.HistogramOpts{
-            Name:    "sei_controller_seinodegroup_reconcile_substep_duration_seconds",
+            Name:    "sei_controller_seinodedeployment_reconcile_substep_duration_seconds",
             Help:    "Duration of individual reconcile substeps",
             Buckets: reconcileBuckets,
         },
@@ -618,7 +618,7 @@ func init() {
 #### 1b. Metrics emission in reconcile loop
 
 ```go
-func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
     // ... existing logic ...
 
     // After status update, emit phase gauge
@@ -648,10 +648,10 @@ func emitPhaseGauge(gauge *prometheus.GaugeVec, ns, name, current string, allPha
 #### 1c. Substep timing helper
 
 ```go
-func (r *SeiNodeGroupReconciler) timeSubstep(ctx context.Context, name string, fn func() error) error {
+func (r *SeiNodeDeploymentReconciler) timeSubstep(ctx context.Context, name string, fn func() error) error {
     start := time.Now()
     err := fn()
-    reconcileSubstepDuration.WithLabelValues("seinodegroup", name).Observe(time.Since(start).Seconds())
+    reconcileSubstepDuration.WithLabelValues("seinodedeployment", name).Observe(time.Since(start).Seconds())
     return err
 }
 
@@ -721,7 +721,7 @@ Each controller implements a `cleanupMetrics` helper called at the beginning of 
 before any status patch:
 
 ```go
-// internal/controller/nodegroup/metrics.go
+// internal/controller/nodedeployment/metrics.go
 
 func cleanupGroupMetrics(namespace, name string) {
     for _, phase := range allGroupPhases {
@@ -739,9 +739,9 @@ func cleanupGroupMetrics(namespace, name string) {
 ```
 
 ```go
-// internal/controller/nodegroup/controller.go — in handleDeletion:
+// internal/controller/nodedeployment/controller.go — in handleDeletion:
 
-func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *SeiNodeGroup) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) handleDeletion(ctx context.Context, group *SeiNodeDeployment) (ctrl.Result, error) {
     cleanupGroupMetrics(group.Namespace, group.Name)
     // ... existing finalizer logic ...
 }
@@ -821,14 +821,14 @@ Committed to `config/monitoring/prometheus-rule.yaml` in the controller repo.
 
 | Test | Setup | Action | Expected |
 |------|-------|--------|----------|
-| `TestPhaseGaugeEmission` | Create SeiNodeGroup, set phase to Ready | Call `emitPhaseGauge` | Ready=1.0, all others=0.0 |
+| `TestPhaseGaugeEmission` | Create SeiNodeDeployment, set phase to Ready | Call `emitPhaseGauge` | Ready=1.0, all others=0.0 |
 | `TestReplicaGaugeValues` | Group with 3 replicas, 2 ready | Reconcile | desired=3, ready=2 |
 | `TestSubstepTimingRecorded` | Mock substep taking 100ms | Call `timeSubstep` | Histogram has observation ≥ 0.1s, bucket 0.25 incremented |
 | `TestPhaseTransitionCounter` | SeiNode transitions Pending→Initializing | Call `transitionPhase` | Counter incremented with from=Pending, to=Initializing |
 | `TestPhaseTransitionEvent` | Same as above | Call `transitionPhase` | EventRecorder received Normal/PhaseTransition event |
 | `TestSidecarUnreachableCounter` | Mock HTTP client returning connection error | Reconcile SeiNode | `sidecar_unreachable_total` incremented |
 | `TestNetworkingResourceMetrics` | Reconcile HTTPRoute successfully | Check counter | `networking_resource_reconcile_total{result=created}` = 1 |
-| `TestMetricsCleanupOnDeletion` | Delete SeiNodeGroup | Call `cleanupGroupMetrics` then check gauges | All gauges for deleted group removed via `DeleteLabelValues` |
+| `TestMetricsCleanupOnDeletion` | Delete SeiNodeDeployment | Call `cleanupGroupMetrics` then check gauges | All gauges for deleted group removed via `DeleteLabelValues` |
 | `TestRouteNormalization` | HTTP call to `/v0/tasks/abc-123` | Check histogram label | `route` = `/v0/tasks/:id` |
 | `TestInitDurationHistogramAggregates` | 3 SeiNodes in same chain complete init | Check histogram | 3 observations in `sei_controller_seinode_init_duration_seconds{chain_id="pacific-1"}` |
 | `TestPoolPhaseGauge` | SeiNodePool in Running phase | Call `emitPhaseGauge` | Running=1.0, all others=0.0 |
@@ -852,10 +852,10 @@ Committed to `config/monitoring/prometheus-rule.yaml` in the controller repo.
 
 | File | Change |
 |------|--------|
-| `internal/controller/nodegroup/metrics.go` | New — metric registration for SeiNodeGroup |
+| `internal/controller/nodedeployment/metrics.go` | New — metric registration for SeiNodeDeployment |
 | `internal/controller/node/metrics.go` | New — metric registration for SeiNode |
 | `internal/controller/nodepool/metrics.go` | New — metric registration for SeiNodePool |
-| `internal/controller/nodegroup/controller.go` | Add metric emission, substep timing, cleanup |
+| `internal/controller/nodedeployment/controller.go` | Add metric emission, substep timing, cleanup |
 | `internal/controller/node/controller.go` | Add Recorder field, metric emission, phase transition helper, cleanup, RBAC marker |
 | `internal/controller/nodepool/controller.go` | Add Recorder field, metric emission, cleanup, RBAC marker |
 | `cmd/main.go` | Wire EventRecorders for SeiNode and SeiNodePool; switch `metrics-secure` default to false |

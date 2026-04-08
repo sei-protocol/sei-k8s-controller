@@ -34,7 +34,7 @@ func deserializeCreateEntrantNodes(id string, params json.RawMessage, cfg Execut
 }
 
 func (e *createEntrantNodesExecution) Execute(ctx context.Context) error {
-	group, err := ResourceAs[*seiv1alpha1.SeiNodeGroup](e.cfg)
+	group, err := ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
 	if err != nil {
 		return Terminal(err)
 	}
@@ -51,7 +51,7 @@ func (e *createEntrantNodesExecution) Execute(ctx context.Context) error {
 
 func (e *createEntrantNodesExecution) ensureEntrantNode(
 	ctx context.Context,
-	group *seiv1alpha1.SeiNodeGroup,
+	group *seiv1alpha1.SeiNodeDeployment,
 	name string,
 	ordinal int,
 ) error {

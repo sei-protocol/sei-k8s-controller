@@ -37,7 +37,7 @@ type effectiveRoute struct {
 	Port      int32
 }
 
-func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking == nil {
 		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
 		removeCondition(group, seiv1alpha1.ConditionRouteReady)
@@ -57,7 +57,7 @@ func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx context.Context, group 
 	return nil
 }
 
-func (r *SeiNodeGroupReconciler) reconcileExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) reconcileExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking.Service == nil {
 		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
 		return r.deleteExternalService(ctx, group)
@@ -72,7 +72,7 @@ func (r *SeiNodeGroupReconciler) reconcileExternalService(ctx context.Context, g
 	return r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 }
 
-func generateExternalService(group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
+func generateExternalService(group *seiv1alpha1.SeiNodeDeployment) *corev1.Service {
 	svcConfig := group.Spec.Networking.Service
 	labels := resourceLabels(group)
 	svc := &corev1.Service{
@@ -94,7 +94,7 @@ func generateExternalService(group *seiv1alpha1.SeiNodeGroup) *corev1.Service {
 	return svc
 }
 
-func groupMode(group *seiv1alpha1.SeiNodeGroup) seiconfig.NodeMode {
+func groupMode(group *seiv1alpha1.SeiNodeDeployment) seiconfig.NodeMode {
 	spec := group.Spec.Template.Spec
 	switch {
 	case spec.Archive != nil:
@@ -119,7 +119,7 @@ func portsForMode(mode seiconfig.NodeMode) []corev1.ServicePort {
 	return ports
 }
 
-func (r *SeiNodeGroupReconciler) reconcileRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) reconcileRoute(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking.Gateway == nil {
 		removeCondition(group, seiv1alpha1.ConditionRouteReady)
 		return r.deleteHTTPRoutesByLabel(ctx, group)
@@ -127,7 +127,7 @@ func (r *SeiNodeGroupReconciler) reconcileRoute(ctx context.Context, group *seiv
 	return r.reconcileHTTPRoute(ctx, group)
 }
 
-func (r *SeiNodeGroupReconciler) deleteHTTPRoutesByLabel(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) deleteHTTPRoutesByLabel(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(httpRouteGVK())
 	err := r.List(ctx, list, client.InNamespace(group.Namespace), client.MatchingLabels(resourceLabels(group)))
@@ -145,7 +145,7 @@ func (r *SeiNodeGroupReconciler) deleteHTTPRoutesByLabel(ctx context.Context, gr
 	return nil
 }
 
-func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeGroup) []effectiveRoute {
+func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment) []effectiveRoute {
 	cfg := group.Spec.Networking.Gateway
 	if cfg.BaseDomain != "" {
 		routes := make([]effectiveRoute, len(seiProtocolRoutes))
@@ -165,7 +165,7 @@ func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeGroup) []effectiveRoute {
 	}}
 }
 
-func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	routes := resolveEffectiveRoutes(group)
 
 	desiredNames := make(map[string]bool, len(routes))
@@ -206,7 +206,7 @@ func (r *SeiNodeGroupReconciler) reconcileHTTPRoute(ctx context.Context, group *
 	return nil
 }
 
-func (r *SeiNodeGroupReconciler) deleteOrphanedHTTPRoutes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, desiredNames map[string]bool) error {
+func (r *SeiNodeDeploymentReconciler) deleteOrphanedHTTPRoutes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, desiredNames map[string]bool) error {
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(httpRouteGVK())
 	err := r.List(ctx, list, client.InNamespace(group.Namespace), client.MatchingLabels(resourceLabels(group)))
@@ -227,7 +227,7 @@ func (r *SeiNodeGroupReconciler) deleteOrphanedHTTPRoutes(ctx context.Context, g
 	return nil
 }
 
-func generateHTTPRoute(group *seiv1alpha1.SeiNodeGroup, er effectiveRoute, gatewayName, gatewayNamespace string) *unstructured.Unstructured {
+func generateHTTPRoute(group *seiv1alpha1.SeiNodeDeployment, er effectiveRoute, gatewayName, gatewayNamespace string) *unstructured.Unstructured {
 	svcName := externalServiceName(group)
 
 	hostnames := make([]any, len(er.Hostnames))
@@ -288,7 +288,7 @@ func httpRouteGVK() schema.GroupVersionKind {
 
 // --- AuthorizationPolicy (unstructured) ---
 
-func (r *SeiNodeGroupReconciler) reconcileIsolation(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) reconcileIsolation(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking.Isolation == nil || group.Spec.Networking.Isolation.AuthorizationPolicy == nil {
 		removeCondition(group, seiv1alpha1.ConditionIsolationReady)
 		return r.deleteUnstructured(ctx, group, authPolicyGVK())
@@ -330,7 +330,7 @@ func (r *SeiNodeGroupReconciler) reconcileIsolation(ctx context.Context, group *
 	return nil
 }
 
-func generateAuthorizationPolicy(group *seiv1alpha1.SeiNodeGroup, controllerSA string) *unstructured.Unstructured {
+func generateAuthorizationPolicy(group *seiv1alpha1.SeiNodeDeployment, controllerSA string) *unstructured.Unstructured {
 	cfg := group.Spec.Networking.Isolation.AuthorizationPolicy
 
 	var rules []any
@@ -402,7 +402,7 @@ func authPolicyGVK() schema.GroupVersionKind {
 
 // --- Deletion policy helpers ---
 
-func (r *SeiNodeGroupReconciler) deleteExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) deleteExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	svc := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc)
 	if apierrors.IsNotFound(err) {
@@ -417,7 +417,7 @@ func (r *SeiNodeGroupReconciler) deleteExternalService(ctx context.Context, grou
 	return nil
 }
 
-func (r *SeiNodeGroupReconciler) deleteNetworkingResources(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) deleteNetworkingResources(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if err := r.deleteExternalService(ctx, group); err != nil {
 		return err
 	}
@@ -433,7 +433,7 @@ func (r *SeiNodeGroupReconciler) deleteNetworkingResources(ctx context.Context, 
 	return nil
 }
 
-func (r *SeiNodeGroupReconciler) deleteUnstructured(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, gvk schema.GroupVersionKind) error {
+func (r *SeiNodeDeploymentReconciler) deleteUnstructured(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, gvk schema.GroupVersionKind) error {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
 	obj.SetName(group.Name)
@@ -445,7 +445,7 @@ func (r *SeiNodeGroupReconciler) deleteUnstructured(ctx context.Context, group *
 	return err
 }
 
-func (r *SeiNodeGroupReconciler) orphanNetworkingResources(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) orphanNetworkingResources(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	svc := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc)
 	if err == nil {
@@ -487,7 +487,7 @@ func (r *SeiNodeGroupReconciler) orphanNetworkingResources(ctx context.Context, 
 	return nil
 }
 
-func (r *SeiNodeGroupReconciler) removeOwnerRef(ctx context.Context, obj client.Object, owner *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) removeOwnerRef(ctx context.Context, obj client.Object, owner *seiv1alpha1.SeiNodeDeployment) error {
 	refs := obj.GetOwnerReferences()
 	filtered := make([]metav1.OwnerReference, 0, len(refs))
 	for _, ref := range refs {
@@ -503,7 +503,7 @@ func (r *SeiNodeGroupReconciler) removeOwnerRef(ctx context.Context, obj client.
 	return r.Patch(ctx, obj, patch)
 }
 
-func (r *SeiNodeGroupReconciler) orphanChildSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) orphanChildSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	nodes, err := r.listChildSeiNodes(ctx, group)
 	if err != nil {
 		return err
