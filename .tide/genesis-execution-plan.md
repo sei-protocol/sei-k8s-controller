@@ -225,7 +225,7 @@ Key concern: `seid add-genesis-account` syntax changed in Cosmos SDK v0.47+ (mov
 **Scope:** New Go types, validation, generated manifests.
 
 **Files:**
-- `api/v1alpha1/seinodegroup_types.go` — add `GenesisCeremonyConfig`, `GenesisS3Destination`, `GenesisAccount` to `SeiNodeGroupSpec`; add `AssemblyPlan`, `GenesisHash`, `GenesisS3URI` to status
+- `api/v1alpha1/seinodedeployment_types.go` — add `GenesisCeremonyConfig`, `GenesisS3Destination`, `GenesisAccount` to `SeiNodeDeploymentSpec`; add `AssemblyPlan`, `GenesisHash`, `GenesisS3URI` to status
 - `api/v1alpha1/seinode_types.go` — add `GenesisCeremonyNodeConfig`, `AccountBalance` to `ValidatorSpec`
 - `api/v1alpha1/common_types.go` — no changes (existing `GenesisS3Source` reused)
 - Run `make manifests generate`
@@ -318,12 +318,12 @@ Must handle BOTH code paths in `reconcilePreInitializing` — the early return a
 
 ### PR 8 — Group coordination
 
-**Scope:** Full genesis orchestration in the SeiNodeGroup controller.
+**Scope:** Full genesis orchestration in the SeiNodeDeployment controller.
 
 **Files:**
-- `internal/controller/nodegroup/nodes.go` — update `generateSeiNode` with genesis injection
-- `internal/controller/nodegroup/genesis.go` (new) — `reconcileGenesisAssembly`, `collectPeers`, `setGenesisSource`, `buildAssemblyPlan`, `executeAssemblyPlan`, `genesisS3Config`
-- `internal/controller/nodegroup/controller.go` — add `BuildSidecarClientFn`, call `reconcileGenesisAssembly` in reconcile loop
+- `internal/controller/nodedeployment/nodes.go` — update `generateSeiNode` with genesis injection
+- `internal/controller/nodedeployment/genesis.go` (new) — `reconcileGenesisAssembly`, `collectPeers`, `setGenesisSource`, `buildAssemblyPlan`, `executeAssemblyPlan`, `genesisS3Config`
+- `internal/controller/nodedeployment/controller.go` — add `BuildSidecarClientFn`, call `reconcileGenesisAssembly` in reconcile loop
 - `internal/controller/node/plan_execution.go` — export `PreInitSidecarURL`
 - Tests: `nodes_test.go`, `genesis_test.go` (new)
 
@@ -368,7 +368,7 @@ Must handle BOTH code paths in `reconcilePreInitializing` — the early return a
 - Integration test in sei-k8s-controller or a dedicated test harness
 
 **Acceptance:**
-- [ ] `TestGenesisNetworkE2E` — SeiNodeGroup replicas=4, all reach Running, produce blocks
+- [ ] `TestGenesisNetworkE2E` — SeiNodeDeployment replicas=4, all reach Running, produce blocks
 - [ ] `TestGenesisNetworkDeletion` — clean deletion of all resources
 
 **Dependencies:** All prior PRs merged

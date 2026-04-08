@@ -1,8 +1,8 @@
-# Design: SeiNodeGroup — Fleet Orchestration with Networking & Monitoring
+# Design: SeiNodeDeployment — Fleet Orchestration with Networking & Monitoring
 
 **Branch:** `feature/networking-monitoring`
 **Status:** Final (v3) — review findings incorporated
-**Goal:** Introduce a `SeiNodeGroup` CRD that orchestrates N SeiNodes behind shared networking (Service, Istio Gateway routing, network isolation) and monitoring (ServiceMonitor), closing the gap between the current controller and sei-infra's EC2 production deployment.
+**Goal:** Introduce a `SeiNodeDeployment` CRD that orchestrates N SeiNodes behind shared networking (Service, Istio Gateway routing, network isolation) and monitoring (ServiceMonitor), closing the gap between the current controller and sei-infra's EC2 production deployment.
 
 ---
 
@@ -25,7 +25,7 @@ These are fleet-level concerns: a load balancer sits in front of N nodes, not on
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                        SeiNodeGroup                               │
+│                        SeiNodeDeployment                               │
 │  "pacific-1-archive-rpc"                                          │
 │                                                                   │
 │  Owns:                                                            │
@@ -44,7 +44,7 @@ These are fleet-level concerns: a load balancer sits in front of N nodes, not on
 ```
 
 **SeiNode** is unchanged — it manages single-node lifecycle.
-**SeiNodeGroup** is the new orchestration layer that composes SeiNodes with shared infrastructure.
+**SeiNodeDeployment** is the new orchestration layer that composes SeiNodes with shared infrastructure.
 
 This follows the same pattern as the existing `SeiNodePool → SeiNode` relationship, where SeiNodePool creates child SeiNode CRs and aggregates their status.
 
@@ -52,9 +52,9 @@ This follows the same pattern as the existing `SeiNodePool → SeiNode` relation
 
 ## 3. Design Principles
 
-1. **SeiNode stays single-responsibility** — One small prerequisite change (`spec.podLabels`) is needed on SeiNode to support label propagation to pods. No networking logic is added. SeiNodeGroup owns the fleet and exposure layer.
+1. **SeiNode stays single-responsibility** — One small prerequisite change (`spec.podLabels`) is needed on SeiNode to support label propagation to pods. No networking logic is added. SeiNodeDeployment owns the fleet and exposure layer.
 
-2. **Same patterns as SeiNodePool** — The SeiNodeGroup controller follows the same `ensureSeiNode` / `updateStatus` / owner-reference patterns already established by SeiNodePool. No new controller patterns to learn.
+2. **Same patterns as SeiNodePool** — The SeiNodeDeployment controller follows the same `ensureSeiNode` / `updateStatus` / owner-reference patterns already established by SeiNodePool. No new controller patterns to learn.
 
 3. **Passthrough over abstraction** — Service annotations, HTTPRoute annotations, and Istio config use Kubernetes-native values. No DSL wrappers.
 
@@ -62,7 +62,7 @@ This follows the same pattern as the existing `SeiNodePool → SeiNode` relation
 
 5. **Two-way doors only** — Every field is optional. WAF is just an annotation on the Service or HTTPRoute. Update strategy for rolling out changes across replicas is a future concern that the current design does not block.
 
-6. **SeiNodePool vs SeiNodeGroup** — SeiNodePool is for genesis network bootstrapping (prep jobs, shared genesis PVC, then SeiNodes). SeiNodeGroup is for production fleet management (N nodes from a template + shared networking/monitoring). They target different use cases and should not manage the same SeiNodes.
+6. **SeiNodePool vs SeiNodeDeployment** — SeiNodePool is for genesis network bootstrapping (prep jobs, shared genesis PVC, then SeiNodes). SeiNodeDeployment is for production fleet management (N nodes from a template + shared networking/monitoring). They target different use cases and should not manage the same SeiNodes.
 
 ---
 
@@ -94,7 +94,7 @@ func resourceLabelsForNode(node *seiv1alpha1.SeiNode) map[string]string {
 }
 ```
 
-The SeiNodeGroup controller sets `podLabels: {"sei.io/group": groupName}` on each child SeiNode. This is a small, backward-compatible change — existing SeiNodes without `podLabels` behave identically.
+The SeiNodeDeployment controller sets `podLabels: {"sei.io/group": groupName}` on each child SeiNode. This is a small, backward-compatible change — existing SeiNodes without `podLabels` behave identically.
 
 This is scoped as a standalone prerequisite PR before Phase 1.
 
@@ -102,11 +102,11 @@ This is scoped as a standalone prerequisite PR before Phase 1.
 
 ## 5. API Types
 
-### 5.1 SeiNodeGroup (`api/v1alpha1/seinodegroup_types.go`)
+### 5.1 SeiNodeDeployment (`api/v1alpha1/seinodedeployment_types.go`)
 
 ```go
-// SeiNodeGroupSpec defines the desired state of a SeiNodeGroup.
-type SeiNodeGroupSpec struct {
+// SeiNodeDeploymentSpec defines the desired state of a SeiNodeDeployment.
+type SeiNodeDeploymentSpec struct {
     // Replicas is the number of SeiNode instances to create.
     // +kubebuilder:validation:Minimum=1
     // +kubebuilder:validation:Maximum=16
@@ -152,24 +152,24 @@ type SeiNodeTemplateMeta struct {
 }
 ```
 
-### 4.2 SeiNodeGroup Status
+### 4.2 SeiNodeDeployment Status
 
 ```go
-// SeiNodeGroupPhase represents the high-level lifecycle state.
+// SeiNodeDeploymentPhase represents the high-level lifecycle state.
 // +kubebuilder:validation:Enum=Pending;Initializing;Ready;Degraded;Failed;Terminating
-type SeiNodeGroupPhase string
+type SeiNodeDeploymentPhase string
 
 const (
-    GroupPhasePending      SeiNodeGroupPhase = "Pending"
-    GroupPhaseInitializing SeiNodeGroupPhase = "Initializing"
-    GroupPhaseReady        SeiNodeGroupPhase = "Ready"
-    GroupPhaseDegraded     SeiNodeGroupPhase = "Degraded"
-    GroupPhaseFailed       SeiNodeGroupPhase = "Failed"
-    GroupPhaseTerminating  SeiNodeGroupPhase = "Terminating"
+    GroupPhasePending      SeiNodeDeploymentPhase = "Pending"
+    GroupPhaseInitializing SeiNodeDeploymentPhase = "Initializing"
+    GroupPhaseReady        SeiNodeDeploymentPhase = "Ready"
+    GroupPhaseDegraded     SeiNodeDeploymentPhase = "Degraded"
+    GroupPhaseFailed       SeiNodeDeploymentPhase = "Failed"
+    GroupPhaseTerminating  SeiNodeDeploymentPhase = "Terminating"
 )
 
-// SeiNodeGroupStatus defines the observed state of a SeiNodeGroup.
-type SeiNodeGroupStatus struct {
+// SeiNodeDeploymentStatus defines the observed state of a SeiNodeDeployment.
+type SeiNodeDeploymentStatus struct {
     // ObservedGeneration is the most recent generation observed by the controller.
     // Clients can check this against metadata.generation to know if the
     // status reflects the current spec.
@@ -177,7 +177,7 @@ type SeiNodeGroupStatus struct {
     ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
     // Phase is the high-level lifecycle state.
-    Phase SeiNodeGroupPhase `json:"phase,omitempty"`
+    Phase SeiNodeDeploymentPhase `json:"phase,omitempty"`
 
     // Replicas is the desired number of SeiNodes.
     Replicas int32 `json:"replicas,omitempty"`
@@ -221,23 +221,23 @@ type NetworkingStatus struct {
 }
 ```
 
-### 4.3 SeiNodeGroup CRD markers
+### 4.3 SeiNodeDeployment CRD markers
 
 ```go
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=sng
+// +kubebuilder:resource:shortName=snd
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Host",type=string,JSONPath=`.spec.networking.gateway.hostnames[0]`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-type SeiNodeGroup struct {
+type SeiNodeDeployment struct {
     metav1.TypeMeta   `json:",inline"`
     metav1.ObjectMeta `json:"metadata,omitempty"`
-    Spec   SeiNodeGroupSpec   `json:"spec,omitempty"`
-    Status SeiNodeGroupStatus `json:"status,omitempty"`
+    Spec   SeiNodeDeploymentSpec   `json:"spec,omitempty"`
+    Status SeiNodeDeploymentStatus `json:"status,omitempty"`
 }
 ```
 
@@ -394,7 +394,7 @@ const (
 
 ## 6. Labels and Naming
 
-### Labels injected by SeiNodeGroup controller
+### Labels injected by SeiNodeDeployment controller
 
 | Label | Value | Set on | Purpose |
 |-------|-------|--------|---------|
@@ -402,7 +402,7 @@ const (
 | `sei.io/group-ordinal` | `"0"`, `"1"`, ... | SeiNode metadata | Identify individual replicas |
 | `sei.io/node` | `{nodeName}` | Pod template (by SeiNode controller) | Existing per-node label |
 
-The SeiNodeGroup controller sets `sei.io/group` on both the child SeiNode's metadata labels AND `spec.podLabels`. The `podLabels` mechanism (Section 4) ensures the label propagates to the StatefulSet pod template. The shared external Service selects on `sei.io/group: {groupName}`, so all replica pods are endpoints of the same Service.
+The SeiNodeDeployment controller sets `sei.io/group` on both the child SeiNode's metadata labels AND `spec.podLabels`. The `podLabels` mechanism (Section 4) ensures the label propagates to the StatefulSet pod template. The shared external Service selects on `sei.io/group: {groupName}`, so all replica pods are endpoints of the same Service.
 
 ### Label merge order (system labels win)
 
@@ -440,7 +440,7 @@ internal/controller/
 │   ├── plan_execution.go
 │   ├── ...
 │
-├── nodegroup/                   # NEW: SeiNodeGroup controller
+├── nodedeployment/                   # NEW: SeiNodeDeployment controller
 │   ├── controller.go            # Reconcile loop, phase transitions
 │   ├── nodes.go                 # ensureSeiNode, scaleDown
 │   ├── networking.go            # External Service, HTTPRoute,
@@ -461,8 +461,8 @@ internal/controller/
 ### 7.2 Reconcile Flow
 
 ```go
-func (r *SeiNodeGroupReconciler) Reconcile(ctx, req) (Result, error) {
-    group := &SeiNodeGroup{}
+func (r *SeiNodeDeploymentReconciler) Reconcile(ctx, req) (Result, error) {
+    group := &SeiNodeDeployment{}
     r.Get(ctx, req, group)
 
     // Deletion handling (respects DeletionPolicy for networking AND child SeiNodes)
@@ -494,14 +494,14 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx, req) (Result, error) {
 Follows the SeiNodePool pattern:
 
 ```go
-func (r *SeiNodeGroupReconciler) reconcileSeiNodes(ctx, group) error {
+func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx, group) error {
     for i := range group.Spec.Replicas {
         r.ensureSeiNode(ctx, group, i)
     }
     return r.scaleDown(ctx, group)
 }
 
-func (r *SeiNodeGroupReconciler) ensureSeiNode(ctx, group, ordinal) error {
+func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx, group, ordinal) error {
     desired := generateSeiNode(group, ordinal)
     // Set owner reference, create-or-update
     // On update: sync Image, Entrypoint, Sidecar (same as SeiNodePool)
@@ -537,7 +537,7 @@ func generateSeiNode(group, ordinal) *SeiNode {
 **Scale-down guard:** The `scaleDown` function refuses to delete SeiNodes if the computed desired count is 0 (defensive against uninitialized fields or controller bugs). The `Minimum=1` CEL validation on `replicas` prevents 0 at admission, but the guard catches code-level errors:
 
 ```go
-func (r *SeiNodeGroupReconciler) scaleDown(ctx, group) error {
+func (r *SeiNodeDeploymentReconciler) scaleDown(ctx, group) error {
     if group.Spec.Replicas <= 0 {
         log.Error("refusing scale-down: desired replicas is zero or negative")
         return nil
@@ -551,7 +551,7 @@ func (r *SeiNodeGroupReconciler) scaleDown(ctx, group) error {
 Each networking resource is managed independently:
 
 ```go
-func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx, group) error {
+func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx, group) error {
     r.reconcileExternalService(ctx, group)
     r.reconcileRoute(ctx, group)          // HTTPRoute
     r.reconcileIsolation(ctx, group)      // AuthorizationPolicy
@@ -559,7 +559,7 @@ func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx, group) error {
 ```
 
 **External Service:**
-- Uses server-side apply with `fieldOwner: seinodegroup-controller`
+- Uses server-side apply with `fieldOwner: seinodedeployment-controller`
 - Selector: `sei.io/group: {groupName}` (matches all replica pods via `podLabels`)
 - Does NOT set `PublishNotReadyAddresses` (natural readiness gating)
 - If spec is nil and `deletionPolicy: Delete`, delete the Service
@@ -588,7 +588,7 @@ func (r *SeiNodeGroupReconciler) reconcileNetworking(ctx, group) error {
 ### 7.6 Status Aggregation (`status.go`)
 
 ```go
-func (r *SeiNodeGroupReconciler) updateStatus(ctx, group) error {
+func (r *SeiNodeDeploymentReconciler) updateStatus(ctx, group) error {
     // List child SeiNodes by label
     nodeList := r.listChildSeiNodes(ctx, group)
 
@@ -635,16 +635,16 @@ The `DeletionPolicy` governs both networking resources AND child SeiNodes:
 | `Delete` | Deleted | Deleted (via owner ref GC) |
 | `Retain` | Orphaned (owner ref removed) | Orphaned (owner ref removed, continue running independently) |
 
-> **Production recommendation:** Always use `deletionPolicy: Retain` in production. The `Delete` default is convenient for development but dangerous in production because deleting a SeiNodeGroup will cascade-delete all child SeiNodes (and their PVCs if configured), causing irreversible data loss.
+> **Production recommendation:** Always use `deletionPolicy: Retain` in production. The `Delete` default is convenient for development but dangerous in production because deleting a SeiNodeDeployment will cascade-delete all child SeiNodes (and their PVCs if configured), causing irreversible data loss.
 
-When `Retain`, the finalizer removes owner references from all managed resources before allowing the SeiNodeGroup to be deleted. This prevents Kubernetes GC from cascading the deletion.
+When `Retain`, the finalizer removes owner references from all managed resources before allowing the SeiNodeDeployment to be deleted. This prevents Kubernetes GC from cascading the deletion.
 
 ### 7.8 RBAC
 
 ```go
-// +kubebuilder:rbac:groups=sei.io,resources=seinodegroups,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=sei.io,resources=seinodegroups/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=sei.io,resources=seinodegroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=sei.io,resources=seinodedeployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=sei.io,resources=seinodedeployments/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=sei.io,resources=seinodedeployments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -656,17 +656,17 @@ When `Retain`, the finalizer removes owner references from all managed resources
 ### 7.9 SetupWithManager
 
 ```go
-func (r *SeiNodeGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *SeiNodeDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
     return ctrl.NewControllerManagedBy(mgr).
-        For(&seiv1alpha1.SeiNodeGroup{}).
+        For(&seiv1alpha1.SeiNodeDeployment{}).
         Owns(&seiv1alpha1.SeiNode{}).
         Owns(&corev1.Service{}).
-        Named("seinodegroup").
+        Named("seinodedeployment").
         Complete(r)
 }
 ```
 
-Note: HTTPRoute, AuthorizationPolicy, and ServiceMonitor are unstructured, so we don't add `Owns()` for them. Their reconciliation is idempotent and driven by the SeiNodeGroup reconcile loop.
+Note: HTTPRoute, AuthorizationPolicy, and ServiceMonitor are unstructured, so we don't add `Owns()` for them. Their reconciliation is idempotent and driven by the SeiNodeDeployment reconcile loop.
 
 ---
 
@@ -726,7 +726,7 @@ DNS is handled by external-dns, which reads HTTPRoute `hostnames` fields and cre
 
 ```yaml
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
+kind: SeiNodeDeployment
 metadata:
   name: pacific-1-archive-rpc
   namespace: sei-nodes
@@ -817,12 +817,12 @@ Plus each SeiNode creates its own StatefulSet, PVC, and headless Service (manage
 | SeiNode controller | **SMALL CHANGE** — merge `podLabels` into StatefulSet pod template |
 | SeiNodePool controller | **UNCHANGED** |
 | SeiNodePool CRD | **UNCHANGED** |
-| SeiNodeGroup CRD | **NEW** |
-| Networking types | **NEW** (used by SeiNodeGroup) |
-| Monitoring types | **NEW** (used by SeiNodeGroup) |
-| SeiNodeGroup controller | **NEW** |
+| SeiNodeDeployment CRD | **NEW** |
+| Networking types | **NEW** (used by SeiNodeDeployment) |
+| Monitoring types | **NEW** (used by SeiNodeDeployment) |
+| SeiNodeDeployment controller | **NEW** |
 
-Existing SeiNode manifests without `podLabels` continue to work identically. SeiNodeGroup is additive.
+Existing SeiNode manifests without `podLabels` continue to work identically. SeiNodeDeployment is additive.
 
 ---
 
@@ -831,7 +831,7 @@ Existing SeiNode manifests without `podLabels` continue to work identically. Sei
 | Decision | How to reverse | Impact |
 |----------|---------------|--------|
 | `spec.podLabels` on SeiNode | Remove field, regenerate CRD. Existing nodes unaffected (nil defaults to empty map). | None |
-| New SeiNodeGroup CRD | Delete SeiNodeGroup with `DeletionPolicy: Retain`. Child SeiNodes and networking resources are orphaned and keep running. | SeiNodes become standalone |
+| New SeiNodeDeployment CRD | Delete SeiNodeDeployment with `DeletionPolicy: Retain`. Child SeiNodes and networking resources are orphaned and keep running. | SeiNodes become standalone |
 | `sei.io/group` label on child SeiNodes | Remove label. SeiNode controller doesn't read this label. | None |
 | Unstructured HTTPRoute / AuthorizationPolicy / ServiceMonitor | Switch to typed imports later. Same apply semantics. | Code change only |
 | `DeletionPolicy` (covers nodes + networking) | Change per-group. Existing groups unaffected. | Per-resource |
@@ -849,20 +849,20 @@ Existing SeiNode manifests without `podLabels` continue to work identically. Sei
 - [ ] Unit tests for label propagation
 - [ ] Regenerate CRD manifests
 
-### Phase 1: SeiNodeGroup CRD + Node Orchestration
-- [ ] `api/v1alpha1/seinodegroup_types.go` — SeiNodeGroup CRD types
+### Phase 1: SeiNodeDeployment CRD + Node Orchestration
+- [ ] `api/v1alpha1/seinodedeployment_types.go` — SeiNodeDeployment CRD types
 - [ ] `api/v1alpha1/networking_types.go` — Networking types
 - [ ] `api/v1alpha1/monitoring_types.go` — Monitoring types
-- [ ] `internal/controller/nodegroup/controller.go` — Reconcile loop with `RequeueAfter`
-- [ ] `internal/controller/nodegroup/nodes.go` — SeiNode create/update/scaleDown with guard
-- [ ] `internal/controller/nodegroup/labels.go` — Label helpers, naming, merge-order safety
-- [ ] `internal/controller/nodegroup/status.go` — Status aggregation with `observedGeneration`
+- [ ] `internal/controller/nodedeployment/controller.go` — Reconcile loop with `RequeueAfter`
+- [ ] `internal/controller/nodedeployment/nodes.go` — SeiNode create/update/scaleDown with guard
+- [ ] `internal/controller/nodedeployment/labels.go` — Label helpers, naming, merge-order safety
+- [ ] `internal/controller/nodedeployment/status.go` — Status aggregation with `observedGeneration`
 - [ ] Wire into `cmd/main.go`
 - [ ] `make manifests` to generate CRD + RBAC
 - [ ] Unit tests for node orchestration and status
 
 ### Phase 2: Shared Networking
-- [ ] `internal/controller/nodegroup/networking.go` — External Service, HTTPRoute, AuthorizationPolicy
+- [ ] `internal/controller/nodedeployment/networking.go` — External Service, HTTPRoute, AuthorizationPolicy
 - [ ] Controller SA auto-injection into AuthorizationPolicy
 - [ ] DeletionPolicy logic (delete vs orphan, covers nodes + networking)
 - [ ] Status conditions for each networking resource
@@ -871,10 +871,10 @@ Existing SeiNode manifests without `podLabels` continue to work identically. Sei
 - [ ] Integration tests
 
 ### Phase 3: Monitoring + Samples + Documentation
-- [ ] `internal/controller/nodegroup/monitoring.go` — ServiceMonitor
+- [ ] `internal/controller/nodedeployment/monitoring.go` — ServiceMonitor
 - [ ] Sample manifests (Istio pattern, ALB pattern, NLB pattern)
 - [ ] Documentation (external-dns prerequisites, Istio prerequisites)
-- [ ] Printer columns on SeiNodeGroup
+- [ ] Printer columns on SeiNodeDeployment
 - [ ] Update `production-deployment-analysis.md` gap table
 
 ---
@@ -894,8 +894,8 @@ Existing SeiNode manifests without `podLabels` continue to work identically. Sei
 | Feature | Why deferred | How current design accommodates |
 |---------|-------------|--------------------------------|
 | **Rolling update strategy** | Whole feature in itself; needs careful design around archive node sync times | `ensureSeiNode` updates one node at a time naturally; adding `maxUnavailable` / ordered rollout is additive to the reconcile loop |
-| **Heterogeneous groups** | Current use case is homogeneous replicas | Separate SeiNodeGroups with different templates can share an external Service via matching labels. A future `overrides` per-ordinal field is additive. |
+| **Heterogeneous groups** | Current use case is homogeneous replicas | Separate SeiNodeDeployments with different templates can share an external Service via matching labels. A future `overrides` per-ordinal field is additive. |
 | **WAF provisioning from K8s** | WAF WebACL is a platform concern | Annotation passthrough makes WAF ARN a two-way door. AWS ACK or Crossplane can manage the WebACL separately. |
 | **Gateway API route rules** | HTTPRoute with no explicit rules routes all traffic to the Service | A `rules` field can be added to `GatewayRouteConfig` without breaking existing manifests |
 | **Multi-listener Gateway** | Current design targets a single Gateway listener | `GatewayParentRef` can be extended with `sectionName *string` for listener targeting |
-| **SeiNodePool + SeiNodeGroup unification** | Different lifecycle needs (genesis vs fleet) | Both create SeiNodes but don't share children. Could merge in a future major version. |
+| **SeiNodePool + SeiNodeDeployment unification** | Different lifecycle needs (genesis vs fleet) | Both create SeiNodes but don't share children. Could merge in a future major version. |

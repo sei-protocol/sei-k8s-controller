@@ -1,4 +1,4 @@
-package nodegroup
+package nodedeployment
 
 import (
 	"crypto/sha256"
@@ -11,28 +11,28 @@ import (
 )
 
 const (
-	groupLabel          = "sei.io/nodegroup"
-	groupOrdinalLabel   = "sei.io/nodegroup-ordinal"
+	groupLabel          = "sei.io/nodedeployment"
+	groupOrdinalLabel   = "sei.io/nodedeployment-ordinal"
 	revisionLabel       = "sei.io/revision"
 	nodeLabel           = "sei.io/node"
 	managedByAnnotation = "sei.io/managed-by"
 )
 
-func seiNodeName(group *seiv1alpha1.SeiNodeGroup, ordinal int) string {
+func seiNodeName(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
 	return fmt.Sprintf("%s-%d", group.Name, ordinal)
 }
 
 // activeRevision returns the revision string for the currently active
 // node set. Used for traffic routing during deployments and for
 // observability labels on pods.
-func activeRevision(group *seiv1alpha1.SeiNodeGroup) string {
+func activeRevision(group *seiv1alpha1.SeiNodeDeployment) string {
 	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
 		return group.Status.Deployment.IncumbentRevision
 	}
 	return strconv.FormatInt(group.Generation, 10)
 }
 
-func externalServiceName(group *seiv1alpha1.SeiNodeGroup) string {
+func externalServiceName(group *seiv1alpha1.SeiNodeDeployment) string {
 	return fmt.Sprintf("%s-external", group.Name)
 }
 
@@ -40,7 +40,7 @@ func externalServiceName(group *seiv1alpha1.SeiNodeGroup) string {
 // Service, AuthorizationPolicy, and ServiceMonitor. During an active
 // deployment, it includes the revision label to pin traffic to the
 // active set. At steady state, it selects by group membership only.
-func groupSelector(group *seiv1alpha1.SeiNodeGroup) map[string]string {
+func groupSelector(group *seiv1alpha1.SeiNodeDeployment) map[string]string {
 	if group.Status.Deployment != nil {
 		return map[string]string{
 			groupLabel:    group.Name,
@@ -53,14 +53,14 @@ func groupSelector(group *seiv1alpha1.SeiNodeGroup) map[string]string {
 // groupOnlySelector returns a selector matching all nodes owned by the
 // group, regardless of revision. Used for listing and scale-down where
 // we need to see every child node.
-func groupOnlySelector(group *seiv1alpha1.SeiNodeGroup) map[string]string {
+func groupOnlySelector(group *seiv1alpha1.SeiNodeDeployment) map[string]string {
 	return map[string]string{groupLabel: group.Name}
 }
 
 // seiNodeLabels builds the metadata labels for a child SeiNode.
 // User-provided template labels are applied first; system labels
 // overwrite to prevent accidental breakage.
-func seiNodeLabels(group *seiv1alpha1.SeiNodeGroup, ordinal int) map[string]string {
+func seiNodeLabels(group *seiv1alpha1.SeiNodeDeployment, ordinal int) map[string]string {
 	labels := make(map[string]string)
 	if group.Spec.Template.Metadata != nil {
 		maps.Copy(labels, group.Spec.Template.Metadata.Labels)
@@ -72,7 +72,7 @@ func seiNodeLabels(group *seiv1alpha1.SeiNodeGroup, ordinal int) map[string]stri
 }
 
 // seiNodeAnnotations builds the metadata annotations for a child SeiNode.
-func seiNodeAnnotations(group *seiv1alpha1.SeiNodeGroup) map[string]string {
+func seiNodeAnnotations(group *seiv1alpha1.SeiNodeDeployment) map[string]string {
 	if group.Spec.Template.Metadata == nil {
 		return nil
 	}
@@ -85,12 +85,12 @@ func seiNodeAnnotations(group *seiv1alpha1.SeiNodeGroup) map[string]string {
 }
 
 // resourceLabels returns labels for resources owned by the group.
-func resourceLabels(group *seiv1alpha1.SeiNodeGroup) map[string]string {
+func resourceLabels(group *seiv1alpha1.SeiNodeDeployment) map[string]string {
 	return map[string]string{groupLabel: group.Name}
 }
 
 // managedByAnnotations returns the standard annotation that marks a resource
-// as owned by the seinodegroup controller. Useful for operators to identify
+// as owned by the seinodedeployment controller. Useful for operators to identify
 // resources subject to periodic drift correction via polling reconciliation.
 func managedByAnnotations() map[string]string {
 	return map[string]string{managedByAnnotation: controllerName}

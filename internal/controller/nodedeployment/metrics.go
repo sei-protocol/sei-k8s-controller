@@ -1,4 +1,4 @@
-package nodegroup
+package nodedeployment
 
 import (
 	"time"
@@ -33,31 +33,31 @@ var allConditionTypes = []string{
 var (
 	groupPhaseGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "sei_controller_seinodegroup_phase",
-			Help: "Current phase of each SeiNodeGroup (1=active, 0=inactive)",
+			Name: "sei_controller_seinodedeployment_phase",
+			Help: "Current phase of each SeiNodeDeployment (1=active, 0=inactive)",
 		},
 		[]string{"namespace", "name", "phase"},
 	)
 
 	groupReplicasGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "sei_controller_seinodegroup_replicas",
-			Help: "Replica counts for each SeiNodeGroup",
+			Name: "sei_controller_seinodedeployment_replicas",
+			Help: "Replica counts for each SeiNodeDeployment",
 		},
 		[]string{"namespace", "name", "type"},
 	)
 
 	groupConditionGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "sei_controller_seinodegroup_condition",
-			Help: "Condition status for each SeiNodeGroup (1=match, 0=no match)",
+			Name: "sei_controller_seinodedeployment_condition",
+			Help: "Condition status for each SeiNodeDeployment (1=match, 0=no match)",
 		},
 		[]string{"namespace", "name", "type", "status"},
 	)
 
 	reconcileSubstepDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "sei_controller_seinodegroup_reconcile_substep_duration_seconds",
+			Name:    "sei_controller_seinodedeployment_reconcile_substep_duration_seconds",
 			Help:    "Duration of individual reconcile substeps",
 			Buckets: observability.ReconcileBuckets,
 		},
@@ -74,7 +74,7 @@ func init() {
 	)
 }
 
-func emitGroupPhase(ns, name string, phase seiv1alpha1.SeiNodeGroupPhase) {
+func emitGroupPhase(ns, name string, phase seiv1alpha1.SeiNodeDeploymentPhase) {
 	observability.EmitPhaseGauge(groupPhaseGauge, ns, name, string(phase), allGroupPhases)
 }
 
@@ -120,5 +120,5 @@ func cleanupGroupMetrics(namespace, name string) {
 		}
 	}
 	observability.ReconcileErrorsTotal.DeleteLabelValues(controllerName, namespace, name)
-	planner.CleanupPlanMetrics("seinodegroup", namespace, name)
+	planner.CleanupPlanMetrics("seinodedeployment", namespace, name)
 }

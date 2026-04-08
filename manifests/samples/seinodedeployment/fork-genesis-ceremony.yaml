@@ -1,4 +1,4 @@
-# SeiNodeGroup — Fork Genesis Ceremony
+# SeiNodeDeployment — Fork Genesis Ceremony
 #
 # Forks an existing chain's state into a new private network.
 # The group controller:
@@ -8,7 +8,7 @@
 #   4. Assembles fork genesis (rewrites chain ID, strips old validators, runs collect-gentxs)
 #   5. Each validator downloads the fork genesis and starts the new chain
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
+kind: SeiNodeDeployment
 metadata:
   name: fork-test
   namespace: default

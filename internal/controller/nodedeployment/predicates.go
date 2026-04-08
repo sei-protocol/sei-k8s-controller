@@ -1,4 +1,4 @@
-package nodegroup
+package nodedeployment
 
 import (
 	"sigs.k8s.io/controller-runtime/pkg/event"

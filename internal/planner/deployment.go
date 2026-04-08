@@ -12,7 +12,7 @@ import (
 
 // ForDeployment returns the appropriate GroupPlanner for the group's
 // configured update strategy.
-func ForDeployment(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
+func ForDeployment(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
 	if group.Spec.UpdateStrategy == nil {
 		return nil, fmt.Errorf("no update strategy on %s/%s", group.Namespace, group.Name)
 	}
@@ -28,7 +28,7 @@ func ForDeployment(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
 
 // EntrantNodeNames generates the names for entrant SeiNodes based on the
 // group's name and generation.
-func EntrantNodeNames(group *seiv1alpha1.SeiNodeGroup) []string {
+func EntrantNodeNames(group *seiv1alpha1.SeiNodeDeployment) []string {
 	names := make([]string, int(group.Spec.Replicas))
 	for i := range int(group.Spec.Replicas) {
 		names[i] = fmt.Sprintf("%s-g%d-%d", group.Name, group.Generation, i)
@@ -37,13 +37,13 @@ func EntrantNodeNames(group *seiv1alpha1.SeiNodeGroup) []string {
 }
 
 // EntrantRevision returns the revision string for the entrant set.
-func EntrantRevision(group *seiv1alpha1.SeiNodeGroup) string {
+func EntrantRevision(group *seiv1alpha1.SeiNodeDeployment) string {
 	return strconv.FormatInt(group.Generation, 10)
 }
 
 // IncumbentRevision returns the revision string for the incumbent set,
 // derived from the last successfully reconciled generation.
-func IncumbentRevision(group *seiv1alpha1.SeiNodeGroup) string {
+func IncumbentRevision(group *seiv1alpha1.SeiNodeDeployment) string {
 	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
 		return group.Status.Deployment.IncumbentRevision
 	}
@@ -54,7 +54,7 @@ func IncumbentRevision(group *seiv1alpha1.SeiNodeGroup) string {
 type hardForkDeploymentPlanner struct{}
 
 func (p *hardForkDeploymentPlanner) BuildPlan(
-	group *seiv1alpha1.SeiNodeGroup,
+	group *seiv1alpha1.SeiNodeDeployment,
 ) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	haltHeight := group.Spec.UpdateStrategy.HardFork.HaltHeight
@@ -115,7 +115,7 @@ func (p *hardForkDeploymentPlanner) BuildPlan(
 type blueGreenDeploymentPlanner struct{}
 
 func (p *blueGreenDeploymentPlanner) BuildPlan(
-	group *seiv1alpha1.SeiNodeGroup,
+	group *seiv1alpha1.SeiNodeDeployment,
 ) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	incumbentNodes := group.Status.IncumbentNodes

@@ -60,7 +60,7 @@ func deserializeCreateExporter(id string, params json.RawMessage, cfg ExecutionC
 }
 
 func (e *createExporterExecution) Execute(ctx context.Context) error {
-	group, err := ResourceAs[*seiv1alpha1.SeiNodeGroup](e.cfg)
+	group, err := ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
 	if err != nil {
 		return Terminal(err)
 	}
@@ -93,8 +93,8 @@ func (e *createExporterExecution) Execute(ctx context.Context) error {
 			Name:      e.params.ExporterName,
 			Namespace: e.params.Namespace,
 			Labels: map[string]string{
-				"sei.io/nodegroup": e.params.GroupName,
-				"sei.io/role":      "exporter",
+				"sei.io/nodedeployment": e.params.GroupName,
+				"sei.io/role":           "exporter",
 			},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{

@@ -1,4 +1,4 @@
-# Component: Genesis Network Configuration on SeiNodeGroup
+# Component: Genesis Network Configuration on SeiNodeDeployment
 
 **Date:** 2026-03-22
 **Status:** Implementation-Ready (cross-review round 4 resolved)
@@ -16,7 +16,7 @@ Pre-Tide — Operational prerequisite. Spinning up isolated validator networks i
 
 ## Purpose
 
-Add an optional `genesis` field to `SeiNodeGroupSpec` that bootstraps a self-contained Sei validator network. The design preserves the task engine as a pure sequencer — tasks succeed or fail, data flows through the filesystem and S3, and the controller sequences execution without routing data.
+Add an optional `genesis` field to `SeiNodeDeploymentSpec` that bootstraps a self-contained Sei validator network. The design preserves the task engine as a pure sequencer — tasks succeed or fail, data flows through the filesystem and S3, and the controller sequences execution without routing data.
 
 **Scope:** Genesis ceremony and validator network bootstrap only.
 
@@ -34,7 +34,7 @@ Add an optional `genesis` field to `SeiNodeGroupSpec` that bootstraps a self-con
 - **sei-config** — `GenesisDefaults()` function for test-network genesis parameter defaults
 - **S3** — artifact store for cross-node data flow; genesis distribution via existing `configure-genesis` S3 path
 - **SeiNode controller** — PreInit gate for genesis nodes; Init plan deferred to gate-clear time
-- **SeiNodeGroup controller** — thin coordination: observe PreInit completion, trigger assembly on node 0, collect node IDs, set genesis source + static peers on each SeiNode
+- **SeiNodeDeployment controller** — thin coordination: observe PreInit completion, trigger assembly on node 0, collect node IDs, set genesis source + static peers on each SeiNode
 
 **Explicit exclusions:**
 - `TaskResult.Result` / typed task results — separate design deliverable
@@ -47,10 +47,10 @@ Add an optional `genesis` field to `SeiNodeGroupSpec` that bootstraps a self-con
 
 ## Interface Specification
 
-### CRD Changes: `SeiNodeGroupSpec`
+### CRD Changes: `SeiNodeDeploymentSpec`
 
 ```go
-type SeiNodeGroupSpec struct {
+type SeiNodeDeploymentSpec struct {
     Replicas       int32            `json:"replicas"`
     Template       SeiNodeTemplate  `json:"template"`
     DeletionPolicy DeletionPolicy   `json:"deletionPolicy,omitempty"`
@@ -153,10 +153,10 @@ No new peer source types. Genesis peers are pushed by the group controller as `S
 // +kubebuilder:validation:XValidation:rule="(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1 : 0) == 1",message="exactly one of ec2Tags or static must be set"
 ```
 
-### `SeiNodeGroupStatus` Additions
+### `SeiNodeDeploymentStatus` Additions
 
 ```go
-type SeiNodeGroupStatus struct {
+type SeiNodeDeploymentStatus struct {
     // ... existing fields ...
 
     // AssemblyPlan tracks the genesis assembly task on index 0's sidecar.
@@ -239,7 +239,7 @@ Unchanged from prior revision — test-network genesis parameter defaults in sei
 │ │ upload-genesis-artifacts PVC→S3: identity.json, gentx.json      │         │
 │ └──────────────────────────────────────────────────────────────────┘         │
 │                                                                              │
-│ SeiNodeGroup coordination (reconcile loop):                                  │
+│ SeiNodeDeployment coordination (reconcile loop):                                  │
 │  1. Create SeiNodes → PreInit plans run independently                        │
 │  2. Watch: all SeiNodes PreInit plans complete?                               │
 │  3. Submit assemble-and-upload-genesis to node 0's sidecar                   │
@@ -391,12 +391,12 @@ func (r *SeiNodeReconciler) handlePreInitComplete(ctx context.Context, node *sei
 }
 ```
 
-### 5. SeiNodeGroup Genesis Coordination
+### 5. SeiNodeDeployment Genesis Coordination
 
 Thin coordination layer. After assembly, the group controller collects node IDs via the sidecar HTTP endpoint and pushes static peers to each SeiNode.
 
 ```go
-type SeiNodeGroupReconciler struct {
+type SeiNodeDeploymentReconciler struct {
     client.Client
     Scheme   *runtime.Scheme
     Recorder record.EventRecorder
@@ -431,7 +431,7 @@ if group.Spec.Genesis != nil {
 **Reconcile:**
 
 ```go
-func (r *SeiNodeGroupReconciler) reconcileGenesisAssembly(ctx context.Context, group *SeiNodeGroup) (bool, ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) reconcileGenesisAssembly(ctx context.Context, group *SeiNodeDeployment) (bool, ctrl.Result, error) {
     nodes, err := r.listChildSeiNodes(ctx, group)
     if err != nil {
         return false, ctrl.Result{}, err
@@ -518,7 +518,7 @@ func (r *SeiNodeGroupReconciler) reconcileGenesisAssembly(ctx context.Context, g
 **`collectPeers`** queries each node's sidecar for its Tendermint node ID and builds the peer list:
 
 ```go
-func (r *SeiNodeGroupReconciler) collectPeers(ctx context.Context, group *SeiNodeGroup, nodes []seiv1alpha1.SeiNode) ([]string, error) {
+func (r *SeiNodeDeploymentReconciler) collectPeers(ctx context.Context, group *SeiNodeDeployment, nodes []seiv1alpha1.SeiNode) ([]string, error) {
     peers := make([]string, 0, len(nodes))
     for i := range nodes {
         sc := r.BuildSidecarClientFn(PreInitSidecarURL(&nodes[i]))
@@ -537,7 +537,7 @@ func (r *SeiNodeGroupReconciler) collectPeers(ctx context.Context, group *SeiNod
 **`setGenesisSource`** sets two fields using existing types — no new CRD peer source variants:
 
 ```go
-func (r *SeiNodeGroupReconciler) setGenesisSource(ctx context.Context, node *seiv1alpha1.SeiNode, genesisURI, region string, peers []string) error {
+func (r *SeiNodeDeploymentReconciler) setGenesisSource(ctx context.Context, node *seiv1alpha1.SeiNode, genesisURI, region string, peers []string) error {
     patch := client.MergeFrom(node.DeepCopy())
     node.Spec.Genesis = &seiv1alpha1.GenesisConfiguration{
         S3: &seiv1alpha1.GenesisS3Source{URI: genesisURI, Region: region},
@@ -658,7 +658,7 @@ PreInit and Init share the same PVC — distinct prefixes prevent cross-phase co
 
 | Test | Setup | Action | Expected |
 |---|---|---|---|
-| `TestGenesisNetworkE2E` | SeiNodeGroup replicas=4 | Wait for Running | 4 validators producing blocks |
+| `TestGenesisNetworkE2E` | SeiNodeDeployment replicas=4 | Wait for Running | 4 validators producing blocks |
 | `TestGenesisNetworkDeletion` | Running network | Delete group | All resources cleaned up |
 
 ---
@@ -747,7 +747,7 @@ No seictl engine changes. No `TaskResult.Result` migration. No new peer source t
 
 ```yaml
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
+kind: SeiNodeDeployment
 metadata:
   name: loadtest
 spec:
@@ -767,7 +767,7 @@ spec:
 
 ```yaml
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
+kind: SeiNodeDeployment
 metadata:
   name: custom-net
 spec:

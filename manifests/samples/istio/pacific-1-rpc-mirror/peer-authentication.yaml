@@ -1,7 +1,7 @@
 # PeerAuthentication: Enforce STRICT mTLS for K8s RPC pods.
 #
 # All traffic to these pods must present a valid SPIFFE identity.
-# The AuthorizationPolicy on the SeiNodeGroup controls which
+# The AuthorizationPolicy on the SeiNodeDeployment controls which
 # identities are allowed (gateway SA, controller SA, same namespace).
 #
 # Do NOT use PERMISSIVE -- it would allow unauthenticated traffic
@@ -17,6 +17,6 @@ metadata:
 spec:
   selector:
     matchLabels:
-      sei.io/nodegroup: pacific-1-rpc
+      sei.io/nodedeployment: pacific-1-rpc
   mtls:
     mode: STRICT

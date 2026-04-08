@@ -1,4 +1,4 @@
-package nodegroup
+package nodedeployment
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-func (r *SeiNodeGroupReconciler) reconcileMonitoring(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) reconcileMonitoring(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Monitoring == nil || group.Spec.Monitoring.ServiceMonitor == nil {
 		removeCondition(group, seiv1alpha1.ConditionServiceMonitorReady)
 		return r.deleteUnstructured(ctx, group, serviceMonitorGVK())
@@ -23,7 +23,7 @@ func (r *SeiNodeGroupReconciler) reconcileMonitoring(ctx context.Context, group 
 	return r.reconcileServiceMonitor(ctx, group)
 }
 
-func (r *SeiNodeGroupReconciler) reconcileServiceMonitor(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) reconcileServiceMonitor(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	desired := generateServiceMonitor(group)
 	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on ServiceMonitor: %w", err)
@@ -50,7 +50,7 @@ func (r *SeiNodeGroupReconciler) reconcileServiceMonitor(ctx context.Context, gr
 	return nil
 }
 
-func generateServiceMonitor(group *seiv1alpha1.SeiNodeGroup) *unstructured.Unstructured {
+func generateServiceMonitor(group *seiv1alpha1.SeiNodeDeployment) *unstructured.Unstructured {
 	cfg := group.Spec.Monitoring.ServiceMonitor
 
 	interval := cfg.Interval

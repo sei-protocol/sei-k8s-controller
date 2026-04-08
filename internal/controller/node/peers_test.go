@@ -18,7 +18,7 @@ func TestReconcilePeers_ResolvesLabelSource(t *testing.T) {
 			Image:   "sei:latest",
 			Peers: []seiv1alpha1.PeerSource{
 				{Label: &seiv1alpha1.LabelPeerSource{
-					Selector: map[string]string{"sei.io/nodegroup": "validators"},
+					Selector: map[string]string{"sei.io/nodedeployment": "validators"},
 				}},
 			},
 			FullNode: &seiv1alpha1.FullNodeSpec{},
@@ -27,14 +27,14 @@ func TestReconcilePeers_ResolvesLabelSource(t *testing.T) {
 	peer1 := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "peer-1", Namespace: "default",
-			Labels: map[string]string{"sei.io/nodegroup": "validators"},
+			Labels: map[string]string{"sei.io/nodedeployment": "validators"},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{ChainID: "test-1", Image: "sei:latest", FullNode: &seiv1alpha1.FullNodeSpec{}},
 	}
 	peer2 := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "peer-2", Namespace: "default",
-			Labels: map[string]string{"sei.io/nodegroup": "validators"},
+			Labels: map[string]string{"sei.io/nodedeployment": "validators"},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{ChainID: "test-1", Image: "sei:latest", FullNode: &seiv1alpha1.FullNodeSpec{}},
 	}
@@ -69,14 +69,14 @@ func TestReconcilePeers_ExcludesSelf(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "my-node", Namespace: "default",
-			Labels: map[string]string{"sei.io/nodegroup": "validators"},
+			Labels: map[string]string{"sei.io/nodedeployment": "validators"},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "test-1",
 			Image:   "sei:latest",
 			Peers: []seiv1alpha1.PeerSource{
 				{Label: &seiv1alpha1.LabelPeerSource{
-					Selector: map[string]string{"sei.io/nodegroup": "validators"},
+					Selector: map[string]string{"sei.io/nodedeployment": "validators"},
 				}},
 			},
 			FullNode: &seiv1alpha1.FullNodeSpec{},
@@ -85,7 +85,7 @@ func TestReconcilePeers_ExcludesSelf(t *testing.T) {
 	peer := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "other-node", Namespace: "default",
-			Labels: map[string]string{"sei.io/nodegroup": "validators"},
+			Labels: map[string]string{"sei.io/nodedeployment": "validators"},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{ChainID: "test-1", Image: "sei:latest", FullNode: &seiv1alpha1.FullNodeSpec{}},
 	}
@@ -159,7 +159,7 @@ func TestReconcilePeers_NoPatchWhenUnchanged(t *testing.T) {
 			Image:   "sei:latest",
 			Peers: []seiv1alpha1.PeerSource{
 				{Label: &seiv1alpha1.LabelPeerSource{
-					Selector: map[string]string{"sei.io/nodegroup": "validators"},
+					Selector: map[string]string{"sei.io/nodedeployment": "validators"},
 				}},
 			},
 			FullNode: &seiv1alpha1.FullNodeSpec{},
@@ -171,7 +171,7 @@ func TestReconcilePeers_NoPatchWhenUnchanged(t *testing.T) {
 	peer := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "peer-1", Namespace: "default",
-			Labels: map[string]string{"sei.io/nodegroup": "validators"},
+			Labels: map[string]string{"sei.io/nodedeployment": "validators"},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{ChainID: "test-1", Image: "sei:latest", FullNode: &seiv1alpha1.FullNodeSpec{}},
 	}
@@ -213,7 +213,7 @@ func TestReconcilePeers_DeduplicatesOverlappingSources(t *testing.T) {
 			Image:   "sei:latest",
 			Peers: []seiv1alpha1.PeerSource{
 				{Label: &seiv1alpha1.LabelPeerSource{
-					Selector: map[string]string{"sei.io/nodegroup": "validators"},
+					Selector: map[string]string{"sei.io/nodedeployment": "validators"},
 				}},
 				{Label: &seiv1alpha1.LabelPeerSource{
 					Selector: map[string]string{"sei.io/chain": "test-1"},
@@ -227,8 +227,8 @@ func TestReconcilePeers_DeduplicatesOverlappingSources(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "peer-1", Namespace: "default",
 			Labels: map[string]string{
-				"sei.io/nodegroup": "validators",
-				"sei.io/chain":     "test-1",
+				"sei.io/nodedeployment": "validators",
+				"sei.io/chain":          "test-1",
 			},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{ChainID: "test-1", Image: "sei:latest", FullNode: &seiv1alpha1.FullNodeSpec{}},

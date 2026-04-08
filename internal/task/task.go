@@ -129,7 +129,7 @@ type SidecarClient interface {
 // external clients, runtime context, and platform configuration. New
 // dependencies are added here without changing Deserialize call sites.
 //
-// Resource is the owning Kubernetes object (SeiNode or SeiNodeGroup).
+// Resource is the owning Kubernetes object (SeiNode or SeiNodeDeployment).
 // Task executions that need a concrete type should type-assert it.
 // Treat as read-only; mutations belong in the reconciler after
 // ExecutePlan returns.

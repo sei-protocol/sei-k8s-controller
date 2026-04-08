@@ -1,4 +1,4 @@
-package nodegroup
+package nodedeployment
 
 import (
 	"context"
@@ -22,14 +22,14 @@ import (
 )
 
 const (
-	groupFinalizerName = "sei.io/seinodegroup-finalizer"
-	controllerName     = "seinodegroup"
+	groupFinalizerName = "sei.io/seinodedeployment-finalizer"
+	controllerName     = "seinodedeployment"
 	statusPollInterval = 30 * time.Second
-	fieldOwner         = client.FieldOwner("seinodegroup-controller")
+	fieldOwner         = client.FieldOwner("seinodedeployment-controller")
 )
 
-// SeiNodeGroupReconciler reconciles a SeiNodeGroup object.
-type SeiNodeGroupReconciler struct {
+// SeiNodeDeploymentReconciler reconciles a SeiNodeDeployment object.
+type SeiNodeDeploymentReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
@@ -45,12 +45,12 @@ type SeiNodeGroupReconciler struct {
 	GatewayNamespace string
 
 	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
-	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeGroup]
+	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeDeployment]
 }
 
-// +kubebuilder:rbac:groups=sei.io,resources=seinodegroups,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=sei.io,resources=seinodegroups/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=sei.io,resources=seinodegroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=sei.io,resources=seinodedeployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=sei.io,resources=seinodedeployments/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=sei.io,resources=seinodedeployments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -59,10 +59,10 @@ type SeiNodeGroupReconciler struct {
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
-func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	group := &seiv1alpha1.SeiNodeGroup{}
+	group := &seiv1alpha1.SeiNodeDeployment{}
 	if err := r.Get(ctx, req.NamespacedName, group); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -132,7 +132,7 @@ func (r *SeiNodeGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
 
-func (r *SeiNodeGroupReconciler) ensureFinalizer(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) error {
+func (r *SeiNodeDeploymentReconciler) ensureFinalizer(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if controllerutil.ContainsFinalizer(group, groupFinalizerName) {
 		return nil
 	}
@@ -141,7 +141,7 @@ func (r *SeiNodeGroupReconciler) ensureFinalizer(ctx context.Context, group *sei
 	return r.Patch(ctx, group, patch)
 }
 
-func (r *SeiNodeGroupReconciler) handleDeletion(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) handleDeletion(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(group, groupFinalizerName) {
 		return ctrl.Result{}, nil
 	}
@@ -184,9 +184,9 @@ func shouldRequeue(result ctrl.Result) bool {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *SeiNodeGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *SeiNodeDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&seiv1alpha1.SeiNodeGroup{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&seiv1alpha1.SeiNodeDeployment{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&seiv1alpha1.SeiNode{}, builder.WithPredicates(childPhaseChangedPredicate())).
 		Owns(&corev1.Service{}).
 		Named(controllerName).

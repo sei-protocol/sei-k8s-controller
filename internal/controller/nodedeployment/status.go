@@ -1,4 +1,4 @@
-package nodegroup
+package nodedeployment
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1alpha1.SeiNodeGroup, statusBase client.Patch) error {
+func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) error {
 	nodes, err := r.listChildSeiNodes(ctx, group)
 	if err != nil {
 		return err
@@ -55,7 +55,7 @@ func (r *SeiNodeGroupReconciler) updateStatus(ctx context.Context, group *seiv1a
 	return r.Status().Patch(ctx, group, statusBase)
 }
 
-func computeGroupPhase(group *seiv1alpha1.SeiNodeGroup, ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1alpha1.SeiNodeGroupPhase {
+func computeGroupPhase(group *seiv1alpha1.SeiNodeDeployment, ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1alpha1.SeiNodeDeploymentPhase {
 	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
 		if group.Status.Deployment != nil {
 			return seiv1alpha1.GroupPhaseUpgrading
@@ -91,7 +91,7 @@ func computeGroupPhase(group *seiv1alpha1.SeiNodeGroup, ready, desired int32, no
 // fetchExternalService returns the external Service if networking is configured.
 // Returns (nil, nil) when not configured or NotFound, and (nil, err) on
 // transient API errors so callers can surface an accurate condition.
-func (r *SeiNodeGroupReconciler) fetchExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeGroup) (*corev1.Service, error) {
+func (r *SeiNodeDeploymentReconciler) fetchExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (*corev1.Service, error) {
 	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
 		return nil, nil
 	}
@@ -107,7 +107,7 @@ func (r *SeiNodeGroupReconciler) fetchExternalService(ctx context.Context, group
 	return svc, nil
 }
 
-func buildNetworkingStatus(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Service) *seiv1alpha1.NetworkingStatus {
+func buildNetworkingStatus(group *seiv1alpha1.SeiNodeDeployment, svc *corev1.Service) *seiv1alpha1.NetworkingStatus {
 	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
 		return nil
 	}
@@ -119,7 +119,7 @@ func buildNetworkingStatus(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Service)
 	return status
 }
 
-func setNodesReadyCondition(group *seiv1alpha1.SeiNodeGroup, ready, desired int32, nodes []seiv1alpha1.SeiNode) {
+func setNodesReadyCondition(group *seiv1alpha1.SeiNodeDeployment, ready, desired int32, nodes []seiv1alpha1.SeiNode) {
 	status := metav1.ConditionTrue
 	reason := "AllNodesReady"
 	message := fmt.Sprintf("%d/%d nodes ready", ready, desired)
@@ -148,7 +148,7 @@ func setNodesReadyCondition(group *seiv1alpha1.SeiNodeGroup, ready, desired int3
 	setCondition(group, seiv1alpha1.ConditionNodesReady, status, reason, message)
 }
 
-func setExternalServiceCondition(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Service, fetchErr error) {
+func setExternalServiceCondition(group *seiv1alpha1.SeiNodeDeployment, svc *corev1.Service, fetchErr error) {
 	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
 		return
 	}
@@ -175,21 +175,21 @@ func setExternalServiceCondition(group *seiv1alpha1.SeiNodeGroup, svc *corev1.Se
 		"ServiceReady", fmt.Sprintf("External Service %s is ready", svc.Name))
 }
 
-func hasConditionTrue(group *seiv1alpha1.SeiNodeGroup, condType string) bool { //nolint:unparam // general-purpose utility
+func hasConditionTrue(group *seiv1alpha1.SeiNodeDeployment, condType string) bool { //nolint:unparam // general-purpose utility
 	c := apimeta.FindStatusCondition(group.Status.Conditions, condType)
 	return c != nil && c.Status == metav1.ConditionTrue
 }
 
-func hasConditionReason(group *seiv1alpha1.SeiNodeGroup, condType, reason string) bool {
+func hasConditionReason(group *seiv1alpha1.SeiNodeDeployment, condType, reason string) bool {
 	c := apimeta.FindStatusCondition(group.Status.Conditions, condType)
 	return c != nil && c.Reason == reason
 }
 
-func removeCondition(group *seiv1alpha1.SeiNodeGroup, condType string) {
+func removeCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) {
 	apimeta.RemoveStatusCondition(&group.Status.Conditions, condType)
 }
 
-func setCondition(group *seiv1alpha1.SeiNodeGroup, condType string, status metav1.ConditionStatus, reason, message string) {
+func setCondition(group *seiv1alpha1.SeiNodeDeployment, condType string, status metav1.ConditionStatus, reason, message string) {
 	apimeta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:               condType,
 		Status:             status,

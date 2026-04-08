@@ -71,7 +71,7 @@ Spec: SeiNodeSpec{
 
 This is the same bootstrap config pattern that replayers use. The SeiNode controller handles it through the standard `fullNodePlanner` → `buildBootstrapPlan` → bootstrap Job → StatefulSet.
 
-Labels: `sei.io/nodegroup: {group}`, `sei.io/role: exporter`
+Labels: `sei.io/nodedeployment: {group}`, `sei.io/role: exporter`
 Excluded from `IncumbentNodes`.
 
 ## Group Plan Tasks
@@ -155,7 +155,7 @@ await-nodes-running         (existing)
 
 ```yaml
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
+kind: SeiNodeDeployment
 metadata:
   name: private-fork
 spec:
@@ -178,8 +178,8 @@ spec:
 ### Controller
 | File | Change |
 |------|--------|
-| `api/v1alpha1/seinodegroup_types.go` | ForkConfig: add SourceImage, ExportHeight |
-| `internal/controller/nodegroup/nodes.go` | ensureForkExporter, needsForkExporter, filter populateIncumbentNodes |
+| `api/v1alpha1/seinodedeployment_types.go` | ForkConfig: add SourceImage, ExportHeight |
+| `internal/controller/nodedeployment/nodes.go` | ensureForkExporter, needsForkExporter, filter populateIncumbentNodes |
 | `internal/planner/group.go` | Prepend export tasks to fork plan when exporter exists |
 | `internal/task/fork_export.go` | New: SubmitExportStateParams, AwaitExporterRunningParams, TeardownExporterParams + executions |
 | `internal/task/task.go` | Deserialize: 3 new cases |

@@ -15,7 +15,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      sei.io/nodegroup: pacific-1-rpc
+      sei.io/nodedeployment: pacific-1-rpc
   accessLogging:
     - providers:
         - name: envoy

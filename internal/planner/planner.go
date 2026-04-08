@@ -52,12 +52,12 @@ type NodePlanner interface {
 
 // GroupPlanner encapsulates logic for building a group-level task plan.
 type GroupPlanner interface {
-	BuildPlan(group *seiv1alpha1.SeiNodeGroup) (*seiv1alpha1.TaskPlan, error)
+	BuildPlan(group *seiv1alpha1.SeiNodeDeployment) (*seiv1alpha1.TaskPlan, error)
 }
 
 // ForGroup returns the appropriate GroupPlanner based on the group's
 // current state and spec. Returns (nil, nil) when no plan is needed.
-func ForGroup(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
+func ForGroup(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
 	if needsGenesisPlan(group) {
 		return &genesisGroupPlanner{}, nil
 	}
@@ -73,7 +73,7 @@ func ForGroup(group *seiv1alpha1.SeiNodeGroup) (GroupPlanner, error) {
 
 // needsGenesisPlan returns true when either GenesisCeremonyNeeded or
 // ForkGenesisCeremonyNeeded condition is set with sufficient nodes.
-func needsGenesisPlan(group *seiv1alpha1.SeiNodeGroup) bool {
+func needsGenesisPlan(group *seiv1alpha1.SeiNodeDeployment) bool {
 	if group.Spec.Genesis == nil {
 		return false
 	}
@@ -88,11 +88,11 @@ func needsGenesisPlan(group *seiv1alpha1.SeiNodeGroup) bool {
 	return allReplicasCreated(group)
 }
 
-func allReplicasCreated(group *seiv1alpha1.SeiNodeGroup) bool {
+func allReplicasCreated(group *seiv1alpha1.SeiNodeDeployment) bool {
 	return int32(len(group.Status.IncumbentNodes)) >= group.Spec.Replicas
 }
 
-func hasCondition(group *seiv1alpha1.SeiNodeGroup, condType string) bool {
+func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 	for _, c := range group.Status.Conditions {
 		if c.Type == condType && c.Status == metav1.ConditionTrue {
 			return true

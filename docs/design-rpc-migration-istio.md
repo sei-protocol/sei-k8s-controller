@@ -19,7 +19,7 @@ DNS: rpc.pacific-1.sei.io
 [primary]   [mirror]
   |             |
 ServiceEntry  K8s Service
-(EC2 ALB)    (SeiNodeGroup)
+(EC2 ALB)    (SeiNodeDeployment)
 ```
 
 Replace ALB with NLB + Istio Gateway. The gateway terminates L7 and applies VirtualService routing. EC2 is the primary backend; K8s receives mirrored (fire-and-forget) traffic.
@@ -38,7 +38,7 @@ All at `manifests/samples/istio/pacific-1-rpc-mirror/`:
 ## Migration Phases
 
 ### Phase 0: Isolated Validation (Week 1-2)
-- Deploy SeiNodeGroup for RPC, sync from S3 snapshot
+- Deploy SeiNodeDeployment for RPC, sync from S3 snapshot
 - Enable `ExportAndCompare` with `canonicalRpc` pointing at EC2
 - Run 48h with zero app-hash divergence (Layer 0 + Layer 1)
 - Validate all alerts fire correctly
@@ -104,7 +104,7 @@ Mirroring write endpoints would double-broadcast transactions. Mempool dedup han
 
 ## Prerequisites Checklist
 
-- [ ] SeiNodeGroup for RPC deployed, all nodes synced (`catching_up: false`)
+- [ ] SeiNodeDeployment for RPC deployed, all nodes synced (`catching_up: false`)
 - [ ] Istio sidecar injection enabled on RPC namespace
 - [ ] Gateway + ServiceEntry deployed, reachable from mesh
 - [ ] ExportAndCompare running 48h with zero divergence
