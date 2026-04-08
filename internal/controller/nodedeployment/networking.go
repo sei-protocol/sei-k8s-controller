@@ -43,12 +43,9 @@ const (
 	keyP2PExternalAddress = "p2p.external_address"
 )
 
-// needsExternalAddress returns true when node creation should wait for
-// a LoadBalancer external address before proceeding.
-func (r *SeiNodeDeploymentReconciler) needsExternalAddress(group *seiv1alpha1.SeiNodeDeployment) bool {
-	return group.Spec.Networking != nil &&
-		group.Spec.Networking.Service != nil &&
-		group.Spec.Networking.Service.Type == corev1.ServiceTypeLoadBalancer
+// hasExternalService returns true when the deployment has an external Service configured.
+func (r *SeiNodeDeploymentReconciler) hasExternalService(group *seiv1alpha1.SeiNodeDeployment) bool {
+	return group.Spec.Networking != nil && group.Spec.Networking.Service != nil
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {

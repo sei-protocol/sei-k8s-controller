@@ -95,10 +95,9 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("reconciling networking: %w", err)
 	}
 
-	// Gate: if a LoadBalancer Service is configured, wait for the external
-	// address before creating nodes. This ensures the P2P address is baked
-	// into the SeiNode's overrides at plan build time (plans are immutable).
-	if r.needsExternalAddress(group) && r.resolveExternalP2PAddress(ctx, group) == "" {
+	// Gate: wait for the LoadBalancer to provision an external address
+	// before creating nodes so the P2P address is baked into the plan.
+	if r.hasExternalService(group) && r.resolveExternalP2PAddress(ctx, group) == "" {
 		logger.Info("waiting for LoadBalancer to provision external address")
 		setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionFalse,
 			"LoadBalancerPending", "Waiting for LoadBalancer to provision external P2P address")
