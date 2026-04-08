@@ -3,6 +3,7 @@ package planner
 import (
 	"testing"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -19,7 +20,7 @@ func TestCommonOverrides_WithExternalAddress(t *testing.T) {
 	if overrides == nil {
 		t.Fatal("expected overrides, got nil")
 	}
-	if got := overrides[keyP2PExternalAddress]; got != "p2p.atlantic-2.seinetwork.io:26656" {
+	if got := overrides[seiconfig.KeyP2PExternalAddress]; got != "p2p.atlantic-2.seinetwork.io:26656" {
 		t.Errorf("p2p.external_address = %q, want %q", got, "p2p.atlantic-2.seinetwork.io:26656")
 	}
 }
@@ -42,7 +43,7 @@ func TestCommonOverrides_UserOverrideTakesPrecedence(t *testing.T) {
 			Image:    "seid:v1",
 			FullNode: &seiv1alpha1.FullNodeSpec{},
 			Overrides: map[string]string{
-				keyP2PExternalAddress: "custom.address:26656",
+				seiconfig.KeyP2PExternalAddress: "custom.address:26656",
 			},
 		},
 		Status: seiv1alpha1.SeiNodeStatus{
@@ -53,7 +54,7 @@ func TestCommonOverrides_UserOverrideTakesPrecedence(t *testing.T) {
 	common := commonOverrides(node)
 	merged := mergeOverrides(common, node.Spec.Overrides)
 
-	if got := merged[keyP2PExternalAddress]; got != "custom.address:26656" {
+	if got := merged[seiconfig.KeyP2PExternalAddress]; got != "custom.address:26656" {
 		t.Errorf("user override should win: got %q, want %q", got, "custom.address:26656")
 	}
 }

@@ -39,10 +39,6 @@ type effectiveRoute struct {
 	Port      int32
 }
 
-const (
-	p2pPort               = 26656
-	keyP2PExternalAddress = "network.p2p.external_address"
-)
 
 // hasExternalService returns true when the deployment has an external Service configured.
 func (r *SeiNodeDeploymentReconciler) hasExternalService(group *seiv1alpha1.SeiNodeDeployment) bool {
@@ -137,7 +133,7 @@ func externalAddressFromService(svc *corev1.Service) string {
 			host = ingress.IP
 		}
 		if host != "" {
-			return fmt.Sprintf("%s:%d", host, p2pPort)
+			return fmt.Sprintf("%s:%d", host, seiconfig.PortP2P)
 		}
 	}
 	return ""

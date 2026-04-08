@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
+	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -358,7 +359,7 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 		return nil
 	}
 	return map[string]string{
-		keyP2PExternalAddress: node.Status.ExternalAddress,
+		seiconfig.KeyP2PExternalAddress: node.Status.ExternalAddress,
 	}
 }
 
