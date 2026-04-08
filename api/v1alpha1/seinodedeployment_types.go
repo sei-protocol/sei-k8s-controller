@@ -161,7 +161,7 @@ type GenesisAccount struct {
 // SeiNodeTemplate wraps a SeiNodeSpec for use in the group template.
 type SeiNodeTemplate struct {
 	// Metadata allows setting labels and annotations on child SeiNodes.
-	// The controller always adds sei.io/nodegroup and sei.io/nodegroup-ordinal
+	// The controller always adds sei.io/nodedeployment and sei.io/nodedeployment-ordinal
 	// labels; user-specified labels are merged.
 	// +optional
 	Metadata *SeiNodeTemplateMeta `json:"metadata,omitempty"`
@@ -311,7 +311,7 @@ const (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=sng
+// +kubebuilder:resource:shortName=snd
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`

@@ -68,7 +68,7 @@ func (e *createEntrantNodesExecution) ensureEntrantNode(
 	if spec.PodLabels == nil {
 		spec.PodLabels = make(map[string]string)
 	}
-	spec.PodLabels["sei.io/nodegroup"] = e.params.GroupName
+	spec.PodLabels["sei.io/nodedeployment"] = e.params.GroupName
 	spec.PodLabels["sei.io/revision"] = e.params.EntrantRevision
 
 	node := &seiv1alpha1.SeiNode{
@@ -76,8 +76,8 @@ func (e *createEntrantNodesExecution) ensureEntrantNode(
 			Name:      name,
 			Namespace: e.params.Namespace,
 			Labels: map[string]string{
-				"sei.io/nodegroup":         e.params.GroupName,
-				"sei.io/nodegroup-ordinal": fmt.Sprintf("%d", ordinal),
+				"sei.io/nodedeployment":         e.params.GroupName,
+				"sei.io/nodedeployment-ordinal": fmt.Sprintf("%d", ordinal),
 				"sei.io/revision":          e.params.EntrantRevision,
 			},
 		},

@@ -1,4 +1,4 @@
-package nodegroup
+package nodedeployment
 
 import (
 	"crypto/sha256"
@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	groupLabel          = "sei.io/nodegroup"
-	groupOrdinalLabel   = "sei.io/nodegroup-ordinal"
+	groupLabel          = "sei.io/nodedeployment"
+	groupOrdinalLabel   = "sei.io/nodedeployment-ordinal"
 	revisionLabel       = "sei.io/revision"
 	nodeLabel           = "sei.io/node"
 	managedByAnnotation = "sei.io/managed-by"

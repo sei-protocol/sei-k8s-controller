@@ -1,4 +1,4 @@
-package nodegroup
+package nodedeployment
 
 import (
 	"context"

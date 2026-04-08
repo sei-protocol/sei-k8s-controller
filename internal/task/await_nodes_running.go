@@ -89,7 +89,7 @@ func (e *awaitNodesRunningExecution) listTargetNodes(ctx context.Context) ([]sei
 	nodeList := &seiv1alpha1.SeiNodeList{}
 	if err := e.cfg.KubeClient.List(ctx, nodeList,
 		client.InNamespace(e.params.Namespace),
-		client.MatchingLabels{"sei.io/nodegroup": e.params.GroupName},
+		client.MatchingLabels{"sei.io/nodedeployment": e.params.GroupName},
 	); err != nil {
 		return nil, err
 	}

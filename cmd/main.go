@@ -24,7 +24,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
-	nodegroupcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment"
+	nodedeploymentcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -178,7 +178,7 @@ func main() {
 	controllerSA := os.Getenv("SEI_CONTROLLER_SA_PRINCIPAL")
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller")
-	if err := (&nodegroupcontroller.SeiNodeDeploymentReconciler{
+	if err := (&nodedeploymentcontroller.SeiNodeDeploymentReconciler{
 		Client:           kc,
 		Scheme:           mgr.GetScheme(),
 		Recorder:         recorder,
@@ -192,7 +192,7 @@ func main() {
 				nodes := &seiv1alpha1.SeiNodeList{}
 				if err := kc.List(ctx, nodes,
 					client.InNamespace(group.Namespace),
-					client.MatchingLabels{"sei.io/nodegroup": group.Name},
+					client.MatchingLabels{"sei.io/nodedeployment": group.Name},
 				); err == nil && len(nodes.Items) > 0 {
 					sort.Slice(nodes.Items, func(i, j int) bool {
 						return nodes.Items[i].Name < nodes.Items[j].Name

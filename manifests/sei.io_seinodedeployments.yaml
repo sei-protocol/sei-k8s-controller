@@ -12,7 +12,7 @@ spec:
     listKind: SeiNodeDeploymentList
     plural: seinodedeployments
     shortNames:
-    - sng
+    - snd
     singular: seinodedeployment
   scope: Namespaced
   versions:
@@ -298,7 +298,7 @@ spec:
                   metadata:
                     description: |-
                       Metadata allows setting labels and annotations on child SeiNodes.
-                      The controller always adds sei.io/nodegroup and sei.io/nodegroup-ordinal
+                      The controller always adds sei.io/nodedeployment and sei.io/nodedeployment-ordinal
                       labels; user-specified labels are merged.
                     properties:
                       annotations:
