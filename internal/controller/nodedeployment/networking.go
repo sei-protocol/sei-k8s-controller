@@ -39,7 +39,6 @@ type effectiveRoute struct {
 	Port      int32
 }
 
-
 // hasExternalService returns true when the deployment has an external Service configured.
 func (r *SeiNodeDeploymentReconciler) hasExternalService(group *seiv1alpha1.SeiNodeDeployment) bool {
 	return group.Spec.Networking != nil && group.Spec.Networking.Service != nil
@@ -113,7 +112,7 @@ func (r *SeiNodeDeploymentReconciler) resolveExternalP2PAddress(ctx context.Cont
 	// assigned immediately by AWS but DNS propagation takes a moment.
 	host, _, _ := net.SplitHostPort(addr)
 	if net.ParseIP(host) == nil {
-		if _, err := net.LookupHost(host); err != nil {
+		if _, err := net.DefaultResolver.LookupHost(ctx, host); err != nil {
 			log.FromContext(ctx).Info("external address not yet resolvable", "host", host)
 			return ""
 		}
