@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -37,6 +38,16 @@ type effectiveRoute struct {
 	Port      int32
 }
 
+const (
+	p2pPort               = 26656
+	keyP2PExternalAddress = "p2p.external_address"
+)
+
+// hasExternalService returns true when the deployment has an external Service configured.
+func (r *SeiNodeDeploymentReconciler) hasExternalService(group *seiv1alpha1.SeiNodeDeployment) bool {
+	return group.Spec.Networking != nil && group.Spec.Networking.Service != nil
+}
+
 func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking == nil {
 		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
@@ -48,6 +59,9 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, g
 	if err := r.reconcileExternalService(ctx, group); err != nil {
 		return fmt.Errorf("reconciling external service: %w", err)
 	}
+	if err := r.reconcileExternalAddress(ctx, group); err != nil {
+		return fmt.Errorf("reconciling external P2P address: %w", err)
+	}
 	if err := r.reconcileRoute(ctx, group); err != nil {
 		return fmt.Errorf("reconciling route: %w", err)
 	}
@@ -55,6 +69,63 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, g
 		return fmt.Errorf("reconciling isolation: %w", err)
 	}
 	return nil
+}
+
+// reconcileExternalAddress propagates the external P2P address from the
+// LoadBalancer Service to child SeiNode status so that the planner can
+// inject p2p.external_address into CometBFT config at plan build time.
+func (r *SeiNodeDeploymentReconciler) reconcileExternalAddress(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
+	addr := r.resolveExternalP2PAddress(ctx, group)
+	if addr == "" {
+		return nil
+	}
+
+	nodes, err := r.listChildSeiNodes(ctx, group)
+	if err != nil {
+		return fmt.Errorf("listing child SeiNodes: %w", err)
+	}
+
+	for i := range nodes {
+		node := &nodes[i]
+		if node.Status.ExternalAddress == addr {
+			continue
+		}
+		patch := client.MergeFrom(node.DeepCopy())
+		node.Status.ExternalAddress = addr
+		if err := r.Status().Patch(ctx, node, patch); err != nil {
+			return fmt.Errorf("patching external address status on SeiNode %s: %w", node.Name, err)
+		}
+		log.FromContext(ctx).Info("set P2P external address on status", "node", node.Name, "address", addr)
+	}
+	return nil
+}
+
+// resolveExternalP2PAddress returns the routable P2P address for this
+// deployment's nodes, or "" if not yet available.
+func (r *SeiNodeDeploymentReconciler) resolveExternalP2PAddress(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) string {
+	svc, err := r.fetchExternalService(ctx, group)
+	if err != nil {
+		return ""
+	}
+	return externalAddressFromService(svc)
+}
+
+// externalAddressFromService extracts the P2P address from a Service's
+// LoadBalancer ingress. Prefers hostname (DNS) over IP.
+func externalAddressFromService(svc *corev1.Service) string {
+	if svc == nil {
+		return ""
+	}
+	for _, ingress := range svc.Status.LoadBalancer.Ingress {
+		host := ingress.Hostname
+		if host == "" {
+			host = ingress.IP
+		}
+		if host != "" {
+			return fmt.Sprintf("%s:%d", host, p2pPort)
+		}
+	}
+	return ""
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {

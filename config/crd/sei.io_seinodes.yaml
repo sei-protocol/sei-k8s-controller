@@ -607,6 +607,13 @@ spec:
                     description: Version is the on-disk config schema version.
                     type: integer
                 type: object
+              externalAddress:
+                description: |-
+                  ExternalAddress is the routable P2P address (host:port) for this node,
+                  populated by the SeiNodeDeployment controller from the LoadBalancer
+                  ingress. Used by the planner to set p2p.external_address in CometBFT
+                  config so the node advertises a reachable address for gossip discovery.
+                type: string
               monitorTasks:
                 additionalProperties:
                   description: |-
