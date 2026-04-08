@@ -39,8 +39,8 @@ type effectiveRoute struct {
 }
 
 const (
-	p2pPort                = 26656
-	keyP2PExternalAddress  = "p2p.external_address"
+	p2pPort               = 26656
+	keyP2PExternalAddress = "p2p.external_address"
 )
 
 // needsExternalAddress returns true when node creation should wait for

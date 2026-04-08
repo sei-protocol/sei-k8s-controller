@@ -17,7 +17,7 @@ const (
 
 	keyP2PExternalAddress = "p2p.external_address"
 
-	valCustom = "custom"
+	valCustom  = "custom"
 	valNothing = "nothing"
 
 	defaultConcurrencyWorkers = "500"
