@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
 
 	seiconfig "github.com/sei-protocol/sei-config"
 	corev1 "k8s.io/api/core/v1"
@@ -101,13 +102,27 @@ func (r *SeiNodeDeploymentReconciler) reconcileExternalAddress(ctx context.Conte
 }
 
 // resolveExternalP2PAddress returns the routable P2P address for this
-// deployment's nodes, or "" if not yet available.
+// deployment's nodes, or "" if not yet available. Returns empty if the
+// hostname is assigned but not yet resolvable in DNS.
 func (r *SeiNodeDeploymentReconciler) resolveExternalP2PAddress(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) string {
 	svc, err := r.fetchExternalService(ctx, group)
 	if err != nil {
 		return ""
 	}
-	return externalAddressFromService(svc)
+	addr := externalAddressFromService(svc)
+	if addr == "" {
+		return ""
+	}
+	// Verify the hostname resolves before using it — NLB hostnames are
+	// assigned immediately by AWS but DNS propagation takes a moment.
+	host, _, _ := net.SplitHostPort(addr)
+	if net.ParseIP(host) == nil {
+		if _, err := net.LookupHost(host); err != nil {
+			log.FromContext(ctx).Info("external address not yet resolvable", "host", host)
+			return ""
+		}
+	}
+	return addr
 }
 
 // externalAddressFromService extracts the P2P address from a Service's
