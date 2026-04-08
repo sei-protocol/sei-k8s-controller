@@ -40,7 +40,7 @@ type effectiveRoute struct {
 
 const (
 	p2pPort               = 26656
-	keyP2PExternalAddress = "p2p.external_address"
+	keyP2PExternalAddress = "network.p2p.external_address"
 )
 
 // hasExternalService returns true when the deployment has an external Service configured.
