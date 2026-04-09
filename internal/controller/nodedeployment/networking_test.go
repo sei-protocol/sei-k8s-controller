@@ -58,6 +58,24 @@ func TestGenerateExternalService_ValidatorModePorts(t *testing.T) {
 	g.Expect(portNames).To(ConsistOf("p2p", "metrics"))
 }
 
+func TestGenerateExternalService_GRPCAppProtocol(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	svc := generateExternalService(group)
+	for _, p := range svc.Spec.Ports {
+		if p.Name == "grpc" {
+			g.Expect(p.AppProtocol).NotTo(BeNil())
+			g.Expect(*p.AppProtocol).To(Equal("kubernetes.io/h2c"))
+			return
+		}
+	}
+	t.Fatal("grpc port not found")
+}
+
 func TestGenerateExternalService_Annotations(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
@@ -202,19 +220,58 @@ func TestGenerateHTTPRoute_EVMMerged(t *testing.T) {
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
 
+	var evmRoute effectiveRoute
 	evmCount := 0
 	for _, r := range routes {
 		if r.Name == "pacific-1-rpc-evm" {
 			evmCount++
-			g.Expect(r.Port).To(Equal(int32(8545)))
+			evmRoute = r
 		}
 	}
 	g.Expect(evmCount).To(Equal(1), "expected exactly one merged EVM route")
+	g.Expect(evmRoute.Port).To(Equal(int32(8545)))
+	g.Expect(evmRoute.WSPort).To(Equal(int32(8546)))
 
 	for _, r := range routes {
 		g.Expect(r.Name).NotTo(ContainSubstring("evm-rpc"))
 		g.Expect(r.Name).NotTo(ContainSubstring("evm-ws"))
 	}
+}
+
+func TestGenerateHTTPRoute_EVMWebSocketRule(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	var evmRoute effectiveRoute
+	for _, r := range routes {
+		if r.Name == "pacific-1-rpc-evm" {
+			evmRoute = r
+			break
+		}
+	}
+
+	httpRoute := generateHTTPRoute(group, evmRoute, "sei-gateway", "gateway")
+	spec := httpRoute.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
+	g.Expect(rules).To(HaveLen(2), "EVM route should have HTTP + WebSocket rules")
+
+	httpRule := rules[0].(map[string]any)
+	httpBackend := httpRule["backendRefs"].([]any)[0].(map[string]any)
+	g.Expect(httpBackend["port"]).To(Equal(int64(8545)))
+
+	wsRule := rules[1].(map[string]any)
+	wsMatches := wsRule["matches"].([]any)
+	wsHeaders := wsMatches[0].(map[string]any)["headers"].([]any)
+	wsHeader := wsHeaders[0].(map[string]any)
+	g.Expect(wsHeader["name"]).To(Equal("Upgrade"))
+	g.Expect(wsHeader["value"]).To(Equal("websocket"))
+
+	wsBackend := wsRule["backendRefs"].([]any)[0].(map[string]any)
+	g.Expect(wsBackend["port"]).To(Equal(int64(8546)))
 }
 
 // --- HTTPRoute Generation ---
@@ -264,7 +321,15 @@ func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
-	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
+	// Use the RPC route (single rule, not EVM which has 2 rules)
+	var rpcRoute effectiveRoute
+	for _, r := range routes {
+		if r.Name == "archive-rpc-rpc" {
+			rpcRoute = r
+			break
+		}
+	}
+	route := generateHTTPRoute(group, rpcRoute, "sei-gateway", "istio-system")
 
 	spec := route.Object["spec"].(map[string]any)
 	rules := spec["rules"].([]any)
