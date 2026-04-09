@@ -321,7 +321,6 @@ func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
-	// Use the RPC route (single rule, not EVM which has 2 rules)
 	var rpcRoute effectiveRoute
 	for _, r := range routes {
 		if r.Name == "archive-rpc-rpc" {
@@ -382,6 +381,53 @@ func TestIsProtocolActiveForMode_EVMMapping(t *testing.T) {
 	g.Expect(isProtocolActiveForMode("evm", activePorts)).To(BeTrue())
 	g.Expect(isProtocolActiveForMode("rpc", activePorts)).To(BeTrue())
 	g.Expect(isProtocolActiveForMode("grpc", activePorts)).To(BeFalse())
+}
+
+// --- Edge Cases ---
+
+func TestResolveEffectiveRoutes_EmptyDomain_MalformedHostnames(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "")
+	g.Expect(routes).To(HaveLen(4), "routes are still generated even with empty domain")
+	g.Expect(routes[0].Hostnames[0]).To(Equal("pacific-1-rpc.evm."), "empty domain produces trailing dot")
+}
+
+func TestReconcileRoute_NoRoutesForValidatorMode(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-val", "sei")
+	group.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	g.Expect(routes).To(BeEmpty(), "validator mode should produce zero routes")
+}
+
+func TestGenerateHTTPRoute_NonEVMRoute_SingleRule(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	for _, r := range routes {
+		if r.Name == "pacific-1-rpc-rpc" {
+			httpRoute := generateHTTPRoute(group, r, "sei-gateway", "gateway")
+			spec := httpRoute.Object["spec"].(map[string]any)
+			rules := spec["rules"].([]any)
+			g.Expect(rules).To(HaveLen(1), "non-EVM routes should have exactly one rule")
+			g.Expect(r.WSPort).To(Equal(int32(0)), "non-EVM routes should have zero WSPort")
+			return
+		}
+	}
+	t.Fatal("rpc route not found")
 }
 
 // --- AuthorizationPolicy ---
