@@ -40,12 +40,12 @@ type SeiNodeDeploymentReconciler struct {
 	// controller can always reach the seictl sidecar.
 	ControllerSA string
 
-	// GatewayName, GatewayNamespace, and GatewayDomain identify the platform
-	// Gateway for HTTPRoute parentRefs and hostname derivation.
-	// Read from SEI_GATEWAY_NAME / SEI_GATEWAY_NAMESPACE / SEI_GATEWAY_DOMAIN.
-	GatewayName      string
-	GatewayNamespace string
-	GatewayDomain    string
+	// GatewayName, GatewayNamespace, GatewayDomain, and GatewaySectionName
+	// identify the platform Gateway for HTTPRoute parentRefs and hostname derivation.
+	GatewayName        string
+	GatewayNamespace   string
+	GatewayDomain      string
+	GatewaySectionName string
 
 	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeDeployment]
