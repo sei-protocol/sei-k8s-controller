@@ -32,7 +32,7 @@ spec:
           - --metrics-bind-address=:8080
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller:f7bd3a0dba42820dc6dd24bd842b5225ea3215b4
+        image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller:3b89217b5e9f410e76a3806faf59ccd9927747d6
         name: manager
         env:
           - name: SEI_NODEPOOL_NAME
@@ -73,6 +73,12 @@ spec:
             value: dev-sei-k8s-genesis-artifacts
           - name: SEI_GENESIS_REGION
             value: us-east-2
+          - name: SEI_GATEWAY_NAME
+            value: sei-gateway
+          - name: SEI_GATEWAY_NAMESPACE
+            value: gateway
+          - name: SEI_GATEWAY_DOMAIN
+            value: prod.platform.sei.io
           - name: SEI_CONTROLLER_SA_PRINCIPAL
             value: "cluster.local/ns/sei-k8s-controller-system/sa/sei-k8s-controller-manager"
         ports:
