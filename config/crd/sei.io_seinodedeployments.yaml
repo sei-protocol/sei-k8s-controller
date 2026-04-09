@@ -30,10 +30,6 @@ spec:
       name: Revision
       priority: 1
       type: string
-    - jsonPath: .spec.networking.gateway.hostnames[0]
-      name: Host
-      priority: 1
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -198,26 +194,9 @@ spec:
                       annotations:
                         additionalProperties:
                           type: string
-                        description: Annotations are merged onto the HTTPRoute metadata.
+                        description: Annotations are merged onto HTTPRoute metadata.
                         type: object
-                      baseDomain:
-                        description: |-
-                          BaseDomain generates HTTPRoutes for all standard Sei protocols
-                          using conventional subdomain prefixes (rpc.*, rest.*, grpc.*,
-                          evm-rpc.*, evm-ws.*), each routing to the correct backend port.
-                        type: string
-                      hostnames:
-                        description: |-
-                          Hostnames routes all listed hostnames to the RPC port (26657).
-                          For multi-protocol routing, use BaseDomain instead.
-                        items:
-                          type: string
-                        type: array
                     type: object
-                    x-kubernetes-validations:
-                    - message: at least one of hostnames or baseDomain must be set
-                      rule: '(has(self.hostnames) && size(self.hostnames) > 0) ||
-                        (has(self.baseDomain) && size(self.baseDomain) > 0)'
                   isolation:
                     description: Isolation configures network-level access control
                       for node pods.

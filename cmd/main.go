@@ -134,6 +134,7 @@ func main() {
 		GenesisRegion:       os.Getenv("SEI_GENESIS_REGION"),
 		GatewayName:         os.Getenv("SEI_GATEWAY_NAME"),
 		GatewayNamespace:    os.Getenv("SEI_GATEWAY_NAMESPACE"),
+		GatewayDomain:       os.Getenv("SEI_GATEWAY_DOMAIN"),
 	}
 
 	if err := platformCfg.Validate(); err != nil {
@@ -185,6 +186,7 @@ func main() {
 		ControllerSA:     controllerSA,
 		GatewayName:      platformCfg.GatewayName,
 		GatewayNamespace: platformCfg.GatewayNamespace,
+		GatewayDomain:    platformCfg.GatewayDomain,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			Client: kc,
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {

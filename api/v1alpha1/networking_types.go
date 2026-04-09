@@ -55,20 +55,11 @@ type ExternalServiceConfig struct {
 // targeting the platform Gateway (configured via SEI_GATEWAY_NAME and
 // SEI_GATEWAY_NAMESPACE environment variables on the controller).
 //
-// +kubebuilder:validation:XValidation:rule=”(has(self.hostnames) && size(self.hostnames) > 0) || (has(self.baseDomain) && size(self.baseDomain) > 0)”,message=”at least one of hostnames or baseDomain must be set”
+// Hostnames are derived automatically from the deployment name, protocol,
+// and the platform domain (SEI_GATEWAY_DOMAIN). Which protocols get
+// HTTPRoutes is determined by the node mode via seiconfig.NodePortsForMode.
 type GatewayRouteConfig struct {
-	// Hostnames routes all listed hostnames to the RPC port (26657).
-	// For multi-protocol routing, use BaseDomain instead.
-	// +optional
-	Hostnames []string `json:"hostnames,omitempty"`
-
-	// BaseDomain generates HTTPRoutes for all standard Sei protocols
-	// using conventional subdomain prefixes (rpc.*, rest.*, grpc.*,
-	// evm-rpc.*, evm-ws.*), each routing to the correct backend port.
-	// +optional
-	BaseDomain string `json:"baseDomain,omitempty"`
-
-	// Annotations are merged onto the HTTPRoute metadata.
+	// Annotations are merged onto HTTPRoute metadata.
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 }

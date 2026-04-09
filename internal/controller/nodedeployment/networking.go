@@ -26,11 +26,10 @@ var seiProtocolRoutes = []struct {
 	Prefix string
 	Port   int32
 }{
+	{"evm", seiconfig.PortEVMHTTP},
 	{"rpc", seiconfig.PortRPC},
 	{"rest", seiconfig.PortREST},
 	{"grpc", seiconfig.PortGRPC},
-	{"evm-rpc", seiconfig.PortEVMHTTP},
-	{"evm-ws", seiconfig.PortEVMWS},
 }
 
 type effectiveRoute struct {
@@ -229,28 +228,37 @@ func (r *SeiNodeDeploymentReconciler) deleteHTTPRoutesByLabel(ctx context.Contex
 	return nil
 }
 
-func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment) []effectiveRoute {
-	cfg := group.Spec.Networking.Gateway
-	if cfg.BaseDomain != "" {
-		routes := make([]effectiveRoute, len(seiProtocolRoutes))
-		for i, p := range seiProtocolRoutes {
-			routes[i] = effectiveRoute{
-				Name:      fmt.Sprintf("%s-%s", group.Name, p.Prefix),
-				Hostnames: []string{fmt.Sprintf("%s.%s", p.Prefix, cfg.BaseDomain)},
-				Port:      p.Port,
-			}
-		}
-		return routes
+func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment, domain string) []effectiveRoute {
+	modePorts := seiconfig.NodePortsForMode(groupMode(group))
+
+	activePorts := make(map[string]bool, len(modePorts))
+	for _, p := range modePorts {
+		activePorts[p.Name] = true
 	}
-	return []effectiveRoute{{
-		Name:      group.Name,
-		Hostnames: cfg.Hostnames,
-		Port:      seiconfig.PortRPC,
-	}}
+
+	var routes []effectiveRoute
+	for _, proto := range seiProtocolRoutes {
+		if !isProtocolActiveForMode(proto.Prefix, activePorts) {
+			continue
+		}
+		routes = append(routes, effectiveRoute{
+			Name:      fmt.Sprintf("%s-%s", group.Name, proto.Prefix),
+			Hostnames: []string{fmt.Sprintf("%s.%s.%s", group.Name, proto.Prefix, domain)},
+			Port:      proto.Port,
+		})
+	}
+	return routes
+}
+
+func isProtocolActiveForMode(prefix string, activePorts map[string]bool) bool {
+	if prefix == "evm" {
+		return activePorts["evm-rpc"]
+	}
+	return activePorts[prefix]
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	routes := resolveEffectiveRoutes(group)
+	routes := resolveEffectiveRoutes(group, r.GatewayDomain)
 
 	desiredNames := make(map[string]bool, len(routes))
 	for _, er := range routes {

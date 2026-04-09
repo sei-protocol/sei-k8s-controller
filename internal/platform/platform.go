@@ -39,6 +39,7 @@ type Config struct {
 
 	GatewayName      string
 	GatewayNamespace string
+	GatewayDomain    string
 }
 
 // Validate returns an error if required fields are missing.
@@ -65,6 +66,7 @@ func (c Config) Validate() error {
 		"SEI_GENESIS_REGION":        c.GenesisRegion,
 		"SEI_GATEWAY_NAME":          c.GatewayName,
 		"SEI_GATEWAY_NAMESPACE":     c.GatewayNamespace,
+		"SEI_GATEWAY_DOMAIN":        c.GatewayDomain,
 	}
 	for name, val := range required {
 		if val == "" {
