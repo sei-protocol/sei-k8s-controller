@@ -343,6 +343,10 @@ func servicePorts() []corev1.ServicePort {
 	ports := make([]corev1.ServicePort, len(np))
 	for i, p := range np {
 		ports[i] = corev1.ServicePort{Name: p.Name, Port: p.Port, TargetPort: intstr.FromInt32(p.Port), Protocol: corev1.ProtocolTCP}
+		if p.Name == "grpc" {
+			h2c := "kubernetes.io/h2c"
+			ports[i].AppProtocol = &h2c
+		}
 	}
 	return ports
 }

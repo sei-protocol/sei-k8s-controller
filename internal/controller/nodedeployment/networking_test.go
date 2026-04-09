@@ -58,6 +58,24 @@ func TestGenerateExternalService_ValidatorModePorts(t *testing.T) {
 	g.Expect(portNames).To(ConsistOf("p2p", "metrics"))
 }
 
+func TestGenerateExternalService_GRPCAppProtocol(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	svc := generateExternalService(group)
+	for _, p := range svc.Spec.Ports {
+		if p.Name == "grpc" {
+			g.Expect(p.AppProtocol).NotTo(BeNil())
+			g.Expect(*p.AppProtocol).To(Equal("kubernetes.io/h2c"))
+			return
+		}
+	}
+	t.Fatal("grpc port not found")
+}
+
 func TestGenerateExternalService_Annotations(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
@@ -202,19 +220,58 @@ func TestGenerateHTTPRoute_EVMMerged(t *testing.T) {
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
 
+	var evmRoute effectiveRoute
 	evmCount := 0
 	for _, r := range routes {
 		if r.Name == "pacific-1-rpc-evm" {
 			evmCount++
-			g.Expect(r.Port).To(Equal(int32(8545)))
+			evmRoute = r
 		}
 	}
 	g.Expect(evmCount).To(Equal(1), "expected exactly one merged EVM route")
+	g.Expect(evmRoute.Port).To(Equal(int32(8545)))
+	g.Expect(evmRoute.WSPort).To(Equal(int32(8546)))
 
 	for _, r := range routes {
 		g.Expect(r.Name).NotTo(ContainSubstring("evm-rpc"))
 		g.Expect(r.Name).NotTo(ContainSubstring("evm-ws"))
 	}
+}
+
+func TestGenerateHTTPRoute_EVMWebSocketRule(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	var evmRoute effectiveRoute
+	for _, r := range routes {
+		if r.Name == "pacific-1-rpc-evm" {
+			evmRoute = r
+			break
+		}
+	}
+
+	httpRoute := generateHTTPRoute(group, evmRoute, "sei-gateway", "gateway")
+	spec := httpRoute.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
+	g.Expect(rules).To(HaveLen(2), "EVM route should have HTTP + WebSocket rules")
+
+	httpRule := rules[0].(map[string]any)
+	httpBackend := httpRule["backendRefs"].([]any)[0].(map[string]any)
+	g.Expect(httpBackend["port"]).To(Equal(int64(8545)))
+
+	wsRule := rules[1].(map[string]any)
+	wsMatches := wsRule["matches"].([]any)
+	wsHeaders := wsMatches[0].(map[string]any)["headers"].([]any)
+	wsHeader := wsHeaders[0].(map[string]any)
+	g.Expect(wsHeader["name"]).To(Equal("Upgrade"))
+	g.Expect(wsHeader["value"]).To(Equal("websocket"))
+
+	wsBackend := wsRule["backendRefs"].([]any)[0].(map[string]any)
+	g.Expect(wsBackend["port"]).To(Equal(int64(8546)))
 }
 
 // --- HTTPRoute Generation ---
@@ -264,7 +321,14 @@ func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
-	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
+	var rpcRoute effectiveRoute
+	for _, r := range routes {
+		if r.Name == "archive-rpc-rpc" {
+			rpcRoute = r
+			break
+		}
+	}
+	route := generateHTTPRoute(group, rpcRoute, "sei-gateway", "istio-system")
 
 	spec := route.Object["spec"].(map[string]any)
 	rules := spec["rules"].([]any)
@@ -317,6 +381,53 @@ func TestIsProtocolActiveForMode_EVMMapping(t *testing.T) {
 	g.Expect(isProtocolActiveForMode("evm", activePorts)).To(BeTrue())
 	g.Expect(isProtocolActiveForMode("rpc", activePorts)).To(BeTrue())
 	g.Expect(isProtocolActiveForMode("grpc", activePorts)).To(BeFalse())
+}
+
+// --- Edge Cases ---
+
+func TestResolveEffectiveRoutes_EmptyDomain_MalformedHostnames(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "")
+	g.Expect(routes).To(HaveLen(4), "routes are still generated even with empty domain")
+	g.Expect(routes[0].Hostnames[0]).To(Equal("pacific-1-rpc.evm."), "empty domain produces trailing dot")
+}
+
+func TestReconcileRoute_NoRoutesForValidatorMode(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-val", "sei")
+	group.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	g.Expect(routes).To(BeEmpty(), "validator mode should produce zero routes")
+}
+
+func TestGenerateHTTPRoute_NonEVMRoute_SingleRule(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	for _, r := range routes {
+		if r.Name == "pacific-1-rpc-rpc" {
+			httpRoute := generateHTTPRoute(group, r, "sei-gateway", "gateway")
+			spec := httpRoute.Object["spec"].(map[string]any)
+			rules := spec["rules"].([]any)
+			g.Expect(rules).To(HaveLen(1), "non-EVM routes should have exactly one rule")
+			g.Expect(r.WSPort).To(Equal(int32(0)), "non-EVM routes should have zero WSPort")
+			return
+		}
+	}
+	t.Fatal("rpc route not found")
 }
 
 // --- AuthorizationPolicy ---

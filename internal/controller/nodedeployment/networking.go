@@ -36,6 +36,7 @@ type effectiveRoute struct {
 	Name      string
 	Hostnames []string
 	Port      int32
+	WSPort    int32 // non-zero when WebSocket requires a separate backend port
 }
 
 // hasExternalService returns true when the deployment has a LoadBalancer
@@ -198,6 +199,10 @@ func portsForMode(mode seiconfig.NodeMode) []corev1.ServicePort {
 			TargetPort: intstr.FromInt32(p.Port),
 			Protocol:   corev1.ProtocolTCP,
 		}
+		if p.Name == "grpc" {
+			h2c := "kubernetes.io/h2c"
+			ports[i].AppProtocol = &h2c
+		}
 	}
 	return ports
 }
@@ -242,11 +247,15 @@ func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment, domain string)
 		if !isProtocolActiveForMode(proto.Prefix, activePorts) {
 			continue
 		}
-		routes = append(routes, effectiveRoute{
+		er := effectiveRoute{
 			Name:      fmt.Sprintf("%s-%s", group.Name, proto.Prefix),
 			Hostnames: []string{fmt.Sprintf("%s.%s.%s", group.Name, proto.Prefix, domain)},
 			Port:      proto.Port,
-		})
+		}
+		if proto.Prefix == "evm" && activePorts["evm-ws"] {
+			er.WSPort = seiconfig.PortEVMWS
+		}
+		routes = append(routes, er)
 	}
 	return routes
 }
@@ -331,6 +340,38 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeDeployment, er effectiveRoute, 
 		"namespace": gatewayNamespace,
 	}
 
+	rules := []any{
+		map[string]any{
+			"backendRefs": []any{
+				map[string]any{
+					"name": svcName,
+					"port": int64(er.Port),
+				},
+			},
+		},
+	}
+	if er.WSPort != 0 {
+		rules = append(rules, map[string]any{
+			"matches": []any{
+				map[string]any{
+					"headers": []any{
+						map[string]any{
+							"type":  "Exact",
+							"name":  "Upgrade",
+							"value": "websocket",
+						},
+					},
+				},
+			},
+			"backendRefs": []any{
+				map[string]any{
+					"name": svcName,
+					"port": int64(er.WSPort),
+				},
+			},
+		})
+	}
+
 	route := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "gateway.networking.k8s.io/v1",
@@ -344,16 +385,7 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeDeployment, er effectiveRoute, 
 			"spec": map[string]any{
 				"parentRefs": []any{parentRef},
 				"hostnames":  hostnames,
-				"rules": []any{
-					map[string]any{
-						"backendRefs": []any{
-							map[string]any{
-								"name": svcName,
-								"port": int64(er.Port),
-							},
-						},
-					},
-				},
+				"rules":      rules,
 			},
 		},
 	}
