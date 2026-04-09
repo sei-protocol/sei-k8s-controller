@@ -68,6 +68,7 @@ func (c Config) Validate() error {
 		"SEI_GATEWAY_NAME":          c.GatewayName,
 		"SEI_GATEWAY_NAMESPACE":     c.GatewayNamespace,
 		"SEI_GATEWAY_DOMAIN":        c.GatewayDomain,
+		"SEI_GATEWAY_SECTION_NAME":  c.GatewaySectionName,
 	}
 	for name, val := range required {
 		if val == "" {

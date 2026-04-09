@@ -29,5 +29,6 @@ func Config() platform.Config {
 		GatewayName:         "sei-gateway",
 		GatewayNamespace:    "istio-system",
 		GatewayDomain:       "test.platform.sei.io",
+		GatewaySectionName:  "https",
 	}
 }
