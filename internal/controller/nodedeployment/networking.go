@@ -26,11 +26,10 @@ var seiProtocolRoutes = []struct {
 	Prefix string
 	Port   int32
 }{
+	{"evm", seiconfig.PortEVMHTTP},
 	{"rpc", seiconfig.PortRPC},
 	{"rest", seiconfig.PortREST},
 	{"grpc", seiconfig.PortGRPC},
-	{"evm-rpc", seiconfig.PortEVMHTTP},
-	{"evm-ws", seiconfig.PortEVMWS},
 }
 
 type effectiveRoute struct {
@@ -204,11 +203,12 @@ func portsForMode(mode seiconfig.NodeMode) []corev1.ServicePort {
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileRoute(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	if group.Spec.Networking.Gateway == nil {
+	routes := resolveEffectiveRoutes(group, r.GatewayDomain)
+	if len(routes) == 0 {
 		removeCondition(group, seiv1alpha1.ConditionRouteReady)
 		return r.deleteHTTPRoutesByLabel(ctx, group)
 	}
-	return r.reconcileHTTPRoute(ctx, group)
+	return r.reconcileHTTPRoutes(ctx, group, routes)
 }
 
 func (r *SeiNodeDeploymentReconciler) deleteHTTPRoutesByLabel(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
@@ -229,29 +229,36 @@ func (r *SeiNodeDeploymentReconciler) deleteHTTPRoutesByLabel(ctx context.Contex
 	return nil
 }
 
-func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment) []effectiveRoute {
-	cfg := group.Spec.Networking.Gateway
-	if cfg.BaseDomain != "" {
-		routes := make([]effectiveRoute, len(seiProtocolRoutes))
-		for i, p := range seiProtocolRoutes {
-			routes[i] = effectiveRoute{
-				Name:      fmt.Sprintf("%s-%s", group.Name, p.Prefix),
-				Hostnames: []string{fmt.Sprintf("%s.%s", p.Prefix, cfg.BaseDomain)},
-				Port:      p.Port,
-			}
-		}
-		return routes
+func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment, domain string) []effectiveRoute {
+	modePorts := seiconfig.NodePortsForMode(groupMode(group))
+
+	activePorts := make(map[string]bool, len(modePorts))
+	for _, p := range modePorts {
+		activePorts[p.Name] = true
 	}
-	return []effectiveRoute{{
-		Name:      group.Name,
-		Hostnames: cfg.Hostnames,
-		Port:      seiconfig.PortRPC,
-	}}
+
+	var routes []effectiveRoute
+	for _, proto := range seiProtocolRoutes {
+		if !isProtocolActiveForMode(proto.Prefix, activePorts) {
+			continue
+		}
+		routes = append(routes, effectiveRoute{
+			Name:      fmt.Sprintf("%s-%s", group.Name, proto.Prefix),
+			Hostnames: []string{fmt.Sprintf("%s.%s.%s", group.Name, proto.Prefix, domain)},
+			Port:      proto.Port,
+		})
+	}
+	return routes
 }
 
-func (r *SeiNodeDeploymentReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	routes := resolveEffectiveRoutes(group)
+func isProtocolActiveForMode(prefix string, activePorts map[string]bool) bool {
+	if prefix == "evm" {
+		return activePorts["evm-rpc"]
+	}
+	return activePorts[prefix]
+}
 
+func (r *SeiNodeDeploymentReconciler) reconcileHTTPRoutes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, routes []effectiveRoute) error {
 	desiredNames := make(map[string]bool, len(routes))
 	for _, er := range routes {
 		desiredNames[er.Name] = true

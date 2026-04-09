@@ -19,15 +19,16 @@ const (
 // Routing uses the Kubernetes Gateway API exclusively; the platform must
 // install the Gateway API CRDs (v1+) and a Gateway implementation such
 // as Istio before HTTPRoute resources will take effect.
-// +kubebuilder:validation:XValidation:rule="!has(self.gateway) || has(self.service)",message="gateway requires service to be configured"
 type NetworkingConfig struct {
 	// Service creates a non-headless Service shared across all replicas.
 	// Each SeiNode still gets its own headless Service for pod DNS.
 	// +optional
 	Service *ExternalServiceConfig `json:"service,omitempty"`
 
-	// Gateway creates a gateway.networking.k8s.io/v1 HTTPRoute
-	// targeting a shared Gateway (e.g. Istio ingress gateway).
+	// Gateway provides optional annotations for generated HTTPRoute resources.
+	// HTTPRoutes are generated automatically when the node mode has public
+	// ports and the platform Gateway env vars are configured. This field is
+	// only needed to add custom annotations to the HTTPRoute metadata.
 	// +optional
 	Gateway *GatewayRouteConfig `json:"gateway,omitempty"`
 
@@ -55,20 +56,11 @@ type ExternalServiceConfig struct {
 // targeting the platform Gateway (configured via SEI_GATEWAY_NAME and
 // SEI_GATEWAY_NAMESPACE environment variables on the controller).
 //
-// +kubebuilder:validation:XValidation:rule=”(has(self.hostnames) && size(self.hostnames) > 0) || (has(self.baseDomain) && size(self.baseDomain) > 0)”,message=”at least one of hostnames or baseDomain must be set”
+// Hostnames are derived automatically from the deployment name, protocol,
+// and the platform domain (SEI_GATEWAY_DOMAIN). Which protocols get
+// HTTPRoutes is determined by the node mode via seiconfig.NodePortsForMode.
 type GatewayRouteConfig struct {
-	// Hostnames routes all listed hostnames to the RPC port (26657).
-	// For multi-protocol routing, use BaseDomain instead.
-	// +optional
-	Hostnames []string `json:"hostnames,omitempty"`
-
-	// BaseDomain generates HTTPRoutes for all standard Sei protocols
-	// using conventional subdomain prefixes (rpc.*, rest.*, grpc.*,
-	// evm-rpc.*, evm-ws.*), each routing to the correct backend port.
-	// +optional
-	BaseDomain string `json:"baseDomain,omitempty"`
-
-	// Annotations are merged onto the HTTPRoute metadata.
+	// Annotations are merged onto HTTPRoute metadata.
 	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 }

@@ -45,9 +45,6 @@ spec:
     service:
       type: ClusterIP
 
-    gateway:
-      baseDomain: pacific-1.sei.io
-
     isolation:
       authorizationPolicy:
         allowedSources:

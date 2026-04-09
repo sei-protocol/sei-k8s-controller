@@ -30,10 +30,6 @@ spec:
       name: Revision
       priority: 1
       type: string
-    - jsonPath: .spec.networking.gateway.hostnames[0]
-      name: Host
-      priority: 1
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -192,32 +188,17 @@ spec:
                 properties:
                   gateway:
                     description: |-
-                      Gateway creates a gateway.networking.k8s.io/v1 HTTPRoute
-                      targeting a shared Gateway (e.g. Istio ingress gateway).
+                      Gateway provides optional annotations for generated HTTPRoute resources.
+                      HTTPRoutes are generated automatically when the node mode has public
+                      ports and the platform Gateway env vars are configured. This field is
+                      only needed to add custom annotations to the HTTPRoute metadata.
                     properties:
                       annotations:
                         additionalProperties:
                           type: string
-                        description: Annotations are merged onto the HTTPRoute metadata.
+                        description: Annotations are merged onto HTTPRoute metadata.
                         type: object
-                      baseDomain:
-                        description: |-
-                          BaseDomain generates HTTPRoutes for all standard Sei protocols
-                          using conventional subdomain prefixes (rpc.*, rest.*, grpc.*,
-                          evm-rpc.*, evm-ws.*), each routing to the correct backend port.
-                        type: string
-                      hostnames:
-                        description: |-
-                          Hostnames routes all listed hostnames to the RPC port (26657).
-                          For multi-protocol routing, use BaseDomain instead.
-                        items:
-                          type: string
-                        type: array
                     type: object
-                    x-kubernetes-validations:
-                    - message: at least one of hostnames or baseDomain must be set
-                      rule: '(has(self.hostnames) && size(self.hostnames) > 0) ||
-                        (has(self.baseDomain) && size(self.baseDomain) > 0)'
                   isolation:
                     description: Isolation configures network-level access control
                       for node pods.
@@ -280,9 +261,6 @@ spec:
                         type: string
                     type: object
                 type: object
-                x-kubernetes-validations:
-                - message: gateway requires service to be configured
-                  rule: '!has(self.gateway) || has(self.service)'
               replicas:
                 default: 1
                 description: Replicas is the number of SeiNode instances to create.

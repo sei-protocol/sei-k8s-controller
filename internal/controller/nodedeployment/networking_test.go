@@ -98,23 +98,139 @@ func TestGenerateExternalService_NoPublishNotReady(t *testing.T) {
 	g.Expect(svc.Spec.PublishNotReadyAddresses).To(BeFalse())
 }
 
-// --- HTTPRoute ---
+func TestGenerateExternalService_FullModeIncludesAllPorts(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	svc := generateExternalService(group)
+	portNames := make([]string, len(svc.Spec.Ports))
+	for i, p := range svc.Spec.Ports {
+		portNames[i] = p.Name
+	}
+	g.Expect(portNames).To(ConsistOf("evm-rpc", "evm-ws", "grpc", "rest", "p2p", "rpc", "metrics"))
+}
+
+// --- Effective Routes ---
+
+func TestResolveEffectiveRoutes_FullMode_FourRoutes(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	g.Expect(routes).To(HaveLen(4))
+
+	type routeExpectation struct {
+		Name     string
+		Hostname string
+		Port     int32
+	}
+	expected := []routeExpectation{
+		{"pacific-1-rpc-evm", "pacific-1-rpc.evm.prod.platform.sei.io", 8545},
+		{"pacific-1-rpc-rpc", "pacific-1-rpc.rpc.prod.platform.sei.io", 26657},
+		{"pacific-1-rpc-rest", "pacific-1-rpc.rest.prod.platform.sei.io", 1317},
+		{"pacific-1-rpc-grpc", "pacific-1-rpc.grpc.prod.platform.sei.io", 9090},
+	}
+	for i, exp := range expected {
+		g.Expect(routes[i].Name).To(Equal(exp.Name))
+		g.Expect(routes[i].Hostnames).To(Equal([]string{exp.Hostname}))
+		g.Expect(routes[i].Port).To(Equal(exp.Port))
+	}
+}
+
+func TestResolveEffectiveRoutes_ArchiveMode_FourRoutes(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-archive", "sei")
+	group.Spec.Template.Spec.FullNode = nil
+	group.Spec.Template.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	g.Expect(routes).To(HaveLen(4))
+}
+
+func TestResolveEffectiveRoutes_ValidatorMode_NoRoutes(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-val", "sei")
+	group.Spec.Template.Spec.FullNode = nil
+	group.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	g.Expect(routes).To(BeEmpty())
+}
+
+func TestGenerateHTTPRoute_HostnamePattern(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	g.Expect(routes).NotTo(BeEmpty())
+
+	for _, er := range routes {
+		route := generateHTTPRoute(group, er, "sei-gateway", "istio-system")
+		spec := route.Object["spec"].(map[string]any)
+		hostnames := spec["hostnames"].([]any)
+		g.Expect(hostnames).To(HaveLen(1))
+		g.Expect(hostnames[0]).To(MatchRegexp(`^pacific-1-rpc\.\w+\.prod\.platform\.sei\.io$`))
+	}
+}
+
+func TestGenerateHTTPRoute_EVMMerged(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+
+	evmCount := 0
+	for _, r := range routes {
+		if r.Name == "pacific-1-rpc-evm" {
+			evmCount++
+			g.Expect(r.Port).To(Equal(int32(8545)))
+		}
+	}
+	g.Expect(evmCount).To(Equal(1), "expected exactly one merged EVM route")
+
+	for _, r := range routes {
+		g.Expect(r.Name).NotTo(ContainSubstring("evm-rpc"))
+		g.Expect(r.Name).NotTo(ContainSubstring("evm-ws"))
+	}
+}
+
+// --- HTTPRoute Generation ---
 
 func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			Hostnames: []string{"rpc.pacific-1.sei.io"},
-		},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{},
 	}
 
-	routes := resolveEffectiveRoutes(group)
-	g.Expect(routes).To(HaveLen(1))
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
+	g.Expect(routes).NotTo(BeEmpty())
 	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
 
-	g.Expect(route.GetName()).To(Equal("archive-rpc"))
 	g.Expect(route.GetNamespace()).To(Equal("sei"))
 
 	spec := route.Object["spec"].(map[string]any)
@@ -124,9 +240,6 @@ func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
 	ref := parentRefs[0].(map[string]any)
 	g.Expect(ref["name"]).To(Equal("sei-gateway"))
 	g.Expect(ref["namespace"]).To(Equal("istio-system"))
-
-	hostnames := spec["hostnames"].([]any)
-	g.Expect(hostnames).To(ConsistOf("rpc.pacific-1.sei.io"))
 }
 
 func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
@@ -134,12 +247,10 @@ func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
 	group := newTestGroup("archive-rpc", "sei")
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			Hostnames: []string{"rpc.sei.io"},
-		},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{},
 	}
 
-	routes := resolveEffectiveRoutes(group)
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
 	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
 	g.Expect(route.GetAnnotations()).To(HaveKeyWithValue("sei.io/managed-by", "seinodedeployment"))
 }
@@ -149,12 +260,10 @@ func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	group := newTestGroup("archive-rpc", "sei")
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			Hostnames: []string{"rpc.sei.io"},
-		},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{},
 	}
 
-	routes := resolveEffectiveRoutes(group)
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
 	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
 
 	spec := route.Object["spec"].(map[string]any)
@@ -169,59 +278,29 @@ func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	g.Expect(backend["name"]).To(Equal("archive-rpc-external"))
 }
 
-// --- BaseDomain HTTPRoutes ---
-
-func TestResolveEffectiveRoutes_BaseDomain_FiveRoutes(t *testing.T) {
+func TestGenerateHTTPRoute_GRPCRoutePort(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-rpc", "sei")
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
 		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			BaseDomain: "pacific-1.sei.io",
-		},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{},
 	}
 
-	routes := resolveEffectiveRoutes(group)
-	g.Expect(routes).To(HaveLen(5))
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io")
 
-	type routeExpectation struct {
-		Name     string
-		Hostname string
-		Port     int32
+	var grpcRoute effectiveRoute
+	for _, r := range routes {
+		if r.Name == "pacific-1-rpc-grpc" {
+			grpcRoute = r
+			break
+		}
 	}
-	expected := []routeExpectation{
-		{"pacific-1-rpc-rpc", "rpc.pacific-1.sei.io", 26657},
-		{"pacific-1-rpc-rest", "rest.pacific-1.sei.io", 1317},
-		{"pacific-1-rpc-grpc", "grpc.pacific-1.sei.io", 9090},
-		{"pacific-1-rpc-evm-rpc", "evm-rpc.pacific-1.sei.io", 8545},
-		{"pacific-1-rpc-evm-ws", "evm-ws.pacific-1.sei.io", 8546},
-	}
-	for i, exp := range expected {
-		g.Expect(routes[i].Name).To(Equal(exp.Name))
-		g.Expect(routes[i].Hostnames).To(Equal([]string{exp.Hostname}))
-		g.Expect(routes[i].Port).To(Equal(exp.Port))
-	}
-}
+	g.Expect(grpcRoute.Name).NotTo(BeEmpty(), "grpc route should exist")
 
-func TestGenerateHTTPRoute_BaseDomain_CorrectHostnamesAndPorts(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("pacific-1-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			BaseDomain: "pacific-1.sei.io",
-		},
-	}
-
-	routes := resolveEffectiveRoutes(group)
-	g.Expect(routes).To(HaveLen(5))
-
-	grpcRoute := generateHTTPRoute(group, routes[2], "sei-gateway", "istio-system")
-	g.Expect(grpcRoute.GetName()).To(Equal("pacific-1-rpc-grpc"))
-
-	spec := grpcRoute.Object["spec"].(map[string]any)
+	httpRoute := generateHTTPRoute(group, grpcRoute, "sei-gateway", "istio-system")
+	spec := httpRoute.Object["spec"].(map[string]any)
 	hostnames := spec["hostnames"].([]any)
-	g.Expect(hostnames).To(ConsistOf("grpc.pacific-1.sei.io"))
+	g.Expect(hostnames).To(ConsistOf("pacific-1-rpc.grpc.prod.platform.sei.io"))
 
 	rules := spec["rules"].([]any)
 	backend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
@@ -229,52 +308,15 @@ func TestGenerateHTTPRoute_BaseDomain_CorrectHostnamesAndPorts(t *testing.T) {
 	g.Expect(backend["name"]).To(Equal("pacific-1-rpc-external"))
 }
 
-func TestResolveEffectiveRoutes_LegacyHostnames_SingleRoute(t *testing.T) {
+// --- isProtocolActiveForMode ---
+
+func TestIsProtocolActiveForMode_EVMMapping(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			Hostnames: []string{"rpc.sei.io"},
-		},
-	}
+	activePorts := map[string]bool{"evm-rpc": true, "evm-ws": true, "rpc": true}
 
-	routes := resolveEffectiveRoutes(group)
-	g.Expect(routes).To(HaveLen(1))
-	g.Expect(routes[0].Name).To(Equal("archive-rpc"))
-	g.Expect(routes[0].Hostnames).To(Equal([]string{"rpc.sei.io"}))
-	g.Expect(routes[0].Port).To(Equal(int32(26657)))
-}
-
-func TestResolveEffectiveRoutes_BaseDomainTakesPrecedence(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{
-			Hostnames:  []string{"rpc.sei.io"},
-			BaseDomain: "pacific-1.sei.io",
-		},
-	}
-
-	routes := resolveEffectiveRoutes(group)
-	g.Expect(routes).To(HaveLen(5))
-	g.Expect(routes[0].Hostnames).To(Equal([]string{"rpc.pacific-1.sei.io"}))
-}
-
-func TestGenerateExternalService_FullModeIncludesAllPorts(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("pacific-1-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
-
-	svc := generateExternalService(group)
-	portNames := make([]string, len(svc.Spec.Ports))
-	for i, p := range svc.Spec.Ports {
-		portNames[i] = p.Name
-	}
-	g.Expect(portNames).To(ConsistOf("evm-rpc", "evm-ws", "grpc", "rest", "p2p", "rpc", "metrics"))
+	g.Expect(isProtocolActiveForMode("evm", activePorts)).To(BeTrue())
+	g.Expect(isProtocolActiveForMode("rpc", activePorts)).To(BeTrue())
+	g.Expect(isProtocolActiveForMode("grpc", activePorts)).To(BeFalse())
 }
 
 // --- AuthorizationPolicy ---
