@@ -203,11 +203,12 @@ func portsForMode(mode seiconfig.NodeMode) []corev1.ServicePort {
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileRoute(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	if group.Spec.Networking.Gateway == nil {
+	routes := resolveEffectiveRoutes(group, r.GatewayDomain)
+	if len(routes) == 0 {
 		removeCondition(group, seiv1alpha1.ConditionRouteReady)
 		return r.deleteHTTPRoutesByLabel(ctx, group)
 	}
-	return r.reconcileHTTPRoute(ctx, group)
+	return r.reconcileHTTPRoutes(ctx, group, routes)
 }
 
 func (r *SeiNodeDeploymentReconciler) deleteHTTPRoutesByLabel(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
@@ -257,9 +258,7 @@ func isProtocolActiveForMode(prefix string, activePorts map[string]bool) bool {
 	return activePorts[prefix]
 }
 
-func (r *SeiNodeDeploymentReconciler) reconcileHTTPRoute(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	routes := resolveEffectiveRoutes(group, r.GatewayDomain)
-
+func (r *SeiNodeDeploymentReconciler) reconcileHTTPRoutes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, routes []effectiveRoute) error {
 	desiredNames := make(map[string]bool, len(routes))
 	for _, er := range routes {
 		desiredNames[er.Name] = true

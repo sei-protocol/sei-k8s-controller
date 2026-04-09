@@ -45,8 +45,6 @@ spec:
     service:
       type: ClusterIP
 
-    gateway: {}
-
     isolation:
       authorizationPolicy:
         allowedSources:

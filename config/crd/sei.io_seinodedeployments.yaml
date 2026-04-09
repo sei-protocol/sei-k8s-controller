@@ -188,8 +188,10 @@ spec:
                 properties:
                   gateway:
                     description: |-
-                      Gateway creates a gateway.networking.k8s.io/v1 HTTPRoute
-                      targeting a shared Gateway (e.g. Istio ingress gateway).
+                      Gateway provides optional annotations for generated HTTPRoute resources.
+                      HTTPRoutes are generated automatically when the node mode has public
+                      ports and the platform Gateway env vars are configured. This field is
+                      only needed to add custom annotations to the HTTPRoute metadata.
                     properties:
                       annotations:
                         additionalProperties:
@@ -259,9 +261,6 @@ spec:
                         type: string
                     type: object
                 type: object
-                x-kubernetes-validations:
-                - message: gateway requires service to be configured
-                  rule: '!has(self.gateway) || has(self.service)'
               replicas:
                 default: 1
                 description: Replicas is the number of SeiNode instances to create.

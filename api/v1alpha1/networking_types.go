@@ -19,15 +19,16 @@ const (
 // Routing uses the Kubernetes Gateway API exclusively; the platform must
 // install the Gateway API CRDs (v1+) and a Gateway implementation such
 // as Istio before HTTPRoute resources will take effect.
-// +kubebuilder:validation:XValidation:rule="!has(self.gateway) || has(self.service)",message="gateway requires service to be configured"
 type NetworkingConfig struct {
 	// Service creates a non-headless Service shared across all replicas.
 	// Each SeiNode still gets its own headless Service for pod DNS.
 	// +optional
 	Service *ExternalServiceConfig `json:"service,omitempty"`
 
-	// Gateway creates a gateway.networking.k8s.io/v1 HTTPRoute
-	// targeting a shared Gateway (e.g. Istio ingress gateway).
+	// Gateway provides optional annotations for generated HTTPRoute resources.
+	// HTTPRoutes are generated automatically when the node mode has public
+	// ports and the platform Gateway env vars are configured. This field is
+	// only needed to add custom annotations to the HTTPRoute metadata.
 	// +optional
 	Gateway *GatewayRouteConfig `json:"gateway,omitempty"`
 
