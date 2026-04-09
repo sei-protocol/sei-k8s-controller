@@ -112,7 +112,7 @@ func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
 
 	routes := resolveEffectiveRoutes(group)
 	g.Expect(routes).To(HaveLen(1))
-	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system", "")
 
 	g.Expect(route.GetName()).To(Equal("archive-rpc"))
 	g.Expect(route.GetNamespace()).To(Equal("sei"))
@@ -140,7 +140,7 @@ func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
 	}
 
 	routes := resolveEffectiveRoutes(group)
-	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system", "")
 	g.Expect(route.GetAnnotations()).To(HaveKeyWithValue("sei.io/managed-by", "seinodedeployment"))
 }
 
@@ -155,7 +155,7 @@ func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	}
 
 	routes := resolveEffectiveRoutes(group)
-	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system", "")
 
 	spec := route.Object["spec"].(map[string]any)
 	rules := spec["rules"].([]any)
@@ -216,7 +216,7 @@ func TestGenerateHTTPRoute_BaseDomain_CorrectHostnamesAndPorts(t *testing.T) {
 	routes := resolveEffectiveRoutes(group)
 	g.Expect(routes).To(HaveLen(5))
 
-	grpcRoute := generateHTTPRoute(group, routes[2], "sei-gateway", "istio-system")
+	grpcRoute := generateHTTPRoute(group, routes[2], "sei-gateway", "istio-system", "")
 	g.Expect(grpcRoute.GetName()).To(Equal("pacific-1-rpc-grpc"))
 
 	spec := grpcRoute.Object["spec"].(map[string]any)
@@ -244,6 +244,45 @@ func TestResolveEffectiveRoutes_LegacyHostnames_SingleRoute(t *testing.T) {
 	g.Expect(routes[0].Name).To(Equal("archive-rpc"))
 	g.Expect(routes[0].Hostnames).To(Equal([]string{"rpc.sei.io"}))
 	g.Expect(routes[0].Port).To(Equal(int32(26657)))
+}
+
+func TestGenerateHTTPRoute_SectionName_IncludedWhenSet(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{
+			Hostnames: []string{"rpc.pacific-1.sei.io"},
+		},
+	}
+
+	routes := resolveEffectiveRoutes(group)
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system", "https")
+
+	spec := route.Object["spec"].(map[string]any)
+	parentRefs := spec["parentRefs"].([]any)
+	ref := parentRefs[0].(map[string]any)
+	g.Expect(ref["sectionName"]).To(Equal("https"))
+}
+
+func TestGenerateHTTPRoute_SectionName_OmittedWhenEmpty(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+		Gateway: &seiv1alpha1.GatewayRouteConfig{
+			Hostnames: []string{"rpc.pacific-1.sei.io"},
+		},
+	}
+
+	routes := resolveEffectiveRoutes(group)
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system", "")
+
+	spec := route.Object["spec"].(map[string]any)
+	parentRefs := spec["parentRefs"].([]any)
+	ref := parentRefs[0].(map[string]any)
+	_, hasSectionName := ref["sectionName"]
+	g.Expect(hasSectionName).To(BeFalse(), "sectionName should not be present when GatewaySectionName is empty")
 }
 
 func TestResolveEffectiveRoutes_BaseDomainTakesPrecedence(t *testing.T) {

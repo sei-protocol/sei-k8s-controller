@@ -28,5 +28,6 @@ func Config() platform.Config {
 		GenesisRegion:       "us-east-2",
 		GatewayName:         "sei-gateway",
 		GatewayNamespace:    "istio-system",
+		GatewaySectionName:  "",
 	}
 }

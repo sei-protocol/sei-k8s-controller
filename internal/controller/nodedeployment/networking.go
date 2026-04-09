@@ -258,7 +258,7 @@ func (r *SeiNodeDeploymentReconciler) reconcileHTTPRoute(ctx context.Context, gr
 	}
 
 	for _, er := range routes {
-		desired := generateHTTPRoute(group, er, r.GatewayName, r.GatewayNamespace)
+		desired := generateHTTPRoute(group, er, r.GatewayName, r.GatewayNamespace, r.GatewaySectionName)
 		if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
 			return fmt.Errorf("setting owner reference on HTTPRoute %s: %w", er.Name, err)
 		}
@@ -311,7 +311,7 @@ func (r *SeiNodeDeploymentReconciler) deleteOrphanedHTTPRoutes(ctx context.Conte
 	return nil
 }
 
-func generateHTTPRoute(group *seiv1alpha1.SeiNodeDeployment, er effectiveRoute, gatewayName, gatewayNamespace string) *unstructured.Unstructured {
+func generateHTTPRoute(group *seiv1alpha1.SeiNodeDeployment, er effectiveRoute, gatewayName, gatewayNamespace, gatewaySectionName string) *unstructured.Unstructured {
 	svcName := externalServiceName(group)
 
 	hostnames := make([]any, len(er.Hostnames))
@@ -322,6 +322,9 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeDeployment, er effectiveRoute, 
 	parentRef := map[string]any{
 		"name":      gatewayName,
 		"namespace": gatewayNamespace,
+	}
+	if gatewaySectionName != "" {
+		parentRef["sectionName"] = gatewaySectionName
 	}
 
 	route := &unstructured.Unstructured{

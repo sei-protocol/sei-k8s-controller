@@ -45,6 +45,11 @@ type SeiNodeDeploymentReconciler struct {
 	GatewayName      string
 	GatewayNamespace string
 
+	// GatewaySectionName optionally targets a specific Gateway listener
+	// (e.g. "https"). When non-empty, HTTPRoute parentRefs include a
+	// sectionName field. Read from SEI_GATEWAY_SECTION_NAME.
+	GatewaySectionName string
+
 	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeDeployment]
 }
