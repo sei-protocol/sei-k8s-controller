@@ -248,7 +248,7 @@ func buildBasePlan(
 	if len(peers) > 0 {
 		prog = insertBefore(prog, TaskConfigValidate, TaskDiscoverPeers)
 	}
-	if hasStateSync(snap) {
+	if snap != nil {
 		prog = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync)
 	}
 
