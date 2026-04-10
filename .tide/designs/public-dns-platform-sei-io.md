@@ -22,9 +22,9 @@ We want clean public URLs under `platform.sei.io` — everything behind HTTPS on
 | Zone | Managed By | Purpose |
 |------|-----------|---------|
 | `prod.platform.sei.io` | Existing Route53 zone | Internal / legacy — no changes |
-| `platform.sei.io` | **New** Route53 hosted zone (AWS CLI / console) | Public-facing endpoints |
+| `platform.sei.io` | **New** Route53 hosted zone (Terraform) | Public-facing endpoints |
 
-The new `platform.sei.io` zone is created manually (one-time operation, no Terraform required). NS delegation from the parent `sei.io` zone is the only prerequisite. A/CNAME records within the zone are fully managed by External-DNS from HTTPRoute hostnames.
+The new `platform.sei.io` zone is created via Terraform alongside the existing infra (`platform/terraform/aws/189176372795/eu-central-1/prod/route53.tf`). NS delegation from the parent `sei.io` zone and IRSA policy grants for cert-manager and external-dns are also managed in Terraform. A/CNAME records within the zone are fully managed by External-DNS from HTTPRoute hostnames.
 
 ### Hostname Pattern
 
@@ -208,8 +208,8 @@ HTTPRoutes currently reference the Gateway without a `sectionName`, which binds 
 
 ## Rollout Plan
 
-### Phase 1: Route53 Zone
-1. Create `platform.sei.io` hosted zone via AWS CLI
+### Phase 1: Infrastructure (Terraform)
+1. Create `platform.sei.io` Route53 hosted zone
 2. Add NS delegation from `sei.io` to the new zone
 3. Grant cert-manager and external-dns IRSA roles access to the new zone
 
@@ -240,8 +240,7 @@ HTTPRoutes currently reference the Gateway without a `sectionName`, which binds 
 
 | Repo | File | Change |
 |------|------|--------|
-| — | AWS Route53 | New `platform.sei.io` hosted zone (CLI) |
-| — | `sei.io` parent zone | NS delegation for `platform.sei.io` |
+| `platform` | `terraform/.../prod/route53.tf` | New `platform.sei.io` hosted zone + NS delegation |
 | `platform` | `terraform/.../prod/cert-manager.tf` | IRSA policy for new zone |
 | `platform` | `terraform/.../prod/external-dns.tf` | IRSA policy for new zone |
 | `platform` | `clusters/prod/cert-manager/issuer.yaml` | Add `platform.sei.io` to dnsZones |
