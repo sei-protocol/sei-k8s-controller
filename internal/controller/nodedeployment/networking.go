@@ -3,7 +3,6 @@ package nodedeployment
 import (
 	"context"
 	"fmt"
-	"maps"
 	"net"
 
 	seiconfig "github.com/sei-protocol/sei-config"
@@ -40,114 +39,42 @@ type effectiveRoute struct {
 	WSPort    int32
 }
 
-// hasExternalService returns true when the deployment has a LoadBalancer
-// Service that will produce an external address to gate on.
-func (r *SeiNodeDeploymentReconciler) hasExternalService(group *seiv1alpha1.SeiNodeDeployment) bool {
-	return group.Spec.Networking != nil &&
-		group.Spec.Networking.Service != nil &&
-		group.Spec.Networking.Service.Type == corev1.ServiceTypeLoadBalancer
+// routeHostnameResolvable returns true when the deployment's first public
+// hostname resolves in DNS, indicating the HTTPRoute + External-DNS pipeline
+// is ready. Returns true when no routes are expected (private deployments,
+// validator mode).
+func (r *SeiNodeDeploymentReconciler) routeHostnameResolvable(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) bool {
+	if group.Spec.Networking == nil {
+		return true
+	}
+	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
+	if len(routes) == 0 {
+		return true
+	}
+	hostname := routes[0].Hostnames[0]
+	if _, err := net.DefaultResolver.LookupHost(ctx, hostname); err != nil {
+		log.FromContext(ctx).Info("route hostname not yet resolvable", "hostname", hostname)
+		return false
+	}
+	return true
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking == nil {
-		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
 		removeCondition(group, seiv1alpha1.ConditionRouteReady)
-		removeCondition(group, seiv1alpha1.ConditionIsolationReady)
 		return r.deleteNetworkingResources(ctx, group)
 	}
 
 	if err := r.reconcileExternalService(ctx, group); err != nil {
 		return fmt.Errorf("reconciling external service: %w", err)
 	}
-	if err := r.reconcileExternalAddress(ctx, group); err != nil {
-		return fmt.Errorf("reconciling external P2P address: %w", err)
-	}
 	if err := r.reconcileRoute(ctx, group); err != nil {
 		return fmt.Errorf("reconciling route: %w", err)
 	}
-	if err := r.reconcileIsolation(ctx, group); err != nil {
-		return fmt.Errorf("reconciling isolation: %w", err)
-	}
 	return nil
-}
-
-// reconcileExternalAddress propagates the external P2P address from the
-// LoadBalancer Service to child SeiNode status so that the planner can
-// inject p2p.external_address into CometBFT config at plan build time.
-func (r *SeiNodeDeploymentReconciler) reconcileExternalAddress(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	addr := r.resolveExternalP2PAddress(ctx, group)
-	if addr == "" {
-		return nil
-	}
-
-	nodes, err := r.listChildSeiNodes(ctx, group)
-	if err != nil {
-		return fmt.Errorf("listing child SeiNodes: %w", err)
-	}
-
-	for i := range nodes {
-		node := &nodes[i]
-		if node.Status.ExternalAddress == addr {
-			continue
-		}
-		patch := client.MergeFrom(node.DeepCopy())
-		node.Status.ExternalAddress = addr
-		if err := r.Status().Patch(ctx, node, patch); err != nil {
-			return fmt.Errorf("patching external address status on SeiNode %s: %w", node.Name, err)
-		}
-		log.FromContext(ctx).Info("set P2P external address on status", "node", node.Name, "address", addr)
-	}
-	return nil
-}
-
-// resolveExternalP2PAddress returns the routable P2P address for this
-// deployment's nodes, or "" if not yet available. Returns empty if the
-// hostname is assigned but not yet resolvable in DNS.
-func (r *SeiNodeDeploymentReconciler) resolveExternalP2PAddress(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) string {
-	svc, err := r.fetchExternalService(ctx, group)
-	if err != nil {
-		return ""
-	}
-	addr := externalAddressFromService(svc)
-	if addr == "" {
-		return ""
-	}
-	// Verify the hostname resolves before using it — NLB hostnames are
-	// assigned immediately by AWS but DNS propagation takes a moment.
-	host, _, _ := net.SplitHostPort(addr)
-	if net.ParseIP(host) == nil {
-		if _, err := net.DefaultResolver.LookupHost(ctx, host); err != nil {
-			log.FromContext(ctx).Info("external address not yet resolvable", "host", host)
-			return ""
-		}
-	}
-	return addr
-}
-
-// externalAddressFromService extracts the P2P address from a Service's
-// LoadBalancer ingress. Prefers hostname (DNS) over IP.
-func externalAddressFromService(svc *corev1.Service) string {
-	if svc == nil {
-		return ""
-	}
-	for _, ingress := range svc.Status.LoadBalancer.Ingress {
-		host := ingress.Hostname
-		if host == "" {
-			host = ingress.IP
-		}
-		if host != "" {
-			return fmt.Sprintf("%s:%d", host, seiconfig.PortP2P)
-		}
-	}
-	return ""
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	if group.Spec.Networking.Service == nil {
-		removeCondition(group, seiv1alpha1.ConditionExternalServiceReady)
-		return r.deleteExternalService(ctx, group)
-	}
-
 	desired := generateExternalService(group)
 	desired.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
 	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
@@ -158,25 +85,18 @@ func (r *SeiNodeDeploymentReconciler) reconcileExternalService(ctx context.Conte
 }
 
 func generateExternalService(group *seiv1alpha1.SeiNodeDeployment) *corev1.Service {
-	svcConfig := group.Spec.Networking.Service
-	labels := resourceLabels(group)
-	svc := &corev1.Service{
+	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      externalServiceName(group),
 			Namespace: group.Namespace,
-			Labels:    labels,
+			Labels:    resourceLabels(group),
 		},
 		Spec: corev1.ServiceSpec{
-			Type:     svcConfig.Type,
+			Type:     corev1.ServiceTypeClusterIP,
 			Selector: groupSelector(group),
 			Ports:    portsForMode(groupMode(group)),
 		},
 	}
-	if len(svcConfig.Annotations) > 0 {
-		svc.Annotations = make(map[string]string, len(svcConfig.Annotations))
-		maps.Copy(svc.Annotations, svcConfig.Annotations)
-	}
-	return svc
 }
 
 func groupMode(group *seiv1alpha1.SeiNodeDeployment) seiconfig.NodeMode {
@@ -383,7 +303,7 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeDeployment, er effectiveRoute, 
 		})
 	}
 
-	route := &unstructured.Unstructured{
+	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "HTTPRoute",
@@ -400,16 +320,6 @@ func generateHTTPRoute(group *seiv1alpha1.SeiNodeDeployment, er effectiveRoute, 
 			},
 		},
 	}
-
-	if gw := group.Spec.Networking.Gateway; gw != nil && len(gw.Annotations) > 0 {
-		metadata := route.Object["metadata"].(map[string]any)
-		annotations := metadata["annotations"].(map[string]any)
-		for k, v := range gw.Annotations {
-			annotations[k] = v
-		}
-	}
-
-	return route
 }
 
 func httpRouteGVK() schema.GroupVersionKind {
@@ -420,121 +330,19 @@ func httpRouteGVK() schema.GroupVersionKind {
 	}
 }
 
-// --- AuthorizationPolicy (unstructured) ---
+// --- Deletion helpers ---
 
-func (r *SeiNodeDeploymentReconciler) reconcileIsolation(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	if group.Spec.Networking.Isolation == nil || group.Spec.Networking.Isolation.AuthorizationPolicy == nil {
-		removeCondition(group, seiv1alpha1.ConditionIsolationReady)
-		return r.deleteUnstructured(ctx, group, authPolicyGVK())
-	}
-
-	if r.ControllerSA == "" {
-		if !hasConditionReason(group, seiv1alpha1.ConditionIsolationReady, "ControllerSAMissing") {
-			r.Recorder.Event(group, corev1.EventTypeWarning, "ControllerSAMissing", "SEI_CONTROLLER_SA_PRINCIPAL is not set; AuthorizationPolicy will not include controller SA, sidecar communication may be blocked")
-		}
-		setCondition(group, seiv1alpha1.ConditionIsolationReady, metav1.ConditionFalse,
-			"ControllerSAMissing", "SEI_CONTROLLER_SA_PRINCIPAL env var is not set; controller SA will not be injected into AuthorizationPolicy")
-	}
-
-	desired := generateAuthorizationPolicy(group, r.ControllerSA)
-	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on AuthorizationPolicy: %w", err)
-	}
-
-	//nolint:staticcheck // migrating unstructured SSA to typed ApplyConfiguration is a separate effort
-	err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
-	if meta.IsNoMatchError(err) {
-		if !hasConditionReason(group, seiv1alpha1.ConditionIsolationReady, "CRDNotInstalled") {
-			r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Istio CRD (AuthorizationPolicy) is not installed; isolation will not be enforced")
-		}
-		setCondition(group, seiv1alpha1.ConditionIsolationReady, metav1.ConditionFalse,
-			"CRDNotInstalled", "Istio CRD (AuthorizationPolicy) is not installed")
+func (r *SeiNodeDeploymentReconciler) deleteUnstructured(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, gvk schema.GroupVersionKind) error {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetName(group.Name)
+	obj.SetNamespace(group.Namespace)
+	err := r.Delete(ctx, obj)
+	if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	if r.ControllerSA != "" {
-		if !hasConditionReason(group, seiv1alpha1.ConditionIsolationReady, "AuthorizationPolicyReady") {
-			r.Recorder.Event(group, corev1.EventTypeNormal, "AuthorizationPolicyReady", "AuthorizationPolicy reconciled successfully")
-		}
-		setCondition(group, seiv1alpha1.ConditionIsolationReady, metav1.ConditionTrue,
-			"AuthorizationPolicyReady", "AuthorizationPolicy reconciled successfully")
-	}
-	return nil
+	return err
 }
-
-func generateAuthorizationPolicy(group *seiv1alpha1.SeiNodeDeployment, controllerSA string) *unstructured.Unstructured {
-	cfg := group.Spec.Networking.Isolation.AuthorizationPolicy
-
-	var rules []any
-	for _, src := range cfg.AllowedSources {
-		rule := map[string]any{}
-		from := map[string]any{}
-		source := map[string]any{}
-		if len(src.Principals) > 0 {
-			principals := make([]any, len(src.Principals))
-			for i, p := range src.Principals {
-				principals[i] = p
-			}
-			source["principals"] = principals
-		}
-		if len(src.Namespaces) > 0 {
-			namespaces := make([]any, len(src.Namespaces))
-			for i, n := range src.Namespaces {
-				namespaces[i] = n
-			}
-			source["namespaces"] = namespaces
-		}
-		from["source"] = source
-		rule["from"] = []any{from}
-		rules = append(rules, rule)
-	}
-
-	// Auto-inject the controller's SA so sidecar communication is never blocked
-	if controllerSA != "" {
-		rules = append(rules, map[string]any{
-			"from": []any{
-				map[string]any{
-					"source": map[string]any{
-						"principals": []any{controllerSA},
-					},
-				},
-			},
-		})
-	}
-
-	policy := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "security.istio.io/v1",
-			"kind":       "AuthorizationPolicy",
-			"metadata": map[string]any{
-				"name":        group.Name,
-				"namespace":   group.Namespace,
-				"labels":      toStringInterfaceMap(resourceLabels(group)),
-				"annotations": toStringInterfaceMap(managedByAnnotations()),
-			},
-			"spec": map[string]any{
-				"selector": map[string]any{
-					"matchLabels": toStringInterfaceMap(groupSelector(group)),
-				},
-				"action": "ALLOW",
-				"rules":  rules,
-			},
-		},
-	}
-	return policy
-}
-
-func authPolicyGVK() schema.GroupVersionKind {
-	return schema.GroupVersionKind{
-		Group:   "security.istio.io",
-		Version: "v1",
-		Kind:    "AuthorizationPolicy",
-	}
-}
-
-// --- Deletion policy helpers ---
 
 func (r *SeiNodeDeploymentReconciler) deleteExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	svc := &corev1.Service{}
@@ -555,28 +363,10 @@ func (r *SeiNodeDeploymentReconciler) deleteNetworkingResources(ctx context.Cont
 	if err := r.deleteExternalService(ctx, group); err != nil {
 		return err
 	}
-
 	if err := r.deleteHTTPRoutesByLabel(ctx, group); err != nil {
 		return fmt.Errorf("deleting HTTPRoutes: %w", err)
 	}
-	for _, gvk := range []schema.GroupVersionKind{authPolicyGVK(), serviceMonitorGVK()} {
-		if err := r.deleteUnstructured(ctx, group, gvk); err != nil {
-			return fmt.Errorf("deleting %s: %w", gvk.Kind, err)
-		}
-	}
 	return nil
-}
-
-func (r *SeiNodeDeploymentReconciler) deleteUnstructured(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, gvk schema.GroupVersionKind) error {
-	obj := &unstructured.Unstructured{}
-	obj.SetGroupVersionKind(gvk)
-	obj.SetName(group.Name)
-	obj.SetNamespace(group.Namespace)
-	err := r.Delete(ctx, obj)
-	if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-		return nil
-	}
-	return err
 }
 
 func (r *SeiNodeDeploymentReconciler) orphanNetworkingResources(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
@@ -604,20 +394,6 @@ func (r *SeiNodeDeploymentReconciler) orphanNetworkingResources(ctx context.Cont
 		}
 	}
 
-	for _, gvk := range []schema.GroupVersionKind{authPolicyGVK(), serviceMonitorGVK()} {
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(gvk)
-		err := r.Get(ctx, types.NamespacedName{Name: group.Name, Namespace: group.Namespace}, obj)
-		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("fetching %s for orphan: %w", gvk.Kind, err)
-		}
-		if err := r.removeOwnerRef(ctx, obj, group); err != nil {
-			return fmt.Errorf("orphaning %s: %w", gvk.Kind, err)
-		}
-	}
 	return nil
 }
 

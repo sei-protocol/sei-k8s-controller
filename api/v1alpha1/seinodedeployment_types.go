@@ -303,9 +303,7 @@ type DeploymentStatus struct {
 // Status condition types for SeiNodeDeployment.
 const (
 	ConditionNodesReady                = "NodesReady"
-	ConditionExternalServiceReady      = "ExternalServiceReady"
 	ConditionRouteReady                = "RouteReady"
-	ConditionIsolationReady            = "IsolationReady"
 	ConditionServiceMonitorReady       = "ServiceMonitorReady"
 	ConditionGenesisCeremonyComplete   = "GenesisCeremonyComplete"
 	ConditionPlanInProgress            = "PlanInProgress"

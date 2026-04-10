@@ -101,9 +101,7 @@ func makeNodes(n int, phase seiv1alpha1.SeiNodePhase) []seiv1alpha1.SeiNode {
 func TestBuildNetworkingStatus_FullMode_DualDomain(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	r := &SeiNodeDeploymentReconciler{
 		GatewayDomain:       "prod.platform.sei.io",
@@ -133,9 +131,7 @@ func TestBuildNetworkingStatus_FullMode_DualDomain(t *testing.T) {
 func TestBuildNetworkingStatus_SingleDomain(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	r := &SeiNodeDeploymentReconciler{
 		GatewayDomain: "dev.platform.sei.io",
@@ -166,9 +162,7 @@ func TestBuildNetworkingStatus_ValidatorMode_Nil(t *testing.T) {
 func TestBuildNetworkingStatus_ProtocolValues(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	r := &SeiNodeDeploymentReconciler{
 		GatewayDomain: "prod.platform.sei.io",
