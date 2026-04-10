@@ -34,9 +34,10 @@ var seiProtocolRoutes = []struct {
 
 type effectiveRoute struct {
 	Name      string
+	Protocol  string
 	Hostnames []string
 	Port      int32
-	WSPort    int32 // non-zero when WebSocket requires a separate backend port
+	WSPort    int32
 }
 
 // hasExternalService returns true when the deployment has a LoadBalancer
@@ -258,6 +259,7 @@ func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment, domain, public
 		}
 		er := effectiveRoute{
 			Name:      subdomain,
+			Protocol:  proto.Prefix,
 			Hostnames: hostnames,
 			Port:      proto.Port,
 		}

@@ -1,7 +1,6 @@
 package v1alpha1
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -272,14 +271,19 @@ type GroupNodeStatus struct {
 
 // NetworkingStatus reports the observed state of networking resources.
 type NetworkingStatus struct {
-	// ExternalServiceName is the name of the managed external Service.
+	// Routes lists the HTTPRoute hostnames managed by this deployment.
 	// +optional
-	ExternalServiceName string `json:"externalServiceName,omitempty"`
+	Routes []RouteStatus `json:"routes,omitempty"`
+}
 
-	// LoadBalancerIngress contains the hostname/IP assigned by the cloud
-	// provider once the LoadBalancer is provisioned.
+// RouteStatus is the observed state of a single HTTPRoute hostname.
+type RouteStatus struct {
+	// Hostname is the public-facing DNS name for this route.
+	Hostname string `json:"hostname"`
+
+	// Protocol identifies the route type (e.g. "rpc", "evm", "grpc", "rest", "evm-ws").
 	// +optional
-	LoadBalancerIngress []corev1.LoadBalancerIngress `json:"loadBalancerIngress,omitempty"`
+	Protocol string `json:"protocol,omitempty"`
 }
 
 // DeploymentStatus tracks metadata for an in-progress deployment.

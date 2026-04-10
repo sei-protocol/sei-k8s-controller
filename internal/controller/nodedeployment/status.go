@@ -47,7 +47,7 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 	group.Status.Phase = computeGroupPhase(group, readyReplicas, group.Spec.Replicas, nodes)
 
 	svc, svcErr := r.fetchExternalService(ctx, group)
-	group.Status.NetworkingStatus = buildNetworkingStatus(group, svc)
+	group.Status.NetworkingStatus = r.buildNetworkingStatus(group)
 
 	setNodesReadyCondition(group, readyReplicas, group.Spec.Replicas, nodes)
 	setExternalServiceCondition(group, svc, svcErr)
@@ -107,16 +107,21 @@ func (r *SeiNodeDeploymentReconciler) fetchExternalService(ctx context.Context, 
 	return svc, nil
 }
 
-func buildNetworkingStatus(group *seiv1alpha1.SeiNodeDeployment, svc *corev1.Service) *seiv1alpha1.NetworkingStatus {
-	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
+func (r *SeiNodeDeploymentReconciler) buildNetworkingStatus(group *seiv1alpha1.SeiNodeDeployment) *seiv1alpha1.NetworkingStatus {
+	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
+	if len(routes) == 0 {
 		return nil
 	}
-	svcName := externalServiceName(group)
-	status := &seiv1alpha1.NetworkingStatus{ExternalServiceName: svcName}
-	if svc != nil && len(svc.Status.LoadBalancer.Ingress) > 0 {
-		status.LoadBalancerIngress = svc.Status.LoadBalancer.Ingress
+	var rs []seiv1alpha1.RouteStatus
+	for _, er := range routes {
+		for _, h := range er.Hostnames {
+			rs = append(rs, seiv1alpha1.RouteStatus{
+				Hostname: h,
+				Protocol: er.Protocol,
+			})
+		}
 	}
-	return status
+	return &seiv1alpha1.NetworkingStatus{Routes: rs}
 }
 
 func setNodesReadyCondition(group *seiv1alpha1.SeiNodeDeployment, ready, desired int32, nodes []seiv1alpha1.SeiNode) {
