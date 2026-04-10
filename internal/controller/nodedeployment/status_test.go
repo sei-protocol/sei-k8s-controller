@@ -95,3 +95,89 @@ func makeNodes(n int, phase seiv1alpha1.SeiNodePhase) []seiv1alpha1.SeiNode {
 	}
 	return nodes
 }
+
+// --- NetworkingStatus ---
+
+func TestBuildNetworkingStatus_FullMode_DualDomain(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	r := &SeiNodeDeploymentReconciler{
+		GatewayDomain:       "prod.platform.sei.io",
+		GatewayPublicDomain: "platform.sei.io",
+	}
+	status := r.buildNetworkingStatus(group)
+
+	g.Expect(status).NotTo(BeNil())
+	g.Expect(status.Routes).To(HaveLen(8))
+
+	hostnames := make([]string, len(status.Routes))
+	for i, r := range status.Routes {
+		hostnames[i] = r.Hostname
+	}
+	g.Expect(hostnames).To(ContainElements(
+		"pacific-1-wave-evm.prod.platform.sei.io",
+		"pacific-1-wave-evm.pacific-1.platform.sei.io",
+		"pacific-1-wave-rpc.prod.platform.sei.io",
+		"pacific-1-wave-rpc.pacific-1.platform.sei.io",
+	))
+
+	for _, rs := range status.Routes {
+		g.Expect(rs.Protocol).NotTo(BeEmpty())
+	}
+}
+
+func TestBuildNetworkingStatus_SingleDomain(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	r := &SeiNodeDeploymentReconciler{
+		GatewayDomain: "dev.platform.sei.io",
+	}
+	status := r.buildNetworkingStatus(group)
+
+	g.Expect(status).NotTo(BeNil())
+	g.Expect(status.Routes).To(HaveLen(4))
+	for _, rs := range status.Routes {
+		g.Expect(rs.Hostname).To(HaveSuffix(".dev.platform.sei.io"))
+	}
+}
+
+func TestBuildNetworkingStatus_ValidatorMode_Nil(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-val", "pacific-1")
+	group.Spec.Template.Spec.FullNode = nil
+	group.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+
+	r := &SeiNodeDeploymentReconciler{
+		GatewayDomain:       "prod.platform.sei.io",
+		GatewayPublicDomain: "platform.sei.io",
+	}
+	status := r.buildNetworkingStatus(group)
+	g.Expect(status).To(BeNil())
+}
+
+func TestBuildNetworkingStatus_ProtocolValues(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	r := &SeiNodeDeploymentReconciler{
+		GatewayDomain: "prod.platform.sei.io",
+	}
+	status := r.buildNetworkingStatus(group)
+
+	protocols := make([]string, len(status.Routes))
+	for i, rs := range status.Routes {
+		protocols[i] = rs.Protocol
+	}
+	g.Expect(protocols).To(ConsistOf("evm", "rpc", "rest", "grpc"))
+}
