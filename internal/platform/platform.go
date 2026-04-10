@@ -37,9 +37,10 @@ type Config struct {
 	GenesisBucket string
 	GenesisRegion string
 
-	GatewayName      string
-	GatewayNamespace string
-	GatewayDomain    string
+	GatewayName         string
+	GatewayNamespace    string
+	GatewayDomain       string
+	GatewayPublicDomain string
 }
 
 // Validate returns an error if required fields are missing.
@@ -67,6 +68,7 @@ func (c Config) Validate() error {
 		"SEI_GATEWAY_NAME":          c.GatewayName,
 		"SEI_GATEWAY_NAMESPACE":     c.GatewayNamespace,
 		"SEI_GATEWAY_DOMAIN":        c.GatewayDomain,
+		"SEI_GATEWAY_PUBLIC_DOMAIN": c.GatewayPublicDomain,
 	}
 	for name, val := range required {
 		if val == "" {

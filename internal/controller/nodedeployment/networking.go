@@ -208,7 +208,7 @@ func portsForMode(mode seiconfig.NodeMode) []corev1.ServicePort {
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileRoute(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	routes := resolveEffectiveRoutes(group, r.GatewayDomain)
+	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
 	if len(routes) == 0 {
 		removeCondition(group, seiv1alpha1.ConditionRouteReady)
 		return r.deleteHTTPRoutesByLabel(ctx, group)
@@ -234,7 +234,7 @@ func (r *SeiNodeDeploymentReconciler) deleteHTTPRoutesByLabel(ctx context.Contex
 	return nil
 }
 
-func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment, domain string) []effectiveRoute {
+func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment, domain, publicDomain string) []effectiveRoute {
 	modePorts := seiconfig.NodePortsForMode(groupMode(group))
 
 	activePorts := make(map[string]bool, len(modePorts))
@@ -247,10 +247,14 @@ func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment, domain string)
 		if !isProtocolActiveForMode(proto.Prefix, activePorts) {
 			continue
 		}
+		subdomain := fmt.Sprintf("%s-%s", group.Name, proto.Prefix)
 		er := effectiveRoute{
-			Name:      fmt.Sprintf("%s-%s", group.Name, proto.Prefix),
-			Hostnames: []string{fmt.Sprintf("%s.%s.%s", group.Name, proto.Prefix, domain)},
-			Port:      proto.Port,
+			Name: subdomain,
+			Hostnames: []string{
+				fmt.Sprintf("%s.%s", subdomain, domain),
+				fmt.Sprintf("%s.%s.%s", subdomain, group.Namespace, publicDomain),
+			},
+			Port: proto.Port,
 		}
 		if proto.Prefix == "evm" && activePorts["evm-ws"] {
 			er.WSPort = seiconfig.PortEVMWS

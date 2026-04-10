@@ -135,6 +135,7 @@ func main() {
 		GatewayName:         os.Getenv("SEI_GATEWAY_NAME"),
 		GatewayNamespace:    os.Getenv("SEI_GATEWAY_NAMESPACE"),
 		GatewayDomain:       os.Getenv("SEI_GATEWAY_DOMAIN"),
+		GatewayPublicDomain: os.Getenv("SEI_GATEWAY_PUBLIC_DOMAIN"),
 	}
 
 	if err := platformCfg.Validate(); err != nil {
@@ -180,13 +181,14 @@ func main() {
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller")
 	if err := (&nodedeploymentcontroller.SeiNodeDeploymentReconciler{
-		Client:           kc,
-		Scheme:           mgr.GetScheme(),
-		Recorder:         recorder,
-		ControllerSA:     controllerSA,
-		GatewayName:      platformCfg.GatewayName,
-		GatewayNamespace: platformCfg.GatewayNamespace,
-		GatewayDomain:    platformCfg.GatewayDomain,
+		Client:              kc,
+		Scheme:              mgr.GetScheme(),
+		Recorder:            recorder,
+		ControllerSA:        controllerSA,
+		GatewayName:         platformCfg.GatewayName,
+		GatewayNamespace:    platformCfg.GatewayNamespace,
+		GatewayDomain:       platformCfg.GatewayDomain,
+		GatewayPublicDomain: platformCfg.GatewayPublicDomain,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			Client: kc,
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
