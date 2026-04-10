@@ -558,55 +558,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              configStatus:
-                description: ConfigStatus reports the observed configuration state
-                  from the sidecar.
-                properties:
-                  diagnostics:
-                    description: Diagnostics contains validation findings from the
-                      last config-validate task.
-                    items:
-                      description: ConfigDiagnostic is a single finding from config
-                        validation.
-                      properties:
-                        field:
-                          description: Field is the config key path that the diagnostic
-                            applies to.
-                          type: string
-                        message:
-                          description: Message describes the finding.
-                          type: string
-                        severity:
-                          description: 'Severity is the diagnostic level: ERROR, WARNING,
-                            or INFO.'
-                          type: string
-                      required:
-                      - field
-                      - message
-                      - severity
-                      type: object
-                    type: array
-                  driftDetected:
-                    description: DriftDetected is true when the on-disk config diverges
-                      from the CRD-desired state.
-                    type: boolean
-                  lastAppliedAt:
-                    description: LastAppliedAt is the timestamp of the last successful
-                      config-apply task.
-                    format: date-time
-                    type: string
-                  lastValidatedAt:
-                    description: LastValidatedAt is the timestamp of the last successful
-                      config-validate task.
-                    format: date-time
-                    type: string
-                  mode:
-                    description: Mode is the config mode that was applied.
-                    type: string
-                  version:
-                    description: Version is the on-disk config schema version.
-                    type: integer
-                type: object
               externalAddress:
                 description: |-
                   ExternalAddress is the routable P2P address (host:port) for this node,

@@ -248,49 +248,6 @@ type SeiNodeStatus struct {
 	// config so the node advertises a reachable address for gossip discovery.
 	// +optional
 	ExternalAddress string `json:"externalAddress,omitempty"`
-
-	// ConfigStatus reports the observed configuration state from the sidecar.
-	// +optional
-	ConfigStatus *ConfigStatus `json:"configStatus,omitempty"`
-}
-
-// ConfigStatus reports the observed config state of a managed node.
-type ConfigStatus struct {
-	// Version is the on-disk config schema version.
-	// +optional
-	Version int `json:"version,omitempty"`
-
-	// Mode is the config mode that was applied.
-	// +optional
-	Mode string `json:"mode,omitempty"`
-
-	// Diagnostics contains validation findings from the last config-validate task.
-	// +optional
-	Diagnostics []ConfigDiagnostic `json:"diagnostics,omitempty"`
-
-	// LastValidatedAt is the timestamp of the last successful config-validate task.
-	// +optional
-	LastValidatedAt *metav1.Time `json:"lastValidatedAt,omitempty"`
-
-	// LastAppliedAt is the timestamp of the last successful config-apply task.
-	// +optional
-	LastAppliedAt *metav1.Time `json:"lastAppliedAt,omitempty"`
-
-	// DriftDetected is true when the on-disk config diverges from the CRD-desired state.
-	// +optional
-	DriftDetected bool `json:"driftDetected,omitempty"`
-}
-
-// ConfigDiagnostic is a single finding from config validation.
-type ConfigDiagnostic struct {
-	// Severity is the diagnostic level: ERROR, WARNING, or INFO.
-	Severity string `json:"severity"`
-
-	// Field is the config key path that the diagnostic applies to.
-	Field string `json:"field"`
-
-	// Message describes the finding.
-	Message string `json:"message"`
 }
 
 // +kubebuilder:object:root=true
