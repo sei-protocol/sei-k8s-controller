@@ -47,14 +47,15 @@ Cookie domain `.prod.platform.sei.io` means one login covers all protected tools
 
 ## Design Decisions
 
-### Separate Google OAuth Client
+### Shared Google OAuth Client
 
-A new Google OAuth client is required (not reusing Grafana's). Google Cloud Console ties redirect URIs to specific clients. Mixing OAuth2 Proxy callbacks with Grafana's `/login/generic_oauth` in one client is fragile — URI rotation on one side risks breaking the other.
+OAuth2 Proxy reuses the existing Google OAuth client that Grafana already uses. Add the OAuth2 Proxy callback URI to the existing client's authorized redirect URIs in Google Cloud Console:
 
-**Google Cloud Console config:**
-- Application type: Web application
-- Name: `sei-platform-oauth2-proxy-prod`
-- Authorized redirect URI: `https://oauth2-proxy.prod.platform.sei.io/oauth2/callback`
+```
+https://oauth2-proxy.prod.platform.sei.io/oauth2/callback
+```
+
+This avoids managing a second set of credentials. The OAuth2 Proxy deployment references the same `google-oauth` secret (client ID and client secret) plus its own `cookie-secret`.
 
 ### Dedicated `auth` Namespace
 
