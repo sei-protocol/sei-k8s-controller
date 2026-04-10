@@ -43,9 +43,10 @@ type SeiNodeDeploymentReconciler struct {
 	// GatewayName, GatewayNamespace, and GatewayDomain identify the platform
 	// Gateway for HTTPRoute parentRefs and hostname derivation.
 	// Read from SEI_GATEWAY_NAME / SEI_GATEWAY_NAMESPACE / SEI_GATEWAY_DOMAIN.
-	GatewayName      string
-	GatewayNamespace string
-	GatewayDomain    string
+	GatewayName         string
+	GatewayNamespace    string
+	GatewayDomain       string
+	GatewayPublicDomain string
 
 	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeDeployment]

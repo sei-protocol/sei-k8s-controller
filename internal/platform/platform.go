@@ -37,9 +37,10 @@ type Config struct {
 	GenesisBucket string
 	GenesisRegion string
 
-	GatewayName      string
-	GatewayNamespace string
-	GatewayDomain    string
+	GatewayName         string
+	GatewayNamespace    string
+	GatewayDomain       string
+	GatewayPublicDomain string
 }
 
 // Validate returns an error if required fields are missing.
