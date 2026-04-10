@@ -95,6 +95,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigureGenesis)
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigApply)
+	driveTask(t, g, r, mock, fetch, planner.TaskConfigureStateSync)
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigValidate)
 	driveTask(t, g, r, mock, fetch, planner.TaskMarkReady)
 
