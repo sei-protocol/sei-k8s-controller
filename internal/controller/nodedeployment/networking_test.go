@@ -395,8 +395,23 @@ func TestResolveEffectiveRoutes_EmptyDomain_MalformedHostnames(t *testing.T) {
 
 	routes := resolveEffectiveRoutes(group, "", "")
 	g.Expect(routes).To(HaveLen(4), "routes are still generated even with empty domain")
+	g.Expect(routes[0].Hostnames).To(HaveLen(1), "no public hostname when public domain is empty")
 	g.Expect(routes[0].Hostnames[0]).To(Equal("pacific-1-wave-evm."), "empty domain produces trailing dot")
-	g.Expect(routes[0].Hostnames[1]).To(Equal("pacific-1-wave-evm.pacific-1."), "empty public domain produces trailing dot")
+}
+
+func TestResolveEffectiveRoutes_NoPublicDomain_SingleHostname(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
+		Service: &seiv1alpha1.ExternalServiceConfig{},
+	}
+
+	routes := resolveEffectiveRoutes(group, "dev.platform.sei.io", "")
+	g.Expect(routes).To(HaveLen(4))
+	for _, r := range routes {
+		g.Expect(r.Hostnames).To(HaveLen(1), "only internal hostname when public domain is empty")
+	}
+	g.Expect(routes[0].Hostnames[0]).To(Equal("pacific-1-wave-evm.dev.platform.sei.io"))
 }
 
 func TestReconcileRoute_NoRoutesForValidatorMode(t *testing.T) {

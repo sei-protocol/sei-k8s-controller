@@ -248,13 +248,18 @@ func resolveEffectiveRoutes(group *seiv1alpha1.SeiNodeDeployment, domain, public
 			continue
 		}
 		subdomain := fmt.Sprintf("%s-%s", group.Name, proto.Prefix)
-		er := effectiveRoute{
-			Name: subdomain,
-			Hostnames: []string{
-				fmt.Sprintf("%s.%s", subdomain, domain),
+		hostnames := []string{
+			fmt.Sprintf("%s.%s", subdomain, domain),
+		}
+		if publicDomain != "" {
+			hostnames = append(hostnames,
 				fmt.Sprintf("%s.%s.%s", subdomain, group.Namespace, publicDomain),
-			},
-			Port: proto.Port,
+			)
+		}
+		er := effectiveRoute{
+			Name:      subdomain,
+			Hostnames: hostnames,
+			Port:      proto.Port,
 		}
 		if proto.Prefix == "evm" && activePorts["evm-ws"] {
 			er.WSPort = seiconfig.PortEVMWS
