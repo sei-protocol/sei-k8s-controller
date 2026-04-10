@@ -380,16 +380,18 @@ func (r *SeiNodeDeploymentReconciler) orphanNetworkingResources(ctx context.Cont
 		return fmt.Errorf("fetching external Service for orphan: %w", err)
 	}
 
-	httpRoutes := &unstructured.UnstructuredList{}
-	httpRoutes.SetGroupVersionKind(httpRouteGVK())
-	listErr := r.List(ctx, httpRoutes, client.InNamespace(group.Namespace), client.MatchingLabels(resourceLabels(group)))
-	if listErr != nil && !meta.IsNoMatchError(listErr) {
-		return fmt.Errorf("listing HTTPRoutes for orphan: %w", listErr)
-	}
-	if listErr == nil {
-		for i := range httpRoutes.Items {
-			if err := r.removeOwnerRef(ctx, &httpRoutes.Items[i], group); err != nil {
-				return fmt.Errorf("orphaning HTTPRoute %s: %w", httpRoutes.Items[i].GetName(), err)
+	for _, gvk := range []schema.GroupVersionKind{httpRouteGVK(), serviceMonitorGVK()} {
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(gvk)
+		listErr := r.List(ctx, list, client.InNamespace(group.Namespace), client.MatchingLabels(resourceLabels(group)))
+		if listErr != nil && !meta.IsNoMatchError(listErr) {
+			return fmt.Errorf("listing %s for orphan: %w", gvk.Kind, listErr)
+		}
+		if listErr == nil {
+			for i := range list.Items {
+				if err := r.removeOwnerRef(ctx, &list.Items[i], group); err != nil {
+					return fmt.Errorf("orphaning %s %s: %w", gvk.Kind, list.Items[i].GetName(), err)
+				}
 			}
 		}
 	}

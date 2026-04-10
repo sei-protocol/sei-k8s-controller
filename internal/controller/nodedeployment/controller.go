@@ -82,8 +82,8 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
-	// Networking runs before node creation so that the external P2P
-	// address (from the LoadBalancer ingress) is known at plan build time.
+	// Networking runs before node creation so the DNS readiness gate
+	// can block until public routes are resolvable.
 	if err := timeSubstep("reconcileNetworking", func() error {
 		return r.reconcileNetworking(ctx, group)
 	}); err != nil {

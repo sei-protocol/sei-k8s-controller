@@ -37,7 +37,7 @@ func externalServiceName(group *seiv1alpha1.SeiNodeDeployment) string {
 }
 
 // groupSelector returns the label selector used by the shared external
-// Service, AuthorizationPolicy, and ServiceMonitor. During an active
+// Service, HTTPRoutes, and ServiceMonitor. During an active
 // deployment, it includes the revision label to pin traffic to the
 // active set. At steady state, it selects by group membership only.
 func groupSelector(group *seiv1alpha1.SeiNodeDeployment) map[string]string {

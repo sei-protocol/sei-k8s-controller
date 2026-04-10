@@ -30,8 +30,10 @@ type SeiNodeDeploymentSpec struct {
 	// +optional
 	Genesis *GenesisCeremonyConfig `json:"genesis,omitempty"`
 
-	// Networking controls how the group is exposed to traffic.
-	// Networking resources are shared across all replicas.
+	// Networking enables public networking for the deployment.
+	// When present, the controller creates a ClusterIP Service and
+	// HTTPRoutes on the platform Gateway. When absent, the deployment
+	// is private with only per-node headless Services.
 	// +optional
 	Networking *NetworkingConfig `json:"networking,omitempty"`
 
