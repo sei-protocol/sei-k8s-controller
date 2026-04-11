@@ -79,8 +79,6 @@ spec:
             value: gateway
           - name: SEI_GATEWAY_DOMAIN
             value: prod.platform.sei.io
-          - name: SEI_CONTROLLER_SA_PRINCIPAL
-            value: "cluster.local/ns/sei-k8s-controller-system/sa/sei-k8s-controller-manager"
         ports:
         - containerPort: 8080
           name: metrics

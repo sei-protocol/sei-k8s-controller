@@ -81,18 +81,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - security.istio.io
-  resources:
-  - authorizationpolicies
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - sei.io
   resources:
   - seinodedeployments

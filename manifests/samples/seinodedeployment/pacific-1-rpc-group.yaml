@@ -1,9 +1,8 @@
 # SeiNodeDeployment — Pacific-1 RPC Fleet
 #
-# Three full nodes behind a shared Service with Gateway API routing,
-# Istio network isolation, and Prometheus monitoring. Each SeiNode
-# bootstraps from an S3 snapshot and block-syncs to tip. Genesis is
-# resolved automatically by the sidecar.
+# Three full nodes with public Gateway API routing and Prometheus
+# monitoring. Each SeiNode bootstraps from an S3 snapshot and
+# block-syncs to tip. Genesis is resolved automatically by the sidecar.
 apiVersion: sei.io/v1alpha1
 kind: SeiNodeDeployment
 metadata:
@@ -41,17 +40,7 @@ spec:
             targetHeight: 198740000
           trustPeriod: "9999h0m0s"
 
-  networking:
-    service:
-      type: ClusterIP
-
-    isolation:
-      authorizationPolicy:
-        allowedSources:
-          - principals:
-              - "cluster.local/ns/istio-system/sa/sei-gateway-istio"
-          - namespaces:
-              - default
+  networking: {}
 
   monitoring:
     serviceMonitor:

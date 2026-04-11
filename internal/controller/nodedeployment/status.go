@@ -4,13 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -46,11 +42,9 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 
 	group.Status.Phase = computeGroupPhase(group, readyReplicas, group.Spec.Replicas, nodes)
 
-	svc, svcErr := r.fetchExternalService(ctx, group)
 	group.Status.NetworkingStatus = r.buildNetworkingStatus(group)
 
 	setNodesReadyCondition(group, readyReplicas, group.Spec.Replicas, nodes)
-	setExternalServiceCondition(group, svc, svcErr)
 
 	return r.Status().Patch(ctx, group, statusBase)
 }
@@ -88,26 +82,10 @@ func computeGroupPhase(group *seiv1alpha1.SeiNodeDeployment, ready, desired int3
 	return seiv1alpha1.GroupPhaseInitializing
 }
 
-// fetchExternalService returns the external Service if networking is configured.
-// Returns (nil, nil) when not configured or NotFound, and (nil, err) on
-// transient API errors so callers can surface an accurate condition.
-func (r *SeiNodeDeploymentReconciler) fetchExternalService(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (*corev1.Service, error) {
-	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
-		return nil, nil
-	}
-	svc := &corev1.Service{}
-	err := r.Get(ctx, types.NamespacedName{Name: externalServiceName(group), Namespace: group.Namespace}, svc)
-	if apierrors.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
-		log.FromContext(ctx).Error(err, "fetching external Service for status")
-		return nil, err
-	}
-	return svc, nil
-}
-
 func (r *SeiNodeDeploymentReconciler) buildNetworkingStatus(group *seiv1alpha1.SeiNodeDeployment) *seiv1alpha1.NetworkingStatus {
+	if group.Spec.Networking == nil {
+		return nil
+	}
 	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
 	if len(routes) == 0 {
 		return nil
@@ -151,33 +129,6 @@ func setNodesReadyCondition(group *seiv1alpha1.SeiNodeDeployment, ready, desired
 	}
 
 	setCondition(group, seiv1alpha1.ConditionNodesReady, status, reason, message)
-}
-
-func setExternalServiceCondition(group *seiv1alpha1.SeiNodeDeployment, svc *corev1.Service, fetchErr error) {
-	if group.Spec.Networking == nil || group.Spec.Networking.Service == nil {
-		return
-	}
-
-	if fetchErr != nil {
-		setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionFalse,
-			"FetchError", fmt.Sprintf("Unable to fetch external Service: %v", fetchErr))
-		return
-	}
-
-	if svc == nil {
-		setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionFalse,
-			"ServiceNotFound", "External Service not yet created")
-		return
-	}
-
-	if svc.Spec.Type == corev1.ServiceTypeLoadBalancer && len(svc.Status.LoadBalancer.Ingress) == 0 {
-		setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionFalse,
-			"LoadBalancerPending", "Waiting for load balancer provisioning")
-		return
-	}
-
-	setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionTrue,
-		"ServiceReady", fmt.Sprintf("External Service %s is ready", svc.Name))
 }
 
 func hasConditionTrue(group *seiv1alpha1.SeiNodeDeployment, condType string) bool { //nolint:unparam // general-purpose utility

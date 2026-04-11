@@ -35,11 +35,6 @@ type SeiNodeDeploymentReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
-	// ControllerSA is the SPIFFE principal of the controller's ServiceAccount.
-	// It is auto-injected into every AuthorizationPolicy to ensure the
-	// controller can always reach the seictl sidecar.
-	ControllerSA string
-
 	// GatewayName, GatewayNamespace, and GatewayDomain identify the platform
 	// Gateway for HTTPRoute parentRefs and hostname derivation.
 	// Read from SEI_GATEWAY_NAME / SEI_GATEWAY_NAMESPACE / SEI_GATEWAY_DOMAIN.
@@ -60,7 +55,6 @@ type SeiNodeDeploymentReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
 func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -88,8 +82,8 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
-	// Networking runs before node creation so that the external P2P
-	// address (from the LoadBalancer ingress) is known at plan build time.
+	// Networking runs before node creation so the DNS readiness gate
+	// can block until public routes are resolvable.
 	if err := timeSubstep("reconcileNetworking", func() error {
 		return r.reconcileNetworking(ctx, group)
 	}); err != nil {
@@ -98,12 +92,9 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("reconciling networking: %w", err)
 	}
 
-	// Gate: wait for the LoadBalancer to provision an external address
-	// before creating nodes so the P2P address is baked into the plan.
-	if r.hasExternalService(group) && r.resolveExternalP2PAddress(ctx, group) == "" {
-		logger.Info("waiting for LoadBalancer to provision external address")
-		setCondition(group, seiv1alpha1.ConditionExternalServiceReady, metav1.ConditionFalse,
-			"LoadBalancerPending", "Waiting for LoadBalancer to provision external P2P address")
+	if !r.routeHostnameResolvable(ctx, group) {
+		setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionFalse,
+			"DNSPending", "Waiting for route hostname to resolve in DNS")
 		if err := r.updateStatus(ctx, group, statusBase); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 		}

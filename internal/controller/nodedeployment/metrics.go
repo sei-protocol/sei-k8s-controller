@@ -24,9 +24,7 @@ var allGroupPhases = []string{
 
 var allConditionTypes = []string{
 	seiv1alpha1.ConditionNodesReady,
-	seiv1alpha1.ConditionExternalServiceReady,
 	seiv1alpha1.ConditionRouteReady,
-	seiv1alpha1.ConditionIsolationReady,
 	seiv1alpha1.ConditionServiceMonitorReady,
 }
 

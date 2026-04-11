@@ -183,83 +183,10 @@ spec:
                 type: object
               networking:
                 description: |-
-                  Networking controls how the group is exposed to traffic.
-                  Networking resources are shared across all replicas.
-                properties:
-                  gateway:
-                    description: |-
-                      Gateway provides optional annotations for generated HTTPRoute resources.
-                      HTTPRoutes are generated automatically when the node mode has public
-                      ports and the platform Gateway env vars are configured. This field is
-                      only needed to add custom annotations to the HTTPRoute metadata.
-                    properties:
-                      annotations:
-                        additionalProperties:
-                          type: string
-                        description: Annotations are merged onto HTTPRoute metadata.
-                        type: object
-                    type: object
-                  isolation:
-                    description: Isolation configures network-level access control
-                      for node pods.
-                    properties:
-                      authorizationPolicy:
-                        description: |-
-                          AuthorizationPolicy creates an Istio AuthorizationPolicy
-                          restricting which identities can reach node pods.
-                        properties:
-                          allowedSources:
-                            description: |-
-                              AllowedSources defines who can reach this group's pods.
-                              The controller generates an ALLOW policy; traffic from
-                              sources not listed here is denied.
-                            items:
-                              description: TrafficSource identifies a set of callers
-                                by Istio identity.
-                              properties:
-                                namespaces:
-                                  description: Namespaces allows all pods in these
-                                    namespaces.
-                                  items:
-                                    type: string
-                                  type: array
-                                principals:
-                                  description: |-
-                                    Principals are SPIFFE identities (e.g.
-                                    "cluster.local/ns/istio-system/sa/istio-ingressgateway").
-                                  items:
-                                    type: string
-                                  type: array
-                              type: object
-                              x-kubernetes-validations:
-                              - message: at least one of principals or namespaces
-                                  must be set
-                                rule: has(self.principals) || has(self.namespaces)
-                            minItems: 1
-                            type: array
-                        required:
-                        - allowedSources
-                        type: object
-                    type: object
-                  service:
-                    description: |-
-                      Service creates a non-headless Service shared across all replicas.
-                      Each SeiNode still gets its own headless Service for pod DNS.
-                    properties:
-                      annotations:
-                        additionalProperties:
-                          type: string
-                        description: Annotations are merged onto the Service metadata.
-                        type: object
-                      type:
-                        default: ClusterIP
-                        description: Type is the Kubernetes Service type.
-                        enum:
-                        - ClusterIP
-                        - LoadBalancer
-                        - NodePort
-                        type: string
-                    type: object
+                  Networking enables public networking for the deployment.
+                  When present, the controller creates a ClusterIP Service and
+                  HTTPRoutes on the platform Gateway. When absent, the deployment
+                  is private with only per-node headless Services.
                 type: object
               replicas:
                 default: 1

@@ -13,40 +13,38 @@ import (
 
 func TestGenerateExternalService_BasicFields(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{
-			Type: corev1.ServiceTypeClusterIP,
-		},
-	}
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	svc := generateExternalService(group)
 
-	g.Expect(svc.Name).To(Equal("archive-rpc-external"))
-	g.Expect(svc.Namespace).To(Equal("sei"))
-	g.Expect(svc.Labels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
+	g.Expect(svc.Name).To(Equal("pacific-1-wave-external"))
+	g.Expect(svc.Namespace).To(Equal("pacific-1"))
+	g.Expect(svc.Labels).To(HaveKeyWithValue(groupLabel, "pacific-1-wave"))
 	g.Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
-	g.Expect(svc.Spec.Selector).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
+	g.Expect(svc.Spec.Selector).To(HaveKeyWithValue(groupLabel, "pacific-1-wave"))
 }
 
-func TestGenerateExternalService_AllPortsWhenEmpty(t *testing.T) {
+func TestGenerateExternalService_AllPortsForFullMode(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	svc := generateExternalService(group)
 	g.Expect(svc.Spec.Ports).To(HaveLen(7))
+
+	portNames := make([]string, len(svc.Spec.Ports))
+	for i, p := range svc.Spec.Ports {
+		portNames[i] = p.Name
+	}
+	g.Expect(portNames).To(ConsistOf("evm-rpc", "evm-ws", "grpc", "rest", "p2p", "rpc", "metrics"))
 }
 
 func TestGenerateExternalService_ValidatorModePorts(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("pacific-1-val", "sei")
+	group := newTestGroup("pacific-1-val", "pacific-1")
 	group.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	svc := generateExternalService(group)
 	g.Expect(svc.Spec.Ports).To(HaveLen(2))
@@ -60,10 +58,8 @@ func TestGenerateExternalService_ValidatorModePorts(t *testing.T) {
 
 func TestGenerateExternalService_GRPCAppProtocol(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("pacific-1-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	svc := generateExternalService(group)
 	for _, p := range svc.Spec.Ports {
@@ -76,59 +72,14 @@ func TestGenerateExternalService_GRPCAppProtocol(t *testing.T) {
 	t.Fatal("grpc port not found")
 }
 
-func TestGenerateExternalService_Annotations(t *testing.T) {
+func TestGenerateExternalService_AlwaysClusterIP(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{
-			Annotations: map[string]string{
-				"service.beta.kubernetes.io/aws-load-balancer-type": "nlb",
-			},
-		},
-	}
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	svc := generateExternalService(group)
-	g.Expect(svc.Annotations).To(HaveKeyWithValue(
-		"service.beta.kubernetes.io/aws-load-balancer-type", "nlb"))
-}
-
-func TestGenerateExternalService_LoadBalancer(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{
-			Type: corev1.ServiceTypeLoadBalancer,
-		},
-	}
-
-	svc := generateExternalService(group)
-	g.Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeLoadBalancer))
-}
-
-func TestGenerateExternalService_NoPublishNotReady(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
-
-	svc := generateExternalService(group)
-	g.Expect(svc.Spec.PublishNotReadyAddresses).To(BeFalse())
-}
-
-func TestGenerateExternalService_FullModeIncludesAllPorts(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("pacific-1-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
-
-	svc := generateExternalService(group)
-	portNames := make([]string, len(svc.Spec.Ports))
-	for i, p := range svc.Spec.Ports {
-		portNames[i] = p.Name
-	}
-	g.Expect(portNames).To(ConsistOf("evm-rpc", "evm-ws", "grpc", "rest", "p2p", "rpc", "metrics"))
+	g.Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+	g.Expect(svc.Annotations).To(BeEmpty())
 }
 
 // --- Effective Routes ---
@@ -136,10 +87,7 @@ func TestGenerateExternalService_FullModeIncludesAllPorts(t *testing.T) {
 func TestResolveEffectiveRoutes_FullMode_FourRoutes(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
 	g.Expect(routes).To(HaveLen(4))
@@ -164,13 +112,10 @@ func TestResolveEffectiveRoutes_FullMode_FourRoutes(t *testing.T) {
 
 func TestResolveEffectiveRoutes_ArchiveMode_FourRoutes(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("pacific-1-archive", "sei")
+	group := newTestGroup("pacific-1-archive", "pacific-1")
 	group.Spec.Template.Spec.FullNode = nil
 	group.Spec.Template.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
 	g.Expect(routes).To(HaveLen(4))
@@ -178,25 +123,34 @@ func TestResolveEffectiveRoutes_ArchiveMode_FourRoutes(t *testing.T) {
 
 func TestResolveEffectiveRoutes_ValidatorMode_NoRoutes(t *testing.T) {
 	g := NewWithT(t)
-	group := newTestGroup("pacific-1-val", "sei")
+	group := newTestGroup("pacific-1-val", "pacific-1")
 	group.Spec.Template.Spec.FullNode = nil
 	group.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
 	g.Expect(routes).To(BeEmpty())
 }
 
+func TestResolveEffectiveRoutes_NoPublicDomain_SingleHostname(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
+
+	routes := resolveEffectiveRoutes(group, "dev.platform.sei.io", "")
+	g.Expect(routes).To(HaveLen(4))
+	for _, r := range routes {
+		g.Expect(r.Hostnames).To(HaveLen(1))
+	}
+	g.Expect(routes[0].Hostnames[0]).To(Equal("pacific-1-wave-evm.dev.platform.sei.io"))
+}
+
+// --- HTTPRoute Generation ---
+
 func TestGenerateHTTPRoute_HostnamePattern(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
 	g.Expect(routes).NotTo(BeEmpty())
@@ -211,13 +165,90 @@ func TestGenerateHTTPRoute_HostnamePattern(t *testing.T) {
 	}
 }
 
+func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
+	g.Expect(routes).NotTo(BeEmpty())
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "gateway")
+
+	g.Expect(route.GetNamespace()).To(Equal("pacific-1"))
+
+	spec := route.Object["spec"].(map[string]any)
+	parentRefs := spec["parentRefs"].([]any)
+	g.Expect(parentRefs).To(HaveLen(1))
+
+	ref := parentRefs[0].(map[string]any)
+	g.Expect(ref["name"]).To(Equal("sei-gateway"))
+	g.Expect(ref["namespace"]).To(Equal("gateway"))
+}
+
+func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "gateway")
+	g.Expect(route.GetAnnotations()).To(HaveKeyWithValue("sei.io/managed-by", "seinodedeployment"))
+}
+
+func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
+	var rpcRoute effectiveRoute
+	for _, r := range routes {
+		if r.Name == "pacific-1-wave-rpc" {
+			rpcRoute = r
+			break
+		}
+	}
+	route := generateHTTPRoute(group, rpcRoute, "sei-gateway", "gateway")
+
+	spec := route.Object["spec"].(map[string]any)
+	rules := spec["rules"].([]any)
+	g.Expect(rules).To(HaveLen(1))
+
+	backend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
+	g.Expect(backend["name"]).To(Equal("pacific-1-wave-external"))
+}
+
+func TestGenerateHTTPRoute_GRPCRoutePort(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
+
+	var grpcRoute effectiveRoute
+	for _, r := range routes {
+		if r.Name == "pacific-1-wave-grpc" {
+			grpcRoute = r
+			break
+		}
+	}
+	g.Expect(grpcRoute.Name).NotTo(BeEmpty())
+
+	httpRoute := generateHTTPRoute(group, grpcRoute, "sei-gateway", "gateway")
+	spec := httpRoute.Object["spec"].(map[string]any)
+	hostnames := spec["hostnames"].([]any)
+	g.Expect(hostnames).To(ConsistOf("pacific-1-wave-grpc.prod.platform.sei.io", "pacific-1-wave-grpc.pacific-1.platform.sei.io"))
+
+	rules := spec["rules"].([]any)
+	backend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
+	g.Expect(backend["port"]).To(Equal(int64(9090)))
+	g.Expect(backend["name"]).To(Equal("pacific-1-wave-external"))
+}
+
 func TestGenerateHTTPRoute_EVMMerged(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
 
@@ -229,22 +260,15 @@ func TestGenerateHTTPRoute_EVMMerged(t *testing.T) {
 			evmRoute = r
 		}
 	}
-	g.Expect(evmCount).To(Equal(1), "expected exactly one merged EVM route")
+	g.Expect(evmCount).To(Equal(1))
 	g.Expect(evmRoute.Port).To(Equal(int32(8545)))
 	g.Expect(evmRoute.WSPort).To(Equal(int32(8546)))
-
-	for _, r := range routes {
-		g.Expect(r.Name).NotTo(ContainSubstring("evm-rpc"))
-		g.Expect(r.Name).NotTo(ContainSubstring("evm-ws"))
-	}
 }
 
 func TestGenerateHTTPRoute_EVMWebSocketRule(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
 	var evmRoute effectiveRoute
@@ -258,119 +282,35 @@ func TestGenerateHTTPRoute_EVMWebSocketRule(t *testing.T) {
 	httpRoute := generateHTTPRoute(group, evmRoute, "sei-gateway", "gateway")
 	spec := httpRoute.Object["spec"].(map[string]any)
 	rules := spec["rules"].([]any)
-	g.Expect(rules).To(HaveLen(2), "EVM route should have HTTP + WebSocket rules")
+	g.Expect(rules).To(HaveLen(2))
 
-	httpRule := rules[0].(map[string]any)
-	httpBackend := httpRule["backendRefs"].([]any)[0].(map[string]any)
+	httpBackend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
 	g.Expect(httpBackend["port"]).To(Equal(int64(8545)))
 
 	wsRule := rules[1].(map[string]any)
-	wsMatches := wsRule["matches"].([]any)
-	wsHeaders := wsMatches[0].(map[string]any)["headers"].([]any)
-	wsHeader := wsHeaders[0].(map[string]any)
+	wsHeader := wsRule["matches"].([]any)[0].(map[string]any)["headers"].([]any)[0].(map[string]any)
 	g.Expect(wsHeader["name"]).To(Equal("Upgrade"))
 	g.Expect(wsHeader["value"]).To(Equal("websocket"))
-
-	wsBackend := wsRule["backendRefs"].([]any)[0].(map[string]any)
-	g.Expect(wsBackend["port"]).To(Equal(int64(8546)))
+	g.Expect(wsRule["backendRefs"].([]any)[0].(map[string]any)["port"]).To(Equal(int64(8546)))
 }
 
-// --- HTTPRoute Generation ---
-
-func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{},
-	}
-
-	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
-	g.Expect(routes).NotTo(BeEmpty())
-	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
-
-	g.Expect(route.GetNamespace()).To(Equal("sei"))
-
-	spec := route.Object["spec"].(map[string]any)
-	parentRefs := spec["parentRefs"].([]any)
-	g.Expect(parentRefs).To(HaveLen(1))
-
-	ref := parentRefs[0].(map[string]any)
-	g.Expect(ref["name"]).To(Equal("sei-gateway"))
-	g.Expect(ref["namespace"]).To(Equal("istio-system"))
-}
-
-func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{},
-	}
-
-	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
-	route := generateHTTPRoute(group, routes[0], "sei-gateway", "istio-system")
-	g.Expect(route.GetAnnotations()).To(HaveKeyWithValue("sei.io/managed-by", "seinodedeployment"))
-}
-
-func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{},
-	}
-
-	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
-	var rpcRoute effectiveRoute
-	for _, r := range routes {
-		if r.Name == "archive-rpc-rpc" {
-			rpcRoute = r
-			break
-		}
-	}
-	route := generateHTTPRoute(group, rpcRoute, "sei-gateway", "istio-system")
-
-	spec := route.Object["spec"].(map[string]any)
-	rules := spec["rules"].([]any)
-	g.Expect(rules).To(HaveLen(1))
-
-	rule := rules[0].(map[string]any)
-	backends := rule["backendRefs"].([]any)
-	g.Expect(backends).To(HaveLen(1))
-
-	backend := backends[0].(map[string]any)
-	g.Expect(backend["name"]).To(Equal("archive-rpc-external"))
-}
-
-func TestGenerateHTTPRoute_GRPCRoutePort(t *testing.T) {
+func TestGenerateHTTPRoute_NonEVMRoute_SingleRule(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-		Gateway: &seiv1alpha1.GatewayRouteConfig{},
-	}
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
-
-	var grpcRoute effectiveRoute
 	for _, r := range routes {
-		if r.Name == "pacific-1-wave-grpc" {
-			grpcRoute = r
-			break
+		if r.Name == "pacific-1-wave-rpc" {
+			httpRoute := generateHTTPRoute(group, r, "sei-gateway", "gateway")
+			spec := httpRoute.Object["spec"].(map[string]any)
+			rules := spec["rules"].([]any)
+			g.Expect(rules).To(HaveLen(1))
+			g.Expect(r.WSPort).To(Equal(int32(0)))
+			return
 		}
 	}
-	g.Expect(grpcRoute.Name).NotTo(BeEmpty(), "grpc route should exist")
-
-	httpRoute := generateHTTPRoute(group, grpcRoute, "sei-gateway", "istio-system")
-	spec := httpRoute.Object["spec"].(map[string]any)
-	hostnames := spec["hostnames"].([]any)
-	g.Expect(hostnames).To(ConsistOf("pacific-1-wave-grpc.prod.platform.sei.io", "pacific-1-wave-grpc.pacific-1.platform.sei.io"))
-
-	rules := spec["rules"].([]any)
-	backend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
-	g.Expect(backend["port"]).To(Equal(int64(9090)))
-	g.Expect(backend["name"]).To(Equal("pacific-1-wave-external"))
+	t.Fatal("rpc route not found")
 }
 
 // --- isProtocolActiveForMode ---
@@ -382,168 +322,4 @@ func TestIsProtocolActiveForMode_EVMMapping(t *testing.T) {
 	g.Expect(isProtocolActiveForMode("evm", activePorts)).To(BeTrue())
 	g.Expect(isProtocolActiveForMode("rpc", activePorts)).To(BeTrue())
 	g.Expect(isProtocolActiveForMode("grpc", activePorts)).To(BeFalse())
-}
-
-// --- Edge Cases ---
-
-func TestResolveEffectiveRoutes_EmptyDomain_MalformedHostnames(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
-
-	routes := resolveEffectiveRoutes(group, "", "")
-	g.Expect(routes).To(HaveLen(4), "routes are still generated even with empty domain")
-	g.Expect(routes[0].Hostnames).To(HaveLen(1), "no public hostname when public domain is empty")
-	g.Expect(routes[0].Hostnames[0]).To(Equal("pacific-1-wave-evm."), "empty domain produces trailing dot")
-}
-
-func TestResolveEffectiveRoutes_NoPublicDomain_SingleHostname(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
-
-	routes := resolveEffectiveRoutes(group, "dev.platform.sei.io", "")
-	g.Expect(routes).To(HaveLen(4))
-	for _, r := range routes {
-		g.Expect(r.Hostnames).To(HaveLen(1), "only internal hostname when public domain is empty")
-	}
-	g.Expect(routes[0].Hostnames[0]).To(Equal("pacific-1-wave-evm.dev.platform.sei.io"))
-}
-
-func TestReconcileRoute_NoRoutesForValidatorMode(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("pacific-1-val", "sei")
-	group.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
-
-	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
-	g.Expect(routes).To(BeEmpty(), "validator mode should produce zero routes")
-}
-
-func TestGenerateHTTPRoute_NonEVMRoute_SingleRule(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("pacific-1-wave", "pacific-1")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Service: &seiv1alpha1.ExternalServiceConfig{},
-	}
-
-	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
-	for _, r := range routes {
-		if r.Name == "pacific-1-wave-rpc" {
-			httpRoute := generateHTTPRoute(group, r, "sei-gateway", "gateway")
-			spec := httpRoute.Object["spec"].(map[string]any)
-			rules := spec["rules"].([]any)
-			g.Expect(rules).To(HaveLen(1), "non-EVM routes should have exactly one rule")
-			g.Expect(r.WSPort).To(Equal(int32(0)), "non-EVM routes should have zero WSPort")
-			return
-		}
-	}
-	t.Fatal("rpc route not found")
-}
-
-// --- AuthorizationPolicy ---
-
-func TestGenerateAuthorizationPolicy_BasicStructure(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Isolation: &seiv1alpha1.NetworkIsolationConfig{
-			AuthorizationPolicy: &seiv1alpha1.AuthorizationPolicyConfig{
-				AllowedSources: []seiv1alpha1.TrafficSource{{
-					Principals: []string{"cluster.local/ns/istio-system/sa/istio-ingressgateway"},
-				}},
-			},
-		},
-	}
-
-	policy := generateAuthorizationPolicy(group, "")
-
-	g.Expect(policy.GetName()).To(Equal("archive-rpc"))
-	g.Expect(policy.GetNamespace()).To(Equal("sei"))
-
-	spec := policy.Object["spec"].(map[string]any)
-	g.Expect(spec["action"]).To(Equal("ALLOW"))
-
-	selector := spec["selector"].(map[string]any)
-	matchLabels := selector["matchLabels"].(map[string]any)
-	g.Expect(matchLabels[groupLabel]).To(Equal("archive-rpc"))
-}
-
-func TestGenerateAuthorizationPolicy_InjectsControllerSA(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Isolation: &seiv1alpha1.NetworkIsolationConfig{
-			AuthorizationPolicy: &seiv1alpha1.AuthorizationPolicyConfig{
-				AllowedSources: []seiv1alpha1.TrafficSource{{
-					Principals: []string{"cluster.local/ns/istio-system/sa/istio-ingressgateway"},
-				}},
-			},
-		},
-	}
-
-	controllerSA := "cluster.local/ns/sei-system/sa/sei-controller"
-	policy := generateAuthorizationPolicy(group, controllerSA)
-
-	spec := policy.Object["spec"].(map[string]any)
-	rules := spec["rules"].([]any)
-	g.Expect(rules).To(HaveLen(2), "should have user source + injected controller SA")
-
-	lastRule := rules[1].(map[string]any)
-	from := lastRule["from"].([]any)
-	source := from[0].(map[string]any)["source"].(map[string]any)
-	principals := source["principals"].([]any)
-	g.Expect(principals).To(ConsistOf(controllerSA))
-}
-
-func TestGenerateAuthorizationPolicy_NoControllerSA(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Isolation: &seiv1alpha1.NetworkIsolationConfig{
-			AuthorizationPolicy: &seiv1alpha1.AuthorizationPolicyConfig{
-				AllowedSources: []seiv1alpha1.TrafficSource{{
-					Principals: []string{"cluster.local/ns/istio-system/sa/istio-ingressgateway"},
-				}},
-			},
-		},
-	}
-
-	policy := generateAuthorizationPolicy(group, "")
-
-	spec := policy.Object["spec"].(map[string]any)
-	rules := spec["rules"].([]any)
-	g.Expect(rules).To(HaveLen(1), "only user sources when controller SA is empty")
-}
-
-func TestGenerateAuthorizationPolicy_NamespaceSource(t *testing.T) {
-	g := NewWithT(t)
-	group := newTestGroup("archive-rpc", "sei")
-	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{
-		Isolation: &seiv1alpha1.NetworkIsolationConfig{
-			AuthorizationPolicy: &seiv1alpha1.AuthorizationPolicyConfig{
-				AllowedSources: []seiv1alpha1.TrafficSource{{
-					Namespaces: []string{"monitoring", "sei-system"},
-				}},
-			},
-		},
-	}
-
-	policy := generateAuthorizationPolicy(group, "")
-
-	spec := policy.Object["spec"].(map[string]any)
-	rules := spec["rules"].([]any)
-	g.Expect(rules).To(HaveLen(1))
-
-	rule := rules[0].(map[string]any)
-	from := rule["from"].([]any)
-	source := from[0].(map[string]any)["source"].(map[string]any)
-	namespaces := source["namespaces"].([]any)
-	g.Expect(namespaces).To(ConsistOf("monitoring", "sei-system"))
 }

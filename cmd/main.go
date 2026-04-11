@@ -177,14 +177,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	controllerSA := os.Getenv("SEI_CONTROLLER_SA_PRINCIPAL")
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller")
 	if err := (&nodedeploymentcontroller.SeiNodeDeploymentReconciler{
 		Client:              kc,
 		Scheme:              mgr.GetScheme(),
 		Recorder:            recorder,
-		ControllerSA:        controllerSA,
 		GatewayName:         platformCfg.GatewayName,
 		GatewayNamespace:    platformCfg.GatewayNamespace,
 		GatewayDomain:       platformCfg.GatewayDomain,
