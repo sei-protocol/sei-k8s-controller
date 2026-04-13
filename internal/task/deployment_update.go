@@ -98,6 +98,10 @@ func (e *awaitSpecUpdateExecution) Status(ctx context.Context) ExecutionStatus {
 	if s, done := e.isTerminal(); done {
 		return s
 	}
+	// TODO: detect terminal pod failures (ImagePullBackOff, ErrImagePull) and
+	// fail the task instead of polling indefinitely. The kubelet waiting reason
+	// strings are not exported as constants in k8s.io/api — needs either
+	// hardcoded reason matching or a duration-based heuristic.
 	for _, name := range e.params.NodeNames {
 		node := &seiv1alpha1.SeiNode{}
 		if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, node); err != nil {

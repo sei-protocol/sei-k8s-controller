@@ -83,6 +83,7 @@ func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *s
 		group.Status.Rollout = nil
 		setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
 			"RolloutComplete", "Deployment completed successfully")
+		r.Recorder.Event(group, corev1.EventTypeNormal, "RolloutComplete", "Deployment rollout completed successfully")
 	}
 
 	if group.Spec.Genesis != nil && !isDeploymentPlan {

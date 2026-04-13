@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/gomega"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -149,7 +150,7 @@ func TestDetectDeploymentNeeded_InPlace_SetsRolloutInProgress(t *testing.T) {
 	group.Status.TemplateHash = testOldHash
 	group.Status.IncumbentNodes = []string{"archive-rpc-0", "archive-rpc-1", "archive-rpc-2"}
 
-	r := &SeiNodeDeploymentReconciler{}
+	r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
 	r.detectDeploymentNeeded(group)
 
 	cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
@@ -181,7 +182,7 @@ func TestDetectDeploymentNeeded_InPlace_AlreadyActive_SameTarget(t *testing.T) {
 	}
 	group.Status.Rollout = existingRollout
 
-	r := &SeiNodeDeploymentReconciler{}
+	r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
 	r.detectDeploymentNeeded(group)
 
 	g.Expect(group.Status.Rollout).To(Equal(existingRollout))
@@ -203,7 +204,7 @@ func TestDetectDeploymentNeeded_InPlace_Supersedes_StaleRollout(t *testing.T) {
 	}
 	group.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
 
-	r := &SeiNodeDeploymentReconciler{}
+	r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
 	r.detectDeploymentNeeded(group)
 
 	g.Expect(group.Status.Rollout.TargetHash).NotTo(Equal("stale-hash"))
@@ -217,7 +218,7 @@ func TestDetectDeploymentNeeded_EmptyType_TreatedAsInPlace(t *testing.T) {
 	group.Status.TemplateHash = testOldHash
 	group.Status.IncumbentNodes = []string{"archive-rpc-0"}
 
-	r := &SeiNodeDeploymentReconciler{}
+	r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
 	r.detectDeploymentNeeded(group)
 
 	g.Expect(group.Status.Rollout).NotTo(BeNil())

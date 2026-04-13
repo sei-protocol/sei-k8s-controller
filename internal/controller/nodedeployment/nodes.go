@@ -98,6 +98,8 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 			return // rollout already targets the current spec
 		}
 		group.Status.Plan = nil
+		r.Recorder.Eventf(group, corev1.EventTypeNormal, "RolloutSuperseded",
+			"Spec changed during active rollout, replacing plan (old target: %s)", group.Status.Rollout.TargetHash)
 	}
 
 	if !hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) &&
@@ -123,6 +125,9 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 
 	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
 		"TemplateChanged", fmt.Sprintf("templateHash changed from %s to %s", group.Status.TemplateHash, currentHash))
+
+	r.Recorder.Eventf(group, corev1.EventTypeNormal, "RolloutStarted",
+		"InPlace rollout started (strategy: %s, target: %s)", strategyType, currentHash[:8])
 }
 
 // populateIncumbentNodes lists child SeiNodes and records their names

@@ -96,9 +96,10 @@ func managedByAnnotations() map[string]string {
 	return map[string]string{managedByAnnotation: controllerName}
 }
 
-// templateHash computes a hash over spec fields that require new nodes
-// when changed. Any container image change triggers a full pod restart,
-// so both the chain binary and sidecar images are included.
+// templateHash computes a hash over spec fields that trigger a deployment
+// plan when changed. Currently tracked: chainId, image, entrypoint, and
+// sidecar image. Fields like overrides, peers, and replica count propagate
+// in-place via ensureSeiNode without requiring a deployment plan.
 func templateHash(spec *seiv1alpha1.SeiNodeSpec) string {
 	h := sha256.New()
 	h.Write([]byte(spec.ChainID))
