@@ -64,30 +64,24 @@ This pattern extends naturally to BlueGreen and HardFork. Today those strategies
 
 2. **templateHash diverges; condition set; plan created.** The SeiNodeDeployment controller's `reconcileSeiNodes` detects that the current `templateHash` differs from `status.templateHash`. With `updateStrategy.type == InPlace`, it sets the `RolloutInProgress` condition, writes a `RolloutStatus` to `status.rollout`, and generates an InPlace deployment plan.
 
-3. **Plan step: UpdateNodeSpecs.** The plan's first task calls `ensureSeiNode` to patch each child SeiNode's image and sets a `ReadinessApproved` condition on each SeiNode. All nodes are updated simultaneously -- chain upgrades are coordinated halts where sequential rollout provides no safety benefit.
+3. **Plan step: UpdateNodeSpecs.** The plan's first task patches each child SeiNode's image via the kube client. All nodes are updated simultaneously -- chain upgrades are coordinated halts where sequential rollout provides no safety benefit. The SeiNode controller converges StatefulSets in its `reconcileRunning` via SSA. Kubernetes detects the pod template change and terminates the old pod, scheduling a new one with the updated image.
 
-4. **SeiNode controller converges StatefulSets.** Each SeiNode's `reconcileRunning` calls `reconcileNodeStatefulSet`, which applies the updated StatefulSet spec via SSA. Kubernetes detects the pod template change and terminates the old pod, scheduling a new one with the updated image.
+4. **Plan step: MarkReady.** The sidecar starts fresh on the new pod and returns 503 from `/v0/healthz`, blocking seid. The `MarkReady` task polls each node's sidecar via `sidecarClientForNode` (the same pattern used by `awaitNodesCaughtUpExecution`). Once the sidecar is reachable, it submits `mark-ready`. Once the sidecar reports `Ready`, the task completes. The sidecar flips `/v0/healthz` to 200, and seid starts via the wait wrapper.
 
-5. **Sidecar restarts fresh; SeiNode reacts to readiness signal.** The new pod's sidecar starts clean and returns 503 from `/v0/healthz`. The SeiNode controller's `reconcileRunning` checks for the `ReadinessApproved` condition. When present, it submits `mark-ready` to the sidecar through its existing client, then clears the condition. The sidecar flips to ready, `/v0/healthz` returns 200, and seid starts via the wait wrapper. This preserves the single-writer invariant: only the SeiNode controller talks to the sidecar.
+5. **Plan completes.** The plan is marked complete, the controller clears `RolloutInProgress`, clears `status.rollout`, and updates `status.templateHash`.
 
-6. **Plan step: AwaitRunning.** The plan's second task monitors all child SeiNodes. When all nodes report `PhaseRunning`, the task completes, the plan is marked complete, the controller clears `RolloutInProgress`, clears `status.rollout`, and updates `status.templateHash`.
-
-7. **Failure detection.** If a node's pod enters CrashLoopBackOff or the SeiNode transitions to Failed, the rollout status reflects this per-node. The controller does NOT auto-rollback -- blockchain rollback after a chain upgrade would leave the node unable to process new blocks. The engineer inspects the status and decides: push a fix, revert the image, or investigate.
+6. **Failure detection.** If a node's pod enters CrashLoopBackOff or the sidecar never becomes reachable, the plan step stays in `ExecutionRunning`. The rollout status shows per-node state. The controller does NOT auto-rollback -- blockchain rollback after a chain upgrade would leave the node unable to process new blocks. The engineer inspects the status and decides: push a fix, revert the image, or investigate.
 
 ### InPlace Plan
 
 ```
-UpdateNodeSpecs → AwaitRunning
+UpdateNodeSpecs → MarkReady
 ```
 
 | Task | Executor | Description |
 |------|----------|-------------|
-| `UpdateNodeSpecs` | SeiNodeDeployment | Patches each child SeiNode's image via `ensureSeiNode`. Sets `ReadinessApproved` condition on each SeiNode. |
-| `AwaitRunning` | SeiNodeDeployment | Polls child SeiNode phases. Completes when all are Running. |
-
-### Standalone SeiNode Fallback
-
-If a SeiNode has no parent SeiNodeDeployment (no owner reference), no deployment controller will ever set `ReadinessApproved`. In this case, the SeiNode controller self-approves: if the sidecar is reachable and no owner reference exists, it submits `mark-ready` directly. This keeps standalone nodes functional for development and testing.
+| `UpdateNodeSpecs` | SeiNodeDeployment | Patches each child SeiNode's image via kube client. The SeiNode controller converges StatefulSets. |
+| `MarkReady` | SeiNodeDeployment | Polls each node's sidecar via `sidecarClientForNode`. Once reachable, submits `mark-ready`. Completes when all sidecars report `Ready`. |
 
 ## CRD Changes
 
