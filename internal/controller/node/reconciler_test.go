@@ -180,6 +180,41 @@ func TestNodeReconcile_SnapshotNode_StatefulSetHasInitContainers(t *testing.T) {
 	g.Expect(sts.Spec.Template.Spec.InitContainers[1].Name).To(Equal("sei-sidecar"))
 }
 
+func TestNodeReconcile_RunningPhase_UpdatesStatefulSetImage(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := newGenesisNode("mynet-0", "default")
+	node.Finalizers = []string{nodeFinalizerName}
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+
+	// Pre-create a StatefulSet with the old image.
+	oldSts := generateNodeStatefulSet(node, platformtest.Config())
+	oldSts.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
+
+	r, c := newNodeReconciler(t, node, oldSts)
+
+	// Verify old image on the StatefulSet.
+	sts := &appsv1.StatefulSet{}
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "mynet-0", Namespace: "default"}, sts)).To(Succeed())
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+	g.Expect(seid.Image).To(Equal("ghcr.io/sei-protocol/seid:latest"))
+
+	// Update the image on the SeiNode spec.
+	node = getSeiNode(t, ctx, c, "mynet-0", "default")
+	node.Spec.Image = "ghcr.io/sei-protocol/seid:v2.0.0"
+	g.Expect(c.Update(ctx, node)).To(Succeed())
+
+	// Reconcile — this enters reconcileRunning which should update the StatefulSet.
+	_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// StatefulSet should now reflect the new image.
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "mynet-0", Namespace: "default"}, sts)).To(Succeed())
+	seid = findContainer(sts.Spec.Template.Spec.Containers, "seid")
+	g.Expect(seid.Image).To(Equal("ghcr.io/sei-protocol/seid:v2.0.0"))
+}
+
 func TestNodeDeletion_SnapshotNode_WithoutRetain_DeletesPVC(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()

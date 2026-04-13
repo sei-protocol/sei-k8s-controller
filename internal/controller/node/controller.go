@@ -166,8 +166,15 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 	return result, nil
 }
 
-// reconcileRunning handles runtime tasks (scheduled uploads, exports).
+// reconcileRunning converges owned resources and handles runtime tasks.
 func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
+	}
+	if err := r.reconcileNodeService(ctx, node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
+	}
+
 	sc := r.buildSidecarClient(node)
 	if sc == nil {
 		sidecarUnreachableTotal.WithLabelValues(node.Namespace, node.Name).Inc()
