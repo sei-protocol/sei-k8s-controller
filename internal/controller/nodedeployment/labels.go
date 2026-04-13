@@ -26,8 +26,8 @@ func seiNodeName(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
 // node set. Used for traffic routing during deployments and for
 // observability labels on pods.
 func activeRevision(group *seiv1alpha1.SeiNodeDeployment) string {
-	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
-		return group.Status.Deployment.IncumbentRevision
+	if group.Status.Rollout != nil && group.Status.Rollout.IncumbentRevision != "" {
+		return group.Status.Rollout.IncumbentRevision
 	}
 	return strconv.FormatInt(group.Generation, 10)
 }
@@ -41,7 +41,7 @@ func externalServiceName(group *seiv1alpha1.SeiNodeDeployment) string {
 // deployment, it includes the revision label to pin traffic to the
 // active set. At steady state, it selects by group membership only.
 func groupSelector(group *seiv1alpha1.SeiNodeDeployment) map[string]string {
-	if group.Status.Deployment != nil {
+	if group.Status.Rollout != nil {
 		return map[string]string{
 			groupLabel:    group.Name,
 			revisionLabel: activeRevision(group),

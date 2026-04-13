@@ -73,14 +73,14 @@ func (r *SeiNodeDeploymentReconciler) startPlan(ctx context.Context, group *seiv
 func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	isDeploymentPlan := group.Status.Deployment != nil
+	isDeploymentPlan := group.Status.Rollout != nil
 
 	if isDeploymentPlan {
 		group.Status.ObservedGeneration = group.Generation
 		if err := r.reconcileNetworking(ctx, group); err != nil {
 			return ctrl.Result{}, fmt.Errorf("reconciling networking after deployment: %w", err)
 		}
-		group.Status.Deployment = nil
+		group.Status.Rollout = nil
 	}
 
 	if group.Spec.Genesis != nil && !isDeploymentPlan {
@@ -105,7 +105,7 @@ func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1
 
 	group.Status.Phase = seiv1alpha1.GroupPhaseDegraded
 	group.Status.Plan = nil
-	group.Status.Deployment = nil
+	group.Status.Rollout = nil
 	clearPlanInProgress(group, "PlanFailed", "Plan failed")
 
 	r.Recorder.Event(group, corev1.EventTypeWarning, "PlanFailed", "Plan failed")

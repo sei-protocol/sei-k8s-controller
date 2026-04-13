@@ -13,9 +13,6 @@ import (
 // ForDeployment returns the appropriate GroupPlanner for the group's
 // configured update strategy.
 func ForDeployment(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
-	if group.Spec.UpdateStrategy == nil {
-		return nil, fmt.Errorf("no update strategy on %s/%s", group.Namespace, group.Name)
-	}
 	switch group.Spec.UpdateStrategy.Type {
 	case seiv1alpha1.UpdateStrategyHardFork:
 		return &hardForkDeploymentPlanner{}, nil
@@ -44,8 +41,8 @@ func EntrantRevision(group *seiv1alpha1.SeiNodeDeployment) string {
 // IncumbentRevision returns the revision string for the incumbent set,
 // derived from the last successfully reconciled generation.
 func IncumbentRevision(group *seiv1alpha1.SeiNodeDeployment) string {
-	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
-		return group.Status.Deployment.IncumbentRevision
+	if group.Status.Rollout != nil && group.Status.Rollout.IncumbentRevision != "" {
+		return group.Status.Rollout.IncumbentRevision
 	}
 	return strconv.FormatInt(group.Status.ObservedGeneration, 10)
 }

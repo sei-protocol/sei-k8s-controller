@@ -26,7 +26,7 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.deployment.entrantRevision
+    - jsonPath: .status.rollout.entrantRevision
       name: Revision
       priority: 1
       type: string
@@ -681,9 +681,7 @@ spec:
               updateStrategy:
                 description: |-
                   UpdateStrategy controls how changes to the template are rolled out
-                  to child SeiNodes. When set, the controller uses blue-green
-                  deployment orchestration instead of in-place updates.
-                  When not set, template changes are applied in-place via ensureSeiNode.
+                  to child SeiNodes. Every deployment must declare an explicit strategy.
                 properties:
                   hardFork:
                     description: |-
@@ -704,6 +702,7 @@ spec:
                   type:
                     description: Type selects the deployment strategy.
                     enum:
+                    - InPlace
                     - BlueGreen
                     - HardFork
                     type: string
@@ -717,6 +716,7 @@ spec:
             required:
             - replicas
             - template
+            - updateStrategy
             type: object
           status:
             description: SeiNodeDeploymentStatus defines the observed state of a SeiNodeDeployment.
@@ -780,28 +780,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              deployment:
-                description: |-
-                  Deployment tracks an in-progress deployment.
-                  Nil when no deployment is active.
-                properties:
-                  entrantNodes:
-                    description: EntrantNodes lists the names of the new SeiNode resources.
-                    items:
-                      type: string
-                    type: array
-                  entrantRevision:
-                    description: EntrantRevision identifies the generation of the
-                      new nodes being deployed.
-                    type: string
-                  incumbentRevision:
-                    description: IncumbentRevision identifies the generation of the
-                      currently live nodes.
-                    type: string
-                required:
-                - entrantRevision
-                - incumbentRevision
-                type: object
               genesisHash:
                 description: GenesisHash is the SHA-256 hex digest of the assembled
                   genesis.json.
@@ -992,6 +970,85 @@ spec:
                 description: Replicas is the desired number of SeiNodes.
                 format: int32
                 type: integer
+              rollout:
+                description: |-
+                  Rollout tracks an in-progress rollout across all strategy types.
+                  Nil when no rollout is active.
+                properties:
+                  entrantNodes:
+                    description: |-
+                      EntrantNodes lists the names of the new SeiNode resources being
+                      created. Only populated for BlueGreen and HardFork strategies.
+                    items:
+                      type: string
+                    type: array
+                  entrantRevision:
+                    description: |-
+                      EntrantRevision identifies the generation of the new nodes.
+                      Only populated for BlueGreen and HardFork strategies.
+                    type: string
+                  incumbentNodes:
+                    description: |-
+                      IncumbentNodes lists the names of the currently active SeiNode
+                      resources. Only populated for BlueGreen and HardFork strategies.
+                    items:
+                      type: string
+                    type: array
+                  incumbentRevision:
+                    description: |-
+                      IncumbentRevision identifies the generation of the currently live nodes.
+                      Only populated for BlueGreen and HardFork strategies.
+                    type: string
+                  nodes:
+                    description: Nodes reports per-node rollout state.
+                    items:
+                      description: RolloutNodeStatus tracks a single node's convergence
+                        during a rollout.
+                      properties:
+                        name:
+                          description: Name is the SeiNode resource name.
+                          type: string
+                        phase:
+                          description: Phase is the SeiNode's current phase.
+                          enum:
+                          - Pending
+                          - Initializing
+                          - Running
+                          - Failed
+                          - Terminating
+                          type: string
+                        ready:
+                          description: Ready is true when the node is Running with
+                            a ready pod.
+                          type: boolean
+                      required:
+                      - name
+                      - ready
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  startedAt:
+                    description: StartedAt is when the rollout was first detected.
+                    format: date-time
+                    type: string
+                  strategy:
+                    description: Strategy is the strategy type driving this rollout.
+                    enum:
+                    - InPlace
+                    - BlueGreen
+                    - HardFork
+                    type: string
+                  targetHash:
+                    description: TargetHash is the templateHash being rolled out to.
+                    type: string
+                required:
+                - nodes
+                - startedAt
+                - strategy
+                - targetHash
+                type: object
               templateHash:
                 description: |-
                   TemplateHash is a hash of the spec fields that require deployment

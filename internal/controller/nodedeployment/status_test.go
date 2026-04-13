@@ -69,7 +69,9 @@ func TestComputeGroupPhase_AllFailed(t *testing.T) {
 func TestComputeGroupPhase_Upgrading(t *testing.T) {
 	g := NewWithT(t)
 	group := emptyGroup()
-	group.Status.Deployment = &seiv1alpha1.DeploymentStatus{
+	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
+		Strategy:          seiv1alpha1.UpdateStrategyBlueGreen,
+		TargetHash:        "abc123",
 		IncumbentRevision: "1",
 		EntrantRevision:   "2",
 	}

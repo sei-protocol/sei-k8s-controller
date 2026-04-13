@@ -51,7 +51,7 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 
 func computeGroupPhase(group *seiv1alpha1.SeiNodeDeployment, ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1alpha1.SeiNodeDeploymentPhase {
 	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
-		if group.Status.Deployment != nil {
+		if group.Status.Rollout != nil {
 			return seiv1alpha1.GroupPhaseUpgrading
 		}
 		return seiv1alpha1.GroupPhaseInitializing

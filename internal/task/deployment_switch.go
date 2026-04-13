@@ -41,14 +41,14 @@ func (e *switchTrafficExecution) Execute(ctx context.Context) error {
 		return Terminal(err)
 	}
 
-	if group.Status.Deployment == nil {
-		return Terminal(fmt.Errorf("no deployment status on group %s", e.params.GroupName))
+	if group.Status.Rollout == nil {
+		return Terminal(fmt.Errorf("no rollout status on group %s", e.params.GroupName))
 	}
 
 	patch := client.MergeFrom(group.DeepCopy())
-	group.Status.Deployment.IncumbentRevision = e.params.EntrantRevision
+	group.Status.Rollout.IncumbentRevision = e.params.EntrantRevision
 	if err := e.cfg.KubeClient.Status().Patch(ctx, group, patch); err != nil {
-		return fmt.Errorf("patching deployment revision: %w", err) // transient
+		return fmt.Errorf("patching rollout revision: %w", err) // transient
 	}
 
 	log.FromContext(ctx).Info("traffic switched to entrant revision",

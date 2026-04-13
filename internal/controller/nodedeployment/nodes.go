@@ -82,13 +82,10 @@ func (r *SeiNodeDeploymentReconciler) detectGenesisCeremonyNeeded(group *seiv1al
 // fields that require new nodes (image, entrypoint, chainId) are hashed;
 // sidecar, overrides, and replica changes propagate in-place.
 func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeDeployment) {
-	if group.Spec.UpdateStrategy == nil {
-		return
-	}
 	if group.Status.TemplateHash == "" {
 		return // first reconcile, no baseline to compare against
 	}
-	if group.Status.Deployment != nil {
+	if group.Status.Rollout != nil {
 		return
 	}
 	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
@@ -100,10 +97,14 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 		return // no deployment-worthy fields changed
 	}
 
-	group.Status.Deployment = &seiv1alpha1.DeploymentStatus{
+	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
+		Strategy:          group.Spec.UpdateStrategy.Type,
+		TargetHash:        currentHash,
+		StartedAt:         metav1.Now(),
 		IncumbentRevision: planner.IncumbentRevision(group),
 		EntrantRevision:   planner.EntrantRevision(group),
 		EntrantNodes:      planner.EntrantNodeNames(group),
+		IncumbentNodes:    group.Status.IncumbentNodes,
 	}
 }
 
