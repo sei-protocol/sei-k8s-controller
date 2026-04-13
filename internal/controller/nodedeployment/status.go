@@ -3,6 +3,7 @@ package nodedeployment
 import (
 	"context"
 	"fmt"
+	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,8 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses
 
+	reconcileRolloutStatus(group, nodes)
+
 	group.Status.Phase = computeGroupPhase(group, readyReplicas, group.Spec.Replicas, nodes)
 
 	group.Status.NetworkingStatus = r.buildNetworkingStatus(group)
@@ -49,7 +52,48 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 	return r.Status().Patch(ctx, group, statusBase)
 }
 
+const stallThreshold = 10 * time.Minute
+
+func reconcileRolloutStatus(group *seiv1alpha1.SeiNodeDeployment, nodes []seiv1alpha1.SeiNode) {
+	if group.Status.Rollout == nil || group.Status.Rollout.Strategy != seiv1alpha1.UpdateStrategyInPlace {
+		return
+	}
+
+	nodePhaseMap := make(map[string]seiv1alpha1.SeiNodePhase, len(nodes))
+	for i := range nodes {
+		nodePhaseMap[nodes[i].Name] = nodes[i].Status.Phase
+	}
+
+	allReady := true
+	for i := range group.Status.Rollout.Nodes {
+		rn := &group.Status.Rollout.Nodes[i]
+		phase := nodePhaseMap[rn.Name]
+		rn.Phase = phase
+		rn.Ready = phase == seiv1alpha1.PhaseRunning
+		if !rn.Ready {
+			allReady = false
+		}
+	}
+
+	if allReady && !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		group.Status.TemplateHash = group.Status.Rollout.TargetHash
+		group.Status.ObservedGeneration = group.Generation
+		group.Status.Rollout = nil
+		setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
+			"RolloutComplete", "All nodes converged")
+		return
+	}
+
+	if time.Since(group.Status.Rollout.StartedAt.Time) > stallThreshold {
+		setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
+			"Stalled", fmt.Sprintf("rollout stalled: not all nodes ready after %s", stallThreshold))
+	}
+}
+
 func computeGroupPhase(group *seiv1alpha1.SeiNodeDeployment, ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1alpha1.SeiNodeDeploymentPhase {
+	if hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
+		return seiv1alpha1.GroupPhaseUpgrading
+	}
 	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
 		if group.Status.Rollout != nil {
 			return seiv1alpha1.GroupPhaseUpgrading

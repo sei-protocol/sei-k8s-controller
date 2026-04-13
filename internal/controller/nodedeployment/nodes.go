@@ -85,7 +85,7 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 	if group.Status.TemplateHash == "" {
 		return // first reconcile, no baseline to compare against
 	}
-	if group.Status.Rollout != nil {
+	if hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
 		return
 	}
 	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
@@ -97,15 +97,33 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 		return // no deployment-worthy fields changed
 	}
 
+	strategyType := group.Spec.UpdateStrategy.Type
+	if strategyType == "" {
+		log.Log.Info("updateStrategy.type is empty, treating as InPlace — update the manifest",
+			"group", group.Name, "namespace", group.Namespace)
+		strategyType = seiv1alpha1.UpdateStrategyInPlace
+	}
+
+	rolloutNodes := make([]seiv1alpha1.RolloutNodeStatus, len(group.Status.IncumbentNodes))
+	for i, name := range group.Status.IncumbentNodes {
+		rolloutNodes[i] = seiv1alpha1.RolloutNodeStatus{Name: name}
+	}
+
 	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
-		Strategy:          group.Spec.UpdateStrategy.Type,
+		Strategy:          strategyType,
 		TargetHash:        currentHash,
 		StartedAt:         metav1.Now(),
+		Nodes:             rolloutNodes,
 		IncumbentRevision: planner.IncumbentRevision(group),
 		EntrantRevision:   planner.EntrantRevision(group),
-		EntrantNodes:      planner.EntrantNodeNames(group),
 		IncumbentNodes:    group.Status.IncumbentNodes,
 	}
+	if strategyType != seiv1alpha1.UpdateStrategyInPlace {
+		group.Status.Rollout.EntrantNodes = planner.EntrantNodeNames(group)
+	}
+
+	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
+		"TemplateChanged", fmt.Sprintf("templateHash changed from %s to %s", group.Status.TemplateHash, currentHash))
 }
 
 // populateIncumbentNodes lists child SeiNodes and records their names
