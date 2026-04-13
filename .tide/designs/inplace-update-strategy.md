@@ -2,11 +2,11 @@
 
 ## Summary
 
-The InPlace update strategy is a lightweight, operator-driven deployment mode that propagates spec changes (image, sidecar image) directly to existing SeiNode resources without creating entrant nodes or performing blue-green traffic switching. The controller's role is confined to change propagation, health monitoring, and status reporting.
+The InPlace update strategy is a lightweight, operator-driven deployment mode that propagates spec changes (image, sidecar image) directly to existing SeiNode resources without creating entrant nodes or performing blue-green traffic switching. Like BlueGreen and HardFork, InPlace uses the deployment plan/task machinery — but with a minimal plan that approves readiness and monitors convergence.
 
 This design also formalizes `updateStrategy` as a required field on SeiNodeDeployment. The previous implicit nil path (fire-and-forget in-place updates with no tracking) is removed -- all deployments must declare an explicit strategy: `InPlace`, `BlueGreen`, or `HardFork`.
 
-The critical technical challenge is the sidecar mark-ready gate: when a pod restarts after an image update, the sidecar starts fresh and returns 503 from `/v0/healthz`, blocking seid startup indefinitely. This design solves that by having the SeiNode controller's Running phase reconciler submit `mark-ready` unconditionally on every reconcile.
+The critical technical challenge is the sidecar mark-ready gate: when a pod restarts after an image update, the sidecar starts fresh and returns 503 from `/v0/healthz`, blocking seid startup indefinitely. This design solves that via a signal-and-react pattern: the SeiNodeDeployment's InPlace plan writes a readiness approval onto each SeiNode, and the SeiNode controller reacts by submitting `mark-ready` to its own sidecar. This preserves the single-writer invariant — only the SeiNode controller talks to the sidecar.
 
 ## Motivation
 
@@ -62,17 +62,32 @@ This pattern extends naturally to BlueGreen and HardFork. Today those strategies
 
 1. **Engineer updates manifests.** The engineer changes `spec.template.spec.image` (or sidecar image) on the SeiNodeDeployment and applies the change (via GitOps push, `kubectl apply`, etc.). The engineer is responsible for timing -- the controller does not validate block height.
 
-2. **templateHash diverges; condition set.** The SeiNodeDeployment controller's `reconcileSeiNodes` detects that the current `templateHash` differs from `status.templateHash`. With `updateStrategy.type == InPlace`, it sets the `RolloutInProgress` condition and writes a `RolloutStatus` to `status.rollout`.
+2. **templateHash diverges; condition set; plan created.** The SeiNodeDeployment controller's `reconcileSeiNodes` detects that the current `templateHash` differs from `status.templateHash`. With `updateStrategy.type == InPlace`, it sets the `RolloutInProgress` condition, writes a `RolloutStatus` to `status.rollout`, and generates an InPlace deployment plan.
 
-3. **ensureSeiNode propagates changes.** The `ensureSeiNode` loop patches each child SeiNode's image. All nodes are updated simultaneously -- chain upgrades are coordinated halts where sequential rollout provides no safety benefit.
+3. **Plan step: UpdateNodeSpecs.** The plan's first task calls `ensureSeiNode` to patch each child SeiNode's image and sets a `ReadinessApproved` condition on each SeiNode. All nodes are updated simultaneously -- chain upgrades are coordinated halts where sequential rollout provides no safety benefit.
 
 4. **SeiNode controller converges StatefulSets.** Each SeiNode's `reconcileRunning` calls `reconcileNodeStatefulSet`, which applies the updated StatefulSet spec via SSA. Kubernetes detects the pod template change and terminates the old pod, scheduling a new one with the updated image.
 
-5. **Sidecar restarts fresh; controller submits mark-ready.** The new pod's sidecar starts clean. The `reconcileRunning` method submits `mark-ready` unconditionally (it is idempotent). The sidecar flips to ready, `/v0/healthz` returns 200, and seid starts via the wait wrapper.
+5. **Sidecar restarts fresh; SeiNode reacts to readiness signal.** The new pod's sidecar starts clean and returns 503 from `/v0/healthz`. The SeiNode controller's `reconcileRunning` checks for the `ReadinessApproved` condition. When present, it submits `mark-ready` to the sidecar through its existing client, then clears the condition. The sidecar flips to ready, `/v0/healthz` returns 200, and seid starts via the wait wrapper. This preserves the single-writer invariant: only the SeiNode controller talks to the sidecar.
 
-6. **SeiNodeDeployment controller monitors convergence.** On each reconcile, the controller checks the rollout: for each node, it reads the child SeiNode's phase and pod readiness. When all nodes are Running with ready pods, the rollout is complete. The controller clears `RolloutInProgress`, clears `status.rollout`, and updates `status.templateHash`.
+6. **Plan step: AwaitRunning.** The plan's second task monitors all child SeiNodes. When all nodes report `PhaseRunning`, the task completes, the plan is marked complete, the controller clears `RolloutInProgress`, clears `status.rollout`, and updates `status.templateHash`.
 
 7. **Failure detection.** If a node's pod enters CrashLoopBackOff or the SeiNode transitions to Failed, the rollout status reflects this per-node. The controller does NOT auto-rollback -- blockchain rollback after a chain upgrade would leave the node unable to process new blocks. The engineer inspects the status and decides: push a fix, revert the image, or investigate.
+
+### InPlace Plan
+
+```
+UpdateNodeSpecs → AwaitRunning
+```
+
+| Task | Executor | Description |
+|------|----------|-------------|
+| `UpdateNodeSpecs` | SeiNodeDeployment | Patches each child SeiNode's image via `ensureSeiNode`. Sets `ReadinessApproved` condition on each SeiNode. |
+| `AwaitRunning` | SeiNodeDeployment | Polls child SeiNode phases. Completes when all are Running. |
+
+### Standalone SeiNode Fallback
+
+If a SeiNode has no parent SeiNodeDeployment (no owner reference), no deployment controller will ever set `ReadinessApproved`. In this case, the SeiNode controller self-approves: if the sidecar is reachable and no owner reference exists, it submits `mark-ready` directly. This keeps standalone nodes functional for development and testing.
 
 ## CRD Changes
 
@@ -203,14 +218,24 @@ The existing `DeploymentStatus` type and `Deployment` field are removed. BlueGre
 
 ### Conditions
 
-New condition type:
+New condition types:
 
 ```go
+// SeiNodeDeployment conditions:
 const (
     // ConditionRolloutInProgress indicates a rollout is active.
     // Set when a templateHash divergence is detected. Cleared when
     // all nodes converge or the rollout is superseded.
     ConditionRolloutInProgress = "RolloutInProgress"
+)
+
+// SeiNode conditions:
+const (
+    // ConditionReadinessApproved is set by the SeiNodeDeployment
+    // controller to signal that the SeiNode controller should submit
+    // mark-ready to the sidecar. Cleared by the SeiNode controller
+    // after successful submission.
+    ConditionReadinessApproved = "ReadinessApproved"
 )
 ```
 
@@ -261,7 +286,72 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 
 ### `ensureSeiNode` (nodedeployment/nodes.go)
 
-No changes needed. The existing in-place propagation already handles image and sidecar updates. When `RolloutInProgress` is true and the strategy is InPlace, `ensureSeiNode` runs normally (no plan blocks it). For BlueGreen/HardFork, the existing plan machinery takes over.
+No changes needed to the core logic. The existing in-place propagation already handles image and sidecar updates. The InPlace plan's `UpdateNodeSpecs` task calls `ensureSeiNode` and additionally sets the `ReadinessApproved` condition on each child SeiNode.
+
+### InPlace deployment planner (planner/deployment.go)
+
+Add an `inPlaceDeploymentPlanner` that generates the minimal two-task plan:
+
+```go
+func (p *inPlaceDeploymentPlanner) BuildPlan(
+    group *seiv1alpha1.SeiNodeDeployment,
+) (*seiv1alpha1.TaskPlan, error) {
+    planID := uuid.New().String()
+    nodeNames := group.Status.IncumbentNodes
+    ns := group.Namespace
+
+    prog := []struct {
+        taskType string
+        params   any
+    }{
+        {task.TaskTypeUpdateNodeSpecs, &task.UpdateNodeSpecsParams{
+            GroupName: group.Name,
+            Namespace: ns,
+            NodeNames: nodeNames,
+        }},
+        {task.TaskTypeAwaitNodesRunning, &task.AwaitNodesRunningParams{
+            GroupName: group.Name,
+            Namespace: ns,
+            Expected:  len(nodeNames),
+            NodeNames: nodeNames,
+        }},
+    }
+
+    tasks := make([]seiv1alpha1.PlannedTask, len(prog))
+    for i, p := range prog {
+        t, err := buildPlannedTask(planID, p.taskType, i, p.params)
+        if err != nil {
+            return nil, err
+        }
+        tasks[i] = t
+    }
+    return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
+}
+```
+
+### UpdateNodeSpecs task (task/deployment_update.go)
+
+New task type. Patches each child SeiNode's image via the existing `ensureSeiNode` mechanism and sets the `ReadinessApproved` condition:
+
+```go
+const TaskTypeUpdateNodeSpecs = "update-node-specs"
+
+type UpdateNodeSpecsParams struct {
+    GroupName string   `json:"groupName"`
+    Namespace string   `json:"namespace"`
+    NodeNames []string `json:"nodeNames"`
+}
+```
+
+The task execution:
+1. Lists child SeiNodes by name
+2. For each node, updates spec fields from the parent deployment template (image, sidecar image)
+3. Sets the `ReadinessApproved` condition on the SeiNode's status
+4. Completes synchronously
+
+### SeiNode controller changes (node/controller.go)
+
+The `reconcileRunning` method gains a `shouldMarkReady` check that reacts to the `ReadinessApproved` condition. See the code in the Sidecar Mark-Ready Resolution section above.
 
 ### Rollout status reconciliation (nodedeployment/status.go)
 
@@ -337,11 +427,17 @@ The sidecar starts fresh on every pod restart. Its `/v0/healthz` endpoint return
 
 After an in-place image update, the StatefulSet rolls the pod. The new sidecar starts, binds its port, and returns 503 from `/v0/healthz`. The seid container's wait wrapper polls `/v0/healthz` and blocks forever.
 
-### Solution: Controller Re-submits Mark-Ready
+### Solution: Signal-and-React via ReadinessApproved
 
-The `reconcileRunning` method submits `mark-ready` unconditionally on every reconcile when the sidecar is reachable. The `mark-ready` task is fire-and-forget and idempotent -- submitting it to an already-ready sidecar is a no-op.
+The solution preserves a clean separation of concerns:
+
+- **SeiNodeDeployment controller** (orchestrator) writes intent onto child SeiNodes via a `ReadinessApproved` condition as part of the InPlace deployment plan.
+- **SeiNode controller** (executor) observes the condition, submits `mark-ready` to the sidecar through its existing client, and clears the condition.
+
+This maintains the **single-writer invariant**: only the SeiNode controller holds a sidecar client and submits tasks. The SeiNodeDeployment controller never talks to the sidecar directly. The Kubernetes resource (SeiNode) is the communication channel between the two controllers.
 
 ```go
+// In reconcileRunning (SeiNode controller):
 func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
     if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
         return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
@@ -357,24 +453,46 @@ func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alp
         return ctrl.Result{RequeueAfter: statusPollInterval}, nil
     }
 
-    r.ensureMarkReady(ctx, node, sc)
+    // React to readiness approval from the deployment controller,
+    // or self-approve if standalone (no owner reference).
+    if r.shouldMarkReady(node) {
+        r.submitMarkReady(ctx, node, sc)
+    }
 
     return r.reconcileRuntimeTasks(ctx, node, sc)
 }
 
-func (r *SeiNodeReconciler) ensureMarkReady(ctx context.Context, node *seiv1alpha1.SeiNode, sc task.SidecarClient) {
+func (r *SeiNodeReconciler) shouldMarkReady(node *seiv1alpha1.SeiNode) bool {
+    if hasCondition(node, seiv1alpha1.ConditionReadinessApproved) {
+        return true
+    }
+    // Standalone fallback: no parent deployment, self-approve
+    if !hasOwnerOfKind(node, "SeiNodeDeployment") {
+        return true
+    }
+    return false
+}
+
+func (r *SeiNodeReconciler) submitMarkReady(ctx context.Context, node *seiv1alpha1.SeiNode, sc task.SidecarClient) {
     req := sidecar.TaskRequest{Type: sidecar.TaskTypeMarkReady}
     if _, err := sc.SubmitTask(ctx, req); err != nil {
         log.FromContext(ctx).V(1).Info("mark-ready submission failed", "error", err)
+        return
+    }
+    // Clear the condition after successful submission
+    removeCondition(node, seiv1alpha1.ConditionReadinessApproved)
+    if err := r.Status().Update(ctx, node); err != nil {
+        log.FromContext(ctx).Info("failed to clear ReadinessApproved", "error", err)
     }
 }
 ```
 
 This approach:
-- Requires no sidecar changes
-- Solves the problem for ALL strategies, not just InPlace
-- Keeps the sidecar stateless by design
-- Is safe because mark-ready is idempotent
+- Keeps sidecar interaction exclusively in the SeiNode controller
+- Uses Kubernetes resources as the communication channel (idiomatic)
+- Provides exactly-once mark-ready via the plan (not fire-and-forget on every reconcile)
+- Handles standalone SeiNodes via owner reference check
+- Aligns with Cluster API (Cluster orchestrates, Machine executes) and Crossplane (Composite drives, Managed actuates) patterns
 
 ### Open Question: Block Height Sourcing
 
@@ -474,14 +592,16 @@ If the operator changes the image again while a rollout is active, `RolloutInPro
 | File | Change |
 |------|--------|
 | `api/v1alpha1/seinodedeployment_types.go` | Add `UpdateStrategyInPlace` to enum. Replace `DeploymentStatus` with unified `RolloutStatus`. Make `UpdateStrategy` required. Add `ConditionRolloutInProgress`. Remove `Deployment` field, add `Rollout` field. |
+| `api/v1alpha1/seinode_types.go` | Add `ConditionReadinessApproved` constant. |
 | `api/v1alpha1/zz_generated.deepcopy.go` | Regenerated |
 | `manifests/crd/bases/sei.io_seinodedeployments.yaml` | Regenerated |
 | `internal/controller/nodedeployment/nodes.go` | `detectDeploymentNeeded`: set `RolloutInProgress` condition, create unified `RolloutStatus`. Migrate BlueGreen/HardFork to use `RolloutStatus`. |
 | `internal/controller/nodedeployment/status.go` | Add `reconcileRolloutStatus`. Extend `computeGroupPhase` for `RolloutInProgress` condition. |
 | `internal/controller/nodedeployment/plan.go` | Read `RolloutStatus` instead of `DeploymentStatus` for BlueGreen/HardFork plan generation. |
-| `internal/planner/deployment.go` | Read entrant/incumbent from `RolloutStatus` instead of `DeploymentStatus`. |
-| `internal/controller/node/controller.go` | `reconcileRunning`: add `ensureMarkReady` call before `reconcileRuntimeTasks`. |
-| `internal/controller/node/plan_execution.go` | Add `ensureMarkReady` method. |
+| `internal/planner/deployment.go` | Add `inPlaceDeploymentPlanner` with `UpdateNodeSpecs → AwaitRunning` plan. Read entrant/incumbent from `RolloutStatus` instead of `DeploymentStatus`. |
+| `internal/task/deployment_update.go` | New file. `UpdateNodeSpecs` task: patches child SeiNode specs and sets `ReadinessApproved` condition. |
+| `internal/task/deployment.go` | Register `TaskTypeUpdateNodeSpecs`. |
+| `internal/controller/node/controller.go` | `reconcileRunning`: add `shouldMarkReady` / `submitMarkReady` for signal-and-react pattern. |
 
 ## Test Plan
 
@@ -493,20 +613,26 @@ If the operator changes the image again while a rollout is active, `RolloutInPro
 | `TestDetectDeploymentNeeded_InPlace_AlreadyActive` | `nodes_test.go` | `RolloutInProgress=True` prevents duplicate detection |
 | `TestDetectDeploymentNeeded_BlueGreen_MigratedToRollout` | `nodes_test.go` | BlueGreen creates `RolloutStatus` with entrant/incumbent fields |
 | `TestBuildRolloutNodes` | `nodes_test.go` | Creates entries for each incumbent node |
+| `TestInPlacePlan_TwoTasks` | `deployment_test.go` | InPlace plan has exactly: UpdateNodeSpecs, AwaitRunning |
+| `TestUpdateNodeSpecs_SetsReadinessApproved` | `deployment_update_test.go` | Task patches SeiNode image and sets `ReadinessApproved` condition |
 | `TestReconcileRolloutStatus_AllReady` | `status_test.go` | Rollout cleared, templateHash updated, `RolloutInProgress` set to False |
 | `TestReconcileRolloutStatus_Partial` | `status_test.go` | Rollout persists with mixed ready/not-ready |
 | `TestReconcileRolloutStatus_WithFailedNode` | `status_test.go` | Shows `ready: false, phase: Failed` |
 | `TestComputeGroupPhase_RolloutInProgress` | `status_test.go` | Returns `Upgrading` when `RolloutInProgress` is True |
-| `TestEnsureMarkReady` | `reconciler_test.go` | Submits mark-ready task via sidecar client |
-| `TestReconcileRunning_SubmitsMarkReady` | `reconciler_test.go` | mark-ready called before runtime tasks |
+| `TestShouldMarkReady_WithApproval` | `reconciler_test.go` | Returns true when `ReadinessApproved` condition is present |
+| `TestShouldMarkReady_Standalone` | `reconciler_test.go` | Returns true when no SeiNodeDeployment owner reference |
+| `TestShouldMarkReady_ManagedNoApproval` | `reconciler_test.go` | Returns false when owned by SeiNodeDeployment but no approval |
+| `TestSubmitMarkReady_ClearsCondition` | `reconciler_test.go` | Submits mark-ready and removes `ReadinessApproved` condition |
 
 ## Implementation Order
 
-1. **ensureMarkReady.** Add to SeiNode controller's `reconcileRunning`. Ships independently -- unblocks pod restarts for all strategies. Highest priority.
-2. **CRD types.** Add `InPlace` enum, unified `RolloutStatus`, `ConditionRolloutInProgress`. Make `updateStrategy` required. Remove `DeploymentStatus`. `make manifests generate`.
-3. **detectDeploymentNeeded refactor.** Set `RolloutInProgress` condition, write unified `RolloutStatus`. Migrate BlueGreen/HardFork.
-4. **Rollout status reconciliation.** Add `reconcileRolloutStatus`, extend `computeGroupPhase`.
-5. **Events.** Emit `RolloutStarted`, `RolloutComplete`.
-6. **Tests.** Unit tests for each step.
+1. **CRD types.** Add `InPlace` enum, `ConditionReadinessApproved` on SeiNode, unified `RolloutStatus`, `ConditionRolloutInProgress`. Make `updateStrategy` required. Remove `DeploymentStatus`. `make manifests generate`.
+2. **SeiNode mark-ready signal-and-react.** Add `shouldMarkReady` / `submitMarkReady` to the SeiNode controller's `reconcileRunning`. Reacts to `ReadinessApproved` condition. Standalone fallback via owner reference check.
+3. **InPlace deployment planner.** Add `inPlaceDeploymentPlanner` with `UpdateNodeSpecs → AwaitRunning` plan. Register in `ForDeployment`.
+4. **UpdateNodeSpecs task.** New task type that patches child SeiNode specs and sets `ReadinessApproved`.
+5. **detectDeploymentNeeded refactor.** Set `RolloutInProgress` condition, write unified `RolloutStatus`. Migrate BlueGreen/HardFork. Add zero-value migration handling.
+6. **Rollout status reconciliation.** Add `reconcileRolloutStatus`, extend `computeGroupPhase`. Add stalled escalation.
+7. **Events.** Emit `RolloutStarted`, `RolloutComplete`, `RolloutStalled`.
+8. **Tests.** Unit tests for each step.
 
-Step 1 is the highest-priority standalone fix -- it resolves the sidecar restart problem that currently blocks all image updates on Running nodes.
+Steps 1-2 can ship independently as they unblock pod restarts for standalone SeiNodes. Steps 3-7 complete the InPlace strategy with full plan-based orchestration.
