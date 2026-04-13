@@ -54,9 +54,6 @@ func TestCompletePlan_ClearsRolloutInProgress(t *testing.T) {
 		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
 		TargetHash: "newhash1234",
 		StartedAt:  metav1.Now(),
-		Nodes: []seiv1alpha1.RolloutNodeStatus{
-			{Name: "archive-rpc-0", Ready: true, Phase: seiv1alpha1.PhaseRunning},
-		},
 	}
 	group.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	setPlanInProgress(group, "Deployment", "deploying")
@@ -111,11 +108,6 @@ func TestFailPlan_ClearsRolloutInProgress(t *testing.T) {
 		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
 		TargetHash: "newhash1234",
 		StartedAt:  metav1.Now(),
-		Nodes: []seiv1alpha1.RolloutNodeStatus{
-			{Name: "archive-rpc-0"},
-			{Name: "archive-rpc-1"},
-			{Name: "archive-rpc-2"},
-		},
 	}
 	group.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanFailed}
 	setPlanInProgress(group, "Deployment", "deploying")

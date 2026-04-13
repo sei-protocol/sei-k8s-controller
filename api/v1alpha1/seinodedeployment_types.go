@@ -292,11 +292,6 @@ type RolloutStatus struct {
 	// StartedAt is when the rollout was first detected.
 	StartedAt metav1.Time `json:"startedAt"`
 
-	// Nodes reports per-node rollout state.
-	// +listType=map
-	// +listMapKey=name
-	Nodes []RolloutNodeStatus `json:"nodes"`
-
 	// IncumbentNodes lists the names of the currently active SeiNode
 	// resources. Only populated for BlueGreen and HardFork strategies.
 	// +optional
@@ -316,18 +311,6 @@ type RolloutStatus struct {
 	// Only populated for BlueGreen and HardFork strategies.
 	// +optional
 	EntrantRevision string `json:"entrantRevision,omitempty"`
-}
-
-// RolloutNodeStatus tracks a single node's convergence during a rollout.
-type RolloutNodeStatus struct {
-	// Name is the SeiNode resource name.
-	Name string `json:"name"`
-
-	// Ready is true when the node is Running with a ready pod.
-	Ready bool `json:"ready"`
-
-	// Phase is the SeiNode's current phase.
-	Phase SeiNodePhase `json:"phase,omitempty"`
 }
 
 // Status condition types for SeiNodeDeployment.
