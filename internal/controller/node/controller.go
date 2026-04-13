@@ -197,6 +197,10 @@ func (r *SeiNodeReconciler) observeCurrentImage(ctx context.Context, node *seiv1
 		return err
 	}
 
+	// Wait for the StatefulSet controller to process the latest spec change.
+	if sts.Status.ObservedGeneration < sts.Generation {
+		return nil
+	}
 	if sts.Spec.Replicas == nil || sts.Status.UpdatedReplicas < *sts.Spec.Replicas {
 		return nil
 	}
