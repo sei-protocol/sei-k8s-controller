@@ -2,64 +2,100 @@
 
 ## Summary
 
-The InPlace update strategy is a lightweight, operator-driven deployment mode that propagates spec changes (image, sidecar, entrypoint) directly to existing SeiNode resources without creating entrant nodes or performing blue-green traffic switching. The controller's role is confined to change propagation, health monitoring, and status reporting. Unlike the nil strategy (no `UpdateStrategy` set), InPlace provides explicit rollout tracking through a `RolloutStatus` on the SeiNodeDeployment, surfacing per-node convergence state so engineers can observe the rollout and detect failures.
+The InPlace update strategy is a lightweight, operator-driven deployment mode that propagates spec changes (image, sidecar image) directly to existing SeiNode resources without creating entrant nodes or performing blue-green traffic switching. The controller's role is confined to change propagation, health monitoring, and status reporting.
 
-The critical technical challenge is the sidecar mark-ready gate: when a pod restarts after an image update, the sidecar starts fresh and returns 503 from `/v0/healthz`, blocking seid startup indefinitely. This design solves that by having the SeiNode controller's Running phase reconciler submit `mark-ready` unconditionally on every reconcile, with a future path for the sidecar to self-resolve on restart.
+This design also formalizes `updateStrategy` as a required field on SeiNodeDeployment. The previous implicit nil path (fire-and-forget in-place updates with no tracking) is removed -- all deployments must declare an explicit strategy: `InPlace`, `BlueGreen`, or `HardFork`.
+
+The critical technical challenge is the sidecar mark-ready gate: when a pod restarts after an image update, the sidecar starts fresh and returns 503 from `/v0/healthz`, blocking seid startup indefinitely. This design solves that by having the SeiNode controller's Running phase reconciler submit `mark-ready` unconditionally on every reconcile.
 
 ## Motivation
 
-Today, the controller supports three update paths:
+Today, the controller supports two explicit update strategies and one implicit path:
 
 1. **BlueGreen** -- full blue-green with entrant nodes, catch-up wait, traffic switch, and incumbent teardown
 2. **HardFork** -- blue-green variant with halt-height coordination for chain upgrades
-3. **nil (no strategy)** -- `ensureSeiNode` patches child SeiNodes in-place with no orchestration, no status tracking, and no health monitoring
+3. **nil (no strategy)** -- `ensureSeiNode` patches child SeiNodes in-place with no orchestration and no status tracking
 
-The nil strategy is fire-and-forget. After pushing the change to child SeiNodes, the deployment controller moves on. There is no rollout status, no per-node convergence tracking, and no way for an operator to answer "did the rollout succeed?" without manually inspecting each SeiNode and its pod.
+The nil path was a placeholder to avoid making a decision on in-place updates. It provided no rollout status, no per-node convergence tracking, and no way for an operator to answer "did the rollout succeed?" Now that InPlace is formalized, the nil path is removed.
 
-InPlace fills this gap. It is the right strategy when:
+InPlace is the right strategy when:
 
 - The operator has already waited for the chain to reach upgrade height (or the change is non-disruptive, like a sidecar bump)
 - Creating fresh nodes is unnecessary or wasteful (the existing PVCs hold valid state)
 - The operator wants controller-assisted status reporting without the cost and complexity of blue-green
 
-Formalizing InPlace also makes the nil path clearer: nil means "I don't want any deployment orchestration at all, not even tracking."
+## Conditions-Driven Reconciliation
+
+This design introduces a pattern that should generalize across all strategies: **conditions as the coordination layer between reconciliation and plan generation**.
+
+### The Pattern
+
+1. **Reconciler detects diffs.** The reconciliation loop compares the current spec against observed state and identifies actionable changes.
+2. **Reconciler sets conditions.** Detected changes are expressed as Kubernetes conditions on the SeiNodeDeployment (e.g., `RolloutInProgress`).
+3. **Plan generation reads conditions.** The planner inspects conditions to derive which task sequences need to execute.
+4. **Conditions guard concurrent mutations.** A condition like `RolloutInProgress` prevents the reconciler from applying additional spec changes until the current rollout completes.
+
+### For InPlace
+
+The InPlace strategy uses a single condition to coordinate:
+
+- **`RolloutInProgress`** -- set when the reconciler detects a templateHash divergence with an InPlace strategy. This condition:
+  - Signals that an image change was detected and needs to be actioned
+  - Guards against concurrent spec changes to the child SeiNodes
+  - Is cleared when all nodes converge to Running on the new image
+
+For InPlace, the "plan" is simple: propagate the image change to child SeiNodes and monitor convergence. No task plan is created -- the condition itself drives the behavior. The reconciler checks `RolloutInProgress`, propagates changes if needed, and monitors health until it can clear the condition.
+
+### Future Direction
+
+This pattern extends naturally to BlueGreen and HardFork. Today those strategies write `DeploymentStatus` directly and use `PlanInProgress` as an informal guard. Over time, the deployment planner can be driven by conditions rather than status structs, making the reconciliation-to-planning boundary explicit and extensible.
 
 ## How It Works
 
 ### InPlace Rollout Lifecycle
 
-1. **Engineer updates manifests.** The engineer changes `spec.template.spec.image` (or sidecar image, entrypoint) on the SeiNodeDeployment and applies the change (via GitOps push, `kubectl apply`, etc.).
+1. **Engineer updates manifests.** The engineer changes `spec.template.spec.image` (or sidecar image) on the SeiNodeDeployment and applies the change (via GitOps push, `kubectl apply`, etc.). The engineer is responsible for timing -- the controller does not validate block height.
 
-2. **templateHash diverges.** The SeiNodeDeployment controller's `reconcileSeiNodes` calls `detectDeploymentNeeded`, which computes the current `templateHash` and compares against `status.templateHash`. When the hashes differ and `spec.updateStrategy.type == InPlace`, the controller writes a `RolloutStatus` to `status.rollout` instead of a `DeploymentStatus`.
+2. **templateHash diverges; condition set.** The SeiNodeDeployment controller's `reconcileSeiNodes` detects that the current `templateHash` differs from `status.templateHash`. With `updateStrategy.type == InPlace`, it sets the `RolloutInProgress` condition and writes a `RolloutStatus` to `status.rollout`.
 
-3. **ensureSeiNode propagates changes.** Because there is no plan in progress (InPlace does not use the plan/task machinery), the normal `ensureSeiNode` loop runs and patches each child SeiNode's spec fields (image, entrypoint, sidecar, labels). All nodes are updated simultaneously -- chain upgrades are coordinated halts where sequential rollout provides no safety benefit.
+3. **ensureSeiNode propagates changes.** The `ensureSeiNode` loop patches each child SeiNode's image. All nodes are updated simultaneously -- chain upgrades are coordinated halts where sequential rollout provides no safety benefit.
 
 4. **SeiNode controller converges StatefulSets.** Each SeiNode's `reconcileRunning` calls `reconcileNodeStatefulSet`, which applies the updated StatefulSet spec via SSA. Kubernetes detects the pod template change and terminates the old pod, scheduling a new one with the updated image.
 
 5. **Sidecar restarts fresh; controller submits mark-ready.** The new pod's sidecar starts clean. The `reconcileRunning` method submits `mark-ready` unconditionally (it is idempotent). The sidecar flips to ready, `/v0/healthz` returns 200, and seid starts via the wait wrapper.
 
-6. **SeiNodeDeployment controller monitors convergence.** On each reconcile, the controller checks `status.rollout`: for each node, it reads the child SeiNode's phase and pod readiness. When all nodes are Running with ready pods, the rollout is complete. The controller clears `status.rollout` and updates `status.templateHash`.
+6. **SeiNodeDeployment controller monitors convergence.** On each reconcile, the controller checks the rollout: for each node, it reads the child SeiNode's phase and pod readiness. When all nodes are Running with ready pods, the rollout is complete. The controller clears `RolloutInProgress`, clears `status.rollout`, and updates `status.templateHash`.
 
 7. **Failure detection.** If a node's pod enters CrashLoopBackOff or the SeiNode transitions to Failed, the rollout status reflects this per-node. The controller does NOT auto-rollback -- blockchain rollback after a chain upgrade would leave the node unable to process new blocks. The engineer inspects the status and decides: push a fix, revert the image, or investigate.
 
 ## CRD Changes
 
-### UpdateStrategyType enum
-
-Add `InPlace` to the existing enum:
+### UpdateStrategy is now required
 
 ```go
-// +kubebuilder:validation:Enum=BlueGreen;HardFork;InPlace
+type SeiNodeDeploymentSpec struct {
+    // UpdateStrategy controls how changes to the template are rolled out
+    // to child SeiNodes. Every deployment must declare an explicit strategy.
+    // +kubebuilder:validation:Required
+    UpdateStrategy UpdateStrategy `json:"updateStrategy"`
+    // ...
+}
+```
+
+### UpdateStrategyType enum
+
+```go
+// +kubebuilder:validation:Enum=InPlace;BlueGreen;HardFork
 type UpdateStrategyType string
 
 const (
+    UpdateStrategyInPlace   UpdateStrategyType = "InPlace"
     UpdateStrategyBlueGreen UpdateStrategyType = "BlueGreen"
     UpdateStrategyHardFork  UpdateStrategyType = "HardFork"
-    UpdateStrategyInPlace   UpdateStrategyType = "InPlace"
 )
 ```
 
-### UpdateStrategy extension
+### UpdateStrategy struct
 
 ```go
 type UpdateStrategy struct {
@@ -69,35 +105,20 @@ type UpdateStrategy struct {
     // Required when type is HardFork.
     // +optional
     HardFork *HardForkStrategy `json:"hardFork,omitempty"`
-
-    // InPlace configures in-place rollout behavior.
-    // Optional when type is InPlace.
-    // +optional
-    InPlace *InPlaceStrategy `json:"inPlace,omitempty"`
-}
-
-// InPlaceStrategy configures an in-place rollout.
-type InPlaceStrategy struct {
-    // UpgradeHeight is the block height at which the chain upgrade occurs.
-    // When set, the controller validates via the sidecar that the chain
-    // has reached this height before patching the StatefulSet. This prevents
-    // premature rollouts when manifests are pushed before the chain halts.
-    // When omitted, the update is applied immediately (suitable for
-    // non-upgrade changes like sidecar bumps or config tweaks).
-    // +optional
-    // +kubebuilder:validation:Minimum=1
-    UpgradeHeight *int64 `json:"upgradeHeight,omitempty"`
 }
 ```
 
-### RolloutStatus (new type)
+InPlace requires no sub-config. The engineer owns timing entirely.
+
+### RolloutStatus (unified type replacing DeploymentStatus)
 
 ```go
-// RolloutStatus tracks an in-progress in-place rollout. Unlike
-// DeploymentStatus (which tracks entrant/incumbent node sets for
-// blue-green), RolloutStatus tracks per-node convergence of the
-// existing node set.
+// RolloutStatus tracks an in-progress rollout. Used by all strategies
+// to report per-node convergence state.
 type RolloutStatus struct {
+    // Strategy is the strategy type driving this rollout.
+    Strategy UpdateStrategyType `json:"strategy"`
+
     // TargetHash is the templateHash being rolled out to.
     TargetHash string `json:"targetHash"`
 
@@ -108,16 +129,29 @@ type RolloutStatus struct {
     // +listType=map
     // +listMapKey=name
     Nodes []RolloutNodeStatus `json:"nodes"`
+
+    // IncumbentNodes lists the names of the currently active SeiNode
+    // resources. Only populated for BlueGreen and HardFork strategies.
+    // +optional
+    IncumbentNodes []string `json:"incumbentNodes,omitempty"`
+
+    // EntrantNodes lists the names of the new SeiNode resources being
+    // created. Only populated for BlueGreen and HardFork strategies.
+    // +optional
+    EntrantNodes []string `json:"entrantNodes,omitempty"`
+
+    // EntrantRevision identifies the generation of the new nodes.
+    // Only populated for BlueGreen and HardFork strategies.
+    // +optional
+    EntrantRevision string `json:"entrantRevision,omitempty"`
 }
 
-// RolloutNodeStatus tracks a single node's convergence during an
-// in-place rollout.
+// RolloutNodeStatus tracks a single node's convergence during a rollout.
 type RolloutNodeStatus struct {
     // Name is the SeiNode resource name.
     Name string `json:"name"`
 
-    // Ready is true when the node is Running with a ready pod
-    // on the new image.
+    // Ready is true when the node is Running with a ready pod.
     Ready bool `json:"ready"`
 
     // Phase is the SeiNode's current phase.
@@ -125,77 +159,84 @@ type RolloutNodeStatus struct {
 }
 ```
 
-### SeiNodeDeploymentStatus addition
+### SeiNodeDeploymentStatus changes
+
+Replace `Deployment *DeploymentStatus` with `Rollout *RolloutStatus`:
 
 ```go
 type SeiNodeDeploymentStatus struct {
     // ... existing fields ...
 
-    // Rollout tracks an in-progress in-place rollout.
-    // Nil when no rollout is active. Mutually exclusive with Deployment.
+    // Rollout tracks an in-progress rollout across all strategy types.
+    // Nil when no rollout is active.
     // +optional
     Rollout *RolloutStatus `json:"rollout,omitempty"`
 }
 ```
 
-### Validation
+The existing `DeploymentStatus` type and `Deployment` field are removed. BlueGreen and HardFork are migrated to use `RolloutStatus` with the `IncumbentNodes`, `EntrantNodes`, and `EntrantRevision` fields.
 
-Add CEL rule for InPlace with upgradeHeight:
+### Conditions
 
-```
-+kubebuilder:validation:XValidation:rule="self.type != 'InPlace' || !has(self.inPlace) || !has(self.inPlace.upgradeHeight) || self.inPlace.upgradeHeight > 0",message="inPlace.upgradeHeight must be > 0 when set"
+New condition type:
+
+```go
+const (
+    // ConditionRolloutInProgress indicates a rollout is active.
+    // Set when a templateHash divergence is detected. Cleared when
+    // all nodes converge or the rollout is superseded.
+    ConditionRolloutInProgress = "RolloutInProgress"
+)
 ```
 
 ## Controller Changes
 
 ### `detectDeploymentNeeded` (nodedeployment/nodes.go)
 
-Branch on strategy type. InPlace creates a `RolloutStatus` instead of a `DeploymentStatus`:
+Refactored to set the `RolloutInProgress` condition and write a unified `RolloutStatus`:
 
 ```go
-switch group.Spec.UpdateStrategy.Type {
-case seiv1alpha1.UpdateStrategyInPlace:
-    if group.Status.Rollout != nil {
+func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeDeployment) {
+    if hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
         return
     }
+    if group.Status.TemplateHash == "" {
+        return
+    }
+
+    currentHash := templateHash(&group.Spec.Template.Spec)
+    if currentHash == group.Status.TemplateHash {
+        return
+    }
+
+    // Set the condition — this is the signal for plan generation
+    meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+        Type:    seiv1alpha1.ConditionRolloutInProgress,
+        Status:  metav1.ConditionTrue,
+        Reason:  "TemplateChanged",
+        Message: fmt.Sprintf("templateHash changed from %s to %s", group.Status.TemplateHash, currentHash),
+    })
+
     group.Status.Rollout = &seiv1alpha1.RolloutStatus{
+        Strategy:   group.Spec.UpdateStrategy.Type,
         TargetHash: currentHash,
         StartedAt:  metav1.Now(),
         Nodes:      buildRolloutNodes(group),
     }
-default: // BlueGreen, HardFork
-    // ... existing deployment status creation ...
+
+    // For BlueGreen/HardFork, also populate entrant/incumbent fields
+    switch group.Spec.UpdateStrategy.Type {
+    case seiv1alpha1.UpdateStrategyBlueGreen, seiv1alpha1.UpdateStrategyHardFork:
+        group.Status.Rollout.IncumbentNodes = group.Status.IncumbentNodes
+        group.Status.Rollout.EntrantNodes = planner.EntrantNodeNames(group)
+        group.Status.Rollout.EntrantRevision = planner.EntrantRevision(group)
+    }
 }
 ```
 
 ### `ensureSeiNode` (nodedeployment/nodes.go)
 
-No changes needed. The existing in-place propagation at lines 156-177 already handles image, entrypoint, and sidecar updates. InPlace does not set `PlanInProgress`, so the `ensureSeiNode` loop runs normally.
-
-### Upgrade height gating (nodedeployment/nodes.go)
-
-When `InPlaceStrategy.UpgradeHeight` is set, the controller checks the sidecar's last block height before allowing `ensureSeiNode` to propagate the image change:
-
-```go
-func (r *SeiNodeDeploymentReconciler) upgradeHeightReached(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) bool {
-    strategy := group.Spec.UpdateStrategy
-    if strategy == nil || strategy.InPlace == nil || strategy.InPlace.UpgradeHeight == nil {
-        return true
-    }
-    // Check at least one node has reached the upgrade height
-    // via sidecar status polling (existing sidecar client)
-    // ...
-}
-```
-
-When the height has not been reached, the controller sets a condition:
-
-```yaml
-- type: UpdateBlocked
-  status: "True"
-  reason: UpgradeHeightNotReached
-  message: "Chain at height 49999800, waiting for 50000000"
-```
+No changes needed. The existing in-place propagation already handles image and sidecar updates. When `RolloutInProgress` is true and the strategy is InPlace, `ensureSeiNode` runs normally (no plan blocks it). For BlueGreen/HardFork, the existing plan machinery takes over.
 
 ### Rollout status reconciliation (nodedeployment/status.go)
 
@@ -206,6 +247,9 @@ func (r *SeiNodeDeploymentReconciler) reconcileRolloutStatus(
 ) {
     if group.Status.Rollout == nil {
         return
+    }
+    if group.Status.Rollout.Strategy != seiv1alpha1.UpdateStrategyInPlace {
+        return // BlueGreen/HardFork rollout convergence is tracked by the plan
     }
 
     nodePhaseMap := make(map[string]seiv1alpha1.SeiNodePhase, len(nodes))
@@ -228,6 +272,11 @@ func (r *SeiNodeDeploymentReconciler) reconcileRolloutStatus(
         group.Status.TemplateHash = group.Status.Rollout.TargetHash
         group.Status.ObservedGeneration = group.Generation
         group.Status.Rollout = nil
+        meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+            Type:   seiv1alpha1.ConditionRolloutInProgress,
+            Status: metav1.ConditionFalse,
+            Reason: "RolloutComplete",
+        })
     }
 }
 ```
@@ -235,7 +284,7 @@ func (r *SeiNodeDeploymentReconciler) reconcileRolloutStatus(
 ### `computeGroupPhase` (nodedeployment/status.go)
 
 ```go
-if group.Status.Rollout != nil {
+if hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
     return seiv1alpha1.GroupPhaseUpgrading
 }
 ```
@@ -248,7 +297,7 @@ The sidecar starts fresh on every pod restart. Its `/v0/healthz` endpoint return
 
 After an in-place image update, the StatefulSet rolls the pod. The new sidecar starts, binds its port, and returns 503 from `/v0/healthz`. The seid container's wait wrapper polls `/v0/healthz` and blocks forever.
 
-### Primary Solution: Controller Re-submits Mark-Ready
+### Solution: Controller Re-submits Mark-Ready
 
 The `reconcileRunning` method submits `mark-ready` unconditionally on every reconcile when the sidecar is reachable. The `mark-ready` task is fire-and-forget and idempotent -- submitting it to an already-ready sidecar is a no-op.
 
@@ -287,13 +336,20 @@ This approach:
 - Keeps the sidecar stateless by design
 - Is safe because mark-ready is idempotent
 
+### Open Question: Block Height Sourcing
+
+The controller currently has no reliable way to source block height from running nodes. The sidecar does not track block progress, and seid panics rather than gracefully reporting it has reached an upgrade height. Until seid supports a graceful halt-at-height that reports its state (rather than panicking), any mechanism that relies on the controller knowing block height is unreliable.
+
+This means:
+- No upgrade height gating for InPlace (the engineer owns timing)
+- No height-based validation before applying changes
+- The `ensureMarkReady` approach has an inherent race: the sidecar marks ready, seid starts, and if seid hits an upgrade height it cannot process, it crashes. This is acceptable because the controller will observe the crash loop and report it via rollout status.
+
+A future improvement would be seid supporting `--halt-height` with a graceful exit (exit code 0, writes state) rather than a panic. Combined with sidecar height reporting, this would enable controller-side gating. This is out of scope for this design.
+
 ### Future Improvement: Sidecar Self-Detection
 
-As a follow-up, the sidecar could detect existing chain data on startup and skip the ready gate entirely. If the sidecar finds `$SEI_HOME/data/` populated (blockstore.db, state.db), it knows this is a restart, not a fresh init, and can serve 200 on `/v0/healthz` immediately. This eliminates the controller round-trip but requires a sidecar release.
-
-### Why NOT persist ready state?
-
-Persisting ready state to disk conflates "previously initialized" with "ready to serve." A sidecar that was ready before a crash is not necessarily ready after -- its in-memory task state is gone. Having the controller explicitly re-submit `mark-ready` is the correct ownership model.
+As a follow-up, the sidecar could detect existing chain data on startup and skip the ready gate entirely. If the sidecar finds `$SEI_HOME/data/` populated, it knows this is a restart, not a fresh init, and can serve 200 on `/v0/healthz` immediately. This eliminates the controller round-trip but requires a sidecar release.
 
 ### Why NOT transition back to Initializing?
 
@@ -307,6 +363,7 @@ Re-running the full initialization plan (snapshot restore, config apply, genesis
 status:
   phase: Upgrading
   rollout:
+    strategy: InPlace
     targetHash: "a1b2c3d4e5f67890"
     startedAt: "2026-04-13T10:00:00Z"
     nodes:
@@ -317,6 +374,10 @@ status:
       ready: false
       phase: Running
   conditions:
+  - type: RolloutInProgress
+    status: "True"
+    reason: TemplateChanged
+    message: "templateHash changed from abc123 to a1b2c3d4e5f67890"
   - type: NodesReady
     status: "False"
     reason: NodesInitializing
@@ -331,6 +392,9 @@ status:
   templateHash: "a1b2c3d4e5f67890"
   rollout: null
   conditions:
+  - type: RolloutInProgress
+    status: "False"
+    reason: RolloutComplete
   - type: NodesReady
     status: "True"
     reason: AllNodesReady
@@ -341,9 +405,8 @@ status:
 
 | Event | Type | Reason | When |
 |---|---|---|---|
-| Rollout started | Normal | `InPlaceRolloutStarted` | `detectDeploymentNeeded` creates `RolloutStatus` |
-| Rollout complete | Normal | `InPlaceRolloutComplete` | All nodes converge to Running |
-| Update blocked | Warning | `UpdateBlocked` | `upgradeHeight` set but chain has not reached it |
+| Rollout started | Normal | `RolloutStarted` | `RolloutInProgress` condition set to True |
+| Rollout complete | Normal | `RolloutComplete` | All nodes converge, condition cleared |
 | Node not converging | Warning | `NodeNotConverging` | A node has been non-ready for > 10 minutes during rollout |
 
 ## Failure Modes
@@ -353,12 +416,6 @@ status:
 The pod enters CrashLoopBackOff. The rollout status shows `ready: false` for the affected node. The group phase stays `Upgrading`. The controller does NOT auto-rollback -- rolling back to the pre-upgrade binary after a chain upgrade means the node cannot process new blocks.
 
 **Recovery:** Fix the image or config, push a new manifest. The controller detects a new hash divergence and updates the existing rollout's `targetHash`.
-
-### Premature push (chain not at upgrade height)
-
-If `upgradeHeight` is set, the controller blocks the update and surfaces `UpdateBlocked` condition. The existing pods continue running the old image.
-
-If `upgradeHeight` is not set, the engineer takes full responsibility for timing.
 
 ### Sidecar cannot start
 
@@ -370,17 +427,19 @@ The rollout status shows per-node state. The group phase is `Upgrading` as long 
 
 ### Concurrent spec change during rollout
 
-If the operator changes the image again while a rollout is active, `detectDeploymentNeeded` compares against `status.templateHash` (pre-rollout). The controller updates the existing rollout's `targetHash` and `ensureSeiNode` pushes the latest spec to all children. No plan state to corrupt.
+If the operator changes the image again while a rollout is active, `RolloutInProgress` is already true so `detectDeploymentNeeded` is a no-op. However, `ensureSeiNode` still runs and pushes the latest spec. The rollout's `targetHash` is updated to reflect the newest hash on the next detection cycle after the current rollout completes. This is safe because InPlace is purely pass-through.
 
 ## File-by-File Changes
 
 | File | Change |
 |------|--------|
-| `api/v1alpha1/seinodedeployment_types.go` | Add `UpdateStrategyInPlace` to enum. Add `InPlaceStrategy`, `RolloutStatus`, `RolloutNodeStatus` types. Add `Rollout` and `InPlace` fields. |
+| `api/v1alpha1/seinodedeployment_types.go` | Add `UpdateStrategyInPlace` to enum. Replace `DeploymentStatus` with unified `RolloutStatus`. Make `UpdateStrategy` required. Add `ConditionRolloutInProgress`. Remove `Deployment` field, add `Rollout` field. |
 | `api/v1alpha1/zz_generated.deepcopy.go` | Regenerated |
 | `manifests/crd/bases/sei.io_seinodedeployments.yaml` | Regenerated |
-| `internal/controller/nodedeployment/nodes.go` | `detectDeploymentNeeded`: branch on strategy type, create `RolloutStatus` for InPlace. Add `buildRolloutNodes`, `upgradeHeightReached`. |
-| `internal/controller/nodedeployment/status.go` | Add `reconcileRolloutStatus`. Extend `computeGroupPhase` for active rollout. |
+| `internal/controller/nodedeployment/nodes.go` | `detectDeploymentNeeded`: set `RolloutInProgress` condition, create unified `RolloutStatus`. Migrate BlueGreen/HardFork to use `RolloutStatus`. |
+| `internal/controller/nodedeployment/status.go` | Add `reconcileRolloutStatus`. Extend `computeGroupPhase` for `RolloutInProgress` condition. |
+| `internal/controller/nodedeployment/plan.go` | Read `RolloutStatus` instead of `DeploymentStatus` for BlueGreen/HardFork plan generation. |
+| `internal/planner/deployment.go` | Read entrant/incumbent from `RolloutStatus` instead of `DeploymentStatus`. |
 | `internal/controller/node/controller.go` | `reconcileRunning`: add `ensureMarkReady` call before `reconcileRuntimeTasks`. |
 | `internal/controller/node/plan_execution.go` | Add `ensureMarkReady` method. |
 
@@ -390,26 +449,24 @@ If the operator changes the image again while a rollout is active, `detectDeploy
 
 | Test | File | Description |
 |------|------|-------------|
-| `TestDetectDeploymentNeeded_InPlace` | `nodes_test.go` | Hash divergence with InPlace creates `RolloutStatus`, not `DeploymentStatus` |
-| `TestDetectDeploymentNeeded_InPlace_AlreadyActive` | `nodes_test.go` | Existing rollout is not duplicated on re-reconcile |
-| `TestDetectDeploymentNeeded_BlueGreen_Unchanged` | `nodes_test.go` | BlueGreen/HardFork still create `DeploymentStatus` |
+| `TestDetectDeploymentNeeded_InPlace` | `nodes_test.go` | Hash divergence with InPlace sets `RolloutInProgress` and creates `RolloutStatus` |
+| `TestDetectDeploymentNeeded_InPlace_AlreadyActive` | `nodes_test.go` | `RolloutInProgress=True` prevents duplicate detection |
+| `TestDetectDeploymentNeeded_BlueGreen_MigratedToRollout` | `nodes_test.go` | BlueGreen creates `RolloutStatus` with entrant/incumbent fields |
 | `TestBuildRolloutNodes` | `nodes_test.go` | Creates entries for each incumbent node |
-| `TestReconcileRolloutStatus_AllReady` | `status_test.go` | Rollout cleared and templateHash updated when all nodes Running |
+| `TestReconcileRolloutStatus_AllReady` | `status_test.go` | Rollout cleared, templateHash updated, `RolloutInProgress` set to False |
 | `TestReconcileRolloutStatus_Partial` | `status_test.go` | Rollout persists with mixed ready/not-ready |
 | `TestReconcileRolloutStatus_WithFailedNode` | `status_test.go` | Shows `ready: false, phase: Failed` |
-| `TestComputeGroupPhase_RolloutActive` | `status_test.go` | Returns `Upgrading` when rollout non-nil |
+| `TestComputeGroupPhase_RolloutInProgress` | `status_test.go` | Returns `Upgrading` when `RolloutInProgress` is True |
 | `TestEnsureMarkReady` | `reconciler_test.go` | Submits mark-ready task via sidecar client |
 | `TestReconcileRunning_SubmitsMarkReady` | `reconciler_test.go` | mark-ready called before runtime tasks |
-| `TestUpgradeHeightGating` | `nodes_test.go` | Update blocked when chain below upgradeHeight |
 
 ## Implementation Order
 
-1. **CRD types.** Add enum value, `InPlaceStrategy`, `RolloutStatus` types. `make manifests generate`.
-2. **ensureMarkReady.** Add to SeiNode controller's `reconcileRunning`. This unblocks pod restarts for all strategies and can ship independently.
-3. **detectDeploymentNeeded.** Branch on InPlace, create `RolloutStatus`.
+1. **ensureMarkReady.** Add to SeiNode controller's `reconcileRunning`. Ships independently -- unblocks pod restarts for all strategies. Highest priority.
+2. **CRD types.** Add `InPlace` enum, unified `RolloutStatus`, `ConditionRolloutInProgress`. Make `updateStrategy` required. Remove `DeploymentStatus`. `make manifests generate`.
+3. **detectDeploymentNeeded refactor.** Set `RolloutInProgress` condition, write unified `RolloutStatus`. Migrate BlueGreen/HardFork.
 4. **Rollout status reconciliation.** Add `reconcileRolloutStatus`, extend `computeGroupPhase`.
-5. **Upgrade height gating.** Add `upgradeHeightReached` check.
-6. **Events.** Emit `InPlaceRolloutStarted`, `InPlaceRolloutComplete`, `UpdateBlocked`.
-7. **Tests.** Unit tests for each step, integration test for end-to-end rollout.
+5. **Events.** Emit `RolloutStarted`, `RolloutComplete`.
+6. **Tests.** Unit tests for each step.
 
-Step 2 is the highest-priority standalone fix -- it resolves the sidecar restart problem that currently blocks all image updates on Running nodes.
+Step 1 is the highest-priority standalone fix -- it resolves the sidecar restart problem that currently blocks all image updates on Running nodes.
