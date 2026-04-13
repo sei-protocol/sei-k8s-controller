@@ -3,7 +3,6 @@ package nodedeployment
 import (
 	"context"
 	"fmt"
-	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,8 +10,6 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
-
-const stallThreshold = 10 * time.Minute
 
 func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) error {
 	nodes, err := r.listChildSeiNodes(ctx, group)
@@ -82,11 +79,6 @@ func reconcileRolloutStatus(group *seiv1alpha1.SeiNodeDeployment, nodes []seiv1a
 		setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
 			"RolloutComplete", "All nodes converged")
 		return
-	}
-
-	if time.Since(group.Status.Rollout.StartedAt.Time) > stallThreshold {
-		setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
-			"Stalled", fmt.Sprintf("rollout stalled: not all nodes ready after %s", stallThreshold))
 	}
 }
 
