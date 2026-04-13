@@ -301,6 +301,153 @@ func TestObserveCurrentImage_SkipsWhenRolling(t *testing.T) {
 	g.Expect(fetched.Status.CurrentImage).To(BeEmpty())
 }
 
+func TestObserveCurrentImage_SkipsWhenReadyReplicasZero(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := newGenesisNode("mynet-0", "default")
+	node.Finalizers = []string{nodeFinalizerName}
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Spec.Image = testImageV2
+
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "mynet-0", Namespace: "default"},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas:    ptrInt32(1),
+			ServiceName: "mynet-0",
+			Selector:    &metav1.LabelSelector{MatchLabels: map[string]string{"sei.io/node": "mynet-0"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"sei.io/node": "mynet-0"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "seid", Image: testImageV2}}},
+			},
+		},
+	}
+
+	s := newNodeTestScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(node, sts).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &appsv1.StatefulSet{}).
+		Build()
+
+	sts.Status.CurrentRevision = testRevision
+	sts.Status.UpdateRevision = testRevision
+	sts.Status.ReadyReplicas = 0
+	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
+
+	r := &SeiNodeReconciler{Client: c, Scheme: s}
+	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+
+	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
+	g.Expect(fetched.Status.CurrentImage).To(BeEmpty())
+}
+
+func TestObserveCurrentImage_SkipsWhenEmptyRevision(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := newGenesisNode("mynet-0", "default")
+	node.Finalizers = []string{nodeFinalizerName}
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Spec.Image = testImageV2
+
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "mynet-0", Namespace: "default"},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas:    ptrInt32(1),
+			ServiceName: "mynet-0",
+			Selector:    &metav1.LabelSelector{MatchLabels: map[string]string{"sei.io/node": "mynet-0"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"sei.io/node": "mynet-0"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "seid", Image: testImageV2}}},
+			},
+		},
+	}
+
+	s := newNodeTestScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(node, sts).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &appsv1.StatefulSet{}).
+		Build()
+
+	sts.Status.CurrentRevision = ""
+	sts.Status.UpdateRevision = testRevision
+	sts.Status.ReadyReplicas = 1
+	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
+
+	r := &SeiNodeReconciler{Client: c, Scheme: s}
+	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+
+	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
+	g.Expect(fetched.Status.CurrentImage).To(BeEmpty())
+}
+
+func TestObserveCurrentImage_NoopWhenAlreadyCurrent(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := newGenesisNode("mynet-0", "default")
+	node.Finalizers = []string{nodeFinalizerName}
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Spec.Image = testImageV2
+	node.Status.CurrentImage = testImageV2
+
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "mynet-0", Namespace: "default"},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas:    ptrInt32(1),
+			ServiceName: "mynet-0",
+			Selector:    &metav1.LabelSelector{MatchLabels: map[string]string{"sei.io/node": "mynet-0"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"sei.io/node": "mynet-0"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "seid", Image: testImageV2}}},
+			},
+		},
+	}
+
+	s := newNodeTestScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(node, sts).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &appsv1.StatefulSet{}).
+		Build()
+
+	sts.Status.CurrentRevision = testRevision
+	sts.Status.UpdateRevision = testRevision
+	sts.Status.ReadyReplicas = 1
+	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
+
+	r := &SeiNodeReconciler{Client: c, Scheme: s}
+	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+
+	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
+	g.Expect(fetched.Status.CurrentImage).To(Equal(testImageV2))
+}
+
+func TestObserveCurrentImage_StatefulSetNotFound(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := newGenesisNode("mynet-0", "default")
+	node.Finalizers = []string{nodeFinalizerName}
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Spec.Image = testImageV2
+
+	s := newNodeTestScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(node).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
+		Build()
+
+	r := &SeiNodeReconciler{Client: c, Scheme: s}
+	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+
+	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
+	g.Expect(fetched.Status.CurrentImage).To(BeEmpty())
+}
+
 func ptrInt32(v int32) *int32 { return &v }
 
 func TestNodeDeletion_SnapshotNode_WithoutRetain_DeletesPVC(t *testing.T) {

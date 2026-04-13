@@ -136,6 +136,35 @@ func TestReconcileRolloutStatus_InPlace_AllReady(t *testing.T) {
 	g.Expect(cond.Reason).To(Equal("RolloutComplete"))
 }
 
+func TestReconcileRolloutStatus_InPlace_DoesNotClearWhilePlanActive(t *testing.T) {
+	g := NewWithT(t)
+	group := emptyGroup()
+	group.Generation = 2
+	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
+		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
+		TargetHash: "newhash1234",
+		StartedAt:  metav1.Now(),
+		Nodes: []seiv1alpha1.RolloutNodeStatus{
+			{Name: "node-0"},
+			{Name: "node-1"},
+		},
+	}
+	group.Status.TemplateHash = testOldHash
+	setPlanInProgress(group, "Deployment", "deploying")
+
+	nodes := []seiv1alpha1.SeiNode{
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}, Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning}},
+	}
+
+	reconcileRolloutStatus(group, nodes)
+
+	g.Expect(group.Status.Rollout).NotTo(BeNil(), "rollout should not be cleared while PlanInProgress is true")
+	g.Expect(group.Status.TemplateHash).To(Equal(testOldHash), "templateHash should not change while plan is active")
+	g.Expect(group.Status.Rollout.Nodes[0].Ready).To(BeTrue())
+	g.Expect(group.Status.Rollout.Nodes[1].Ready).To(BeTrue())
+}
+
 func TestReconcileRolloutStatus_InPlace_Partial(t *testing.T) {
 	g := NewWithT(t)
 	group := emptyGroup()
