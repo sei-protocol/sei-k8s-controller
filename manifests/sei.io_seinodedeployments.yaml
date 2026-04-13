@@ -999,36 +999,6 @@ spec:
                       IncumbentRevision identifies the generation of the currently live nodes.
                       Only populated for BlueGreen and HardFork strategies.
                     type: string
-                  nodes:
-                    description: Nodes reports per-node rollout state.
-                    items:
-                      description: RolloutNodeStatus tracks a single node's convergence
-                        during a rollout.
-                      properties:
-                        name:
-                          description: Name is the SeiNode resource name.
-                          type: string
-                        phase:
-                          description: Phase is the SeiNode's current phase.
-                          enum:
-                          - Pending
-                          - Initializing
-                          - Running
-                          - Failed
-                          - Terminating
-                          type: string
-                        ready:
-                          description: Ready is true when the node is Running with
-                            a ready pod.
-                          type: boolean
-                      required:
-                      - name
-                      - ready
-                      type: object
-                    type: array
-                    x-kubernetes-list-map-keys:
-                    - name
-                    x-kubernetes-list-type: map
                   startedAt:
                     description: StartedAt is when the rollout was first detected.
                     format: date-time
@@ -1044,7 +1014,6 @@ spec:
                     description: TargetHash is the templateHash being rolled out to.
                     type: string
                 required:
-                - nodes
                 - startedAt
                 - strategy
                 - targetHash
