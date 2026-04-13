@@ -97,9 +97,13 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 		if group.Status.Rollout != nil && group.Status.Rollout.TargetHash == currentHash {
 			return // rollout already targets the current spec
 		}
+		oldTarget := ""
+		if group.Status.Rollout != nil {
+			oldTarget = group.Status.Rollout.TargetHash
+		}
 		group.Status.Plan = nil
 		r.Recorder.Eventf(group, corev1.EventTypeNormal, "RolloutSuperseded",
-			"Spec changed during active rollout, replacing plan (old target: %s)", group.Status.Rollout.TargetHash)
+			"Spec changed during active rollout, replacing plan (old target: %s)", oldTarget)
 	}
 
 	if !hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) &&

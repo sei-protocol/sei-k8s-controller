@@ -121,7 +121,7 @@ func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1
 	if err := r.updateStatus(ctx, group, statusBase); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating status after plan failure: %w", err)
 	}
-	return ctrl.Result{}, nil
+	return planner.ResultRequeueImmediate, nil
 }
 
 func setPlanInProgress(group *seiv1alpha1.SeiNodeDeployment, reason, message string) {
