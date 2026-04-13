@@ -249,9 +249,7 @@ func TestObserveCurrentImage_UpdatesWhenConverged(t *testing.T) {
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &appsv1.StatefulSet{}).
 		Build()
 
-	sts.Status.CurrentRevision = testRevision
-	sts.Status.UpdateRevision = testRevision
-	sts.Status.ReadyReplicas = 1
+	sts.Status.UpdatedReplicas = 1
 	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
 
 	r := &SeiNodeReconciler{Client: c, Scheme: s}

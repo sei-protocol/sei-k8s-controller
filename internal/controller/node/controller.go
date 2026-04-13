@@ -197,10 +197,7 @@ func (r *SeiNodeReconciler) observeCurrentImage(ctx context.Context, node *seiv1
 		return err
 	}
 
-	if sts.Status.CurrentRevision == "" || sts.Status.CurrentRevision != sts.Status.UpdateRevision {
-		return nil
-	}
-	if sts.Status.ReadyReplicas < 1 {
+	if sts.Spec.Replicas == nil || sts.Status.UpdatedReplicas < *sts.Spec.Replicas {
 		return nil
 	}
 
