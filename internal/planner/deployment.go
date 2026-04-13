@@ -13,10 +13,9 @@ import (
 // ForDeployment returns the appropriate GroupPlanner for the group's
 // configured update strategy.
 func ForDeployment(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
-	if group.Spec.UpdateStrategy == nil {
-		return nil, fmt.Errorf("no update strategy on %s/%s", group.Namespace, group.Name)
-	}
 	switch group.Spec.UpdateStrategy.Type {
+	case seiv1alpha1.UpdateStrategyInPlace:
+		return &inPlaceDeploymentPlanner{}, nil
 	case seiv1alpha1.UpdateStrategyHardFork:
 		return &hardForkDeploymentPlanner{}, nil
 	case seiv1alpha1.UpdateStrategyBlueGreen:
@@ -44,8 +43,8 @@ func EntrantRevision(group *seiv1alpha1.SeiNodeDeployment) string {
 // IncumbentRevision returns the revision string for the incumbent set,
 // derived from the last successfully reconciled generation.
 func IncumbentRevision(group *seiv1alpha1.SeiNodeDeployment) string {
-	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
-		return group.Status.Deployment.IncumbentRevision
+	if group.Status.Rollout != nil && group.Status.Rollout.IncumbentRevision != "" {
+		return group.Status.Rollout.IncumbentRevision
 	}
 	return strconv.FormatInt(group.Status.ObservedGeneration, 10)
 }
@@ -97,6 +96,46 @@ func (p *hardForkDeploymentPlanner) BuildPlan(
 		{task.TaskTypeTeardownNodes, &task.TeardownNodesParams{
 			Namespace: ns,
 			NodeNames: incumbentNodes,
+		}},
+	}
+
+	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
+	for i, p := range prog {
+		t, err := buildPlannedTask(planID, p.taskType, i, p.params)
+		if err != nil {
+			return nil, err
+		}
+		tasks[i] = t
+	}
+	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
+}
+
+// inPlaceDeploymentPlanner builds a deployment plan for the InPlace strategy.
+type inPlaceDeploymentPlanner struct{}
+
+func (p *inPlaceDeploymentPlanner) BuildPlan(
+	group *seiv1alpha1.SeiNodeDeployment,
+) (*seiv1alpha1.TaskPlan, error) {
+	planID := uuid.New().String()
+	nodeNames := group.Status.IncumbentNodes
+	ns := group.Namespace
+
+	prog := []struct {
+		taskType string
+		params   any
+	}{
+		{task.TaskTypeUpdateNodeSpecs, &task.UpdateNodeSpecsParams{
+			GroupName: group.Name,
+			Namespace: ns,
+			NodeNames: nodeNames,
+		}},
+		{task.TaskTypeAwaitSpecUpdate, &task.AwaitSpecUpdateParams{
+			Namespace: ns,
+			NodeNames: nodeNames,
+		}},
+		{task.TaskTypeMarkNodesReady, &task.MarkNodesReadyParams{
+			Namespace: ns,
+			NodeNames: nodeNames,
 		}},
 	}
 

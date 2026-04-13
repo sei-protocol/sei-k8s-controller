@@ -5,6 +5,9 @@ import "github.com/google/uuid"
 // Controller-managed deployment task types.
 const (
 	TaskTypeCreateEntrantNodes = "create-entrant-nodes"
+	TaskTypeUpdateNodeSpecs    = "update-node-specs"
+	TaskTypeAwaitSpecUpdate    = "await-spec-update"
+	TaskTypeMarkNodesReady     = "mark-nodes-ready"
 	TaskTypeSubmitHaltSignal   = "submit-halt-signal"
 	TaskTypeAwaitNodesAtHeight = "await-nodes-at-height"
 	TaskTypeAwaitNodesCaughtUp = "await-nodes-caught-up"
@@ -54,6 +57,28 @@ type SwitchTrafficParams struct {
 	GroupName       string `json:"groupName"`
 	Namespace       string `json:"namespace"`
 	EntrantRevision string `json:"entrantRevision"`
+}
+
+// UpdateNodeSpecsParams holds parameters for patching child SeiNode specs
+// during an InPlace deployment.
+type UpdateNodeSpecsParams struct {
+	GroupName string   `json:"groupName"`
+	Namespace string   `json:"namespace"`
+	NodeNames []string `json:"nodeNames"`
+}
+
+// AwaitSpecUpdateParams holds parameters for waiting until all nodes
+// have converged to the desired image (status.currentImage == spec.image).
+type AwaitSpecUpdateParams struct {
+	Namespace string   `json:"namespace"`
+	NodeNames []string `json:"nodeNames"`
+}
+
+// MarkNodesReadyParams holds parameters for submitting mark-ready to
+// each node's sidecar after an InPlace rollout completes.
+type MarkNodesReadyParams struct {
+	Namespace string   `json:"namespace"`
+	NodeNames []string `json:"nodeNames"`
 }
 
 // TeardownNodesParams holds parameters for deleting incumbent SeiNode resources.

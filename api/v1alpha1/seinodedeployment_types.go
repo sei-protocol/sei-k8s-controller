@@ -43,26 +43,18 @@ type SeiNodeDeploymentSpec struct {
 	Monitoring *MonitoringConfig `json:"monitoring,omitempty"`
 
 	// UpdateStrategy controls how changes to the template are rolled out
-	// to child SeiNodes. When set, the controller uses blue-green
-	// deployment orchestration instead of in-place updates.
-	// When not set, template changes are applied in-place via ensureSeiNode.
-	// +optional
-	UpdateStrategy *UpdateStrategy `json:"updateStrategy,omitempty"`
+	// to child SeiNodes. Every deployment must declare an explicit strategy.
+	UpdateStrategy UpdateStrategy `json:"updateStrategy"`
 }
 
 // UpdateStrategyType identifies the deployment strategy.
-// +kubebuilder:validation:Enum=BlueGreen;HardFork
+// +kubebuilder:validation:Enum=InPlace;BlueGreen;HardFork
 type UpdateStrategyType string
 
 const (
-	// UpdateStrategyBlueGreen performs a blue-green deployment once the
-	// green nodes have caught up to the chain tip (catching_up == false).
+	UpdateStrategyInPlace   UpdateStrategyType = "InPlace"
 	UpdateStrategyBlueGreen UpdateStrategyType = "BlueGreen"
-
-	// UpdateStrategyHardFork performs a blue-green deployment at a specific
-	// block height. The old binary halts via sidecar SIGTERM at the
-	// configured halt-height, and the new binary continues from that height.
-	UpdateStrategyHardFork UpdateStrategyType = "HardFork"
+	UpdateStrategyHardFork  UpdateStrategyType = "HardFork"
 )
 
 // UpdateStrategy controls how spec changes propagate to child SeiNodes.
@@ -247,10 +239,10 @@ type SeiNodeDeploymentStatus struct {
 	// +optional
 	IncumbentNodes []string `json:"incumbentNodes,omitempty"`
 
-	// Deployment tracks an in-progress deployment.
-	// Nil when no deployment is active.
+	// Rollout tracks an in-progress rollout across all strategy types.
+	// Nil when no rollout is active.
 	// +optional
-	Deployment *DeploymentStatus `json:"deployment,omitempty"`
+	Rollout *RolloutStatus `json:"rollout,omitempty"`
 
 	// NetworkingStatus reports the observed state of networking resources.
 	// +optional
@@ -288,18 +280,54 @@ type RouteStatus struct {
 	Protocol string `json:"protocol,omitempty"`
 }
 
-// DeploymentStatus tracks metadata for an in-progress deployment.
-// The task plan itself lives in SeiNodeDeploymentStatus.Plan.
-type DeploymentStatus struct {
-	// IncumbentRevision identifies the generation of the currently live nodes.
-	IncumbentRevision string `json:"incumbentRevision"`
+// RolloutStatus tracks an in-progress rollout. Used by all strategies
+// to report per-node convergence state.
+type RolloutStatus struct {
+	// Strategy is the strategy type driving this rollout.
+	Strategy UpdateStrategyType `json:"strategy"`
 
-	// EntrantRevision identifies the generation of the new nodes being deployed.
-	EntrantRevision string `json:"entrantRevision"`
+	// TargetHash is the templateHash being rolled out to.
+	TargetHash string `json:"targetHash"`
 
-	// EntrantNodes lists the names of the new SeiNode resources.
+	// StartedAt is when the rollout was first detected.
+	StartedAt metav1.Time `json:"startedAt"`
+
+	// Nodes reports per-node rollout state.
+	// +listType=map
+	// +listMapKey=name
+	Nodes []RolloutNodeStatus `json:"nodes"`
+
+	// IncumbentNodes lists the names of the currently active SeiNode
+	// resources. Only populated for BlueGreen and HardFork strategies.
+	// +optional
+	IncumbentNodes []string `json:"incumbentNodes,omitempty"`
+
+	// EntrantNodes lists the names of the new SeiNode resources being
+	// created. Only populated for BlueGreen and HardFork strategies.
 	// +optional
 	EntrantNodes []string `json:"entrantNodes,omitempty"`
+
+	// IncumbentRevision identifies the generation of the currently live nodes.
+	// Only populated for BlueGreen and HardFork strategies.
+	// +optional
+	IncumbentRevision string `json:"incumbentRevision,omitempty"`
+
+	// EntrantRevision identifies the generation of the new nodes.
+	// Only populated for BlueGreen and HardFork strategies.
+	// +optional
+	EntrantRevision string `json:"entrantRevision,omitempty"`
+}
+
+// RolloutNodeStatus tracks a single node's convergence during a rollout.
+type RolloutNodeStatus struct {
+	// Name is the SeiNode resource name.
+	Name string `json:"name"`
+
+	// Ready is true when the node is Running with a ready pod.
+	Ready bool `json:"ready"`
+
+	// Phase is the SeiNode's current phase.
+	Phase SeiNodePhase `json:"phase,omitempty"`
 }
 
 // Status condition types for SeiNodeDeployment.
@@ -311,6 +339,7 @@ const (
 	ConditionPlanInProgress            = "PlanInProgress"
 	ConditionGenesisCeremonyNeeded     = "GenesisCeremonyNeeded"
 	ConditionForkGenesisCeremonyNeeded = "ForkGenesisCeremonyNeeded"
+	ConditionRolloutInProgress         = "RolloutInProgress"
 )
 
 // +kubebuilder:object:root=true
@@ -319,7 +348,7 @@ const (
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Revision",type=string,JSONPath=`.status.deployment.entrantRevision`,priority=1
+// +kubebuilder:printcolumn:name="Revision",type=string,JSONPath=`.status.rollout.entrantRevision`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SeiNodeDeployment is the Schema for the seinodedeployments API.

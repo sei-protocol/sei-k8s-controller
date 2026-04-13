@@ -63,9 +63,9 @@ func ForGroup(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
 		return &genesisGroupPlanner{}, nil
 	}
 
-	// Deployment: reconcileSeiNodes sets Deployment metadata when it
+	// Deployment: reconcileSeiNodes sets Rollout metadata when it
 	// detects a spec change requiring deployment orchestration.
-	if group.Status.Deployment != nil && group.Status.Plan == nil {
+	if group.Status.Rollout != nil && group.Status.Plan == nil {
 		return ForDeployment(group)
 	}
 

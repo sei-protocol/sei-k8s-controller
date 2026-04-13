@@ -26,8 +26,8 @@ func seiNodeName(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
 // node set. Used for traffic routing during deployments and for
 // observability labels on pods.
 func activeRevision(group *seiv1alpha1.SeiNodeDeployment) string {
-	if group.Status.Deployment != nil && group.Status.Deployment.IncumbentRevision != "" {
-		return group.Status.Deployment.IncumbentRevision
+	if group.Status.Rollout != nil && group.Status.Rollout.IncumbentRevision != "" {
+		return group.Status.Rollout.IncumbentRevision
 	}
 	return strconv.FormatInt(group.Generation, 10)
 }
@@ -41,7 +41,7 @@ func externalServiceName(group *seiv1alpha1.SeiNodeDeployment) string {
 // deployment, it includes the revision label to pin traffic to the
 // active set. At steady state, it selects by group membership only.
 func groupSelector(group *seiv1alpha1.SeiNodeDeployment) map[string]string {
-	if group.Status.Deployment != nil {
+	if group.Status.Rollout != nil {
 		return map[string]string{
 			groupLabel:    group.Name,
 			revisionLabel: activeRevision(group),
@@ -96,9 +96,10 @@ func managedByAnnotations() map[string]string {
 	return map[string]string{managedByAnnotation: controllerName}
 }
 
-// templateHash computes a hash over spec fields that require new nodes
-// when changed. Any container image change triggers a full pod restart,
-// so both the chain binary and sidecar images are included.
+// templateHash computes a hash over spec fields that trigger a deployment
+// plan when changed. Currently tracked: chainId, image, entrypoint, and
+// sidecar image. Fields like overrides, peers, and replica count propagate
+// in-place via ensureSeiNode without requiring a deployment plan.
 func templateHash(spec *seiv1alpha1.SeiNodeSpec) string {
 	h := sha256.New()
 	h.Write([]byte(spec.ChainID))

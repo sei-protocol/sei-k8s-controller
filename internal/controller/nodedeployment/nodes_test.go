@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -139,6 +141,92 @@ func TestGenerateSeiNode_NoAnnotationsWhenNil(t *testing.T) {
 
 	node := generateSeiNode(group, 0)
 	g.Expect(node.Annotations).To(BeNil())
+}
+
+func TestDetectDeploymentNeeded_InPlace_SetsRolloutInProgress(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.UpdateStrategy = seiv1alpha1.UpdateStrategy{Type: seiv1alpha1.UpdateStrategyInPlace}
+	group.Status.TemplateHash = testOldHash
+	group.Status.IncumbentNodes = []string{"archive-rpc-0", "archive-rpc-1", "archive-rpc-2"}
+
+	r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
+	r.detectDeploymentNeeded(group)
+
+	cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(cond.Reason).To(Equal("TemplateChanged"))
+
+	g.Expect(group.Status.Rollout).NotTo(BeNil())
+	g.Expect(group.Status.Rollout.Strategy).To(Equal(seiv1alpha1.UpdateStrategyInPlace))
+	g.Expect(group.Status.Rollout.TargetHash).NotTo(BeEmpty())
+	g.Expect(group.Status.Rollout.IncumbentNodes).To(ConsistOf("archive-rpc-0", "archive-rpc-1", "archive-rpc-2"))
+}
+
+func TestDetectDeploymentNeeded_InPlace_AlreadyActive_SameTarget(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.UpdateStrategy = seiv1alpha1.UpdateStrategy{Type: seiv1alpha1.UpdateStrategyInPlace}
+	group.Status.TemplateHash = testOldHash
+	group.Status.IncumbentNodes = []string{"archive-rpc-0"}
+
+	currentHash := templateHash(&group.Spec.Template.Spec)
+
+	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
+		"TemplateChanged", "already rolling")
+
+	existingRollout := &seiv1alpha1.RolloutStatus{
+		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
+		TargetHash: currentHash,
+	}
+	group.Status.Rollout = existingRollout
+
+	r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
+	r.detectDeploymentNeeded(group)
+
+	g.Expect(group.Status.Rollout).To(Equal(existingRollout))
+}
+
+func TestDetectDeploymentNeeded_InPlace_Supersedes_StaleRollout(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.UpdateStrategy = seiv1alpha1.UpdateStrategy{Type: seiv1alpha1.UpdateStrategyInPlace}
+	group.Status.TemplateHash = testOldHash
+	group.Status.IncumbentNodes = []string{"archive-rpc-0"}
+
+	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
+		"TemplateChanged", "already rolling")
+
+	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
+		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
+		TargetHash: "stale-hash",
+	}
+	group.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
+
+	r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
+	r.detectDeploymentNeeded(group)
+
+	g.Expect(group.Status.Rollout.TargetHash).NotTo(Equal("stale-hash"))
+	g.Expect(group.Status.Plan).To(BeNil())
+}
+
+func TestDetectDeploymentNeeded_EmptyType_TreatedAsInPlace(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.UpdateStrategy = seiv1alpha1.UpdateStrategy{Type: ""}
+	group.Status.TemplateHash = testOldHash
+	group.Status.IncumbentNodes = []string{"archive-rpc-0"}
+
+	r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
+	r.detectDeploymentNeeded(group)
+
+	g.Expect(group.Status.Rollout).NotTo(BeNil())
+	g.Expect(group.Status.Rollout.Strategy).To(Equal(seiv1alpha1.UpdateStrategyInPlace))
+
+	cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 }
 
 func TestGenerateSeiNode_DeepCopiesTemplate(t *testing.T) {

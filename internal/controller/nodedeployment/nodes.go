@@ -82,17 +82,8 @@ func (r *SeiNodeDeploymentReconciler) detectGenesisCeremonyNeeded(group *seiv1al
 // fields that require new nodes (image, entrypoint, chainId) are hashed;
 // sidecar, overrides, and replica changes propagate in-place.
 func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeDeployment) {
-	if group.Spec.UpdateStrategy == nil {
-		return
-	}
 	if group.Status.TemplateHash == "" {
 		return // first reconcile, no baseline to compare against
-	}
-	if group.Status.Deployment != nil {
-		return
-	}
-	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
-		return
 	}
 
 	currentHash := templateHash(&group.Spec.Template.Spec)
@@ -100,11 +91,43 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 		return // no deployment-worthy fields changed
 	}
 
-	group.Status.Deployment = &seiv1alpha1.DeploymentStatus{
+	// Supersession: if the spec moved since the active rollout was created,
+	// replace the stale plan so the controller converges on the latest spec.
+	if hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
+		if group.Status.Rollout != nil && group.Status.Rollout.TargetHash == currentHash {
+			return // rollout already targets the current spec
+		}
+		group.Status.Plan = nil
+		r.Recorder.Eventf(group, corev1.EventTypeNormal, "RolloutSuperseded",
+			"Spec changed during active rollout, replacing plan (old target: %s)", group.Status.Rollout.TargetHash)
+	}
+
+	if !hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) &&
+		hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		return // non-deployment plan in progress (e.g. genesis)
+	}
+
+	strategyType := group.Spec.UpdateStrategy.Type
+	if strategyType == "" {
+		log.Log.Info("updateStrategy.type is empty, treating as InPlace — update the manifest",
+			"group", group.Name, "namespace", group.Namespace)
+		strategyType = seiv1alpha1.UpdateStrategyInPlace
+	}
+
+	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
+		Strategy:          strategyType,
+		TargetHash:        currentHash,
+		StartedAt:         metav1.Now(),
 		IncumbentRevision: planner.IncumbentRevision(group),
 		EntrantRevision:   planner.EntrantRevision(group),
-		EntrantNodes:      planner.EntrantNodeNames(group),
+		IncumbentNodes:    group.Status.IncumbentNodes,
 	}
+
+	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
+		"TemplateChanged", fmt.Sprintf("templateHash changed from %s to %s", group.Status.TemplateHash, currentHash))
+
+	r.Recorder.Eventf(group, corev1.EventTypeNormal, "RolloutStarted",
+		"InPlace rollout started (strategy: %s, target: %s)", strategyType, currentHash[:8])
 }
 
 // populateIncumbentNodes lists child SeiNodes and records their names
