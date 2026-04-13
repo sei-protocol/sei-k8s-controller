@@ -12,6 +12,8 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
+const stallThreshold = 10 * time.Minute
+
 func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) error {
 	nodes, err := r.listChildSeiNodes(ctx, group)
 	if err != nil {
@@ -51,8 +53,6 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 
 	return r.Status().Patch(ctx, group, statusBase)
 }
-
-const stallThreshold = 10 * time.Minute
 
 func reconcileRolloutStatus(group *seiv1alpha1.SeiNodeDeployment, nodes []seiv1alpha1.SeiNode) {
 	if group.Status.Rollout == nil || group.Status.Rollout.Strategy != seiv1alpha1.UpdateStrategyInPlace {

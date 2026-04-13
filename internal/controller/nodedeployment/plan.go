@@ -81,6 +81,8 @@ func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *s
 			return ctrl.Result{}, fmt.Errorf("reconciling networking after deployment: %w", err)
 		}
 		group.Status.Rollout = nil
+		setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
+			"RolloutComplete", "Deployment completed successfully")
 	}
 
 	if group.Spec.Genesis != nil && !isDeploymentPlan {
@@ -105,7 +107,11 @@ func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1
 
 	group.Status.Phase = seiv1alpha1.GroupPhaseDegraded
 	group.Status.Plan = nil
-	group.Status.Rollout = nil
+	if group.Status.Rollout != nil {
+		group.Status.Rollout = nil
+		setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
+			"RolloutFailed", "Deployment plan failed")
+	}
 	clearPlanInProgress(group, "PlanFailed", "Plan failed")
 
 	r.Recorder.Event(group, corev1.EventTypeWarning, "PlanFailed", "Plan failed")

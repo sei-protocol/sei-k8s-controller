@@ -160,12 +160,34 @@ func TestDetectDeploymentNeeded_InPlace_SetsRolloutInProgress(t *testing.T) {
 	g.Expect(group.Status.Rollout).NotTo(BeNil())
 	g.Expect(group.Status.Rollout.Strategy).To(Equal(seiv1alpha1.UpdateStrategyInPlace))
 	g.Expect(group.Status.Rollout.TargetHash).NotTo(BeEmpty())
-	g.Expect(group.Status.Rollout.Nodes).To(HaveLen(3))
-	g.Expect(group.Status.Rollout.Nodes[0].Name).To(Equal("archive-rpc-0"))
-	g.Expect(group.Status.Rollout.EntrantNodes).To(BeEmpty())
+	g.Expect(group.Status.Rollout.IncumbentNodes).To(ConsistOf("archive-rpc-0", "archive-rpc-1", "archive-rpc-2"))
 }
 
-func TestDetectDeploymentNeeded_InPlace_AlreadyActive(t *testing.T) {
+func TestDetectDeploymentNeeded_InPlace_AlreadyActive_SameTarget(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.UpdateStrategy = seiv1alpha1.UpdateStrategy{Type: seiv1alpha1.UpdateStrategyInPlace}
+	group.Status.TemplateHash = testOldHash
+	group.Status.IncumbentNodes = []string{"archive-rpc-0"}
+
+	currentHash := templateHash(&group.Spec.Template.Spec)
+
+	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
+		"TemplateChanged", "already rolling")
+
+	existingRollout := &seiv1alpha1.RolloutStatus{
+		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
+		TargetHash: currentHash,
+	}
+	group.Status.Rollout = existingRollout
+
+	r := &SeiNodeDeploymentReconciler{}
+	r.detectDeploymentNeeded(group)
+
+	g.Expect(group.Status.Rollout).To(Equal(existingRollout))
+}
+
+func TestDetectDeploymentNeeded_InPlace_Supersedes_StaleRollout(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
 	group.Spec.UpdateStrategy = seiv1alpha1.UpdateStrategy{Type: seiv1alpha1.UpdateStrategyInPlace}
@@ -175,16 +197,17 @@ func TestDetectDeploymentNeeded_InPlace_AlreadyActive(t *testing.T) {
 	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
 		"TemplateChanged", "already rolling")
 
-	existingRollout := &seiv1alpha1.RolloutStatus{
+	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
 		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
-		TargetHash: "existing-target",
+		TargetHash: "stale-hash",
 	}
-	group.Status.Rollout = existingRollout
+	group.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
 
 	r := &SeiNodeDeploymentReconciler{}
 	r.detectDeploymentNeeded(group)
 
-	g.Expect(group.Status.Rollout).To(Equal(existingRollout))
+	g.Expect(group.Status.Rollout.TargetHash).NotTo(Equal("stale-hash"))
+	g.Expect(group.Status.Plan).To(BeNil())
 }
 
 func TestDetectDeploymentNeeded_EmptyType_TreatedAsInPlace(t *testing.T) {

@@ -193,10 +193,6 @@ const (
 	PhaseTerminating  SeiNodePhase = "Terminating"
 )
 
-const (
-	ConditionReadinessApproved = "ReadinessApproved"
-)
-
 // MonitorTask tracks a long-running sidecar task that the controller
 // actively polls for completion. Unlike fire-and-forget tasks,
 // completing a monitor task triggers a controller response (Event + Condition).

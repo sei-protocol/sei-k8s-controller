@@ -251,6 +251,7 @@ func TestObserveCurrentImage_UpdatesWhenConverged(t *testing.T) {
 
 	sts.Status.CurrentRevision = testRevision
 	sts.Status.UpdateRevision = testRevision
+	sts.Status.ReadyReplicas = 1
 	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
 
 	r := &SeiNodeReconciler{Client: c, Scheme: s}

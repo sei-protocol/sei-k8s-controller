@@ -85,16 +85,24 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 	if group.Status.TemplateHash == "" {
 		return // first reconcile, no baseline to compare against
 	}
-	if hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
-		return
-	}
-	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
-		return
-	}
 
 	currentHash := templateHash(&group.Spec.Template.Spec)
 	if currentHash == group.Status.TemplateHash {
 		return // no deployment-worthy fields changed
+	}
+
+	// Supersession: if the spec moved since the active rollout was created,
+	// replace the stale plan so the controller converges on the latest spec.
+	if hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
+		if group.Status.Rollout != nil && group.Status.Rollout.TargetHash == currentHash {
+			return // rollout already targets the current spec
+		}
+		group.Status.Plan = nil
+	}
+
+	if !hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) &&
+		hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		return // non-deployment plan in progress (e.g. genesis)
 	}
 
 	strategyType := group.Spec.UpdateStrategy.Type
@@ -104,22 +112,13 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 		strategyType = seiv1alpha1.UpdateStrategyInPlace
 	}
 
-	rolloutNodes := make([]seiv1alpha1.RolloutNodeStatus, len(group.Status.IncumbentNodes))
-	for i, name := range group.Status.IncumbentNodes {
-		rolloutNodes[i] = seiv1alpha1.RolloutNodeStatus{Name: name}
-	}
-
 	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
 		Strategy:          strategyType,
 		TargetHash:        currentHash,
 		StartedAt:         metav1.Now(),
-		Nodes:             rolloutNodes,
 		IncumbentRevision: planner.IncumbentRevision(group),
 		EntrantRevision:   planner.EntrantRevision(group),
 		IncumbentNodes:    group.Status.IncumbentNodes,
-	}
-	if strategyType != seiv1alpha1.UpdateStrategyInPlace {
-		group.Status.Rollout.EntrantNodes = planner.EntrantNodeNames(group)
 	}
 
 	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
