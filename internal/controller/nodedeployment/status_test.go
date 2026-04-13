@@ -2,11 +2,16 @@ package nodedeployment
 
 import (
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
+
+const testOldHash = "oldhash1234"
 
 func emptyGroup() *seiv1alpha1.SeiNodeDeployment {
 	return &seiv1alpha1.SeiNodeDeployment{}
@@ -99,6 +104,104 @@ func makeNodes(n int, phase seiv1alpha1.SeiNodePhase) []seiv1alpha1.SeiNode {
 }
 
 // --- NetworkingStatus ---
+
+func TestReconcileRolloutStatus_InPlace_AllReady(t *testing.T) {
+	g := NewWithT(t)
+	group := emptyGroup()
+	group.Generation = 2
+	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
+		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
+		TargetHash: "newhash1234",
+		StartedAt:  metav1.Now(),
+		Nodes: []seiv1alpha1.RolloutNodeStatus{
+			{Name: "node-0"},
+			{Name: "node-1"},
+		},
+	}
+	group.Status.TemplateHash = testOldHash
+
+	nodes := []seiv1alpha1.SeiNode{
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}, Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning}},
+	}
+
+	reconcileRolloutStatus(group, nodes)
+
+	g.Expect(group.Status.Rollout).To(BeNil())
+	g.Expect(group.Status.TemplateHash).To(Equal("newhash1234"))
+	g.Expect(group.Status.ObservedGeneration).To(Equal(int64(2)))
+
+	cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(cond.Reason).To(Equal("RolloutComplete"))
+}
+
+func TestReconcileRolloutStatus_InPlace_Partial(t *testing.T) {
+	g := NewWithT(t)
+	group := emptyGroup()
+	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
+		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
+		TargetHash: "newhash1234",
+		StartedAt:  metav1.Now(),
+		Nodes: []seiv1alpha1.RolloutNodeStatus{
+			{Name: "node-0"},
+			{Name: "node-1"},
+		},
+	}
+	group.Status.TemplateHash = testOldHash
+
+	nodes := []seiv1alpha1.SeiNode{
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}, Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseInitializing}},
+	}
+
+	reconcileRolloutStatus(group, nodes)
+
+	g.Expect(group.Status.Rollout).NotTo(BeNil())
+	g.Expect(group.Status.TemplateHash).To(Equal(testOldHash))
+	g.Expect(group.Status.Rollout.Nodes[0].Ready).To(BeTrue())
+	g.Expect(group.Status.Rollout.Nodes[1].Ready).To(BeFalse())
+}
+
+func TestReconcileRolloutStatus_InPlace_Stalled(t *testing.T) {
+	g := NewWithT(t)
+	group := emptyGroup()
+	stalledTime := metav1.NewTime(time.Now().Add(-15 * time.Minute))
+	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
+		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
+		TargetHash: "newhash1234",
+		StartedAt:  stalledTime,
+		Nodes: []seiv1alpha1.RolloutNodeStatus{
+			{Name: "node-0"},
+			{Name: "node-1"},
+		},
+	}
+
+	nodes := []seiv1alpha1.SeiNode{
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}, Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseInitializing}},
+	}
+
+	reconcileRolloutStatus(group, nodes)
+
+	g.Expect(group.Status.Rollout).NotTo(BeNil())
+
+	cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(cond.Reason).To(Equal("Stalled"))
+}
+
+func TestComputeGroupPhase_RolloutInProgress(t *testing.T) {
+	g := NewWithT(t)
+	group := emptyGroup()
+	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
+		"TemplateChanged", "hash changed")
+	nodes := makeNodes(3, seiv1alpha1.PhaseRunning)
+	phase := computeGroupPhase(group, 3, 3, nodes)
+	g.Expect(phase).To(Equal(seiv1alpha1.GroupPhaseUpgrading))
+}
 
 func TestBuildNetworkingStatus_FullMode_DualDomain(t *testing.T) {
 	g := NewWithT(t)
