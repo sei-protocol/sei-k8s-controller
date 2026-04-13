@@ -21,7 +21,7 @@ import (
 func (r *SeiNodeDeploymentReconciler) reconcilePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
 	// Drive active plan.
 	if group.Status.Plan != nil && group.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
-		return r.drivePlan(ctx, group, statusBase)
+		return r.drivePlan(ctx, group)
 	}
 
 	// No active plan — ask the planner if one is needed.
@@ -38,7 +38,7 @@ func (r *SeiNodeDeploymentReconciler) reconcilePlan(ctx context.Context, group *
 	return r.startPlan(ctx, group, statusBase, plan)
 }
 
-func (r *SeiNodeDeploymentReconciler) drivePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) drivePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
 	result, err := r.PlanExecutor.ExecutePlan(ctx, group, group.Status.Plan)
 	if err != nil {
 		return result, err
@@ -46,9 +46,9 @@ func (r *SeiNodeDeploymentReconciler) drivePlan(ctx context.Context, group *seiv
 
 	switch group.Status.Plan.Phase {
 	case seiv1alpha1.TaskPlanComplete:
-		return r.completePlan(ctx, group, statusBase)
+		return r.completePlan(ctx, group)
 	case seiv1alpha1.TaskPlanFailed:
-		return r.failPlan(ctx, group, statusBase)
+		return r.failPlan(ctx, group)
 	}
 
 	return result, nil
@@ -70,8 +70,16 @@ func (r *SeiNodeDeploymentReconciler) startPlan(ctx context.Context, group *seiv
 	return planner.ResultRequeueImmediate, nil
 }
 
-func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+
+	// Re-read to get a fresh resourceVersion. The plan executor patches
+	// status mid-reconcile (task/plan completion), which invalidates the
+	// statusBase computed at the start of Reconcile.
+	if err := r.Get(ctx, client.ObjectKeyFromObject(group), group); err != nil {
+		return ctrl.Result{}, fmt.Errorf("re-reading group for completePlan: %w", err)
+	}
+	status := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 
 	isDeploymentPlan := group.Status.Rollout != nil
 
@@ -97,14 +105,19 @@ func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *s
 	r.Recorder.Event(group, corev1.EventTypeNormal, "PlanComplete", "Plan completed successfully")
 	logger.Info("plan completed")
 
-	if err := r.updateStatus(ctx, group, statusBase); err != nil {
+	if err := r.updateStatus(ctx, group, status); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating status after plan completion: %w", err)
 	}
 	return planner.ResultRequeueImmediate, nil
 }
 
-func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
+func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+
+	if err := r.Get(ctx, client.ObjectKeyFromObject(group), group); err != nil {
+		return ctrl.Result{}, fmt.Errorf("re-reading group for failPlan: %w", err)
+	}
+	status := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 
 	group.Status.Phase = seiv1alpha1.GroupPhaseDegraded
 	group.Status.Plan = nil
@@ -118,7 +131,7 @@ func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1
 	r.Recorder.Event(group, corev1.EventTypeWarning, "PlanFailed", "Plan failed")
 	logger.Info("plan failed")
 
-	if err := r.updateStatus(ctx, group, statusBase); err != nil {
+	if err := r.updateStatus(ctx, group, status); err != nil {
 		return ctrl.Result{}, fmt.Errorf("updating status after plan failure: %w", err)
 	}
 	return planner.ResultRequeueImmediate, nil

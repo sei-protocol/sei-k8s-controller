@@ -78,8 +78,7 @@ func TestCompletePlan_ClearsRolloutInProgress(t *testing.T) {
 
 	r, c := newPlanTestReconciler(t, group, childNode)
 
-	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	_, err := r.completePlan(ctx, group, statusBase)
+	_, err := r.completePlan(ctx, group)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	fetched := &seiv1alpha1.SeiNodeDeployment{}
@@ -148,8 +147,7 @@ func TestFailPlan_ClearsRolloutInProgress(t *testing.T) {
 
 	r, c := newPlanTestReconciler(t, group, childRunning, childFailed, childFailed2)
 
-	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	_, err := r.failPlan(ctx, group, statusBase)
+	_, err := r.failPlan(ctx, group)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	fetched := &seiv1alpha1.SeiNodeDeployment{}
