@@ -30,9 +30,10 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 		})
 	}
 
-	// Update ObservedGeneration and TemplateHash when no plan is active.
-	// During plan execution, ObservedGeneration is updated by completePlan.
-	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+	// Update ObservedGeneration and TemplateHash when no rollout or plan is active.
+	// During rollout/plan execution, these are updated by completePlan.
+	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) &&
+		!hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
 		group.Status.ObservedGeneration = group.Generation
 		group.Status.TemplateHash = templateHash(&group.Spec.Template.Spec)
 	}
