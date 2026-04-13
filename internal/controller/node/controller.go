@@ -175,6 +175,10 @@ func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alp
 		return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
 	}
 
+	if err := r.observeCurrentImage(ctx, node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("observing current image: %w", err)
+	}
+
 	sc := r.buildSidecarClient(node)
 	if sc == nil {
 		sidecarUnreachableTotal.WithLabelValues(node.Namespace, node.Name).Inc()
@@ -182,6 +186,27 @@ func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alp
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 	return r.reconcileRuntimeTasks(ctx, node, sc)
+}
+
+func (r *SeiNodeReconciler) observeCurrentImage(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+	sts := &appsv1.StatefulSet{}
+	if err := r.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, sts); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	if sts.Status.CurrentRevision != sts.Status.UpdateRevision {
+		return nil
+	}
+
+	if node.Status.CurrentImage != node.Spec.Image {
+		patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		node.Status.CurrentImage = node.Spec.Image
+		return r.Status().Patch(ctx, node, patch)
+	}
+	return nil
 }
 
 // transitionPhase transitions the node to a new phase and emits the associated

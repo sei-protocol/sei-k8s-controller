@@ -14,6 +14,8 @@ import (
 // configured update strategy.
 func ForDeployment(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
 	switch group.Spec.UpdateStrategy.Type {
+	case seiv1alpha1.UpdateStrategyInPlace:
+		return &inPlaceDeploymentPlanner{}, nil
 	case seiv1alpha1.UpdateStrategyHardFork:
 		return &hardForkDeploymentPlanner{}, nil
 	case seiv1alpha1.UpdateStrategyBlueGreen:
@@ -94,6 +96,46 @@ func (p *hardForkDeploymentPlanner) BuildPlan(
 		{task.TaskTypeTeardownNodes, &task.TeardownNodesParams{
 			Namespace: ns,
 			NodeNames: incumbentNodes,
+		}},
+	}
+
+	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
+	for i, p := range prog {
+		t, err := buildPlannedTask(planID, p.taskType, i, p.params)
+		if err != nil {
+			return nil, err
+		}
+		tasks[i] = t
+	}
+	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
+}
+
+// inPlaceDeploymentPlanner builds a deployment plan for the InPlace strategy.
+type inPlaceDeploymentPlanner struct{}
+
+func (p *inPlaceDeploymentPlanner) BuildPlan(
+	group *seiv1alpha1.SeiNodeDeployment,
+) (*seiv1alpha1.TaskPlan, error) {
+	planID := uuid.New().String()
+	nodeNames := group.Status.IncumbentNodes
+	ns := group.Namespace
+
+	prog := []struct {
+		taskType string
+		params   any
+	}{
+		{task.TaskTypeUpdateNodeSpecs, &task.UpdateNodeSpecsParams{
+			GroupName: group.Name,
+			Namespace: ns,
+			NodeNames: nodeNames,
+		}},
+		{task.TaskTypeAwaitSpecUpdate, &task.AwaitSpecUpdateParams{
+			Namespace: ns,
+			NodeNames: nodeNames,
+		}},
+		{task.TaskTypeMarkNodesReady, &task.MarkNodesReadyParams{
+			Namespace: ns,
+			NodeNames: nodeNames,
 		}},
 	}
 

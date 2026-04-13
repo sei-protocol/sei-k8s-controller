@@ -225,6 +225,14 @@ type SeiNodeStatus struct {
 	// Phase is the high-level lifecycle state.
 	Phase SeiNodePhase `json:"phase,omitempty"`
 
+	// CurrentImage is the seid container image observed running on the
+	// owned StatefulSet. Updated by the SeiNode controller when the
+	// StatefulSet rollout completes (currentRevision == updateRevision).
+	// Parent controllers compare this against spec.image to determine
+	// whether a spec change has been fully actuated.
+	// +optional
+	CurrentImage string `json:"currentImage,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional

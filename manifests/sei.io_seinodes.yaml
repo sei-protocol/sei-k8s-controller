@@ -558,6 +558,14 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              currentImage:
+                description: |-
+                  CurrentImage is the seid container image observed running on the
+                  owned StatefulSet. Updated by the SeiNode controller when the
+                  StatefulSet rollout completes (currentRevision == updateRevision).
+                  Parent controllers compare this against spec.image to determine
+                  whether a spec change has been fully actuated.
+                type: string
               externalAddress:
                 description: |-
                   ExternalAddress is the routable P2P address (host:port) for this node,
