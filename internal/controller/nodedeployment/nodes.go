@@ -81,6 +81,10 @@ func (r *SeiNodeDeploymentReconciler) detectGenesisCeremonyNeeded(group *seiv1al
 // by comparing the current template hash against the stored hash. Only
 // fields that require new nodes (image, entrypoint, chainId) are hashed;
 // sidecar, overrides, and replica changes propagate in-place.
+// TODO: guard against empty incumbentNodes — if populateIncumbentNodes found
+// zero nodes (e.g. missing owner references), a rollout with empty node lists
+// creates a plan where all tasks complete as no-ops. Should return early here
+// when len(group.Status.IncumbentNodes) == 0.
 func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeDeployment) {
 	if group.Status.TemplateHash == "" {
 		return // first reconcile, no baseline to compare against
