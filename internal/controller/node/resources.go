@@ -30,7 +30,7 @@ func generateNodeStatefulSet(node *seiv1alpha1.SeiNode, platform PlatformConfig)
 			Replicas:    &one,
 			ServiceName: node.Name,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
+				MatchLabels: selectorLabelsForNode(node),
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
@@ -290,16 +290,15 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 }
 
 func generateNodeHeadlessService(node *seiv1alpha1.SeiNode) *corev1.Service {
-	labels := resourceLabelsForNode(node)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      node.Name,
 			Namespace: node.Namespace,
-			Labels:    labels,
+			Labels:    resourceLabelsForNode(node),
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP:                corev1.ClusterIPNone,
-			Selector:                 labels,
+			Selector:                 selectorLabelsForNode(node),
 			Ports:                    servicePorts(),
 			PublishNotReadyAddresses: true,
 		},

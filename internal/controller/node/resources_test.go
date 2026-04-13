@@ -123,7 +123,7 @@ func TestGenerateNodeStatefulSet_PodLabelsPropagate(t *testing.T) {
 
 	g.Expect(sts.Labels).To(HaveKeyWithValue("sei.io/nodedeployment", "my-group"))
 	g.Expect(sts.Spec.Template.Labels).To(HaveKeyWithValue("sei.io/nodedeployment", "my-group"))
-	g.Expect(sts.Spec.Selector.MatchLabels).To(HaveKeyWithValue("sei.io/nodedeployment", "my-group"))
+	g.Expect(sts.Spec.Selector.MatchLabels).To(Equal(map[string]string{"sei.io/node": "snap-0"}))
 }
 
 // --- StatefulSet generation ---
@@ -139,7 +139,7 @@ func TestGenerateNodeStatefulSet_BasicFields(t *testing.T) {
 	g.Expect(sts.Labels).To(HaveKeyWithValue(nodeLabel, "mynet-0"))
 	g.Expect(*sts.Spec.Replicas).To(Equal(int32(1)))
 	g.Expect(sts.Spec.ServiceName).To(Equal("mynet-0"))
-	g.Expect(sts.Spec.Selector.MatchLabels).To(Equal(sts.Spec.Template.Labels))
+	g.Expect(sts.Spec.Selector.MatchLabels).To(Equal(map[string]string{nodeLabel: "mynet-0"}))
 	g.Expect(sts.Spec.VolumeClaimTemplates).To(BeEmpty())
 }
 
@@ -587,7 +587,7 @@ func TestGenerateNodeHeadlessService(t *testing.T) {
 	g.Expect(svc.Labels).To(HaveKeyWithValue(nodeLabel, "mynet-0"))
 	g.Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
 	g.Expect(svc.Spec.PublishNotReadyAddresses).To(BeTrue())
-	g.Expect(svc.Spec.Selector).To(HaveKeyWithValue(nodeLabel, "mynet-0"))
+	g.Expect(svc.Spec.Selector).To(Equal(map[string]string{nodeLabel: "mynet-0"}))
 	g.Expect(svc.Spec.Ports).To(HaveLen(7))
 }
 

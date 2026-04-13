@@ -14,6 +14,15 @@ const (
 	defaultSidecarImage = platform.DefaultSidecarImage
 )
 
+// selectorLabelsForNode returns the minimal, immutable label set used as the
+// StatefulSet selector. Only sei.io/node is included because each SeiNode
+// has a unique name within a namespace, making it sufficient to select its
+// pods. Mutable labels (sei.io/revision, podLabels) must NOT appear here
+// because Kubernetes forbids changing a StatefulSet's selector after creation.
+func selectorLabelsForNode(node *seiv1alpha1.SeiNode) map[string]string {
+	return map[string]string{nodeLabel: node.Name}
+}
+
 // resourceLabelsForNode returns labels for the StatefulSet pod template.
 // User-provided podLabels are applied first; the system sei.io/node label
 // is set last so it cannot be overridden.
