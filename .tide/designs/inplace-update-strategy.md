@@ -35,6 +35,12 @@ This design introduces a pattern that should generalize across all strategies: *
 3. **Plan generation reads conditions.** The planner inspects conditions to derive which task sequences need to execute.
 4. **Conditions guard concurrent mutations.** A condition like `RolloutInProgress` prevents the reconciler from applying additional spec changes until the current rollout completes.
 
+### Design Principles
+
+- **Keep condition vocabulary small.** As BlueGreen and HardFork migrate to this pattern, do NOT add strategy-specific conditions. Let `RolloutStatus.Strategy` carry the variant. Every new condition type is a new alert rule for operators.
+- **`RolloutStatus` is the real state machine; conditions are derived.** The `RolloutStatus` struct drives controller behavior. The `RolloutInProgress` condition is an API-surface convenience for `kubectl wait`, external consumers, and alerting. This matches how upstream controllers (Deployment, StatefulSet) use conditions as derived signals, not primary drivers.
+- **Simultaneous rollout is intentional.** Chain upgrades are coordinated halts — all nodes must move to the new binary at the same height. Sequential rollout provides no safety benefit and creates split-brain risk. This deviates from StatefulSet's default `OrderedReady` but is correct for the domain.
+
 ### For InPlace
 
 The InPlace strategy uses a single condition to coordinate:
@@ -110,6 +116,20 @@ type UpdateStrategy struct {
 
 InPlace requires no sub-config. The engineer owns timing entirely.
 
+### Migration: zero-value handling
+
+Making `updateStrategy` required won't break existing stored objects (CRD validation only fires on create/update). However, the next reconcile of an existing resource without the field will see a zero-value `UpdateStrategy{Type: ""}`. During the migration window, `detectDeploymentNeeded` treats an empty `Type` as `InPlace` and logs a warning:
+
+```go
+strategyType := group.Spec.UpdateStrategy.Type
+if strategyType == "" {
+    log.FromContext(ctx).Info("updateStrategy.type is empty, treating as InPlace — update the manifest")
+    strategyType = seiv1alpha1.UpdateStrategyInPlace
+}
+```
+
+This handler is removed in a subsequent release once all manifests have been updated.
+
 ### RolloutStatus (unified type replacing DeploymentStatus)
 
 ```go
@@ -139,6 +159,11 @@ type RolloutStatus struct {
     // created. Only populated for BlueGreen and HardFork strategies.
     // +optional
     EntrantNodes []string `json:"entrantNodes,omitempty"`
+
+    // IncumbentRevision identifies the generation of the currently live nodes.
+    // Only populated for BlueGreen and HardFork strategies.
+    // +optional
+    IncumbentRevision string `json:"incumbentRevision,omitempty"`
 
     // EntrantRevision identifies the generation of the new nodes.
     // Only populated for BlueGreen and HardFork strategies.
@@ -277,6 +302,21 @@ func (r *SeiNodeDeploymentReconciler) reconcileRolloutStatus(
             Status: metav1.ConditionFalse,
             Reason: "RolloutComplete",
         })
+        return
+    }
+
+    // Escalate stalled rollouts. If any node has been non-ready for longer
+    // than the stall threshold, update the condition reason to Stalled.
+    // This provides a durable signal for alerting (PagerDuty, Grafana)
+    // unlike events which are ephemeral.
+    const stallThreshold = 10 * time.Minute
+    if time.Since(group.Status.Rollout.StartedAt.Time) > stallThreshold {
+        meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+            Type:    seiv1alpha1.ConditionRolloutInProgress,
+            Status:  metav1.ConditionTrue,
+            Reason:  "Stalled",
+            Message: fmt.Sprintf("rollout stalled: not all nodes ready after %s", stallThreshold),
+        })
     }
 }
 ```
@@ -407,7 +447,7 @@ status:
 |---|---|---|---|
 | Rollout started | Normal | `RolloutStarted` | `RolloutInProgress` condition set to True |
 | Rollout complete | Normal | `RolloutComplete` | All nodes converge, condition cleared |
-| Node not converging | Warning | `NodeNotConverging` | A node has been non-ready for > 10 minutes during rollout |
+| Rollout stalled | Warning | `RolloutStalled` | `RolloutInProgress` reason transitions to `Stalled` (> 10 min with non-ready nodes) |
 
 ## Failure Modes
 
