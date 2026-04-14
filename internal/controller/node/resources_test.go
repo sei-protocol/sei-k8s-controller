@@ -701,6 +701,6 @@ func TestDefaultResourcesForMode_Archive(t *testing.T) {
 	cfg := platformtest.Config()
 
 	res := defaultResourcesForMode(string(seiconfig.ModeArchive), cfg)
-	g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("16")))
-	g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse("256Gi")))
+	g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("48")))
+	g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse("448Gi")))
 }
