@@ -114,11 +114,12 @@ func main() {
 
 	platformCfg := platform.Config{
 		NodepoolName:        os.Getenv("SEI_NODEPOOL_NAME"),
+		NodepoolArchive:     os.Getenv("SEI_NODEPOOL_ARCHIVE"),
 		TolerationKey:       os.Getenv("SEI_TOLERATION_KEY"),
-		TolerationVal:       os.Getenv("SEI_TOLERATION_VALUE"),
 		ServiceAccount:      os.Getenv("SEI_SERVICE_ACCOUNT"),
 		StorageClassPerf:    os.Getenv("SEI_STORAGE_CLASS_PERF"),
 		StorageClassDefault: os.Getenv("SEI_STORAGE_CLASS_DEFAULT"),
+		StorageClassArchive: os.Getenv("SEI_STORAGE_CLASS_ARCHIVE"),
 		StorageSizeDefault:  os.Getenv("SEI_STORAGE_SIZE_DEFAULT"),
 		StorageSizeArchive:  os.Getenv("SEI_STORAGE_SIZE_ARCHIVE"),
 		ResourceCPUArchive:  os.Getenv("SEI_RESOURCE_CPU_ARCHIVE"),

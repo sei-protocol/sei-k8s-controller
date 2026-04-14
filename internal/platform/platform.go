@@ -9,6 +9,9 @@ const (
 
 	// DataDir is the mount path for the sei data volume inside node pods.
 	DataDir = "/sei"
+
+	// modeArchive matches seiconfig.ModeArchive without importing sei-config.
+	modeArchive = "archive"
 )
 
 // Config holds infrastructure-level settings that vary per deployment
@@ -16,11 +19,12 @@ const (
 // in main.go. See platformtest.Config() for test fixtures.
 type Config struct {
 	NodepoolName        string
+	NodepoolArchive     string
 	TolerationKey       string
-	TolerationVal       string
 	ServiceAccount      string
 	StorageClassPerf    string
 	StorageClassDefault string
+	StorageClassArchive string
 	StorageSizeDefault  string
 	StorageSizeArchive  string
 	ResourceCPUArchive  string
@@ -43,17 +47,28 @@ type Config struct {
 	GatewayPublicDomain string
 }
 
+// NodepoolForMode returns the Karpenter NodePool name for the given
+// sei-config mode string. Archive nodes use a dedicated pool; all
+// other modes share the default pool.
+func (c Config) NodepoolForMode(mode string) string {
+	if mode == modeArchive {
+		return c.NodepoolArchive
+	}
+	return c.NodepoolName
+}
+
 // Validate returns an error if required fields are missing.
 func (c Config) Validate() error {
 	required := map[string]string{
 		"SEI_NODEPOOL_NAME":         c.NodepoolName,
 		"SEI_TOLERATION_KEY":        c.TolerationKey,
-		"SEI_TOLERATION_VALUE":      c.TolerationVal,
 		"SEI_SERVICE_ACCOUNT":       c.ServiceAccount,
 		"SEI_STORAGE_CLASS_PERF":    c.StorageClassPerf,
 		"SEI_STORAGE_CLASS_DEFAULT": c.StorageClassDefault,
+		"SEI_STORAGE_CLASS_ARCHIVE": c.StorageClassArchive,
 		"SEI_STORAGE_SIZE_DEFAULT":  c.StorageSizeDefault,
 		"SEI_STORAGE_SIZE_ARCHIVE":  c.StorageSizeArchive,
+		"SEI_NODEPOOL_ARCHIVE":      c.NodepoolArchive,
 		"SEI_RESOURCE_CPU_ARCHIVE":  c.ResourceCPUArchive,
 		"SEI_RESOURCE_MEM_ARCHIVE":  c.ResourceMemArchive,
 		"SEI_RESOURCE_CPU_DEFAULT":  c.ResourceCPUDefault,

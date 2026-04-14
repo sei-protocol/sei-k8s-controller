@@ -8,13 +8,14 @@ import "github.com/sei-protocol/sei-k8s-controller/internal/platform"
 func Config() platform.Config {
 	return platform.Config{
 		NodepoolName:        "sei-node",
+		NodepoolArchive:     "sei-archive",
 		TolerationKey:       "sei.io/workload",
-		TolerationVal:       "sei-node",
 		ServiceAccount:      "seid-node",
 		StorageClassPerf:    "gp3-10k-750",
 		StorageClassDefault: "gp3",
+		StorageClassArchive: "io2-archive",
 		StorageSizeDefault:  "2000Gi",
-		StorageSizeArchive:  "4000Gi",
+		StorageSizeArchive:  "25000Gi",
 		ResourceCPUArchive:  "16",
 		ResourceMemArchive:  "256Gi",
 		ResourceCPUDefault:  "4",

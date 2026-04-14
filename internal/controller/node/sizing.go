@@ -39,14 +39,13 @@ func defaultResourcesForMode(mode string, platform PlatformConfig) corev1.Resour
 func defaultStorageForMode(mode string, platform PlatformConfig) (storageClass string, size string) {
 	switch mode {
 	case string(seiconfig.ModeArchive):
-		return platform.StorageClassPerf, platform.StorageSizeArchive
+		return platform.StorageClassArchive, platform.StorageSizeArchive
 	case string(seiconfig.ModeFull), string(seiconfig.ModeValidator):
 		return platform.StorageClassPerf, platform.StorageSizeDefault
 	default:
 		return platform.StorageClassDefault, platform.StorageSizeDefault
 	}
 }
-
 func makeResources(cpu, memory string) corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{

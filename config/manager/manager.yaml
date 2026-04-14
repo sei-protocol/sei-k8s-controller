@@ -37,20 +37,22 @@ spec:
         env:
           - name: SEI_NODEPOOL_NAME
             value: sei-node
+          - name: SEI_NODEPOOL_ARCHIVE
+            value: sei-archive
           - name: SEI_TOLERATION_KEY
             value: sei.io/workload
-          - name: SEI_TOLERATION_VALUE
-            value: sei-node
           - name: SEI_SERVICE_ACCOUNT
             value: seid-node
           - name: SEI_STORAGE_CLASS_PERF
             value: gp3-10k-750
           - name: SEI_STORAGE_CLASS_DEFAULT
             value: gp3
+          - name: SEI_STORAGE_CLASS_ARCHIVE
+            value: io2-archive
           - name: SEI_STORAGE_SIZE_DEFAULT
             value: 2000Gi
           - name: SEI_STORAGE_SIZE_ARCHIVE
-            value: 4000Gi
+            value: 25000Gi
           - name: SEI_RESOURCE_CPU_ARCHIVE
             value: "16"
           - name: SEI_RESOURCE_MEM_ARCHIVE
