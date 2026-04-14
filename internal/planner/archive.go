@@ -23,14 +23,10 @@ func (p *archiveNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	return buildBasePlan(node, node.Spec.Peers, p.snapshotSource(), &task.ConfigApplyParams{
+	return buildBasePlan(node, node.Spec.Peers, nil, &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeArchive),
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
 	})
-}
-
-func (p *archiveNodePlanner) snapshotSource() *seiv1alpha1.SnapshotSource {
-	return &seiv1alpha1.SnapshotSource{StateSync: &seiv1alpha1.StateSyncSource{}}
 }
 
 func (p *archiveNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
