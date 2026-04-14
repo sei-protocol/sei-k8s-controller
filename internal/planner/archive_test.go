@@ -26,7 +26,7 @@ func TestArchivePlanner_BlockSyncProgression(t *testing.T) {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	var types []string
+	types := make([]string, 0, len(plan.Tasks))
 	for _, task := range plan.Tasks {
 		types = append(types, task.Type)
 	}
@@ -66,7 +66,7 @@ func TestArchivePlanner_WithPeers(t *testing.T) {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	var types []string
+	types := make([]string, 0, len(plan.Tasks))
 	for _, task := range plan.Tasks {
 		types = append(types, task.Type)
 	}

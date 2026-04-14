@@ -320,7 +320,7 @@ func TestBuildPlan_Archive(t *testing.T) {
 	p, _ := planner.ForNode(node)
 	plan := mustBuildPlan(t, p, node)
 	got := taskTypes(plan)
-	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
