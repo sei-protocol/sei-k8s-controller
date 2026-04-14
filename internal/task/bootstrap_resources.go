@@ -162,6 +162,8 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 	seidInit := bootstrapSeidInitContainer(node)
 	seidInit.Image = bootstrapImage
 
+	pool := platformCfg.NodepoolForMode(bootstrapNodeMode(node))
+
 	return corev1.PodSpec{
 		Hostname:                      fmt.Sprintf("%s-0", node.Name),
 		Subdomain:                     serviceName,
@@ -170,7 +172,20 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 		RestartPolicy:                 corev1.RestartPolicyNever,
 		TerminationGracePeriodSeconds: ptr.To(bootstrapTerminationGracePeriod),
 		Tolerations: []corev1.Toleration{
-			{Key: platformCfg.TolerationKey, Value: platformCfg.TolerationVal, Effect: corev1.TaintEffectNoSchedule},
+			{Key: platformCfg.TolerationKey, Value: pool, Effect: corev1.TaintEffectNoSchedule},
+		},
+		Affinity: &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+						MatchExpressions: []corev1.NodeSelectorRequirement{{
+							Key:      "karpenter.sh/nodepool",
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{pool},
+						}},
+					}},
+				},
+			},
 		},
 		Volumes:        []corev1.Volume{dataVolume},
 		InitContainers: []corev1.Container{seidInit, sidecar},

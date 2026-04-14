@@ -55,10 +55,12 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1
 		},
 	}
 
+	pool := platform.NodepoolForMode(nodeMode(node))
+
 	spec := corev1.PodSpec{
 		ServiceAccountName: platform.ServiceAccount,
 		Tolerations: []corev1.Toleration{
-			{Key: platform.TolerationKey, Value: platform.TolerationVal, Effect: corev1.TaintEffectNoSchedule},
+			{Key: platform.TolerationKey, Value: pool, Effect: corev1.TaintEffectNoSchedule},
 		},
 		Affinity: &corev1.Affinity{
 			NodeAffinity: &corev1.NodeAffinity{
@@ -67,7 +69,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, platform PlatformConfig) corev1
 						MatchExpressions: []corev1.NodeSelectorRequirement{{
 							Key:      "karpenter.sh/nodepool",
 							Operator: corev1.NodeSelectorOpIn,
-							Values:   []string{platform.NodepoolName},
+							Values:   []string{pool},
 						}},
 					}},
 				},

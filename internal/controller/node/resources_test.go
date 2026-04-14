@@ -624,3 +624,83 @@ func TestGenerateNodeDataPVC(t *testing.T) {
 	storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 	g.Expect(storage.String()).To(Equal("2000Gi"))
 }
+
+func newArchiveNode(name, namespace string) *seiv1alpha1.SeiNode {
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "pacific-1",
+			Image:   "ghcr.io/sei-protocol/seid:v6.4.1",
+			Archive: &seiv1alpha1.ArchiveSpec{},
+			Sidecar: &seiv1alpha1.SidecarConfig{Port: 7777},
+		},
+	}
+}
+
+func TestGenerateNodeDataPVC_Archive(t *testing.T) {
+	g := NewWithT(t)
+	node := newArchiveNode("archive-0", "pacific-1")
+
+	pvc := generateNodeDataPVC(node, platformtest.Config())
+
+	g.Expect(*pvc.Spec.StorageClassName).To(Equal("io2-archive"))
+
+	storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	g.Expect(storage.String()).To(Equal("25000Gi"))
+}
+
+func TestBuildNodePodSpec_Archive_SchedulesOnArchiveNodepool(t *testing.T) {
+	g := NewWithT(t)
+	node := newArchiveNode("archive-0", "pacific-1")
+
+	spec := buildNodePodSpec(node, platformtest.Config())
+
+	g.Expect(spec.Tolerations).To(HaveLen(1))
+	g.Expect(spec.Tolerations[0].Key).To(Equal("sei.io/workload"))
+	g.Expect(spec.Tolerations[0].Value).To(Equal("sei-archive"))
+
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	g.Expect(terms).To(HaveLen(1))
+	g.Expect(terms[0].MatchExpressions).To(HaveLen(1))
+	g.Expect(terms[0].MatchExpressions[0].Key).To(Equal("karpenter.sh/nodepool"))
+	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-archive"))
+}
+
+func TestBuildNodePodSpec_FullNode_SchedulesOnDefaultNodepool(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("syncer-0", "pacific-1")
+
+	spec := buildNodePodSpec(node, platformtest.Config())
+
+	g.Expect(spec.Tolerations[0].Value).To(Equal("sei-node"))
+
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-node"))
+}
+
+func TestDefaultStorageForMode_Archive(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+
+	sc, size := defaultStorageForMode(string(seiconfig.ModeArchive), cfg)
+	g.Expect(sc).To(Equal("io2-archive"))
+	g.Expect(size).To(Equal("25000Gi"))
+}
+
+func TestDefaultStorageForMode_FullNode(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+
+	sc, size := defaultStorageForMode(string(seiconfig.ModeFull), cfg)
+	g.Expect(sc).To(Equal("gp3-10k-750"))
+	g.Expect(size).To(Equal("2000Gi"))
+}
+
+func TestDefaultResourcesForMode_Archive(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+
+	res := defaultResourcesForMode(string(seiconfig.ModeArchive), cfg)
+	g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("16")))
+	g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse("256Gi")))
+}
