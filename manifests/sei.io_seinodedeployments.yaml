@@ -864,6 +864,18 @@ spec:
                   Plan tracks the active group-level task plan (genesis assembly,
                   deployment, etc.). Nil when no plan is in progress.
                 properties:
+                  failedPhase:
+                    description: |-
+                      FailedPhase is the SeiNodePhase the executor sets on the owning
+                      resource when the plan fails terminally. When empty, the executor
+                      does not perform a phase transition on failure.
+                    enum:
+                    - Pending
+                    - Initializing
+                    - Running
+                    - Failed
+                    - Terminating
+                    type: string
                   failedTaskDetail:
                     description: FailedTaskDetail records diagnostics about the task
                       that caused the plan to fail.
@@ -904,6 +916,18 @@ spec:
                     - Active
                     - Complete
                     - Failed
+                    type: string
+                  targetPhase:
+                    description: |-
+                      TargetPhase is the SeiNodePhase the executor sets on the owning
+                      resource when the plan completes successfully. When empty, the
+                      executor does not perform a phase transition.
+                    enum:
+                    - Pending
+                    - Initializing
+                    - Running
+                    - Failed
+                    - Terminating
                     type: string
                   tasks:
                     description: Tasks is the ordered list of tasks to execute.

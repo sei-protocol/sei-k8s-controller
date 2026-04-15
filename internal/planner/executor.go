@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -18,6 +19,9 @@ import (
 const (
 	TaskPollInterval = 5 * time.Second
 	maxRetryBackoff  = 30 * time.Second
+
+	// ConditionPlanFailed is set on the node when a plan fails terminally.
+	ConditionPlanFailed = "PlanFailed"
 )
 
 // ResultRequeueImmediate requests an immediate re-enqueue. Uses a minimal
@@ -101,8 +105,11 @@ func executePlan(
 
 	t := CurrentTask(plan)
 	if t == nil {
+		prevPhase := currentPhase(obj)
 		patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 		plan.Phase = seiv1alpha1.TaskPlanComplete
+		setTargetPhase(obj, plan.TargetPhase)
+		nilPlanIfConvergence(obj, prevPhase, plan.TargetPhase)
 		if err := kc.Status().Patch(ctx, obj, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
 		}
@@ -178,6 +185,7 @@ func executePlan(
 }
 
 // failTask marks an individual task and the overall plan as Failed.
+// It sets the FailedPhase on the node and a PlanFailed condition.
 func failTask(
 	ctx context.Context,
 	kc client.Client,
@@ -195,6 +203,8 @@ func failTask(
 	t.Status = seiv1alpha1.TaskFailed
 	t.Error = errMsg
 	plan.Phase = seiv1alpha1.TaskPlanFailed
+	setTargetPhase(obj, plan.FailedPhase)
+	setPlanFailedCondition(obj, plan, t, errMsg)
 	for i := range plan.Tasks {
 		if plan.Tasks[i].ID == t.ID {
 			plan.FailedTaskIndex = &i
@@ -222,4 +232,54 @@ func retryBackoff(attempt int) time.Duration {
 		return maxRetryBackoff
 	}
 	return d
+}
+
+// setTargetPhase sets the node's phase if the plan specifies one.
+func setTargetPhase(obj client.Object, phase seiv1alpha1.SeiNodePhase) {
+	if phase == "" {
+		return
+	}
+	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
+		node.Status.Phase = phase
+	}
+}
+
+// setPlanFailedCondition sets a PlanFailed condition on the node with
+// details about which task failed and why.
+func setPlanFailedCondition(obj client.Object, plan *seiv1alpha1.TaskPlan, t *seiv1alpha1.PlannedTask, errMsg string) {
+	node, ok := obj.(*seiv1alpha1.SeiNode)
+	if !ok {
+		return
+	}
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:               ConditionPlanFailed,
+		Status:             metav1.ConditionTrue,
+		Reason:             "TaskFailed",
+		Message:            fmt.Sprintf("plan %s failed at task %s: %s", plan.ID, t.Type, errMsg),
+		ObservedGeneration: node.Generation,
+	})
+}
+
+// currentPhase returns the SeiNode phase, or empty for non-SeiNode objects.
+func currentPhase(obj client.Object) seiv1alpha1.SeiNodePhase {
+	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
+		return node.Status.Phase
+	}
+	return ""
+}
+
+// nilPlanIfConvergence nils the plan on the object's status when the plan's
+// target phase matches the phase the node was already in before the plan
+// completed (convergence — the node stays in the same phase). Init plans
+// that transition to a new phase keep their completed plan visible in status.
+func nilPlanIfConvergence(obj client.Object, prevPhase, targetPhase seiv1alpha1.SeiNodePhase) {
+	if targetPhase == "" {
+		return
+	}
+	if prevPhase != targetPhase {
+		return
+	}
+	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
+		node.Status.Plan = nil
+	}
 }

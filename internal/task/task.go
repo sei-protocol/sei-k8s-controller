@@ -184,6 +184,11 @@ var registry = map[string]taskDeserializer{
 	TaskTypeAwaitNodesRunning:  deserializeAwaitNodesRunning,
 	TaskTypeCollectAndSetPeers: deserializeCollectAndSetPeers,
 
+	// Controller-side infrastructure tasks
+	TaskTypeEnsureDataPVC:    deserializeEnsureDataPVC,
+	TaskTypeApplyStatefulSet: deserializeApplyStatefulSet,
+	TaskTypeApplyService:     deserializeApplyService,
+
 	// Controller-side bootstrap tasks
 	TaskTypeDeployBootstrapSvc:     deserializeBootstrapService,
 	TaskTypeDeployBootstrapJob:     deserializeBootstrapJob,

@@ -9,6 +9,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
@@ -18,7 +19,7 @@ func (r *SeiNodeReconciler) buildSidecarClient(node *seiv1alpha1.SeiNode) task.S
 	if r.BuildSidecarClientFn != nil {
 		return r.BuildSidecarClientFn(node)
 	}
-	c, err := sidecar.NewSidecarClientFromPodDNS(node.Name, node.Namespace, sidecarPort(node))
+	c, err := sidecar.NewSidecarClientFromPodDNS(node.Name, node.Namespace, noderesource.SidecarPort(node))
 	if err != nil {
 		log.Log.Info("failed to build sidecar client", "node", node.Name, "error", err)
 		return nil
