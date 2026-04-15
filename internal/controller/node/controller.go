@@ -37,7 +37,7 @@ const (
 	ReasonNodeUpdateComplete    = "NodeUpdateComplete"
 	ReasonSidecarNotReady       = "SidecarNotReady"
 	ReasonNodeUpdatePlanStarted = "NodeUpdatePlanStarted"
-	ReasonNodeUpdatePlanDone    = "NodeUpdatePlanDone"
+	ReasonNodeUpdatePlanComplete    = "NodeUpdatePlanDone"
 	ReasonNodeUpdatePlanFailed  = "NodeUpdatePlanFailed"
 )
 
@@ -230,7 +230,7 @@ func (r *SeiNodeReconciler) handlePlanComplete(ctx context.Context, node *seiv1a
 			ReasonNodeUpdateComplete,
 			fmt.Sprintf("NodeUpdate plan %s completed", planID))
 		setSeiNodeCondition(node, seiv1alpha1.ConditionNodeUpdateInProgress, metav1.ConditionFalse,
-			ReasonNodeUpdatePlanDone,
+			ReasonNodeUpdatePlanComplete,
 			fmt.Sprintf("NodeUpdate plan %s completed", planID))
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("completing NodeUpdate plan: %w", err)
