@@ -258,6 +258,12 @@ type SeiNodeStatus struct {
 	ExternalAddress string `json:"externalAddress,omitempty"`
 }
 
+// Status condition types for SeiNode.
+const (
+	ConditionSidecarReady        = "SidecarReady"
+	ConditionNodeUpdateInProgress = "NodeUpdateInProgress"
+)
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=snode

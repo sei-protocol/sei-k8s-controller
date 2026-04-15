@@ -65,6 +65,14 @@ var (
 		[]string{"namespace", "node"},
 	)
 
+	nodeUpdatePlanFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "sei_controller_node_update_plan_failures_total",
+			Help: "Number of NodeUpdate plan failures in Running phase",
+		},
+		[]string{"namespace", "name"},
+	)
+
 	monitorTaskCompletedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "sei_controller_monitor_task_completed_total",
@@ -89,6 +97,7 @@ func init() {
 		nodeInitDuration,
 		nodeLastInitDuration,
 		sidecarUnreachableTotal,
+		nodeUpdatePlanFailuresTotal,
 		monitorTaskCompletedTotal,
 		monitorTaskStatus,
 	)

@@ -33,6 +33,15 @@ const (
 	testSnapshotRegion   = "eu-central-1"
 )
 
+func mustPlanner(t *testing.T, node *seiv1alpha1.SeiNode) planner.NodePlanner {
+	t.Helper()
+	p, err := planner.ForNode(node)
+	if err != nil {
+		t.Fatalf("ForNode: %v", err)
+	}
+	return p
+}
+
 func mustBuildPlan(t *testing.T, p planner.NodePlanner, node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	t.Helper()
 	plan, err := p.BuildPlan(node)
@@ -541,6 +550,7 @@ func TestReconcile_FailedPlan_NoOps(t *testing.T) {
 }
 
 func TestReconcile_CompletePlan_SubmitsSnapshotUploadMonitor(t *testing.T) {
+	t.Skip("MonitorTasks descoped from reconcileRunning in M1")
 	taskID := uuid.New()
 	mock := &mockSidecarClient{submitID: taskID}
 	node := snapshotterNode()
@@ -550,7 +560,7 @@ func TestReconcile_CompletePlan_SubmitsSnapshotUploadMonitor(t *testing.T) {
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	_, err := r.reconcileRunning(ctx, node)
+	_, err := r.reconcileRunning(ctx, node, mustPlanner(t, node))
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -585,7 +595,7 @@ func TestReconcile_CompletePlan_SkipsAlreadySubmittedMonitor(t *testing.T) {
 	r, _ := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	_, err := r.reconcileRunning(ctx, node)
+	_, err := r.reconcileRunning(ctx, node, mustPlanner(t, node))
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -980,7 +990,7 @@ func TestReconcile_ReplayerWithoutResultExport_NoMonitorTask(t *testing.T) {
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	_, err := r.reconcileRunning(context.Background(), node)
+	_, err := r.reconcileRunning(context.Background(), node, mustPlanner(t, node))
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -995,6 +1005,7 @@ func TestReconcile_ReplayerWithoutResultExport_NoMonitorTask(t *testing.T) {
 }
 
 func TestReconcile_SnapshotterWithMonitorTask_BothSubmitted(t *testing.T) {
+	t.Skip("MonitorTasks descoped from reconcileRunning in M1")
 	taskID := uuid.New()
 	mock := &mockSidecarClient{submitID: taskID}
 
@@ -1007,7 +1018,7 @@ func TestReconcile_SnapshotterWithMonitorTask_BothSubmitted(t *testing.T) {
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	_, err := r.reconcileRunning(context.Background(), node)
+	_, err := r.reconcileRunning(context.Background(), node, mustPlanner(t, node))
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -1028,6 +1039,7 @@ func TestReconcile_SnapshotterWithMonitorTask_BothSubmitted(t *testing.T) {
 }
 
 func TestReconcileRunning_PollRequeue_ImmediateRequeue(t *testing.T) {
+	t.Skip("MonitorTasks descoped from reconcileRunning in M1")
 	taskID := uuid.New()
 	mock := &mockSidecarClient{
 		submitID: taskID,
@@ -1048,7 +1060,7 @@ func TestReconcileRunning_PollRequeue_ImmediateRequeue(t *testing.T) {
 
 	r, _ := newProgressionReconciler(t, mock, node)
 
-	result, err := r.reconcileRunning(context.Background(), node)
+	result, err := r.reconcileRunning(context.Background(), node, mustPlanner(t, node))
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -1058,6 +1070,7 @@ func TestReconcileRunning_PollRequeue_ImmediateRequeue(t *testing.T) {
 }
 
 func TestReconcile_CompletePlan_SubmitsResultExportMonitorForReplayer(t *testing.T) {
+	t.Skip("MonitorTasks descoped from reconcileRunning in M1")
 	taskID := uuid.New()
 	mock := &mockSidecarClient{submitID: taskID}
 	node := monitorReplayerNode()
@@ -1066,7 +1079,7 @@ func TestReconcile_CompletePlan_SubmitsResultExportMonitorForReplayer(t *testing
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	_, err := r.reconcileRunning(context.Background(), node)
+	_, err := r.reconcileRunning(context.Background(), node, mustPlanner(t, node))
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}

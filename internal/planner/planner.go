@@ -133,6 +133,28 @@ func insertBefore(prog []string, target, taskType string) []string {
 	return prog
 }
 
+// NeedsNodeUpdate returns true when a Running node needs a NodeUpdate plan
+// to re-initialize the sidecar after a spec change. This is a pure function
+// of CRD state — no sidecar calls.
+func NeedsNodeUpdate(node *seiv1alpha1.SeiNode) bool {
+	if node.Status.Phase != seiv1alpha1.PhaseRunning {
+		return false
+	}
+	if node.Status.Plan != nil {
+		return false
+	}
+	return !isSidecarReady(node)
+}
+
+func isSidecarReady(node *seiv1alpha1.SeiNode) bool {
+	for _, c := range node.Status.Conditions {
+		if c.Type == seiv1alpha1.ConditionSidecarReady {
+			return c.Status == metav1.ConditionTrue
+		}
+	}
+	return false
+}
+
 // NeedsBootstrap returns true when the node requires a bootstrap Job to
 // populate the PVC before the StatefulSet takes over.
 func NeedsBootstrap(node *seiv1alpha1.SeiNode) bool {

@@ -23,10 +23,20 @@ func (p *archiveNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	return buildBasePlan(node, node.Spec.Peers, nil, &task.ConfigApplyParams{
+	if NeedsNodeUpdate(node) {
+		return buildNodeUpdatePlan(node, p.configApplyParams(node))
+	}
+	if node.Status.Phase != "" && node.Status.Phase != seiv1alpha1.PhasePending {
+		return nil, nil
+	}
+	return buildBasePlan(node, node.Spec.Peers, nil, p.configApplyParams(node))
+}
+
+func (p *archiveNodePlanner) configApplyParams(node *seiv1alpha1.SeiNode) *task.ConfigApplyParams {
+	return &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeArchive),
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
-	})
+	}
 }
 
 func (p *archiveNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {

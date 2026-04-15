@@ -36,16 +36,26 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if NeedsNodeUpdate(node) {
+		return buildNodeUpdatePlan(node, p.configApplyParams(node))
+	}
+	if node.Status.Phase != "" && node.Status.Phase != seiv1alpha1.PhasePending {
+		return nil, nil
+	}
 	if isGenesisCeremonyNode(node) {
 		return buildGenesisPlan(node)
 	}
 	v := node.Spec.Validator
-	params := &task.ConfigApplyParams{
-		Mode:      string(seiconfig.ModeValidator),
-		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
-	}
+	params := p.configApplyParams(node)
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, v.Snapshot, params)
 	}
 	return buildBasePlan(node, node.Spec.Peers, v.Snapshot, params)
+}
+
+func (p *validatorPlanner) configApplyParams(node *seiv1alpha1.SeiNode) *task.ConfigApplyParams {
+	return &task.ConfigApplyParams{
+		Mode:      string(seiconfig.ModeValidator),
+		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
+	}
 }

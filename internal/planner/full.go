@@ -27,15 +27,25 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	fn := node.Spec.FullNode
-	params := &task.ConfigApplyParams{
-		Mode:      string(seiconfig.ModeFull),
-		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
+	if NeedsNodeUpdate(node) {
+		return buildNodeUpdatePlan(node, p.configApplyParams(node))
 	}
+	if node.Status.Phase != "" && node.Status.Phase != seiv1alpha1.PhasePending {
+		return nil, nil
+	}
+	fn := node.Spec.FullNode
+	params := p.configApplyParams(node)
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, fn.Snapshot, params)
 	}
 	return buildBasePlan(node, node.Spec.Peers, fn.Snapshot, params)
+}
+
+func (p *fullNodePlanner) configApplyParams(node *seiv1alpha1.SeiNode) *task.ConfigApplyParams {
+	return &task.ConfigApplyParams{
+		Mode:      string(seiconfig.ModeFull),
+		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
+	}
 }
 
 func (p *fullNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {

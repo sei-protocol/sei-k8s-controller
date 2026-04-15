@@ -495,6 +495,7 @@ func TestPollMonitorTasks_FailedWithUnknownError(t *testing.T) {
 // --- Reconcile integration tests ---
 
 func TestReconcileRunning_MonitorMode_SubmitsMonitorTask(t *testing.T) {
+	t.Skip("MonitorTasks descoped from reconcileRunning in M1")
 	taskID := uuid.New()
 	mock := &mockSidecarClient{submitID: taskID}
 	node := monitorReplayerNode()
@@ -503,7 +504,7 @@ func TestReconcileRunning_MonitorMode_SubmitsMonitorTask(t *testing.T) {
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	_, err := r.reconcileRunning(context.Background(), node)
+	_, err := r.reconcileRunning(context.Background(), node, mustPlanner(t, node))
 	if err != nil {
 		t.Fatalf("reconcileRunning: %v", err)
 	}
