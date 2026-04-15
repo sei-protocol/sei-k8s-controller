@@ -155,18 +155,45 @@ func plannerForMode(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
 	}
 }
 
-// insertBefore inserts task into prog immediately before target, unless task
-// is already present.
-func insertBefore(prog []string, target, taskType string) []string {
+// insertBefore inserts taskType into prog immediately before target.
+// Returns an error if the target is not found — this catches plan
+// construction bugs rather than producing silently incomplete plans.
+// No-op if taskType is already present.
+func insertBefore(prog []string, target, taskType string) ([]string, error) {
 	if slices.Contains(prog, taskType) {
-		return prog
+		return prog, nil
 	}
 	for i, t := range prog {
 		if t == target {
-			return slices.Insert(prog, i, taskType)
+			return slices.Insert(prog, i, taskType), nil
 		}
 	}
-	return prog
+	return nil, fmt.Errorf("insertBefore: target %q not found in progression %v", target, prog)
+}
+
+// buildSidecarProgression constructs the sidecar task sequence for the given
+// bootstrap mode, inserting optional tasks (genesis, peers, state-sync) at
+// the correct positions. Used by both buildBasePlan and buildBootstrapPlan
+// to ensure they produce consistent sidecar progressions.
+func buildSidecarProgression(snap *seiv1alpha1.SnapshotSource, peers []seiv1alpha1.PeerSource) ([]string, error) {
+	mode := bootstrapMode(snap)
+	prog := slices.Clone(baseProgression[mode])
+
+	var err error
+	if prog, err = insertBefore(prog, TaskConfigApply, TaskConfigureGenesis); err != nil {
+		return nil, err
+	}
+	if len(peers) > 0 {
+		if prog, err = insertBefore(prog, TaskConfigValidate, TaskDiscoverPeers); err != nil {
+			return nil, err
+		}
+	}
+	if snap != nil {
+		if prog, err = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync); err != nil {
+			return nil, err
+		}
+	}
+	return prog, nil
 }
 
 // NeedsBootstrap returns true when the node requires a bootstrap Job to
@@ -260,15 +287,9 @@ func buildBasePlan(
 	snap *seiv1alpha1.SnapshotSource,
 	configApplyParams *task.ConfigApplyParams,
 ) (*seiv1alpha1.TaskPlan, error) {
-	mode := bootstrapMode(snap)
-	sidecarProg := slices.Clone(baseProgression[mode])
-
-	sidecarProg = insertBefore(sidecarProg, TaskConfigApply, TaskConfigureGenesis)
-	if len(peers) > 0 {
-		sidecarProg = insertBefore(sidecarProg, TaskConfigValidate, TaskDiscoverPeers)
-	}
-	if snap != nil {
-		sidecarProg = insertBefore(sidecarProg, TaskConfigValidate, TaskConfigureStateSync)
+	sidecarProg, err := buildSidecarProgression(snap, peers)
+	if err != nil {
+		return nil, err
 	}
 
 	// Infrastructure tasks run before sidecar tasks.

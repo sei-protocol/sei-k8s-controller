@@ -1,8 +1,6 @@
 package planner
 
 import (
-	"slices"
-
 	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
@@ -28,7 +26,10 @@ func buildBootstrapPlan(
 	jobName := task.BootstrapJobName(node)
 	serviceName := node.Name
 
-	bootstrapProg := buildBootstrapProgression(peers, snap)
+	bootstrapProg, err := buildBootstrapProgression(peers, snap)
+	if err != nil {
+		return nil, err
+	}
 	postProg := buildPostBootstrapProgression(peers)
 	tasks := make([]seiv1alpha1.PlannedTask, 0, 2+len(bootstrapProg)+2+len(postProg))
 
@@ -102,20 +103,10 @@ func buildBootstrapPlan(
 }
 
 // buildBootstrapProgression returns the sidecar task sequence for the
-// bootstrap Job phase (everything except mark-ready).
-func buildBootstrapProgression(peers []seiv1alpha1.PeerSource, snap *seiv1alpha1.SnapshotSource) []string {
-	mode := bootstrapMode(snap)
-	prog := slices.Clone(baseProgression[mode])
-
-	prog = insertBefore(prog, TaskConfigApply, TaskConfigureGenesis)
-	if len(peers) > 0 {
-		prog = insertBefore(prog, TaskConfigValidate, TaskDiscoverPeers)
-	}
-	if snap != nil {
-		prog = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync)
-	}
-
-	return prog
+// bootstrap Job phase. Uses the shared buildSidecarProgression to ensure
+// consistency with buildBasePlan's sidecar task ordering.
+func buildBootstrapProgression(peers []seiv1alpha1.PeerSource, snap *seiv1alpha1.SnapshotSource) ([]string, error) {
+	return buildSidecarProgression(snap, peers)
 }
 
 // buildPostBootstrapProgression returns the sidecar task sequence for the
