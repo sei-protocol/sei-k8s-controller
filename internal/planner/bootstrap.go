@@ -173,17 +173,7 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		var params any
-		switch taskType {
-		case task.TaskTypeEnsureDataPVC:
-			params = &task.EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace}
-		case task.TaskTypeApplyStatefulSet:
-			params = &task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}
-		case task.TaskTypeApplyService:
-			params = &task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}
-		default:
-			params = genesisParamsForTaskType(node, gc, taskType)
-		}
+		params := genesisParamsForTaskType(node, gc, taskType)
 		t, err := buildPlannedTask(planID, taskType, i, params)
 		if err != nil {
 			return nil, err
@@ -203,6 +193,7 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 }
 
 func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.GenesisCeremonyNodeConfig, taskType string) any {
+	// Genesis-specific tasks.
 	switch taskType {
 	case TaskGenerateIdentity:
 		return &task.GenerateIdentityParams{
@@ -220,22 +211,16 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 		return &task.UploadGenesisArtifactsParams{
 			NodeName: node.Name,
 		}
-	case TaskConfigureGenesis:
-		return &task.ConfigureGenesisParams{}
+	case TaskSetGenesisPeers:
+		return &task.SetGenesisPeersParams{}
 	case TaskConfigApply:
 		return &task.ConfigApplyParams{
 			Mode:      string(seiconfig.ModeValidator),
 			Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
 		}
-	case TaskSetGenesisPeers:
-		return &task.SetGenesisPeersParams{}
-	case TaskConfigValidate:
-		return &task.ConfigValidateParams{}
-	case TaskMarkReady:
-		return &task.MarkReadyParams{}
-	default:
-		return nil
 	}
+	// Shared tasks (infrastructure + common sidecar tasks).
+	return paramsForTaskType(node, taskType, nil, nil)
 }
 
 // SnapshotUploadMonitorTask returns a snapshot-upload TaskRequest if applicable.

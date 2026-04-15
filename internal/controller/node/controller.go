@@ -92,7 +92,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Resolve or resume plan. ResolvePlan either resumes an active plan or
 	// builds a new one based on the node's phase, stamping it onto
 	// node.Status.Plan (and transitioning Pending → Initializing).
-	prevPhase := node.Status.Phase
+	observedPhase := node.Status.Phase
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
 	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	if err := planner.ResolvePlan(node); err != nil {
@@ -119,12 +119,12 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Emit metrics/events if the phase changed.
-	if node.Status.Phase != prevPhase {
+	if node.Status.Phase != observedPhase {
 		ns, name := node.Namespace, node.Name
-		nodePhaseTransitions.WithLabelValues(ns, string(prevPhase), string(node.Status.Phase)).Inc()
+		nodePhaseTransitions.WithLabelValues(ns, string(observedPhase), string(node.Status.Phase)).Inc()
 		emitNodePhase(ns, name, node.Status.Phase)
 		r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
-			"Phase changed from %s to %s", prevPhase, node.Status.Phase)
+			"Phase changed from %s to %s", observedPhase, node.Status.Phase)
 
 		if node.Status.Phase == seiv1alpha1.PhaseRunning {
 			dur := time.Since(node.CreationTimestamp.Time).Seconds()
