@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -85,14 +86,18 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("validating spec: %w", err)
 	}
 
+	// TODO: reconcile peers should become a part of a plan if it needs to be performed.
 	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
 
+	// TODO: this should be a part of a plan and not part of the main reconciliation flow.
 	if err := r.ensureNodeDataPVC(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensuring data PVC: %w", err)
 	}
 
+	// TODO: if the plan becomes the abstraction it should be, then p from planner.ForNode should just take an existing
+	// plan off the node if one exists, otherwise, create one based on the state it sees.
 	switch node.Status.Phase {
 	case "", seiv1alpha1.PhasePending:
 		return r.reconcilePending(ctx, node, p)
@@ -143,6 +148,8 @@ func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alp
 func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
 	plan := node.Status.Plan
 
+	// TODO: This should be a part of the plan, not a special case we need to filter out for the reconciliation before we
+	// go ahead with the actual plan.
 	if !planner.NeedsBootstrap(node) || planner.IsBootstrapComplete(plan) {
 		if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
 			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
@@ -157,6 +164,9 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 		return result, err
 	}
 
+	// TODO: transitioning should be a part of ExecutePlan, I would think. This way, when a plan is done, it has materialized
+	// the proper state and does some final patch to the node, basically leaving it in a state that other logic can observe and
+	// act on as well. For instance, if a plan succeeds, the plan knows what state to put it in. Same for if it fails.
 	if plan.Phase == seiv1alpha1.TaskPlanComplete {
 		return r.transitionPhase(ctx, node, seiv1alpha1.PhaseRunning)
 	}
@@ -168,9 +178,12 @@ func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *sei
 
 // reconcileRunning converges owned resources and handles runtime tasks.
 func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+
+	// TODO: ideally this becomes a task in a plan
 	if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
 	}
+	// TODO: ideally this becomes a task in a plan
 	if err := r.reconcileNodeService(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
 	}
@@ -286,7 +299,7 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 
 func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	pvc := &corev1.PersistentVolumeClaim{}
-	err := r.Get(ctx, types.NamespacedName{Name: nodeDataPVCName(node), Namespace: node.Namespace}, pvc)
+	err := r.Get(ctx, types.NamespacedName{Name: noderesource.DataPVCName(node), Namespace: node.Namespace}, pvc)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
@@ -297,7 +310,7 @@ func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1al
 }
 
 func (r *SeiNodeReconciler) ensureNodeDataPVC(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	desired := generateNodeDataPVC(node, r.Platform)
+	desired := noderesource.GenerateDataPVC(node, r.Platform)
 	if err := ctrl.SetControllerReference(node, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
@@ -311,7 +324,7 @@ func (r *SeiNodeReconciler) ensureNodeDataPVC(ctx context.Context, node *seiv1al
 }
 
 func (r *SeiNodeReconciler) reconcileNodeStatefulSet(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	desired := generateNodeStatefulSet(node, r.Platform)
+	desired := noderesource.GenerateStatefulSet(node, r.Platform)
 	desired.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
 	if err := ctrl.SetControllerReference(node, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
@@ -321,7 +334,7 @@ func (r *SeiNodeReconciler) reconcileNodeStatefulSet(ctx context.Context, node *
 }
 
 func (r *SeiNodeReconciler) reconcileNodeService(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	desired := generateNodeHeadlessService(node)
+	desired := noderesource.GenerateHeadlessService(node)
 	desired.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
 	if err := ctrl.SetControllerReference(node, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)

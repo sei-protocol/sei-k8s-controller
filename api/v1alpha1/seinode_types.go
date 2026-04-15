@@ -159,8 +159,8 @@ type FailedTaskInfo struct {
 	MaxRetries int `json:"maxRetries"`
 }
 
-// TaskPlan tracks an ordered sequence of sidecar tasks that the controller
-// executes to initialize a node.
+// TaskPlan tracks an ordered sequence of tasks that the controller
+// executes to drive a node toward a target state.
 type TaskPlan struct {
 	// ID is a unique identifier for this plan instance.
 	// +optional
@@ -171,6 +171,18 @@ type TaskPlan struct {
 
 	// Tasks is the ordered list of tasks to execute.
 	Tasks []PlannedTask `json:"tasks"`
+
+	// TargetPhase is the SeiNodePhase the executor sets on the owning
+	// resource when the plan completes successfully. When empty, the
+	// executor does not perform a phase transition.
+	// +optional
+	TargetPhase SeiNodePhase `json:"targetPhase,omitempty"`
+
+	// FailedPhase is the SeiNodePhase the executor sets on the owning
+	// resource when the plan fails terminally. When empty, the executor
+	// does not perform a phase transition on failure.
+	// +optional
+	FailedPhase SeiNodePhase `json:"failedPhase,omitempty"`
 
 	// FailedTaskIndex is the index of the task that caused the plan to fail.
 	// +optional

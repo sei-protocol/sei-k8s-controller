@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -194,7 +195,7 @@ func TestNodeReconcile_RunningPhase_UpdatesStatefulSetImage(t *testing.T) {
 	node.Status.Phase = seiv1alpha1.PhaseRunning
 
 	// Pre-create a StatefulSet with the old image.
-	oldSts := generateNodeStatefulSet(node, platformtest.Config())
+	oldSts := noderesource.GenerateStatefulSet(node, platformtest.Config())
 	oldSts.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
 
 	r, c := newNodeReconciler(t, node, oldSts)
@@ -500,7 +501,7 @@ func TestNodeDeletion_SnapshotNode_WithoutRetain_DeletesPVC(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "data-snap-0",
 			Namespace: "default",
-			Labels:    resourceLabelsForNode(node),
+			Labels:    noderesource.ResourceLabels(node),
 		},
 	}
 

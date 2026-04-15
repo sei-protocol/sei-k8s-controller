@@ -29,6 +29,12 @@ type PlanExecutor[T client.Object] interface {
 	ExecutePlan(ctx context.Context, obj T, plan *seiv1alpha1.TaskPlan) (ctrl.Result, error)
 }
 
+// PhaseTransition records a phase change triggered by plan completion or failure.
+type PhaseTransition struct {
+	PrevPhase string
+	NewPhase  string
+}
+
 // Executor[T] is the concrete implementation of PlanExecutor. It is stateless
 // per reconcile — each call re-deserializes the current task from the plan's
 // embedded params and calls Status/Execute.
@@ -37,9 +43,15 @@ type PlanExecutor[T client.Object] interface {
 // resource. This is where the sidecar client, kube client, and other
 // dependencies are resolved per-reconcile. The context is forwarded from
 // the reconcile call in case the factory needs to make API calls.
+//
+// OnPlanComplete and OnPlanFailed are optional callbacks invoked after the
+// status patch succeeds. They allow the caller to emit metrics or events
+// without coupling the executor to resource-specific concerns.
 type Executor[T client.Object] struct {
-	Client    client.Client
-	ConfigFor func(ctx context.Context, obj T) task.ExecutionConfig
+	Client         client.Client
+	ConfigFor      func(ctx context.Context, obj T) task.ExecutionConfig
+	OnPlanComplete func(ctx context.Context, obj T, transition *PhaseTransition)
+	OnPlanFailed   func(ctx context.Context, obj T, transition *PhaseTransition)
 }
 
 // needsSubmission reports whether the task should be submitted (or resubmitted)
@@ -77,7 +89,25 @@ func (e *Executor[T]) ExecutePlan(
 	}
 
 	cfg := e.ConfigFor(ctx, obj)
-	return executePlan(ctx, e.Client, obj, plan, cfg)
+	callbacks := planCallbacks{
+		onComplete: func(ctx context.Context, transition *PhaseTransition) {
+			if e.OnPlanComplete != nil {
+				e.OnPlanComplete(ctx, obj, transition)
+			}
+		},
+		onFailed: func(ctx context.Context, transition *PhaseTransition) {
+			if e.OnPlanFailed != nil {
+				e.OnPlanFailed(ctx, obj, transition)
+			}
+		},
+	}
+	return executePlan(ctx, e.Client, obj, plan, cfg, callbacks)
+}
+
+// planCallbacks are optional hooks invoked after plan-terminal status patches.
+type planCallbacks struct {
+	onComplete func(ctx context.Context, transition *PhaseTransition)
+	onFailed   func(ctx context.Context, transition *PhaseTransition)
 }
 
 // executePlan is the core plan execution loop. It deserializes the current
@@ -88,6 +118,7 @@ func executePlan(
 	obj client.Object,
 	plan *seiv1alpha1.TaskPlan,
 	cfg task.ExecutionConfig,
+	cb planCallbacks,
 ) (ctrl.Result, error) {
 	cn := controllerName(obj)
 
@@ -101,12 +132,18 @@ func executePlan(
 
 	t := CurrentTask(plan)
 	if t == nil {
+		transition := applyTargetPhase(obj, plan)
 		patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 		plan.Phase = seiv1alpha1.TaskPlanComplete
+		applyPhaseToStatus(obj, transition)
+		nilPlanIfConvergence(obj, plan, transition)
 		if err := kc.Status().Patch(ctx, obj, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
 		}
 		planActive.WithLabelValues(cn, obj.GetNamespace(), obj.GetName()).Set(0)
+		if cb.onComplete != nil {
+			cb.onComplete(ctx, transition)
+		}
 		return ResultRequeueImmediate, nil
 	}
 
@@ -117,14 +154,14 @@ func executePlan(
 
 	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, cfg)
 	if err != nil {
-		return failTask(ctx, kc, obj, cn, plan, t, err.Error())
+		return failTask(ctx, kc, obj, cn, plan, t, err.Error(), cb)
 	}
 
 	if needsSubmission(t) {
 		if err := exec.Execute(ctx); err != nil {
 			var termErr *task.TerminalError
 			if errors.As(err, &termErr) {
-				return failTask(ctx, kc, obj, cn, plan, t, err.Error())
+				return failTask(ctx, kc, obj, cn, plan, t, err.Error(), cb)
 			}
 			log.FromContext(ctx).Info("task execution failed, will retry",
 				"task", t.Type, "error", err)
@@ -170,7 +207,7 @@ func executePlan(
 			}
 			return ctrl.Result{RequeueAfter: retryBackoff(t.RetryCount)}, nil
 		}
-		return failTask(ctx, kc, obj, cn, plan, t, errMsg)
+		return failTask(ctx, kc, obj, cn, plan, t, errMsg, cb)
 
 	default:
 		return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
@@ -186,15 +223,18 @@ func failTask(
 	plan *seiv1alpha1.TaskPlan,
 	t *seiv1alpha1.PlannedTask,
 	errMsg string,
+	cb planCallbacks,
 ) (ctrl.Result, error) {
 	log.FromContext(ctx).Error(fmt.Errorf("task failed: %s", errMsg), "task plan failed", "task", t.Type)
 
 	taskFailuresTotal.WithLabelValues(controller, obj.GetNamespace(), t.Type).Inc()
 
+	transition := applyFailedPhase(obj, plan)
 	patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 	t.Status = seiv1alpha1.TaskFailed
 	t.Error = errMsg
 	plan.Phase = seiv1alpha1.TaskPlanFailed
+	applyPhaseToStatus(obj, transition)
 	for i := range plan.Tasks {
 		if plan.Tasks[i].ID == t.ID {
 			plan.FailedTaskIndex = &i
@@ -212,6 +252,9 @@ func failTask(
 		return ctrl.Result{}, fmt.Errorf("marking task failed: %w", err)
 	}
 	planActive.WithLabelValues(controller, obj.GetNamespace(), obj.GetName()).Set(0)
+	if cb.onFailed != nil {
+		cb.onFailed(ctx, transition)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -222,4 +265,56 @@ func retryBackoff(attempt int) time.Duration {
 		return maxRetryBackoff
 	}
 	return d
+}
+
+// applyTargetPhase builds a PhaseTransition from the plan's TargetPhase.
+// Returns nil if no transition is needed.
+func applyTargetPhase(obj client.Object, plan *seiv1alpha1.TaskPlan) *PhaseTransition {
+	if plan.TargetPhase == "" {
+		return nil
+	}
+	node, ok := obj.(*seiv1alpha1.SeiNode)
+	if !ok {
+		return nil
+	}
+	prev := string(node.Status.Phase)
+	return &PhaseTransition{PrevPhase: prev, NewPhase: string(plan.TargetPhase)}
+}
+
+// applyFailedPhase builds a PhaseTransition from the plan's FailedPhase.
+// Returns nil if no transition is needed.
+func applyFailedPhase(obj client.Object, plan *seiv1alpha1.TaskPlan) *PhaseTransition {
+	if plan.FailedPhase == "" {
+		return nil
+	}
+	node, ok := obj.(*seiv1alpha1.SeiNode)
+	if !ok {
+		return nil
+	}
+	prev := string(node.Status.Phase)
+	return &PhaseTransition{PrevPhase: prev, NewPhase: string(plan.FailedPhase)}
+}
+
+// applyPhaseToStatus sets the node's phase if a transition was determined.
+func applyPhaseToStatus(obj client.Object, transition *PhaseTransition) {
+	if transition == nil {
+		return
+	}
+	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
+		node.Status.Phase = seiv1alpha1.SeiNodePhase(transition.NewPhase)
+	}
+}
+
+// nilPlanIfConvergence nils the plan on the object's status when the completed
+// plan's target phase matches the current phase (convergence — the node stays
+// in the same phase). This avoids dead plan data in etcd between reconciles.
+func nilPlanIfConvergence(obj client.Object, _ *seiv1alpha1.TaskPlan, transition *PhaseTransition) {
+	if transition == nil {
+		return
+	}
+	if transition.PrevPhase == transition.NewPhase {
+		if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
+			node.Status.Plan = nil
+		}
+	}
 }
