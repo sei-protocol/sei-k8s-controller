@@ -155,7 +155,10 @@ const genesisConfigureMaxRetries = 180
 // uploaded genesis.json to S3.
 func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	gc := node.Spec.Validator.GenesisCeremony
-	planID := uuid.New().String()
+	configApplyParams := &task.ConfigApplyParams{
+		Mode:      string(seiconfig.ModeValidator),
+		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
+	}
 
 	prog := []string{
 		task.TaskTypeEnsureDataPVC,
@@ -171,9 +174,15 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		TaskMarkReady,
 	}
 
+	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		params := genesisParamsForTaskType(node, gc, taskType)
+		// Use the ceremony-specific factory for genesis tasks,
+		// fall through to the shared factory for everything else.
+		params := genesisCeremonyParams(node, gc, taskType)
+		if params == nil {
+			params = paramsForTaskType(node, taskType, nil, configApplyParams)
+		}
 		t, err := buildPlannedTask(planID, taskType, i, params)
 		if err != nil {
 			return nil, err
@@ -192,8 +201,9 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 	}, nil
 }
 
-func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.GenesisCeremonyNodeConfig, taskType string) any {
-	// Genesis-specific tasks.
+// genesisCeremonyParams returns params for genesis-ceremony-specific tasks,
+// or nil for tasks handled by the shared paramsForTaskType factory.
+func genesisCeremonyParams(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.GenesisCeremonyNodeConfig, taskType string) any {
 	switch taskType {
 	case TaskGenerateIdentity:
 		return &task.GenerateIdentityParams{
@@ -213,14 +223,9 @@ func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.Genesis
 		}
 	case TaskSetGenesisPeers:
 		return &task.SetGenesisPeersParams{}
-	case TaskConfigApply:
-		return &task.ConfigApplyParams{
-			Mode:      string(seiconfig.ModeValidator),
-			Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
-		}
+	default:
+		return nil
 	}
-	// Shared tasks (infrastructure + common sidecar tasks).
-	return paramsForTaskType(node, taskType, nil, nil)
 }
 
 // SnapshotUploadMonitorTask returns a snapshot-upload TaskRequest if applicable.
