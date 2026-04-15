@@ -103,8 +103,10 @@ func TestNodeReconcile_ValidatorNode_CreateStatefulSetAndService(t *testing.T) {
 	node := newGenesisNode("mynet-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	// Drive through Pending -> Initializing.
-	for range 4 {
+	// Drive through Pending -> Initializing -> infrastructure tasks.
+	// Plan: ensure-data-pvc, apply-statefulset, apply-service, then sidecar tasks.
+	// Each reconcile drives one step forward.
+	for range 8 {
 		_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())
 	}
@@ -140,8 +142,8 @@ func TestNodeReconcile_StatefulSet_Idempotent(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	// Drive through Pending -> Initializing, then one more for idempotency.
-	for range 5 {
+	// Drive through Pending -> Initializing -> infrastructure tasks, then one more for idempotency.
+	for range 8 {
 		_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())
 	}
@@ -158,8 +160,11 @@ func TestNodeReconcile_SnapshotNode_CreatesPVC(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
-	g.Expect(err).NotTo(HaveOccurred())
+	// Reconcile 1: finalizer + build plan. Reconcile 2: execute ensure-data-pvc.
+	for range 3 {
+		_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
+		g.Expect(err).NotTo(HaveOccurred())
+	}
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	g.Expect(c.Get(ctx, types.NamespacedName{Name: "data-snap-0", Namespace: "default"}, pvc)).To(Succeed())
@@ -173,8 +178,8 @@ func TestNodeReconcile_SnapshotNode_StatefulSetHasInitContainers(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	r, c := newNodeReconciler(t, node)
 
-	// Drive through Pending -> Initializing.
-	for range 4 {
+	// Drive through Pending -> Initializing -> infrastructure tasks.
+	for range 8 {
 		_, err := r.Reconcile(ctx, nodeReqFor("snap-0", "default"))
 		g.Expect(err).NotTo(HaveOccurred())
 	}
@@ -211,9 +216,11 @@ func TestNodeReconcile_RunningPhase_UpdatesStatefulSetImage(t *testing.T) {
 	node.Spec.Image = testImageV2
 	g.Expect(c.Update(ctx, node)).To(Succeed())
 
-	// Reconcile — this enters reconcileRunning which should update the StatefulSet.
-	_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
-	g.Expect(err).NotTo(HaveOccurred())
+	// Reconcile — this builds a convergence plan and drives apply-statefulset.
+	for range 4 {
+		_, err := r.Reconcile(ctx, nodeReqFor("mynet-0", "default"))
+		g.Expect(err).NotTo(HaveOccurred())
+	}
 
 	// StatefulSet should now reflect the new image.
 	g.Expect(c.Get(ctx, types.NamespacedName{Name: "mynet-0", Namespace: "default"}, sts)).To(Succeed())

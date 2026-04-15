@@ -42,6 +42,12 @@ func buildBootstrapPlan(
 		return nil
 	}
 
+	// Phase 0: Ensure the data PVC exists (needed by both bootstrap Job and StatefulSet)
+	if err := appendTask(task.TaskTypeEnsureDataPVC,
+		&task.EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
+
 	// Phase 1: Deploy bootstrap infrastructure
 	if err := appendTask(task.TaskTypeDeployBootstrapSvc,
 		&task.DeployBootstrapServiceParams{ServiceName: serviceName, Namespace: node.Namespace}); err != nil {
@@ -69,14 +75,30 @@ func buildBootstrapPlan(
 		return nil, err
 	}
 
-	// Phase 4: Post-bootstrap config on StatefulSet pod
+	// Phase 4: Create production StatefulSet and Service (after bootstrap teardown frees the PVC)
+	if err := appendTask(task.TaskTypeApplyStatefulSet,
+		&task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
+	if err := appendTask(task.TaskTypeApplyService,
+		&task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
+
+	// Phase 5: Post-bootstrap config on StatefulSet pod
 	for _, taskType := range postProg {
 		if err := appendTask(taskType, paramsForTaskType(node, taskType, nil, configApplyParams)); err != nil {
 			return nil, err
 		}
 	}
 
-	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
+	return &seiv1alpha1.TaskPlan{
+		ID:          planID,
+		Phase:       seiv1alpha1.TaskPlanActive,
+		Tasks:       tasks,
+		TargetPhase: seiv1alpha1.PhaseRunning,
+		FailedPhase: seiv1alpha1.PhaseFailed,
+	}, nil
 }
 
 // buildBootstrapProgression returns the sidecar task sequence for the
@@ -136,6 +158,9 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 	planID := uuid.New().String()
 
 	prog := []string{
+		task.TaskTypeEnsureDataPVC,
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
 		TaskGenerateIdentity,
 		TaskGenerateGentx,
 		TaskUploadGenesisArtifacts,
@@ -148,7 +173,18 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(planID, taskType, i, genesisParamsForTaskType(node, gc, taskType))
+		var params any
+		switch taskType {
+		case task.TaskTypeEnsureDataPVC:
+			params = &task.EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace}
+		case task.TaskTypeApplyStatefulSet:
+			params = &task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}
+		case task.TaskTypeApplyService:
+			params = &task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}
+		default:
+			params = genesisParamsForTaskType(node, gc, taskType)
+		}
+		t, err := buildPlannedTask(planID, taskType, i, params)
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +193,13 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		}
 		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
+	return &seiv1alpha1.TaskPlan{
+		ID:          planID,
+		Phase:       seiv1alpha1.TaskPlanActive,
+		Tasks:       tasks,
+		TargetPhase: seiv1alpha1.PhaseRunning,
+		FailedPhase: seiv1alpha1.PhaseFailed,
+	}, nil
 }
 
 func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.GenesisCeremonyNodeConfig, taskType string) any {

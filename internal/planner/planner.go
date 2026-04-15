@@ -102,9 +102,40 @@ func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 	return false
 }
 
-// ForNode returns the appropriate NodePlanner based on which mode sub-spec
-// is populated on the SeiNode.
-func ForNode(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
+// ForNode ensures node.Status.Plan is set and ready for execution.
+// If an active plan exists, it is left in place (resume). Otherwise a
+// new plan is built from the node's current phase and spec.
+func ForNode(node *seiv1alpha1.SeiNode) error {
+	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
+		return nil
+	}
+
+	p, err := plannerForMode(node)
+	if err != nil {
+		return err
+	}
+	if err := p.Validate(node); err != nil {
+		return err
+	}
+
+	plan, err := p.BuildPlan(node)
+	if err != nil {
+		return err
+	}
+	if plan == nil {
+		return nil
+	}
+
+	node.Status.Plan = plan
+	if node.Status.Phase == "" || node.Status.Phase == seiv1alpha1.PhasePending {
+		node.Status.Phase = seiv1alpha1.PhaseInitializing
+	}
+	return nil
+}
+
+// plannerForMode returns the appropriate NodePlanner based on which mode
+// sub-spec is populated on the SeiNode.
+func plannerForMode(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
 	switch {
 	case node.Spec.FullNode != nil:
 		return &fullNodePlanner{}, nil
@@ -233,8 +264,8 @@ func buildPlannedTask(planID, taskType string, planIndex int, params any) (seiv1
 	}, nil
 }
 
-// buildBasePlan builds a TaskPlan by starting with the base progression for the
-// node's bootstrap mode and inserting optional tasks.
+// buildBasePlan builds a TaskPlan by starting with infrastructure tasks,
+// then the base sidecar progression for the node's bootstrap mode.
 func buildBasePlan(
 	node *seiv1alpha1.SeiNode,
 	peers []seiv1alpha1.PeerSource,
@@ -242,15 +273,20 @@ func buildBasePlan(
 	configApplyParams *task.ConfigApplyParams,
 ) (*seiv1alpha1.TaskPlan, error) {
 	mode := bootstrapMode(snap)
-	prog := slices.Clone(baseProgression[mode])
+	sidecarProg := slices.Clone(baseProgression[mode])
 
-	prog = insertBefore(prog, TaskConfigApply, TaskConfigureGenesis)
+	sidecarProg = insertBefore(sidecarProg, TaskConfigApply, TaskConfigureGenesis)
 	if len(peers) > 0 {
-		prog = insertBefore(prog, TaskConfigValidate, TaskDiscoverPeers)
+		sidecarProg = insertBefore(sidecarProg, TaskConfigValidate, TaskDiscoverPeers)
 	}
 	if snap != nil {
-		prog = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync)
+		sidecarProg = insertBefore(sidecarProg, TaskConfigValidate, TaskConfigureStateSync)
 	}
+
+	// Infrastructure tasks run before sidecar tasks.
+	prog := make([]string, 0, 3+len(sidecarProg))
+	prog = append(prog, task.TaskTypeEnsureDataPVC, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
+	prog = append(prog, sidecarProg...)
 
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
@@ -262,9 +298,11 @@ func buildBasePlan(
 		tasks[i] = t
 	}
 	return &seiv1alpha1.TaskPlan{
-		ID:    planID,
-		Phase: seiv1alpha1.TaskPlanActive,
-		Tasks: tasks,
+		ID:          planID,
+		Phase:       seiv1alpha1.TaskPlanActive,
+		Tasks:       tasks,
+		TargetPhase: seiv1alpha1.PhaseRunning,
+		FailedPhase: seiv1alpha1.PhaseFailed,
 	}, nil
 }
 
@@ -276,6 +314,12 @@ func paramsForTaskType(
 	configApplyParams *task.ConfigApplyParams,
 ) any {
 	switch taskType {
+	case task.TaskTypeEnsureDataPVC:
+		return &task.EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace}
+	case task.TaskTypeApplyStatefulSet:
+		return &task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}
+	case task.TaskTypeApplyService:
+		return &task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}
 	case TaskSnapshotRestore:
 		return snapshotRestoreParams(snap)
 	case TaskConfigureGenesis:
@@ -361,6 +405,28 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	return map[string]string{
 		seiconfig.KeyP2PExternalAddress: node.Status.ExternalAddress,
 	}
+}
+
+// buildRunningPlan builds a convergence plan for a Running node.
+// It ensures the StatefulSet and Service match the current spec.
+func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	prog := []string{task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService}
+
+	planID := uuid.New().String()
+	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
+	for i, taskType := range prog {
+		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, nil))
+		if err != nil {
+			return nil, err
+		}
+		tasks[i] = t
+	}
+	return &seiv1alpha1.TaskPlan{
+		ID:          planID,
+		Phase:       seiv1alpha1.TaskPlanActive,
+		Tasks:       tasks,
+		TargetPhase: seiv1alpha1.PhaseRunning,
+	}, nil
 }
 
 // mergeOverrides combines controller-generated overrides with user-specified

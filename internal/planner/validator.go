@@ -36,6 +36,9 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 }
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if node.Status.Phase == seiv1alpha1.PhaseRunning {
+		return buildRunningPlan(node)
+	}
 	if isGenesisCeremonyNode(node) {
 		return buildGenesisPlan(node)
 	}

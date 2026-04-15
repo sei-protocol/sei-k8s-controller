@@ -30,7 +30,6 @@ const (
 	nodeFinalizerName     = "sei.io/seinode-finalizer"
 	seiNodeControllerName = "seinode"
 	statusPollInterval    = 30 * time.Second
-	fieldOwner            = client.FieldOwner("seinode-controller")
 )
 
 // PlatformConfig is an alias for platform.Config, used throughout the node
@@ -78,116 +77,74 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	p, err := planner.ForNode(node)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("resolving planner: %w", err)
-	}
-	if err := p.Validate(node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("validating spec: %w", err)
+	// Failed is terminal — nothing to do.
+	if node.Status.Phase == seiv1alpha1.PhaseFailed {
+		r.Recorder.Eventf(node, corev1.EventTypeWarning, "NodeFailed",
+			"SeiNode is in Failed state. Delete and recreate the resource to retry.")
+		return ctrl.Result{}, nil
 	}
 
-	// TODO: reconcile peers should become a part of a plan if it needs to be performed.
+	// Pre-plan: resolve label-based peers so plan params have fresh data.
 	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
 
-	// TODO: this should be a part of a plan and not part of the main reconciliation flow.
-	if err := r.ensureNodeDataPVC(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("ensuring data PVC: %w", err)
-	}
-
-	// TODO: if the plan becomes the abstraction it should be, then p from planner.ForNode should just take an existing
-	// plan off the node if one exists, otherwise, create one based on the state it sees.
-	switch node.Status.Phase {
-	case "", seiv1alpha1.PhasePending:
-		return r.reconcilePending(ctx, node, p)
-	case seiv1alpha1.PhaseInitializing:
-		return r.reconcileInitializing(ctx, node)
-	case seiv1alpha1.PhaseRunning:
-		return r.reconcileRunning(ctx, node)
-	case seiv1alpha1.PhaseFailed:
-		r.Recorder.Eventf(node, corev1.EventTypeWarning, "NodeFailed",
-			"SeiNode is in Failed state. Delete and recreate the resource to retry.")
-		return ctrl.Result{}, nil
-	default:
-		return ctrl.Result{}, nil
-	}
-}
-
-// reconcilePending builds the unified Plan and transitions to Initializing.
-// For genesis ceremony nodes the plan includes artifact generation and assembly
-// steps. For bootstrap nodes the plan includes controller-side Job lifecycle
-// tasks followed by production config. All orchestration lives in the plan.
-func (r *SeiNodeReconciler) reconcilePending(ctx context.Context, node *seiv1alpha1.SeiNode, p planner.NodePlanner) (ctrl.Result, error) {
+	// Resolve or resume plan. ForNode either resumes an active plan or
+	// builds a new one based on the node's phase, stamping it onto
+	// node.Status.Plan (and transitioning Pending → Initializing).
+	prevPhase := node.Status.Phase
+	hadPlan := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
 	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
-
-	plan, err := p.BuildPlan(node)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("building plan: %w", err)
-	}
-	node.Status.Plan = plan
-	node.Status.Phase = seiv1alpha1.PhaseInitializing
-
-	if err := r.Status().Patch(ctx, node, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("initializing plans: %w", err)
+	if err := planner.ForNode(node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
 
-	ns, name := node.Namespace, node.Name
-	nodePhaseTransitions.WithLabelValues(ns, string(seiv1alpha1.PhasePending), string(seiv1alpha1.PhaseInitializing)).Inc()
-	emitNodePhase(ns, name, seiv1alpha1.PhaseInitializing)
-	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
-		"Phase changed from %s to %s", seiv1alpha1.PhasePending, seiv1alpha1.PhaseInitializing)
+	if node.Status.Plan == nil {
+		return ctrl.Result{}, nil
+	}
 
-	return planner.ResultRequeueImmediate, nil
-}
-
-// reconcileInitializing drives the unified Plan to completion. For
-// bootstrap nodes the StatefulSet and Service are created only after
-// bootstrap teardown is complete (to avoid RWO PVC conflicts). For
-// non-bootstrap nodes they are created immediately.
-func (r *SeiNodeReconciler) reconcileInitializing(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
-	plan := node.Status.Plan
-
-	// TODO: This should be a part of the plan, not a special case we need to filter out for the reconciliation before we
-	// go ahead with the actual plan.
-	if !planner.NeedsBootstrap(node) || planner.IsBootstrapComplete(plan) {
-		if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
+	// If ForNode built a new plan, persist it before execution.
+	if !hadPlan {
+		if err := r.Status().Patch(ctx, node, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("persisting new plan: %w", err)
 		}
-		if err := r.reconcileNodeService(ctx, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
-		}
+		return planner.ResultRequeueImmediate, nil
 	}
 
-	result, err := r.PlanExecutor.ExecutePlan(ctx, node, plan)
+	// Execute the plan. The executor handles phase transitions via
+	// TargetPhase/FailedPhase and sets Conditions on failure.
+	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
 	if err != nil {
 		return result, err
 	}
 
-	// TODO: transitioning should be a part of ExecutePlan, I would think. This way, when a plan is done, it has materialized
-	// the proper state and does some final patch to the node, basically leaving it in a state that other logic can observe and
-	// act on as well. For instance, if a plan succeeds, the plan knows what state to put it in. Same for if it fails.
-	if plan.Phase == seiv1alpha1.TaskPlanComplete {
-		return r.transitionPhase(ctx, node, seiv1alpha1.PhaseRunning)
+	// Emit metrics/events if the phase changed.
+	if node.Status.Phase != prevPhase {
+		ns, name := node.Namespace, node.Name
+		nodePhaseTransitions.WithLabelValues(ns, string(prevPhase), string(node.Status.Phase)).Inc()
+		emitNodePhase(ns, name, node.Status.Phase)
+		r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
+			"Phase changed from %s to %s", prevPhase, node.Status.Phase)
+
+		if node.Status.Phase == seiv1alpha1.PhaseRunning {
+			dur := time.Since(node.CreationTimestamp.Time).Seconds()
+			nodeInitDuration.WithLabelValues(ns, node.Spec.ChainID).Observe(dur)
+			nodeLastInitDuration.WithLabelValues(ns, name).Set(dur)
+		}
 	}
-	if plan.Phase == seiv1alpha1.TaskPlanFailed {
-		return r.transitionPhase(ctx, node, seiv1alpha1.PhaseFailed)
+
+	// Running phase: after the convergence plan completes, handle
+	// runtime tasks (image observation, monitor task polling).
+	if node.Status.Phase == seiv1alpha1.PhaseRunning {
+		return r.reconcileRunningTasks(ctx, node)
 	}
+
 	return result, nil
 }
 
-// reconcileRunning converges owned resources and handles runtime tasks.
-func (r *SeiNodeReconciler) reconcileRunning(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
-
-	// TODO: ideally this becomes a task in a plan
-	if err := r.reconcileNodeStatefulSet(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
-	}
-	// TODO: ideally this becomes a task in a plan
-	if err := r.reconcileNodeService(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconciling service: %w", err)
-	}
-
+// reconcileRunningTasks handles Running-phase work that is outside the plan:
+// image observation and sidecar monitor task polling.
+func (r *SeiNodeReconciler) reconcileRunningTasks(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
 	if err := r.observeCurrentImage(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("observing current image: %w", err)
 	}
@@ -224,36 +181,6 @@ func (r *SeiNodeReconciler) observeCurrentImage(ctx context.Context, node *seiv1
 		return r.Status().Patch(ctx, node, patch)
 	}
 	return nil
-}
-
-// transitionPhase transitions the node to a new phase and emits the associated
-// metric counter, phase gauge, and Kubernetes event.
-func (r *SeiNodeReconciler) transitionPhase(ctx context.Context, node *seiv1alpha1.SeiNode, phase seiv1alpha1.SeiNodePhase) (ctrl.Result, error) {
-	prev := node.Status.Phase
-	if prev == "" {
-		prev = seiv1alpha1.PhasePending
-	}
-
-	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	node.Status.Phase = phase
-	if err := r.Status().Patch(ctx, node, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("setting phase to %s: %w", phase, err)
-	}
-
-	ns, name := node.Namespace, node.Name
-	nodePhaseTransitions.WithLabelValues(ns, string(prev), string(phase)).Inc()
-	emitNodePhase(ns, name, phase)
-
-	if phase == seiv1alpha1.PhaseRunning {
-		dur := time.Since(node.CreationTimestamp.Time).Seconds()
-		nodeInitDuration.WithLabelValues(ns, node.Spec.ChainID).Observe(dur)
-		nodeLastInitDuration.WithLabelValues(ns, name).Set(dur)
-	}
-
-	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
-		"Phase changed from %s to %s", prev, phase)
-
-	return planner.ResultRequeueImmediate, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -307,38 +234,4 @@ func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1al
 		return err
 	}
 	return r.Delete(ctx, pvc)
-}
-
-func (r *SeiNodeReconciler) ensureNodeDataPVC(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	desired := noderesource.GenerateDataPVC(node, r.Platform)
-	if err := ctrl.SetControllerReference(node, desired, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference: %w", err)
-	}
-
-	existing := &corev1.PersistentVolumeClaim{}
-	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
-	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, desired)
-	}
-	return err
-}
-
-func (r *SeiNodeReconciler) reconcileNodeStatefulSet(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	desired := noderesource.GenerateStatefulSet(node, r.Platform)
-	desired.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
-	if err := ctrl.SetControllerReference(node, desired, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference: %w", err)
-	}
-	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
-	return r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
-}
-
-func (r *SeiNodeReconciler) reconcileNodeService(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	desired := noderesource.GenerateHeadlessService(node)
-	desired.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
-	if err := ctrl.SetControllerReference(node, desired, r.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference: %w", err)
-	}
-	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
-	return r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 }
