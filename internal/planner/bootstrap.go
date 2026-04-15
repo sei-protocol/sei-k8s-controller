@@ -26,7 +26,7 @@ func buildBootstrapPlan(
 	jobName := task.BootstrapJobName(node)
 	serviceName := node.Name
 
-	bootstrapProg, err := buildBootstrapProgression(peers, snap)
+	bootstrapProg, err := buildSidecarProgression(snap, peers)
 	if err != nil {
 		return nil, err
 	}
@@ -102,15 +102,11 @@ func buildBootstrapPlan(
 	}, nil
 }
 
-// buildBootstrapProgression returns the sidecar task sequence for the
-// bootstrap Job phase. Uses the shared buildSidecarProgression to ensure
-// consistency with buildBasePlan's sidecar task ordering.
-func buildBootstrapProgression(peers []seiv1alpha1.PeerSource, snap *seiv1alpha1.SnapshotSource) ([]string, error) {
-	return buildSidecarProgression(snap, peers)
-}
-
 // buildPostBootstrapProgression returns the sidecar task sequence for the
-// production StatefulSet after bootstrap teardown.
+// production StatefulSet after bootstrap teardown. This is intentionally
+// a separate, hand-written progression — it runs on the production pod
+// after bootstrap teardown and only includes the config tasks needed to
+// prepare the already-restored data directory for production use.
 func buildPostBootstrapProgression(peers []seiv1alpha1.PeerSource) []string {
 	prog := []string{TaskConfigureGenesis, TaskConfigApply}
 	if len(peers) > 0 {
