@@ -15,9 +15,9 @@ import (
 
 const TaskTypeApplyStatefulSet = "apply-statefulset"
 
-var statefulSetFieldOwner = client.FieldOwner("seinode-controller")
-
 // ApplyStatefulSetParams identifies the node whose StatefulSet should be applied.
+// Fields are serialized into the plan for observability (the task itself
+// reads the node from ExecutionConfig.Resource).
 type ApplyStatefulSetParams struct {
 	NodeName  string `json:"nodeName"`
 	Namespace string `json:"namespace"`
@@ -56,7 +56,7 @@ func (e *applyStatefulSetExecution) Execute(ctx context.Context) error {
 	}
 
 	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
-	if err := e.cfg.KubeClient.Patch(ctx, desired, client.Apply, statefulSetFieldOwner, client.ForceOwnership); err != nil {
+	if err := e.cfg.KubeClient.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
 		return fmt.Errorf("applying statefulset: %w", err)
 	}
 
@@ -65,8 +65,5 @@ func (e *applyStatefulSetExecution) Execute(ctx context.Context) error {
 }
 
 func (e *applyStatefulSetExecution) Status(_ context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
-		return s
-	}
-	return e.status
+	return e.DefaultStatus()
 }

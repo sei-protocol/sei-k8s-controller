@@ -503,9 +503,9 @@ func TestReconcileRunning_MonitorMode_SubmitsMonitorTask(t *testing.T) {
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	_, err := r.reconcileRunning(context.Background(), node)
+	_, err := r.reconcileRunningTasks(context.Background(), node)
 	if err != nil {
-		t.Fatalf("reconcileRunning: %v", err)
+		t.Fatalf("reconcileRunningTasks: %v", err)
 	}
 
 	if len(mock.submitted) != 1 {

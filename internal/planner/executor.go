@@ -24,7 +24,8 @@ const (
 	ConditionPlanFailed = "PlanFailed"
 )
 
-// ResultRequeueImmediate requests an immediate re-enqueue. Uses a minimal
+// ResultRequeueImmediate requests an immediate re-enqueue with a minimal
+// delay to avoid busy-looping while still progressing the plan promptly.
 var ResultRequeueImmediate = ctrl.Result{RequeueAfter: 1 * time.Millisecond}
 
 // PlanExecutor drives a TaskPlan to completion for a given resource type.
@@ -109,7 +110,7 @@ func executePlan(
 		patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 		plan.Phase = seiv1alpha1.TaskPlanComplete
 		setTargetPhase(obj, plan.TargetPhase)
-		nilPlanIfConvergence(obj, prevPhase, plan.TargetPhase)
+		clearCompletedConvergencePlan(obj, prevPhase, plan.TargetPhase)
 		if err := kc.Status().Patch(ctx, obj, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
 		}
@@ -268,11 +269,11 @@ func currentPhase(obj client.Object) seiv1alpha1.SeiNodePhase {
 	return ""
 }
 
-// nilPlanIfConvergence nils the plan on the object's status when the plan's
+// clearCompletedConvergencePlan nils the plan on the object's status when the plan's
 // target phase matches the phase the node was already in before the plan
 // completed (convergence — the node stays in the same phase). Init plans
 // that transition to a new phase keep their completed plan visible in status.
-func nilPlanIfConvergence(obj client.Object, prevPhase, targetPhase seiv1alpha1.SeiNodePhase) {
+func clearCompletedConvergencePlan(obj client.Object, prevPhase, targetPhase seiv1alpha1.SeiNodePhase) {
 	if targetPhase == "" {
 		return
 	}

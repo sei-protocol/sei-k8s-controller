@@ -1,8 +1,6 @@
 package planner
 
 import (
-	"slices"
-
 	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
@@ -28,7 +26,10 @@ func buildBootstrapPlan(
 	jobName := task.BootstrapJobName(node)
 	serviceName := node.Name
 
-	bootstrapProg := buildBootstrapProgression(peers, snap)
+	bootstrapProg, err := buildSidecarProgression(snap, peers)
+	if err != nil {
+		return nil, err
+	}
 	postProg := buildPostBootstrapProgression(peers)
 	tasks := make([]seiv1alpha1.PlannedTask, 0, 2+len(bootstrapProg)+2+len(postProg))
 
@@ -40,6 +41,12 @@ func buildBootstrapPlan(
 		tasks = append(tasks, t)
 		planIndex++
 		return nil
+	}
+
+	// Phase 0: Ensure the data PVC exists (needed by both bootstrap Job and StatefulSet)
+	if err := appendTask(task.TaskTypeEnsureDataPVC,
+		&task.EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
+		return nil, err
 	}
 
 	// Phase 1: Deploy bootstrap infrastructure
@@ -69,35 +76,37 @@ func buildBootstrapPlan(
 		return nil, err
 	}
 
-	// Phase 4: Post-bootstrap config on StatefulSet pod
+	// Phase 4: Create production StatefulSet and Service (after bootstrap teardown frees the PVC)
+	if err := appendTask(task.TaskTypeApplyStatefulSet,
+		&task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
+	if err := appendTask(task.TaskTypeApplyService,
+		&task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
+
+	// Phase 5: Post-bootstrap config on StatefulSet pod
 	for _, taskType := range postProg {
 		if err := appendTask(taskType, paramsForTaskType(node, taskType, nil, configApplyParams)); err != nil {
 			return nil, err
 		}
 	}
 
-	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
-}
-
-// buildBootstrapProgression returns the sidecar task sequence for the
-// bootstrap Job phase (everything except mark-ready).
-func buildBootstrapProgression(peers []seiv1alpha1.PeerSource, snap *seiv1alpha1.SnapshotSource) []string {
-	mode := bootstrapMode(snap)
-	prog := slices.Clone(baseProgression[mode])
-
-	prog = insertBefore(prog, TaskConfigApply, TaskConfigureGenesis)
-	if len(peers) > 0 {
-		prog = insertBefore(prog, TaskConfigValidate, TaskDiscoverPeers)
-	}
-	if snap != nil {
-		prog = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync)
-	}
-
-	return prog
+	return &seiv1alpha1.TaskPlan{
+		ID:          planID,
+		Phase:       seiv1alpha1.TaskPlanActive,
+		Tasks:       tasks,
+		TargetPhase: seiv1alpha1.PhaseRunning,
+		FailedPhase: seiv1alpha1.PhaseFailed,
+	}, nil
 }
 
 // buildPostBootstrapProgression returns the sidecar task sequence for the
-// production StatefulSet after bootstrap teardown.
+// production StatefulSet after bootstrap teardown. This is intentionally
+// a separate, hand-written progression — it runs on the production pod
+// after bootstrap teardown and only includes the config tasks needed to
+// prepare the already-restored data directory for production use.
 func buildPostBootstrapProgression(peers []seiv1alpha1.PeerSource) []string {
 	prog := []string{TaskConfigureGenesis, TaskConfigApply}
 	if len(peers) > 0 {
@@ -132,10 +141,15 @@ const genesisConfigureMaxRetries = 180
 // configure-genesis retries until the group controller has assembled and
 // uploaded genesis.json to S3.
 func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	gc := node.Spec.Validator.GenesisCeremony
-	planID := uuid.New().String()
+	configApplyParams := &task.ConfigApplyParams{
+		Mode:      string(seiconfig.ModeValidator),
+		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
+	}
 
 	prog := []string{
+		task.TaskTypeEnsureDataPVC,
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
 		TaskGenerateIdentity,
 		TaskGenerateGentx,
 		TaskUploadGenesisArtifacts,
@@ -146,9 +160,10 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		TaskMarkReady,
 	}
 
+	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(planID, taskType, i, genesisParamsForTaskType(node, gc, taskType))
+		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, configApplyParams))
 		if err != nil {
 			return nil, err
 		}
@@ -157,43 +172,13 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		}
 		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{ID: planID, Phase: seiv1alpha1.TaskPlanActive, Tasks: tasks}, nil
-}
-
-func genesisParamsForTaskType(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.GenesisCeremonyNodeConfig, taskType string) any {
-	switch taskType {
-	case TaskGenerateIdentity:
-		return &task.GenerateIdentityParams{
-			ChainID: gc.ChainID,
-			Moniker: node.Name,
-		}
-	case TaskGenerateGentx:
-		return &task.GenerateGentxParams{
-			ChainID:        gc.ChainID,
-			StakingAmount:  gc.StakingAmount,
-			AccountBalance: gc.AccountBalance,
-			GenesisParams:  gc.GenesisParams,
-		}
-	case TaskUploadGenesisArtifacts:
-		return &task.UploadGenesisArtifactsParams{
-			NodeName: node.Name,
-		}
-	case TaskConfigureGenesis:
-		return &task.ConfigureGenesisParams{}
-	case TaskConfigApply:
-		return &task.ConfigApplyParams{
-			Mode:      string(seiconfig.ModeValidator),
-			Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
-		}
-	case TaskSetGenesisPeers:
-		return &task.SetGenesisPeersParams{}
-	case TaskConfigValidate:
-		return &task.ConfigValidateParams{}
-	case TaskMarkReady:
-		return &task.MarkReadyParams{}
-	default:
-		return nil
-	}
+	return &seiv1alpha1.TaskPlan{
+		ID:          planID,
+		Phase:       seiv1alpha1.TaskPlanActive,
+		Tasks:       tasks,
+		TargetPhase: seiv1alpha1.PhaseRunning,
+		FailedPhase: seiv1alpha1.PhaseFailed,
+	}, nil
 }
 
 // SnapshotUploadMonitorTask returns a snapshot-upload TaskRequest if applicable.

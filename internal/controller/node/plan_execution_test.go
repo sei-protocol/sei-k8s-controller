@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -33,13 +34,12 @@ const (
 	testSnapshotRegion   = "eu-central-1"
 )
 
-func mustBuildPlan(t *testing.T, p planner.NodePlanner, node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
+func mustBuildPlan(t *testing.T, node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	t.Helper()
-	plan, err := p.BuildPlan(node)
-	if err != nil {
-		t.Fatalf("BuildPlan: %v", err)
+	if err := planner.ResolvePlan(node); err != nil {
+		t.Fatalf("ResolvePlan: %v", err)
 	}
-	return plan
+	return node.Status.Plan
 }
 
 type mockSidecarClient struct {
@@ -232,37 +232,12 @@ func replayerNode() *seiv1alpha1.SeiNode {
 	}
 }
 
-// --- Bootstrap mode tests ---
-
-func TestBootstrapMode(t *testing.T) {
-	tests := []struct {
-		name string
-		snap *seiv1alpha1.SnapshotSource
-		want string
-	}{
-		{"snapshot", &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 1}}, "snapshot"},
-		{"state-sync", &seiv1alpha1.SnapshotSource{StateSync: &seiv1alpha1.StateSyncSource{}}, "state-sync"},
-		{"genesis", nil, "genesis"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p, _ := planner.ForNode(snapshotNode())
-			plan := mustBuildPlan(t, p, snapshotNode())
-			if plan == nil {
-				t.Fatal("expected non-nil plan")
-			}
-			_ = tt // bootstrap mode is now internal to planner
-		})
-	}
-}
-
 // --- Plan building tests ---
 
 func TestBuildPlan_Snapshot(t *testing.T) {
-	p, _ := planner.ForNode(snapshotNode())
-	plan := mustBuildPlan(t, p, snapshotNode())
+	plan := mustBuildPlan(t, snapshotNode())
 	got := taskTypes(plan)
-	want := []string{planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -271,26 +246,23 @@ func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 	node.Spec.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "atlantic-2"}}},
 	}
-	p, _ := planner.ForNode(node)
-	plan := mustBuildPlan(t, p, node)
+	plan := mustBuildPlan(t, node)
 	got := taskTypes(plan)
-	want := []string{planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestBuildPlan_StateSync(t *testing.T) {
-	p, _ := planner.ForNode(peerSyncNode())
-	plan := mustBuildPlan(t, p, peerSyncNode())
+	plan := mustBuildPlan(t, peerSyncNode())
 	got := taskTypes(plan)
-	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestBuildPlan_Genesis(t *testing.T) {
-	p, _ := planner.ForNode(genesisNode())
-	plan := mustBuildPlan(t, p, genesisNode())
+	plan := mustBuildPlan(t, genesisNode())
 	got := taskTypes(plan)
-	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -299,39 +271,35 @@ func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 	node.Spec.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"Chain": "arctic-1"}}},
 	}
-	p, _ := planner.ForNode(node)
-	plan := mustBuildPlan(t, p, node)
+	plan := mustBuildPlan(t, node)
 	got := taskTypes(plan)
-	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestBuildPlan_Replayer(t *testing.T) {
 	node := replayerNode()
-	p, _ := planner.ForNode(node)
-	plan := mustBuildPlan(t, p, node)
+	plan := mustBuildPlan(t, node)
 	got := taskTypes(plan)
-	want := []string{planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestBuildPlan_Archive(t *testing.T) {
 	node := snapshotterNode()
-	p, _ := planner.ForNode(node)
-	plan := mustBuildPlan(t, p, node)
+	plan := mustBuildPlan(t, node)
 	got := taskTypes(plan)
-	want := []string{planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestBuildPlanPhaseAndTasks(t *testing.T) {
-	p, _ := planner.ForNode(snapshotNode())
-	plan := mustBuildPlan(t, p, snapshotNode())
+	plan := mustBuildPlan(t, snapshotNode())
 	if plan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", plan.Phase)
 	}
-	if len(plan.Tasks) != 6 {
-		t.Fatalf("expected 6 tasks, got %d: %v", len(plan.Tasks), taskTypes(plan))
+	if len(plan.Tasks) != 9 {
+		t.Fatalf("expected 9 tasks, got %d: %v", len(plan.Tasks), taskTypes(plan))
 	}
 	for _, pt := range plan.Tasks {
 		if pt.Status != seiv1alpha1.TaskPending {
@@ -344,16 +312,17 @@ func TestBuildPlanPhaseAndTasks(t *testing.T) {
 			t.Errorf("task %q has nil Params", pt.Type)
 		}
 	}
-	if plan.Tasks[0].Type != planner.TaskSnapshotRestore {
-		t.Errorf("first task = %q, want %q", plan.Tasks[0].Type, planner.TaskSnapshotRestore)
+	if plan.Tasks[0].Type != task.TaskTypeEnsureDataPVC {
+		t.Errorf("first task = %q, want %q", plan.Tasks[0].Type, task.TaskTypeEnsureDataPVC)
 	}
 }
 
 func TestBuildPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
 	node := snapshotNode()
-	p, _ := planner.ForNode(node)
-	plan1 := mustBuildPlan(t, p, node)
-	plan2 := mustBuildPlan(t, p, node)
+	plan1 := mustBuildPlan(t, node)
+	// Clear the plan so ResolvePlan builds a fresh one.
+	node.Status.Plan = nil
+	plan2 := mustBuildPlan(t, node)
 	if plan1.ID == plan2.ID {
 		t.Errorf("plan IDs should differ across rebuilds: both %q", plan1.ID)
 	}
@@ -374,14 +343,21 @@ func TestBuildPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
 
 func TestBuildPlan_ParamsRoundTrip(t *testing.T) {
 	node := snapshotNode()
-	p, _ := planner.ForNode(node)
-	plan := mustBuildPlan(t, p, node)
-	firstTask := plan.Tasks[0]
-	if firstTask.Type != planner.TaskSnapshotRestore {
-		t.Fatalf("expected snapshot-restore, got %s", firstTask.Type)
+	plan := mustBuildPlan(t, node)
+
+	// Find snapshot-restore task (now after infrastructure tasks).
+	var snapshotTask *seiv1alpha1.PlannedTask
+	for i := range plan.Tasks {
+		if plan.Tasks[i].Type == planner.TaskSnapshotRestore {
+			snapshotTask = &plan.Tasks[i]
+			break
+		}
+	}
+	if snapshotTask == nil {
+		t.Fatal("expected snapshot-restore task in plan")
 	}
 	var params task.SnapshotRestoreParams
-	if err := json.Unmarshal(firstTask.Params.Raw, &params); err != nil {
+	if err := json.Unmarshal(snapshotTask.Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal error: %v", err)
 	}
 	if params.TargetHeight != 100000000 {
@@ -395,8 +371,7 @@ func TestConfigApply_ParamsFromPlan(t *testing.T) {
 	node.Spec.Overrides = map[string]string{
 		"giga_executor.enabled": "true",
 	}
-	p, _ := planner.ForNode(node)
-	plan := mustBuildPlan(t, p, node)
+	plan := mustBuildPlan(t, node)
 
 	var configTask *seiv1alpha1.PlannedTask
 	for i := range plan.Tasks {
@@ -438,65 +413,56 @@ func taskTypes(plan *seiv1alpha1.TaskPlan) []string {
 func TestReconcile_CreatesPlanOnFirstRun(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
-	p, _ := planner.ForNode(node)
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name, Namespace: node.Namespace}}
 
-	_, err := r.reconcilePending(ctx, node, p)
-	if err != nil {
-		t.Fatalf("error = %v", err)
-	}
-	node = fetchNode(t, c, node.Name, node.Namespace)
-
-	_, err = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
+	// First Reconcile: ResolvePlan builds the plan, transitions to Initializing,
+	// and executes the first task (ensure-data-pvc, which is fire-and-forget).
+	_, err := r.Reconcile(ctx, req)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
 	if updated.Status.Plan == nil {
-		t.Fatal("expected InitPlan to be created")
+		t.Fatal("expected plan to be created")
 	}
 	if updated.Status.Plan.Phase != seiv1alpha1.TaskPlanActive {
 		t.Errorf("phase = %q, want Active", updated.Status.Plan.Phase)
 	}
-	if len(mock.submitted) != 1 {
-		t.Fatalf("expected 1 submitted task, got %d", len(mock.submitted))
-	}
-	if mock.submitted[0].Type != planner.TaskSnapshotRestore {
-		t.Errorf("submitted task = %q, want %q", mock.submitted[0].Type, planner.TaskSnapshotRestore)
+	if updated.Status.Phase != seiv1alpha1.PhaseInitializing {
+		t.Errorf("node phase = %q, want Initializing", updated.Status.Phase)
 	}
 }
 
 func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
-	p, _ := planner.ForNode(node)
-	node.Status.Plan = mustBuildPlan(t, p, node)
+	mustBuildPlan(t, node)
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
+	// First task is ensure-data-pvc (controller-side, no sidecar submission).
 	_, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
 
-	if len(mock.submitted) != 1 {
-		t.Fatalf("expected 1 submitted, got %d", len(mock.submitted))
-	}
-
 	updated := fetchNode(t, c, node.Name, node.Namespace)
 	firstTask := updated.Status.Plan.Tasks[0]
-	if firstTask.Status != seiv1alpha1.TaskPending && firstTask.Status != seiv1alpha1.TaskComplete {
-		t.Logf("task status = %q (submit succeeded, status depends on mock GetTask)", firstTask.Status)
+	if firstTask.Type != task.TaskTypeEnsureDataPVC {
+		t.Errorf("first task = %q, want %q", firstTask.Type, task.TaskTypeEnsureDataPVC)
+	}
+	if firstTask.Status != seiv1alpha1.TaskComplete {
+		t.Errorf("first task status = %q, want Complete", firstTask.Status)
 	}
 }
 
 func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := genesisNode()
-	p, _ := planner.ForNode(node)
-	node.Status.Plan = mustBuildPlan(t, p, node)
+	mustBuildPlan(t, node)
 	for i := range node.Status.Plan.Tasks {
 		node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
 	}
@@ -521,8 +487,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 func TestReconcile_FailedPlan_NoOps(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
-	p, _ := planner.ForNode(node)
-	node.Status.Plan = mustBuildPlan(t, p, node)
+	mustBuildPlan(t, node)
 	node.Status.Plan.Phase = seiv1alpha1.TaskPlanFailed
 
 	r, _ := newProgressionReconciler(t, mock, node)
@@ -550,7 +515,7 @@ func TestReconcile_CompletePlan_SubmitsSnapshotUploadMonitor(t *testing.T) {
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	_, err := r.reconcileRunning(ctx, node)
+	_, err := r.reconcileRunningTasks(ctx, node)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -585,7 +550,7 @@ func TestReconcile_CompletePlan_SkipsAlreadySubmittedMonitor(t *testing.T) {
 	r, _ := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
-	_, err := r.reconcileRunning(ctx, node)
+	_, err := r.reconcileRunningTasks(ctx, node)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -597,12 +562,21 @@ func TestReconcile_CompletePlan_SkipsAlreadySubmittedMonitor(t *testing.T) {
 func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 	mock := &mockSidecarClient{submitErr: fmt.Errorf("connection refused")}
 	node := snapshotNode()
-	p, _ := planner.ForNode(node)
-	node.Status.Plan = mustBuildPlan(t, p, node)
+	mustBuildPlan(t, node)
+
+	// Advance past the infrastructure tasks (they are controller-side, complete synchronously).
+	for i := range node.Status.Plan.Tasks {
+		if node.Status.Plan.Tasks[i].Type == task.TaskTypeEnsureDataPVC ||
+			node.Status.Plan.Tasks[i].Type == task.TaskTypeApplyStatefulSet ||
+			node.Status.Plan.Tasks[i].Type == task.TaskTypeApplyService {
+			node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
+		}
+	}
 
 	r, c := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
+	// The first sidecar task (snapshot-restore) will fail to submit.
 	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -611,8 +585,12 @@ func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, planner.TaskPollInterval)
 	}
 	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Plan.Tasks[0].Status != seiv1alpha1.TaskPending {
-		t.Errorf("task status = %q, want Pending after submit failure", updated.Status.Plan.Tasks[0].Status)
+	snapshotTask := findPlannedTask(updated.Status.Plan, planner.TaskSnapshotRestore)
+	if snapshotTask == nil {
+		t.Fatal("expected snapshot-restore task in plan")
+	}
+	if snapshotTask.Status != seiv1alpha1.TaskPending {
+		t.Errorf("snapshot task status = %q, want Pending after submit failure", snapshotTask.Status)
 	}
 }
 
@@ -629,79 +607,86 @@ func TestExecutePlan_NilPlan_ReturnsError(t *testing.T) {
 	}
 }
 
-// --- PlannerForNode dispatch tests ---
+// --- ResolvePlan dispatch tests ---
 
-func TestPlannerForNode_FullNode(t *testing.T) {
+func TestResolvePlan_FullNode(t *testing.T) {
 	node := snapshotNode()
-	p, err := planner.ForNode(node)
-	if err != nil {
+	if err := planner.ResolvePlan(node); err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode() != string(seiconfig.ModeFull) {
-		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeFull))
+	if node.Status.Plan == nil {
+		t.Fatal("expected non-nil plan")
 	}
 }
 
-func TestPlannerForNode_Archive(t *testing.T) {
+func TestResolvePlan_Archive(t *testing.T) {
 	node := snapshotterNode()
-	p, err := planner.ForNode(node)
-	if err != nil {
+	if err := planner.ResolvePlan(node); err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode() != string(seiconfig.ModeArchive) {
-		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeArchive))
+	if node.Status.Plan == nil {
+		t.Fatal("expected non-nil plan")
 	}
 }
 
-func TestPlannerForNode_Validator(t *testing.T) {
+func TestResolvePlan_Validator(t *testing.T) {
 	node := genesisNode()
-	p, err := planner.ForNode(node)
-	if err != nil {
+	if err := planner.ResolvePlan(node); err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode() != string(seiconfig.ModeValidator) {
-		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeValidator))
+	if node.Status.Plan == nil {
+		t.Fatal("expected non-nil plan")
 	}
 }
 
-func TestPlannerForNode_Replayer(t *testing.T) {
+func TestResolvePlan_Replayer(t *testing.T) {
 	node := replayerNode()
-	p, err := planner.ForNode(node)
-	if err != nil {
+	if err := planner.ResolvePlan(node); err != nil {
 		t.Fatal(err)
 	}
-	if p.Mode() != string(seiconfig.ModeFull) {
-		t.Errorf("Mode() = %q, want %q", p.Mode(), string(seiconfig.ModeFull))
+	if node.Status.Plan == nil {
+		t.Fatal("expected non-nil plan")
 	}
 }
 
-func TestPlannerForNode_NoSubSpec(t *testing.T) {
+func TestResolvePlan_NoSubSpec(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "test",
 			Image:   "sei:latest",
 		},
 	}
-	_, err := planner.ForNode(node)
+	err := planner.ResolvePlan(node)
 	if err == nil {
 		t.Error("expected error for node with no sub-spec")
 	}
 }
 
+func TestResolvePlan_ResumesActivePlan(t *testing.T) {
+	node := snapshotNode()
+	node.Status.Plan = &seiv1alpha1.TaskPlan{
+		ID:    "existing-plan",
+		Phase: seiv1alpha1.TaskPlanActive,
+	}
+	if err := planner.ResolvePlan(node); err != nil {
+		t.Fatal(err)
+	}
+	if node.Status.Plan.ID != "existing-plan" {
+		t.Errorf("expected plan to be resumed, got new plan %q", node.Status.Plan.ID)
+	}
+}
+
 // --- Phase transition tests ---
 
-func TestReconcilePending_NoBootstrap_SetsInitializingWithPlan(t *testing.T) {
+func TestReconcile_Pending_SetsInitializingWithPlan(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
 	r, c := newProgressionReconciler(t, mock, node)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name, Namespace: node.Namespace}}
 
-	p, _ := planner.ForNode(node)
-	result, err := r.reconcilePending(context.Background(), node, p)
+	_, err := r.Reconcile(context.Background(), req)
 	if err != nil {
-		t.Fatalf("reconcilePending error: %v", err)
-	}
-	if result.RequeueAfter == 0 {
-		t.Error("expected requeue after reconcilePending")
+		t.Fatalf("Reconcile error: %v", err)
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -709,23 +694,20 @@ func TestReconcilePending_NoBootstrap_SetsInitializingWithPlan(t *testing.T) {
 		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseInitializing)
 	}
 	if updated.Status.Plan == nil {
-		t.Fatal("expected InitPlan to be created")
+		t.Fatal("expected plan to be created")
 	}
 }
 
-func TestReconcilePending_WithBootstrap_SetsInitializing(t *testing.T) {
+func TestReconcile_Pending_WithBootstrap_SetsInitializing(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := replayerNode()
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImage
 	r, c := newProgressionReconciler(t, mock, node)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name, Namespace: node.Namespace}}
 
-	p, _ := planner.ForNode(node)
-	result, err := r.reconcilePending(context.Background(), node, p)
+	_, err := r.Reconcile(context.Background(), req)
 	if err != nil {
-		t.Fatalf("reconcilePending error: %v", err)
-	}
-	if result.RequeueAfter == 0 {
-		t.Error("expected requeue after reconcilePending")
+		t.Fatalf("Reconcile error: %v", err)
 	}
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
@@ -733,54 +715,100 @@ func TestReconcilePending_WithBootstrap_SetsInitializing(t *testing.T) {
 		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseInitializing)
 	}
 	if updated.Status.Plan == nil {
-		t.Fatal("expected InitPlan to be created")
+		t.Fatal("expected plan to be created")
 	}
 }
 
-func TestReconcileInitializing_PlanComplete_TransitionsToRunning(t *testing.T) {
+func TestExecutePlan_AllComplete_TransitionsToTargetPhase(t *testing.T) {
+	g := NewWithT(t)
 	mock := &mockSidecarClient{}
 	node := genesisNode()
 	node.Status.Phase = seiv1alpha1.PhaseInitializing
-	node.Status.Plan = &seiv1alpha1.TaskPlan{
-		Phase: seiv1alpha1.TaskPlanComplete,
+	mustBuildPlan(t, node)
+	// Pre-complete all tasks so ExecutePlan triggers plan completion.
+	for i := range node.Status.Plan.Tasks {
+		node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
 	}
-	r, c := newProgressionReconciler(t, mock, node)
 
-	result, err := r.reconcileInitializing(context.Background(), node)
-	if err != nil {
-		t.Fatalf("reconcileInitializing error: %v", err)
-	}
-	if result.RequeueAfter == 0 {
-		t.Error("expected requeue after plan complete")
-	}
+	r, c := newProgressionReconciler(t, mock, node)
+	_, err := r.PlanExecutor.ExecutePlan(context.Background(), node, node.Status.Plan)
+	g.Expect(err).NotTo(HaveOccurred())
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Phase != seiv1alpha1.PhaseRunning {
-		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseRunning)
-	}
+	g.Expect(updated.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning), "executor should transition to TargetPhase")
+	g.Expect(updated.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
 }
 
-func TestReconcileInitializing_PlanFailed_TransitionsToFailed(t *testing.T) {
+func TestExecutePlan_ConvergencePlan_NilsOnCompletion(t *testing.T) {
+	g := NewWithT(t)
 	mock := &mockSidecarClient{}
-	node := genesisNode()
-	node.Status.Phase = seiv1alpha1.PhaseInitializing
-	node.Status.Plan = &seiv1alpha1.TaskPlan{
-		Phase: seiv1alpha1.TaskPlanFailed,
+	node := snapshotNode()
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.Plan = nil
+	// Build a convergence plan for a Running node.
+	if err := planner.ResolvePlan(node); err != nil {
+		t.Fatal(err)
 	}
-	r, c := newProgressionReconciler(t, mock, node)
+	// Pre-complete all tasks.
+	for i := range node.Status.Plan.Tasks {
+		node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
+	}
 
-	result, err := r.reconcileInitializing(context.Background(), node)
-	if err != nil {
-		t.Fatalf("reconcileInitializing error: %v", err)
-	}
-	if result.RequeueAfter == 0 {
-		t.Error("expected requeue after plan failed")
-	}
+	r, c := newProgressionReconciler(t, mock, node)
+	_, err := r.PlanExecutor.ExecutePlan(context.Background(), node, node.Status.Plan)
+	g.Expect(err).NotTo(HaveOccurred())
 
 	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Phase != seiv1alpha1.PhaseFailed {
-		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseFailed)
+	g.Expect(updated.Status.Plan).To(BeNil(), "convergence plan should be nilled after completion")
+	g.Expect(updated.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning), "phase should stay Running")
+}
+
+func TestExecutePlan_TaskFailure_SetsPlanFailedCondition(t *testing.T) {
+	g := NewWithT(t)
+	mock := &mockSidecarClient{}
+	node := snapshotNode()
+	mustBuildPlan(t, node)
+	// Advance past infrastructure tasks.
+	for i := range node.Status.Plan.Tasks {
+		if node.Status.Plan.Tasks[i].Type == task.TaskTypeEnsureDataPVC ||
+			node.Status.Plan.Tasks[i].Type == task.TaskTypeApplyStatefulSet ||
+			node.Status.Plan.Tasks[i].Type == task.TaskTypeApplyService {
+			node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
+		}
 	}
+	r, c := newProgressionReconciler(t, mock, node)
+	ctx := context.Background()
+
+	// Submit snapshot-restore.
+	_, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// Fail the task via mock.
+	ct := planner.CurrentTask(node.Status.Plan)
+	g.Expect(ct).NotTo(BeNil())
+	taskUUID, parseErr := uuid.Parse(ct.ID)
+	g.Expect(parseErr).NotTo(HaveOccurred())
+	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
+		taskUUID: completedResult(taskUUID, planner.TaskSnapshotRestore, strPtr("boom")),
+	}
+	node = fetchNode(t, c, node.Name, node.Namespace)
+	_, err = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	updated := fetchNode(t, c, node.Name, node.Namespace)
+	g.Expect(updated.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
+
+	// Verify PlanFailed condition was set.
+	var found bool
+	for _, cond := range updated.Status.Conditions {
+		if cond.Type == planner.ConditionPlanFailed {
+			g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(cond.Reason).To(Equal("TaskFailed"))
+			g.Expect(cond.Message).To(ContainSubstring("boom"))
+			found = true
+		}
+	}
+	g.Expect(found).To(BeTrue(), "expected PlanFailed condition on node")
 }
 
 // --- Result export tests ---
@@ -864,7 +892,7 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 		},
 	}
 
-	result, err := r.reconcileInitializing(context.Background(), node)
+	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name, Namespace: node.Namespace}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -980,7 +1008,7 @@ func TestReconcile_ReplayerWithoutResultExport_NoMonitorTask(t *testing.T) {
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	_, err := r.reconcileRunning(context.Background(), node)
+	_, err := r.reconcileRunningTasks(context.Background(), node)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -1007,7 +1035,7 @@ func TestReconcile_SnapshotterWithMonitorTask_BothSubmitted(t *testing.T) {
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	_, err := r.reconcileRunning(context.Background(), node)
+	_, err := r.reconcileRunningTasks(context.Background(), node)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -1048,7 +1076,7 @@ func TestReconcileRunning_PollRequeue_ImmediateRequeue(t *testing.T) {
 
 	r, _ := newProgressionReconciler(t, mock, node)
 
-	result, err := r.reconcileRunning(context.Background(), node)
+	result, err := r.reconcileRunningTasks(context.Background(), node)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -1066,7 +1094,7 @@ func TestReconcile_CompletePlan_SubmitsResultExportMonitorForReplayer(t *testing
 
 	r, c := newProgressionReconciler(t, mock, node)
 
-	_, err := r.reconcileRunning(context.Background(), node)
+	_, err := r.reconcileRunningTasks(context.Background(), node)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}

@@ -15,6 +15,8 @@ import (
 const TaskTypeEnsureDataPVC = "ensure-data-pvc"
 
 // EnsureDataPVCParams identifies the node whose PVC should be ensured.
+// Fields are serialized into the plan for observability (the task itself
+// reads the node from ExecutionConfig.Resource).
 type EnsureDataPVCParams struct {
 	NodeName  string `json:"nodeName"`
 	Namespace string `json:"namespace"`
@@ -64,8 +66,5 @@ func (e *ensureDataPVCExecution) Execute(ctx context.Context) error {
 }
 
 func (e *ensureDataPVCExecution) Status(_ context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
-		return s
-	}
-	return e.status
+	return e.DefaultStatus()
 }

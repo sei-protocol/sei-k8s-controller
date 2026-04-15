@@ -55,7 +55,10 @@ make docker-push IMG=<image>  # Push container image
 
 - **SeiNodeDeployment** creates and owns **SeiNode** resources. Groups orchestrate genesis ceremonies, manage deployments, and coordinate networking/monitoring.
 - **SeiNode** creates StatefulSets (replicas=1), headless Services, and PVCs via server-side apply (fieldOwner: `seinode-controller`).
+- **Plan-driven reconciliation** — Both controllers use ordered task plans (stored in `.status.plan`) to drive lifecycle. Plans are built by `internal/planner/` (`ResolvePlan` for nodes, `ForGroup` for deployments), executed by `planner.Executor`, with individual tasks in `internal/task/`. The reconcile loop is: `ResolvePlan → persist plan → ExecutePlan`. See `internal/planner/doc.go` for the full plan lifecycle.
+- **Init plans** transition nodes from Pending → Running. They include infrastructure tasks (`ensure-data-pvc`, `apply-statefulset`, `apply-service`) followed by sidecar tasks (`configure-genesis`, `config-apply`, etc.).
+- **Convergence plans** keep Running nodes in sync. They contain only `apply-statefulset` + `apply-service` and are nilled from status after completion.
+- **Resource generators** live in `internal/noderesource/` — pure functions that produce StatefulSets, Services, and PVCs from a SeiNode spec. Used by both the controller and plan tasks.
 - **Platform config** is fully environment-driven — all fields in `platform.Config` must be set via env vars (no defaults). See `internal/platform/platform.go` for the full list.
 - **Genesis resolution** is handled by the sidecar autonomously: embedded sei-config for well-known chains, S3 fallback at `{SEI_GENESIS_BUCKET}/{chainID}/genesis.json` for custom chains.
-- Sidecar bootstrap progression is driven by the node controller polling the sidecar HTTP API and submitting tasks in sequence.
 - Config keys in seid's `config.toml` use **hyphens** (e.g., `persistent-peers`, `trust-height`), not underscores.
