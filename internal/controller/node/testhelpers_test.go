@@ -50,3 +50,15 @@ func findContainer(containers []corev1.Container, name string) *corev1.Container
 	}
 	return nil
 }
+
+func findPlannedTask(plan *seiv1alpha1.TaskPlan, taskType string) *seiv1alpha1.PlannedTask {
+	if plan == nil {
+		return nil
+	}
+	for i := range plan.Tasks {
+		if plan.Tasks[i].Type == taskType {
+			return &plan.Tasks[i]
+		}
+	}
+	return nil
+}

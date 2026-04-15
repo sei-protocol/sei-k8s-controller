@@ -15,9 +15,9 @@ import (
 
 const TaskTypeApplyService = "apply-service"
 
-var serviceFieldOwner = client.FieldOwner("seinode-controller")
-
 // ApplyServiceParams identifies the node whose headless Service should be applied.
+// Fields are serialized into the plan for observability (the task itself
+// reads the node from ExecutionConfig.Resource).
 type ApplyServiceParams struct {
 	NodeName  string `json:"nodeName"`
 	Namespace string `json:"namespace"`
@@ -56,7 +56,7 @@ func (e *applyServiceExecution) Execute(ctx context.Context) error {
 	}
 
 	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
-	if err := e.cfg.KubeClient.Patch(ctx, desired, client.Apply, serviceFieldOwner, client.ForceOwnership); err != nil {
+	if err := e.cfg.KubeClient.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
 		return fmt.Errorf("applying service: %w", err)
 	}
 
@@ -65,8 +65,5 @@ func (e *applyServiceExecution) Execute(ctx context.Context) error {
 }
 
 func (e *applyServiceExecution) Status(_ context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
-		return s
-	}
-	return e.status
+	return e.DefaultStatus()
 }

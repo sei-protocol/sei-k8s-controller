@@ -81,7 +81,7 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 		return n
 	}
 
-	// First Reconcile: ForNode builds the plan and transitions to Initializing.
+	// First Reconcile: ResolvePlan builds the plan and transitions to Initializing.
 	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	node = fetch()
 	g.Expect(node.Status.Plan).NotTo(BeNil())
@@ -122,7 +122,7 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 		return n
 	}
 
-	// First Reconcile: ForNode builds the plan and transitions to Initializing.
+	// First Reconcile: ResolvePlan builds the plan and transitions to Initializing.
 	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	node = fetch()
 	g.Expect(node.Status.Plan).NotTo(BeNil())
@@ -194,9 +194,10 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 	g.Expect(updated.Status.Phase).To(Equal(seiv1alpha1.PhaseFailed))
 
 	// Verify the failed task details.
-	failedIdx := 3 // ensure-data-pvc(0), apply-statefulset(1), apply-service(2), snapshot-restore(3)
-	g.Expect(updated.Status.Plan.Tasks[failedIdx].Status).To(Equal(seiv1alpha1.TaskFailed))
-	g.Expect(updated.Status.Plan.Tasks[failedIdx].Error).To(Equal("S3 access denied"))
+	failedTask := findPlannedTask(updated.Status.Plan, planner.TaskSnapshotRestore)
+	g.Expect(failedTask).NotTo(BeNil())
+	g.Expect(failedTask.Status).To(Equal(seiv1alpha1.TaskFailed))
+	g.Expect(failedTask.Error).To(Equal("S3 access denied"))
 
 	// Subsequent ExecutePlan is a no-op on failed plans.
 	mock.submitted = nil

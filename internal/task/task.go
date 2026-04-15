@@ -26,6 +26,10 @@ const (
 	TaskTypeTeardownBootstrap      = "teardown-bootstrap"
 )
 
+// fieldOwner is the server-side apply field manager for resources
+// owned by the seinode-controller.
+var fieldOwner = client.FieldOwner("seinode-controller")
+
 // ExecutionStatus represents the lifecycle state of a task execution.
 type ExecutionStatus string
 
@@ -94,6 +98,16 @@ func (b *taskBase) complete() {
 func (b *taskBase) setFailed(err error) {
 	b.status = ExecutionFailed
 	b.err = err
+}
+
+// DefaultStatus returns the cached status, short-circuiting if terminal.
+// Fire-and-forget tasks that complete entirely within Execute can use this
+// as their Status implementation directly.
+func (b *taskBase) DefaultStatus() ExecutionStatus {
+	if s, done := b.isTerminal(); done {
+		return s
+	}
+	return b.status
 }
 
 // Err returns the error that caused failure, or nil.

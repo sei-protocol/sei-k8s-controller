@@ -89,13 +89,13 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
 
-	// Resolve or resume plan. ForNode either resumes an active plan or
+	// Resolve or resume plan. ResolvePlan either resumes an active plan or
 	// builds a new one based on the node's phase, stamping it onto
 	// node.Status.Plan (and transitioning Pending → Initializing).
 	prevPhase := node.Status.Phase
-	hadPlan := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
+	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
 	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	if err := planner.ForNode(node); err != nil {
+	if err := planner.ResolvePlan(node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
 
@@ -103,8 +103,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	// If ForNode built a new plan, persist it before execution.
-	if !hadPlan {
+	// If ResolvePlan built a new plan, persist it before execution.
+	if !planAlreadyActive {
 		if err := r.Status().Patch(ctx, node, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("persisting new plan: %w", err)
 		}

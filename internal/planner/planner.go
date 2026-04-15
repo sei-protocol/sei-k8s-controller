@@ -102,10 +102,15 @@ func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 	return false
 }
 
-// ForNode ensures node.Status.Plan is set and ready for execution.
+// ResolvePlan ensures node.Status.Plan is set and ready for execution.
 // If an active plan exists, it is left in place (resume). Otherwise a
 // new plan is built from the node's current phase and spec.
-func ForNode(node *seiv1alpha1.SeiNode) error {
+//
+// ResolvePlan mutates the node in place: it sets Status.Plan and may
+// transition Status.Phase from Pending to Initializing. The caller must
+// capture a MergeFrom patch base before calling ResolvePlan, and persist
+// the status change if a new plan was built (check planAlreadyActive).
+func ResolvePlan(node *seiv1alpha1.SeiNode) error {
 	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		return nil
 	}
@@ -187,23 +192,6 @@ func SnapshotGeneration(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotGenerati
 		return node.Spec.Archive.SnapshotGeneration
 	default:
 		return nil
-	}
-}
-
-// NeedsLongStartup returns true when the node's bootstrap strategy involves
-// replaying blocks.
-func NeedsLongStartup(node *seiv1alpha1.SeiNode) bool {
-	switch {
-	case node.Spec.FullNode != nil:
-		return node.Spec.FullNode.Snapshot != nil
-	case node.Spec.Validator != nil:
-		return node.Spec.Validator.Snapshot != nil
-	case node.Spec.Replayer != nil:
-		return true
-	case node.Spec.Archive != nil:
-		return true
-	default:
-		return false
 	}
 }
 
@@ -323,7 +311,7 @@ func paramsForTaskType(
 	case TaskSnapshotRestore:
 		return snapshotRestoreParams(snap)
 	case TaskConfigureGenesis:
-		return configureGenesisParams(node)
+		return configureGenesisParams()
 	case TaskConfigApply:
 		if configApplyParams != nil {
 			return configApplyParams
@@ -351,7 +339,7 @@ func snapshotRestoreParams(snap *seiv1alpha1.SnapshotSource) *task.SnapshotResto
 	}
 }
 
-func configureGenesisParams(_ *seiv1alpha1.SeiNode) *task.ConfigureGenesisParams {
+func configureGenesisParams() *task.ConfigureGenesisParams {
 	return &task.ConfigureGenesisParams{}
 }
 
@@ -409,6 +397,11 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 
 // buildRunningPlan builds a convergence plan for a Running node.
 // It ensures the StatefulSet and Service match the current spec.
+//
+// FailedPhase is deliberately empty: a convergence failure should not
+// transition the node out of Running. The executor still sets a PlanFailed
+// condition for observability, and the next reconcile will build a fresh
+// convergence plan to retry.
 func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	prog := []string{task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService}
 
