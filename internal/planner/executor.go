@@ -105,10 +105,11 @@ func executePlan(
 
 	t := CurrentTask(plan)
 	if t == nil {
+		prevPhase := currentPhase(obj)
 		patch := client.MergeFromWithOptions(obj.DeepCopyObject().(client.Object), client.MergeFromWithOptimisticLock{})
 		plan.Phase = seiv1alpha1.TaskPlanComplete
 		setTargetPhase(obj, plan.TargetPhase)
-		nilPlanIfConvergence(obj, plan)
+		nilPlanIfConvergence(obj, prevPhase, plan.TargetPhase)
 		if err := kc.Status().Patch(ctx, obj, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("marking plan complete: %w", err)
 		}
@@ -253,24 +254,32 @@ func setPlanFailedCondition(obj client.Object, plan *seiv1alpha1.TaskPlan, t *se
 	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
 		Type:               ConditionPlanFailed,
 		Status:             metav1.ConditionTrue,
-		Reason:             t.Type,
+		Reason:             "TaskFailed",
 		Message:            fmt.Sprintf("plan %s failed at task %s: %s", plan.ID, t.Type, errMsg),
 		ObservedGeneration: node.Generation,
 	})
 }
 
-// nilPlanIfConvergence nils the plan on the object's status when the completed
-// plan's target phase matches the current phase (convergence — the node stays
-// in the same phase). This avoids dead plan data in etcd between reconciles.
-func nilPlanIfConvergence(obj client.Object, plan *seiv1alpha1.TaskPlan) {
-	if plan.TargetPhase == "" {
+// currentPhase returns the SeiNode phase, or empty for non-SeiNode objects.
+func currentPhase(obj client.Object) seiv1alpha1.SeiNodePhase {
+	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
+		return node.Status.Phase
+	}
+	return ""
+}
+
+// nilPlanIfConvergence nils the plan on the object's status when the plan's
+// target phase matches the phase the node was already in before the plan
+// completed (convergence — the node stays in the same phase). Init plans
+// that transition to a new phase keep their completed plan visible in status.
+func nilPlanIfConvergence(obj client.Object, prevPhase, targetPhase seiv1alpha1.SeiNodePhase) {
+	if targetPhase == "" {
 		return
 	}
-	node, ok := obj.(*seiv1alpha1.SeiNode)
-	if !ok {
+	if prevPhase != targetPhase {
 		return
 	}
-	if node.Status.Phase == plan.TargetPhase {
+	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
 		node.Status.Plan = nil
 	}
 }
