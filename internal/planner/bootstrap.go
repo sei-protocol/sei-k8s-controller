@@ -154,7 +154,6 @@ const genesisConfigureMaxRetries = 180
 // configure-genesis retries until the group controller has assembled and
 // uploaded genesis.json to S3.
 func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	gc := node.Spec.Validator.GenesisCeremony
 	configApplyParams := &task.ConfigApplyParams{
 		Mode:      string(seiconfig.ModeValidator),
 		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
@@ -177,13 +176,7 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		// Use the ceremony-specific factory for genesis tasks,
-		// fall through to the shared factory for everything else.
-		params := genesisCeremonyParams(node, gc, taskType)
-		if params == nil {
-			params = paramsForTaskType(node, taskType, nil, configApplyParams)
-		}
-		t, err := buildPlannedTask(planID, taskType, i, params)
+		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, configApplyParams))
 		if err != nil {
 			return nil, err
 		}
@@ -199,33 +192,6 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		TargetPhase: seiv1alpha1.PhaseRunning,
 		FailedPhase: seiv1alpha1.PhaseFailed,
 	}, nil
-}
-
-// genesisCeremonyParams returns params for genesis-ceremony-specific tasks,
-// or nil for tasks handled by the shared paramsForTaskType factory.
-func genesisCeremonyParams(node *seiv1alpha1.SeiNode, gc *seiv1alpha1.GenesisCeremonyNodeConfig, taskType string) any {
-	switch taskType {
-	case TaskGenerateIdentity:
-		return &task.GenerateIdentityParams{
-			ChainID: gc.ChainID,
-			Moniker: node.Name,
-		}
-	case TaskGenerateGentx:
-		return &task.GenerateGentxParams{
-			ChainID:        gc.ChainID,
-			StakingAmount:  gc.StakingAmount,
-			AccountBalance: gc.AccountBalance,
-			GenesisParams:  gc.GenesisParams,
-		}
-	case TaskUploadGenesisArtifacts:
-		return &task.UploadGenesisArtifactsParams{
-			NodeName: node.Name,
-		}
-	case TaskSetGenesisPeers:
-		return &task.SetGenesisPeersParams{}
-	default:
-		return nil
-	}
 }
 
 // SnapshotUploadMonitorTask returns a snapshot-upload TaskRequest if applicable.

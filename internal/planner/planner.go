@@ -295,6 +295,7 @@ func buildBasePlan(
 }
 
 // paramsForTaskType constructs the appropriate params struct for a task type.
+// This is the single factory for all task params — every plan builder uses it.
 func paramsForTaskType(
 	node *seiv1alpha1.SeiNode,
 	taskType string,
@@ -302,16 +303,19 @@ func paramsForTaskType(
 	configApplyParams *task.ConfigApplyParams,
 ) any {
 	switch taskType {
+	// Infrastructure tasks
 	case task.TaskTypeEnsureDataPVC:
 		return &task.EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeApplyStatefulSet:
 		return &task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeApplyService:
 		return &task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}
+
+	// Sidecar tasks
 	case TaskSnapshotRestore:
 		return snapshotRestoreParams(snap)
 	case TaskConfigureGenesis:
-		return configureGenesisParams()
+		return &task.ConfigureGenesisParams{}
 	case TaskConfigApply:
 		if configApplyParams != nil {
 			return configApplyParams
@@ -325,6 +329,35 @@ func paramsForTaskType(
 		return &task.ConfigValidateParams{}
 	case TaskMarkReady:
 		return &task.MarkReadyParams{}
+
+	// Genesis ceremony tasks — only valid when Validator.GenesisCeremony is set.
+	case TaskGenerateIdentity, TaskGenerateGentx, TaskUploadGenesisArtifacts, TaskSetGenesisPeers:
+		return genesisCeremonyTaskParams(node, taskType)
+
+	default:
+		return nil
+	}
+}
+
+func genesisCeremonyTaskParams(node *seiv1alpha1.SeiNode, taskType string) any {
+	if node.Spec.Validator == nil || node.Spec.Validator.GenesisCeremony == nil {
+		return nil
+	}
+	gc := node.Spec.Validator.GenesisCeremony
+	switch taskType {
+	case TaskGenerateIdentity:
+		return &task.GenerateIdentityParams{ChainID: gc.ChainID, Moniker: node.Name}
+	case TaskGenerateGentx:
+		return &task.GenerateGentxParams{
+			ChainID:        gc.ChainID,
+			StakingAmount:  gc.StakingAmount,
+			AccountBalance: gc.AccountBalance,
+			GenesisParams:  gc.GenesisParams,
+		}
+	case TaskUploadGenesisArtifacts:
+		return &task.UploadGenesisArtifactsParams{NodeName: node.Name}
+	case TaskSetGenesisPeers:
+		return &task.SetGenesisPeersParams{}
 	default:
 		return nil
 	}
@@ -337,10 +370,6 @@ func snapshotRestoreParams(snap *seiv1alpha1.SnapshotSource) *task.SnapshotResto
 	return &task.SnapshotRestoreParams{
 		TargetHeight: snap.S3.TargetHeight,
 	}
-}
-
-func configureGenesisParams() *task.ConfigureGenesisParams {
-	return &task.ConfigureGenesisParams{}
 }
 
 func discoverPeersParams(node *seiv1alpha1.SeiNode) *task.DiscoverPeersParams {
