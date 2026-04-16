@@ -133,10 +133,6 @@ func (p *inPlaceDeploymentPlanner) BuildPlan(
 			Namespace: ns,
 			NodeNames: nodeNames,
 		}},
-		{task.TaskTypeMarkNodesReady, &task.MarkNodesReadyParams{
-			Namespace: ns,
-			NodeNames: nodeNames,
-		}},
 	}
 
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))

@@ -70,7 +70,11 @@ func (e *updateNodeSpecsExecution) Status(_ context.Context) ExecutionStatus {
 	return e.status
 }
 
-// --- AwaitSpecUpdate: waits for StatefulSet rollout to complete ---
+// --- AwaitSpecUpdate: waits for each node's image update to complete ---
+// This task polls status.currentImage on each SeiNode. The SeiNode
+// controller's NodeUpdate plan handles the full rollout lifecycle
+// (apply-statefulset, observe-image, mark-ready) and stamps currentImage
+// only after the rollout is complete and the sidecar is re-initialized.
 
 type awaitSpecUpdateExecution struct {
 	taskBase
