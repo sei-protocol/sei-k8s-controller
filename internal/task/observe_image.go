@@ -50,6 +50,12 @@ func (e *observeImageExecution) Execute(_ context.Context) error {
 // Status polls the StatefulSet rollout. Returns ExecutionRunning until the
 // rollout completes (UpdatedReplicas >= Replicas and ObservedGeneration >= Generation),
 // then stamps status.currentImage on the owning SeiNode and returns ExecutionComplete.
+//
+// This task mutates the owning resource's status (currentImage) inside Status(),
+// which is a sanctioned exception to the general rule that tasks only mutate owned
+// resources. The mutation must happen at observation time (not in Execute) because
+// the rollout completes asynchronously. The single-patch model ensures the mutation
+// is flushed with all other status changes.
 func (e *observeImageExecution) Status(ctx context.Context) ExecutionStatus {
 	if s, done := e.isTerminal(); done {
 		return s

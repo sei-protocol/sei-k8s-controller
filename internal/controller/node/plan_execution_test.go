@@ -683,10 +683,12 @@ func TestExecutePlan_ConvergencePlan_NilsOnCompletion(t *testing.T) {
 	node := snapshotNode()
 	node.Status.Phase = seiv1alpha1.PhaseRunning
 	node.Status.Plan = nil
-	// Build a convergence plan for a Running node.
+	// Build a NodeUpdate plan for a Running node with drift.
 	if err := planner.ResolvePlan(node); err != nil {
 		t.Fatal(err)
 	}
+	g.Expect(node.Status.Plan).NotTo(BeNil())
+
 	// Pre-complete all tasks.
 	for i := range node.Status.Plan.Tasks {
 		node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
@@ -696,8 +698,11 @@ func TestExecutePlan_ConvergencePlan_NilsOnCompletion(t *testing.T) {
 	_, err := r.PlanExecutor.ExecutePlan(context.Background(), node, node.Status.Plan)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	g.Expect(node.Status.Plan).To(BeNil(), "convergence plan should be nilled after completion")
-	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning), "phase should stay Running")
+	// NodeUpdate plans stay Complete (not nilled) so the planner can
+	// observe them and clear conditions on the next reconcile.
+	g.Expect(node.Status.Plan).NotTo(BeNil(), "NodeUpdate plan should stay for planner to observe")
+	g.Expect(node.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
+	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning))
 }
 
 func TestExecutePlan_TaskFailure_SetsPlanFailedCondition(t *testing.T) {

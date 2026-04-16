@@ -105,7 +105,7 @@ func executePlan(
 			prevPhase := currentPhase(obj)
 			plan.Phase = seiv1alpha1.TaskPlanComplete
 			setTargetPhase(obj, plan.TargetPhase)
-			clearCompletedConvergencePlan(obj, prevPhase, plan.TargetPhase)
+			clearCompletedPlanIfSafe(obj, plan, prevPhase, plan.TargetPhase)
 			planActive.WithLabelValues(cn, obj.GetNamespace(), obj.GetName()).Set(0)
 			return ResultRequeueImmediate, nil
 		}
@@ -254,15 +254,20 @@ func currentPhase(obj client.Object) seiv1alpha1.SeiNodePhase {
 	return ""
 }
 
-// clearCompletedConvergencePlan nils the plan on the object's status when the
-// plan's target phase matches the phase the node was already in before the
-// plan completed (convergence — the node stays in the same phase). Init plans
-// that transition to a new phase keep their completed plan visible in status.
-func clearCompletedConvergencePlan(obj client.Object, prevPhase, targetPhase seiv1alpha1.SeiNodePhase) {
+// clearCompletedPlanIfSafe nils the plan on the object's status when the
+// plan completed without changing phases AND does not require planner-side
+// cleanup (e.g., condition management). NodeUpdate plans are kept so the
+// planner can observe the terminal plan and clear conditions on the next
+// reconcile. Plans that transition to a new phase are also kept for
+// observability.
+func clearCompletedPlanIfSafe(obj client.Object, plan *seiv1alpha1.TaskPlan, prevPhase, targetPhase seiv1alpha1.SeiNodePhase) {
 	if targetPhase == "" {
 		return
 	}
 	if prevPhase != targetPhase {
+		return
+	}
+	if isNodeUpdatePlan(plan) {
 		return
 	}
 	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {

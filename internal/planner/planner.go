@@ -193,7 +193,7 @@ func clearNodeUpdateCondition(node *seiv1alpha1.SeiNode, reason, message string)
 }
 
 // isNodeUpdatePlan checks if the plan contains an observe-image task,
-// which distinguishes NodeUpdate plans from init or convergence plans.
+// which distinguishes NodeUpdate plans from init plans.
 func isNodeUpdatePlan(plan *seiv1alpha1.TaskPlan) bool {
 	for _, t := range plan.Tasks {
 		if t.Type == task.TaskTypeObserveImage {
