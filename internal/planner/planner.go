@@ -10,6 +10,7 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -113,6 +114,9 @@ func ResolvePlan(node *seiv1alpha1.SeiNode) error {
 		return nil
 	}
 
+	// Handle terminal plans before building the next one.
+	handleTerminalPlan(node)
+
 	p, err := plannerForMode(node)
 	if err != nil {
 		return err
@@ -133,7 +137,77 @@ func ResolvePlan(node *seiv1alpha1.SeiNode) error {
 	if node.Status.Phase == "" || node.Status.Phase == seiv1alpha1.PhasePending {
 		node.Status.Phase = seiv1alpha1.PhaseInitializing
 	}
+
+	// Set conditions for the new plan.
+	applyPlanStartConditions(node, plan)
 	return nil
+}
+
+// handleTerminalPlan clears conditions from a completed or failed plan.
+func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
+	plan := node.Status.Plan
+	if plan == nil {
+		return
+	}
+
+	switch plan.Phase {
+	case seiv1alpha1.TaskPlanComplete:
+		clearNodeUpdateCondition(node, "UpdateComplete",
+			fmt.Sprintf("plan %s completed", plan.ID))
+		node.Status.Plan = nil
+
+	case seiv1alpha1.TaskPlanFailed:
+		clearNodeUpdateCondition(node, "UpdateFailed",
+			fmt.Sprintf("plan %s failed: %s", plan.ID, planFailureMessage(plan)))
+		node.Status.Plan = nil
+	}
+}
+
+// applyPlanStartConditions sets conditions for a newly created plan.
+func applyPlanStartConditions(node *seiv1alpha1.SeiNode, plan *seiv1alpha1.TaskPlan) {
+	if isNodeUpdatePlan(plan) {
+		meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+			Type:               seiv1alpha1.ConditionNodeUpdateInProgress,
+			Status:             metav1.ConditionTrue,
+			Reason:             "UpdateStarted",
+			Message:            fmt.Sprintf("NodeUpdate plan %s started", plan.ID),
+			ObservedGeneration: node.Generation,
+		})
+	}
+}
+
+// clearNodeUpdateCondition clears NodeUpdateInProgress if it was set.
+func clearNodeUpdateCondition(node *seiv1alpha1.SeiNode, reason, message string) {
+	for _, c := range node.Status.Conditions {
+		if c.Type == seiv1alpha1.ConditionNodeUpdateInProgress && c.Status == metav1.ConditionTrue {
+			meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+				Type:               seiv1alpha1.ConditionNodeUpdateInProgress,
+				Status:             metav1.ConditionFalse,
+				Reason:             reason,
+				Message:            message,
+				ObservedGeneration: node.Generation,
+			})
+			return
+		}
+	}
+}
+
+// isNodeUpdatePlan checks if the plan contains an observe-image task,
+// which distinguishes NodeUpdate plans from init or convergence plans.
+func isNodeUpdatePlan(plan *seiv1alpha1.TaskPlan) bool {
+	for _, t := range plan.Tasks {
+		if t.Type == task.TaskTypeObserveImage {
+			return true
+		}
+	}
+	return false
+}
+
+func planFailureMessage(plan *seiv1alpha1.TaskPlan) string {
+	if plan.FailedTaskDetail != nil {
+		return fmt.Sprintf("task %s: %s", plan.FailedTaskDetail.Type, plan.FailedTaskDetail.Error)
+	}
+	return "unknown"
 }
 
 // plannerForMode returns the appropriate NodePlanner based on which mode
@@ -329,6 +403,8 @@ func paramsForTaskType(
 		return &task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeApplyService:
 		return &task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}
+	case task.TaskTypeObserveImage:
+		return &task.ObserveImageParams{NodeName: node.Name, Namespace: node.Namespace}
 
 	// Sidecar tasks
 	case TaskSnapshotRestore:
@@ -450,14 +526,25 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 // Currently detects image drift (spec.image != status.currentImage). This is
 // the extension point for future drift types (config changes, peer changes).
 func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if node.Spec.Image == node.Status.CurrentImage {
-		return nil, nil
+	if node.Spec.Image != node.Status.CurrentImage {
+		return buildNodeUpdatePlan(node)
 	}
+	return nil, nil
+}
 
-	// Image drift detected — build a convergence plan to update the StatefulSet.
-	// FailedPhase is deliberately empty: a failure retries on the next reconcile
-	// rather than transitioning the node out of Running.
-	prog := []string{task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService}
+// buildNodeUpdatePlan constructs a plan to roll out an image update on a
+// Running node. The plan applies the new StatefulSet spec, waits for the
+// rollout to complete, then re-initializes the sidecar.
+//
+// FailedPhase is deliberately empty: a failure retries on the next reconcile
+// rather than transitioning the node out of Running.
+func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	prog := []string{
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}
 
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
