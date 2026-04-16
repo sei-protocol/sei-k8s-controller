@@ -525,7 +525,7 @@ func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, erro
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
 		task.TaskTypeObserveImage,
-		TaskMarkReady,
+		sidecar.TaskTypeMarkReady,
 	}
 
 	planID := uuid.New().String()
