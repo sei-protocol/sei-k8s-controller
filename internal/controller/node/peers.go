@@ -12,10 +12,9 @@ import (
 
 // reconcilePeers resolves label-based peer sources by listing matching
 // SeiNode resources and writing their stable DNS hostnames to
-// status.resolvedPeers. This runs on every reconcile so the resolved
-// list stays current. EC2Tags and Static sources are handled by the
-// sidecar at task execution time and do not appear here.
-func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+// status.resolvedPeers in-memory. The caller is responsible for persisting
+// the change. Returns true if the resolved peers changed.
+func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha1.SeiNode) (bool, error) {
 	var resolved []string
 	for _, src := range node.Spec.Peers {
 		if src.Label == nil {
@@ -23,7 +22,7 @@ func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha
 		}
 		endpoints, err := r.resolveLabelPeers(ctx, node, src.Label)
 		if err != nil {
-			return err
+			return false, err
 		}
 		resolved = append(resolved, endpoints...)
 	}
@@ -32,13 +31,10 @@ func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha
 	resolved = slices.Compact(resolved)
 
 	if !slices.Equal(node.Status.ResolvedPeers, resolved) {
-		patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		node.Status.ResolvedPeers = resolved
-		if err := r.Status().Patch(ctx, node, patch); err != nil {
-			return fmt.Errorf("patching resolved peers: %w", err)
-		}
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 // resolveLabelPeers lists SeiNode resources matching the label selector
