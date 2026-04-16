@@ -77,14 +77,17 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 		return n
 	}
 
-	// First Reconcile: builds plan, transitions to Initializing, completes
-	// all synchronous infrastructure tasks, and submits the first sidecar task.
+	// First Reconcile: builds and persists the plan.
 	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	node = fetch()
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhaseInitializing))
 
-	// Drive sidecar tasks (infrastructure tasks already completed in first reconcile).
+	// Second Reconcile: executes all synchronous infrastructure tasks
+	// and submits the first sidecar task.
+	reconcileOnce(t, g, r, node.Name, node.Namespace)
+
+	// Drive sidecar tasks.
 	driveTask(t, g, r, mock, fetch, planner.TaskSnapshotRestore)
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigureGenesis)
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigApply)
@@ -111,13 +114,15 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 		return n
 	}
 
-	// First Reconcile: builds plan, transitions to Initializing, completes
-	// all synchronous infrastructure tasks, and submits the first sidecar task.
+	// First Reconcile: builds and persists the plan.
 	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	node = fetch()
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
-	// Drive sidecar tasks (infrastructure tasks already completed in first reconcile).
+	// Second Reconcile: executes infrastructure tasks, submits first sidecar task.
+	reconcileOnce(t, g, r, node.Name, node.Namespace)
+
+	// Drive sidecar tasks.
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigureGenesis)
 	// Completing config-apply also chain-completes the trailing fire-and-forget
 	// tasks (config-validate, mark-ready) and the plan, transitioning to Running.
@@ -141,13 +146,13 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 		return n
 	}
 
-	// First Reconcile: builds plan, transitions to Initializing, completes
-	// all synchronous infrastructure tasks, and submits the first sidecar task.
+	// First Reconcile: builds and persists the plan.
 	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	node = fetch()
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
-	// Drive snapshot-restore: the first reconcile already submitted it.
+	// Second Reconcile: executes infrastructure tasks, submits snapshot-restore.
+	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	node = fetch()
 	ct := planner.CurrentTask(node.Status.Plan)
 	g.Expect(ct).NotTo(BeNil())
