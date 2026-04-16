@@ -143,7 +143,8 @@ func ResolvePlan(node *seiv1alpha1.SeiNode) error {
 	return nil
 }
 
-// handleTerminalPlan clears conditions from a completed or failed plan.
+// handleTerminalPlan handles completed or failed plans: clears conditions
+// and nils the plan so the planner can build the next one if needed.
 func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 	plan := node.Status.Plan
 	if plan == nil {

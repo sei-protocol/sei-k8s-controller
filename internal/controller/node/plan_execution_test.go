@@ -677,7 +677,7 @@ func TestExecutePlan_AllComplete_TransitionsToTargetPhase(t *testing.T) {
 	g.Expect(node.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
 }
 
-func TestExecutePlan_ConvergencePlan_NilsOnCompletion(t *testing.T) {
+func TestExecutePlan_CompletedPlan_StaysForPlannerCleanup(t *testing.T) {
 	g := NewWithT(t)
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
@@ -698,9 +698,9 @@ func TestExecutePlan_ConvergencePlan_NilsOnCompletion(t *testing.T) {
 	_, err := r.PlanExecutor.ExecutePlan(context.Background(), node, node.Status.Plan)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	// NodeUpdate plans stay Complete (not nilled) so the planner can
-	// observe them and clear conditions on the next reconcile.
-	g.Expect(node.Status.Plan).NotTo(BeNil(), "NodeUpdate plan should stay for planner to observe")
+	// Completed plans stay in status — the planner handles cleanup
+	// (nilling the plan, clearing conditions) on the next reconcile.
+	g.Expect(node.Status.Plan).NotTo(BeNil(), "completed plan should stay for planner to observe")
 	g.Expect(node.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
 	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning))
 }
