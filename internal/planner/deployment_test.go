@@ -30,11 +30,10 @@ func TestInPlacePlan_ThreeTasks(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
-	g.Expect(plan.Tasks).To(HaveLen(3))
+	g.Expect(plan.Tasks).To(HaveLen(2))
 
 	g.Expect(plan.Tasks[0].Type).To(Equal(task.TaskTypeUpdateNodeSpecs))
 	g.Expect(plan.Tasks[1].Type).To(Equal(task.TaskTypeAwaitSpecUpdate))
-	g.Expect(plan.Tasks[2].Type).To(Equal(task.TaskTypeMarkNodesReady))
 
 	for i, pt := range plan.Tasks {
 		g.Expect(pt.Status).To(Equal(seiv1alpha1.TaskPending), "task[%d] should be Pending", i)
@@ -52,9 +51,4 @@ func TestInPlacePlan_ThreeTasks(t *testing.T) {
 	g.Expect(json.Unmarshal(plan.Tasks[1].Params.Raw, &awaitParams)).To(Succeed())
 	g.Expect(awaitParams.Namespace).To(Equal("pacific-1"))
 	g.Expect(awaitParams.NodeNames).To(Equal([]string{"wave-group-0", "wave-group-1", "wave-group-2"}))
-
-	var markParams task.MarkNodesReadyParams
-	g.Expect(json.Unmarshal(plan.Tasks[2].Params.Raw, &markParams)).To(Succeed())
-	g.Expect(markParams.Namespace).To(Equal("pacific-1"))
-	g.Expect(markParams.NodeNames).To(Equal([]string{"wave-group-0", "wave-group-1", "wave-group-2"}))
 }

@@ -7,7 +7,6 @@ const (
 	TaskTypeCreateEntrantNodes = "create-entrant-nodes"
 	TaskTypeUpdateNodeSpecs    = "update-node-specs"
 	TaskTypeAwaitSpecUpdate    = "await-spec-update"
-	TaskTypeMarkNodesReady     = "mark-nodes-ready"
 	TaskTypeSubmitHaltSignal   = "submit-halt-signal"
 	TaskTypeAwaitNodesAtHeight = "await-nodes-at-height"
 	TaskTypeAwaitNodesCaughtUp = "await-nodes-caught-up"
@@ -70,13 +69,6 @@ type UpdateNodeSpecsParams struct {
 // AwaitSpecUpdateParams holds parameters for waiting until all nodes
 // have converged to the desired image (status.currentImage == spec.image).
 type AwaitSpecUpdateParams struct {
-	Namespace string   `json:"namespace"`
-	NodeNames []string `json:"nodeNames"`
-}
-
-// MarkNodesReadyParams holds parameters for submitting mark-ready to
-// each node's sidecar after an InPlace rollout completes.
-type MarkNodesReadyParams struct {
 	Namespace string   `json:"namespace"`
 	NodeNames []string `json:"nodeNames"`
 }
