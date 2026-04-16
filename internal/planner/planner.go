@@ -137,9 +137,6 @@ func ResolvePlan(node *seiv1alpha1.SeiNode) error {
 	if node.Status.Phase == "" || node.Status.Phase == seiv1alpha1.PhasePending {
 		node.Status.Phase = seiv1alpha1.PhaseInitializing
 	}
-
-	// Set conditions for the new plan.
-	applyPlanStartConditions(node, plan)
 	return nil
 }
 
@@ -153,55 +150,26 @@ func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 
 	switch plan.Phase {
 	case seiv1alpha1.TaskPlanComplete:
-		clearNodeUpdateCondition(node, "UpdateComplete",
+		setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateComplete",
 			fmt.Sprintf("plan %s completed", plan.ID))
 		node.Status.Plan = nil
 
 	case seiv1alpha1.TaskPlanFailed:
-		clearNodeUpdateCondition(node, "UpdateFailed",
+		setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateFailed",
 			fmt.Sprintf("plan %s failed: %s", plan.ID, planFailureMessage(plan)))
 		node.Status.Plan = nil
 	}
 }
 
-// applyPlanStartConditions sets conditions for a newly created plan.
-func applyPlanStartConditions(node *seiv1alpha1.SeiNode, plan *seiv1alpha1.TaskPlan) {
-	if isNodeUpdatePlan(plan) {
-		meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
-			Type:               seiv1alpha1.ConditionNodeUpdateInProgress,
-			Status:             metav1.ConditionTrue,
-			Reason:             "UpdateStarted",
-			Message:            fmt.Sprintf("NodeUpdate plan %s started", plan.ID),
-			ObservedGeneration: node.Generation,
-		})
-	}
-}
-
-// clearNodeUpdateCondition clears NodeUpdateInProgress if it was set.
-func clearNodeUpdateCondition(node *seiv1alpha1.SeiNode, reason, message string) {
-	for _, c := range node.Status.Conditions {
-		if c.Type == seiv1alpha1.ConditionNodeUpdateInProgress && c.Status == metav1.ConditionTrue {
-			meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
-				Type:               seiv1alpha1.ConditionNodeUpdateInProgress,
-				Status:             metav1.ConditionFalse,
-				Reason:             reason,
-				Message:            message,
-				ObservedGeneration: node.Generation,
-			})
-			return
-		}
-	}
-}
-
-// isNodeUpdatePlan checks if the plan contains an observe-image task,
-// which distinguishes NodeUpdate plans from init plans.
-func isNodeUpdatePlan(plan *seiv1alpha1.TaskPlan) bool {
-	for _, t := range plan.Tasks {
-		if t.Type == task.TaskTypeObserveImage {
-			return true
-		}
-	}
-	return false
+// setNodeUpdateCondition sets or updates the NodeUpdateInProgress condition.
+func setNodeUpdateCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:               seiv1alpha1.ConditionNodeUpdateInProgress,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: node.Generation,
+	})
 }
 
 func planFailureMessage(plan *seiv1alpha1.TaskPlan) string {
@@ -540,6 +508,9 @@ func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 // FailedPhase is deliberately empty: a failure retries on the next reconcile
 // rather than transitioning the node out of Running.
 func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted",
+		fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage))
+
 	prog := []string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,

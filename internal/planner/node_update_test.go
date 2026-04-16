@@ -96,7 +96,7 @@ func TestResolvePlan_NodeUpdate_SetsCondition(t *testing.T) {
 	g.Expect(cond).NotTo(BeNil(), "NodeUpdateInProgress condition should be set")
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 	g.Expect(cond.Reason).To(Equal("UpdateStarted"))
-	g.Expect(cond.Message).To(ContainSubstring(node.Status.Plan.ID))
+	g.Expect(cond.Message).To(ContainSubstring("image drift detected"))
 }
 
 func TestResolvePlan_CompletedPlan_ClearsCondition(t *testing.T) {
@@ -237,26 +237,6 @@ func TestBuildRunningPlan_UniqueIDs(t *testing.T) {
 	}
 }
 
-func TestIsNodeUpdatePlan(t *testing.T) {
-	g := NewWithT(t)
-
-	updatePlan := &seiv1alpha1.TaskPlan{
-		Tasks: []seiv1alpha1.PlannedTask{
-			{Type: task.TaskTypeApplyStatefulSet},
-			{Type: task.TaskTypeObserveImage},
-		},
-	}
-	g.Expect(isNodeUpdatePlan(updatePlan)).To(BeTrue())
-
-	initPlan := &seiv1alpha1.TaskPlan{
-		Tasks: []seiv1alpha1.PlannedTask{
-			{Type: task.TaskTypeApplyStatefulSet},
-			{Type: TaskMarkReady},
-		},
-	}
-	g.Expect(isNodeUpdatePlan(initPlan)).To(BeFalse())
-}
-
 func TestHandleTerminalPlan_CompletedWithUpdateCondition(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
@@ -325,30 +305,6 @@ func TestHandleTerminalPlan_ActivePlan_NoOp(t *testing.T) {
 	handleTerminalPlan(node)
 	g.Expect(node.Status.Plan).NotTo(BeNil(), "active plan should not be cleared")
 	g.Expect(node.Status.Plan.ID).To(Equal("active-plan"))
-}
-
-func TestClearNodeUpdateCondition_NoConditionSet(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-	// No conditions — clearNodeUpdateCondition should be a no-op.
-	clearNodeUpdateCondition(node, "UpdateComplete", "plan done")
-	g.Expect(node.Status.Conditions).To(BeEmpty(),
-		"should not create a condition when none existed")
-}
-
-func TestClearNodeUpdateCondition_AlreadyFalse(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
-		Type:   seiv1alpha1.ConditionNodeUpdateInProgress,
-		Status: metav1.ConditionFalse,
-		Reason: "PreviousComplete",
-	})
-
-	clearNodeUpdateCondition(node, "UpdateComplete", "plan done again")
-	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
-	g.Expect(cond.Reason).To(Equal("PreviousComplete"),
-		"should not overwrite a condition that is already False")
 }
 
 func TestPlanFailureMessage_WithDetail(t *testing.T) {
