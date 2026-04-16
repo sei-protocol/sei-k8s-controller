@@ -105,18 +105,18 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
 
-	// Execute the plan. The executor advances tasks in-memory — synchronous
-	// tasks complete in a loop, async tasks return Running with a poll interval.
 	var result ctrl.Result
 	var execErr error
-	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
-		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
-		statusDirty = true
-	}
 
-	// If ResolvePlan built a new plan (but there's nothing to execute yet
-	// because it was just created this reconcile), mark dirty so it gets persisted.
 	if !planAlreadyActive && node.Status.Plan != nil {
+		// New plan — persist it before executing. Execution starts on the
+		// next reconcile. This guarantees external observers see the plan
+		// (and any conditions) before side effects occur.
+		statusDirty = true
+		result = planner.ResultRequeueImmediate
+	} else if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
+		// Existing plan — execute tasks in-memory.
+		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
 		statusDirty = true
 	}
 
