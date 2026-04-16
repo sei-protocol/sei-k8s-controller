@@ -42,51 +42,39 @@ func deserializeObserveImage(id string, params json.RawMessage, cfg ExecutionCon
 	}, nil
 }
 
-// Execute is a no-op for observe-image — all work happens in Status polling.
-func (e *observeImageExecution) Execute(_ context.Context) error {
-	return nil
-}
-
-// Status polls the StatefulSet rollout. Returns ExecutionRunning until the
-// rollout completes (UpdatedReplicas >= Replicas and ObservedGeneration >= Generation),
-// then stamps status.currentImage on the owning SeiNode and returns ExecutionComplete.
-//
-// This task mutates the owning resource's status (currentImage) inside Status(),
-// which is a sanctioned exception to the general rule that tasks only mutate owned
-// resources. The mutation must happen at observation time (not in Execute) because
-// the rollout completes asynchronously. The single-patch model ensures the mutation
-// is flushed with all other status changes.
-func (e *observeImageExecution) Status(ctx context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
-		return s
-	}
-
+// Execute polls the StatefulSet rollout. If the rollout is complete, stamps
+// status.currentImage on the owning SeiNode and marks the task complete.
+// If the rollout is still in progress, returns nil — the executor will
+// re-invoke on the next reconcile since the task remains Pending.
+func (e *observeImageExecution) Execute(ctx context.Context) error {
 	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
-		e.setFailed(err)
-		return ExecutionFailed
+		return Terminal(err)
 	}
 
 	sts := &appsv1.StatefulSet{}
 	key := types.NamespacedName{Name: node.Name, Namespace: node.Namespace}
 	if err := e.cfg.KubeClient.Get(ctx, key, sts); err != nil {
 		if apierrors.IsNotFound(err) {
-			// StatefulSet doesn't exist yet — keep waiting.
-			return ExecutionRunning
+			return nil
 		}
-		e.setFailed(fmt.Errorf("getting statefulset: %w", err))
-		return ExecutionFailed
+		return fmt.Errorf("getting statefulset: %w", err)
 	}
 
 	if sts.Status.ObservedGeneration < sts.Generation {
-		return ExecutionRunning
+		return nil
 	}
 	if sts.Spec.Replicas == nil || sts.Status.UpdatedReplicas < *sts.Spec.Replicas {
-		return ExecutionRunning
+		return nil
 	}
 
 	// Rollout complete — stamp currentImage in-memory.
 	node.Status.CurrentImage = node.Spec.Image
 	e.complete()
-	return ExecutionComplete
+	return nil
+}
+
+// Status returns the cached execution status.
+func (e *observeImageExecution) Status(_ context.Context) ExecutionStatus {
+	return e.DefaultStatus()
 }
