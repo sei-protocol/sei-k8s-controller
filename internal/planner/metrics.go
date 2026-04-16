@@ -1,11 +1,11 @@
 package planner
 
 import (
-	"strings"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 var (
@@ -42,13 +42,17 @@ func init() {
 	)
 }
 
-// controllerName derives a lowercase controller label from the object's GVK Kind.
+// controllerName returns the controller label for metrics. Uses a type switch
+// because controller-runtime strips GVK from objects fetched via client.Get.
 func controllerName(obj client.Object) string {
-	kind := obj.GetObjectKind().GroupVersionKind().Kind
-	if kind == "" {
+	switch obj.(type) {
+	case *seiv1alpha1.SeiNode:
+		return "seinode"
+	case *seiv1alpha1.SeiNodeDeployment:
+		return "seinodedeployment"
+	default:
 		return "unknown"
 	}
-	return strings.ToLower(kind)
 }
 
 // CleanupPlanMetrics removes the plan_active gauge for a deleted resource.

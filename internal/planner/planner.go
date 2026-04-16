@@ -443,14 +443,20 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	}
 }
 
-// buildRunningPlan builds a convergence plan for a Running node.
-// It ensures the StatefulSet and Service match the current spec.
+// buildRunningPlan returns a plan for a Running node only when the controller
+// recognizes a scenario that requires action. Returns nil when the node is
+// in steady state (no drift detected).
 //
-// FailedPhase is deliberately empty: a convergence failure should not
-// transition the node out of Running. The executor still sets a PlanFailed
-// condition for observability, and the next reconcile will build a fresh
-// convergence plan to retry.
+// Currently detects image drift (spec.image != status.currentImage). This is
+// the extension point for future drift types (config changes, peer changes).
 func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if node.Spec.Image == node.Status.CurrentImage {
+		return nil, nil
+	}
+
+	// Image drift detected — build a convergence plan to update the StatefulSet.
+	// FailedPhase is deliberately empty: a failure retries on the next reconcile
+	// rather than transitioning the node out of Running.
 	prog := []string{task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService}
 
 	planID := uuid.New().String()

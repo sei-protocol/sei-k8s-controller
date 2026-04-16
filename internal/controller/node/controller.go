@@ -216,6 +216,8 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 		return ctrl.Result{}, nil
 	}
 
+	// Deletion path: separate patch is intentional — this runs before the
+	// main reconcile flow and must set Terminating before cleaning up resources.
 	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	node.Status.Phase = seiv1alpha1.PhaseTerminating
 	if err := r.Status().Patch(ctx, node, patch); err != nil {
