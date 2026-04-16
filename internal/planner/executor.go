@@ -121,8 +121,6 @@ func executePlan(
 		if t.Status != seiv1alpha1.TaskComplete {
 			return result, nil
 		}
-
-		// Task completed synchronously — continue to the next task.
 	}
 }
 
@@ -143,7 +141,7 @@ func advanceTask(
 
 	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, cfg)
 	if err != nil {
-		failTask(obj, cn, plan, t, err.Error())
+		failTask(ctx, obj, cn, plan, t, err.Error())
 		return ctrl.Result{}
 	}
 
@@ -151,7 +149,7 @@ func advanceTask(
 		if err := exec.Execute(ctx); err != nil {
 			var termErr *task.TerminalError
 			if errors.As(err, &termErr) {
-				failTask(obj, cn, plan, t, err.Error())
+				failTask(ctx, obj, cn, plan, t, err.Error())
 				return ctrl.Result{}
 			}
 			log.FromContext(ctx).Info("task execution failed, will retry",
@@ -190,7 +188,7 @@ func advanceTask(
 				"task", t.Type, "retry", t.RetryCount, "maxRetries", t.MaxRetries, "lastError", errMsg)
 			return ctrl.Result{RequeueAfter: retryBackoff(t.RetryCount)}
 		}
-		failTask(obj, cn, plan, t, errMsg)
+		failTask(ctx, obj, cn, plan, t, errMsg)
 		return ctrl.Result{}
 
 	default:
@@ -202,13 +200,14 @@ func advanceTask(
 // Sets FailedPhase on the node and a PlanFailed condition. All mutations
 // are in-memory.
 func failTask(
+	ctx context.Context,
 	obj client.Object,
 	controller string,
 	plan *seiv1alpha1.TaskPlan,
 	t *seiv1alpha1.PlannedTask,
 	errMsg string,
 ) {
-	log.Log.Error(fmt.Errorf("task failed: %s", errMsg), "task plan failed", "task", t.Type)
+	log.FromContext(ctx).Error(fmt.Errorf("task failed: %s", errMsg), "task plan failed", "task", t.Type)
 
 	taskFailuresTotal.WithLabelValues(controller, obj.GetNamespace(), t.Type).Inc()
 

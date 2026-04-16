@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -53,6 +54,8 @@ type SeiNodeReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
+// Reconcile drives the SeiNode lifecycle. All status mutations after the
+// finalizer are accumulated in-memory and flushed in a single status patch.
 func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	node := &seiv1alpha1.SeiNode{}
 	if err := r.Get(ctx, req.NamespacedName, node); err != nil {
@@ -83,9 +86,6 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	// --- From here, all status mutations are in-memory. ---
-	// Capture the patch base AFTER the finalizer update so resourceVersion
-	// matches the stored object.
 	statusBase := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	observedPhase := node.Status.Phase
 	statusDirty := false
@@ -129,14 +129,15 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	// --- Flush all accumulated status mutations in a single patch. ---
 	if statusDirty {
 		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
+			if execErr != nil {
+				log.FromContext(ctx).Error(execErr, "plan execution error lost due to status flush failure")
+			}
 			return ctrl.Result{}, fmt.Errorf("flushing status: %w", err)
 		}
 	}
 
-	// Return exec error AFTER the flush so partial progress is persisted.
 	if execErr != nil {
 		return result, execErr
 	}
