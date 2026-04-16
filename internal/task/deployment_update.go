@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -70,7 +69,11 @@ func (e *updateNodeSpecsExecution) Status(_ context.Context) ExecutionStatus {
 	return e.status
 }
 
-// --- AwaitSpecUpdate: waits for StatefulSet rollout to complete ---
+// --- AwaitSpecUpdate: waits for each node's image update to complete ---
+// This task polls status.currentImage on each SeiNode. The SeiNode
+// controller's NodeUpdate plan handles the full rollout lifecycle
+// (apply-statefulset, observe-image, mark-ready) and stamps currentImage
+// only after the rollout is complete and the sidecar is re-initialized.
 
 type awaitSpecUpdateExecution struct {
 	taskBase
@@ -113,73 +116,4 @@ func (e *awaitSpecUpdateExecution) Status(ctx context.Context) ExecutionStatus {
 	}
 	e.complete()
 	return ExecutionComplete
-}
-
-// --- MarkNodesReady: submits mark-ready to each node's sidecar ---
-
-type markNodesReadyExecution struct {
-	taskBase
-	params MarkNodesReadyParams
-	cfg    ExecutionConfig
-	marked map[string]bool
-}
-
-func deserializeMarkNodesReady(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
-	var p MarkNodesReadyParams
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, fmt.Errorf("deserializing mark-nodes-ready params: %w", err)
-		}
-	}
-	return &markNodesReadyExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
-		marked:   make(map[string]bool, len(p.NodeNames)),
-	}, nil
-}
-
-func (e *markNodesReadyExecution) Execute(_ context.Context) error { return nil }
-
-func (e *markNodesReadyExecution) Status(ctx context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
-		return s
-	}
-	logger := log.FromContext(ctx)
-
-	allReady := true
-	for _, name := range e.params.NodeNames {
-		if e.marked[name] {
-			continue
-		}
-		node := &seiv1alpha1.SeiNode{}
-		if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, node); err != nil {
-			allReady = false
-			continue
-		}
-		sc, err := sidecarClientForNode(node)
-		if err != nil {
-			allReady = false
-			continue
-		}
-		resp, err := sc.Status(ctx)
-		if err != nil {
-			allReady = false
-			continue
-		}
-		if resp.Status == sidecar.Ready {
-			e.marked[name] = true
-			continue
-		}
-		if _, err := sc.SubmitTask(ctx, sidecar.TaskRequest{Type: sidecar.TaskTypeMarkReady}); err != nil {
-			logger.V(1).Info("mark-ready submission failed", "node", name, "error", err)
-		}
-		allReady = false
-	}
-
-	if allReady {
-		e.complete()
-		return ExecutionComplete
-	}
-	return ExecutionRunning
 }

@@ -213,7 +213,6 @@ var registry = map[string]taskDeserializer{
 	// Controller-side deployment tasks
 	TaskTypeUpdateNodeSpecs:    deserializeUpdateNodeSpecs,
 	TaskTypeAwaitSpecUpdate:    deserializeAwaitSpecUpdate,
-	TaskTypeMarkNodesReady:     deserializeMarkNodesReady,
 	TaskTypeCreateEntrantNodes: deserializeCreateEntrantNodes,
 	TaskTypeSubmitHaltSignal:   deserializeSubmitHaltSignal,
 	TaskTypeAwaitNodesAtHeight: deserializeAwaitNodesAtHeight,
