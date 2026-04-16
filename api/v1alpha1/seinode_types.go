@@ -205,29 +205,6 @@ const (
 	PhaseTerminating  SeiNodePhase = "Terminating"
 )
 
-// MonitorTask tracks a long-running sidecar task that the controller
-// actively polls for completion. Unlike fire-and-forget tasks,
-// completing a monitor task triggers a controller response (Event + Condition).
-// The map key in MonitorTasks serves as the task type identifier.
-type MonitorTask struct {
-	// ID is the sidecar-assigned task UUID.
-	ID string `json:"id"`
-
-	// Status tracks lifecycle: Pending → Complete or Failed.
-	Status TaskStatus `json:"status"`
-
-	// SubmittedAt is the time the task was submitted to the sidecar.
-	SubmittedAt metav1.Time `json:"submittedAt"`
-
-	// CompletedAt is the time the task reached a terminal state.
-	// +optional
-	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
-
-	// Error is set when the task fails.
-	// +optional
-	Error string `json:"error,omitempty"`
-}
-
 // SeiNodeStatus defines the observed state of a SeiNode.
 type SeiNodeStatus struct {
 	// Phase is the high-level lifecycle state.
@@ -250,11 +227,6 @@ type SeiNodeStatus struct {
 	// the plan based on the node's current state and conditions.
 	// +optional
 	Plan *TaskPlan `json:"plan,omitempty"`
-
-	// MonitorTasks tracks long-running sidecar tasks the controller polls
-	// for completion. Keyed by task type for idempotent submission.
-	// +optional
-	MonitorTasks map[string]MonitorTask `json:"monitorTasks,omitempty"`
 
 	// ResolvedPeers is the current set of peer DNS hostnames discovered
 	// from label-based peer sources. Reconciled continuously so that

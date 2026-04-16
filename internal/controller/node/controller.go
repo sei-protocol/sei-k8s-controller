@@ -16,14 +16,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 const (
@@ -39,11 +37,10 @@ type PlatformConfig = platform.Config
 // SeiNodeReconciler reconciles a SeiNode object.
 type SeiNodeReconciler struct {
 	client.Client
-	Scheme               *runtime.Scheme
-	Recorder             record.EventRecorder
-	Platform             PlatformConfig
-	PlanExecutor         planner.PlanExecutor[*seiv1alpha1.SeiNode]
-	BuildSidecarClientFn func(node *seiv1alpha1.SeiNode) task.SidecarClient
+	Scheme       *runtime.Scheme
+	Recorder     record.EventRecorder
+	Platform     PlatformConfig
+	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNode]
 }
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
@@ -133,29 +130,15 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	// Running phase: after the convergence plan completes, handle
-	// runtime tasks (image observation, monitor task polling).
+	// Running phase: observe image convergence after plan completes.
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
-		return r.reconcileRunningTasks(ctx, node)
+		if err := r.observeCurrentImage(ctx, node); err != nil {
+			return ctrl.Result{}, fmt.Errorf("observing current image: %w", err)
+		}
+		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 
 	return result, nil
-}
-
-// reconcileRunningTasks handles Running-phase work that is outside the plan:
-// image observation and sidecar monitor task polling.
-func (r *SeiNodeReconciler) reconcileRunningTasks(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
-	if err := r.observeCurrentImage(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("observing current image: %w", err)
-	}
-
-	sc := r.buildSidecarClient(node)
-	if sc == nil {
-		sidecarUnreachableTotal.WithLabelValues(node.Namespace, node.Name).Inc()
-		log.FromContext(ctx).Info("sidecar not reachable, will retry")
-		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
-	}
-	return r.reconcileRuntimeTasks(ctx, node, sc)
 }
 
 func (r *SeiNodeReconciler) observeCurrentImage(ctx context.Context, node *seiv1alpha1.SeiNode) error {

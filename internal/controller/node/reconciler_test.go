@@ -61,9 +61,6 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 				}
 			},
 		},
-		BuildSidecarClientFn: func(_ *seiv1alpha1.SeiNode) task.SidecarClient {
-			return mock
-		},
 	}
 	return r, c
 }

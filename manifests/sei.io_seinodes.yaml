@@ -573,47 +573,6 @@ spec:
                   ingress. Used by the planner to set p2p.external_address in CometBFT
                   config so the node advertises a reachable address for gossip discovery.
                 type: string
-              monitorTasks:
-                additionalProperties:
-                  description: |-
-                    MonitorTask tracks a long-running sidecar task that the controller
-                    actively polls for completion. Unlike fire-and-forget tasks,
-                    completing a monitor task triggers a controller response (Event + Condition).
-                    The map key in MonitorTasks serves as the task type identifier.
-                  properties:
-                    completedAt:
-                      description: CompletedAt is the time the task reached a terminal
-                        state.
-                      format: date-time
-                      type: string
-                    error:
-                      description: Error is set when the task fails.
-                      type: string
-                    id:
-                      description: ID is the sidecar-assigned task UUID.
-                      type: string
-                    status:
-                      description: 'Status tracks lifecycle: Pending → Complete or
-                        Failed.'
-                      enum:
-                      - Pending
-                      - Complete
-                      - Failed
-                      type: string
-                    submittedAt:
-                      description: SubmittedAt is the time the task was submitted
-                        to the sidecar.
-                      format: date-time
-                      type: string
-                  required:
-                  - id
-                  - status
-                  - submittedAt
-                  type: object
-                description: |-
-                  MonitorTasks tracks long-running sidecar tasks the controller polls
-                  for completion. Keyed by task type for idempotent submission.
-                type: object
               phase:
                 description: Phase is the high-level lifecycle state.
                 enum:
