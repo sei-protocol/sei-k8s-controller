@@ -33,15 +33,20 @@
 // followed by sidecar tasks (configure-genesis, config-apply, etc.).
 // Init plans set both TargetPhase (Running) and FailedPhase (Failed).
 //
-// Convergence plans keep a Running node's owned resources in sync with the
-// spec. They contain only apply-statefulset and apply-service. FailedPhase
-// is deliberately empty: a convergence failure retries on the next reconcile
-// rather than transitioning the node to Failed.
+// NodeUpdate plans roll out image changes on Running nodes. They are built
+// when spec.image != status.currentImage (drift detection). The task sequence
+// is: apply-statefulset, apply-service, observe-image, mark-ready. The planner
+// sets NodeUpdateInProgress=True on creation and clears it when the plan
+// completes or fails. FailedPhase is empty — failures retry on the next
+// reconcile rather than transitioning to Failed.
+//
+// When no drift is detected for a Running node, no plan is built. The node
+// sits in steady state with no active plan.
 //
 // # Task Types
 //
 // Sidecar tasks are submitted to the sidecar HTTP API and polled for
 // completion. Controller-side tasks (ensure-data-pvc, apply-statefulset,
-// apply-service, deploy-bootstrap-job, etc.) execute inline against the
-// Kubernetes API.
+// apply-service, observe-image, deploy-bootstrap-job, etc.) execute inline
+// against the Kubernetes API.
 package planner

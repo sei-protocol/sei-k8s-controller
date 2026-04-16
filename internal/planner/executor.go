@@ -101,11 +101,11 @@ func executePlan(
 	for {
 		t := CurrentTask(plan)
 		if t == nil {
-			// All tasks complete — finalize the plan.
-			prevPhase := currentPhase(obj)
+			// All tasks complete — mark the plan Complete and set the target
+			// phase. The planner handles cleanup (nilling the plan, clearing
+			// conditions) when it observes the terminal plan on the next reconcile.
 			plan.Phase = seiv1alpha1.TaskPlanComplete
 			setTargetPhase(obj, plan.TargetPhase)
-			clearCompletedConvergencePlan(obj, prevPhase, plan.TargetPhase)
 			planActive.WithLabelValues(cn, obj.GetNamespace(), obj.GetName()).Set(0)
 			return ResultRequeueImmediate, nil
 		}
@@ -243,29 +243,5 @@ func setTargetPhase(obj client.Object, phase seiv1alpha1.SeiNodePhase) {
 	}
 	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
 		node.Status.Phase = phase
-	}
-}
-
-// currentPhase returns the SeiNode phase, or empty for non-SeiNode objects.
-func currentPhase(obj client.Object) seiv1alpha1.SeiNodePhase {
-	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
-		return node.Status.Phase
-	}
-	return ""
-}
-
-// clearCompletedConvergencePlan nils the plan on the object's status when the
-// plan's target phase matches the phase the node was already in before the
-// plan completed (convergence — the node stays in the same phase). Init plans
-// that transition to a new phase keep their completed plan visible in status.
-func clearCompletedConvergencePlan(obj client.Object, prevPhase, targetPhase seiv1alpha1.SeiNodePhase) {
-	if targetPhase == "" {
-		return
-	}
-	if prevPhase != targetPhase {
-		return
-	}
-	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
-		node.Status.Plan = nil
 	}
 }

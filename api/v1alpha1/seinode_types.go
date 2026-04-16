@@ -205,6 +205,12 @@ const (
 	PhaseTerminating  SeiNodePhase = "Terminating"
 )
 
+// SeiNode condition types.
+const (
+	// ConditionNodeUpdateInProgress indicates an image update is being rolled out.
+	ConditionNodeUpdateInProgress = "NodeUpdateInProgress"
+)
+
 // SeiNodeStatus defines the observed state of a SeiNode.
 type SeiNodeStatus struct {
 	// Phase is the high-level lifecycle state.

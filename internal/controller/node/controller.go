@@ -120,15 +120,6 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		statusDirty = true
 	}
 
-	// Running phase: observe image convergence in-memory.
-	if node.Status.Phase == seiv1alpha1.PhaseRunning {
-		if dirty, err := r.observeCurrentImage(ctx, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("observing current image: %w", err)
-		} else if dirty {
-			statusDirty = true
-		}
-	}
-
 	if statusDirty {
 		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
 			if execErr != nil {
@@ -164,31 +155,6 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	return result, nil
-}
-
-// observeCurrentImage checks whether the StatefulSet rollout has completed
-// and stamps status.currentImage in-memory. Returns true if the image changed.
-func (r *SeiNodeReconciler) observeCurrentImage(ctx context.Context, node *seiv1alpha1.SeiNode) (bool, error) {
-	sts := &appsv1.StatefulSet{}
-	if err := r.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, sts); err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	if sts.Status.ObservedGeneration < sts.Generation {
-		return false, nil
-	}
-	if sts.Spec.Replicas == nil || sts.Status.UpdatedReplicas < *sts.Spec.Replicas {
-		return false, nil
-	}
-
-	if node.Status.CurrentImage != node.Spec.Image {
-		node.Status.CurrentImage = node.Spec.Image
-		return true, nil
-	}
-	return false, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
