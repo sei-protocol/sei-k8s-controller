@@ -150,15 +150,25 @@ func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 
 	switch plan.Phase {
 	case seiv1alpha1.TaskPlanComplete:
-		setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateComplete",
-			fmt.Sprintf("plan %s completed", plan.ID))
+		if hasNodeUpdateCondition(node) {
+			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateComplete",
+				fmt.Sprintf("plan %s completed", plan.ID))
+		}
 		node.Status.Plan = nil
 
 	case seiv1alpha1.TaskPlanFailed:
-		setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateFailed",
-			fmt.Sprintf("plan %s failed: %s", plan.ID, planFailureMessage(plan)))
+		if hasNodeUpdateCondition(node) {
+			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateFailed",
+				fmt.Sprintf("plan %s failed: %s", plan.ID, planFailureMessage(plan)))
+		}
 		node.Status.Plan = nil
 	}
+}
+
+// hasNodeUpdateCondition returns true if NodeUpdateInProgress is currently True.
+func hasNodeUpdateCondition(node *seiv1alpha1.SeiNode) bool {
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+	return cond != nil && cond.Status == metav1.ConditionTrue
 }
 
 // setNodeUpdateCondition sets or updates the NodeUpdateInProgress condition.
