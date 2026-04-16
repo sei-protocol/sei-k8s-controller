@@ -28,7 +28,7 @@ func newPlanTestScheme(t *testing.T) *k8sruntime.Scheme {
 	return s
 }
 
-func newPlanTestReconciler(t *testing.T, objs ...client.Object) (*SeiNodeDeploymentReconciler, client.Client) {
+func newPlanTestReconciler(t *testing.T, objs ...client.Object) *SeiNodeDeploymentReconciler {
 	t.Helper()
 	s := newPlanTestScheme(t)
 	c := fake.NewClientBuilder().
@@ -36,12 +36,11 @@ func newPlanTestReconciler(t *testing.T, objs ...client.Object) (*SeiNodeDeploym
 		WithObjects(objs...).
 		WithStatusSubresource(&seiv1alpha1.SeiNodeDeployment{}).
 		Build()
-	r := &SeiNodeDeploymentReconciler{
+	return &SeiNodeDeploymentReconciler{
 		Client:   c,
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
 	}
-	return r, c
 }
 
 func TestCompletePlan_ClearsRolloutInProgress(t *testing.T) {
@@ -76,23 +75,19 @@ func TestCompletePlan_ClearsRolloutInProgress(t *testing.T) {
 		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning},
 	}
 
-	r, c := newPlanTestReconciler(t, group, childNode)
+	r := newPlanTestReconciler(t, group, childNode)
 
-	_, err := r.completePlan(ctx, group)
-	g.Expect(err).NotTo(HaveOccurred())
+	r.completePlan(ctx, group)
 
-	fetched := &seiv1alpha1.SeiNodeDeployment{}
-	g.Expect(c.Get(ctx, client.ObjectKeyFromObject(group), fetched)).To(Succeed())
+	g.Expect(group.Status.Rollout).To(BeNil())
+	g.Expect(group.Status.Plan).To(BeNil())
 
-	g.Expect(fetched.Status.Rollout).To(BeNil())
-	g.Expect(fetched.Status.Plan).To(BeNil())
-
-	rolloutCond := apimeta.FindStatusCondition(fetched.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
+	rolloutCond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
 	g.Expect(rolloutCond).NotTo(BeNil())
 	g.Expect(rolloutCond.Status).To(Equal(metav1.ConditionFalse))
 	g.Expect(rolloutCond.Reason).To(Equal("RolloutComplete"))
 
-	planCond := apimeta.FindStatusCondition(fetched.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
+	planCond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
 	g.Expect(planCond).NotTo(BeNil())
 	g.Expect(planCond.Status).To(Equal(metav1.ConditionFalse))
 }
@@ -145,24 +140,20 @@ func TestFailPlan_ClearsRolloutInProgress(t *testing.T) {
 		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseFailed},
 	}
 
-	r, c := newPlanTestReconciler(t, group, childRunning, childFailed, childFailed2)
+	r := newPlanTestReconciler(t, group, childRunning, childFailed, childFailed2)
 
-	_, err := r.failPlan(ctx, group)
-	g.Expect(err).NotTo(HaveOccurred())
+	r.failPlan(ctx, group)
 
-	fetched := &seiv1alpha1.SeiNodeDeployment{}
-	g.Expect(c.Get(ctx, client.ObjectKeyFromObject(group), fetched)).To(Succeed())
+	g.Expect(group.Status.Rollout).To(BeNil())
+	g.Expect(group.Status.Plan).To(BeNil())
+	g.Expect(group.Status.Phase).To(Equal(seiv1alpha1.GroupPhaseDegraded))
 
-	g.Expect(fetched.Status.Rollout).To(BeNil())
-	g.Expect(fetched.Status.Plan).To(BeNil())
-	g.Expect(fetched.Status.Phase).To(Equal(seiv1alpha1.GroupPhaseDegraded))
-
-	rolloutCond := apimeta.FindStatusCondition(fetched.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
+	rolloutCond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
 	g.Expect(rolloutCond).NotTo(BeNil())
 	g.Expect(rolloutCond.Status).To(Equal(metav1.ConditionFalse))
 	g.Expect(rolloutCond.Reason).To(Equal("RolloutFailed"))
 
-	planCond := apimeta.FindStatusCondition(fetched.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
+	planCond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
 	g.Expect(planCond).NotTo(BeNil())
 	g.Expect(planCond.Status).To(Equal(metav1.ConditionFalse))
 }

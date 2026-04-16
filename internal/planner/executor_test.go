@@ -13,7 +13,6 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -97,7 +96,6 @@ func configGenesisParams(t *testing.T) *apiextensionsv1.JSON {
 func nodeExecutor(c *fake.ClientBuilder, s *k8sruntime.Scheme, mock *mockSidecarClient) *Executor[*seiv1alpha1.SeiNode] {
 	fc := c.Build()
 	return &Executor[*seiv1alpha1.SeiNode]{
-		Client: fc,
 		ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 			return task.ExecutionConfig{
 				BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
@@ -159,12 +157,8 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 		t.Fatalf("expected 1 submission, got %d", len(mock.submitted))
 	}
 
-	updated := &seiv1alpha1.SeiNode{}
-	if err := executor.Client.Get(ctx, keyFor(node), updated); err != nil {
-		t.Fatalf("get node: %v", err)
-	}
-
-	tsk := &updated.Status.Plan.Tasks[0]
+	// Executor mutates in-memory — assert directly on the node.
+	tsk := &node.Status.Plan.Tasks[0]
 	if tsk.Status != seiv1alpha1.TaskPending {
 		t.Errorf("task status = %q, want Pending (reset for retry)", tsk.Status)
 	}
@@ -174,7 +168,7 @@ func TestExecutePlan_RetryOnFailure(t *testing.T) {
 	if tsk.ID != taskID {
 		t.Errorf("task ID changed after retry: got %q, want %q", tsk.ID, taskID)
 	}
-	if updated.Status.Plan.Phase == seiv1alpha1.TaskPlanFailed {
+	if node.Status.Plan.Phase == seiv1alpha1.TaskPlanFailed {
 		t.Error("plan should NOT be failed — retries remain")
 	}
 	if result.RequeueAfter == 0 {
@@ -229,34 +223,30 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 		t.Fatalf("ExecutePlan: %v", err)
 	}
 
-	updated := &seiv1alpha1.SeiNode{}
-	if err := executor.Client.Get(ctx, keyFor(node), updated); err != nil {
-		t.Fatalf("get node: %v", err)
+	// Executor mutates in-memory — assert directly on the node.
+	if node.Status.Plan.Phase != seiv1alpha1.TaskPlanFailed {
+		t.Errorf("plan phase = %q, want Failed", node.Status.Plan.Phase)
 	}
-
-	if updated.Status.Plan.Phase != seiv1alpha1.TaskPlanFailed {
-		t.Errorf("plan phase = %q, want Failed", updated.Status.Plan.Phase)
+	if node.Status.Plan.Tasks[0].Status != seiv1alpha1.TaskFailed {
+		t.Errorf("task status = %q, want Failed", node.Status.Plan.Tasks[0].Status)
 	}
-	if updated.Status.Plan.Tasks[0].Status != seiv1alpha1.TaskFailed {
-		t.Errorf("task status = %q, want Failed", updated.Status.Plan.Tasks[0].Status)
-	}
-	if updated.Status.Plan.FailedTaskIndex == nil {
+	if node.Status.Plan.FailedTaskIndex == nil {
 		t.Fatal("FailedTaskIndex should not be nil")
 	}
-	if *updated.Status.Plan.FailedTaskIndex != 0 {
-		t.Errorf("FailedTaskIndex = %d, want 0", *updated.Status.Plan.FailedTaskIndex)
+	if *node.Status.Plan.FailedTaskIndex != 0 {
+		t.Errorf("FailedTaskIndex = %d, want 0", *node.Status.Plan.FailedTaskIndex)
 	}
-	if updated.Status.Plan.FailedTaskDetail == nil {
+	if node.Status.Plan.FailedTaskDetail == nil {
 		t.Fatal("FailedTaskDetail should not be nil")
 	}
-	if updated.Status.Plan.FailedTaskDetail.Type != sidecar.TaskTypeConfigureGenesis {
-		t.Errorf("FailedTaskDetail.Type = %q, want %q", updated.Status.Plan.FailedTaskDetail.Type, sidecar.TaskTypeConfigureGenesis)
+	if node.Status.Plan.FailedTaskDetail.Type != sidecar.TaskTypeConfigureGenesis {
+		t.Errorf("FailedTaskDetail.Type = %q, want %q", node.Status.Plan.FailedTaskDetail.Type, sidecar.TaskTypeConfigureGenesis)
 	}
-	if updated.Status.Plan.FailedTaskDetail.RetryCount != 2 {
-		t.Errorf("FailedTaskDetail.RetryCount = %d, want 2", updated.Status.Plan.FailedTaskDetail.RetryCount)
+	if node.Status.Plan.FailedTaskDetail.RetryCount != 2 {
+		t.Errorf("FailedTaskDetail.RetryCount = %d, want 2", node.Status.Plan.FailedTaskDetail.RetryCount)
 	}
-	if updated.Status.Plan.FailedTaskDetail.MaxRetries != 2 {
-		t.Errorf("FailedTaskDetail.MaxRetries = %d, want 2", updated.Status.Plan.FailedTaskDetail.MaxRetries)
+	if node.Status.Plan.FailedTaskDetail.MaxRetries != 2 {
+		t.Errorf("FailedTaskDetail.MaxRetries = %d, want 2", node.Status.Plan.FailedTaskDetail.MaxRetries)
 	}
 }
 
@@ -311,7 +301,6 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		Build()
 
 	executor := &Executor[*seiv1alpha1.SeiNodeDeployment]{
-		Client: fc,
 		ConfigFor: func(_ context.Context, g *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 			return task.ExecutionConfig{
 				BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
@@ -332,13 +321,9 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		t.Fatalf("expected 1 submission, got %d", len(mock.submitted))
 	}
 
-	updated := &seiv1alpha1.SeiNodeDeployment{}
-	if err := fc.Get(ctx, keyForGroup(group), updated); err != nil {
-		t.Fatalf("get group: %v", err)
-	}
-
-	if updated.Status.Plan.Tasks[0].Status != seiv1alpha1.TaskComplete {
-		t.Errorf("task status = %q, want Complete", updated.Status.Plan.Tasks[0].Status)
+	// Executor mutates in-memory — assert directly on the group.
+	if group.Status.Plan.Tasks[0].Status != seiv1alpha1.TaskComplete {
+		t.Errorf("task status = %q, want Complete", group.Status.Plan.Tasks[0].Status)
 	}
 	if result.RequeueAfter == 0 {
 		t.Error("expected non-zero RequeueAfter after task completion")
@@ -358,11 +343,3 @@ func TestRetryBackoff(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
-
-func keyFor(node *seiv1alpha1.SeiNode) types.NamespacedName {
-	return types.NamespacedName{Name: node.Name, Namespace: node.Namespace}
-}
-
-func keyForGroup(group *seiv1alpha1.SeiNodeDeployment) types.NamespacedName {
-	return types.NamespacedName{Name: group.Name, Namespace: group.Namespace}
-}

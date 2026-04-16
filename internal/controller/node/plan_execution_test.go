@@ -113,7 +113,6 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
-			Client: c,
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
 					BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
@@ -437,7 +436,7 @@ func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 	mock := &mockSidecarClient{}
 	node := snapshotNode()
 	mustBuildPlan(t, node)
-	r, c := newProgressionReconciler(t, mock, node)
+	r, _ := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
 	// First task is ensure-data-pvc (controller-side, no sidecar submission).
@@ -446,8 +445,7 @@ func TestReconcile_SubmitsFirstPendingTask(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	firstTask := updated.Status.Plan.Tasks[0]
+	firstTask := node.Status.Plan.Tasks[0]
 	if firstTask.Type != task.TaskTypeEnsureDataPVC {
 		t.Errorf("first task = %q, want %q", firstTask.Type, task.TaskTypeEnsureDataPVC)
 	}
@@ -464,7 +462,7 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 		node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
 	}
 
-	r, c := newProgressionReconciler(t, mock, node)
+	r, _ := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
 	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
@@ -475,9 +473,8 @@ func TestReconcile_AllTasksComplete_MarksPlanComplete(t *testing.T) {
 		t.Error("expected requeue when marking plan complete")
 	}
 
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Plan.Phase != seiv1alpha1.TaskPlanComplete {
-		t.Errorf("plan phase = %q, want Complete", updated.Status.Plan.Phase)
+	if node.Status.Plan.Phase != seiv1alpha1.TaskPlanComplete {
+		t.Errorf("plan phase = %q, want Complete", node.Status.Plan.Phase)
 	}
 }
 
@@ -516,7 +513,7 @@ func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 		}
 	}
 
-	r, c := newProgressionReconciler(t, mock, node)
+	r, _ := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
 	// The first sidecar task (snapshot-restore) will fail to submit.
@@ -527,8 +524,7 @@ func TestReconcile_SubmitError_RequeuesGracefully(t *testing.T) {
 	if result.RequeueAfter != planner.TaskPollInterval {
 		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, planner.TaskPollInterval)
 	}
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	snapshotTask := findPlannedTask(updated.Status.Plan, planner.TaskSnapshotRestore)
+	snapshotTask := findPlannedTask(node.Status.Plan, planner.TaskSnapshotRestore)
 	if snapshotTask == nil {
 		t.Fatal("expected snapshot-restore task in plan")
 	}
@@ -673,13 +669,12 @@ func TestExecutePlan_AllComplete_TransitionsToTargetPhase(t *testing.T) {
 		node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
 	}
 
-	r, c := newProgressionReconciler(t, mock, node)
+	r, _ := newProgressionReconciler(t, mock, node)
 	_, err := r.PlanExecutor.ExecutePlan(context.Background(), node, node.Status.Plan)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	g.Expect(updated.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning), "executor should transition to TargetPhase")
-	g.Expect(updated.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
+	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning), "executor should transition to TargetPhase")
+	g.Expect(node.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
 }
 
 func TestExecutePlan_ConvergencePlan_NilsOnCompletion(t *testing.T) {
@@ -697,13 +692,12 @@ func TestExecutePlan_ConvergencePlan_NilsOnCompletion(t *testing.T) {
 		node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
 	}
 
-	r, c := newProgressionReconciler(t, mock, node)
+	r, _ := newProgressionReconciler(t, mock, node)
 	_, err := r.PlanExecutor.ExecutePlan(context.Background(), node, node.Status.Plan)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	g.Expect(updated.Status.Plan).To(BeNil(), "convergence plan should be nilled after completion")
-	g.Expect(updated.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning), "phase should stay Running")
+	g.Expect(node.Status.Plan).To(BeNil(), "convergence plan should be nilled after completion")
+	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning), "phase should stay Running")
 }
 
 func TestExecutePlan_TaskFailure_SetsPlanFailedCondition(t *testing.T) {
@@ -719,7 +713,7 @@ func TestExecutePlan_TaskFailure_SetsPlanFailedCondition(t *testing.T) {
 			node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
 		}
 	}
-	r, c := newProgressionReconciler(t, mock, node)
+	r, _ := newProgressionReconciler(t, mock, node)
 	ctx := context.Background()
 
 	// Submit snapshot-restore.
@@ -734,16 +728,14 @@ func TestExecutePlan_TaskFailure_SetsPlanFailedCondition(t *testing.T) {
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
 		taskUUID: completedResult(taskUUID, planner.TaskSnapshotRestore, strPtr("boom")),
 	}
-	node = fetchNode(t, c, node.Name, node.Namespace)
 	_, err = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	g.Expect(updated.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
+	g.Expect(node.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
 
 	// Verify PlanFailed condition was set.
 	var found bool
-	for _, cond := range updated.Status.Conditions {
+	for _, cond := range node.Status.Conditions {
 		if cond.Type == planner.ConditionPlanFailed {
 			g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(cond.Reason).To(Equal("TaskFailed"))
@@ -786,7 +778,6 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
-			Client: c,
 			ConfigFor: func(_ context.Context, n *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
 					BuildSidecarClient: func() (task.SidecarClient, error) {

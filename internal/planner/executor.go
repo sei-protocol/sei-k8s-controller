@@ -114,10 +114,7 @@ func executePlan(
 			return ResultRequeueImmediate, nil
 		}
 
-		result, err := advanceTask(ctx, obj, cn, plan, t, cfg)
-		if err != nil {
-			return result, err
-		}
+		result := advanceTask(ctx, obj, cn, plan, t, cfg)
 
 		// If the task is not yet complete, stop the loop — the result
 		// carries the appropriate requeue interval.
@@ -138,7 +135,7 @@ func advanceTask(
 	plan *seiv1alpha1.TaskPlan,
 	t *seiv1alpha1.PlannedTask,
 	cfg task.ExecutionConfig,
-) (ctrl.Result, error) {
+) ctrl.Result {
 	var paramsRaw []byte
 	if t.Params != nil {
 		paramsRaw = t.Params.Raw
@@ -147,7 +144,7 @@ func advanceTask(
 	exec, err := task.Deserialize(t.Type, t.ID, paramsRaw, cfg)
 	if err != nil {
 		failTask(obj, cn, plan, t, err.Error())
-		return ctrl.Result{}, nil
+		return ctrl.Result{}
 	}
 
 	if needsSubmission(t) {
@@ -155,11 +152,11 @@ func advanceTask(
 			var termErr *task.TerminalError
 			if errors.As(err, &termErr) {
 				failTask(obj, cn, plan, t, err.Error())
-				return ctrl.Result{}, nil
+				return ctrl.Result{}
 			}
 			log.FromContext(ctx).Info("task execution failed, will retry",
 				"task", t.Type, "error", err)
-			return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
+			return ctrl.Result{RequeueAfter: TaskPollInterval}
 		}
 		if t.SubmittedAt == nil {
 			now := metav1.Now()
@@ -172,11 +169,11 @@ func advanceTask(
 
 	switch status {
 	case task.ExecutionRunning:
-		return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
+		return ctrl.Result{RequeueAfter: TaskPollInterval}
 
 	case task.ExecutionComplete:
 		t.Status = seiv1alpha1.TaskComplete
-		return ResultRequeueImmediate, nil
+		return ResultRequeueImmediate
 
 	case task.ExecutionFailed:
 		errMsg := "unknown error"
@@ -191,13 +188,13 @@ func advanceTask(
 			t.SubmittedAt = nil
 			log.FromContext(ctx).Info("retrying failed task",
 				"task", t.Type, "retry", t.RetryCount, "maxRetries", t.MaxRetries, "lastError", errMsg)
-			return ctrl.Result{RequeueAfter: retryBackoff(t.RetryCount)}, nil
+			return ctrl.Result{RequeueAfter: retryBackoff(t.RetryCount)}
 		}
 		failTask(obj, cn, plan, t, errMsg)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}
 
 	default:
-		return ctrl.Result{RequeueAfter: TaskPollInterval}, nil
+		return ctrl.Result{RequeueAfter: TaskPollInterval}
 	}
 }
 

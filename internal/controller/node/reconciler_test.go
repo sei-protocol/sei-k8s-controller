@@ -50,7 +50,6 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
-			Client: c,
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
 					BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
@@ -259,10 +258,10 @@ func TestObserveCurrentImage_UpdatesWhenConverged(t *testing.T) {
 	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
 
 	r := &SeiNodeReconciler{Client: c, Scheme: s}
-	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+	_, err := r.observeCurrentImage(ctx, node)
+	g.Expect(err).NotTo(HaveOccurred())
 
-	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
-	g.Expect(fetched.Status.CurrentImage).To(Equal(testImageV2))
+	g.Expect(node.Status.CurrentImage).To(Equal(testImageV2))
 }
 
 func TestObserveCurrentImage_SkipsWhenStaleGeneration(t *testing.T) {
@@ -299,10 +298,10 @@ func TestObserveCurrentImage_SkipsWhenStaleGeneration(t *testing.T) {
 	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
 
 	r := &SeiNodeReconciler{Client: c, Scheme: s}
-	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+	_, err := r.observeCurrentImage(ctx, node)
+	g.Expect(err).NotTo(HaveOccurred())
 
-	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
-	g.Expect(fetched.Status.CurrentImage).To(BeEmpty())
+	g.Expect(node.Status.CurrentImage).To(BeEmpty())
 }
 
 func TestObserveCurrentImage_SkipsWhenRolling(t *testing.T) {
@@ -339,10 +338,10 @@ func TestObserveCurrentImage_SkipsWhenRolling(t *testing.T) {
 	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
 
 	r := &SeiNodeReconciler{Client: c, Scheme: s}
-	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+	_, err := r.observeCurrentImage(ctx, node)
+	g.Expect(err).NotTo(HaveOccurred())
 
-	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
-	g.Expect(fetched.Status.CurrentImage).To(BeEmpty())
+	g.Expect(node.Status.CurrentImage).To(BeEmpty())
 }
 
 func TestObserveCurrentImage_SkipsWhenReadyReplicasZero(t *testing.T) {
@@ -380,10 +379,10 @@ func TestObserveCurrentImage_SkipsWhenReadyReplicasZero(t *testing.T) {
 	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
 
 	r := &SeiNodeReconciler{Client: c, Scheme: s}
-	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+	_, err := r.observeCurrentImage(ctx, node)
+	g.Expect(err).NotTo(HaveOccurred())
 
-	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
-	g.Expect(fetched.Status.CurrentImage).To(BeEmpty())
+	g.Expect(node.Status.CurrentImage).To(BeEmpty())
 }
 
 func TestObserveCurrentImage_SkipsWhenEmptyRevision(t *testing.T) {
@@ -421,10 +420,10 @@ func TestObserveCurrentImage_SkipsWhenEmptyRevision(t *testing.T) {
 	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
 
 	r := &SeiNodeReconciler{Client: c, Scheme: s}
-	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+	_, err := r.observeCurrentImage(ctx, node)
+	g.Expect(err).NotTo(HaveOccurred())
 
-	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
-	g.Expect(fetched.Status.CurrentImage).To(BeEmpty())
+	g.Expect(node.Status.CurrentImage).To(BeEmpty())
 }
 
 func TestObserveCurrentImage_NoopWhenAlreadyCurrent(t *testing.T) {
@@ -463,10 +462,10 @@ func TestObserveCurrentImage_NoopWhenAlreadyCurrent(t *testing.T) {
 	g.Expect(c.Status().Update(ctx, sts)).To(Succeed())
 
 	r := &SeiNodeReconciler{Client: c, Scheme: s}
-	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+	_, err := r.observeCurrentImage(ctx, node)
+	g.Expect(err).NotTo(HaveOccurred())
 
-	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
-	g.Expect(fetched.Status.CurrentImage).To(Equal(testImageV2))
+	g.Expect(node.Status.CurrentImage).To(Equal(testImageV2))
 }
 
 func TestObserveCurrentImage_StatefulSetNotFound(t *testing.T) {
@@ -486,10 +485,10 @@ func TestObserveCurrentImage_StatefulSetNotFound(t *testing.T) {
 		Build()
 
 	r := &SeiNodeReconciler{Client: c, Scheme: s}
-	g.Expect(r.observeCurrentImage(ctx, node)).To(Succeed())
+	_, err := r.observeCurrentImage(ctx, node)
+	g.Expect(err).NotTo(HaveOccurred())
 
-	fetched := getSeiNode(t, ctx, c, "mynet-0", "default")
-	g.Expect(fetched.Status.CurrentImage).To(BeEmpty())
+	g.Expect(node.Status.CurrentImage).To(BeEmpty())
 }
 
 func ptrInt32(v int32) *int32 { return &v }
