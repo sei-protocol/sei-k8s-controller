@@ -24,8 +24,6 @@ const (
 	TaskConfigApply        = sidecar.TaskTypeConfigApply
 	TaskConfigValidate     = sidecar.TaskTypeConfigValidate
 	TaskMarkReady          = sidecar.TaskTypeMarkReady
-	TaskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
-	TaskResultExport       = sidecar.TaskTypeResultExport
 	TaskAwaitCondition     = sidecar.TaskTypeAwaitCondition
 
 	TaskGenerateIdentity       = sidecar.TaskTypeGenerateIdentity

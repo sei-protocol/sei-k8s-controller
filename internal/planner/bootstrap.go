@@ -3,10 +3,8 @@ package planner
 import (
 	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -179,34 +177,4 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		TargetPhase: seiv1alpha1.PhaseRunning,
 		FailedPhase: seiv1alpha1.PhaseFailed,
 	}, nil
-}
-
-// SnapshotUploadMonitorTask returns a snapshot-upload TaskRequest if applicable.
-// The sidecar handler runs in a loop at its configured interval (SEI_SNAPSHOT_UPLOAD_INTERVAL).
-// The controller submits this once and tracks it as a monitor task.
-func SnapshotUploadMonitorTask(node *seiv1alpha1.SeiNode) *sidecar.TaskRequest {
-	sg := SnapshotGeneration(node)
-	if sg == nil {
-		return nil
-	}
-	req := sidecar.SnapshotUploadTask{}.ToTaskRequest()
-	return &req
-}
-
-// ResultExportMonitorTask builds a TaskRequest for result-export comparison
-// mode. The sidecar compares local block results against the canonical RPC
-// and completes on app-hash divergence. Returns nil when the node has no
-// result-export config.
-func ResultExportMonitorTask(node *seiv1alpha1.SeiNode, platformCfg platform.Config) *sidecar.TaskRequest {
-	if node.Spec.Replayer == nil || node.Spec.Replayer.ResultExport == nil {
-		return nil
-	}
-	re := node.Spec.Replayer.ResultExport
-	req := sidecar.ResultExportTask{
-		Bucket:       platformCfg.ResultExportBucket,
-		Prefix:       platformCfg.ResultExportPrefix + node.Spec.ChainID + "/",
-		Region:       platformCfg.ResultExportRegion,
-		CanonicalRPC: re.CanonicalRPC,
-	}.ToTaskRequest()
-	return &req
 }
