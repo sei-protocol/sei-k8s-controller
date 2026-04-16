@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -53,6 +54,8 @@ type SeiNodeReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
+// Reconcile drives the SeiNode lifecycle. All status mutations after the
+// finalizer are accumulated in-memory and flushed in a single status patch.
 func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	node := &seiv1alpha1.SeiNode{}
 	if err := r.Get(ctx, req.NamespacedName, node); err != nil {
@@ -70,6 +73,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.handleNodeDeletion(ctx, node)
 	}
 
+	// Finalizer is a metadata Update — must happen before we snapshot
+	// the status patch base because Update changes resourceVersion.
 	if err := r.ensureNodeFinalizer(ctx, node); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -81,38 +86,60 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	statusBase := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	observedPhase := node.Status.Phase
+	statusDirty := false
+
 	// Pre-plan: resolve label-based peers so plan params have fresh data.
-	if err := r.reconcilePeers(ctx, node); err != nil {
+	if dirty, err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
+	} else if dirty {
+		statusDirty = true
 	}
 
 	// Resolve or resume plan. ResolvePlan either resumes an active plan or
 	// builds a new one based on the node's phase, stamping it onto
 	// node.Status.Plan (and transitioning Pending → Initializing).
-	observedPhase := node.Status.Phase
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
-	patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	if err := planner.ResolvePlan(node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
 
-	if node.Status.Plan == nil {
-		return ctrl.Result{}, nil
+	// Execute the plan. The executor advances tasks in-memory — synchronous
+	// tasks complete in a loop, async tasks return Running with a poll interval.
+	var result ctrl.Result
+	var execErr error
+	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
+		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
+		statusDirty = true
 	}
 
-	// If ResolvePlan built a new plan, persist it before execution.
-	if !planAlreadyActive {
-		if err := r.Status().Patch(ctx, node, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("persisting new plan: %w", err)
+	// If ResolvePlan built a new plan (but there's nothing to execute yet
+	// because it was just created this reconcile), mark dirty so it gets persisted.
+	if !planAlreadyActive && node.Status.Plan != nil {
+		statusDirty = true
+	}
+
+	// Running phase: observe image convergence in-memory.
+	if node.Status.Phase == seiv1alpha1.PhaseRunning {
+		if dirty, err := r.observeCurrentImage(ctx, node); err != nil {
+			return ctrl.Result{}, fmt.Errorf("observing current image: %w", err)
+		} else if dirty {
+			statusDirty = true
 		}
-		return planner.ResultRequeueImmediate, nil
 	}
 
-	// Execute the plan. The executor handles phase transitions via
-	// TargetPhase/FailedPhase and sets Conditions on failure.
-	result, err := r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
-	if err != nil {
-		return result, err
+	if statusDirty {
+		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
+			if execErr != nil {
+				log.FromContext(ctx).Error(execErr, "plan execution error lost due to status flush failure")
+			}
+			return ctrl.Result{}, fmt.Errorf("flushing status: %w", err)
+		}
+	}
+
+	if execErr != nil {
+		return result, execErr
 	}
 
 	// Emit metrics/events if the phase changed.
@@ -130,40 +157,38 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	// Running phase: observe image convergence after plan completes.
-	if node.Status.Phase == seiv1alpha1.PhaseRunning {
-		if err := r.observeCurrentImage(ctx, node); err != nil {
-			return ctrl.Result{}, fmt.Errorf("observing current image: %w", err)
-		}
+	// Running nodes with no active plan requeue on a steady-state interval.
+	// Spec changes trigger immediate reconciles via GenerationChangedPredicate.
+	if node.Status.Phase == seiv1alpha1.PhaseRunning && (node.Status.Plan == nil || node.Status.Plan.Phase != seiv1alpha1.TaskPlanActive) {
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 
 	return result, nil
 }
 
-func (r *SeiNodeReconciler) observeCurrentImage(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+// observeCurrentImage checks whether the StatefulSet rollout has completed
+// and stamps status.currentImage in-memory. Returns true if the image changed.
+func (r *SeiNodeReconciler) observeCurrentImage(ctx context.Context, node *seiv1alpha1.SeiNode) (bool, error) {
 	sts := &appsv1.StatefulSet{}
 	if err := r.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, sts); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 
-	// Wait for the StatefulSet controller to process the latest spec change.
 	if sts.Status.ObservedGeneration < sts.Generation {
-		return nil
+		return false, nil
 	}
 	if sts.Spec.Replicas == nil || sts.Status.UpdatedReplicas < *sts.Spec.Replicas {
-		return nil
+		return false, nil
 	}
 
 	if node.Status.CurrentImage != node.Spec.Image {
-		patch := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		node.Status.CurrentImage = node.Spec.Image
-		return r.Status().Patch(ctx, node, patch)
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

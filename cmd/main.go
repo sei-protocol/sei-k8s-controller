@@ -159,7 +159,6 @@ func main() {
 		Recorder: nodeRecorder,
 		Platform: platformCfg,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
-			Client: kc,
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
 					BuildSidecarClient: func() (task.SidecarClient, error) {
@@ -189,7 +188,6 @@ func main() {
 		GatewayDomain:       platformCfg.GatewayDomain,
 		GatewayPublicDomain: platformCfg.GatewayPublicDomain,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
-			Client: kc,
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 				var assemblerNode *seiv1alpha1.SeiNode
 				nodes := &seiv1alpha1.SeiNodeList{}

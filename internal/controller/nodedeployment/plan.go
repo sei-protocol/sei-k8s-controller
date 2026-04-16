@@ -8,7 +8,6 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -17,8 +16,9 @@ import (
 
 // reconcilePlan is the single entry point for plan-driven orchestration.
 // It drives an active plan to completion, or builds a new plan if the
-// planner determines one is needed.
-func (r *SeiNodeDeploymentReconciler) reconcilePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch) (ctrl.Result, error) {
+// planner determines one is needed. All status mutations are in-memory;
+// the caller flushes via a single status patch.
+func (r *SeiNodeDeploymentReconciler) reconcilePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
 	// Drive active plan.
 	if group.Status.Plan != nil && group.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		return r.drivePlan(ctx, group)
@@ -35,7 +35,8 @@ func (r *SeiNodeDeploymentReconciler) reconcilePlan(ctx context.Context, group *
 		return ctrl.Result{}, fmt.Errorf("building plan: %w", err)
 	}
 
-	return r.startPlan(ctx, group, statusBase, plan)
+	r.startPlan(ctx, group, plan)
+	return planner.ResultRequeueImmediate, nil
 }
 
 func (r *SeiNodeDeploymentReconciler) drivePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
@@ -46,47 +47,36 @@ func (r *SeiNodeDeploymentReconciler) drivePlan(ctx context.Context, group *seiv
 
 	switch group.Status.Plan.Phase {
 	case seiv1alpha1.TaskPlanComplete:
-		return r.completePlan(ctx, group)
+		r.completePlan(ctx, group)
 	case seiv1alpha1.TaskPlanFailed:
-		return r.failPlan(ctx, group)
+		r.failPlan(ctx, group)
 	}
 
 	return result, nil
 }
 
-func (r *SeiNodeDeploymentReconciler) startPlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, statusBase client.Patch, plan *seiv1alpha1.TaskPlan) (ctrl.Result, error) {
+// startPlan stamps the plan onto the group and sets the PlanInProgress condition.
+// All mutations are in-memory.
+func (r *SeiNodeDeploymentReconciler) startPlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, plan *seiv1alpha1.TaskPlan) {
 	logger := log.FromContext(ctx)
 
 	group.Status.Plan = plan
 	setPlanInProgress(group, "PlanStarted", "Plan execution started")
 
-	if err := r.Status().Patch(ctx, group, statusBase); err != nil {
-		return ctrl.Result{}, fmt.Errorf("writing plan status: %w", err)
-	}
-
 	r.Recorder.Event(group, corev1.EventTypeNormal, "PlanStarted", "Plan execution started")
 	logger.Info("plan started", "tasks", len(plan.Tasks))
-
-	return planner.ResultRequeueImmediate, nil
 }
 
-func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
+// completePlan finalizes a completed plan. All mutations are in-memory.
+func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) {
 	logger := log.FromContext(ctx)
-
-	// Re-read to get a fresh resourceVersion. The plan executor patches
-	// status mid-reconcile (task/plan completion), which invalidates the
-	// statusBase computed at the start of Reconcile.
-	if err := r.Get(ctx, client.ObjectKeyFromObject(group), group); err != nil {
-		return ctrl.Result{}, fmt.Errorf("re-reading group for completePlan: %w", err)
-	}
-	status := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 
 	isDeploymentPlan := group.Status.Rollout != nil
 
 	if isDeploymentPlan {
 		group.Status.ObservedGeneration = group.Generation
 		if err := r.reconcileNetworking(ctx, group); err != nil {
-			return ctrl.Result{}, fmt.Errorf("reconciling networking after deployment: %w", err)
+			logger.Error(err, "reconciling networking after deployment")
 		}
 		group.Status.Rollout = nil
 		setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
@@ -104,20 +94,11 @@ func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *s
 
 	r.Recorder.Event(group, corev1.EventTypeNormal, "PlanComplete", "Plan completed successfully")
 	logger.Info("plan completed")
-
-	if err := r.updateStatus(ctx, group, status); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating status after plan completion: %w", err)
-	}
-	return planner.ResultRequeueImmediate, nil
 }
 
-func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
+// failPlan handles a failed plan. All mutations are in-memory.
+func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) {
 	logger := log.FromContext(ctx)
-
-	if err := r.Get(ctx, client.ObjectKeyFromObject(group), group); err != nil {
-		return ctrl.Result{}, fmt.Errorf("re-reading group for failPlan: %w", err)
-	}
-	status := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 
 	group.Status.Phase = seiv1alpha1.GroupPhaseDegraded
 	group.Status.Plan = nil
@@ -130,11 +111,6 @@ func (r *SeiNodeDeploymentReconciler) failPlan(ctx context.Context, group *seiv1
 
 	r.Recorder.Event(group, corev1.EventTypeWarning, "PlanFailed", "Plan failed")
 	logger.Info("plan failed")
-
-	if err := r.updateStatus(ctx, group, status); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating status after plan failure: %w", err)
-	}
-	return planner.ResultRequeueImmediate, nil
 }
 
 func setPlanInProgress(group *seiv1alpha1.SeiNodeDeployment, reason, message string) {

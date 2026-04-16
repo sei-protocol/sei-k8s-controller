@@ -109,7 +109,7 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("reconciling SeiNodes: %w", err)
 	}
 
-	planResult, planErr := r.reconcilePlan(ctx, group, statusBase)
+	planResult, planErr := r.reconcilePlan(ctx, group)
 	if planErr != nil {
 		logger.Error(planErr, "reconciling plan")
 		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()

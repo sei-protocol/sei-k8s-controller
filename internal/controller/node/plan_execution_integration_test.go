@@ -12,13 +12,12 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// driveTask submits one task and completes it. For fire-and-forget tasks
-// (config-validate, mark-ready, infrastructure tasks), the task completes
-// in a single ExecutePlan call. For normal tasks, mock results are set and
-// a second call is made.
+// driveTask submits one task and completes it via the full Reconcile pipeline.
+// For fire-and-forget tasks (config-validate, mark-ready, infrastructure tasks),
+// the task completes in a single reconcile. For normal sidecar tasks, mock
+// results are set and a second reconcile is made.
 func driveTask(
 	t *testing.T,
 	g Gomega,
@@ -37,8 +36,7 @@ func driveTask(
 	taskUUID, err := uuid.Parse(ct.ID)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	_, err = r.PlanExecutor.ExecutePlan(context.Background(), node, node.Status.Plan)
-	g.Expect(err).NotTo(HaveOccurred())
+	reconcileOnce(t, g, r, node.Name, node.Namespace)
 
 	// Check if already complete (fire-and-forget tasks complete in one call)
 	node = fetch()
@@ -54,9 +52,7 @@ func driveTask(
 			taskUUID: completedResult(taskUUID, taskType, nil),
 		}
 	}
-	node = fetch()
-	_, err = r.PlanExecutor.ExecutePlan(context.Background(), node, node.Status.Plan)
-	g.Expect(err).NotTo(HaveOccurred())
+	reconcileOnce(t, g, r, node.Name, node.Namespace)
 }
 
 // reconcileOnce runs a single Reconcile call for the given node.
@@ -81,30 +77,23 @@ func TestIntegrationFullProgressionSnapshotMode(t *testing.T) {
 		return n
 	}
 
-	// First Reconcile: ResolvePlan builds the plan and transitions to Initializing.
+	// First Reconcile: builds plan, transitions to Initializing, completes
+	// all synchronous infrastructure tasks, and submits the first sidecar task.
 	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	node = fetch()
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhaseInitializing))
 
-	// Drive infrastructure tasks (fire-and-forget, complete in one call each).
-	driveTask(t, g, r, mock, fetch, task.TaskTypeEnsureDataPVC)
-	driveTask(t, g, r, mock, fetch, task.TaskTypeApplyStatefulSet)
-	driveTask(t, g, r, mock, fetch, task.TaskTypeApplyService)
-
-	// Drive sidecar tasks.
+	// Drive sidecar tasks (infrastructure tasks already completed in first reconcile).
 	driveTask(t, g, r, mock, fetch, planner.TaskSnapshotRestore)
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigureGenesis)
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigApply)
+	// Completing configure-state-sync also chain-completes the trailing
+	// fire-and-forget tasks (config-validate, mark-ready) and the plan,
+	// transitioning the node to Running.
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigureStateSync)
-	driveTask(t, g, r, mock, fetch, planner.TaskConfigValidate)
-	driveTask(t, g, r, mock, fetch, planner.TaskMarkReady)
 
-	// Final ExecutePlan marks the plan complete and transitions to Running.
 	updated := fetch()
-	_, err := r.PlanExecutor.ExecutePlan(ctx, updated, updated.Status.Plan)
-	g.Expect(err).NotTo(HaveOccurred())
-	updated = fetch()
 	g.Expect(updated.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning))
 }
 
@@ -122,27 +111,19 @@ func TestIntegrationFullProgressionGenesisMode(t *testing.T) {
 		return n
 	}
 
-	// First Reconcile: ResolvePlan builds the plan and transitions to Initializing.
+	// First Reconcile: builds plan, transitions to Initializing, completes
+	// all synchronous infrastructure tasks, and submits the first sidecar task.
 	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	node = fetch()
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
-	// Drive infrastructure tasks.
-	driveTask(t, g, r, mock, fetch, task.TaskTypeEnsureDataPVC)
-	driveTask(t, g, r, mock, fetch, task.TaskTypeApplyStatefulSet)
-	driveTask(t, g, r, mock, fetch, task.TaskTypeApplyService)
-
-	// Drive sidecar tasks.
+	// Drive sidecar tasks (infrastructure tasks already completed in first reconcile).
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigureGenesis)
+	// Completing config-apply also chain-completes the trailing fire-and-forget
+	// tasks (config-validate, mark-ready) and the plan, transitioning to Running.
 	driveTask(t, g, r, mock, fetch, planner.TaskConfigApply)
-	driveTask(t, g, r, mock, fetch, planner.TaskConfigValidate)
-	driveTask(t, g, r, mock, fetch, planner.TaskMarkReady)
 
-	// Final ExecutePlan marks the plan complete and transitions to Running.
 	updated := fetch()
-	_, err := r.PlanExecutor.ExecutePlan(ctx, updated, updated.Status.Plan)
-	g.Expect(err).NotTo(HaveOccurred())
-	updated = fetch()
 	g.Expect(updated.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning))
 }
 
@@ -160,17 +141,13 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 		return n
 	}
 
-	// First Reconcile: builds plan and transitions to Initializing.
+	// First Reconcile: builds plan, transitions to Initializing, completes
+	// all synchronous infrastructure tasks, and submits the first sidecar task.
 	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	node = fetch()
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
-	// Drive infrastructure tasks past the fire-and-forget phase.
-	driveTask(t, g, r, mock, fetch, task.TaskTypeEnsureDataPVC)
-	driveTask(t, g, r, mock, fetch, task.TaskTypeApplyStatefulSet)
-	driveTask(t, g, r, mock, fetch, task.TaskTypeApplyService)
-
-	// Drive snapshot-restore: submit it.
+	// Drive snapshot-restore: the first reconcile already submitted it.
 	node = fetch()
 	ct := planner.CurrentTask(node.Status.Plan)
 	g.Expect(ct).NotTo(BeNil())
@@ -178,18 +155,15 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 	taskUUID, err := uuid.Parse(ct.ID)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	_, err = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
-	g.Expect(err).NotTo(HaveOccurred())
+	reconcileOnce(t, g, r, node.Name, node.Namespace)
 
 	// Fail the snapshot-restore task.
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
 		taskUUID: completedResult(taskUUID, planner.TaskSnapshotRestore, strPtr("S3 access denied")),
 	}
-	updated := fetch()
-	_, err = r.PlanExecutor.ExecutePlan(ctx, updated, updated.Status.Plan)
-	g.Expect(err).NotTo(HaveOccurred())
+	reconcileOnce(t, g, r, node.Name, node.Namespace)
 
-	updated = fetch()
+	updated := fetch()
 	g.Expect(updated.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
 	g.Expect(updated.Status.Phase).To(Equal(seiv1alpha1.PhaseFailed))
 
@@ -199,9 +173,8 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 	g.Expect(failedTask.Status).To(Equal(seiv1alpha1.TaskFailed))
 	g.Expect(failedTask.Error).To(Equal("S3 access denied"))
 
-	// Subsequent ExecutePlan is a no-op on failed plans.
+	// Subsequent reconcile is a no-op on failed plans.
 	mock.submitted = nil
-	_, err = r.PlanExecutor.ExecutePlan(ctx, updated, updated.Status.Plan)
-	g.Expect(err).NotTo(HaveOccurred())
+	reconcileOnce(t, g, r, node.Name, node.Namespace)
 	g.Expect(mock.submitted).To(BeEmpty())
 }
