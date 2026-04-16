@@ -8,15 +8,23 @@
 //
 //  1. Build: ResolvePlan (for nodes) or ForGroup (for deployments) inspects the
 //     resource's current phase and spec, then builds an appropriate plan.
-//  2. Persist: The controller patches the plan into the resource's status.
-//  3. Execute: Executor.ExecutePlan drives one task per reconcile, patching
-//     status after each task completes.
-//  4. Complete: When all tasks finish, the executor sets TargetPhase on the
-//     resource and marks the plan Complete. Convergence plans (where the
-//     target phase equals the current phase) are nilled out to avoid stale
-//     data in etcd.
-//  5. Fail: If a task fails terminally, the executor sets FailedPhase and a
-//     PlanFailed condition on the resource for operator observability.
+//  2. Persist: The controller flushes the plan into the resource's status.
+//     Execution does not start until the plan is persisted (atomic creation).
+//  3. Execute: Executor.ExecutePlan drives tasks in-memory. Synchronous tasks
+//     advance in a loop; async tasks return Running for the next reconcile.
+//     The controller flushes all mutations in a single status patch.
+//  4. Complete: When all tasks finish, the executor marks the plan Complete and
+//     sets TargetPhase. On the next reconcile, the planner observes the terminal
+//     plan, updates conditions, and builds the next plan if needed.
+//  5. Fail: If a task fails terminally, the executor marks the plan Failed and
+//     sets FailedPhase. On the next reconcile, the planner observes the failure,
+//     updates conditions, and decides whether to retry.
+//
+// # Condition Ownership
+//
+// The planner owns all condition management on the owning resource. It sets
+// conditions when creating plans and when observing terminal plans. The executor
+// does not set conditions — it only mutates plan/task state and phase transitions.
 //
 // # Plan Types
 //

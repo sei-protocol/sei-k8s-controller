@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -19,9 +18,6 @@ import (
 const (
 	TaskPollInterval = 5 * time.Second
 	maxRetryBackoff  = 30 * time.Second
-
-	// ConditionPlanFailed is set on the node when a plan fails terminally.
-	ConditionPlanFailed = "PlanFailed"
 )
 
 // ResultRequeueImmediate requests an immediate re-enqueue with a minimal
@@ -197,8 +193,8 @@ func advanceTask(
 }
 
 // failTask marks an individual task and the overall plan as Failed.
-// Sets FailedPhase on the node and a PlanFailed condition. All mutations
-// are in-memory.
+// Sets FailedPhase on the node. The planner handles condition updates
+// when it observes the failed plan on the next reconcile.
 func failTask(
 	ctx context.Context,
 	obj client.Object,
@@ -215,7 +211,6 @@ func failTask(
 	t.Error = errMsg
 	plan.Phase = seiv1alpha1.TaskPlanFailed
 	setTargetPhase(obj, plan.FailedPhase)
-	setPlanFailedCondition(obj, plan, t, errMsg)
 	for i := range plan.Tasks {
 		if plan.Tasks[i].ID == t.ID {
 			plan.FailedTaskIndex = &i
@@ -249,22 +244,6 @@ func setTargetPhase(obj client.Object, phase seiv1alpha1.SeiNodePhase) {
 	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
 		node.Status.Phase = phase
 	}
-}
-
-// setPlanFailedCondition sets a PlanFailed condition on the node with
-// details about which task failed and why.
-func setPlanFailedCondition(obj client.Object, plan *seiv1alpha1.TaskPlan, t *seiv1alpha1.PlannedTask, errMsg string) {
-	node, ok := obj.(*seiv1alpha1.SeiNode)
-	if !ok {
-		return
-	}
-	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
-		Type:               ConditionPlanFailed,
-		Status:             metav1.ConditionTrue,
-		Reason:             "TaskFailed",
-		Message:            fmt.Sprintf("plan %s failed at task %s: %s", plan.ID, t.Type, errMsg),
-		ObservedGeneration: node.Generation,
-	})
 }
 
 // currentPhase returns the SeiNode phase, or empty for non-SeiNode objects.

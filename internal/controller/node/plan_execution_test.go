@@ -732,18 +732,8 @@ func TestExecutePlan_TaskFailure_SetsPlanFailedCondition(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(node.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
-
-	// Verify PlanFailed condition was set.
-	var found bool
-	for _, cond := range node.Status.Conditions {
-		if cond.Type == planner.ConditionPlanFailed {
-			g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(cond.Reason).To(Equal("TaskFailed"))
-			g.Expect(cond.Message).To(ContainSubstring("boom"))
-			found = true
-		}
-	}
-	g.Expect(found).To(BeTrue(), "expected PlanFailed condition on node")
+	g.Expect(node.Status.Plan.FailedTaskDetail).NotTo(BeNil())
+	g.Expect(node.Status.Plan.FailedTaskDetail.Error).To(ContainSubstring("boom"))
 }
 
 // --- Nil sidecar client handling ---
