@@ -2,7 +2,7 @@
 
 ## Overview
 
-Migrate the controller from `prometheus/client_golang` to the OpenTelemetry metrics SDK so users can configure any observability backend. The telemetry is designed from the operator's perspective: what do I need measured to understand issues, and what dimensions do I care about?
+Migrate the controller from `prometheus/client_golang` to the OpenTelemetry metrics SDK. Designed around the Google SRE Four Golden Signals — start with core service health, add granularity once we understand sharp edges.
 
 ## Architecture
 
@@ -16,161 +16,99 @@ OTel MeterProvider (with 2 readers) |
                                     +---> Prometheus Exporter ---> controller-runtime /metrics
 ```
 
-- **Prometheus exporter**: registers into controller-runtime's `metrics.Registry` via `promexporter.WithRegisterer(crmetrics.Registry)`. OTel metrics appear alongside controller-runtime's own workqueue/reconcile metrics on the existing `/metrics` endpoint. Zero scraping changes.
-- **OTLP exporter**: enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Users point at their collector (Datadog, Grafana Cloud, etc.).
-
-controller-runtime's Prometheus metrics (workqueue depth, reconcile duration, REST client) remain untouched.
+- **Prometheus exporter**: registers into controller-runtime's `metrics.Registry`. OTel metrics appear alongside controller-runtime's own metrics on `/metrics`. Zero scraping changes.
+- **OTLP exporter**: enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Users point at any backend.
 
 ## Configuration
 
 Standard OTel environment variables — no custom flags:
 - `OTEL_EXPORTER_OTLP_ENDPOINT` — collector address
-- `OTEL_EXPORTER_OTLP_PROTOCOL` — grpc or http/protobuf
 - `OTEL_SERVICE_NAME` — override (defaults to `sei-k8s-controller`)
 - `OTEL_RESOURCE_ATTRIBUTES` — user-provided extras
-- `OTEL_SDK_DISABLED` — kill switch
-
-Kubernetes downward API provides pod identity:
-```yaml
-env:
-  - name: POD_NAME
-    valueFrom:
-      fieldRef:
-        fieldPath: metadata.name
-  - name: POD_NAMESPACE
-    valueFrom:
-      fieldRef:
-        fieldPath: metadata.namespace
-  - name: NODE_NAME
-    valueFrom:
-      fieldRef:
-        fieldPath: spec.nodeName
-```
 
 ## Resource Attributes (Soft Context)
-
-Set once on the MeterProvider. Apply to all metrics via OTLP. Invisible to Prometheus scrapers (Resource attributes are not emitted as labels on `/metrics`).
 
 | Attribute | Source |
 |-----------|--------|
 | `service.name` | Hardcoded: `sei-k8s-controller` |
 | `service.version` | Build-time ldflags |
-| `service.instance.id` | Downward API: pod UID |
-| `k8s.pod.name` | Downward API: `POD_NAME` |
-| `k8s.namespace.name` | Downward API: `POD_NAMESPACE` |
-| `k8s.node.name` | Downward API: `NODE_NAME` |
+| `k8s.pod.name` | Downward API |
+| `k8s.namespace.name` | Downward API |
 
-## Metric Naming
+## Four Golden Signals → 7 Metrics
 
-OTel uses dot-separated names. The Prometheus exporter auto-converts to underscores and appends `_total` / `_seconds` suffixes, so existing PromQL and dashboards continue working.
+### LATENCY (2 metrics)
 
-Meter name: `github.com/sei-protocol/sei-k8s-controller`
+**1. `sei.controller.node.phase.duration`** — Float64 Histogram (unit: s)
+- Dimensions: `namespace`, `chain_id`, `phase`
+- Buckets: 10, 30, 60, 120, 300, 600, 900, 1800, 3600
+- Records time spent in each phase when a node transitions out. Phase IS the dimension — no separate init-specific metric. Initializing durations tell you bootstrap health. Running durations are expected to be long.
+- Requires adding `PhaseTransitionTime` to SeiNodeStatus (set on every phase transition, observed on the next transition).
+- Cardinality at 200 nodes: ~5 phases × ~5 chains = ~25 histogram series. No per-node label.
 
-Per-datapoint attribute keys use short names matching current Prometheus labels exactly (`namespace`, `name`, `phase`, `controller`, `task_type`, etc.) to preserve dashboard compatibility.
-
-## The Operational Questions
-
-| Scenario | Metric(s) That Answer It |
-|----------|--------------------------|
-| Is my fleet healthy? | `seinode.phase` by chain_id and node_mode |
-| Is a node stuck or just slow? | `plan.task.current` / `plan.task.count` + `task.submitted.at` |
-| How's the rollout going? | `plan.active` with plan_type + `plan.completions` |
-| What failed and where? | `task.failures` with name + task_type |
-| How long do things normally take? | `task.duration` histogram + `seinode.init.duration` |
-| Is the controller itself healthy? | controller-runtime builtins (reconcile rate, queue depth) |
-
-## Metrics: Cut (4)
-
-| Current Metric | Reason |
-|---------------|--------|
-| `seinode.phase_transitions_total` | Combinatorial from/to matrix. Replaced by `plan.completions` with outcome dimension |
-| `seinode.last_init_duration_seconds` | Per-node gauge that persists forever. The init histogram covers aggregate analysis; task duration covers per-operation debugging |
-| `seinodedeployment.reconcile_substep_duration` | Internal implementation detail. controller-runtime's total reconcile latency covers alerting |
-| `reconcile_errors_total` (per-name) | Unbounded cardinality. controller-runtime's `reconcile_total{result=error}` covers the alert case |
-
-## Metrics: Keep (8, with dimension additions)
-
-### Fleet Health
-
-**1. `sei.controller.seinode.phase`** — Observable Float64 Gauge
-- Dimensions: `namespace`, `name`, `chain_id`, `node_mode`, `phase`
-- 0/1 per phase (kube-state-metrics pattern). Observable gauge with phaseTracker callback — cleanup on deletion is automatic (stop reporting, series disappears)
-- *Added*: `chain_id`, `node_mode`
-
-**2. `sei.controller.seinodedeployment.phase`** — Observable Float64 Gauge
-- Dimensions: `namespace`, `name`, `phase`
-- Same 0/1 pattern
-
-**3. `sei.controller.seinodedeployment.replicas`** — Float64 Gauge
-- Dimensions: `namespace`, `name`, `type` (desired/ready)
-
-**4. `sei.controller.seinodedeployment.condition`** — Observable Float64 Gauge
-- Dimensions: `namespace`, `name`, `type`, `status`
-- Same 0/1 pattern
-
-### Initialization Performance
-
-**5. `sei.controller.seinode.init.duration`** — Float64 Histogram (unit: s)
-- Dimensions: `namespace`, `chain_id`, `node_mode`, `bootstrap_mode`
-- Buckets: 10, 30, 60, 120, 300, 600, 900, 1200, 1800, 3600
-- Recorded when a node reaches Running
-- *Added*: `node_mode`, `bootstrap_mode` (snapshot / state-sync / genesis)
-
-### Plan Execution
-
-**6. `sei.controller.plan.active`** — Float64 Gauge
-- Dimensions: `controller`, `namespace`, `name`, `plan_type`
-- 1 when a plan is in progress, 0 otherwise
-- *Added*: `plan_type` (init / node-update / genesis / deployment)
-
-**7. `sei.controller.task.failures`** — Int64 Counter
-- Dimensions: `controller`, `namespace`, `name`, `task_type`
-- *Added*: `name` (resource name)
-
-**8. `sei.controller.task.retries`** — Int64 Counter
-- Dimensions: `controller`, `namespace`, `name`, `task_type`
-- *Added*: `name`
-
-## Metrics: Add (7)
-
-### Task-Level Diagnostics
-
-**9. `sei.controller.task.duration`** — Float64 Histogram (unit: s)
-- Dimensions: `controller`, `namespace`, `task_type`
-- Recorded when a task completes: `time.Since(submittedAt)`
+**2. `sei.controller.plan.duration`** — Float64 Histogram (unit: s)
+- Dimensions: `controller`, `namespace`, `plan_type`
 - Buckets: 1, 5, 10, 30, 60, 120, 300, 600, 1800
-- Highest-value missing metric. Answers: "is snapshot-restore slow or is config-apply slow?"
+- Records wall-clock time from plan creation to completion/failure. Answers "how long do init plans take vs node-update plans?"
+- Cardinality: ~2 controllers × ~4 plan_types = ~8 histogram series.
 
-### Plan Progress
+### TRAFFIC (2 metrics)
 
-**10. `sei.controller.plan.task.current`** — Int64 Gauge
-- Dimensions: `controller`, `namespace`, `name`
-- Zero-indexed position of the current task in the plan
-- Combined with task.count, gives a progress bar
+**3. `sei.controller.node.phase`** — Observable Float64 Gauge
+- Dimensions: `namespace`, `name`, `phase`
+- 0/1 per phase (kube-state-metrics pattern). Observable gauge with phaseTracker callback — cleanup on deletion is automatic.
+- Cardinality at 200 nodes: 200 × 5 phases = 1,000 series.
 
-**11. `sei.controller.plan.task.count`** — Int64 Gauge
-- Dimensions: `controller`, `namespace`, `name`
-- Total tasks in the active plan. 0 when no plan active.
+**4. `sei.controller.phase.transitions`** — Int64 Counter
+- Dimensions: `controller`, `namespace`, `from_phase`, `to_phase`
+- Unified for both SeiNode and SeiNodeDeployment (the `controller` label disambiguates).
+- Cardinality: ~2 controllers × ~10 valid transitions = ~20 series.
 
-**12. `sei.controller.task.submitted.at`** — Float64 Gauge (unix epoch)
-- Dimensions: `controller`, `namespace`, `name`
-- When the current task was submitted. Detect stuck tasks: `time() - submitted_at > threshold`
+### ERRORS (2 metrics)
 
-### Plan Outcomes
+**5. `sei.controller.plan.failures`** — Int64 Counter
+- Dimensions: `controller`, `namespace`, `plan_type`
+- Incremented when a plan reaches terminal Failed state.
+- Cardinality: ~2 controllers × ~4 plan_types = ~8 series.
 
-**13. `sei.controller.plan.completions`** — Int64 Counter
-- Dimensions: `controller`, `namespace`, `plan_type`, `outcome` (success/failure)
-- Compute success rate: `rate(completions{outcome=success}) / rate(completions)`
+**6. `sei.controller.reconcile.errors`** — Int64 Counter
+- Dimensions: `controller`, `namespace`
+- No per-node `name` label — unbounded cardinality at scale. Namespace-scoped is sufficient for alerting; logs have the node name for debugging.
+- Cardinality: ~2 controllers × ~3 namespaces = ~6 series.
 
-### Controller Identity
+### SATURATION (1 metric)
 
-**14. `sei.controller.info`** — Float64 Gauge (always 1)
-- Dimensions: `version`, `cluster`, `environment`
-- One time series. Correlate version with behavior changes.
+**7. `sei.controller.plan.active`** — Int64 Gauge
+- Dimensions: `controller`, `namespace`
+- Aggregate count of in-progress plans (not per-node). Answers "how loaded is the controller?"
+- Cardinality: ~2 controllers × ~3 namespaces = ~6 series.
 
-## Per-Metric Attribute Constants
+### Deployment-Level (optional, low cardinality)
 
-Defined in `internal/controller/observability/`:
+These cover SeiNodeDeployment resources (3-10 per cluster, not 200):
+
+**8. `sei.controller.deployment.phase`** — Observable Float64 Gauge
+- Dimensions: `namespace`, `name`, `phase`
+- Same 0/1 pattern.
+
+**9. `sei.controller.deployment.replicas`** — Float64 Gauge
+- Dimensions: `namespace`, `name`, `replica_state` (desired/ready)
+- Renamed from `type` to `replica_state` to avoid attribute overload.
+
+## What Gets Cut
+
+| Metric | Reason |
+|--------|--------|
+| `seinode.init_duration_seconds` | Replaced by generic `node.phase.duration{phase=Initializing}` |
+| `seinode.last_init_duration_seconds` | Per-node gauge, high cardinality, replaced by phase duration histogram |
+| `seinode.phase_transitions_total` | Replaced by unified `phase.transitions` counter |
+| `task.retries_total` | Task-level detail, too granular for launch |
+| `task.failures_total` | Rolled up into `plan.failures` |
+| `reconcile_errors_total` (per-name) | Fixed: drop `name` label, keep namespace-scoped |
+| `seinodedeployment.condition` | Conditions are in CRD status — queryable via kube API, not needed in metrics for launch |
+| `seinodedeployment.reconcile_substep_duration` | Internal implementation detail |
+
+## Attribute Constants
 
 ```go
 var (
@@ -178,67 +116,67 @@ var (
     AttrNamespace     = attribute.Key("namespace")
     AttrName          = attribute.Key("name")
     AttrPhase         = attribute.Key("phase")
+    AttrFromPhase     = attribute.Key("from_phase")
+    AttrToPhase       = attribute.Key("to_phase")
     AttrChainID       = attribute.Key("chain_id")
-    AttrNodeMode      = attribute.Key("node_mode")
-    AttrBootstrapMode = attribute.Key("bootstrap_mode")
     AttrPlanType      = attribute.Key("plan_type")
-    AttrTaskType      = attribute.Key("task_type")
-    AttrOutcome       = attribute.Key("outcome")
-    AttrReplicaType   = attribute.Key("type")
-    AttrCondType      = attribute.Key("type")
-    AttrCondStatus    = attribute.Key("status")
+    AttrReplicaState  = attribute.Key("replica_state")
 )
 ```
 
+No overloaded `type` attribute.
+
+## Cardinality at 200 Nodes
+
+| Metric | Series |
+|--------|--------|
+| node.phase.duration (histogram) | ~25 |
+| plan.duration (histogram) | ~8 |
+| node.phase (gauge) | ~1,000 |
+| phase.transitions (counter) | ~20 |
+| plan.failures (counter) | ~8 |
+| reconcile.errors (counter) | ~6 |
+| plan.active (gauge) | ~6 |
+| deployment.phase (gauge) | ~50 |
+| deployment.replicas (gauge) | ~20 |
+| **Total** | **~1,143 series** |
+
+~70% reduction from the previous design.
+
 ## Alerts (4)
 
-| Alert | Expression | Rationale |
-|-------|-----------|-----------|
-| Node stuck | Non-Running phase >30min AND `task.submitted.at` unchanged | Distinguishes "slow but progressing" from "stuck" |
-| Plan retrying without progress | Same task retried N times, no task index advance | Catches infinite retry loops |
-| Sustained reconcile error rate | controller-runtime `reconcile_total{result=error}` >25% over 10min | Controller is broken (RBAC, CRDs missing) |
-| Queue depth growing | Monotonic increase over 5min | Controller is overwhelmed |
+| Alert | Signal | Expression |
+|-------|--------|-----------|
+| Node stuck | Latency | `node.phase{phase=Initializing}` held for >30min with no transition |
+| Plan failure rate | Errors | `rate(plan.failures) / rate(phase.transitions)` > threshold |
+| Sustained reconcile errors | Errors | controller-runtime `reconcile_total{result=error}` >25% over 10min |
+| Controller saturated | Saturation | `plan.active` growing monotonically OR `workqueue_depth` growing |
 
-## Cardinality Analysis
+## CRD Change
 
-| Metric | Max Series (50 nodes, 3 chains) |
-|--------|------|
-| seinode.phase | 50 nodes × 5 phases = 250 |
-| task.failures | 50 nodes × ~10 active task types = 500 |
-| plan.active | 50 nodes = 50 |
-| plan.task.current | 50 nodes = 50 |
-| task.duration | ~10 task types × 11 buckets = 110 |
-| **Total** | **< 2,000 active series** |
+Add `PhaseTransitionTime` to `SeiNodeStatus`:
+```go
+// PhaseTransitionTime is when the node last changed phases.
+// Used to compute phase duration metrics.
+// +optional
+PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
+```
 
 ## Implementation Phases
 
 ### Phase 1: OTel Infrastructure
 - Add OTel SDK dependencies
-- `initMeterProvider()` in `cmd/main.go` with Prometheus + OTLP readers
-- Attribute constants in `internal/controller/observability/`
-- Downward API env vars in Deployment spec
-- No metric changes — validates the bridge works
+- `initMeterProvider()` in `cmd/main.go`
+- Attribute constants in `observability/`
+- Downward API env vars
+- No metric changes
 
-### Phase 2: Migrate Planner Metrics (3 metrics)
-- Convert `task.retries`, `task.failures`, `plan.active`
-- Add `name` and `plan_type` dimensions
-- Add new `task.duration` histogram
-- Add new `plan.completions` counter
+### Phase 2: Core Metrics (the 7+2)
+- Replace all existing metrics with the new set
+- Add `PhaseTransitionTime` to CRD
+- Implement phaseTracker for observable gauges
+- Single PR, atomic swap
 
-### Phase 3: Migrate Node Metrics (4 → 5 metrics)
-- Convert `seinode.phase`, `seinode.init.duration`
-- Introduce `phaseTracker` for observable gauge
-- Add `chain_id`, `node_mode`, `bootstrap_mode` dimensions
-- Add new plan progress metrics (`task.current`, `task.count`, `submitted.at`)
-
-### Phase 4: Migrate Deployment Metrics (4 metrics)
-- Convert phase, replicas, condition gauges
-- Add `controller.info` gauge
-
-### Phase 5: Remove Prometheus Client
-- Remove cut metrics
+### Phase 3: Remove Prometheus Client
 - Remove `prometheus/client_golang` direct dependency
-- Remove `init()` registrations
-- Only transitive Prometheus dependency through controller-runtime remains
-
-Each phase is independently deployable. Parallel operation during migration is safe.
+- Only transitive through controller-runtime
