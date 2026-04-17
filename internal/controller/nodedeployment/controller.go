@@ -81,6 +81,11 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
+	if err := r.reconcileInternalRpcService(ctx, group); err != nil {
+		logger.Error(err, "reconciling internal RPC service")
+		return ctrl.Result{}, fmt.Errorf("reconciling internal RPC service: %w", err)
+	}
+
 	if err := r.reconcileNetworking(ctx, group); err != nil {
 		logger.Error(err, "reconciling networking")
 		return ctrl.Result{}, fmt.Errorf("reconciling networking: %w", err)

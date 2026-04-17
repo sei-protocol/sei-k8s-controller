@@ -248,10 +248,49 @@ type SeiNodeDeploymentStatus struct {
 	// +optional
 	NetworkingStatus *NetworkingStatus `json:"networkingStatus,omitempty"`
 
+	// RpcService reports the in-cluster ClusterIP Service that kube-proxy
+	// load-balances across healthy child pods. Populated unconditionally —
+	// this path is independent of .spec.networking.
+	// +optional
+	RpcService *RpcServiceStatus `json:"rpcService,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// RpcServiceStatus reports the resolved in-cluster ClusterIP Service that
+// exposes RPC for a SeiNodeDeployment. Consumers resolve the service at
+// {name}.{namespace}.svc and dial the named port from {ports}.
+type RpcServiceStatus struct {
+	// Name is the Kubernetes Service name (always "{deployment-name}-rpc").
+	Name string `json:"name"`
+
+	// Namespace is the Service's namespace (always equal to the deployment's
+	// namespace).
+	Namespace string `json:"namespace"`
+
+	// Ports enumerates the named ports on the Service. All fields are populated
+	// with the canonical seid port numbers; absence from the node's active port
+	// set (e.g. validator mode) is reported via the Service's Ports list, not
+	// by omitting fields here.
+	Ports RpcServicePorts `json:"ports"`
+}
+
+// RpcServicePorts is the set of named ports advertised on the internal
+// RPC Service. Field names are part of the public interface contract.
+type RpcServicePorts struct {
+	// Rpc is the Tendermint / CometBFT RPC port (26657).
+	Rpc int32 `json:"rpc"`
+	// EvmHttp is the EVM JSON-RPC HTTP port (8545).
+	EvmHttp int32 `json:"evmHttp"`
+	// EvmWs is the EVM JSON-RPC WebSocket port (8546).
+	EvmWs int32 `json:"evmWs"`
+	// Rest is the Cosmos REST (LCD) port (1317).
+	Rest int32 `json:"rest"`
+	// Grpc is the Cosmos gRPC port (9090).
+	Grpc int32 `json:"grpc"`
 }
 
 // GroupNodeStatus is a summary of a child SeiNode's state.

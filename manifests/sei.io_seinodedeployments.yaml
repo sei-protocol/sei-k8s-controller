@@ -1042,6 +1042,59 @@ spec:
                 - strategy
                 - targetHash
                 type: object
+              rpcService:
+                description: |-
+                  RpcService reports the in-cluster ClusterIP Service that kube-proxy
+                  load-balances across healthy child pods. Populated unconditionally —
+                  this path is independent of .spec.networking.
+                properties:
+                  name:
+                    description: Name is the Kubernetes Service name (always "{deployment-name}-rpc").
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the Service's namespace (always equal to the deployment's
+                      namespace).
+                    type: string
+                  ports:
+                    description: |-
+                      Ports enumerates the named ports on the Service. All fields are populated
+                      with the canonical seid port numbers; absence from the node's active port
+                      set (e.g. validator mode) is reported via the Service's Ports list, not
+                      by omitting fields here.
+                    properties:
+                      evmHttp:
+                        description: EvmHttp is the EVM JSON-RPC HTTP port (8545).
+                        format: int32
+                        type: integer
+                      evmWs:
+                        description: EvmWs is the EVM JSON-RPC WebSocket port (8546).
+                        format: int32
+                        type: integer
+                      grpc:
+                        description: Grpc is the Cosmos gRPC port (9090).
+                        format: int32
+                        type: integer
+                      rest:
+                        description: Rest is the Cosmos REST (LCD) port (1317).
+                        format: int32
+                        type: integer
+                      rpc:
+                        description: Rpc is the Tendermint / CometBFT RPC port (26657).
+                        format: int32
+                        type: integer
+                    required:
+                    - evmHttp
+                    - evmWs
+                    - grpc
+                    - rest
+                    - rpc
+                    type: object
+                required:
+                - name
+                - namespace
+                - ports
+                type: object
               templateHash:
                 description: |-
                   TemplateHash is a hash of the spec fields that require deployment
