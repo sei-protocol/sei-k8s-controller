@@ -99,7 +99,9 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
-	mp, err := initMeterProvider(context.Background())
+	ctx := ctrl.SetupSignalHandler()
+
+	mp, err := initMeterProvider(ctx)
 	if err != nil {
 		setupLog.Error(err, "Failed to initialize OTel MeterProvider")
 		os.Exit(1)
@@ -241,7 +243,7 @@ func main() {
 	}
 
 	setupLog.Info("Starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
