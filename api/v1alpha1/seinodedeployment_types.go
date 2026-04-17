@@ -248,10 +248,46 @@ type SeiNodeDeploymentStatus struct {
 	// +optional
 	NetworkingStatus *NetworkingStatus `json:"networkingStatus,omitempty"`
 
+	// InternalService reports the in-cluster ClusterIP Service that kube-proxy
+	// load-balances across healthy child pods. Populated unconditionally —
+	// this path is independent of .spec.networking.
+	// +optional
+	InternalService *InternalServiceStatus `json:"internalService,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// InternalServiceStatus reports the resolved in-cluster ClusterIP Service
+// exposed for a SeiNodeDeployment. Consumers resolve the service at
+// {name}.{namespace}.svc and dial the named port from {ports}.
+type InternalServiceStatus struct {
+	// Name is the Kubernetes Service name (always "{deployment-name}-internal").
+	Name string `json:"name"`
+
+	// Namespace is the Service's namespace (always equal to the deployment's
+	// namespace).
+	Namespace string `json:"namespace"`
+
+	// Ports enumerates the named ports on the Service.
+	Ports InternalServicePorts `json:"ports"`
+}
+
+// InternalServicePorts is the set of named ports advertised on the internal
+// ClusterIP Service. Only stateless HTTP request/response protocols are
+// exposed here — stateful protocols (EVM WebSocket, gRPC streaming, P2P
+// gossip) do not load-balance correctly behind a kube-proxy L4 LB, and
+// consumers needing those use the per-node headless Services instead.
+// Field names are part of the public interface contract.
+type InternalServicePorts struct {
+	// Rpc is the Tendermint / CometBFT RPC port (26657).
+	Rpc int32 `json:"rpc"`
+	// EvmHttp is the EVM JSON-RPC HTTP port (8545).
+	EvmHttp int32 `json:"evmHttp"`
+	// Rest is the Cosmos REST (LCD) port (1317).
+	Rest int32 `json:"rest"`
 }
 
 // GroupNodeStatus is a summary of a child SeiNode's state.

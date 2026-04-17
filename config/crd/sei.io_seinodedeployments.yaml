@@ -795,6 +795,45 @@ spec:
                 items:
                   type: string
                 type: array
+              internalService:
+                description: |-
+                  InternalService reports the in-cluster ClusterIP Service that kube-proxy
+                  load-balances across healthy child pods. Populated unconditionally —
+                  this path is independent of .spec.networking.
+                properties:
+                  name:
+                    description: Name is the Kubernetes Service name (always "{deployment-name}-internal").
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the Service's namespace (always equal to the deployment's
+                      namespace).
+                    type: string
+                  ports:
+                    description: Ports enumerates the named ports on the Service.
+                    properties:
+                      evmHttp:
+                        description: EvmHttp is the EVM JSON-RPC HTTP port (8545).
+                        format: int32
+                        type: integer
+                      rest:
+                        description: Rest is the Cosmos REST (LCD) port (1317).
+                        format: int32
+                        type: integer
+                      rpc:
+                        description: Rpc is the Tendermint / CometBFT RPC port (26657).
+                        format: int32
+                        type: integer
+                    required:
+                    - evmHttp
+                    - rest
+                    - rpc
+                    type: object
+                required:
+                - name
+                - namespace
+                - ports
+                type: object
               networkingStatus:
                 description: NetworkingStatus reports the observed state of networking
                   resources.
