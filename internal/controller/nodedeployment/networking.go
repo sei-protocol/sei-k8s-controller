@@ -380,16 +380,6 @@ func (r *SeiNodeDeploymentReconciler) orphanNetworkingResources(ctx context.Cont
 		return fmt.Errorf("fetching external Service for orphan: %w", err)
 	}
 
-	internalSvc := &corev1.Service{}
-	err = r.Get(ctx, types.NamespacedName{Name: internalRpcServiceName(group), Namespace: group.Namespace}, internalSvc)
-	if err == nil {
-		if err := r.removeOwnerRef(ctx, internalSvc, group); err != nil {
-			return fmt.Errorf("orphaning internal RPC Service: %w", err)
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("fetching internal RPC Service for orphan: %w", err)
-	}
-
 	for _, gvk := range []schema.GroupVersionKind{httpRouteGVK(), serviceMonitorGVK()} {
 		list := &unstructured.UnstructuredList{}
 		list.SetGroupVersionKind(gvk)

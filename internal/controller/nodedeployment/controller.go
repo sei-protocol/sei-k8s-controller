@@ -81,7 +81,7 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
-	if err := r.reconcileInternalRpcService(ctx, group); err != nil {
+	if err := r.reconcileInternalService(ctx, group); err != nil {
 		logger.Error(err, "reconciling internal RPC service")
 		return ctrl.Result{}, fmt.Errorf("reconciling internal RPC service: %w", err)
 	}
@@ -164,6 +164,9 @@ func (r *SeiNodeDeploymentReconciler) handleDeletion(ctx context.Context, group 
 		}
 		if err := r.orphanNetworkingResources(ctx, group); err != nil {
 			return ctrl.Result{}, fmt.Errorf("orphaning networking resources: %w", err)
+		}
+		if err := r.orphanInternalService(ctx, group); err != nil {
+			return ctrl.Result{}, fmt.Errorf("orphaning internal Service: %w", err)
 		}
 	} else {
 		if err := r.deleteNetworkingResources(ctx, group); err != nil {
