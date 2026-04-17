@@ -229,6 +229,11 @@ type SeiNodeStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// PhaseTransitionTime is when the node last changed phases.
+	// Used to compute phase duration metrics.
+	// +optional
+	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
+
 	// Plan tracks the active task sequence for this node. A planner generates
 	// the plan based on the node's current state and conditions.
 	// +optional

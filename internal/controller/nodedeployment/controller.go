@@ -18,7 +18,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
@@ -82,13 +81,8 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
-	// Networking runs before node creation so the DNS readiness gate
-	// can block until public routes are resolvable.
-	if err := timeSubstep("reconcileNetworking", func() error {
-		return r.reconcileNetworking(ctx, group)
-	}); err != nil {
+	if err := r.reconcileNetworking(ctx, group); err != nil {
 		logger.Error(err, "reconciling networking")
-		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 		return ctrl.Result{}, fmt.Errorf("reconciling networking: %w", err)
 	}
 
@@ -101,18 +95,14 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if err := timeSubstep("reconcileSeiNodes", func() error {
-		return r.reconcileSeiNodes(ctx, group)
-	}); err != nil {
+	if err := r.reconcileSeiNodes(ctx, group); err != nil {
 		logger.Error(err, "reconciling SeiNodes")
-		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 		return ctrl.Result{}, fmt.Errorf("reconciling SeiNodes: %w", err)
 	}
 
 	planResult, planErr := r.reconcilePlan(ctx, group)
 	if planErr != nil {
 		logger.Error(planErr, "reconciling plan")
-		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 		return ctrl.Result{}, fmt.Errorf("reconciling plan: %w", planErr)
 	}
 	if shouldRequeue(planResult) {
@@ -122,11 +112,8 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return planResult, nil
 	}
 
-	if err := timeSubstep("reconcileMonitoring", func() error {
-		return r.reconcileMonitoring(ctx, group)
-	}); err != nil {
+	if err := r.reconcileMonitoring(ctx, group); err != nil {
 		logger.Error(err, "reconciling monitoring")
-		observability.ReconcileErrorsTotal.WithLabelValues(controllerName, ns, name).Inc()
 		return ctrl.Result{}, fmt.Errorf("reconciling monitoring: %w", err)
 	}
 
@@ -136,7 +123,6 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	emitGroupPhase(ns, name, group.Status.Phase)
 	emitGroupReplicas(ns, name, group.Spec.Replicas, group.Status.ReadyReplicas)
-	emitGroupConditions(ns, name, group.Status.Conditions)
 
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }

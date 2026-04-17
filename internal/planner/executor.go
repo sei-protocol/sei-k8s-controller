@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -96,7 +98,12 @@ func executePlan(
 		return ctrl.Result{}, nil
 	}
 
-	planActive.WithLabelValues(cn, obj.GetNamespace(), obj.GetName()).Set(1)
+	planActiveCount.Add(ctx, 1,
+		metric.WithAttributes(
+			observability.AttrController.String(cn),
+			observability.AttrNamespace.String(obj.GetNamespace()),
+		),
+	)
 
 	for {
 		t := CurrentTask(plan)
@@ -106,7 +113,12 @@ func executePlan(
 			// conditions) when it observes the terminal plan on the next reconcile.
 			plan.Phase = seiv1alpha1.TaskPlanComplete
 			setTargetPhase(obj, plan.TargetPhase)
-			planActive.WithLabelValues(cn, obj.GetNamespace(), obj.GetName()).Set(0)
+			planActiveCount.Add(ctx, -1,
+				metric.WithAttributes(
+					observability.AttrController.String(cn),
+					observability.AttrNamespace.String(obj.GetNamespace()),
+				),
+			)
 			return ResultRequeueImmediate, nil
 		}
 
@@ -175,7 +187,6 @@ func advanceTask(
 			errMsg = exec.Err().Error()
 		}
 		if t.MaxRetries > 0 && t.RetryCount < t.MaxRetries {
-			taskRetriesTotal.WithLabelValues(cn, obj.GetNamespace(), t.Type).Inc()
 			t.RetryCount++
 			t.Status = seiv1alpha1.TaskPending
 			t.Error = ""
@@ -205,8 +216,6 @@ func failTask(
 ) {
 	log.FromContext(ctx).Error(fmt.Errorf("task failed: %s", errMsg), "task plan failed", "task", t.Type)
 
-	taskFailuresTotal.WithLabelValues(controller, obj.GetNamespace(), t.Type).Inc()
-
 	t.Status = seiv1alpha1.TaskFailed
 	t.Error = errMsg
 	plan.Phase = seiv1alpha1.TaskPlanFailed
@@ -224,7 +233,12 @@ func failTask(
 		RetryCount: t.RetryCount,
 		MaxRetries: t.MaxRetries,
 	}
-	planActive.WithLabelValues(controller, obj.GetNamespace(), obj.GetName()).Set(0)
+	planActiveCount.Add(ctx, -1,
+		metric.WithAttributes(
+			observability.AttrController.String(controller),
+			observability.AttrNamespace.String(obj.GetNamespace()),
+		),
+	)
 }
 
 // retryBackoff returns an exponential backoff duration capped at maxRetryBackoff.
@@ -243,5 +257,7 @@ func setTargetPhase(obj client.Object, phase seiv1alpha1.SeiNodePhase) {
 	}
 	if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
 		node.Status.Phase = phase
+		now := metav1.Now()
+		node.Status.PhaseTransitionTime = &now
 	}
 }

@@ -726,6 +726,10 @@ func (in *SeiNodeStatus) DeepCopyInto(out *SeiNodeStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.PhaseTransitionTime != nil {
+		in, out := &in.PhaseTransitionTime, &out.PhaseTransitionTime
+		*out = (*in).DeepCopy()
+	}
 	if in.Plan != nil {
 		in, out := &in.Plan, &out.Plan
 		*out = new(TaskPlan)

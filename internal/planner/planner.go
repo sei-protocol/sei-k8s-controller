@@ -1,21 +1,27 @@
 package planner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	"go.opentelemetry.io/otel/metric"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
+
+const unknownValue = "unknown"
 
 const (
 	TaskSnapshotRestore    = sidecar.TaskTypeSnapshotRestore
@@ -136,6 +142,8 @@ func ResolvePlan(node *seiv1alpha1.SeiNode) error {
 	node.Status.Plan = plan
 	if node.Status.Phase == "" || node.Status.Phase == seiv1alpha1.PhasePending {
 		node.Status.Phase = seiv1alpha1.PhaseInitializing
+		now := metav1.Now()
+		node.Status.PhaseTransitionTime = &now
 	}
 	return nil
 }
@@ -148,12 +156,17 @@ func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 		return
 	}
 
+	ctx := context.Background()
+	cn := "seinode"
+	planType := classifyPlan(plan)
+
 	switch plan.Phase {
 	case seiv1alpha1.TaskPlanComplete:
 		if hasNodeUpdateCondition(node) {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateComplete",
 				fmt.Sprintf("plan %s completed", plan.ID))
 		}
+		emitPlanDuration(ctx, cn, node.Namespace, planType, plan)
 		node.Status.Plan = nil
 
 	case seiv1alpha1.TaskPlanFailed:
@@ -161,6 +174,14 @@ func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateFailed",
 				fmt.Sprintf("plan %s failed: %s", plan.ID, planFailureMessage(plan)))
 		}
+		planFailures.Add(ctx, 1,
+			metric.WithAttributes(
+				observability.AttrController.String(cn),
+				observability.AttrNamespace.String(node.Namespace),
+				observability.AttrPlanType.String(planType),
+			),
+		)
+		emitPlanDuration(ctx, cn, node.Namespace, planType, plan)
 		node.Status.Plan = nil
 	}
 }
@@ -182,11 +203,45 @@ func setNodeUpdateCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionSt
 	})
 }
 
+// classifyPlan returns the plan type for metrics.
+func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
+	for _, t := range plan.Tasks {
+		switch t.Type {
+		case task.TaskTypeObserveImage:
+			return "node-update"
+		case task.TaskTypeEnsureDataPVC:
+			return "init"
+		}
+	}
+	return unknownValue
+}
+
+// emitPlanDuration records the wall-clock time from the first task's
+// submission to now. This approximates plan duration.
+func emitPlanDuration(ctx context.Context, controller, namespace, planType string, plan *seiv1alpha1.TaskPlan) {
+	if len(plan.Tasks) == 0 {
+		return
+	}
+	// Use the first task's SubmittedAt as the plan start time.
+	first := plan.Tasks[0]
+	if first.SubmittedAt == nil {
+		return
+	}
+	dur := time.Since(first.SubmittedAt.Time).Seconds()
+	planDuration.Record(ctx, dur,
+		metric.WithAttributes(
+			observability.AttrController.String(controller),
+			observability.AttrNamespace.String(namespace),
+			observability.AttrPlanType.String(planType),
+		),
+	)
+}
+
 func planFailureMessage(plan *seiv1alpha1.TaskPlan) string {
 	if plan.FailedTaskDetail != nil {
 		return fmt.Sprintf("task %s: %s", plan.FailedTaskDetail.Type, plan.FailedTaskDetail.Error)
 	}
-	return "unknown"
+	return unknownValue
 }
 
 // plannerForMode returns the appropriate NodePlanner based on which mode
