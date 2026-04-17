@@ -4,7 +4,7 @@ GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null || echo $(HOME)/go/bin/
 .PHONY: build test lint manifests generate ci docker-build docker-push
 
 build: ## Build manager binary.
-	go build -o bin/manager cmd/main.go
+	go build -o bin/manager ./cmd/
 
 test: ## Run tests.
 	go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
