@@ -103,7 +103,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// builds a new one based on the node's phase, stamping it onto
 	// node.Status.Plan (and transitioning Pending → Initializing).
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
-	if err := planner.ResolvePlan(node); err != nil {
+	if err := planner.ResolvePlan(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
 

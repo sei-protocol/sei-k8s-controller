@@ -51,8 +51,7 @@ func emitGroupPhase(ns, name string, phase seiv1alpha1.SeiNodeDeploymentPhase) {
 	groupPhaseTracker.Set(ns, name, string(phase))
 }
 
-func emitGroupReplicas(ns, name string, desired, ready int32) {
-	ctx := context.Background()
+func emitGroupReplicas(ctx context.Context, ns, name string, desired, ready int32) {
 	deploymentReplicas.Record(ctx, float64(desired),
 		metric.WithAttributes(
 			observability.AttrNamespace.String(ns),

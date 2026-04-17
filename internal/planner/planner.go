@@ -115,13 +115,13 @@ func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 // transition Status.Phase from Pending to Initializing. The caller must
 // capture a MergeFrom patch base before calling ResolvePlan, and persist
 // the status change if a new plan was built (check planAlreadyActive).
-func ResolvePlan(node *seiv1alpha1.SeiNode) error {
+func ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		return nil
 	}
 
 	// Handle terminal plans before building the next one.
-	handleTerminalPlan(node)
+	handleTerminalPlan(ctx, node)
 
 	p, err := plannerForMode(node)
 	if err != nil {
@@ -150,15 +150,12 @@ func ResolvePlan(node *seiv1alpha1.SeiNode) error {
 
 // handleTerminalPlan handles completed or failed plans: clears conditions
 // and nils the plan so the planner can build the next one if needed.
-func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
+func handleTerminalPlan(ctx context.Context, node *seiv1alpha1.SeiNode) {
 	plan := node.Status.Plan
 	if plan == nil {
 		return
 	}
 
-	// TODO: thread reconcile ctx through ResolvePlan when tracing is added.
-	// For metrics-only recording, context.Background() is sufficient.
-	ctx := context.Background()
 	cn := "seinode"
 	planType := classifyPlan(plan)
 

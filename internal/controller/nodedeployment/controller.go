@@ -122,7 +122,7 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	emitGroupPhase(ns, name, group.Status.Phase)
-	emitGroupReplicas(ns, name, group.Spec.Replicas, group.Status.ReadyReplicas)
+	emitGroupReplicas(ctx, ns, name, group.Spec.Replicas, group.Status.ReadyReplicas)
 
 	return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 }
