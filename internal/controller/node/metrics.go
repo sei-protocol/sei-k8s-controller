@@ -1,12 +1,10 @@
 package node
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
+	"go.opentelemetry.io/otel/metric"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
-	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 var allNodePhases = []string{
@@ -17,57 +15,54 @@ var allNodePhases = []string{
 	string(seiv1alpha1.PhaseTerminating),
 }
 
+var nodePhaseTracker = observability.NewPhaseTracker(allNodePhases)
+
 var (
-	nodePhaseGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "sei_controller_seinode_phase",
-			Help: "Current phase of each SeiNode (1=active, 0=inactive)",
-		},
-		[]string{"namespace", "name", "phase"},
-	)
+	// nodePhaseTransitions counts phase transitions.
+	nodePhaseTransitions metric.Int64Counter
 
-	nodePhaseTransitions = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "sei_controller_seinode_phase_transitions_total",
-			Help: "Phase state machine transitions",
-		},
-		[]string{"namespace", "from", "to"},
-	)
-
-	nodeInitDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "sei_controller_seinode_init_duration_seconds",
-			Help:    "Time from Pending to Running",
-			Buckets: observability.InitBuckets,
-		},
-		[]string{"namespace", "chain_id"},
-	)
-
-	nodeLastInitDuration = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "sei_controller_seinode_last_init_duration_seconds",
-			Help: "Per-node init duration, set once when node reaches Running",
-		},
-		[]string{"namespace", "name"},
-	)
+	// nodePhaseDuration records time spent in each phase when transitioning out.
+	nodePhaseDuration metric.Float64Histogram
 )
 
+var meter = observability.NewMeter("node")
+
 func init() {
-	metrics.Registry.MustRegister(
-		nodePhaseGauge,
-		nodePhaseTransitions,
-		nodeInitDuration,
-		nodeLastInitDuration,
+	var err error
+
+	// The observable gauge is registered for its callback side effect.
+	_, err = meter.Float64ObservableGauge(
+		"sei.controller.seinode.phase",
+		metric.WithDescription("Current phase of each SeiNode (1=active, 0=inactive)"),
+		metric.WithFloat64Callback(nodePhaseTracker.Observe),
 	)
+	handleInitErr(err)
+
+	nodePhaseTransitions, err = meter.Int64Counter(
+		"sei.controller.seinode.phase.transitions",
+		metric.WithDescription("Phase state machine transitions"),
+	)
+	handleInitErr(err)
+
+	nodePhaseDuration, err = meter.Float64Histogram(
+		"sei.controller.seinode.phase.duration",
+		metric.WithDescription("Time spent in each phase before transitioning"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(observability.InitBuckets...),
+	)
+	handleInitErr(err)
+}
+
+func handleInitErr(err error) {
+	if err != nil {
+		panic("otel metric init: " + err.Error())
+	}
 }
 
 func emitNodePhase(ns, name string, phase seiv1alpha1.SeiNodePhase) {
-	observability.EmitPhaseGauge(nodePhaseGauge, ns, name, string(phase), allNodePhases)
+	nodePhaseTracker.Set(ns, name, string(phase))
 }
 
 func cleanupNodeMetrics(namespace, name string) {
-	observability.DeletePhaseGauge(nodePhaseGauge, namespace, name, allNodePhases)
-	nodeLastInitDuration.DeleteLabelValues(namespace, name)
-	observability.ReconcileErrorsTotal.DeleteLabelValues(seiNodeControllerName, namespace, name)
-	planner.CleanupPlanMetrics("seinode", namespace, name)
+	nodePhaseTracker.Delete(namespace, name)
 }

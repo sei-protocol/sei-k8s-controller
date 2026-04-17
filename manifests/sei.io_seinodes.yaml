@@ -582,6 +582,12 @@ spec:
                 - Failed
                 - Terminating
                 type: string
+              phaseTransitionTime:
+                description: |-
+                  PhaseTransitionTime is when the node last changed phases.
+                  Used to compute phase duration metrics.
+                format: date-time
+                type: string
               plan:
                 description: |-
                   Plan tracks the active task sequence for this node. A planner generates

@@ -1,21 +1,27 @@
 package planner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	"go.opentelemetry.io/otel/metric"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
+
+const unknownValue = "unknown"
 
 const (
 	TaskSnapshotRestore    = sidecar.TaskTypeSnapshotRestore
@@ -109,13 +115,13 @@ func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 // transition Status.Phase from Pending to Initializing. The caller must
 // capture a MergeFrom patch base before calling ResolvePlan, and persist
 // the status change if a new plan was built (check planAlreadyActive).
-func ResolvePlan(node *seiv1alpha1.SeiNode) error {
+func ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		return nil
 	}
 
 	// Handle terminal plans before building the next one.
-	handleTerminalPlan(node)
+	handleTerminalPlan(ctx, node)
 
 	p, err := plannerForMode(node)
 	if err != nil {
@@ -136,17 +142,22 @@ func ResolvePlan(node *seiv1alpha1.SeiNode) error {
 	node.Status.Plan = plan
 	if node.Status.Phase == "" || node.Status.Phase == seiv1alpha1.PhasePending {
 		node.Status.Phase = seiv1alpha1.PhaseInitializing
+		now := metav1.Now()
+		node.Status.PhaseTransitionTime = &now
 	}
 	return nil
 }
 
 // handleTerminalPlan handles completed or failed plans: clears conditions
 // and nils the plan so the planner can build the next one if needed.
-func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
+func handleTerminalPlan(ctx context.Context, node *seiv1alpha1.SeiNode) {
 	plan := node.Status.Plan
 	if plan == nil {
 		return
 	}
+
+	cn := "seinode"
+	planType := classifyPlan(plan)
 
 	switch plan.Phase {
 	case seiv1alpha1.TaskPlanComplete:
@@ -154,6 +165,7 @@ func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateComplete",
 				fmt.Sprintf("plan %s completed", plan.ID))
 		}
+		emitPlanDuration(ctx, cn, node.Namespace, planType, "complete", plan)
 		node.Status.Plan = nil
 
 	case seiv1alpha1.TaskPlanFailed:
@@ -161,6 +173,7 @@ func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateFailed",
 				fmt.Sprintf("plan %s failed: %s", plan.ID, planFailureMessage(plan)))
 		}
+		emitPlanDuration(ctx, cn, node.Namespace, planType, "failed", plan)
 		node.Status.Plan = nil
 	}
 }
@@ -182,11 +195,45 @@ func setNodeUpdateCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionSt
 	})
 }
 
+// classifyPlan returns the plan type for metrics.
+func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
+	for _, t := range plan.Tasks {
+		switch t.Type {
+		case task.TaskTypeObserveImage:
+			return "node-update"
+		case task.TaskTypeEnsureDataPVC:
+			return "init"
+		}
+	}
+	return unknownValue
+}
+
+// emitPlanDuration records the wall-clock time from the first task's
+// submission to now. This approximates plan duration.
+func emitPlanDuration(ctx context.Context, controller, namespace, planType, outcome string, plan *seiv1alpha1.TaskPlan) {
+	if len(plan.Tasks) == 0 {
+		return
+	}
+	first := plan.Tasks[0]
+	if first.SubmittedAt == nil {
+		return
+	}
+	dur := time.Since(first.SubmittedAt.Time).Seconds()
+	planDuration.Record(ctx, dur,
+		metric.WithAttributes(
+			observability.AttrController.String(controller),
+			observability.AttrNamespace.String(namespace),
+			observability.AttrPlanType.String(planType),
+			observability.AttrOutcome.String(outcome),
+		),
+	)
+}
+
 func planFailureMessage(plan *seiv1alpha1.TaskPlan) string {
 	if plan.FailedTaskDetail != nil {
 		return fmt.Sprintf("task %s: %s", plan.FailedTaskDetail.Type, plan.FailedTaskDetail.Error)
 	}
-	return "unknown"
+	return unknownValue
 }
 
 // plannerForMode returns the appropriate NodePlanner based on which mode

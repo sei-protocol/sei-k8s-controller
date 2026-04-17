@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -20,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
@@ -101,7 +103,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// builds a new one based on the node's phase, stamping it onto
 	// node.Status.Plan (and transitioning Pending → Initializing).
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
-	if err := planner.ResolvePlan(node); err != nil {
+	if err := planner.ResolvePlan(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
 
@@ -136,15 +138,28 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Emit metrics/events if the phase changed.
 	if node.Status.Phase != observedPhase {
 		ns, name := node.Namespace, node.Name
-		nodePhaseTransitions.WithLabelValues(ns, string(observedPhase), string(node.Status.Phase)).Inc()
+		nodePhaseTransitions.Add(ctx, 1,
+			metric.WithAttributes(
+				observability.AttrController.String(seiNodeControllerName),
+				observability.AttrNamespace.String(ns),
+				observability.AttrFromPhase.String(string(observedPhase)),
+				observability.AttrToPhase.String(string(node.Status.Phase)),
+			),
+		)
 		emitNodePhase(ns, name, node.Status.Phase)
 		r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
 			"Phase changed from %s to %s", observedPhase, node.Status.Phase)
 
-		if node.Status.Phase == seiv1alpha1.PhaseRunning {
-			dur := time.Since(node.CreationTimestamp.Time).Seconds()
-			nodeInitDuration.WithLabelValues(ns, node.Spec.ChainID).Observe(dur)
-			nodeLastInitDuration.WithLabelValues(ns, name).Set(dur)
+		// Record time spent in the previous phase.
+		if node.Status.PhaseTransitionTime != nil && observedPhase != "" {
+			dur := time.Since(node.Status.PhaseTransitionTime.Time).Seconds()
+			nodePhaseDuration.Record(ctx, dur,
+				metric.WithAttributes(
+					observability.AttrNamespace.String(ns),
+					observability.AttrChainID.String(node.Spec.ChainID),
+					observability.AttrPhase.String(string(observedPhase)),
+				),
+			)
 		}
 	}
 
