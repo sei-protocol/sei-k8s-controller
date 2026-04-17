@@ -99,6 +99,17 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
+	mp, err := initMeterProvider(context.Background())
+	if err != nil {
+		setupLog.Error(err, "Failed to initialize OTel MeterProvider")
+		os.Exit(1)
+	}
+	defer func() {
+		if err := mp.Shutdown(context.Background()); err != nil {
+			setupLog.Error(err, "Failed to shutdown MeterProvider")
+		}
+	}()
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                        scheme,
 		Metrics:                       metricsServerOptions,
