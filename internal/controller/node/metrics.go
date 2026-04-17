@@ -25,24 +25,26 @@ var (
 	nodePhaseDuration metric.Float64Histogram
 )
 
+var meter = observability.NewMeter("node")
+
 func init() {
 	var err error
 
 	// The observable gauge is registered for its callback side effect.
-	_, err = observability.Meter.Float64ObservableGauge(
+	_, err = meter.Float64ObservableGauge(
 		"sei.controller.seinode.phase",
 		metric.WithDescription("Current phase of each SeiNode (1=active, 0=inactive)"),
 		metric.WithFloat64Callback(nodePhaseTracker.Observe),
 	)
 	handleInitErr(err)
 
-	nodePhaseTransitions, err = observability.Meter.Int64Counter(
+	nodePhaseTransitions, err = meter.Int64Counter(
 		"sei.controller.seinode.phase.transitions",
 		metric.WithDescription("Phase state machine transitions"),
 	)
 	handleInitErr(err)
 
-	nodePhaseDuration, err = observability.Meter.Float64Histogram(
+	nodePhaseDuration, err = meter.Float64Histogram(
 		"sei.controller.seinode.phase.duration",
 		metric.WithDescription("Time spent in each phase before transitioning"),
 		metric.WithUnit("s"),

@@ -8,15 +8,20 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-// Meter is the shared OTel meter for all controller metrics.
-var Meter = otel.Meter("github.com/sei-protocol/sei-k8s-controller")
+// NewMeter creates a package-scoped OTel meter. Each package should call
+// this once to get its own meter for proper scope identification in backends.
+func NewMeter(pkg string) metric.Meter {
+	return otel.Meter("sei-k8s-controller/" + pkg)
+}
 
 // ReconcileErrors counts reconcile errors per controller and namespace.
 var ReconcileErrors metric.Int64Counter
 
+var meter = NewMeter("observability")
+
 func init() {
 	var err error
-	ReconcileErrors, err = Meter.Int64Counter(
+	ReconcileErrors, err = meter.Int64Counter(
 		"sei.controller.reconcile.errors",
 		metric.WithDescription("Reconcile errors per controller and namespace"),
 	)

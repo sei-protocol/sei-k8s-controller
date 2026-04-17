@@ -33,4 +33,7 @@ var (
 	// AttrReplicaState is the replica count type (desired, ready).
 	// Named explicitly to avoid overloading a generic "type" attribute.
 	AttrReplicaState = attribute.Key("replica_state")
+
+	// AttrOutcome is the plan outcome (complete, failed).
+	AttrOutcome = attribute.Key("outcome")
 )

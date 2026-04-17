@@ -23,11 +23,13 @@ var groupPhaseTracker = observability.NewPhaseTracker(allGroupPhases)
 
 var deploymentReplicas metric.Float64Gauge
 
+var meter = observability.NewMeter("nodedeployment")
+
 func init() {
 	var err error
 
 	// The observable gauge is registered for its callback side effect.
-	_, err = observability.Meter.Float64ObservableGauge(
+	_, err = meter.Float64ObservableGauge(
 		"sei.controller.seinodedeployment.phase",
 		metric.WithDescription("Current phase of each SeiNodeDeployment (1=active, 0=inactive)"),
 		metric.WithFloat64Callback(groupPhaseTracker.Observe),
@@ -36,7 +38,7 @@ func init() {
 		panic("otel metric init: " + err.Error())
 	}
 
-	deploymentReplicas, err = observability.Meter.Float64Gauge(
+	deploymentReplicas, err = meter.Float64Gauge(
 		"sei.controller.seinodedeployment.replicas",
 		metric.WithDescription("Replica counts for each SeiNodeDeployment"),
 	)

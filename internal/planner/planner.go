@@ -156,6 +156,8 @@ func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 		return
 	}
 
+	// TODO: thread reconcile ctx through ResolvePlan when tracing is added.
+	// For metrics-only recording, context.Background() is sufficient.
 	ctx := context.Background()
 	cn := "seinode"
 	planType := classifyPlan(plan)
@@ -166,7 +168,7 @@ func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateComplete",
 				fmt.Sprintf("plan %s completed", plan.ID))
 		}
-		emitPlanDuration(ctx, cn, node.Namespace, planType, plan)
+		emitPlanDuration(ctx, cn, node.Namespace, planType, "complete", plan)
 		node.Status.Plan = nil
 
 	case seiv1alpha1.TaskPlanFailed:
@@ -174,14 +176,7 @@ func handleTerminalPlan(node *seiv1alpha1.SeiNode) {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateFailed",
 				fmt.Sprintf("plan %s failed: %s", plan.ID, planFailureMessage(plan)))
 		}
-		planFailures.Add(ctx, 1,
-			metric.WithAttributes(
-				observability.AttrController.String(cn),
-				observability.AttrNamespace.String(node.Namespace),
-				observability.AttrPlanType.String(planType),
-			),
-		)
-		emitPlanDuration(ctx, cn, node.Namespace, planType, plan)
+		emitPlanDuration(ctx, cn, node.Namespace, planType, "failed", plan)
 		node.Status.Plan = nil
 	}
 }
@@ -218,11 +213,10 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 
 // emitPlanDuration records the wall-clock time from the first task's
 // submission to now. This approximates plan duration.
-func emitPlanDuration(ctx context.Context, controller, namespace, planType string, plan *seiv1alpha1.TaskPlan) {
+func emitPlanDuration(ctx context.Context, controller, namespace, planType, outcome string, plan *seiv1alpha1.TaskPlan) {
 	if len(plan.Tasks) == 0 {
 		return
 	}
-	// Use the first task's SubmittedAt as the plan start time.
 	first := plan.Tasks[0]
 	if first.SubmittedAt == nil {
 		return
@@ -233,6 +227,7 @@ func emitPlanDuration(ctx context.Context, controller, namespace, planType strin
 			observability.AttrController.String(controller),
 			observability.AttrNamespace.String(namespace),
 			observability.AttrPlanType.String(planType),
+			observability.AttrOutcome.String(outcome),
 		),
 	)
 }

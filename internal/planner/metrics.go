@@ -9,26 +9,21 @@ import (
 )
 
 var (
-	// planFailures counts terminal plan failures.
-	planFailures metric.Int64Counter
-
 	// planDuration records wall-clock time from plan creation to completion/failure.
+	// The outcome attribute (complete/failed) distinguishes success from failure,
+	// and _count gives you the total plan count — no separate counter needed.
 	planDuration metric.Float64Histogram
 
 	// planActiveCount tracks the number of active plans per controller/namespace.
 	planActiveCount metric.Int64UpDownCounter
 )
 
+var meter = observability.NewMeter("planner")
+
 func init() {
 	var err error
 
-	planFailures, err = observability.Meter.Int64Counter(
-		"sei.controller.plan.failures",
-		metric.WithDescription("Terminal plan failures"),
-	)
-	handlePlanInitErr(err)
-
-	planDuration, err = observability.Meter.Float64Histogram(
+	planDuration, err = meter.Float64Histogram(
 		"sei.controller.plan.duration",
 		metric.WithDescription("Wall-clock time from plan creation to completion or failure"),
 		metric.WithUnit("s"),
@@ -36,7 +31,7 @@ func init() {
 	)
 	handlePlanInitErr(err)
 
-	planActiveCount, err = observability.Meter.Int64UpDownCounter(
+	planActiveCount, err = meter.Int64UpDownCounter(
 		"sei.controller.plan.active",
 		metric.WithDescription("Number of active plans"),
 	)
