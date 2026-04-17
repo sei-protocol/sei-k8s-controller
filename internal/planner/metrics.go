@@ -15,7 +15,7 @@ var (
 	planDuration metric.Float64Histogram
 
 	// planActiveCount tracks the number of active plans per controller/namespace.
-	planActiveCount metric.Int64Gauge
+	planActiveCount metric.Int64UpDownCounter
 )
 
 var meter = observability.NewMeter("planner")
@@ -31,7 +31,7 @@ func init() {
 	)
 	handlePlanInitErr(err)
 
-	planActiveCount, err = meter.Int64Gauge(
+	planActiveCount, err = meter.Int64UpDownCounter(
 		"sei.controller.plan.active",
 		metric.WithDescription("Number of active plans"),
 	)
