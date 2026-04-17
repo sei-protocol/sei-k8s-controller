@@ -15,7 +15,7 @@ var (
 	planDuration metric.Float64Histogram
 
 	// planActiveCount tracks the number of active plans per controller/namespace.
-	planActiveCount metric.Int64UpDownCounter
+	planActiveCount metric.Int64Gauge
 )
 
 var meter = observability.NewMeter("planner")
@@ -31,7 +31,7 @@ func init() {
 	)
 	handlePlanInitErr(err)
 
-	planActiveCount, err = meter.Int64UpDownCounter(
+	planActiveCount, err = meter.Int64Gauge(
 		"sei.controller.plan.active",
 		metric.WithDescription("Number of active plans"),
 	)
@@ -55,7 +55,3 @@ func controllerName(obj client.Object) string {
 		return unknownValue
 	}
 }
-
-// CleanupPlanMetrics is a no-op in OTel — active series stop being
-// reported when no new observations occur. Retained for interface compat.
-func CleanupPlanMetrics(_, _, _ string) {}

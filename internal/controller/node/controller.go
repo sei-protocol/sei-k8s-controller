@@ -140,7 +140,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		ns, name := node.Namespace, node.Name
 		nodePhaseTransitions.Add(ctx, 1,
 			metric.WithAttributes(
-				observability.AttrController.String("seinode"),
+				observability.AttrController.String(seiNodeControllerName),
 				observability.AttrNamespace.String(ns),
 				observability.AttrFromPhase.String(string(observedPhase)),
 				observability.AttrToPhase.String(string(node.Status.Phase)),

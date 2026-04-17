@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -25,6 +26,9 @@ const (
 // ResultRequeueImmediate requests an immediate re-enqueue with a minimal
 // delay to avoid busy-looping while still progressing the plan promptly.
 var ResultRequeueImmediate = ctrl.Result{RequeueAfter: 1 * time.Millisecond}
+
+// activePlans tracks the number of in-progress plans for the gauge metric.
+var activePlans atomic.Int64
 
 // PlanExecutor drives a TaskPlan to completion for a given resource type.
 // T is the owning Kubernetes object whose status carries the plan.
@@ -98,7 +102,8 @@ func executePlan(
 		return ctrl.Result{}, nil
 	}
 
-	planActiveCount.Add(ctx, 1,
+	activePlans.Add(1)
+	planActiveCount.Record(ctx, activePlans.Load(),
 		metric.WithAttributes(
 			observability.AttrController.String(cn),
 			observability.AttrNamespace.String(obj.GetNamespace()),
@@ -113,7 +118,8 @@ func executePlan(
 			// conditions) when it observes the terminal plan on the next reconcile.
 			plan.Phase = seiv1alpha1.TaskPlanComplete
 			setTargetPhase(obj, plan.TargetPhase)
-			planActiveCount.Add(ctx, -1,
+			activePlans.Add(-1)
+			planActiveCount.Record(ctx, activePlans.Load(),
 				metric.WithAttributes(
 					observability.AttrController.String(cn),
 					observability.AttrNamespace.String(obj.GetNamespace()),
@@ -233,7 +239,8 @@ func failTask(
 		RetryCount: t.RetryCount,
 		MaxRetries: t.MaxRetries,
 	}
-	planActiveCount.Add(ctx, -1,
+	activePlans.Add(-1)
+	planActiveCount.Record(ctx, activePlans.Load(),
 		metric.WithAttributes(
 			observability.AttrController.String(controller),
 			observability.AttrNamespace.String(obj.GetNamespace()),
