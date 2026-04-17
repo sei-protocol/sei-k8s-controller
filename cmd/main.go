@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"time"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -107,7 +108,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() {
-		if err := mp.Shutdown(context.Background()); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := mp.Shutdown(shutdownCtx); err != nil {
 			setupLog.Error(err, "Failed to shutdown MeterProvider")
 		}
 	}()
