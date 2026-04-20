@@ -157,14 +157,15 @@ return seiconfig.SnapshotGenerationOverrides(sg.Tendermint.KeepRecent)
 
 Archival pruning + `snapshot-interval` overrides apply whenever `tendermint` is set — identical to today's behavior when `SnapshotGeneration` was set. The override code does not care whether publishing is enabled; the overrides control what seid writes to disk.
 
-### 2. Sidecar publish toggle
+### 2. Dedicated publish plan task
 
-The sidecar is what performs the S3 upload today. Passing the publish decision to the sidecar is the new signal. Two equivalent implementation options; picking between them is an LLD detail:
+Publishing to S3 is modelled as an explicit sidecar plan task rather than an implicit side effect of config-apply. When `spec.*.snapshotGeneration.tendermint.publish` is present, the planner appends a one-shot `configure-snapshot-publish` task to the init progression. The task is an RPC to the sidecar that instructs it to start its continuous upload loop. Absence of `publish` means the task is not emitted; the sidecar never starts uploading.
 
-- **A** — expose the `publish` struct presence as an explicit field in the sidecar config payload (e.g., in the config-apply task's rendered config). The sidecar reads the flag and conditionally starts its upload loop.
-- **B** — key on an env var or config file whose presence the sidecar already checks (e.g., skip configuring S3 creds / bucket in the manifest when `publish` is absent, and have the sidecar no-op when those are empty).
+This mirrors the existing `ConfigureStateSync` pattern (`internal/task/bootstrap.go:25`) — a one-shot task that enables a background behavior — and keeps the plan self-describing: a reader can tell from `.status.plan` whether a node is configured to publish, without having to inspect rendered app.toml or sidecar env.
 
-Lean toward A for explicitness — "the controller told me not to publish" is clearer in the sidecar's logs than "the bucket var was empty, so I didn't try."
+Placement in the init progression: after `config-apply` / `config-validate` (so the snapshot-interval overrides are in place first) and before `mark-ready` (so the sidecar's upload loop is armed before seid starts producing snapshots). Exact positioning is an LLD detail but constrained by those two boundaries.
+
+The existing sidecar env wiring (`SEI_SNAPSHOT_BUCKET`, `SEI_SNAPSHOT_REGION` at `internal/noderesource/noderesource.go:300-301`) is unchanged — the sidecar still needs bucket/region to perform the upload; the new task is what flips uploading on.
 
 ### 3. `SnapshotGeneration` helper
 
@@ -172,9 +173,17 @@ Lean toward A for explicitness — "the controller told me not to publish" is cl
 
 ## Validation
 
-- `snapshotGeneration.tendermint.keepRecent >= 1` at the schema level (was `>= 2`).
-- When `snapshotGeneration.tendermint.publish` is set, the planner enforces `keepRecent >= 2` at admission / validation time (webhook OR reconcile-level validation — whichever the repo already uses for similar cross-field checks). Rationale: the upload algorithm picks the second-to-latest completed snapshot. Without publish, retaining only the most recent is fine.
-- `snapshotGeneration` with neither `tendermint` nor any other sub-struct set is either rejected at the schema level (`oneOf: [required: [tendermint]]`) or treated as a no-op. Lean toward **rejected** — an empty `snapshotGeneration: {}` is almost certainly a user typo.
+Cross-field validation lives in each per-mode planner's `Validate(node)` hook — `fullNodePlanner.Validate` (`internal/planner/full.go:17`), `archiveNodePlanner.Validate` (`internal/planner/archive.go:18`). That hook already enforces semantic rules on sub-specs (e.g., `snap.BootstrapImage requires s3.TargetHeight > 0`) and is the established home for rules that the OpenAPI schema cannot express.
+
+Not a job for the sidecar's `config-validate` task (`internal/task/config.go:33`): that task validates the **rendered** `app.toml` / `config.toml` against seid's requirements. `snapshot-keep-recent=1` is perfectly legal in seid — the "must be ≥ 2 when publishing" rule is ours, not seid's, so it does not belong at the rendered-config layer.
+
+Rules:
+
+- `snapshotGeneration.tendermint.keepRecent >= 1` at the schema level via kubebuilder marker (was `>= 2`).
+- When `snapshotGeneration.tendermint.publish` is set, the planner `Validate(node)` enforces `keepRecent >= 2`. Rationale: the upload algorithm picks the second-to-latest completed snapshot. Without publish, retaining only the most recent is fine.
+- `snapshotGeneration` with neither `tendermint` nor any other sub-struct set is treated as a validation error in `Validate(node)` — an empty `snapshotGeneration: {}` is almost certainly a user typo. Schema-level `oneOf` is an option but not required; planner-level validation is consistent with how other "pick one sub-mode" invariants are handled in this codebase.
+
+No admission webhook is introduced.
 
 ## Migration
 
@@ -186,21 +195,19 @@ Per the skill brief: no launched product, no backward compat required. The exist
 
 1. Land type changes in `api/v1alpha1/common_types.go`: new `TendermintSnapshotGenerationConfig`, new empty `TendermintSnapshotPublishConfig`, rewritten `SnapshotGenerationConfig`.
 2. `make manifests generate` — regenerates CRDs and DeepCopy.
-3. Update planner call sites (`internal/planner/full.go`, `internal/planner/archive.go`) to read `.Tendermint.KeepRecent`.
-4. Update the sidecar publish signal (option A or B above; LLD decides).
-5. Update sample manifests and tests.
-6. Update `internal/planner/planner.go:312` doc comment to note the indirection through `.Tendermint`.
-7. Cross-field validation for `publish set ⇒ keepRecent >= 2`.
+3. Update planner override call sites (`internal/planner/full.go`, `internal/planner/archive.go`) to read `.Tendermint.KeepRecent`.
+4. Add cross-field checks to `fullNodePlanner.Validate` and `archiveNodePlanner.Validate`: reject `snapshotGeneration: {}` with no sub-struct; require `keepRecent >= 2` when `publish` is set.
+5. Define a `configure-snapshot-publish` sidecar task (params struct + `taskType()` returning the sidecar-side task type) and thread it into the init progression in `internal/planner/bootstrap.go` when `publish` is present. Requires a matching sidecar task type on the seictl side.
+6. Update sample manifests and tests to the new shape.
+7. Update `internal/planner/planner.go:312` doc comment to note the indirection through `.Tendermint`.
 
 ## Open questions (for the LLD)
 
-1. **Sidecar signal shape.** Option A (explicit flag in rendered config) vs. option B (derive from absence of bucket config) — see §2. Option A is cleaner but might require a sidecar version bump; inventory whether the sidecar already reads config that option B could key on.
+1. **Sidecar-side task type.** The controller emits a `configure-snapshot-publish` task; the sidecar (seictl) must define a matching task type. Confirm the name and payload shape with the sidecar before landing the controller change — this is a cross-repo interface.
 
-2. **Where does cross-field validation live?** The repo has no admission webhook today (last checked). Options: (a) reconcile-level validation that marks the node `Degraded` with a clear condition, (b) OpenAPI `oneOf` encoded in the kubebuilder markers if expressible, (c) add a lightweight validating webhook. Lean (a) — matches the existing "errors surface via Conditions" pattern and avoids adding a new admission surface for a single rule.
+2. **Should `publish: {}` later grow a `bucket` override?** Out of scope for this design; the struct exists precisely to absorb that field later without a rename. Flag if the operator wants per-node bucket overrides imminently — affects whether `TendermintSnapshotPublishConfig` should be defined with future fields in mind now.
 
-3. **Should `publish: {}` later grow a `bucket` override?** Out of scope for this design; the struct exists precisely to absorb that field later without a rename. Flag if the operator wants per-node bucket overrides imminently — affects whether `TendermintSnapshotPublishConfig` should be defined with future fields in mind now.
-
-4. **Archive node behavior when `publish` is absent.** Archives already disable pruning independent of `SnapshotGeneration` (per `archive_types.go` comment). Does omitting `publish` on an archive that was previously a "snapshotter" orphan the S3 history? Operational, not schema-level — note in release notes / migration instructions for any already-deployed dev archives.
+3. **Archive node behavior when `publish` is absent.** Archives already disable pruning independent of `SnapshotGeneration` (per `archive_types.go` comment). Does omitting `publish` on an archive that was previously a "snapshotter" orphan the S3 history? Operational, not schema-level — note in release notes / migration instructions for any already-deployed dev archives.
 
 ## What this design does NOT cover
 
@@ -214,7 +221,11 @@ Per the skill brief: no launched product, no backward compat required. The exist
 - `api/v1alpha1/common_types.go:109` — `SnapshotGenerationConfig` (type being refactored)
 - `api/v1alpha1/full_node_types.go:11`, `api/v1alpha1/archive_types.go:8` — consumers of the type
 - `api/v1alpha1/common_types.go:107` — `StateSyncSource struct{}` precedent for the presence-as-toggle pattern
+- `internal/planner/full.go:17`, `internal/planner/archive.go:18` — `Validate(node)` hooks; home for the new cross-field checks
 - `internal/planner/full.go:44`, `internal/planner/archive.go:35` — override call sites
 - `internal/planner/planner.go:312` — `SnapshotGeneration()` helper
+- `internal/task/bootstrap.go:25` — `ConfigureStateSyncParams`, pattern mirrored by the new `configure-snapshot-publish` task
+- `internal/task/config.go:33` — `ConfigValidateParams`, the rendered-config validator (distinct from spec-level `Validate(node)`)
+- `internal/noderesource/noderesource.go:300-301` — sidecar `SEI_SNAPSHOT_BUCKET` / `SEI_SNAPSHOT_REGION` env (unchanged)
 - `manifests/samples/seinode/pacific-1-snapshotter.yaml`, `pacific-1-state-syncer.yaml` — sample manifests updated alongside the type change
 - `.tide/observability.md` §Events — snapshot-related event names (unchanged by this design)
