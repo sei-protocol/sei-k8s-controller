@@ -31,7 +31,7 @@ The feature and the bug share a refactor: splitting `ensure-data-pvc` into a cre
 
 ### Additional options considered
 
-- **D** — `importFromPV` (reference a PV by name). Operator pre-creates the PV, controller creates the PVC with `volumeName:` pointing at it. Less friction than A for orphan adoption — the PVC spec (size, SC, labels) stays under controller ownership; we just bind.
+- **D** — `importFromPV` (reference a PV by name). Operator pre-creates the PV, controller creates the PVC with `volumeName:` pointing at it. Covers orphan adoption with the controller owning the PVC object. Evaluated but **not adopted** in this pass — the orphan-adoption use case is already reachable via Shape A (operator creates a PVC with `volumeName:` pointing at the orphan PV, then references that PVC from the SeiNode). Adding D is a 2nd CRD field and a 2nd task path for a use case that Shape A already covers with one extra operator step. Revisit if orphan adoption becomes frequent enough that the extra step is operational friction.
 - **E** — `VolumeSnapshot` CR as the snapshot source. If a team wants snapshot-restore, they materialize a `VolumeSnapshot` (or `VolumeSnapshotContent` pre-provisioned from an EBS snap ID), then reference it via the standard k8s `dataSource`. The external-snapshotter + CSI driver do the heavy lifting. **No AWS SDK in our controller.**
 - **F** — Bootstrap Job pattern (separate `SeiNodeBootstrap` CR). Over-engineered for the current use cases; adds a resource type to reason about.
 
@@ -39,17 +39,17 @@ E is the k8s-native equivalent of C. Same user outcome, zero cloud SDK in our co
 
 ## Decision
 
-**Adopt A and D together as a single design pass. Keep E on the roadmap. Do not build C.**
+**Adopt Shape A. Keep E on the roadmap. Do not build C. Defer D.**
 
 ### Rationale
 
-1. **A + D cover all three stated use cases today.** The manual migration was A minus the validation. Orphan adoption is D (or A, depending on how the operator stages the adoption). AMI bootstrap can be staged into A by a human or an external tool that produces the PV+PVC — later upgraded to E when snapshot-restore is worth the investment.
+1. **A covers all three stated use cases today.** The manual migration was A minus the validation. Orphan adoption is A (operator creates a PVC bound to the orphaned PV, then references it). AMI bootstrap can be staged into A by a human or an external tool that produces the PV+PVC — later upgraded to E when snapshot-restore is worth the investment.
 
-2. **A is the smallest defensible fix to #104.** The bug exists because we conflate "PVC present" with "PVC correct." Splitting the task into a create-path and an import-path forces the validation we're missing: the import path must assert `spec.resources.requests.storage >=` node needs, `storageClassName` matches or is intentionally empty (static PV), `DeletionTimestamp` is nil, and the PVC is `Bound` to a PV whose `capacity >=` required size. Same validation catches the orphan-adoption race where a Retain PV is still `Released`.
+2. **A is the smallest defensible fix to #104.** The bug exists because we conflate "PVC present" with "PVC correct." Splitting the task into a create-path and an import-path forces the validation we're missing: the import path must assert the PVC is present, bound, and matches node requirements. Same validation catches the orphan-adoption race where a Retain PV is still `Released`.
 
-3. **A + D avoid the cloud-provider precedent.** Once the controller has AWS creds for `CreateVolume`, gravity pulls toward more cloud calls inside the controller. The team is explicitly shallow on k8s; the operator already runs alongside tooling (Karpenter, EBS CSI driver, Terraform/CDK) better-placed for cloud-resource lifecycle.
+3. **A avoids the cloud-provider precedent.** Once the controller has AWS creds for `CreateVolume`, gravity pulls toward more cloud calls inside the controller. The team is explicitly shallow on k8s; the operator already runs alongside tooling (Karpenter, EBS CSI driver, Terraform/CDK) better-placed for cloud-resource lifecycle.
 
-4. **D is a small delta from A** — worth including in the same design pass. Supporting both `import.pvcName` (fully external) and `import.pvName` (controller owns the PVC, binds to a named PV) covers "I staged everything" and "I just have an orphan PV" without much additional code.
+4. **One shape, one field, one task path.** Keeping the surface area minimal means less to document, test, and maintain. D can be added later without invalidating A.
 
 5. **E becomes the snapshot story when it's needed.** Reuses the existing k8s snapshot ecosystem rather than building a parallel one. Until a second team asks for snapshot-restore, A + external tooling is fine.
 
@@ -59,35 +59,50 @@ E is the k8s-native equivalent of C. Same user outcome, zero cloud SDK in our co
 spec:
   dataVolume:
     import:
-      pvcName: data-archive-0-0      # Shape A — reference a pre-existing PVC
-      # OR
-      pvName: pv-archive-restored    # Shape D — reference a pre-existing PV
-      # Optional:
-      reclaimPolicy: Preserve        # override the PV's default reclaim behavior on SeiNode deletion
+      pvcName: data-archive-0-0      # name of a pre-existing PVC in the SeiNode's namespace
 ```
 
-Planner behavior: if `spec.dataVolume.import` is set, `ensure-data-pvc` is replaced with a new task — `validate-imported-pvc` (Shape A) or `adopt-pv-and-create-pvc` (Shape D). Successor tasks (`apply-statefulset`, `apply-service`, etc.) are unchanged. Snapshot-restore and bootstrap-Job tasks are skipped when importing — the data is by definition already present.
+Planner behavior: if `spec.dataVolume.import.pvcName` is set, `ensure-data-pvc` is replaced with a new task — `validate-imported-pvc`. Successor tasks (`apply-statefulset`, `apply-service`, etc.) are unchanged. Snapshot-restore and bootstrap-Job tasks are skipped when importing — the data is by definition already present.
+
+## Requirements for an imported PVC
+
+For `validate-imported-pvc` to succeed, the PVC must satisfy **all** of the following. The controller never mutates the PVC — it reads and either accepts or fails the task.
+
+| # | Requirement | Rationale |
+|---|---|---|
+| 1 | PVC exists in the same namespace as the SeiNode | Namespace-scoped resource lookup |
+| 2 | `metadata.deletionTimestamp` is nil | A PVC being deleted cannot be relied on to persist |
+| 3 | `status.phase == Bound` | Pending/Lost PVCs have no data we can read; Released PVCs aren't attachable |
+| 4 | `spec.accessModes` contains `ReadWriteOnce` | Matches what pods attached to a SeiNode require |
+| 5 | `status.capacity.storage >=` whatever default the node's role demands (see `noderesource.DefaultStorageForMode`) | Prevent attaching too-small volumes |
+| 6 | The underlying PV's `spec.capacity.storage` matches `status.capacity.storage` | Sanity — catch misconfigured PVs |
+| 7 | The underlying PV exists and is not in a terminal state (`Failed`) | Same |
+
+The controller does **not** check:
+- The filesystem type (CSI mount will fail loudly if wrong)
+- The data contents (seid startup / sidecar `configure-genesis` catches data-content problems)
+- Labels on the PVC (those are operator concerns; we shouldn't gate on them)
+- The `storageClassName` (operators may intentionally use empty SC for static PVs; we trust them)
+
+If any check fails, the task enters a retry loop with the current error in the task's `error` field. A PVC that becomes valid later (e.g., finishes binding) resolves the task on the next reconcile.
+
+## Deletion semantics (decided)
+
+**When a SeiNode with `import.pvcName` is deleted, the controller does NOT delete the imported PVC.** The `deleteNodeDataPVC` finalizer is a no-op for imported volumes.
+
+Rationale: the operator opted into `import.pvcName` precisely because they are managing the storage lifecycle externally (via Terraform, by hand, via another operator). Having the SeiNode controller silently delete the PVC on `kubectl delete seinode` would surprise that external lifecycle and risk data loss. The safer default for an import feature is "touch nothing the controller didn't create."
+
+If the operator wants the PVC gone, they delete it explicitly after the SeiNode is gone. This is symmetric with `kubectl delete deployment` not deleting PVCs on the pods it owned.
 
 ## Open questions (for the LLD)
 
-1. **Deletion semantics for imported volumes.** When a SeiNode with `import.pvcName` is deleted, does `deleteNodeDataPVC` still delete the PVC?
-   - **(a)** Always preserve imported PVCs (safe, but deletes don't fully clean up)
-   - **(b)** Respect the PV's `persistentVolumeReclaimPolicy` (Retain vs Delete) — most k8s-idiomatic
-   - **(c)** Add explicit `spec.dataVolume.import.reclaimPolicy` that overrides
-   
-   Leaning (b) with (c) as override.
-
-2. **What does "validate" actually check, and do we ever mutate?** Size is obvious (PV capacity ≥ requested). But:
-   - Do we require PVC labels to match `ResourceLabels`?
-   - Do we require a specific `storageClassName` or allow any?
-   - Do we refuse if the PVC is still `Pending` / `Released`, or wait with a retry budget?
-   - Do we attempt to fix (patch labels, patch claimRef) or only read and fail?
-   
-   Lean: **validate, never mutate; fail loudly; no data-content validation** (the operator asserts it's a valid Sei data dir; sidecar's `configure-genesis` and seid startup catch gross errors anyway).
-
-3. **How does import interact with the init plan's bootstrap progression?** If a node imports a PVC, the bootstrap Job (snapshot-restore into the PVC) is by definition wrong. Does `import` imply `skipBootstrap`, or do we allow both and detect conflict?
+1. **How does import interact with the init plan's bootstrap progression?** If a node imports a PVC, the bootstrap Job (snapshot-restore into the PVC) is by definition wrong. Does `import` imply `skipBootstrap`, or do we allow both and detect conflict?
    
    Lean: **import implies no bootstrap.** Planner routes to a simplified init progression: `validate-imported-pvc` → `apply-statefulset` → `apply-service` → `configure-genesis` → `config-apply` → `config-validate` → `mark-ready`, skipping all snapshot-restore tasks. Needs a clear state-diagram in the LLD.
+
+2. **Validation retry budget.** If `validate-imported-pvc` finds the PVC in a temporarily bad state (e.g., `Pending` during initial bind), should it retry indefinitely or give up after some time? A SeiNode referring to a PVC that will never exist shouldn't hang forever.
+   
+   Lean: **retry indefinitely with exponential backoff, surface the latest error via a Condition on the SeiNode status** — matches the pattern of other reconcilable-but-might-take-a-while tasks. Operators see the stuck state in `kubectl describe seinode` and intervene if needed.
 
 ## What this design does NOT cover
 
