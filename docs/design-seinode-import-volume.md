@@ -62,11 +62,21 @@ spec:
       pvcName: data-archive-0-0      # name of a pre-existing PVC in the SeiNode's namespace
 ```
 
-Planner behavior: if `spec.dataVolume.import.pvcName` is set, `ensure-data-pvc` is replaced with a new task — `validate-imported-pvc`. Successor tasks (`apply-statefulset`, `apply-service`, etc.) are unchanged. Snapshot-restore and bootstrap-Job tasks are skipped when importing — the data is by definition already present.
+Planner behavior: **the init plan is unchanged.** The only difference is inside `ensure-data-pvc`: if `spec.dataVolume.import.pvcName` is set, the task verifies the named PVC instead of creating a fresh one. Every successor task (`apply-statefulset`, `apply-service`, `configure-genesis`, `config-apply`, `discover-peers`, `configure-state-sync`, `config-validate`, `mark-ready`) runs exactly as it does today.
+
+This is a deliberate "no extra fluff" choice: import is a PVC-source substitution, not a bootstrap off-ramp. The operator is trusted to provide a PVC whose contents are compatible with the rest of the init progression. If the imported data is from an incompatible seid version, the wrong chain, or in an unexpected on-disk format, seid will fail to start on the pod and the operator gets a clear signal from the Failed plan — same failure channel as any other init problem.
+
+The controller does **not**:
+- Detect that the PVC is pre-populated and skip any steps
+- Refuse to run `configure-genesis` or `config-apply` against imported data
+- Add an `import` state to the init plan
+- Take any responsibility for the data's contents
+
+This keeps the controller small and the contract with the operator honest: "give me a PVC, I'll use it; making it the right PVC is your job."
 
 ## Requirements for an imported PVC
 
-For `validate-imported-pvc` to succeed, the PVC must satisfy **all** of the following. The controller never mutates the PVC — it reads and either accepts or fails the task.
+For the import branch of `ensure-data-pvc` to succeed, the PVC must satisfy **all** of the following. The controller never mutates the PVC — it reads and either accepts or fails the task.
 
 | # | Requirement | Rationale |
 |---|---|---|
@@ -96,11 +106,7 @@ If the operator wants the PVC gone, they delete it explicitly after the SeiNode 
 
 ## Open questions (for the LLD)
 
-1. **How does import interact with the init plan's bootstrap progression?** If a node imports a PVC, the bootstrap Job (snapshot-restore into the PVC) is by definition wrong. Does `import` imply `skipBootstrap`, or do we allow both and detect conflict?
-   
-   Lean: **import implies no bootstrap.** Planner routes to a simplified init progression: `validate-imported-pvc` → `apply-statefulset` → `apply-service` → `configure-genesis` → `config-apply` → `config-validate` → `mark-ready`, skipping all snapshot-restore tasks. Needs a clear state-diagram in the LLD.
-
-2. **Validation retry budget.** If `validate-imported-pvc` finds the PVC in a temporarily bad state (e.g., `Pending` during initial bind), should it retry indefinitely or give up after some time? A SeiNode referring to a PVC that will never exist shouldn't hang forever.
+1. **Validation retry budget.** If the import branch of `ensure-data-pvc` finds the PVC in a temporarily bad state (e.g., `Pending` during initial bind), should it retry indefinitely or give up after some time? A SeiNode referring to a PVC that will never exist shouldn't hang forever.
    
    Lean: **retry indefinitely with exponential backoff, surface the latest error via a Condition on the SeiNode status** — matches the pattern of other reconcilable-but-might-take-a-while tasks. Operators see the stuck state in `kubectl describe seinode` and intervene if needed.
 
@@ -117,5 +123,5 @@ If the operator wants the PVC gone, they delete it explicitly after the SeiNode 
 - Retain-reclaim-policy + finalizer orphan behavior (separate issue to file; the import-feature is safe to ship before it lands, but together they close the loop on SeiNode deletion + re-creation flows).
 - `internal/task/ensure_pvc.go` — site of the create-path/import-path split
 - `internal/noderesource/noderesource.go:176` (`GenerateDataPVC`) — unchanged; still generates the create-path PVC
-- `internal/planner/bootstrap.go` — where the conditional routing to `validate-imported-pvc` / `adopt-pv-and-create-pvc` lives
+- `internal/planner/bootstrap.go` — unchanged (init plan is unchanged); `ensure-data-pvc` internally branches on `spec.dataVolume.import.pvcName`
 - `api/v1alpha1/seinode_types.go` — where `spec.dataVolume.import` gets added
