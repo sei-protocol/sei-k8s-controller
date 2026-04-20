@@ -104,11 +104,28 @@ Rationale: the operator opted into `import.pvcName` precisely because they are m
 
 If the operator wants the PVC gone, they delete it explicitly after the SeiNode is gone. This is symmetric with `kubectl delete deployment` not deleting PVCs on the pods it owned.
 
+## Validation retry semantics (decided)
+
+When the import branch of `ensure-data-pvc` finds the PVC in a transient-bad state (missing, `Pending` during initial bind, `Released` mid-adoption, etc.), **the task retries indefinitely with exponential backoff and surfaces the latest validation error via a `Condition` on the SeiNode status.**
+
+Rationale:
+- Matches the existing pattern for other reconcilable-but-might-take-a-while tasks in the controller — tasks return `Running` until the external state is acceptable, and only mark `Failed` on truly terminal errors.
+- Resilient to ordering races: an operator who applies the SeiNode and the PVC in close succession (or in either order) sees the controller converge once both resources exist.
+- Typo detection remains feasible: a misspelled PVC name produces a persistent `Condition: ImportPVCReady=False, Reason: PVCNotFound` that is visible in `kubectl describe seinode`, `kubectl get seinode -o wide`, and any Prometheus alert built on `kube_seinode_status_condition`. Operator fixes the spec; reconciliation converges.
+- A pod stuck in `Pending` because its PVC isn't bound will already fire the cluster's existing `KubePodNotReady` alerts, so we don't lose failure signal by retrying rather than giving up.
+
+The LLD pins down the specifics: exact backoff curve, exact Condition name and Reason strings for each failure mode (`PVCNotFound`, `PVCTerminating`, `PVCNotBound`, `CapacityTooSmall`, `UnderlyingPVMissing`, etc.), and whether those Reasons become part of the public contract for alerting.
+
 ## Open questions (for the LLD)
 
-1. **Validation retry budget.** If the import branch of `ensure-data-pvc` finds the PVC in a temporarily bad state (e.g., `Pending` during initial bind), should it retry indefinitely or give up after some time? A SeiNode referring to a PVC that will never exist shouldn't hang forever.
-   
-   Lean: **retry indefinitely with exponential backoff, surface the latest error via a Condition on the SeiNode status** — matches the pattern of other reconcilable-but-might-take-a-while tasks. Operators see the stuck state in `kubectl describe seinode` and intervene if needed.
+None remaining at the direction level. All prior open questions are now decided:
+- **Scope**: Shape A only (PVC by name)
+- **Deletion semantics**: controller never deletes imported PVCs
+- **Validation requirements**: seven-item table above
+- **Init plan interaction**: unchanged — import is a PVC-source substitution inside `ensure-data-pvc`, nothing else
+- **Retry semantics**: retry indefinitely with exponential backoff, surface via Condition
+
+The LLD is now about implementation specifics (exact backoff curve, Condition schema, unit-test matrix, CRD schema details) rather than direction.
 
 ## What this design does NOT cover
 
