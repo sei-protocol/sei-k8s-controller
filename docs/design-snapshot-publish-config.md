@@ -157,15 +157,18 @@ return seiconfig.SnapshotGenerationOverrides(sg.Tendermint.KeepRecent)
 
 Archival pruning + `snapshot-interval` overrides apply whenever `tendermint` is set — identical to today's behavior when `SnapshotGeneration` was set. The override code does not care whether publishing is enabled; the overrides control what seid writes to disk.
 
-### 2. Dedicated publish plan task
+### 2. Reuse the existing `snapshot-upload` sidecar task
 
-Publishing to S3 is modelled as an explicit sidecar plan task rather than an implicit side effect of config-apply. When `spec.*.snapshotGeneration.tendermint.publish` is present, the planner appends a one-shot `configure-snapshot-publish` task to the init progression. The task is an RPC to the sidecar that instructs it to start its continuous upload loop. Absence of `publish` means the task is not emitted; the sidecar never starts uploading.
+The sidecar already defines `TaskTypeSnapshotUpload` and `SnapshotUploadTask{}` (seictl `sidecar/client/tasks.go`, present in pinned version v0.0.30). The task is a fire-and-forget RPC that tells the sidecar to start its continuous upload loop at its configured interval. Bucket/region/prefix are derived by the sidecar from its env — the existing `SEI_SNAPSHOT_BUCKET` / `SEI_SNAPSHOT_REGION` wiring at `internal/noderesource/noderesource.go:300-301` is unchanged.
 
-This mirrors the existing `ConfigureStateSync` pattern (`internal/task/bootstrap.go:25`) — a one-shot task that enables a background behavior — and keeps the plan self-describing: a reader can tell from `.status.plan` whether a node is configured to publish, without having to inspect rendered app.toml or sidecar env.
+The controller-side plumbing that used to submit this task (`planner.SnapshotUploadMonitorTask`, `planner.TaskSnapshotUpload`, the monitor-task reconcile loop) was deleted in #89 (`358a216 feat: remove monitor task system`) when the monitor-task subsystem was removed in favor of plan-driven reconciliation. The net change here is re-introducing that wiring, but as a **plan task** instead of a separate monitor-task surface:
 
-Placement in the init progression: after `config-apply` / `config-validate` (so the snapshot-interval overrides are in place first) and before `mark-ready` (so the sidecar's upload loop is armed before seid starts producing snapshots). Exact positioning is an LLD detail but constrained by those two boundaries.
+- Register `sidecar.TaskTypeSnapshotUpload` in the controller's task registry (`internal/task/task.go`) with a `SnapshotUploadParams` wrapper, as fire-and-forget (matching `mark-ready`, `config-validate`).
+- In `internal/planner/bootstrap.go`, append the `snapshot-upload` task to the init progression when `spec.*.snapshotGeneration.tendermint.publish` is present. Absence of `publish` means the task is not emitted; the sidecar never starts uploading.
 
-The existing sidecar env wiring (`SEI_SNAPSHOT_BUCKET`, `SEI_SNAPSHOT_REGION` at `internal/noderesource/noderesource.go:300-301`) is unchanged — the sidecar still needs bucket/region to perform the upload; the new task is what flips uploading on.
+Placement in the init progression: after `config-apply` / `config-validate` (so the snapshot-interval overrides are in place first) and before `mark-ready` (so the sidecar's upload loop is armed before seid starts producing snapshots).
+
+This keeps the plan self-describing — a reader can tell from `.status.plan` whether a node is configured to publish — and it does so by using the sidecar task type that already exists, rather than inventing a new one.
 
 ### 3. `SnapshotGeneration` helper
 
@@ -197,17 +200,15 @@ Per the skill brief: no launched product, no backward compat required. The exist
 2. `make manifests generate` — regenerates CRDs and DeepCopy.
 3. Update planner override call sites (`internal/planner/full.go`, `internal/planner/archive.go`) to read `.Tendermint.KeepRecent`.
 4. Add cross-field checks to `fullNodePlanner.Validate` and `archiveNodePlanner.Validate`: reject `snapshotGeneration: {}` with no sub-struct; require `keepRecent >= 2` when `publish` is set.
-5. Define a `configure-snapshot-publish` sidecar task (params struct + `taskType()` returning the sidecar-side task type) and thread it into the init progression in `internal/planner/bootstrap.go` when `publish` is present. Requires a matching sidecar task type on the seictl side.
+5. Re-wire the existing seictl `TaskTypeSnapshotUpload` on the controller side: add a `SnapshotUploadParams` wrapper in `internal/task/`, register it in the task registry at `internal/task/task.go` as fire-and-forget, and thread it into the init progression in `internal/planner/bootstrap.go` when `publish` is present. This restores controller-side plumbing that was deleted in #89 (`358a216`), now as a plan task rather than a monitor task.
 6. Update sample manifests and tests to the new shape.
 7. Update `internal/planner/planner.go:312` doc comment to note the indirection through `.Tendermint`.
 
 ## Open questions (for the LLD)
 
-1. **Sidecar-side task type.** The controller emits a `configure-snapshot-publish` task; the sidecar (seictl) must define a matching task type. Confirm the name and payload shape with the sidecar before landing the controller change — this is a cross-repo interface.
+1. **Should `publish: {}` later grow a `bucket` override?** Out of scope for this design; the struct exists precisely to absorb that field later without a rename. Flag if the operator wants per-node bucket overrides imminently — affects whether `TendermintSnapshotPublishConfig` should be defined with future fields in mind now. Note: `SnapshotUploadTask` in seictl v0.0.30 currently takes no params; per-node overrides would likely require a minor bump on the sidecar as well.
 
-2. **Should `publish: {}` later grow a `bucket` override?** Out of scope for this design; the struct exists precisely to absorb that field later without a rename. Flag if the operator wants per-node bucket overrides imminently — affects whether `TendermintSnapshotPublishConfig` should be defined with future fields in mind now.
-
-3. **Archive node behavior when `publish` is absent.** Archives already disable pruning independent of `SnapshotGeneration` (per `archive_types.go` comment). Does omitting `publish` on an archive that was previously a "snapshotter" orphan the S3 history? Operational, not schema-level — note in release notes / migration instructions for any already-deployed dev archives.
+2. **Archive node behavior when `publish` is absent.** Archives already disable pruning independent of `SnapshotGeneration` (per `archive_types.go` comment). Does omitting `publish` on an archive that was previously a "snapshotter" orphan the S3 history? Operational, not schema-level — note in release notes / migration instructions for any already-deployed dev archives.
 
 ## What this design does NOT cover
 
@@ -224,8 +225,11 @@ Per the skill brief: no launched product, no backward compat required. The exist
 - `internal/planner/full.go:17`, `internal/planner/archive.go:18` — `Validate(node)` hooks; home for the new cross-field checks
 - `internal/planner/full.go:44`, `internal/planner/archive.go:35` — override call sites
 - `internal/planner/planner.go:312` — `SnapshotGeneration()` helper
-- `internal/task/bootstrap.go:25` — `ConfigureStateSyncParams`, pattern mirrored by the new `configure-snapshot-publish` task
+- `internal/task/bootstrap.go:25` — `ConfigureStateSyncParams`, an example of the one-shot "enable a background sidecar behavior" task pattern
 - `internal/task/config.go:33` — `ConfigValidateParams`, the rendered-config validator (distinct from spec-level `Validate(node)`)
-- `internal/noderesource/noderesource.go:300-301` — sidecar `SEI_SNAPSHOT_BUCKET` / `SEI_SNAPSHOT_REGION` env (unchanged)
+- `internal/task/task.go:180` — sidecar task registry where `TaskTypeSnapshotUpload` is re-registered
+- `internal/noderesource/noderesource.go:300-301` — sidecar `SEI_SNAPSHOT_BUCKET` / `SEI_SNAPSHOT_REGION` env (unchanged; sidecar reads upload target from these)
+- seictl `sidecar/client/tasks.go` — `TaskTypeSnapshotUpload` / `SnapshotUploadTask{}` (v0.0.30, already present; the controller side is what's missing)
+- Commit `358a216` (PR #89) — removed the monitor-task subsystem, including the old `SnapshotUploadMonitorTask` plumbing that this design reinstates as a plan task
 - `manifests/samples/seinode/pacific-1-snapshotter.yaml`, `pacific-1-state-syncer.yaml` — sample manifests updated alongside the type change
 - `.tide/observability.md` §Events — snapshot-related event names (unchanged by this design)
