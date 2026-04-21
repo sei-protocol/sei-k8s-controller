@@ -322,12 +322,8 @@ func SnapshotGeneration(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotGenerati
 	}
 }
 
-// validateSnapshotGeneration enforces cross-field rules on SnapshotGenerationConfig
-// that the OpenAPI schema cannot express: empty config is a typo, and
-// tendermint.keepRecent must be >= 2 when publish is set. The returned error
-// carries no mode-specific prefix — callers wrap with their mode name (e.g.,
-// fmt.Errorf("fullNode: %w", err)) so the mode label lives next to the
-// mode-specific Validate method.
+// validateSnapshotGeneration returns errors without a mode prefix; callers
+// wrap with their own (e.g., fmt.Errorf("fullNode: %w", err)).
 func validateSnapshotGeneration(sg *seiv1alpha1.SnapshotGenerationConfig) error {
 	if sg == nil {
 		return nil
@@ -410,9 +406,11 @@ func buildBasePlan(
 	if err != nil {
 		return nil, err
 	}
-	sidecarProg, err = maybeInsertSnapshotUpload(sidecarProg, node)
-	if err != nil {
-		return nil, err
+	if sg := SnapshotGeneration(node); sg != nil && sg.Tendermint != nil && sg.Tendermint.Publish != nil {
+		sidecarProg, err = insertBefore(sidecarProg, TaskMarkReady, TaskSnapshotUpload)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Infrastructure tasks run before sidecar tasks.

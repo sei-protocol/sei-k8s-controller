@@ -114,20 +114,10 @@ func buildPostBootstrapProgression(node *seiv1alpha1.SeiNode, peers []seiv1alpha
 		prog = append(prog, TaskDiscoverPeers)
 	}
 	prog = append(prog, TaskConfigValidate, TaskMarkReady)
-	return maybeInsertSnapshotUpload(prog, node)
-}
-
-// maybeInsertSnapshotUpload inserts the snapshot-upload sidecar task into prog
-// immediately before mark-ready when the node is configured to publish
-// Tendermint snapshots. Placement after config-apply/config-validate and before
-// mark-ready means the sidecar's upload loop is armed before seid starts
-// producing snapshots. Returns prog unchanged when publish is not set.
-func maybeInsertSnapshotUpload(prog []string, node *seiv1alpha1.SeiNode) ([]string, error) {
-	sg := SnapshotGeneration(node)
-	if sg == nil || sg.Tendermint == nil || sg.Tendermint.Publish == nil {
-		return prog, nil
+	if sg := SnapshotGeneration(node); sg != nil && sg.Tendermint != nil && sg.Tendermint.Publish != nil {
+		return insertBefore(prog, TaskMarkReady, TaskSnapshotUpload)
 	}
-	return insertBefore(prog, TaskMarkReady, TaskSnapshotUpload)
+	return prog, nil
 }
 
 // IsBootstrapComplete checks whether the teardown-bootstrap task in a plan
