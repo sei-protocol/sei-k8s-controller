@@ -187,6 +187,7 @@ var registry = map[string]taskDeserializer{
 	sidecar.TaskTypeConfigureGenesis:       sidecarTask[ConfigureGenesisParams](false),
 	sidecar.TaskTypeDiscoverPeers:          sidecarTask[DiscoverPeersParams](false),
 	sidecar.TaskTypeMarkReady:              sidecarTask[MarkReadyParams](true),
+	sidecar.TaskTypeSnapshotUpload:         sidecarTask[SnapshotUploadParams](true),
 	sidecar.TaskTypeGenerateIdentity:       sidecarTask[GenerateIdentityParams](false),
 	sidecar.TaskTypeGenerateGentx:          sidecarTask[GenerateGentxParams](false),
 	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[UploadGenesisArtifactsParams](false),

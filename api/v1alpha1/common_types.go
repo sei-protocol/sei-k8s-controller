@@ -106,17 +106,42 @@ type S3SnapshotSource struct {
 // height and RPC server configuration automatically.
 type StateSyncSource struct{}
 
-// SnapshotGenerationConfig configures a node to produce Tendermint state-sync
-// snapshots and upload them to the platform's snapshot bucket. The controller
-// sets archival pruning and a system-default snapshot-interval in app.toml.
-// Uploads go to {SEI_SNAPSHOT_BUCKET}/{chainID}/ automatically.
+// SnapshotGenerationConfig configures snapshot generation. One or more snapshot
+// modes may be enabled by setting the corresponding sub-struct. A mode sub-struct
+// being absent means that snapshot type is not produced. An empty
+// SnapshotGenerationConfig (no sub-struct set) is rejected by the planner as a
+// likely user typo.
 type SnapshotGenerationConfig struct {
-	// KeepRecent is the number of recent snapshots to retain on disk.
-	// Must be at least 2 so the upload algorithm can select the
-	// second-to-latest completed snapshot.
-	// +kubebuilder:validation:Minimum=2
-	KeepRecent int32 `json:"keepRecent"`
+	// Tendermint configures Tendermint state-sync snapshot generation.
+	// +optional
+	Tendermint *TendermintSnapshotGenerationConfig `json:"tendermint,omitempty"`
 }
+
+// TendermintSnapshotGenerationConfig configures a node to produce Tendermint
+// state-sync snapshots. The controller sets archival pruning and a
+// system-default snapshot-interval in app.toml. Snapshots are written to the
+// node's data volume.
+type TendermintSnapshotGenerationConfig struct {
+	// KeepRecent is the number of recent snapshots to retain on disk.
+	// When Publish is set, must be at least 2 so the upload algorithm can
+	// select the second-to-latest completed snapshot. Otherwise must be at
+	// least 1.
+	// +kubebuilder:validation:Minimum=1
+	KeepRecent int32 `json:"keepRecent"`
+
+	// Publish, when set, causes the sidecar to upload completed snapshots
+	// to {SEI_SNAPSHOT_BUCKET}/{chainID}/. Absence means snapshots are kept
+	// on disk only and are not uploaded.
+	// +optional
+	Publish *TendermintSnapshotPublishConfig `json:"publish,omitempty"`
+}
+
+// TendermintSnapshotPublishConfig configures how completed Tendermint
+// snapshots are uploaded. Currently an empty struct — its presence on
+// TendermintSnapshotGenerationConfig enables upload to the platform
+// snapshot bucket. Fields may be added here in the future (e.g., bucket
+// override, prefix) without a breaking change.
+type TendermintSnapshotPublishConfig struct{}
 
 // ResultExportConfig enables export of block execution results to S3.
 // The sidecar queries the local RPC endpoint for block results and uploads

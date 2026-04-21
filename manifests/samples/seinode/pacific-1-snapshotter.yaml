@@ -28,4 +28,6 @@ spec:
 
   archive:
     snapshotGeneration:
-      keepRecent: 5
+      tendermint:
+        keepRecent: 5
+        publish: {}
