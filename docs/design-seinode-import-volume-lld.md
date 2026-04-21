@@ -81,7 +81,7 @@ The task splits into two internal paths under one public API. The struct, params
 
 ### New structure
 
-The existing `ensureDataPVCExecution` struct adds two ephemeral fields (`lastReason`, `lastMessage`) for condition propagation within one reconcile. The executor re-deserializes the task on every reconcile (executor.go:150), so per-instance state does not survive. The backoff input is instead the plan-persisted `PlannedTask.SubmittedAt` (executor.go:168), which is stamped on first execution and never cleared while running — a monotonically-increasing age across reconciles.
+The existing `ensureDataPVCExecution` struct adds two ephemeral fields (`lastReason`, `lastMessage`) for condition propagation within one reconcile. The executor re-deserializes the task on every reconcile (executor.go:150), so per-instance state does not survive. No other state is added; the validation path is stateless across reconciles.
 
 ### Execute() — branching structure
 
@@ -158,19 +158,10 @@ func (e *ensureDataPVCExecution) Status(_ context.Context) ExecutionStatus {
 }
 ```
 
-`executeImport` leaves `e.status == ExecutionRunning` (the `taskBase` default) on transient validation failures and returns `nil`. The executor sees Running and requeues after `TaskPollInterval` (5 s, executor.go:178). That 5 s poll is too aggressive as a steady state — so the task short-circuits its own Get calls based on wall time since `SubmittedAt`, producing the backoff curve in §3 below.
+`executeImport` leaves `e.status == ExecutionRunning` (the `taskBase` default) on transient validation failures and returns `nil`. The executor sees Running and requeues after `TaskPollInterval` (5 s, executor.go:178) — we use this interval as-is. Each reconcile does one Get against the controller-runtime cache, which is a ~free operation; no custom backoff, no state, no arithmetic.
 
 ```go
-var importBackoffSchedule = []time.Duration{
-    5*time.Second, 10*time.Second, 30*time.Second,
-    1*time.Minute, 5*time.Minute, 15*time.Minute,
-}
-
 func (e *ensureDataPVCExecution) executeImport(ctx context.Context, node *seiv1alpha1.SeiNode, name string) error {
-    attempt := deriveAttempt(node) // from PlannedTask.SubmittedAt + schedule
-    if attempt > 0 && !backoffElapsed(node, attempt) {
-        return nil // stay Running; executor polls at 5s, we short-circuit until the window elapses
-    }
     reason, msg, state := e.validateImport(ctx, node, name)
     recordTransient(node, reason, msg) // writes "reason: msg" into PlannedTask.Error
     switch state {
@@ -273,23 +264,15 @@ Both are reads. The task never mutates the imported PVC or PV — explicit per d
 
 This is the only RBAC addition. `make manifests` regenerates `manifests/role.yaml`.
 
-### Backoff curve
+### Requeue interval
 
-Per attempt → minimum wall time since `SubmittedAt` before we make another Get:
+We use the executor's existing `TaskPollInterval` (5 s, `executor.go:178`) unchanged for Running tasks. No custom backoff, no per-task state, no attempt counter. Each reconcile cycle on a still-transient import performs one cache-served Get against the named PVC (and possibly its PV) and returns Running.
 
-| Attempt | Min elapsed | Cumulative wall time |
-|---|---|---|
-| 1 | 0 s (immediate first validation) | 0 s |
-| 2 | 5 s | 5 s |
-| 3 | 10 s | 15 s |
-| 4 | 30 s | 45 s |
-| 5 | 1 min | 1:45 |
-| 6 | 5 min | 6:45 |
-| 7+ | 15 min (cap) | 21:45, 36:45, … |
+**Why this is fine**: controller-runtime's default client serves Get from an informer cache; these are essentially free local-memory reads, not round trips to the API server. At one Get per 5 s per stuck import, even a fleet of stuck imports produces a trivial load footprint. There is no cost saving to be had from stretching the interval, so we don't.
 
-**Justification for the 15 min cap:** two legitimate slow paths are (a) dynamic PV provisioning on a cold storage class (EBS gp3 in a new AZ typically < 60 s; CSI retries on throttling can push to ~5 min), and (b) an operator who applies the SeiNode before the Terraform that produces the PV. A 15 min cap keeps the validation pressure low on the control plane once the operator is clearly not around, while still resolving within one human-attention cycle when they return. The initial fast curve (5 s, 10 s, 30 s) covers the common case of same-reconcile-loop ordering races.
+**Stuck-import visibility**: the plan task's `error` field records the latest failure reason+message (§6), and the `ImportPVCReady` Condition (§4) carries the current state on the SeiNode. A human reading `kubectl describe seinode` sees the current reason directly; there is no hidden schedule state to reason about.
 
-**How the retry count is tracked:** `PlannedTask.RetryCount` is driven by `TaskFailed → TaskPending` (executor.go:189-196), which the import path does not enter on transient errors. The task derives its attempt number by summing `importBackoffSchedule` prefixes and comparing against `time.Since(SubmittedAt)`. Coarse under delayed reconciles but stateless and restart-safe. Exact per-attempt counting would require a new persisted field; not worth it given we retry indefinitely and the only consumer is the backoff curve itself.
+**Transient vs. terminal**: unrecoverable failures (wrong access modes, too-small capacity — see the table in §2) bypass this entirely and mark the plan Failed, giving the operator a clear signal. The 5 s-polling path is only for genuinely transient conditions (PVC still binding, PV provisioning race, operator about to apply the PVC).
 
 ## 4. Condition schema on SeiNode status
 
@@ -425,7 +408,7 @@ Table-driven, using the same fake-client pattern as `observe_image_test.go` (ref
 - req 6: `PVCapacityMismatch_Terminal`.
 - req 7: `PVMissing_Transient`, `PVFailed_Terminal`.
 
-**Backoff short-circuit:** `BackoffShortCircuit` — SubmittedAt=now; second attempt within 5 s window makes no Get call (asserted via counting client decorator or unchanged `t.Error`).
+**Poll cadence** (regression guard): `TransientValidationRepeats` — stuck-in-transient state produces one Get per reconcile, matching the executor's `TaskPollInterval`. Asserted via counting client decorator over N reconciles.
 
 ### Integration / e2e-style (extends existing harnesses in `internal/controller/node/`)
 
