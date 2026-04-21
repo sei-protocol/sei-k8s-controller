@@ -23,6 +23,9 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 			return fmt.Errorf("fullNode: bootstrapImage requires s3 with targetHeight > 0")
 		}
 	}
+	if err := validateSnapshotGeneration(node.Spec.FullNode.SnapshotGeneration); err != nil {
+		return fmt.Errorf("fullNode: %w", err)
+	}
 	return nil
 }
 
@@ -43,8 +46,8 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 
 func (p *fullNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	sg := node.Spec.FullNode.SnapshotGeneration
-	if sg == nil {
+	if sg == nil || sg.Tendermint == nil {
 		return nil
 	}
-	return seiconfig.SnapshotGenerationOverrides(sg.KeepRecent)
+	return seiconfig.SnapshotGenerationOverrides(sg.Tendermint.KeepRecent)
 }

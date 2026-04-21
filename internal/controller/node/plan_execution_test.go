@@ -201,7 +201,9 @@ func snapshotterNode() *seiv1alpha1.SeiNode {
 			}},
 			Archive: &seiv1alpha1.ArchiveSpec{
 				SnapshotGeneration: &seiv1alpha1.SnapshotGenerationConfig{
-					KeepRecent: 5,
+					Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{
+						KeepRecent: 5,
+					},
 				},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Image: "sidecar:latest", Port: 7777},

@@ -31,6 +31,7 @@ const (
 	TaskConfigApply        = sidecar.TaskTypeConfigApply
 	TaskConfigValidate     = sidecar.TaskTypeConfigValidate
 	TaskMarkReady          = sidecar.TaskTypeMarkReady
+	TaskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
 	TaskAwaitCondition     = sidecar.TaskTypeAwaitCondition
 
 	TaskGenerateIdentity       = sidecar.TaskTypeGenerateIdentity
@@ -308,7 +309,8 @@ func isGenesisCeremonyNode(node *seiv1alpha1.SeiNode) bool {
 }
 
 // SnapshotGeneration extracts the SnapshotGenerationConfig from the populated
-// mode sub-spec.
+// mode sub-spec. Callers reach through .Tendermint for mode-specific fields
+// (KeepRecent, Publish).
 func SnapshotGeneration(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotGenerationConfig {
 	switch {
 	case node.Spec.FullNode != nil:
@@ -318,6 +320,21 @@ func SnapshotGeneration(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotGenerati
 	default:
 		return nil
 	}
+}
+
+// validateSnapshotGeneration returns errors without a mode prefix; callers
+// wrap with their own (e.g., fmt.Errorf("fullNode: %w", err)).
+func validateSnapshotGeneration(sg *seiv1alpha1.SnapshotGenerationConfig) error {
+	if sg == nil {
+		return nil
+	}
+	if sg.Tendermint == nil {
+		return fmt.Errorf("snapshotGeneration is set but has no sub-struct (e.g., tendermint); omit it to disable snapshot generation")
+	}
+	if sg.Tendermint.Publish != nil && sg.Tendermint.KeepRecent < 2 {
+		return fmt.Errorf("snapshotGeneration.tendermint.keepRecent must be >= 2 when publish is set (upload algorithm requires the second-to-latest snapshot)")
+	}
+	return nil
 }
 
 func hasS3Snapshot(snap *seiv1alpha1.SnapshotSource) bool {
@@ -389,6 +406,12 @@ func buildBasePlan(
 	if err != nil {
 		return nil, err
 	}
+	if sg := SnapshotGeneration(node); sg != nil && sg.Tendermint != nil && sg.Tendermint.Publish != nil {
+		sidecarProg, err = insertBefore(sidecarProg, TaskMarkReady, TaskSnapshotUpload)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Infrastructure tasks run before sidecar tasks.
 	prog := make([]string, 0, 3+len(sidecarProg))
@@ -450,6 +473,8 @@ func paramsForTaskType(
 		return &task.ConfigValidateParams{}
 	case TaskMarkReady:
 		return &task.MarkReadyParams{}
+	case TaskSnapshotUpload:
+		return &task.SnapshotUploadParams{}
 
 	// Genesis ceremony tasks — only valid when Validator.GenesisCeremony is set.
 	case TaskGenerateIdentity, TaskGenerateGentx, TaskUploadGenesisArtifacts, TaskSetGenesisPeers:

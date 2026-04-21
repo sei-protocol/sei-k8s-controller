@@ -28,6 +28,7 @@ var (
 	_ taskParamser = (*ConfigureGenesisParams)(nil)
 	_ taskParamser = (*DiscoverPeersParams)(nil)
 	_ taskParamser = (*MarkReadyParams)(nil)
+	_ taskParamser = (*SnapshotUploadParams)(nil)
 	_ taskParamser = (*GenerateIdentityParams)(nil)
 	_ taskParamser = (*GenerateGentxParams)(nil)
 	_ taskParamser = (*UploadGenesisArtifactsParams)(nil)

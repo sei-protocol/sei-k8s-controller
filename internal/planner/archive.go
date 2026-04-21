@@ -19,6 +19,9 @@ func (p *archiveNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if node.Spec.Archive == nil {
 		return fmt.Errorf("archive sub-spec is nil")
 	}
+	if err := validateSnapshotGeneration(node.Spec.Archive.SnapshotGeneration); err != nil {
+		return fmt.Errorf("archive: %w", err)
+	}
 	return nil
 }
 
@@ -34,11 +37,11 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.
 
 func (p *archiveNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	sg := node.Spec.Archive.SnapshotGeneration
-	if sg == nil {
+	if sg == nil || sg.Tendermint == nil {
 		return nil
 	}
 	return map[string]string{
 		seiconfig.KeySnapshotInterval:   strconv.FormatInt(seiconfig.DefaultSnapshotInterval, 10),
-		seiconfig.KeySnapshotKeepRecent: strconv.FormatInt(int64(sg.KeepRecent), 10),
+		seiconfig.KeySnapshotKeepRecent: strconv.FormatInt(int64(sg.Tendermint.KeepRecent), 10),
 	}
 }

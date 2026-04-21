@@ -59,16 +59,28 @@ spec:
                     description: SnapshotGeneration configures periodic snapshot creation
                       and optional upload.
                     properties:
-                      keepRecent:
-                        description: |-
-                          KeepRecent is the number of recent snapshots to retain on disk.
-                          Must be at least 2 so the upload algorithm can select the
-                          second-to-latest completed snapshot.
-                        format: int32
-                        minimum: 2
-                        type: integer
-                    required:
-                    - keepRecent
+                      tendermint:
+                        description: Tendermint configures Tendermint state-sync snapshot
+                          generation.
+                        properties:
+                          keepRecent:
+                            description: |-
+                              KeepRecent is the number of recent snapshots to retain on disk.
+                              When Publish is set, must be at least 2 so the upload algorithm can
+                              select the second-to-latest completed snapshot. Otherwise must be at
+                              least 1.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          publish:
+                            description: |-
+                              Publish, when set, causes the sidecar to upload completed snapshots
+                              to {SEI_SNAPSHOT_BUCKET}/{chainID}/. Absence means snapshots are kept
+                              on disk only and are not uploaded.
+                            type: object
+                        required:
+                        - keepRecent
+                        type: object
                     type: object
                 type: object
               chainId:
@@ -148,16 +160,28 @@ spec:
                       SnapshotGeneration configures periodic snapshot creation and optional upload.
                       When set, the controller disables pruning and enables snapshot intervals.
                     properties:
-                      keepRecent:
-                        description: |-
-                          KeepRecent is the number of recent snapshots to retain on disk.
-                          Must be at least 2 so the upload algorithm can select the
-                          second-to-latest completed snapshot.
-                        format: int32
-                        minimum: 2
-                        type: integer
-                    required:
-                    - keepRecent
+                      tendermint:
+                        description: Tendermint configures Tendermint state-sync snapshot
+                          generation.
+                        properties:
+                          keepRecent:
+                            description: |-
+                              KeepRecent is the number of recent snapshots to retain on disk.
+                              When Publish is set, must be at least 2 so the upload algorithm can
+                              select the second-to-latest completed snapshot. Otherwise must be at
+                              least 1.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          publish:
+                            description: |-
+                              Publish, when set, causes the sidecar to upload completed snapshots
+                              to {SEI_SNAPSHOT_BUCKET}/{chainID}/. Absence means snapshots are kept
+                              on disk only and are not uploaded.
+                            type: object
+                        required:
+                        - keepRecent
+                        type: object
                     type: object
                 type: object
               image:

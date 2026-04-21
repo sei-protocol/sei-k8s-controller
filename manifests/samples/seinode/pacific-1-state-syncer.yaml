@@ -37,4 +37,6 @@ spec:
     snapshot:
       stateSync: {}
     snapshotGeneration:
-      keepRecent: 5
+      tendermint:
+        keepRecent: 5
+        publish: {}
