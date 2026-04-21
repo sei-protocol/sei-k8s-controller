@@ -337,6 +337,18 @@ func validateSnapshotGeneration(sg *seiv1alpha1.SnapshotGenerationConfig) error 
 	return nil
 }
 
+// validateResultExport returns errors without a mode prefix; callers
+// wrap with their own (e.g., fmt.Errorf("replayer: %w", err)).
+func validateResultExport(re *seiv1alpha1.ResultExportConfig) error {
+	if re == nil {
+		return nil
+	}
+	if re.ShadowResult == nil {
+		return fmt.Errorf("resultExport is set but has no sub-struct (e.g., shadowResult); omit it to disable result export")
+	}
+	return nil
+}
+
 func hasS3Snapshot(snap *seiv1alpha1.SnapshotSource) bool {
 	return snap != nil && snap.S3 != nil
 }

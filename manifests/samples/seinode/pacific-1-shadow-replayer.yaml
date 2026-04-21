@@ -39,4 +39,5 @@ spec:
       bootstrapImage: "ghcr.io/sei-protocol/sei:v6.3.0"
       trustPeriod: "9999h0m0s"
     resultExport:
-      canonicalRpc: "http://rpc.pacific-1.prod.platform.sei.io:26657"
+      shadowResult:
+        canonicalRpc: "http://rpc.pacific-1.prod.platform.sei.io:26657"
