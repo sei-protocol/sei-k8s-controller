@@ -57,6 +57,7 @@ type SeiNodeReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -213,6 +214,14 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 }
 
 func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+	// Imported PVCs are managed externally — never delete them.
+	if node.Spec.DataVolume != nil && node.Spec.DataVolume.Import != nil &&
+		node.Spec.DataVolume.Import.PVCName != "" {
+		log.FromContext(ctx).Info("skipping data PVC delete for imported volume",
+			"pvc", node.Spec.DataVolume.Import.PVCName)
+		return nil
+	}
+
 	pvc := &corev1.PersistentVolumeClaim{}
 	err := r.Get(ctx, types.NamespacedName{Name: noderesource.DataPVCName(node), Namespace: node.Namespace}, pvc)
 	if apierrors.IsNotFound(err) {
