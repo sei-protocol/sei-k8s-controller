@@ -143,20 +143,25 @@ type TendermintSnapshotGenerationConfig struct {
 // override, prefix) without a breaking change.
 type TendermintSnapshotPublishConfig struct{}
 
-// ResultExportConfig enables export of block execution results to S3.
-// The sidecar queries the local RPC endpoint for block results and uploads
-// them in compressed NDJSON pages to the platform S3 bucket, keyed by the
-// node's chain ID.
-//
-// When CanonicalRPC is set, the sidecar additionally compares local results
-// against the canonical chain and the task completes when app-hash divergence
-// is detected (monitor mode). Without CanonicalRPC, results are exported
-// periodically on a cron schedule (scheduled mode).
+// ResultExportConfig configures the node to export block-execution results.
+// One or more use-case sub-structs may be enabled. An empty ResultExportConfig
+// (no sub-struct set) is rejected by the planner as a likely user typo.
 type ResultExportConfig struct {
+	// ShadowResult configures the node to generate and export shadow-result
+	// pages, comparing local block execution results against a canonical
+	// chain via app-hash divergence detection.
+	// +optional
+	ShadowResult *ShadowResultConfig `json:"shadowResult,omitempty"`
+}
+
+// ShadowResultConfig configures shadow-result generation. The sidecar queries
+// the local RPC endpoint for block_results, uploads them in compressed NDJSON
+// pages to the platform result-export bucket, and compares each page's app-hash
+// against the canonical chain. The export task completes when divergence is
+// detected.
+type ShadowResultConfig struct {
 	// CanonicalRPC is the HTTP RPC endpoint of the canonical chain node
-	// to compare block execution results against. When set, the sidecar
-	// runs in comparison mode and the task completes when app-hash
-	// divergence is detected.
+	// to compare block-execution results against.
 	// +kubebuilder:validation:MinLength=1
 	CanonicalRPC string `json:"canonicalRpc"`
 }

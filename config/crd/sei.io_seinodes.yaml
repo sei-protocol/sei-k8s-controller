@@ -283,21 +283,25 @@ spec:
                 properties:
                   resultExport:
                     description: |-
-                      ResultExport configures periodic export of block execution results to S3.
-                      The sidecar queries the local RPC for block_results and uploads compressed
-                      NDJSON pages on a schedule. Useful for shadow replayers that need their
-                      execution results compared against the canonical chain.
+                      ResultExport configures block-execution result export. Select one or more
+                      sub-structs (e.g., shadowResult) to enable an export mode. Useful for
+                      shadow replayers that compare execution results against the canonical chain.
                     properties:
-                      canonicalRpc:
+                      shadowResult:
                         description: |-
-                          CanonicalRPC is the HTTP RPC endpoint of the canonical chain node
-                          to compare block execution results against. When set, the sidecar
-                          runs in comparison mode and the task completes when app-hash
-                          divergence is detected.
-                        minLength: 1
-                        type: string
-                    required:
-                    - canonicalRpc
+                          ShadowResult configures the node to generate and export shadow-result
+                          pages, comparing local block execution results against a canonical
+                          chain via app-hash divergence detection.
+                        properties:
+                          canonicalRpc:
+                            description: |-
+                              CanonicalRPC is the HTTP RPC endpoint of the canonical chain node
+                              to compare block-execution results against.
+                            minLength: 1
+                            type: string
+                        required:
+                        - canonicalRpc
+                        type: object
                     type: object
                   snapshot:
                     description: Snapshot identifies the snapshot to restore from

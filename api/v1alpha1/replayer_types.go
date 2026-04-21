@@ -8,10 +8,9 @@ type ReplayerSpec struct {
 	// Snapshot identifies the snapshot to restore from before replay begins.
 	Snapshot SnapshotSource `json:"snapshot"`
 
-	// ResultExport configures periodic export of block execution results to S3.
-	// The sidecar queries the local RPC for block_results and uploads compressed
-	// NDJSON pages on a schedule. Useful for shadow replayers that need their
-	// execution results compared against the canonical chain.
+	// ResultExport configures block-execution result export. Select one or more
+	// sub-structs (e.g., shadowResult) to enable an export mode. Useful for
+	// shadow replayers that compare execution results against the canonical chain.
 	// +optional
 	ResultExport *ResultExportConfig `json:"resultExport,omitempty"`
 }

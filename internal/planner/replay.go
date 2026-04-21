@@ -28,6 +28,9 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if len(node.Spec.Peers) == 0 {
 		return fmt.Errorf("replayer requires at least one peer source for block sync")
 	}
+	if err := validateResultExport(node.Spec.Replayer.ResultExport); err != nil {
+		return fmt.Errorf("replayer: %w", err)
+	}
 	return nil
 }
 
