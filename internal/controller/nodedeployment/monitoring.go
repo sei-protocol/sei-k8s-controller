@@ -92,15 +92,25 @@ func endpointSpec(group *seiv1alpha1.SeiNodeDeployment, interval string) map[str
 		"port":     "metrics",
 		"interval": interval,
 	}
+	var relabelings []any
 	if component := deriveComponent(&group.Spec.Template.Spec); component != "" {
-		ep["metricRelabelings"] = []any{
-			map[string]any{
-				"action":      "replace",
-				"regex":       ".*",
-				"replacement": component,
-				"targetLabel": "component",
-			},
-		}
+		relabelings = append(relabelings, map[string]any{
+			"action":      "replace",
+			"regex":       ".*",
+			"replacement": component,
+			"targetLabel": "component",
+		})
+	}
+	if chainID := group.Spec.Template.Spec.ChainID; chainID != "" {
+		relabelings = append(relabelings, map[string]any{
+			"action":      "replace",
+			"regex":       ".*",
+			"replacement": chainID,
+			"targetLabel": "chain_id",
+		})
+	}
+	if len(relabelings) > 0 {
+		ep["metricRelabelings"] = relabelings
 	}
 	return ep
 }
