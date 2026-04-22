@@ -31,13 +31,14 @@ func TestGenerateExternalService_AllPortsForFullMode(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	svc := generateExternalService(group)
-	g.Expect(svc.Spec.Ports).To(HaveLen(7))
+	g.Expect(svc.Spec.Ports).To(HaveLen(6))
 
 	portNames := make([]string, len(svc.Spec.Ports))
 	for i, p := range svc.Spec.Ports {
 		portNames[i] = p.Name
 	}
-	g.Expect(portNames).To(ConsistOf("evm-rpc", "evm-ws", "grpc", "rest", "p2p", "rpc", "metrics"))
+	g.Expect(portNames).To(ConsistOf("evm-rpc", "evm-ws", "grpc", "rest", "p2p", "rpc"))
+	g.Expect(portNames).NotTo(ContainElement("metrics"))
 }
 
 func TestGenerateExternalService_ValidatorModePorts(t *testing.T) {
@@ -47,13 +48,13 @@ func TestGenerateExternalService_ValidatorModePorts(t *testing.T) {
 	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 
 	svc := generateExternalService(group)
-	g.Expect(svc.Spec.Ports).To(HaveLen(2))
+	g.Expect(svc.Spec.Ports).To(HaveLen(1))
 
 	portNames := make([]string, len(svc.Spec.Ports))
 	for i, p := range svc.Spec.Ports {
 		portNames[i] = p.Name
 	}
-	g.Expect(portNames).To(ConsistOf("p2p", "metrics"))
+	g.Expect(portNames).To(ConsistOf("p2p"))
 }
 
 func TestGenerateExternalService_GRPCAppProtocol(t *testing.T) {
