@@ -80,16 +80,45 @@ func generateServiceMonitor(group *seiv1alpha1.SeiNodeDeployment) *unstructured.
 				"selector": map[string]any{
 					"matchLabels": toStringInterfaceMap(groupSelector(group)),
 				},
-				"endpoints": []any{
-					map[string]any{
-						"port":     "metrics",
-						"interval": interval,
-					},
-				},
+				"endpoints": []any{endpointSpec(group, interval)},
 			},
 		},
 	}
 	return sm
+}
+
+func endpointSpec(group *seiv1alpha1.SeiNodeDeployment, interval string) map[string]any {
+	ep := map[string]any{
+		"port":     "metrics",
+		"interval": interval,
+	}
+	if component := deriveComponent(&group.Spec.Template.Spec); component != "" {
+		ep["metricRelabelings"] = []any{
+			map[string]any{
+				"action":      "replace",
+				"regex":       ".*",
+				"replacement": component,
+				"targetLabel": "component",
+			},
+		}
+	}
+	return ep
+}
+
+// deriveComponent returns the `component` label value for the SND's role,
+// or "" if no role is set (caller omits the relabeling in that case).
+func deriveComponent(spec *seiv1alpha1.SeiNodeSpec) string {
+	switch {
+	case spec.Validator != nil:
+		return "validator"
+	case spec.Archive != nil:
+		return "archive"
+	case spec.Replayer != nil:
+		return "replayer"
+	case spec.FullNode != nil:
+		return "node"
+	}
+	return ""
 }
 
 func serviceMonitorGVK() schema.GroupVersionKind {

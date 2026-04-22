@@ -69,3 +69,61 @@ func TestGenerateServiceMonitor_CustomLabels(t *testing.T) {
 	g.Expect(labels["release"]).To(Equal("prometheus"))
 	g.Expect(labels[groupLabel]).To(Equal("archive-rpc"))
 }
+
+func TestGenerateServiceMonitor_ComponentRelabeling(t *testing.T) {
+	cases := []struct {
+		name     string
+		mutate   func(*seiv1alpha1.SeiNodeSpec)
+		expected string
+	}{
+		{"fullNode", func(s *seiv1alpha1.SeiNodeSpec) {}, "node"},
+		{"validator", func(s *seiv1alpha1.SeiNodeSpec) {
+			s.FullNode = nil
+			s.Validator = &seiv1alpha1.ValidatorSpec{}
+		}, "validator"},
+		{"archive", func(s *seiv1alpha1.SeiNodeSpec) {
+			s.FullNode = nil
+			s.Archive = &seiv1alpha1.ArchiveSpec{}
+		}, "archive"},
+		{"replayer", func(s *seiv1alpha1.SeiNodeSpec) {
+			s.FullNode = nil
+			s.Replayer = &seiv1alpha1.ReplayerSpec{}
+		}, "replayer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			group := newTestGroup("role-test", "sei")
+			group.Spec.Monitoring = &seiv1alpha1.MonitoringConfig{
+				ServiceMonitor: &seiv1alpha1.ServiceMonitorConfig{},
+			}
+			tc.mutate(&group.Spec.Template.Spec)
+
+			sm := generateServiceMonitor(group)
+			spec := sm.Object["spec"].(map[string]any)
+			ep := spec["endpoints"].([]any)[0].(map[string]any)
+			relabelings := ep["metricRelabelings"].([]any)
+			g.Expect(relabelings).To(HaveLen(1))
+			rule := relabelings[0].(map[string]any)
+			g.Expect(rule["action"]).To(Equal("replace"))
+			g.Expect(rule["regex"]).To(Equal(".*"))
+			g.Expect(rule["targetLabel"]).To(Equal("component"))
+			g.Expect(rule["replacement"]).To(Equal(tc.expected))
+		})
+	}
+}
+
+func TestGenerateServiceMonitor_NoComponentWhenAmbiguous(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("role-test", "sei")
+	group.Spec.Monitoring = &seiv1alpha1.MonitoringConfig{
+		ServiceMonitor: &seiv1alpha1.ServiceMonitorConfig{},
+	}
+	group.Spec.Template.Spec.FullNode = nil
+
+	sm := generateServiceMonitor(group)
+	spec := sm.Object["spec"].(map[string]any)
+	ep := spec["endpoints"].([]any)[0].(map[string]any)
+	_, has := ep["metricRelabelings"]
+	g.Expect(has).To(BeFalse())
+}
