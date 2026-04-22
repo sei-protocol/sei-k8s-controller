@@ -109,9 +109,22 @@ func endpointSpec(group *seiv1alpha1.SeiNodeDeployment, interval string) map[str
 			"targetLabel": "chain_id",
 		})
 	}
-	if len(relabelings) > 0 {
-		ep["metricRelabelings"] = relabelings
-	}
+	// EC2-compat shim: stamp legacy labels from `pod` so dashboards that
+	// filter on instance_name / public_dns work for both EC2 and k8s scrapes.
+	// TODO(sei-protocol/sei-k8s-controller#122): remove after EC2 scrape decommission.
+	relabelings = append(relabelings,
+		map[string]any{
+			"action":       "replace",
+			"sourceLabels": []any{"pod"},
+			"targetLabel":  "instance_name",
+		},
+		map[string]any{
+			"action":       "replace",
+			"sourceLabels": []any{"pod"},
+			"targetLabel":  "public_dns",
+		},
+	)
+	ep["metricRelabelings"] = relabelings
 	return ep
 }
 
