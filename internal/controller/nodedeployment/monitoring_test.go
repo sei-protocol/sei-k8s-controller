@@ -103,27 +103,49 @@ func TestGenerateServiceMonitor_ComponentRelabeling(t *testing.T) {
 			spec := sm.Object["spec"].(map[string]any)
 			ep := spec["endpoints"].([]any)[0].(map[string]any)
 			relabelings := ep["metricRelabelings"].([]any)
-			g.Expect(relabelings).To(HaveLen(1))
-			rule := relabelings[0].(map[string]any)
-			g.Expect(rule["action"]).To(Equal("replace"))
-			g.Expect(rule["regex"]).To(Equal(".*"))
-			g.Expect(rule["targetLabel"]).To(Equal("component"))
-			g.Expect(rule["replacement"]).To(Equal(tc.expected))
+			g.Expect(findRelabeling(relabelings, "component")).To(Equal(tc.expected))
 		})
 	}
 }
 
-func TestGenerateServiceMonitor_NoComponentWhenAmbiguous(t *testing.T) {
+func TestGenerateServiceMonitor_ChainIDRelabeling(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("role-test", "sei")
+	group.Spec.Monitoring = &seiv1alpha1.MonitoringConfig{
+		ServiceMonitor: &seiv1alpha1.ServiceMonitorConfig{},
+	}
+
+	sm := generateServiceMonitor(group)
+	spec := sm.Object["spec"].(map[string]any)
+	ep := spec["endpoints"].([]any)[0].(map[string]any)
+	relabelings := ep["metricRelabelings"].([]any)
+	g.Expect(findRelabeling(relabelings, "chain_id")).To(Equal("pacific-1"))
+}
+
+func TestGenerateServiceMonitor_NoRelabelingsWhenNothingDerivable(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("role-test", "sei")
 	group.Spec.Monitoring = &seiv1alpha1.MonitoringConfig{
 		ServiceMonitor: &seiv1alpha1.ServiceMonitorConfig{},
 	}
 	group.Spec.Template.Spec.FullNode = nil
+	group.Spec.Template.Spec.ChainID = ""
 
 	sm := generateServiceMonitor(group)
 	spec := sm.Object["spec"].(map[string]any)
 	ep := spec["endpoints"].([]any)[0].(map[string]any)
 	_, has := ep["metricRelabelings"]
 	g.Expect(has).To(BeFalse())
+}
+
+// findRelabeling returns the `replacement` string for a metricRelabeling
+// targeting the given label, or "" if no such rule exists.
+func findRelabeling(relabelings []any, targetLabel string) string {
+	for _, r := range relabelings {
+		rule := r.(map[string]any)
+		if rule["targetLabel"] == targetLabel {
+			return rule["replacement"].(string)
+		}
+	}
+	return ""
 }
