@@ -122,7 +122,7 @@ func TestGenerateServiceMonitor_ChainIDRelabeling(t *testing.T) {
 	g.Expect(findRelabeling(relabelings, "chain_id")).To(Equal("pacific-1"))
 }
 
-func TestGenerateServiceMonitor_NoRelabelingsWhenNothingDerivable(t *testing.T) {
+func TestGenerateServiceMonitor_OnlyEC2CompatWhenNothingDerivable(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("role-test", "sei")
 	group.Spec.Monitoring = &seiv1alpha1.MonitoringConfig{
@@ -134,8 +134,26 @@ func TestGenerateServiceMonitor_NoRelabelingsWhenNothingDerivable(t *testing.T) 
 	sm := generateServiceMonitor(group)
 	spec := sm.Object["spec"].(map[string]any)
 	ep := spec["endpoints"].([]any)[0].(map[string]any)
-	_, has := ep["metricRelabelings"]
-	g.Expect(has).To(BeFalse())
+	relabelings := ep["metricRelabelings"].([]any)
+	g.Expect(findRelabeling(relabelings, "component")).To(Equal(""))
+	g.Expect(findRelabeling(relabelings, "chain_id")).To(Equal(""))
+	g.Expect(findSourceRelabeling(relabelings, "instance_name")).To(Equal("pod"))
+	g.Expect(findSourceRelabeling(relabelings, "public_dns")).To(Equal("pod"))
+}
+
+func TestGenerateServiceMonitor_EC2CompatLabels(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("role-test", "sei")
+	group.Spec.Monitoring = &seiv1alpha1.MonitoringConfig{
+		ServiceMonitor: &seiv1alpha1.ServiceMonitorConfig{},
+	}
+
+	sm := generateServiceMonitor(group)
+	spec := sm.Object["spec"].(map[string]any)
+	ep := spec["endpoints"].([]any)[0].(map[string]any)
+	relabelings := ep["metricRelabelings"].([]any)
+	g.Expect(findSourceRelabeling(relabelings, "instance_name")).To(Equal("pod"))
+	g.Expect(findSourceRelabeling(relabelings, "public_dns")).To(Equal("pod"))
 }
 
 // findRelabeling returns the `replacement` string for a metricRelabeling
@@ -143,9 +161,31 @@ func TestGenerateServiceMonitor_NoRelabelingsWhenNothingDerivable(t *testing.T) 
 func findRelabeling(relabelings []any, targetLabel string) string {
 	for _, r := range relabelings {
 		rule := r.(map[string]any)
-		if rule["targetLabel"] == targetLabel {
-			return rule["replacement"].(string)
+		if rule["targetLabel"] != targetLabel {
+			continue
 		}
+		repl, ok := rule["replacement"].(string)
+		if !ok {
+			continue
+		}
+		return repl
+	}
+	return ""
+}
+
+// findSourceRelabeling returns the first sourceLabels entry for a metricRelabeling
+// targeting the given label, or "" if no such rule exists.
+func findSourceRelabeling(relabelings []any, targetLabel string) string {
+	for _, r := range relabelings {
+		rule := r.(map[string]any)
+		if rule["targetLabel"] != targetLabel {
+			continue
+		}
+		src, ok := rule["sourceLabels"].([]any)
+		if !ok || len(src) == 0 {
+			continue
+		}
+		return src[0].(string)
 	}
 	return ""
 }
