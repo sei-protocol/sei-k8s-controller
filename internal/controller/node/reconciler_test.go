@@ -49,6 +49,7 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
+		Planner:  &planner.NodeResolver{},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
@@ -288,7 +289,7 @@ func TestReconcile_Running_ProbesAndSetsCondition(t *testing.T) {
 	r, c := newNodeReconciler(t, node)
 	unhealthy := false
 	mock := &mockSidecarClient{healthz: &unhealthy}
-	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+	r.Planner.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
 
 	_, err := r.Reconcile(context.Background(), nodeReqFor(node.Name, node.Namespace))
 	g.Expect(err).NotTo(HaveOccurred())
@@ -308,7 +309,7 @@ func TestReconcile_Initializing_SkipsProbe(t *testing.T) {
 	r, c := newNodeReconciler(t, node)
 	unhealthy := false
 	mock := &mockSidecarClient{healthz: &unhealthy}
-	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+	r.Planner.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
 
 	_, err := r.Reconcile(context.Background(), nodeReqFor(node.Name, node.Namespace))
 	g.Expect(err).NotTo(HaveOccurred())

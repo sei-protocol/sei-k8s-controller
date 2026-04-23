@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,7 +28,6 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 const (
@@ -46,13 +46,8 @@ type SeiNodeReconciler struct {
 	Scheme       *runtime.Scheme
 	Recorder     record.EventRecorder
 	Platform     PlatformConfig
+	Planner      *planner.NodeResolver
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNode]
-
-	// BuildSidecarClient constructs a sidecar client targeting the node's
-	// headless Service. Used by probeSidecarHealth to detect a stale
-	// mark-ready gate after pod replacement. Same function the
-	// PlanExecutor's ConfigFor wires up.
-	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
 }
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
@@ -97,59 +92,48 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	statusBase := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	before := node.DeepCopy()
+	statusBase := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
 	observedPhase := node.Status.Phase
-	statusDirty := false
+
+	// Snapshot SidecarReady so we can emit kubectl events on transitions.
+	// The condition itself is the durable signal; the events just surface
+	// it in `kubectl get events` during incidents.
+	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 
 	// Pre-plan: resolve label-based peers so plan params have fresh data.
-	if dirty, err := r.reconcilePeers(ctx, node); err != nil {
+	if _, err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
-	} else if dirty {
-		statusDirty = true
 	}
 
-	// Resolve or resume plan. ResolvePlan probes the sidecar when the node
+	// Resolve or resume plan. The planner probes the sidecar when the node
 	// is Running (stamping SidecarReady on the node), then either resumes
-	// an active plan or builds a new one based on the node's phase. A
-	// sidecar 503 results in a one-task MarkReady plan.
-	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
-	var client task.SidecarClient
-	if r.BuildSidecarClient != nil && node.Status.Phase == seiv1alpha1.PhaseRunning {
-		c, err := r.BuildSidecarClient(node)
-		if err == nil {
-			client = c
-		}
-	}
-
+	// an active plan or builds a new one. A sidecar 503 results in a
+	// one-task MarkReady plan.
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
-	if err := planner.ResolvePlan(ctx, node, client); err != nil {
+	if err := r.Planner.ResolvePlan(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
 
-	// Emit events on SidecarReady transitions so `kubectl describe` surfaces
-	// them during incidents. The condition itself is the durable signal.
 	r.emitSidecarReadinessEvent(node, prevSidecar)
-	if cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady); cur != nil &&
-		(prevSidecar == nil || prevSidecar.Status != cur.Status || prevSidecar.Reason != cur.Reason) {
-		statusDirty = true
-	}
 
 	var result ctrl.Result
 	var execErr error
 
 	if !planAlreadyActive && node.Status.Plan != nil {
 		// New plan — persist it before executing. Execution starts on the
-		// next reconcile. This guarantees external observers see the plan
-		// (and any conditions) before side effects occur.
-		statusDirty = true
+		// next reconcile so external observers see the plan (and any
+		// conditions) before side effects occur.
 		result = planner.ResultRequeueImmediate
 	} else if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		// Existing plan — execute tasks in-memory.
 		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
-		statusDirty = true
 	}
 
-	if statusDirty {
+	// Diff-at-end: patch status if any reconcile step mutated it. Unchanged
+	// Status skips the round-trip. Uses MergeFromWithOptimisticLock to
+	// preserve resourceVersion precondition against executor-side patches.
+	if !apiequality.Semantic.DeepEqual(before.Status, node.Status) {
 		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
 			if execErr != nil {
 				log.FromContext(ctx).Error(execErr, "plan execution error lost due to status flush failure")

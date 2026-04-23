@@ -60,6 +60,14 @@ func probeSidecarHealth(ctx context.Context, node *seiv1alpha1.SeiNode, client t
 		),
 	)
 
+	// Gauge lets PrometheusRule alerts key on `seinode_sidecar_ready`
+	// without needing kube-state-metrics to expose CRD conditions.
+	var readyVal float64
+	if status == metav1.ConditionTrue {
+		readyVal = 1
+	}
+	sidecarReadyTracker.Set(node.Namespace, node.Name, readyVal)
+
 	setSidecarReadyCondition(node, status, reason, message)
 }
 

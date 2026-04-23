@@ -78,16 +78,16 @@ func TestIntegration_PodReplacement_ReissuesMarkReady(t *testing.T) {
 	g.Expect(len(mock.submitted)).To(BeNumerically(">", submittedBefore),
 		"sidecar should have received a mark-ready submission")
 
-	// 4. Eventually: plan completes and condition returns to True.
-	// Drive a few reconciles so the executor marks the plan Complete and
-	// the probe re-observes 200.
+	// 4. Eventually: plan completes, handleTerminalPlan clears it, and the
+	// probe re-observes 200 → condition restored. Diff-at-end catches the
+	// plan-nil-ing and the condition flip in the same reconcile. A few
+	// reconciles drive the whole arc.
 	for i := 0; i < 5; i++ {
 		reconcileOnce(t, g, r, node.Name, node.Namespace)
 		got = fetch()
 	}
-	g.Expect(got.Status.Plan).NotTo(BeNil())
-	g.Expect(got.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete),
-		"MarkReady plan should reach Complete")
+	g.Expect(got.Status.Plan).To(BeNil(),
+		"plan should be cleared once MarkReady completes and handleTerminalPlan runs")
 	cFinal := findSidecarReady(got)
 	g.Expect(cFinal.Status).To(Equal(metav1.ConditionTrue),
 		"condition should return to True once sidecar is healthy again")

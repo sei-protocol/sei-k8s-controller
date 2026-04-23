@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type fakeSidecarClient struct {
@@ -69,7 +70,7 @@ func TestResolvePlan_NilClient_DoesNotProbe(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
 
-	err := ResolvePlan(context.Background(), node, nil)
+	err := (&NodeResolver{}).ResolvePlan(context.Background(), node)
 
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(findCond(node, seiv1alpha1.ConditionSidecarReady)).To(BeNil(),
@@ -81,7 +82,7 @@ func TestResolvePlan_Initializing_DoesNotProbe(t *testing.T) {
 	node := runningFullNode()
 	node.Status.Phase = seiv1alpha1.PhaseInitializing
 
-	err := ResolvePlan(context.Background(), node, &fakeSidecarClient{healthy: false})
+	err := (&NodeResolver{BuildSidecarClient: func(*seiv1alpha1.SeiNode) (task.SidecarClient, error) { return &fakeSidecarClient{healthy: false}, nil }}).ResolvePlan(context.Background(), node)
 
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(findCond(node, seiv1alpha1.ConditionSidecarReady)).To(BeNil(),

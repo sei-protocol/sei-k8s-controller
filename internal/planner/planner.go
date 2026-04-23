@@ -108,26 +108,37 @@ func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 	return false
 }
 
+// NodeResolver resolves plans for SeiNode resources. It holds the
+// sidecar-client factory so the reconciler doesn't have to construct
+// clients — drift detection + mitigation is fully co-located here.
+type NodeResolver struct {
+	// BuildSidecarClient returns a sidecar client for probing a specific
+	// node's Healthz. Optional — when nil, the probe is skipped
+	// (useful for unit tests that don't exercise sidecar interaction).
+	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
+}
+
 // ResolvePlan ensures node.Status.Plan is set and ready for execution.
 // If an active plan exists, it is left in place (resume). Otherwise a
 // new plan is built from the node's current phase and spec.
 //
-// When sidecarClient is non-nil and the node is Running, ResolvePlan
-// also probes the sidecar's Healthz and stamps the SidecarReady
+// When the node is Running and the planner has a sidecar client factory,
+// ResolvePlan probes the sidecar's Healthz and stamps the SidecarReady
 // condition. A 503 response feeds buildRunningPlan's drift detection
-// and results in a one-task MarkReady plan. A nil sidecarClient skips
-// the probe (used by tests that don't exercise sidecar interaction).
+// and results in a one-task MarkReady plan.
 //
 // ResolvePlan mutates the node in place: it sets Status.Plan, may
 // transition Status.Phase from Pending to Initializing, and may update
-// the SidecarReady condition. The caller must capture a MergeFrom patch
-// base before calling ResolvePlan, and persist the status change if a
-// new plan was built (check planAlreadyActive).
-func ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode, sidecarClient task.SidecarClient) error {
+// the SidecarReady condition. The caller compares before/after Status
+// to decide whether to patch.
+func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	// Stamp SidecarReady up front so buildRunningPlan can read it. Skipped
 	// during Initializing — init plans own sidecar interaction there.
-	if sidecarClient != nil && node.Status.Phase == seiv1alpha1.PhaseRunning {
-		probeSidecarHealth(ctx, node, sidecarClient)
+	if p.BuildSidecarClient != nil && node.Status.Phase == seiv1alpha1.PhaseRunning {
+		client, err := p.BuildSidecarClient(node)
+		if err == nil {
+			probeSidecarHealth(ctx, node, client)
+		}
 	}
 
 	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
@@ -137,15 +148,15 @@ func ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode, sidecarClient t
 	// Handle terminal plans before building the next one.
 	handleTerminalPlan(ctx, node)
 
-	p, err := plannerForMode(node)
+	mode, err := plannerForMode(node)
 	if err != nil {
 		return err
 	}
-	if err := p.Validate(node); err != nil {
+	if err := mode.Validate(node); err != nil {
 		return err
 	}
 
-	plan, err := p.BuildPlan(node)
+	plan, err := mode.BuildPlan(node)
 	if err != nil {
 		return err
 	}

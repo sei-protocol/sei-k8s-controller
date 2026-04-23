@@ -1,6 +1,9 @@
 package planner
 
 import (
+	"context"
+	"sync"
+
 	"go.opentelemetry.io/otel/metric"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -46,6 +49,58 @@ func init() {
 		metric.WithDescription("Sidecar Healthz probe outcomes observed during plan resolution"),
 	)
 	handlePlanInitErr(err)
+
+	// The observable gauge is registered for its callback side effect.
+	_, err = meter.Float64ObservableGauge(
+		"sei.controller.seinode.sidecar_ready",
+		metric.WithDescription("Latest observed sidecar readiness per SeiNode (1=ready, 0=not-ready or unknown)"),
+		metric.WithFloat64Callback(sidecarReadyTracker.Observe),
+	)
+	handlePlanInitErr(err)
+}
+
+// sidecarReadyTracker records the latest observed sidecar readiness per
+// SeiNode so the observable gauge can emit it at scrape time. Written by
+// probeSidecarHealth; read by the OTel callback.
+var sidecarReadyTracker = newSidecarReadyTracker()
+
+type srTracker struct {
+	mu    sync.RWMutex
+	state map[string]float64 // key: "namespace/name"
+}
+
+func newSidecarReadyTracker() *srTracker {
+	return &srTracker{state: make(map[string]float64)}
+}
+
+func (t *srTracker) Set(ns, name string, ready float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.state[ns+"/"+name] = ready
+}
+
+func (t *srTracker) Observe(_ context.Context, o metric.Float64Observer) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for key, v := range t.state {
+		ns, name := splitKey(key)
+		o.Observe(v,
+			metric.WithAttributes(
+				observability.AttrNamespace.String(ns),
+				observability.AttrName.String(name),
+			),
+		)
+	}
+	return nil
+}
+
+func splitKey(key string) (ns, name string) {
+	for i := 0; i < len(key); i++ {
+		if key[i] == '/' {
+			return key[:i], key[i+1:]
+		}
+	}
+	return "", key
 }
 
 func handlePlanInitErr(err error) {
