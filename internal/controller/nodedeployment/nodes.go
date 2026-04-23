@@ -221,11 +221,14 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeDeployment, ordinal int) *seiv1al
 	annotations := seiNodeAnnotations(group)
 
 	spec := group.Spec.Template.Spec.DeepCopy()
-	if spec.PodLabels == nil {
-		spec.PodLabels = make(map[string]string)
+	podLabels := make(map[string]string)
+	if group.Spec.Template.Metadata != nil {
+		maps.Copy(podLabels, group.Spec.Template.Metadata.Labels)
 	}
-	spec.PodLabels[groupLabel] = group.Name
-	spec.PodLabels[revisionLabel] = activeRevision(group)
+	maps.Copy(podLabels, spec.PodLabels)
+	podLabels[groupLabel] = group.Name
+	podLabels[revisionLabel] = activeRevision(group)
+	spec.PodLabels = podLabels
 
 	if gc := group.Spec.Genesis; gc != nil && spec.Validator != nil {
 		if spec.ChainID == "" {
