@@ -58,43 +58,37 @@ func init() {
 
 var sidecarReadyTracker = newSidecarReadyTracker()
 
+type nodeKey struct {
+	namespace, name string
+}
+
 type srTracker struct {
 	mu    sync.RWMutex
-	state map[string]float64
+	state map[nodeKey]float64
 }
 
 func newSidecarReadyTracker() *srTracker {
-	return &srTracker{state: make(map[string]float64)}
+	return &srTracker{state: make(map[nodeKey]float64)}
 }
 
 func (t *srTracker) Set(ns, name string, ready float64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.state[ns+"/"+name] = ready
+	t.state[nodeKey{ns, name}] = ready
 }
 
 func (t *srTracker) Observe(_ context.Context, o metric.Float64Observer) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	for key, v := range t.state {
-		ns, name := splitKey(key)
+	for k, v := range t.state {
 		o.Observe(v,
 			metric.WithAttributes(
-				observability.AttrNamespace.String(ns),
-				observability.AttrName.String(name),
+				observability.AttrNamespace.String(k.namespace),
+				observability.AttrName.String(k.name),
 			),
 		)
 	}
 	return nil
-}
-
-func splitKey(key string) (ns, name string) {
-	for i := 0; i < len(key); i++ {
-		if key[i] == '/' {
-			return key[:i], key[i+1:]
-		}
-	}
-	return "", key
 }
 
 func handlePlanInitErr(err error) {
