@@ -108,23 +108,30 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		statusDirty = true
 	}
 
-	// Pre-plan: probe the sidecar's Healthz when Running. A 503 here
-	// indicates the mark-ready gate got re-closed by a pod replacement;
-	// the planner picks up the SidecarReady=False condition and spawns a
-	// one-task MarkReady plan. Probe is skipped during Initializing — the
-	// init plan owns sidecar interaction there.
-	if node.Status.Phase == seiv1alpha1.PhaseRunning {
-		if dirty := r.probeSidecarHealth(ctx, node); dirty {
-			statusDirty = true
+	// Resolve or resume plan. ResolvePlan probes the sidecar when the node
+	// is Running (stamping SidecarReady on the node), then either resumes
+	// an active plan or builds a new one based on the node's phase. A
+	// sidecar 503 results in a one-task MarkReady plan.
+	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	var client task.SidecarClient
+	if r.BuildSidecarClient != nil && node.Status.Phase == seiv1alpha1.PhaseRunning {
+		c, err := r.BuildSidecarClient(node)
+		if err == nil {
+			client = c
 		}
 	}
 
-	// Resolve or resume plan. ResolvePlan either resumes an active plan or
-	// builds a new one based on the node's phase, stamping it onto
-	// node.Status.Plan (and transitioning Pending → Initializing).
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
-	if err := planner.ResolvePlan(ctx, node); err != nil {
+	if err := planner.ResolvePlan(ctx, node, client); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
+	}
+
+	// Emit events on SidecarReady transitions so `kubectl describe` surfaces
+	// them during incidents. The condition itself is the durable signal.
+	r.emitSidecarReadinessEvent(node, prevSidecar)
+	if cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady); cur != nil &&
+		(prevSidecar == nil || prevSidecar.Status != cur.Status || prevSidecar.Reason != cur.Reason) {
+		statusDirty = true
 	}
 
 	var result ctrl.Result
@@ -136,10 +143,6 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		// (and any conditions) before side effects occur.
 		statusDirty = true
 		result = planner.ResultRequeueImmediate
-		if isMarkReadyReapplyPlan(node.Status.Plan) {
-			r.Recorder.Event(node, corev1.EventTypeNormal, "MarkReadyReapplied",
-				"sidecar reported 503; re-issuing mark-ready via a one-task plan")
-		}
 	} else if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		// Existing plan — execute tasks in-memory.
 		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
@@ -251,103 +254,22 @@ func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1al
 	return r.Delete(ctx, pvc)
 }
 
-// probeSidecarHealth queries the sidecar's /v0/healthz and stamps
-// ConditionSidecarReady on the node. Returns true iff the condition
-// changed. The planner reads this condition on its next reconcile to
-// decide whether to spawn a MarkReady re-apply plan.
-//
-// Three-way signal:
-//   - HTTP 200            → True / Ready
-//   - HTTP 503            → False / NotReady    (only actionable state)
-//   - network error       → Unknown / Unreachable
-//   - other (e.g. 4xx/5xx) → Unknown / ProbeError
-//
-// Only `False/NotReady` triggers a plan. Unknown cases re-probe next tick.
-func (r *SeiNodeReconciler) probeSidecarHealth(ctx context.Context, node *seiv1alpha1.SeiNode) bool {
-	if r.BuildSidecarClient == nil {
-		return false
+// emitSidecarReadinessEvent fires kubectl-visible events on SidecarReady
+// condition transitions observed during a reconcile. The condition is
+// stamped by the planner; the reconciler only diffs prev vs current.
+func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {
+	cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	if cur == nil {
+		return
 	}
-
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	var status metav1.ConditionStatus
-	var reason, message, outcome string
-
-	client, err := r.BuildSidecarClient(node)
-	if err != nil {
-		status = metav1.ConditionUnknown
-		reason = "ProbeError"
-		message = fmt.Sprintf("failed to construct sidecar client: %v", err)
-		outcome = "probe_error"
-	} else {
-		ready, healthzErr := client.Healthz(probeCtx)
-		switch {
-		case healthzErr != nil:
-			status = metav1.ConditionUnknown
-			reason = "Unreachable"
-			message = fmt.Sprintf("sidecar Healthz error: %v", healthzErr)
-			outcome = "unreachable"
-		case ready:
-			status = metav1.ConditionTrue
-			reason = "Ready"
-			message = "sidecar returned 200"
-			outcome = "ready"
-		default:
-			status = metav1.ConditionFalse
-			reason = "NotReady"
-			message = "sidecar returned 503, re-issuing mark-ready"
-			outcome = "not_ready"
-		}
-	}
-
-	sidecarHealthProbes.Add(ctx, 1,
-		metric.WithAttributes(
-			observability.AttrController.String(seiNodeControllerName),
-			observability.AttrNamespace.String(node.Namespace),
-			observability.AttrOutcome.String(outcome),
-		),
-	)
-
-	prev := findCondition(node, seiv1alpha1.ConditionSidecarReady)
-	setSidecarReadyCondition(node, status, reason, message)
-
-	if prev == nil || prev.Status != status || prev.Reason != reason {
-		r.emitSidecarReadinessEvent(node, prev, status, reason)
-		return true
-	}
-	return false
-}
-
-func setSidecarReadyCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason, message string) {
-	apimeta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
-		Type:               seiv1alpha1.ConditionSidecarReady,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		ObservedGeneration: node.Generation,
-	})
-}
-
-func findCondition(node *seiv1alpha1.SeiNode, t string) *metav1.Condition {
-	return apimeta.FindStatusCondition(node.Status.Conditions, t)
-}
-
-func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition, newStatus metav1.ConditionStatus, newReason string) {
 	switch {
-	case prev != nil && prev.Status == metav1.ConditionTrue && newStatus == metav1.ConditionFalse:
+	case cur.Status == metav1.ConditionFalse && cur.Reason == "NotReady" &&
+		(prev == nil || prev.Status != metav1.ConditionFalse):
 		r.Recorder.Event(node, corev1.EventTypeWarning, "SidecarReadinessLost",
 			"sidecar Healthz returned 503; controller will re-issue mark-ready")
-	case newStatus == metav1.ConditionFalse && newReason == "NotReady":
-		// First-time False observation (prev was nil or Unknown).
-		r.Recorder.Event(node, corev1.EventTypeWarning, "SidecarReadinessLost",
-			"sidecar Healthz returned 503; controller will re-issue mark-ready")
-	case prev != nil && prev.Status == metav1.ConditionFalse && newStatus == metav1.ConditionTrue:
+	case cur.Status == metav1.ConditionTrue &&
+		prev != nil && prev.Status == metav1.ConditionFalse:
 		r.Recorder.Event(node, corev1.EventTypeNormal, "SidecarReadinessRestored",
 			"sidecar Healthz returned 200; mark-ready gate is open")
 	}
-}
-
-func isMarkReadyReapplyPlan(plan *seiv1alpha1.TaskPlan) bool {
-	return plan != nil && len(plan.Tasks) == 1 && plan.Tasks[0].Type == planner.TaskMarkReady
 }

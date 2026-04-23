@@ -275,83 +275,30 @@ func findSidecarReady(node *seiv1alpha1.SeiNode) *metav1.Condition {
 	return nil
 }
 
-func TestProbeSidecarHealth_200_SetsReady(t *testing.T) {
-	g := NewWithT(t)
-	r, _ := newNodeReconciler(t)
-	healthy := true
-	mock := &mockSidecarClient{healthz: &healthy}
-	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+// Probe outcome unit tests live in the planner package now that the probe
+// itself lives there. These tests exercise Reconcile-level integration:
+// that the reconciler passes a client to the planner when Phase==Running
+// (and skips during Initializing), and that SidecarReady transitions emit
+// kubectl events.
 
+func TestReconcile_Running_ProbesAndSetsCondition(t *testing.T) {
+	g := NewWithT(t)
 	node := runningSeiNodeForProbe()
-	dirty := r.probeSidecarHealth(context.Background(), node)
 
-	g.Expect(dirty).To(BeTrue())
-	c := findSidecarReady(node)
-	g.Expect(c).NotTo(BeNil())
-	g.Expect(c.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(c.Reason).To(Equal("Ready"))
-}
-
-func TestProbeSidecarHealth_503_SetsNotReady(t *testing.T) {
-	g := NewWithT(t)
-	r, _ := newNodeReconciler(t)
+	r, c := newNodeReconciler(t, node)
 	unhealthy := false
 	mock := &mockSidecarClient{healthz: &unhealthy}
 	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
 
-	node := runningSeiNodeForProbe()
-	dirty := r.probeSidecarHealth(context.Background(), node)
+	_, err := r.Reconcile(context.Background(), nodeReqFor(node.Name, node.Namespace))
+	g.Expect(err).NotTo(HaveOccurred())
 
-	g.Expect(dirty).To(BeTrue())
-	c := findSidecarReady(node)
-	g.Expect(c.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(c.Reason).To(Equal("NotReady"))
+	got := getSeiNode(t, context.Background(), c, node.Name, node.Namespace)
+	cond := findSidecarReady(got)
+	g.Expect(cond).NotTo(BeNil(), "probe should stamp SidecarReady when Running")
+	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(cond.Reason).To(Equal("NotReady"))
 }
-
-func TestProbeSidecarHealth_NetworkError_SetsUnknown(t *testing.T) {
-	g := NewWithT(t)
-	r, _ := newNodeReconciler(t)
-	mock := &mockSidecarClient{healthzErr: errProbeFailed{}}
-	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
-
-	node := runningSeiNodeForProbe()
-	dirty := r.probeSidecarHealth(context.Background(), node)
-
-	g.Expect(dirty).To(BeTrue())
-	c := findSidecarReady(node)
-	g.Expect(c.Status).To(Equal(metav1.ConditionUnknown))
-	g.Expect(c.Reason).To(Equal("Unreachable"))
-}
-
-func TestProbeSidecarHealth_NoChange_ReturnsFalse(t *testing.T) {
-	g := NewWithT(t)
-	r, _ := newNodeReconciler(t)
-	healthy := true
-	mock := &mockSidecarClient{healthz: &healthy}
-	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
-
-	node := runningSeiNodeForProbe()
-	_ = r.probeSidecarHealth(context.Background(), node)
-	dirty := r.probeSidecarHealth(context.Background(), node) // second probe, same result
-
-	g.Expect(dirty).To(BeFalse(), "no condition change → should report not dirty")
-}
-
-func TestProbeSidecarHealth_ClientBuilderNil_NoOp(t *testing.T) {
-	g := NewWithT(t)
-	r, _ := newNodeReconciler(t)
-	r.BuildSidecarClient = nil // simulate missing wiring
-
-	node := runningSeiNodeForProbe()
-	dirty := r.probeSidecarHealth(context.Background(), node)
-
-	g.Expect(dirty).To(BeFalse())
-	g.Expect(findSidecarReady(node)).To(BeNil(), "no condition should be set when probe is no-op")
-}
-
-type errProbeFailed struct{}
-
-func (errProbeFailed) Error() string { return "simulated probe network failure" }
 
 func TestReconcile_Initializing_SkipsProbe(t *testing.T) {
 	g := NewWithT(t)

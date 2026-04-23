@@ -36,7 +36,7 @@ const (
 
 func mustBuildPlan(t *testing.T, node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	t.Helper()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := planner.ResolvePlan(context.Background(), node, nil); err != nil {
 		t.Fatalf("ResolvePlan: %v", err)
 	}
 	return node.Status.Plan
@@ -564,7 +564,7 @@ func TestExecutePlan_NilPlan_ReturnsError(t *testing.T) {
 
 func TestResolvePlan_FullNode(t *testing.T) {
 	node := snapshotNode()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := planner.ResolvePlan(context.Background(), node, nil); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan == nil {
@@ -574,7 +574,7 @@ func TestResolvePlan_FullNode(t *testing.T) {
 
 func TestResolvePlan_Archive(t *testing.T) {
 	node := snapshotterNode()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := planner.ResolvePlan(context.Background(), node, nil); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan == nil {
@@ -584,7 +584,7 @@ func TestResolvePlan_Archive(t *testing.T) {
 
 func TestResolvePlan_Validator(t *testing.T) {
 	node := genesisNode()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := planner.ResolvePlan(context.Background(), node, nil); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan == nil {
@@ -594,7 +594,7 @@ func TestResolvePlan_Validator(t *testing.T) {
 
 func TestResolvePlan_Replayer(t *testing.T) {
 	node := replayerNode()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := planner.ResolvePlan(context.Background(), node, nil); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan == nil {
@@ -609,7 +609,7 @@ func TestResolvePlan_NoSubSpec(t *testing.T) {
 			Image:   "sei:latest",
 		},
 	}
-	err := planner.ResolvePlan(context.Background(), node)
+	err := planner.ResolvePlan(context.Background(), node, nil)
 	if err == nil {
 		t.Error("expected error for node with no sub-spec")
 	}
@@ -621,7 +621,7 @@ func TestResolvePlan_ResumesActivePlan(t *testing.T) {
 		ID:    "existing-plan",
 		Phase: seiv1alpha1.TaskPlanActive,
 	}
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := planner.ResolvePlan(context.Background(), node, nil); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan.ID != "existing-plan" {
@@ -698,7 +698,7 @@ func TestExecutePlan_CompletedPlan_StaysForPlannerCleanup(t *testing.T) {
 	node.Status.Phase = seiv1alpha1.PhaseRunning
 	node.Status.Plan = nil
 	// Build a NodeUpdate plan for a Running node with drift.
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := planner.ResolvePlan(context.Background(), node, nil); err != nil {
 		t.Fatal(err)
 	}
 	g.Expect(node.Status.Plan).NotTo(BeNil())

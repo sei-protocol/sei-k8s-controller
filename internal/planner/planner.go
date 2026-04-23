@@ -112,11 +112,24 @@ func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 // If an active plan exists, it is left in place (resume). Otherwise a
 // new plan is built from the node's current phase and spec.
 //
-// ResolvePlan mutates the node in place: it sets Status.Plan and may
-// transition Status.Phase from Pending to Initializing. The caller must
-// capture a MergeFrom patch base before calling ResolvePlan, and persist
-// the status change if a new plan was built (check planAlreadyActive).
-func ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+// When sidecarClient is non-nil and the node is Running, ResolvePlan
+// also probes the sidecar's Healthz and stamps the SidecarReady
+// condition. A 503 response feeds buildRunningPlan's drift detection
+// and results in a one-task MarkReady plan. A nil sidecarClient skips
+// the probe (used by tests that don't exercise sidecar interaction).
+//
+// ResolvePlan mutates the node in place: it sets Status.Plan, may
+// transition Status.Phase from Pending to Initializing, and may update
+// the SidecarReady condition. The caller must capture a MergeFrom patch
+// base before calling ResolvePlan, and persist the status change if a
+// new plan was built (check planAlreadyActive).
+func ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode, sidecarClient task.SidecarClient) error {
+	// Stamp SidecarReady up front so buildRunningPlan can read it. Skipped
+	// during Initializing — init plans own sidecar interaction there.
+	if sidecarClient != nil && node.Status.Phase == seiv1alpha1.PhaseRunning {
+		probeSidecarHealth(ctx, node, sidecarClient)
+	}
+
 	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		return nil
 	}

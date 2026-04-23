@@ -23,10 +23,6 @@ var (
 
 	// nodePhaseDuration records time spent in each phase when transitioning out.
 	nodePhaseDuration metric.Float64Histogram
-
-	// sidecarHealthProbes counts sidecar Healthz probe outcomes.
-	// outcome ∈ {ready, not_ready, unreachable, probe_error}.
-	sidecarHealthProbes metric.Int64Counter
 )
 
 var meter = observability.NewMeter("node")
@@ -53,12 +49,6 @@ func init() {
 		metric.WithDescription("Time spent in each phase before transitioning"),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(observability.InitBuckets...),
-	)
-	handleInitErr(err)
-
-	sidecarHealthProbes, err = meter.Int64Counter(
-		"sei.controller.seinode.sidecar_health_probes",
-		metric.WithDescription("Sidecar Healthz probe outcomes from the SeiNode reconciler"),
 	)
 	handleInitErr(err)
 }

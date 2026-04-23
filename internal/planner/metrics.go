@@ -16,6 +16,10 @@ var (
 
 	// planActiveCount tracks the number of active plans per controller/namespace.
 	planActiveCount metric.Int64UpDownCounter
+
+	// sidecarHealthProbes counts sidecar Healthz probe outcomes.
+	// outcome ∈ {ready, not_ready, unreachable}.
+	sidecarHealthProbes metric.Int64Counter
 )
 
 var meter = observability.NewMeter("planner")
@@ -34,6 +38,12 @@ func init() {
 	planActiveCount, err = meter.Int64UpDownCounter(
 		"sei.controller.plan.active",
 		metric.WithDescription("Number of active plans"),
+	)
+	handlePlanInitErr(err)
+
+	sidecarHealthProbes, err = meter.Int64Counter(
+		"sei.controller.seinode.sidecar_health_probes",
+		metric.WithDescription("Sidecar Healthz probe outcomes observed during plan resolution"),
 	)
 	handlePlanInitErr(err)
 }

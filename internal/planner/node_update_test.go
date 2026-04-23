@@ -88,7 +88,7 @@ func TestResolvePlan_NodeUpdate_SetsCondition(t *testing.T) {
 	node := runningFullNode()
 	node.Spec.Image = testImageV2 // drift triggers NodeUpdate plan
 
-	err := ResolvePlan(t.Context(), node)
+	err := ResolvePlan(t.Context(), node, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan).NotTo(BeNil(), "plan should be created")
 
@@ -105,7 +105,7 @@ func TestResolvePlan_CompletedPlan_ClearsCondition(t *testing.T) {
 	node.Spec.Image = testImageV2
 
 	// Build a NodeUpdate plan and simulate completion.
-	err := ResolvePlan(t.Context(), node)
+	err := ResolvePlan(t.Context(), node, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
@@ -120,7 +120,7 @@ func TestResolvePlan_CompletedPlan_ClearsCondition(t *testing.T) {
 	node.Status.CurrentImage = testImageV2
 
 	// ResolvePlan should clear the completed plan and the condition.
-	err = ResolvePlan(t.Context(), node)
+	err = ResolvePlan(t.Context(), node, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	cond = meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
@@ -136,7 +136,7 @@ func TestResolvePlan_FailedPlan_ClearsCondition(t *testing.T) {
 	node.Spec.Image = testImageV2
 
 	// Build a NodeUpdate plan and simulate failure.
-	err := ResolvePlan(t.Context(), node)
+	err := ResolvePlan(t.Context(), node, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
@@ -152,7 +152,7 @@ func TestResolvePlan_FailedPlan_ClearsCondition(t *testing.T) {
 	// ResolvePlan should clear the failed plan. Since drift still exists,
 	// it immediately builds a new NodeUpdate plan and sets the condition
 	// back to True. This is correct — automatic retry on failure.
-	err = ResolvePlan(t.Context(), node)
+	err = ResolvePlan(t.Context(), node, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// A new plan was built because drift still exists.
@@ -178,7 +178,7 @@ func TestResolvePlan_ResumesActivePlan(t *testing.T) {
 	}
 	node.Status.Plan = existingPlan
 
-	err := ResolvePlan(t.Context(), node)
+	err := ResolvePlan(t.Context(), node, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan.ID).To(Equal("existing-plan-123"),
 		"active plan should be resumed, not replaced")
@@ -205,7 +205,7 @@ func TestResolvePlan_CompletedNonUpdatePlan_DoesNotClearCondition(t *testing.T) 
 		},
 	}
 
-	err := ResolvePlan(t.Context(), node)
+	err := ResolvePlan(t.Context(), node, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// The condition should remain unchanged (already False from before).
