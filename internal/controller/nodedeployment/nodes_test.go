@@ -109,6 +109,57 @@ func TestGenerateSeiNode_PreservesExistingPodLabels(t *testing.T) {
 	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
 }
 
+func TestGenerateSeiNode_PropagatesTemplateMetadataLabelsToPods(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{
+		Labels: map[string]string{
+			"sei.io/chain-id": "pacific-1",
+			"sei.io/role":     "archive",
+		},
+	}
+
+	node := generateSeiNode(group, 0)
+
+	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue("sei.io/chain-id", "pacific-1"))
+	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue("sei.io/role", "archive"))
+	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
+}
+
+func TestGenerateSeiNode_PodLabelsOverrideTemplateMetadataLabels(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{
+		Labels: map[string]string{
+			"key": "from-metadata",
+		},
+	}
+	group.Spec.Template.Spec.PodLabels = map[string]string{
+		"key": "from-pod-labels",
+	}
+
+	node := generateSeiNode(group, 0)
+
+	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue("key", "from-pod-labels"))
+}
+
+func TestGenerateSeiNode_SystemLabelsOverrideUserLabels(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{
+		Labels: map[string]string{
+			groupLabel: "user-attempt-to-override",
+		},
+	}
+	group.Spec.Template.Spec.PodLabels = map[string]string{
+		groupLabel: "another-override-attempt",
+	}
+
+	node := generateSeiNode(group, 0)
+
+	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
+}
+
 func TestGenerateSeiNode_CopiesSpec(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("full-node", "pacific-1")
