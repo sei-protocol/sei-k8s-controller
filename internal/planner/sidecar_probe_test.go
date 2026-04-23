@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	. "github.com/onsi/gomega"
 	"github.com/google/uuid"
+	. "github.com/onsi/gomega"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

@@ -82,7 +82,7 @@ func TestIntegration_PodReplacement_ReissuesMarkReady(t *testing.T) {
 	// probe re-observes 200 → condition restored. Diff-at-end catches the
 	// plan-nil-ing and the condition flip in the same reconcile. A few
 	// reconciles drive the whole arc.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		reconcileOnce(t, g, r, node.Name, node.Namespace)
 		got = fetch()
 	}
