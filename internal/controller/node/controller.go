@@ -136,6 +136,10 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		// (and any conditions) before side effects occur.
 		statusDirty = true
 		result = planner.ResultRequeueImmediate
+		if isMarkReadyReapplyPlan(node.Status.Plan) {
+			r.Recorder.Event(node, corev1.EventTypeNormal, "MarkReadyReapplied",
+				"sidecar reported 503; re-issuing mark-ready via a one-task plan")
+		}
 	} else if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		// Existing plan — execute tasks in-memory.
 		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
@@ -342,4 +346,8 @@ func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode,
 		r.Recorder.Event(node, corev1.EventTypeNormal, "SidecarReadinessRestored",
 			"sidecar Healthz returned 200; mark-ready gate is open")
 	}
+}
+
+func isMarkReadyReapplyPlan(plan *seiv1alpha1.TaskPlan) bool {
+	return plan != nil && len(plan.Tasks) == 1 && plan.Tasks[0].Type == planner.TaskMarkReady
 }

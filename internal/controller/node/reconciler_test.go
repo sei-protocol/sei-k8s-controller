@@ -352,3 +352,21 @@ func TestProbeSidecarHealth_ClientBuilderNil_NoOp(t *testing.T) {
 type errProbeFailed struct{}
 
 func (errProbeFailed) Error() string { return "simulated probe network failure" }
+
+func TestReconcile_Initializing_SkipsProbe(t *testing.T) {
+	g := NewWithT(t)
+	node := runningSeiNodeForProbe()
+	node.Status.Phase = seiv1alpha1.PhaseInitializing
+
+	r, c := newNodeReconciler(t, node)
+	unhealthy := false
+	mock := &mockSidecarClient{healthz: &unhealthy}
+	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+
+	_, err := r.Reconcile(context.Background(), nodeReqFor(node.Name, node.Namespace))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got := getSeiNode(t, context.Background(), c, node.Name, node.Namespace)
+	g.Expect(findSidecarReady(got)).To(BeNil(),
+		"probe must be skipped while Initializing — init plan owns the sidecar")
+}

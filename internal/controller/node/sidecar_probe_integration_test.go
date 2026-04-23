@@ -2,11 +2,13 @@ package node
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
@@ -91,4 +93,21 @@ func TestIntegration_PodReplacement_ReissuesMarkReady(t *testing.T) {
 	cFinal := findSidecarReady(got)
 	g.Expect(cFinal.Status).To(Equal(metav1.ConditionTrue),
 		"condition should return to True once sidecar is healthy again")
+
+	// Assert the MarkReadyReapplied event was emitted.
+	fakeRec, ok := r.Recorder.(*record.FakeRecorder)
+	g.Expect(ok).To(BeTrue())
+	var sawReapply bool
+	for {
+		select {
+		case ev := <-fakeRec.Events:
+			if strings.Contains(ev, "MarkReadyReapplied") {
+				sawReapply = true
+			}
+		default:
+			goto done
+		}
+	}
+done:
+	g.Expect(sawReapply).To(BeTrue(), "expected MarkReadyReapplied event")
 }
