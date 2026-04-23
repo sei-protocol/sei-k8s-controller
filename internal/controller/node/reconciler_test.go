@@ -250,3 +250,105 @@ func TestNodeDeletion_SnapshotNode_WithoutRetain_DeletesPVC(t *testing.T) {
 	err = c.Get(ctx, types.NamespacedName{Name: "data-snap-0", Namespace: "default"}, remaining)
 	g.Expect(err).To(HaveOccurred())
 }
+
+// --- probeSidecarHealth tests ---
+
+func runningSeiNodeForProbe() *seiv1alpha1.SeiNode {
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "p-0", Namespace: "default", Generation: 1},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID:  "atlantic-2",
+			Image:    "sei:v1.0.0",
+			FullNode: &seiv1alpha1.FullNodeSpec{},
+		},
+		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning, CurrentImage: "sei:v1.0.0"},
+	}
+}
+
+func findSidecarReady(node *seiv1alpha1.SeiNode) *metav1.Condition {
+	for i := range node.Status.Conditions {
+		c := &node.Status.Conditions[i]
+		if c.Type == seiv1alpha1.ConditionSidecarReady {
+			return c
+		}
+	}
+	return nil
+}
+
+func TestProbeSidecarHealth_200_SetsReady(t *testing.T) {
+	g := NewWithT(t)
+	r, _ := newNodeReconciler(t)
+	healthy := true
+	mock := &mockSidecarClient{healthz: &healthy}
+	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+
+	node := runningSeiNodeForProbe()
+	dirty := r.probeSidecarHealth(context.Background(), node)
+
+	g.Expect(dirty).To(BeTrue())
+	c := findSidecarReady(node)
+	g.Expect(c).NotTo(BeNil())
+	g.Expect(c.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(c.Reason).To(Equal("Ready"))
+}
+
+func TestProbeSidecarHealth_503_SetsNotReady(t *testing.T) {
+	g := NewWithT(t)
+	r, _ := newNodeReconciler(t)
+	unhealthy := false
+	mock := &mockSidecarClient{healthz: &unhealthy}
+	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+
+	node := runningSeiNodeForProbe()
+	dirty := r.probeSidecarHealth(context.Background(), node)
+
+	g.Expect(dirty).To(BeTrue())
+	c := findSidecarReady(node)
+	g.Expect(c.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(c.Reason).To(Equal("NotReady"))
+}
+
+func TestProbeSidecarHealth_NetworkError_SetsUnknown(t *testing.T) {
+	g := NewWithT(t)
+	r, _ := newNodeReconciler(t)
+	mock := &mockSidecarClient{healthzErr: errProbeFailed{}}
+	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+
+	node := runningSeiNodeForProbe()
+	dirty := r.probeSidecarHealth(context.Background(), node)
+
+	g.Expect(dirty).To(BeTrue())
+	c := findSidecarReady(node)
+	g.Expect(c.Status).To(Equal(metav1.ConditionUnknown))
+	g.Expect(c.Reason).To(Equal("Unreachable"))
+}
+
+func TestProbeSidecarHealth_NoChange_ReturnsFalse(t *testing.T) {
+	g := NewWithT(t)
+	r, _ := newNodeReconciler(t)
+	healthy := true
+	mock := &mockSidecarClient{healthz: &healthy}
+	r.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+
+	node := runningSeiNodeForProbe()
+	_ = r.probeSidecarHealth(context.Background(), node)
+	dirty := r.probeSidecarHealth(context.Background(), node) // second probe, same result
+
+	g.Expect(dirty).To(BeFalse(), "no condition change → should report not dirty")
+}
+
+func TestProbeSidecarHealth_ClientBuilderNil_NoOp(t *testing.T) {
+	g := NewWithT(t)
+	r, _ := newNodeReconciler(t)
+	r.BuildSidecarClient = nil // simulate missing wiring
+
+	node := runningSeiNodeForProbe()
+	dirty := r.probeSidecarHealth(context.Background(), node)
+
+	g.Expect(dirty).To(BeFalse())
+	g.Expect(findSidecarReady(node)).To(BeNil(), "no condition should be set when probe is no-op")
+}
+
+type errProbeFailed struct{}
+
+func (errProbeFailed) Error() string { return "simulated probe network failure" }

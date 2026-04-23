@@ -49,6 +49,10 @@ type mockSidecarClient struct {
 
 	taskResults map[uuid.UUID]*sidecar.TaskResult
 	getTaskErr  error
+
+	// Healthz returns (healthz, healthzErr) when non-nil; defaults to (true, nil).
+	healthz    *bool
+	healthzErr error
 }
 
 func (m *mockSidecarClient) SubmitTask(_ context.Context, req sidecar.TaskRequest) (uuid.UUID, error) {
@@ -73,6 +77,13 @@ func (m *mockSidecarClient) GetTask(_ context.Context, id uuid.UUID) (*sidecar.T
 		}
 	}
 	return nil, sidecar.ErrNotFound
+}
+
+func (m *mockSidecarClient) Healthz(_ context.Context) (bool, error) {
+	if m.healthz != nil {
+		return *m.healthz, m.healthzErr
+	}
+	return true, m.healthzErr
 }
 
 func strPtr(s string) *string { return &s }
@@ -108,10 +119,11 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 	r := &SeiNodeReconciler{
-		Client:   c,
-		Scheme:   s,
-		Recorder: record.NewFakeRecorder(100),
-		Platform: platformtest.Config(),
+		Client:             c,
+		Scheme:             s,
+		Recorder:           record.NewFakeRecorder(100),
+		Platform:           platformtest.Config(),
+		BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil },
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{

@@ -324,3 +324,104 @@ func TestPlanFailureMessage_NoDetail(t *testing.T) {
 	plan := &seiv1alpha1.TaskPlan{}
 	g.Expect(planFailureMessage(plan)).To(Equal("unknown"))
 }
+
+// --- sidecar mark-ready re-apply tests ---
+
+func setSidecarReady(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason string) {
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:    seiv1alpha1.ConditionSidecarReady,
+		Status:  status,
+		Reason:  reason,
+		Message: "test",
+	})
+}
+
+func TestBuildRunningPlan_SidecarReady_NoPlan(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	setSidecarReady(node, metav1.ConditionTrue, "Ready")
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).To(BeNil())
+}
+
+func TestBuildRunningPlan_SidecarNotReady_ReturnsMarkReadyPlan(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
+	g.Expect(plan.TargetPhase).To(Equal(seiv1alpha1.PhaseRunning))
+	g.Expect(string(plan.FailedPhase)).To(BeEmpty())
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{TaskMarkReady}))
+}
+
+func TestBuildRunningPlan_SidecarUnknown_NoPlan(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	setSidecarReady(node, metav1.ConditionUnknown, "Unreachable")
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).To(BeNil(), "Unknown should not trigger a plan — re-probe next tick")
+}
+
+func TestBuildRunningPlan_ImageDriftWinsOverSidecar(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.Image = testImageV2 // image drift
+	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+	// Image update plan ends with MarkReady, which also resolves the sidecar.
+	g.Expect(len(plan.Tasks)).To(Equal(4), "should be full node-update plan, not one-task mark-ready")
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+}
+
+func TestBuildMarkReadyPlan_FreshIDEveryCall(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+
+	p1, err := buildMarkReadyPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	p2, err := buildMarkReadyPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(p1.ID).NotTo(Equal(p2.ID))
+	g.Expect(p1.Tasks[0].ID).NotTo(Equal(p2.Tasks[0].ID))
+}
+
+func TestSidecarNeedsReapproval(t *testing.T) {
+	g := NewWithT(t)
+
+	// missing condition
+	node := runningFullNode()
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	// True
+	setSidecarReady(node, metav1.ConditionTrue, "Ready")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	// Unknown
+	setSidecarReady(node, metav1.ConditionUnknown, "Unreachable")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	// False + wrong reason
+	setSidecarReady(node, metav1.ConditionFalse, "SomethingElse")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	// False + NotReady
+	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeTrue())
+}

@@ -206,6 +206,9 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 			return "init"
 		}
 	}
+	if len(plan.Tasks) == 1 && plan.Tasks[0].Type == sidecar.TaskTypeMarkReady {
+		return "mark-ready-reapply"
+	}
 	return unknownValue
 }
 
@@ -586,13 +589,39 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 // recognizes a scenario that requires action. Returns nil when the node is
 // in steady state (no drift detected).
 //
-// Currently detects image drift (spec.image != status.currentImage). This is
-// the extension point for future drift types (config changes, peer changes).
+// Image drift wins conflict with sidecar drift: the image-update plan ends
+// with MarkReady, so solving image drift also solves a stale sidecar.
 func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Spec.Image != node.Status.CurrentImage {
 		return buildNodeUpdatePlan(node)
 	}
+	if sidecarNeedsReapproval(node) {
+		return buildMarkReadyPlan(node)
+	}
 	return nil, nil
+}
+
+// sidecarNeedsReapproval is true iff SidecarReady is False with reason
+// NotReady. Unknown and missing are not actionable — the reconciler re-probes.
+func sidecarNeedsReapproval(node *seiv1alpha1.SeiNode) bool {
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	return cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == "NotReady"
+}
+
+// buildMarkReadyPlan constructs a one-task plan for a Running node whose
+// sidecar reports 503. Failure retries on next reconcile (empty FailedPhase).
+func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	planID := uuid.New().String()
+	t, err := buildPlannedTask(planID, sidecar.TaskTypeMarkReady, 0, paramsForTaskType(node, sidecar.TaskTypeMarkReady, nil, nil))
+	if err != nil {
+		return nil, err
+	}
+	return &seiv1alpha1.TaskPlan{
+		ID:          planID,
+		Phase:       seiv1alpha1.TaskPlanActive,
+		Tasks:       []seiv1alpha1.PlannedTask{t},
+		TargetPhase: seiv1alpha1.PhaseRunning,
+	}, nil
 }
 
 // buildNodeUpdatePlan constructs a plan to roll out an image update on a

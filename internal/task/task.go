@@ -137,6 +137,7 @@ func DeterministicTaskID(planID, taskType string, planIndex int) string {
 type SidecarClient interface {
 	SubmitTask(ctx context.Context, req sidecar.TaskRequest) (uuid.UUID, error)
 	GetTask(ctx context.Context, id uuid.UUID) (*sidecar.TaskResult, error)
+	Healthz(ctx context.Context) (bool, error)
 }
 
 // ExecutionConfig bundles all dependencies needed by task executions:
