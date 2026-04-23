@@ -28,8 +28,8 @@ func (f *fakeSidecarClient) GetTask(context.Context, uuid.UUID) (*sidecar.TaskRe
 }
 func (f *fakeSidecarClient) Healthz(context.Context) (bool, error) { return f.healthy, f.err }
 
-func findCond(node *seiv1alpha1.SeiNode, typ string) *metav1.Condition {
-	return apimeta.FindStatusCondition(node.Status.Conditions, typ)
+func findSidecarReady(node *seiv1alpha1.SeiNode) *metav1.Condition {
+	return apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 }
 
 func TestProbeSidecarHealth_200_SetsReady(t *testing.T) {
@@ -38,7 +38,7 @@ func TestProbeSidecarHealth_200_SetsReady(t *testing.T) {
 
 	probeSidecarHealth(context.Background(), node, &fakeSidecarClient{healthy: true})
 
-	c := findCond(node, seiv1alpha1.ConditionSidecarReady)
+	c := findSidecarReady(node)
 	g.Expect(c).NotTo(BeNil())
 	g.Expect(c.Status).To(Equal(metav1.ConditionTrue))
 	g.Expect(c.Reason).To(Equal("Ready"))
@@ -50,7 +50,7 @@ func TestProbeSidecarHealth_503_SetsNotReady(t *testing.T) {
 
 	probeSidecarHealth(context.Background(), node, &fakeSidecarClient{healthy: false})
 
-	c := findCond(node, seiv1alpha1.ConditionSidecarReady)
+	c := findSidecarReady(node)
 	g.Expect(c.Status).To(Equal(metav1.ConditionFalse))
 	g.Expect(c.Reason).To(Equal("NotReady"))
 }
@@ -61,7 +61,7 @@ func TestProbeSidecarHealth_NetworkError_SetsUnknown(t *testing.T) {
 
 	probeSidecarHealth(context.Background(), node, &fakeSidecarClient{err: errors.New("boom")})
 
-	c := findCond(node, seiv1alpha1.ConditionSidecarReady)
+	c := findSidecarReady(node)
 	g.Expect(c.Status).To(Equal(metav1.ConditionUnknown))
 	g.Expect(c.Reason).To(Equal("Unreachable"))
 }
@@ -73,7 +73,7 @@ func TestResolvePlan_NilClient_DoesNotProbe(t *testing.T) {
 	err := (&NodeResolver{}).ResolvePlan(context.Background(), node)
 
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(findCond(node, seiv1alpha1.ConditionSidecarReady)).To(BeNil(),
+	g.Expect(findSidecarReady(node)).To(BeNil(),
 		"no probe should run when client is nil")
 }
 
@@ -85,6 +85,6 @@ func TestResolvePlan_Initializing_DoesNotProbe(t *testing.T) {
 	err := (&NodeResolver{BuildSidecarClient: func(*seiv1alpha1.SeiNode) (task.SidecarClient, error) { return &fakeSidecarClient{healthy: false}, nil }}).ResolvePlan(context.Background(), node)
 
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(findCond(node, seiv1alpha1.ConditionSidecarReady)).To(BeNil(),
+	g.Expect(findSidecarReady(node)).To(BeNil(),
 		"probe must be skipped when not Running — init plan owns the sidecar")
 }

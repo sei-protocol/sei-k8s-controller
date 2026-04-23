@@ -10,11 +10,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// reconcilePeers resolves label-based peer sources by listing matching
-// SeiNode resources and writing their stable DNS hostnames to
-// status.resolvedPeers in-memory. The caller is responsible for persisting
-// the change. Returns true if the resolved peers changed.
-func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha1.SeiNode) (bool, error) {
+func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	var resolved []string
 	for _, src := range node.Spec.Peers {
 		if src.Label == nil {
@@ -22,7 +18,7 @@ func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha
 		}
 		endpoints, err := r.resolveLabelPeers(ctx, node, src.Label)
 		if err != nil {
-			return false, err
+			return err
 		}
 		resolved = append(resolved, endpoints...)
 	}
@@ -32,9 +28,8 @@ func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha
 
 	if !slices.Equal(node.Status.ResolvedPeers, resolved) {
 		node.Status.ResolvedPeers = resolved
-		return true, nil
 	}
-	return false, nil
+	return nil
 }
 
 // resolveLabelPeers lists SeiNode resources matching the label selector

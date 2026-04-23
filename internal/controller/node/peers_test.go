@@ -41,7 +41,7 @@ func TestReconcilePeers_ResolvesLabelSource(t *testing.T) {
 	r, _ := newNodeReconciler(t, node, peer1, peer2)
 	ctx := context.Background()
 
-	if _, err := r.reconcilePeers(ctx, node); err != nil {
+	if err := r.reconcilePeers(ctx, node); err != nil {
 		t.Fatalf("reconcilePeers: %v", err)
 	}
 
@@ -87,7 +87,7 @@ func TestReconcilePeers_ExcludesSelf(t *testing.T) {
 	r, _ := newNodeReconciler(t, node, peer)
 	ctx := context.Background()
 
-	if _, err := r.reconcilePeers(ctx, node); err != nil {
+	if err := r.reconcilePeers(ctx, node); err != nil {
 		t.Fatalf("reconcilePeers: %v", err)
 	}
 
@@ -126,7 +126,7 @@ func TestReconcilePeers_CrossNamespace_DoesNotExcludeMatchingName(t *testing.T) 
 	r, _ := newNodeReconciler(t, node, peerSameName)
 	ctx := context.Background()
 
-	if _, err := r.reconcilePeers(ctx, node); err != nil {
+	if err := r.reconcilePeers(ctx, node); err != nil {
 		t.Fatalf("reconcilePeers: %v", err)
 	}
 
@@ -163,7 +163,7 @@ func TestReconcilePeers_NoPatchWhenUnchanged(t *testing.T) {
 	r, _ := newNodeReconciler(t, node, peer)
 
 	// Should not error — resolved peers match, no patch needed
-	if _, err := r.reconcilePeers(context.Background(), node); err != nil {
+	if err := r.reconcilePeers(context.Background(), node); err != nil {
 		t.Fatalf("reconcilePeers: %v", err)
 	}
 }
@@ -183,7 +183,7 @@ func TestReconcilePeers_NoLabelSources_NoPatch(t *testing.T) {
 
 	r, _ := newNodeReconciler(t, node)
 
-	if _, err := r.reconcilePeers(context.Background(), node); err != nil {
+	if err := r.reconcilePeers(context.Background(), node); err != nil {
 		t.Fatalf("reconcilePeers: %v", err)
 	}
 	// No label sources means no resolved peers, no patch — just verifying no error
@@ -221,7 +221,7 @@ func TestReconcilePeers_DeduplicatesOverlappingSources(t *testing.T) {
 	r, _ := newNodeReconciler(t, node, peer)
 	ctx := context.Background()
 
-	if _, err := r.reconcilePeers(ctx, node); err != nil {
+	if err := r.reconcilePeers(ctx, node); err != nil {
 		t.Fatalf("reconcilePeers: %v", err)
 	}
 
