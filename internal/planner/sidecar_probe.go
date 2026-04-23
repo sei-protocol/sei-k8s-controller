@@ -14,18 +14,7 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// probeSidecarHealth queries the sidecar's /v0/healthz and stamps
-// ConditionSidecarReady on the node. buildRunningPlan reads this
-// condition on the same reconcile to decide whether to spawn a MarkReady
-// re-apply plan.
-//
-// Three-way signal:
-//   - HTTP 200             → True / Ready
-//   - HTTP 503             → False / NotReady    (only actionable state)
-//   - network error        → Unknown / Unreachable
-//   - client-build failure → Unknown / ProbeError
-//
-// Only `False/NotReady` triggers a plan. Unknown cases re-probe next tick.
+// Only False/NotReady triggers a plan; Unknown cases re-probe next tick.
 func probeSidecarHealth(ctx context.Context, node *seiv1alpha1.SeiNode, client task.SidecarClient) {
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -60,8 +49,6 @@ func probeSidecarHealth(ctx context.Context, node *seiv1alpha1.SeiNode, client t
 		),
 	)
 
-	// Gauge lets PrometheusRule alerts key on `seinode_sidecar_ready`
-	// without needing kube-state-metrics to expose CRD conditions.
 	var readyVal float64
 	if status == metav1.ConditionTrue {
 		readyVal = 1

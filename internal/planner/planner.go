@@ -108,32 +108,13 @@ func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 	return false
 }
 
-// NodeResolver resolves plans for SeiNode resources. It holds the
-// sidecar-client factory so the reconciler doesn't have to construct
-// clients — drift detection + mitigation is fully co-located here.
 type NodeResolver struct {
-	// BuildSidecarClient returns a sidecar client for probing a specific
-	// node's Healthz. Optional — when nil, the probe is skipped
-	// (useful for unit tests that don't exercise sidecar interaction).
+	// Nil factory skips the sidecar probe; used by tests.
 	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
 }
 
-// ResolvePlan ensures node.Status.Plan is set and ready for execution.
-// If an active plan exists, it is left in place (resume). Otherwise a
-// new plan is built from the node's current phase and spec.
-//
-// When the node is Running and the planner has a sidecar client factory,
-// ResolvePlan probes the sidecar's Healthz and stamps the SidecarReady
-// condition. A 503 response feeds buildRunningPlan's drift detection
-// and results in a one-task MarkReady plan.
-//
-// ResolvePlan mutates the node in place: it sets Status.Plan, may
-// transition Status.Phase from Pending to Initializing, and may update
-// the SidecarReady condition. The caller compares before/after Status
-// to decide whether to patch.
 func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	// Stamp SidecarReady up front so buildRunningPlan can read it. Skipped
-	// during Initializing — init plans own sidecar interaction there.
+	// Skip the probe during Initializing — the init plan owns the sidecar there.
 	if p.BuildSidecarClient != nil && node.Status.Phase == seiv1alpha1.PhaseRunning {
 		client, err := p.BuildSidecarClient(node)
 		if err == nil {
@@ -145,7 +126,6 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return nil
 	}
 
-	// Handle terminal plans before building the next one.
 	handleTerminalPlan(ctx, node)
 
 	mode, err := plannerForMode(node)
@@ -609,12 +589,9 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	}
 }
 
-// buildRunningPlan returns a plan for a Running node only when the controller
-// recognizes a scenario that requires action. Returns nil when the node is
-// in steady state (no drift detected).
-//
-// Image drift wins conflict with sidecar drift: the image-update plan ends
-// with MarkReady, so solving image drift also solves a stale sidecar.
+// buildRunningPlan returns a steady-state drift plan, or nil if no drift.
+// Image drift is checked first — its plan ends with MarkReady, so it also
+// resolves any stale sidecar.
 func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Spec.Image != node.Status.CurrentImage {
 		return buildNodeUpdatePlan(node)
@@ -625,15 +602,11 @@ func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 	return nil, nil
 }
 
-// sidecarNeedsReapproval is true iff SidecarReady is False with reason
-// NotReady. Unknown and missing are not actionable — the reconciler re-probes.
 func sidecarNeedsReapproval(node *seiv1alpha1.SeiNode) bool {
 	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 	return cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == "NotReady"
 }
 
-// buildMarkReadyPlan constructs a one-task plan for a Running node whose
-// sidecar reports 503. Failure retries on next reconcile (empty FailedPhase).
 func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	t, err := buildPlannedTask(planID, sidecar.TaskTypeMarkReady, 0, paramsForTaskType(node, sidecar.TaskTypeMarkReady, nil, nil))

@@ -95,21 +95,12 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	before := node.DeepCopy()
 	statusBase := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
 	observedPhase := node.Status.Phase
-
-	// Snapshot SidecarReady so we can emit kubectl events on transitions.
-	// The condition itself is the durable signal; the events just surface
-	// it in `kubectl get events` during incidents.
 	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 
-	// Pre-plan: resolve label-based peers so plan params have fresh data.
 	if _, err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
 
-	// Resolve or resume plan. The planner probes the sidecar when the node
-	// is Running (stamping SidecarReady on the node), then either resumes
-	// an active plan or builds a new one. A sidecar 503 results in a
-	// one-task MarkReady plan.
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
 	if err := r.Planner.ResolvePlan(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
@@ -121,18 +112,13 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	var execErr error
 
 	if !planAlreadyActive && node.Status.Plan != nil {
-		// New plan — persist it before executing. Execution starts on the
-		// next reconcile so external observers see the plan (and any
-		// conditions) before side effects occur.
+		// Requeue immediately so the plan is persisted and visible to
+		// observers before execution begins on the next tick.
 		result = planner.ResultRequeueImmediate
 	} else if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
-		// Existing plan — execute tasks in-memory.
 		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
 	}
 
-	// Diff-at-end: patch status if any reconcile step mutated it. Unchanged
-	// Status skips the round-trip. Uses MergeFromWithOptimisticLock to
-	// preserve resourceVersion precondition against executor-side patches.
 	if !apiequality.Semantic.DeepEqual(before.Status, node.Status) {
 		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
 			if execErr != nil {
@@ -238,9 +224,6 @@ func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1al
 	return r.Delete(ctx, pvc)
 }
 
-// emitSidecarReadinessEvent fires kubectl-visible events on SidecarReady
-// condition transitions observed during a reconcile. The condition is
-// stamped by the planner; the reconciler only diffs prev vs current.
 func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {
 	cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 	if cur == nil {

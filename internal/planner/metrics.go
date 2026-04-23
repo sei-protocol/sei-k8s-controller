@@ -20,8 +20,6 @@ var (
 	// planActiveCount tracks the number of active plans per controller/namespace.
 	planActiveCount metric.Int64UpDownCounter
 
-	// sidecarHealthProbes counts sidecar Healthz probe outcomes.
-	// outcome ∈ {ready, not_ready, unreachable}.
 	sidecarHealthProbes metric.Int64Counter
 )
 
@@ -50,7 +48,6 @@ func init() {
 	)
 	handlePlanInitErr(err)
 
-	// The observable gauge is registered for its callback side effect.
 	_, err = meter.Float64ObservableGauge(
 		"sei.controller.seinode.sidecar_ready",
 		metric.WithDescription("Latest observed sidecar readiness per SeiNode (1=ready, 0=not-ready or unknown)"),
@@ -59,14 +56,11 @@ func init() {
 	handlePlanInitErr(err)
 }
 
-// sidecarReadyTracker records the latest observed sidecar readiness per
-// SeiNode so the observable gauge can emit it at scrape time. Written by
-// probeSidecarHealth; read by the OTel callback.
 var sidecarReadyTracker = newSidecarReadyTracker()
 
 type srTracker struct {
 	mu    sync.RWMutex
-	state map[string]float64 // key: "namespace/name"
+	state map[string]float64
 }
 
 func newSidecarReadyTracker() *srTracker {

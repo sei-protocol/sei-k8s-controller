@@ -211,8 +211,6 @@ const (
 	ConditionNodeUpdateInProgress = "NodeUpdateInProgress"
 
 	// ConditionSidecarReady reflects the last observed sidecar Healthz state.
-	// True → 200. False/NotReady → 503 (mark-ready plan will be scheduled).
-	// Unknown → unreachable or unexpected status; controller re-probes next tick.
 	ConditionSidecarReady = "SidecarReady"
 )
 
