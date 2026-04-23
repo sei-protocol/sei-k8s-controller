@@ -61,6 +61,10 @@ func (m *mockSidecarClient) GetTask(_ context.Context, id uuid.UUID) (*sidecar.T
 	return nil, sidecar.ErrNotFound
 }
 
+func (m *mockSidecarClient) Healthz(_ context.Context) (bool, error) {
+	return true, nil
+}
+
 func testScheme(t *testing.T) *k8sruntime.Scheme {
 	t.Helper()
 	s := k8sruntime.NewScheme()

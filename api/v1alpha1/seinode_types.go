@@ -209,6 +209,9 @@ const (
 const (
 	// ConditionNodeUpdateInProgress indicates an image update is being rolled out.
 	ConditionNodeUpdateInProgress = "NodeUpdateInProgress"
+
+	// ConditionSidecarReady reflects the last observed sidecar Healthz state.
+	ConditionSidecarReady = "SidecarReady"
 )
 
 // SeiNodeStatus defines the observed state of a SeiNode.

@@ -108,31 +108,35 @@ func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 	return false
 }
 
-// ResolvePlan ensures node.Status.Plan is set and ready for execution.
-// If an active plan exists, it is left in place (resume). Otherwise a
-// new plan is built from the node's current phase and spec.
-//
-// ResolvePlan mutates the node in place: it sets Status.Plan and may
-// transition Status.Phase from Pending to Initializing. The caller must
-// capture a MergeFrom patch base before calling ResolvePlan, and persist
-// the status change if a new plan was built (check planAlreadyActive).
-func ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+type NodeResolver struct {
+	// Nil factory skips the sidecar probe; used by tests.
+	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
+}
+
+func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+	// Skip the probe during Initializing — the init plan owns the sidecar there.
+	if p.BuildSidecarClient != nil && node.Status.Phase == seiv1alpha1.PhaseRunning {
+		client, err := p.BuildSidecarClient(node)
+		if err == nil {
+			probeSidecarHealth(ctx, node, client)
+		}
+	}
+
 	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		return nil
 	}
 
-	// Handle terminal plans before building the next one.
 	handleTerminalPlan(ctx, node)
 
-	p, err := plannerForMode(node)
+	mode, err := plannerForMode(node)
 	if err != nil {
 		return err
 	}
-	if err := p.Validate(node); err != nil {
+	if err := mode.Validate(node); err != nil {
 		return err
 	}
 
-	plan, err := p.BuildPlan(node)
+	plan, err := mode.BuildPlan(node)
 	if err != nil {
 		return err
 	}
@@ -205,6 +209,9 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 		case task.TaskTypeEnsureDataPVC:
 			return "init"
 		}
+	}
+	if len(plan.Tasks) == 1 && plan.Tasks[0].Type == sidecar.TaskTypeMarkReady {
+		return "mark-ready-reapply"
 	}
 	return unknownValue
 }
@@ -582,17 +589,36 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	}
 }
 
-// buildRunningPlan returns a plan for a Running node only when the controller
-// recognizes a scenario that requires action. Returns nil when the node is
-// in steady state (no drift detected).
-//
-// Currently detects image drift (spec.image != status.currentImage). This is
-// the extension point for future drift types (config changes, peer changes).
+// buildRunningPlan returns a steady-state drift plan, or nil if no drift.
+// Image drift is checked first — its plan ends with MarkReady, so it also
+// resolves any stale sidecar.
 func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Spec.Image != node.Status.CurrentImage {
 		return buildNodeUpdatePlan(node)
 	}
+	if sidecarNeedsReapproval(node) {
+		return buildMarkReadyPlan(node)
+	}
 	return nil, nil
+}
+
+func sidecarNeedsReapproval(node *seiv1alpha1.SeiNode) bool {
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	return cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == "NotReady"
+}
+
+func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	planID := uuid.New().String()
+	t, err := buildPlannedTask(planID, sidecar.TaskTypeMarkReady, 0, paramsForTaskType(node, sidecar.TaskTypeMarkReady, nil, nil))
+	if err != nil {
+		return nil, err
+	}
+	return &seiv1alpha1.TaskPlan{
+		ID:          planID,
+		Phase:       seiv1alpha1.TaskPlanActive,
+		Tasks:       []seiv1alpha1.PlannedTask{t},
+		TargetPhase: seiv1alpha1.PhaseRunning,
+	}, nil
 }
 
 // buildNodeUpdatePlan constructs a plan to roll out an image update on a

@@ -36,7 +36,7 @@ const (
 
 func mustBuildPlan(t *testing.T, node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
 	t.Helper()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := (&planner.NodeResolver{}).ResolvePlan(context.Background(), node); err != nil {
 		t.Fatalf("ResolvePlan: %v", err)
 	}
 	return node.Status.Plan
@@ -49,6 +49,10 @@ type mockSidecarClient struct {
 
 	taskResults map[uuid.UUID]*sidecar.TaskResult
 	getTaskErr  error
+
+	// Healthz returns (healthz, healthzErr) when non-nil; defaults to (true, nil).
+	healthz    *bool
+	healthzErr error
 }
 
 func (m *mockSidecarClient) SubmitTask(_ context.Context, req sidecar.TaskRequest) (uuid.UUID, error) {
@@ -73,6 +77,13 @@ func (m *mockSidecarClient) GetTask(_ context.Context, id uuid.UUID) (*sidecar.T
 		}
 	}
 	return nil, sidecar.ErrNotFound
+}
+
+func (m *mockSidecarClient) Healthz(_ context.Context) (bool, error) {
+	if m.healthz != nil {
+		return *m.healthz, m.healthzErr
+	}
+	return true, m.healthzErr
 }
 
 func strPtr(s string) *string { return &s }
@@ -112,6 +123,9 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
+		Planner: &planner.NodeResolver{
+			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil },
+		},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
@@ -552,7 +566,7 @@ func TestExecutePlan_NilPlan_ReturnsError(t *testing.T) {
 
 func TestResolvePlan_FullNode(t *testing.T) {
 	node := snapshotNode()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := (&planner.NodeResolver{}).ResolvePlan(context.Background(), node); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan == nil {
@@ -562,7 +576,7 @@ func TestResolvePlan_FullNode(t *testing.T) {
 
 func TestResolvePlan_Archive(t *testing.T) {
 	node := snapshotterNode()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := (&planner.NodeResolver{}).ResolvePlan(context.Background(), node); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan == nil {
@@ -572,7 +586,7 @@ func TestResolvePlan_Archive(t *testing.T) {
 
 func TestResolvePlan_Validator(t *testing.T) {
 	node := genesisNode()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := (&planner.NodeResolver{}).ResolvePlan(context.Background(), node); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan == nil {
@@ -582,7 +596,7 @@ func TestResolvePlan_Validator(t *testing.T) {
 
 func TestResolvePlan_Replayer(t *testing.T) {
 	node := replayerNode()
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := (&planner.NodeResolver{}).ResolvePlan(context.Background(), node); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan == nil {
@@ -597,7 +611,7 @@ func TestResolvePlan_NoSubSpec(t *testing.T) {
 			Image:   "sei:latest",
 		},
 	}
-	err := planner.ResolvePlan(context.Background(), node)
+	err := (&planner.NodeResolver{}).ResolvePlan(context.Background(), node)
 	if err == nil {
 		t.Error("expected error for node with no sub-spec")
 	}
@@ -609,7 +623,7 @@ func TestResolvePlan_ResumesActivePlan(t *testing.T) {
 		ID:    "existing-plan",
 		Phase: seiv1alpha1.TaskPlanActive,
 	}
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := (&planner.NodeResolver{}).ResolvePlan(context.Background(), node); err != nil {
 		t.Fatal(err)
 	}
 	if node.Status.Plan.ID != "existing-plan" {
@@ -686,7 +700,7 @@ func TestExecutePlan_CompletedPlan_StaysForPlannerCleanup(t *testing.T) {
 	node.Status.Phase = seiv1alpha1.PhaseRunning
 	node.Status.Plan = nil
 	// Build a NodeUpdate plan for a Running node with drift.
-	if err := planner.ResolvePlan(context.Background(), node); err != nil {
+	if err := (&planner.NodeResolver{}).ResolvePlan(context.Background(), node); err != nil {
 		t.Fatal(err)
 	}
 	g.Expect(node.Status.Plan).NotTo(BeNil())
@@ -774,6 +788,7 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
+		Planner:  &planner.NodeResolver{},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, n *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{

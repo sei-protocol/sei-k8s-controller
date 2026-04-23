@@ -1,6 +1,9 @@
 package planner
 
 import (
+	"context"
+	"sync"
+
 	"go.opentelemetry.io/otel/metric"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -16,6 +19,8 @@ var (
 
 	// planActiveCount tracks the number of active plans per controller/namespace.
 	planActiveCount metric.Int64UpDownCounter
+
+	sidecarHealthProbes metric.Int64Counter
 )
 
 var meter = observability.NewMeter("planner")
@@ -36,6 +41,54 @@ func init() {
 		metric.WithDescription("Number of active plans"),
 	)
 	handlePlanInitErr(err)
+
+	sidecarHealthProbes, err = meter.Int64Counter(
+		"sei.controller.seinode.sidecar_health_probes",
+		metric.WithDescription("Sidecar Healthz probe outcomes observed during plan resolution"),
+	)
+	handlePlanInitErr(err)
+
+	_, err = meter.Float64ObservableGauge(
+		"sei.controller.seinode.sidecar_ready",
+		metric.WithDescription("Latest observed sidecar readiness per SeiNode (1=ready, 0=not-ready or unknown)"),
+		metric.WithFloat64Callback(sidecarReadyTracker.Observe),
+	)
+	handlePlanInitErr(err)
+}
+
+var sidecarReadyTracker = newSidecarReadyTracker()
+
+type nodeKey struct {
+	namespace, name string
+}
+
+type srTracker struct {
+	mu    sync.RWMutex
+	state map[nodeKey]float64
+}
+
+func newSidecarReadyTracker() *srTracker {
+	return &srTracker{state: make(map[nodeKey]float64)}
+}
+
+func (t *srTracker) Set(ns, name string, ready float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.state[nodeKey{ns, name}] = ready
+}
+
+func (t *srTracker) Observe(_ context.Context, o metric.Float64Observer) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for k, v := range t.state {
+		o.Observe(v,
+			metric.WithAttributes(
+				observability.AttrNamespace.String(k.namespace),
+				observability.AttrName.String(k.name),
+			),
+		)
+	}
+	return nil
 }
 
 func handlePlanInitErr(err error) {

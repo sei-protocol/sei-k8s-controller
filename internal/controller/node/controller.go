@@ -9,7 +9,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -43,6 +46,7 @@ type SeiNodeReconciler struct {
 	Scheme       *runtime.Scheme
 	Recorder     record.EventRecorder
 	Platform     PlatformConfig
+	Planner      *planner.NodeResolver
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNode]
 }
 
@@ -88,41 +92,34 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	statusBase := client.MergeFromWithOptions(node.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	before := node.DeepCopy()
+	statusBase := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
 	observedPhase := node.Status.Phase
-	statusDirty := false
+	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 
-	// Pre-plan: resolve label-based peers so plan params have fresh data.
-	if dirty, err := r.reconcilePeers(ctx, node); err != nil {
+	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
-	} else if dirty {
-		statusDirty = true
 	}
 
-	// Resolve or resume plan. ResolvePlan either resumes an active plan or
-	// builds a new one based on the node's phase, stamping it onto
-	// node.Status.Plan (and transitioning Pending → Initializing).
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
-	if err := planner.ResolvePlan(ctx, node); err != nil {
+	if err := r.Planner.ResolvePlan(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
+
+	r.emitSidecarReadinessEvent(node, prevSidecar)
 
 	var result ctrl.Result
 	var execErr error
 
 	if !planAlreadyActive && node.Status.Plan != nil {
-		// New plan — persist it before executing. Execution starts on the
-		// next reconcile. This guarantees external observers see the plan
-		// (and any conditions) before side effects occur.
-		statusDirty = true
+		// Requeue immediately so the plan is persisted and visible to
+		// observers before execution begins on the next tick.
 		result = planner.ResultRequeueImmediate
 	} else if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
-		// Existing plan — execute tasks in-memory.
 		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
-		statusDirty = true
 	}
 
-	if statusDirty {
+	if !apiequality.Semantic.DeepEqual(before.Status, node.Status) {
 		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
 			if execErr != nil {
 				log.FromContext(ctx).Error(execErr, "plan execution error lost due to status flush failure")
@@ -225,4 +222,21 @@ func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1al
 		return err
 	}
 	return r.Delete(ctx, pvc)
+}
+
+func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {
+	cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	if cur == nil {
+		return
+	}
+	switch {
+	case cur.Status == metav1.ConditionFalse && cur.Reason == "NotReady" &&
+		(prev == nil || prev.Status != metav1.ConditionFalse):
+		r.Recorder.Event(node, corev1.EventTypeWarning, "SidecarReadinessLost",
+			"sidecar Healthz returned 503; controller will re-issue mark-ready")
+	case cur.Status == metav1.ConditionTrue &&
+		prev != nil && prev.Status == metav1.ConditionFalse:
+		r.Recorder.Event(node, corev1.EventTypeNormal, "SidecarReadinessRestored",
+			"sidecar Healthz returned 200; mark-ready gate is open")
+	}
 }

@@ -174,6 +174,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: nodeRecorder,
 		Platform: platformCfg,
+		Planner:  &planner.NodeResolver{BuildSidecarClient: buildSidecarClient},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{

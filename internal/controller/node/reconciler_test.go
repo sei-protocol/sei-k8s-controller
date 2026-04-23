@@ -49,6 +49,7 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
+		Planner:  &planner.NodeResolver{},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
@@ -249,4 +250,71 @@ func TestNodeDeletion_SnapshotNode_WithoutRetain_DeletesPVC(t *testing.T) {
 	remaining := &corev1.PersistentVolumeClaim{}
 	err = c.Get(ctx, types.NamespacedName{Name: "data-snap-0", Namespace: "default"}, remaining)
 	g.Expect(err).To(HaveOccurred())
+}
+
+// --- probeSidecarHealth tests ---
+
+func runningSeiNodeForProbe() *seiv1alpha1.SeiNode {
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "p-0", Namespace: "default", Generation: 1},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID:  "atlantic-2",
+			Image:    "sei:v1.0.0",
+			FullNode: &seiv1alpha1.FullNodeSpec{},
+		},
+		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning, CurrentImage: "sei:v1.0.0"},
+	}
+}
+
+func findSidecarReady(node *seiv1alpha1.SeiNode) *metav1.Condition {
+	for i := range node.Status.Conditions {
+		c := &node.Status.Conditions[i]
+		if c.Type == seiv1alpha1.ConditionSidecarReady {
+			return c
+		}
+	}
+	return nil
+}
+
+// Probe outcome unit tests live in the planner package now that the probe
+// itself lives there. These tests exercise Reconcile-level integration:
+// that the reconciler passes a client to the planner when Phase==Running
+// (and skips during Initializing), and that SidecarReady transitions emit
+// kubectl events.
+
+func TestReconcile_Running_ProbesAndSetsCondition(t *testing.T) {
+	g := NewWithT(t)
+	node := runningSeiNodeForProbe()
+
+	r, c := newNodeReconciler(t, node)
+	unhealthy := false
+	mock := &mockSidecarClient{healthz: &unhealthy}
+	r.Planner.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+
+	_, err := r.Reconcile(context.Background(), nodeReqFor(node.Name, node.Namespace))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got := getSeiNode(t, context.Background(), c, node.Name, node.Namespace)
+	cond := findSidecarReady(got)
+	g.Expect(cond).NotTo(BeNil(), "probe should stamp SidecarReady when Running")
+	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(cond.Reason).To(Equal("NotReady"))
+}
+
+func TestReconcile_Initializing_SkipsProbe(t *testing.T) {
+	g := NewWithT(t)
+	node := runningSeiNodeForProbe()
+	node.Status.Phase = seiv1alpha1.PhaseInitializing
+
+	r, c := newNodeReconciler(t, node)
+	unhealthy := false
+	mock := &mockSidecarClient{healthz: &unhealthy}
+	r.Planner.BuildSidecarClient = func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil }
+
+	_, err := r.Reconcile(context.Background(), nodeReqFor(node.Name, node.Namespace))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got := getSeiNode(t, context.Background(), c, node.Name, node.Namespace)
+	g.Expect(findSidecarReady(got)).To(BeNil(),
+		"probe must be skipped while Initializing — init plan owns the sidecar")
 }

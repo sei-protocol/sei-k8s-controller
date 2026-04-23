@@ -88,7 +88,7 @@ func TestResolvePlan_NodeUpdate_SetsCondition(t *testing.T) {
 	node := runningFullNode()
 	node.Spec.Image = testImageV2 // drift triggers NodeUpdate plan
 
-	err := ResolvePlan(t.Context(), node)
+	err := (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan).NotTo(BeNil(), "plan should be created")
 
@@ -105,7 +105,7 @@ func TestResolvePlan_CompletedPlan_ClearsCondition(t *testing.T) {
 	node.Spec.Image = testImageV2
 
 	// Build a NodeUpdate plan and simulate completion.
-	err := ResolvePlan(t.Context(), node)
+	err := (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
@@ -120,7 +120,7 @@ func TestResolvePlan_CompletedPlan_ClearsCondition(t *testing.T) {
 	node.Status.CurrentImage = testImageV2
 
 	// ResolvePlan should clear the completed plan and the condition.
-	err = ResolvePlan(t.Context(), node)
+	err = (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	cond = meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
@@ -136,7 +136,7 @@ func TestResolvePlan_FailedPlan_ClearsCondition(t *testing.T) {
 	node.Spec.Image = testImageV2
 
 	// Build a NodeUpdate plan and simulate failure.
-	err := ResolvePlan(t.Context(), node)
+	err := (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
@@ -152,7 +152,7 @@ func TestResolvePlan_FailedPlan_ClearsCondition(t *testing.T) {
 	// ResolvePlan should clear the failed plan. Since drift still exists,
 	// it immediately builds a new NodeUpdate plan and sets the condition
 	// back to True. This is correct — automatic retry on failure.
-	err = ResolvePlan(t.Context(), node)
+	err = (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// A new plan was built because drift still exists.
@@ -178,7 +178,7 @@ func TestResolvePlan_ResumesActivePlan(t *testing.T) {
 	}
 	node.Status.Plan = existingPlan
 
-	err := ResolvePlan(t.Context(), node)
+	err := (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan.ID).To(Equal("existing-plan-123"),
 		"active plan should be resumed, not replaced")
@@ -205,7 +205,7 @@ func TestResolvePlan_CompletedNonUpdatePlan_DoesNotClearCondition(t *testing.T) 
 		},
 	}
 
-	err := ResolvePlan(t.Context(), node)
+	err := (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// The condition should remain unchanged (already False from before).
@@ -323,4 +323,105 @@ func TestPlanFailureMessage_NoDetail(t *testing.T) {
 	g := NewWithT(t)
 	plan := &seiv1alpha1.TaskPlan{}
 	g.Expect(planFailureMessage(plan)).To(Equal("unknown"))
+}
+
+// --- sidecar mark-ready re-apply tests ---
+
+func setSidecarReady(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason string) {
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:    seiv1alpha1.ConditionSidecarReady,
+		Status:  status,
+		Reason:  reason,
+		Message: "test",
+	})
+}
+
+func TestBuildRunningPlan_SidecarReady_NoPlan(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	setSidecarReady(node, metav1.ConditionTrue, "Ready")
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).To(BeNil())
+}
+
+func TestBuildRunningPlan_SidecarNotReady_ReturnsMarkReadyPlan(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
+	g.Expect(plan.TargetPhase).To(Equal(seiv1alpha1.PhaseRunning))
+	g.Expect(string(plan.FailedPhase)).To(BeEmpty())
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{TaskMarkReady}))
+}
+
+func TestBuildRunningPlan_SidecarUnknown_NoPlan(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	setSidecarReady(node, metav1.ConditionUnknown, "Unreachable")
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).To(BeNil(), "Unknown should not trigger a plan — re-probe next tick")
+}
+
+func TestBuildRunningPlan_ImageDriftWinsOverSidecar(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.Image = testImageV2 // image drift
+	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+	// Image update plan ends with MarkReady, which also resolves the sidecar.
+	g.Expect(plan.Tasks).To(HaveLen(4), "should be full node-update plan, not one-task mark-ready")
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+}
+
+func TestBuildMarkReadyPlan_FreshIDEveryCall(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+
+	p1, err := buildMarkReadyPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	p2, err := buildMarkReadyPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(p1.ID).NotTo(Equal(p2.ID))
+	g.Expect(p1.Tasks[0].ID).NotTo(Equal(p2.Tasks[0].ID))
+}
+
+func TestSidecarNeedsReapproval(t *testing.T) {
+	g := NewWithT(t)
+
+	// missing condition
+	node := runningFullNode()
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	// True
+	setSidecarReady(node, metav1.ConditionTrue, "Ready")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	// Unknown
+	setSidecarReady(node, metav1.ConditionUnknown, "Unreachable")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	// False + wrong reason
+	setSidecarReady(node, metav1.ConditionFalse, "SomethingElse")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	// False + NotReady
+	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeTrue())
 }
