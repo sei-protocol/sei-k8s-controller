@@ -1,15 +1,6 @@
 # Allows Prometheus to scrape the controller metrics endpoint.
-#
-# Prerequisite: the Prometheus namespace manifest must declaratively carry the
-# label `metrics: enabled` — see the platform repo's per-cluster
-# clusters/<env>/monitoring/namespace.yaml. Without it, scrapes are blocked by
-# the namespaceSelector below.
-#
-# Note: Kubernetes NetworkPolicy is only enforced on CNIs that implement it.
-# AWS VPC CNI accepts NP objects but does not enforce them, so this rule is a
-# silent no-op on VPC CNI clusters. Cilium (with kubeProxyReplacement)
-# enforces natively — missing the label there causes an immediate scrape
-# outage, as discovered during the harbor bring-up.
+# The scraping namespace must carry the label `metrics: enabled`
+# to match the namespaceSelector below.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
