@@ -1,7 +1,6 @@
 # Allows Prometheus to scrape the controller metrics endpoint.
-# Prerequisite: the Prometheus namespace must carry the label
-#   kubectl label namespace <prometheus-ns> metrics=enabled
-# Without this label, scrapes will be blocked by the namespaceSelector.
+# The scraping namespace must carry the label `metrics: enabled`
+# to match the namespaceSelector below.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
