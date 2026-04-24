@@ -257,6 +257,42 @@ spec:
                         description: ChainID of the chain this node belongs to.
                         minLength: 1
                         type: string
+                      dataVolume:
+                        description: |-
+                          DataVolume configures the data PersistentVolumeClaim for this node.
+                          When omitted, the controller creates a PVC using the node's mode-default
+                          storage class and size (see noderesource.DefaultStorageForMode).
+                        properties:
+                          import:
+                            description: |-
+                              Import references a pre-existing PersistentVolumeClaim in the same
+                              namespace as the SeiNode, instead of creating a new one. The
+                              controller validates the referenced PVC but never mutates it. Storage
+                              class is the importer's responsibility — the controller does not
+                              validate it.
+
+                              When Import is set, the controller never deletes the referenced PVC
+                              on SeiNode deletion — storage lifecycle is the operator's responsibility.
+                            properties:
+                              pvcName:
+                                description: |-
+                                  PVCName is the name of a PersistentVolumeClaim in the SeiNode's
+                                  namespace. The PVC must be Bound, ReadWriteOnce, and sized at or above
+                                  the node mode's default storage size. Immutable after creation.
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                type: string
+                                x-kubernetes-validations:
+                                - message: pvcName is immutable
+                                  rule: self == oldSelf
+                            required:
+                            - pvcName
+                            type: object
+                        type: object
+                        x-kubernetes-validations:
+                        - message: import cannot be unset once configured
+                          rule: (!has(oldSelf.import) || has(self.import))
                       entrypoint:
                         description: Entrypoint overrides the image command for the
                           running node process.

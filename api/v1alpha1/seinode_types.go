@@ -47,6 +47,12 @@ type SeiNodeSpec struct {
 	// +optional
 	PodLabels map[string]string `json:"podLabels,omitempty"`
 
+	// DataVolume configures the data PersistentVolumeClaim for this node.
+	// When omitted, the controller creates a PVC using the node's mode-default
+	// storage class and size (see noderesource.DefaultStorageForMode).
+	// +optional
+	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
+
 	// --- Mode-specific sub-specs (exactly one must be set) ---
 
 	// FullNode configures a chain-following full node (absorbs the "rpc" role).
@@ -64,6 +70,35 @@ type SeiNodeSpec struct {
 	// Validator configures a consensus-participating validator node.
 	// +optional
 	Validator *ValidatorSpec `json:"validator,omitempty"`
+}
+
+// DataVolumeSpec configures how the data PVC is sourced.
+//
+// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.import) || has(self.import))",message="import cannot be unset once configured"
+type DataVolumeSpec struct {
+	// Import references a pre-existing PersistentVolumeClaim in the same
+	// namespace as the SeiNode, instead of creating a new one. The
+	// controller validates the referenced PVC but never mutates it. Storage
+	// class is the importer's responsibility — the controller does not
+	// validate it.
+	//
+	// When Import is set, the controller never deletes the referenced PVC
+	// on SeiNode deletion — storage lifecycle is the operator's responsibility.
+	// +optional
+	Import *DataVolumeImport `json:"import,omitempty"`
+}
+
+// DataVolumeImport names a pre-existing PVC to adopt as this node's data volume.
+type DataVolumeImport struct {
+	// PVCName is the name of a PersistentVolumeClaim in the SeiNode's
+	// namespace. The PVC must be Bound, ReadWriteOnce, and sized at or above
+	// the node mode's default storage size. Immutable after creation.
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="pvcName is immutable"
+	PVCName string `json:"pvcName"`
 }
 
 // SnapshotSource returns the SnapshotSource from whichever mode sub-spec is
@@ -212,6 +247,17 @@ const (
 
 	// ConditionSidecarReady reflects the last observed sidecar Healthz state.
 	ConditionSidecarReady = "SidecarReady"
+
+	// ConditionImportPVCReady indicates whether an imported data PVC passes all
+	// validation requirements. Only set on SeiNodes with spec.dataVolume.import.
+	ConditionImportPVCReady = "ImportPVCReady"
+)
+
+// Reasons for the ImportPVCReady condition.
+const (
+	ReasonPVCValidated = "PVCValidated" // import succeeded
+	ReasonPVCNotReady  = "PVCNotReady"  // transient: retry
+	ReasonPVCInvalid   = "PVCInvalid"   // terminal: fail the plan
 )
 
 // SeiNodeStatus defines the observed state of a SeiNode.
