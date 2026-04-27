@@ -27,14 +27,18 @@ A single new optional sub-struct is added to `ValidatorSpec` in `api/v1alpha1/va
 // api/v1alpha1/validator_types.go
 
 type ValidatorSpec struct {
+    // Snapshot, GenesisCeremony — existing fields, both optional.
+    // +optional
     Snapshot        *SnapshotSource             `json:"snapshot,omitempty"`
+    // +optional
     GenesisCeremony *GenesisCeremonyNodeConfig  `json:"genesisCeremony,omitempty"`
 
     // SigningKey declares the source of this validator's consensus signing
     // key (priv_validator_key.json). When omitted, the node runs as a
     // non-signing observer — suitable for pre-sync (Phase 1 of the
     // validator-migration runbook) or for genesis-ceremony bootstraps that
-    // produce keys on-cluster.
+    // produce keys on-cluster. Mutually exclusive with GenesisCeremony
+    // (cross-field check in the validator planner; see §6).
     // +optional
     SigningKey *SigningKeySource `json:"signingKey,omitempty"`
 }
