@@ -901,13 +901,14 @@ func TestTaskGenerateBootstrapJob_SidecarResources(t *testing.T) {
 	}
 }
 
-// TestTaskGenerateBootstrapJob_NeverHasSigningKeyVolume is the safety
-// regression guard for the load-bearing invariant in
-// docs/design-seinode-validator-signing-key-lld.md §3: the bootstrap pod
-// must never have access to consensus signing material. Even when a
-// SeiNode has SigningKey set on its spec, GenerateBootstrapJob must
-// produce a pod template with no signing-key volume.
-func TestTaskGenerateBootstrapJob_NeverHasSigningKeyVolume(t *testing.T) {
+// TestTaskGenerateBootstrapJob_NeverHasIdentityVolumes is the safety
+// regression guard for the load-bearing invariants on validator identity
+// material. The bootstrap pod must never carry the consensus signing key
+// (slashing risk, LLD §3) AND must never carry the validator's permanent
+// node key (peer-reputation pollution risk — bootstrap pods crash, halt,
+// and restart, and that misbehavior must not attribute to the validator's
+// permanent libp2p identity).
+func TestTaskGenerateBootstrapJob_NeverHasIdentityVolumes(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "default"},
 		Spec: seiv1alpha1.SeiNodeSpec{
@@ -921,6 +922,9 @@ func TestTaskGenerateBootstrapJob_NeverHasSigningKeyVolume(t *testing.T) {
 				SigningKey: &seiv1alpha1.SigningKeySource{
 					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
 				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+				},
 			},
 		},
 	}
@@ -929,20 +933,29 @@ func TestTaskGenerateBootstrapJob_NeverHasSigningKeyVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateBootstrapJob error: %v", err)
 	}
+	forbiddenVolumeNames := map[string]string{
+		"signing-key": "consensus signing material — slashing risk (LLD §3)",
+		"node-key":    "validator permanent node ID — peer-reputation pollution risk",
+	}
+	forbiddenSecretNames := map[string]string{
+		"validator-0-key":     "consensus signing Secret",
+		"validator-0-nodekey": "validator node-key Secret",
+	}
 	for _, v := range job.Spec.Template.Spec.Volumes {
-		if v.Name == "signing-key" {
-			t.Fatalf("bootstrap Job pod-spec must NEVER include a signing-key volume "+
-				"(SAFETY INVARIANT — see LLD §3); found volume %+v", v)
+		if reason, forbidden := forbiddenVolumeNames[v.Name]; forbidden {
+			t.Fatalf("bootstrap Job pod-spec must NEVER include volume %q (%s); found %+v", v.Name, reason, v)
 		}
-		if v.Secret != nil && v.Secret.SecretName == "validator-0-key" {
-			t.Fatalf("bootstrap Job pod-spec must NEVER mount the validator's signing Secret; "+
-				"found Secret-backed volume %q", v.Name)
+		if v.Secret != nil {
+			if reason, forbidden := forbiddenSecretNames[v.Secret.SecretName]; forbidden {
+				t.Fatalf("bootstrap Job pod-spec must NEVER mount Secret %q (%s); found volume %q",
+					v.Secret.SecretName, reason, v.Name)
+			}
 		}
 	}
 	for _, c := range job.Spec.Template.Spec.Containers {
 		for _, m := range c.VolumeMounts {
-			if m.Name == "signing-key" {
-				t.Fatalf("bootstrap Job container %q must NEVER have a signing-key mount", c.Name)
+			if reason, forbidden := forbiddenVolumeNames[m.Name]; forbidden {
+				t.Fatalf("bootstrap Job container %q must NEVER mount %q (%s)", c.Name, m.Name, reason)
 			}
 		}
 	}

@@ -27,6 +27,9 @@ func signingKeyTestNode(name, namespace, secretName string) *seiv1alpha1.SeiNode
 				SigningKey: &seiv1alpha1.SigningKeySource{
 					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: secretName},
 				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: secretName + "-nodekey"},
+				},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
