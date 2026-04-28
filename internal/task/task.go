@@ -206,6 +206,7 @@ var registry = map[string]taskDeserializer{
 	TaskTypeApplyService:       deserializeApplyService,
 	TaskTypeObserveImage:       deserializeObserveImage,
 	TaskTypeValidateSigningKey: deserializeValidateSigningKey,
+	TaskTypeValidateNodeKey:    deserializeValidateNodeKey,
 
 	// Controller-side bootstrap tasks
 	TaskTypeDeployBootstrapSvc:     deserializeBootstrapService,

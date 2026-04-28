@@ -22,15 +22,18 @@ func TestValidatorPlanner_Validate_SigningKey(t *testing.T) {
 			spec: seiv1alpha1.ValidatorSpec{},
 		},
 		{
-			name: "signingKey with secretName is valid",
+			name: "signingKey + nodeKey with distinct secretNames is valid",
 			spec: seiv1alpha1.ValidatorSpec{
 				SigningKey: &seiv1alpha1.SigningKeySource{
 					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
 				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+				},
 			},
 		},
 		{
-			name: "signingKey + bootstrap is valid (migration use case)",
+			name: "signingKey + nodeKey + bootstrap is valid (migration use case)",
 			spec: seiv1alpha1.ValidatorSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					BootstrapImage: "ghcr.io/sei/bootstrap:v1",
@@ -39,7 +42,40 @@ func TestValidatorPlanner_Validate_SigningKey(t *testing.T) {
 				SigningKey: &seiv1alpha1.SigningKeySource{
 					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
 				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+				},
 			},
+		},
+		{
+			name: "signingKey without nodeKey is rejected",
+			spec: seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{
+					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+				},
+			},
+			wantErr: "nodeKey is required when signingKey is set",
+		},
+		{
+			name: "nodeKey without signingKey is rejected",
+			spec: seiv1alpha1.ValidatorSpec{
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+				},
+			},
+			wantErr: "nodeKey requires signingKey to be set",
+		},
+		{
+			name: "signingKey and nodeKey sharing a secretName is rejected",
+			spec: seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{
+					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "shared-keys"},
+				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "shared-keys"},
+				},
+			},
+			wantErr: "must reference distinct Secrets",
 		},
 		{
 			name: "signingKey with empty secretName is rejected",
@@ -67,6 +103,9 @@ func TestValidatorPlanner_Validate_SigningKey(t *testing.T) {
 				},
 				SigningKey: &seiv1alpha1.SigningKeySource{
 					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
 				},
 			},
 			wantErr: "signingKey is mutually exclusive with genesisCeremony",
@@ -114,7 +153,7 @@ func indexOfTaskType(plan *seiv1alpha1.TaskPlan, taskType string) int {
 	return slices.Index(taskTypes(plan), taskType)
 }
 
-func TestValidatorPlanner_BuildPlan_SigningKeyInsertsValidateTask_Bootstrap(t *testing.T) {
+func TestValidatorPlanner_BuildPlan_IdentityInsertsValidateTasks_Bootstrap(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "pacific-1"},
 		Spec: seiv1alpha1.SeiNodeSpec{
@@ -128,49 +167,8 @@ func TestValidatorPlanner_BuildPlan_SigningKeyInsertsValidateTask_Bootstrap(t *t
 				SigningKey: &seiv1alpha1.SigningKeySource{
 					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
 				},
-			},
-		},
-	}
-	plan, err := (&validatorPlanner{}).BuildPlan(node)
-	if err != nil {
-		t.Fatalf("BuildPlan: %v", err)
-	}
-
-	pvcIdx := indexOfTaskType(plan, task.TaskTypeEnsureDataPVC)
-	validateIdx := indexOfTaskType(plan, task.TaskTypeValidateSigningKey)
-	deployJobIdx := indexOfTaskType(plan, task.TaskTypeDeployBootstrapJob)
-
-	if validateIdx < 0 {
-		t.Fatalf("plan must contain %s when SigningKey is set; got %v", task.TaskTypeValidateSigningKey, taskTypes(plan))
-	}
-	if pvcIdx >= validateIdx || validateIdx >= deployJobIdx {
-		t.Fatalf("expected ordering ensure-data-pvc(%d) < validate-signing-key(%d) < deploy-bootstrap-job(%d); got %v",
-			pvcIdx, validateIdx, deployJobIdx, taskTypes(plan))
-	}
-
-	// Verify params are populated correctly.
-	for _, pt := range plan.Tasks {
-		if pt.Type == task.TaskTypeValidateSigningKey {
-			if pt.Params == nil {
-				t.Fatalf("validate-signing-key task params must not be nil")
-			}
-			if !strings.Contains(string(pt.Params.Raw), "validator-0-key") {
-				t.Fatalf("validate-signing-key params must reference secret name; got %q", string(pt.Params.Raw))
-			}
-		}
-	}
-}
-
-func TestValidatorPlanner_BuildPlan_SigningKeyInsertsValidateTask_Base(t *testing.T) {
-	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "pacific-1"},
-		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "pacific-1",
-			Image:   "seid:v6.4.1",
-			Validator: &seiv1alpha1.ValidatorSpec{
-				// No bootstrap — falls into buildBasePlan path.
-				SigningKey: &seiv1alpha1.SigningKeySource{
-					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
 				},
 			},
 		},
@@ -181,15 +179,68 @@ func TestValidatorPlanner_BuildPlan_SigningKeyInsertsValidateTask_Base(t *testin
 	}
 
 	pvcIdx := indexOfTaskType(plan, task.TaskTypeEnsureDataPVC)
-	validateIdx := indexOfTaskType(plan, task.TaskTypeValidateSigningKey)
+	signingIdx := indexOfTaskType(plan, task.TaskTypeValidateSigningKey)
+	nodeKeyIdx := indexOfTaskType(plan, task.TaskTypeValidateNodeKey)
+	deployJobIdx := indexOfTaskType(plan, task.TaskTypeDeployBootstrapJob)
+
+	if signingIdx < 0 {
+		t.Fatalf("plan must contain %s; got %v", task.TaskTypeValidateSigningKey, taskTypes(plan))
+	}
+	if nodeKeyIdx < 0 {
+		t.Fatalf("plan must contain %s; got %v", task.TaskTypeValidateNodeKey, taskTypes(plan))
+	}
+	if pvcIdx >= signingIdx || signingIdx >= nodeKeyIdx || nodeKeyIdx >= deployJobIdx {
+		t.Fatalf("expected ordering pvc(%d) < signing(%d) < nodeKey(%d) < deploy-bootstrap-job(%d); got %v",
+			pvcIdx, signingIdx, nodeKeyIdx, deployJobIdx, taskTypes(plan))
+	}
+
+	// Verify params are populated correctly.
+	for _, pt := range plan.Tasks {
+		switch pt.Type {
+		case task.TaskTypeValidateSigningKey:
+			if pt.Params == nil || !strings.Contains(string(pt.Params.Raw), "validator-0-key") {
+				t.Fatalf("validate-signing-key params must reference secret name; got %q", string(pt.Params.Raw))
+			}
+		case task.TaskTypeValidateNodeKey:
+			if pt.Params == nil || !strings.Contains(string(pt.Params.Raw), "validator-0-nodekey") {
+				t.Fatalf("validate-node-key params must reference secret name; got %q", string(pt.Params.Raw))
+			}
+		}
+	}
+}
+
+func TestValidatorPlanner_BuildPlan_IdentityInsertsValidateTasks_Base(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "pacific-1"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "pacific-1",
+			Image:   "seid:v6.4.1",
+			Validator: &seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{
+					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+				},
+			},
+		},
+	}
+	plan, err := (&validatorPlanner{}).BuildPlan(node)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	pvcIdx := indexOfTaskType(plan, task.TaskTypeEnsureDataPVC)
+	signingIdx := indexOfTaskType(plan, task.TaskTypeValidateSigningKey)
+	nodeKeyIdx := indexOfTaskType(plan, task.TaskTypeValidateNodeKey)
 	stsIdx := indexOfTaskType(plan, task.TaskTypeApplyStatefulSet)
 
-	if validateIdx < 0 {
-		t.Fatalf("plan must contain %s when SigningKey is set; got %v", task.TaskTypeValidateSigningKey, taskTypes(plan))
+	if signingIdx < 0 || nodeKeyIdx < 0 {
+		t.Fatalf("plan must contain both validate-signing-key and validate-node-key; got %v", taskTypes(plan))
 	}
-	if pvcIdx >= validateIdx || validateIdx >= stsIdx {
-		t.Fatalf("expected ordering ensure-data-pvc(%d) < validate-signing-key(%d) < apply-statefulset(%d); got %v",
-			pvcIdx, validateIdx, stsIdx, taskTypes(plan))
+	if pvcIdx >= signingIdx || signingIdx >= nodeKeyIdx || nodeKeyIdx >= stsIdx {
+		t.Fatalf("expected ordering pvc(%d) < signing(%d) < nodeKey(%d) < apply-statefulset(%d); got %v",
+			pvcIdx, signingIdx, nodeKeyIdx, stsIdx, taskTypes(plan))
 	}
 }
 

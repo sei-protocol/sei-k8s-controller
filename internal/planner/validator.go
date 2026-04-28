@@ -25,6 +25,19 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 		if sk.Secret == nil || sk.Secret.SecretName == "" {
 			return fmt.Errorf("validator: signingKey.secret.secretName is required")
 		}
+		nk := node.Spec.Validator.NodeKey
+		if nk == nil {
+			return fmt.Errorf("validator: nodeKey is required when signingKey is set")
+		}
+		if nk.Secret == nil || nk.Secret.SecretName == "" {
+			return fmt.Errorf("validator: nodeKey.secret.secretName is required")
+		}
+		if nk.Secret.SecretName == sk.Secret.SecretName {
+			return fmt.Errorf("validator: signingKey and nodeKey must reference distinct Secrets")
+		}
+	}
+	if node.Spec.Validator.NodeKey != nil && node.Spec.Validator.SigningKey == nil {
+		return fmt.Errorf("validator: nodeKey requires signingKey to be set")
 	}
 	if gc := node.Spec.Validator.GenesisCeremony; gc != nil {
 		if gc.ChainID == "" {

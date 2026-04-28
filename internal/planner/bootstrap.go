@@ -56,6 +56,12 @@ func buildBootstrapPlan(
 			return nil, err
 		}
 	}
+	if needsValidateNodeKey(node) {
+		if err := appendTask(task.TaskTypeValidateNodeKey,
+			validateNodeKeyParams(node)); err != nil {
+			return nil, err
+		}
+	}
 
 	// Phase 1: Deploy bootstrap infrastructure
 	if err := appendTask(task.TaskTypeDeployBootstrapSvc,

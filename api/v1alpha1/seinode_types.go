@@ -256,6 +256,11 @@ const (
 	// signing-key Secret passes all validation requirements. Only set on
 	// SeiNodes with spec.validator.signingKey.
 	ConditionSigningKeyReady = "SigningKeyReady"
+
+	// ConditionNodeKeyReady indicates whether a referenced validator
+	// node-key Secret passes all validation requirements. Only set on
+	// SeiNodes with spec.validator.nodeKey.
+	ConditionNodeKeyReady = "NodeKeyReady"
 )
 
 // Reasons for the ImportPVCReady condition.
@@ -270,6 +275,13 @@ const (
 	ReasonSigningKeyValidated = "SigningKeyValidated" // validation succeeded
 	ReasonSigningKeyNotReady  = "SigningKeyNotReady"  // transient: retry
 	ReasonSigningKeyInvalid   = "SigningKeyInvalid"   // terminal: fail the plan
+)
+
+// Reasons for the NodeKeyReady condition.
+const (
+	ReasonNodeKeyValidated = "NodeKeyValidated" // validation succeeded
+	ReasonNodeKeyNotReady  = "NodeKeyNotReady"  // transient: retry
+	ReasonNodeKeyInvalid   = "NodeKeyInvalid"   // terminal: fail the plan
 )
 
 // SeiNodeStatus defines the observed state of a SeiNode.

@@ -328,6 +328,24 @@ func validateSigningKeyParams(node *seiv1alpha1.SeiNode) any {
 	}
 }
 
+func needsValidateNodeKey(node *seiv1alpha1.SeiNode) bool {
+	if node.Spec.Validator == nil || node.Spec.Validator.NodeKey == nil {
+		return false
+	}
+	return node.Spec.Validator.NodeKey.Secret != nil &&
+		node.Spec.Validator.NodeKey.Secret.SecretName != ""
+}
+
+func validateNodeKeyParams(node *seiv1alpha1.SeiNode) any {
+	if !needsValidateNodeKey(node) {
+		return nil
+	}
+	return &task.ValidateNodeKeyParams{
+		SecretName: node.Spec.Validator.NodeKey.Secret.SecretName,
+		Namespace:  node.Namespace,
+	}
+}
+
 // isGenesisCeremonyNode returns true when the node participates in a group genesis ceremony.
 func isGenesisCeremonyNode(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Validator != nil && node.Spec.Validator.GenesisCeremony != nil
@@ -458,6 +476,9 @@ func buildBasePlan(
 		// kubelet attempts the volume mount.
 		prog = append(prog, task.TaskTypeValidateSigningKey)
 	}
+	if needsValidateNodeKey(node) {
+		prog = append(prog, task.TaskTypeValidateNodeKey)
+	}
 	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
 	prog = append(prog, sidecarProg...)
 
@@ -499,6 +520,8 @@ func paramsForTaskType(
 		return &task.ObserveImageParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeValidateSigningKey:
 		return validateSigningKeyParams(node)
+	case task.TaskTypeValidateNodeKey:
+		return validateNodeKeyParams(node)
 
 	// Sidecar tasks
 	case TaskSnapshotRestore:
