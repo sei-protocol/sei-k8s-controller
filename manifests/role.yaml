@@ -29,6 +29,7 @@ rules:
   resources:
   - persistentvolumes
   - pods
+  - secrets
   verbs:
   - get
   - list

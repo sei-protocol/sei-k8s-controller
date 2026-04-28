@@ -50,6 +50,17 @@ func buildBootstrapPlan(
 		return nil, err
 	}
 
+	// Phase 0.5: Validate signing-key Secret before any StatefulSet/Job is created.
+	// Bootstrap Job pod-spec never sees the Secret (safety invariant — see
+	// task.GenerateBootstrapJob), but failing fast here saves a bootstrap-Job
+	// startup if the operator misconfigured the Secret.
+	if needsValidateSigningKey(node) {
+		if err := appendTask(task.TaskTypeValidateSigningKey,
+			validateSigningKeyParams(node)); err != nil {
+			return nil, err
+		}
+	}
+
 	// Phase 1: Deploy bootstrap infrastructure
 	if err := appendTask(task.TaskTypeDeployBootstrapSvc,
 		&task.DeployBootstrapServiceParams{ServiceName: serviceName, Namespace: node.Namespace}); err != nil {
