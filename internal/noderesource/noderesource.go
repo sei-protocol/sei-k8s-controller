@@ -467,11 +467,9 @@ const (
 	privValidatorKeyDataKey = "priv_validator_key.json"
 )
 
-// signingKeyVolumes returns the Secret-backed volume that mounts a
-// validator's priv_validator_key.json into the seid container, or nil if
-// the SeiNode has no SigningKey configured. Mounted only on the production
-// StatefulSet pod — the bootstrap Job pod-spec generator never sees this
-// (see task.GenerateBootstrapJob's safety comment).
+// signingKeyVolumes is called only from the production StatefulSet pod-spec.
+// The bootstrap Job pod-spec must never include these volumes — see the
+// safety invariant on task.GenerateBootstrapJob.
 func signingKeyVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
 	src := signingKeySecretSource(node)
 	if src == nil {
@@ -491,11 +489,11 @@ func signingKeyVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
 	}}
 }
 
-// signingKeyMounts returns the seid-container subPath mount for the
-// signing-key volume, or nil if SigningKey is unset. subPath is deliberate:
-// it pins the file at pod-start so a Secret edit cannot hot-swap the
-// consensus key under a running seid (which would risk signing two
-// different blocks at the same height).
+// signingKeyMounts uses subPath deliberately: kubelet does not auto-refresh
+// subPath mounts, so a Secret edit cannot hot-swap the consensus key under
+// a running seid — which would risk signing two different blocks at the
+// same height. Rotating the key requires a deliberate pod restart paired
+// with on-chain MsgEditValidator.
 func signingKeyMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
 	if signingKeySecretSource(node) == nil {
 		return nil
@@ -508,8 +506,6 @@ func signingKeyMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
 	}}
 }
 
-// signingKeySecretSource returns the SecretSigningKeySource if the node is
-// a validator with a Secret-variant SigningKey configured, else nil.
 func signingKeySecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretSigningKeySource {
 	if node.Spec.Validator == nil || node.Spec.Validator.SigningKey == nil {
 		return nil

@@ -215,10 +215,8 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 }
 
 func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1alpha1.SeiNode) error {
-	// Note: SigningKey-referenced Secrets (spec.validator.signingKey.secret)
-	// are managed externally (operator, ESO, CSI Secrets Store). The
-	// controller never reads, writes, or deletes these Secrets — see
-	// docs/design-seinode-validator-signing-key-lld.md §7.
+	// SigningKey-referenced Secrets are externally managed; the controller
+	// never deletes them. No cleanup needed here.
 
 	// Imported PVCs are managed externally — never delete them.
 	if node.Spec.DataVolume != nil && node.Spec.DataVolume.Import != nil &&

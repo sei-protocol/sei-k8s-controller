@@ -16,11 +16,8 @@ import (
 
 const TaskTypeValidateSigningKey = "validate-signing-key"
 
-// privValidatorKeyDataKey is the well-known data key inside the Secret that
-// holds the Tendermint validator key blob.
 const privValidatorKeyDataKey = "priv_validator_key.json"
 
-// ValidateSigningKeyParams identifies the Secret to validate.
 type ValidateSigningKeyParams struct {
 	SecretName string `json:"secretName"`
 	Namespace  string `json:"namespace"`
@@ -46,8 +43,6 @@ func deserializeValidateSigningKey(id string, params json.RawMessage, cfg Execut
 	}, nil
 }
 
-// Execute validates the referenced Secret and sets the SigningKeyReady
-// condition on the owning SeiNode based on the outcome.
 func (e *validateSigningKeyExecution) Execute(ctx context.Context) error {
 	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
@@ -70,9 +65,9 @@ func (e *validateSigningKeyExecution) Execute(ctx context.Context) error {
 	}
 }
 
-// validate returns nil when the Secret passes all checks, a Terminal error
-// for defects the user must fix (malformed key, missing required data),
-// or a plain error for transient conditions (Secret not yet applied).
+// validate returns Terminal for operator-fixable defects (malformed key,
+// missing data) and plain errors for transient conditions (Secret not yet
+// applied). The executor retries plain errors and fails the plan on Terminal.
 func (e *validateSigningKeyExecution) validate(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	name := e.params.SecretName
 	if name == "" {
@@ -108,8 +103,8 @@ func (e *validateSigningKeyExecution) Status(_ context.Context) ExecutionStatus 
 	return e.DefaultStatus()
 }
 
-// tendermintValidatorKey is the minimal shape we require — full Tendermint
-// keys carry algorithm-specific value blobs we don't need to inspect.
+// tendermintValidatorKey is the minimal shape required for the pre-flight
+// check; algorithm-specific value blobs are opaque here and validated by seid.
 type tendermintValidatorKey struct {
 	Address string `json:"address"`
 	PubKey  struct {
@@ -122,10 +117,8 @@ type tendermintValidatorKey struct {
 	} `json:"priv_key"`
 }
 
-// validateTendermintValidatorKey verifies the file is JSON with the standard
-// Tendermint priv_validator_key.json shape: top-level address, pub_key.type,
-// pub_key.value, priv_key.type, priv_key.value all non-empty. Cryptographic
-// validity is not checked — that's seid's job at startup.
+// validateTendermintValidatorKey checks shape only. Cryptographic validity
+// is seid's responsibility at startup.
 func validateTendermintValidatorKey(raw []byte) error {
 	var k tendermintValidatorKey
 	if err := json.Unmarshal(raw, &k); err != nil {

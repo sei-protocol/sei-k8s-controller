@@ -310,8 +310,6 @@ func NeedsBootstrap(node *seiv1alpha1.SeiNode) bool {
 		snap.S3 != nil && snap.S3.TargetHeight > 0
 }
 
-// needsValidateSigningKey returns true when the node has a Secret-backed
-// signing key configured, requiring pre-flight Secret validation.
 func needsValidateSigningKey(node *seiv1alpha1.SeiNode) bool {
 	if node.Spec.Validator == nil || node.Spec.Validator.SigningKey == nil {
 		return false
@@ -320,8 +318,6 @@ func needsValidateSigningKey(node *seiv1alpha1.SeiNode) bool {
 		node.Spec.Validator.SigningKey.Secret.SecretName != ""
 }
 
-// validateSigningKeyParams returns the params for the validate-signing-key
-// task, or nil if the node has no Secret-backed signing key.
 func validateSigningKeyParams(node *seiv1alpha1.SeiNode) any {
 	if !needsValidateSigningKey(node) {
 		return nil
@@ -458,9 +454,8 @@ func buildBasePlan(
 	prog := make([]string, 0, 4+len(sidecarProg))
 	prog = append(prog, task.TaskTypeEnsureDataPVC)
 	if needsValidateSigningKey(node) {
-		// Validate the referenced Secret before creating the StatefulSet —
-		// surfaces missing/malformed key material via SigningKeyReady before
-		// kubelet attempts to mount the volume.
+		// Surfaces missing/malformed key material via SigningKeyReady before
+		// kubelet attempts the volume mount.
 		prog = append(prog, task.TaskTypeValidateSigningKey)
 	}
 	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)

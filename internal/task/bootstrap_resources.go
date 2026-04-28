@@ -39,11 +39,10 @@ func BootstrapLabels(node *seiv1alpha1.SeiNode) map[string]string {
 // GenerateBootstrapJob creates the batch Job that runs seid with --halt-height
 // to populate a PVC before the StatefulSet takes over.
 //
-// SAFETY INVARIANT: this function deliberately omits ValidatorSpec.SigningKey
-// volumes. The bootstrap pod must never have access to consensus signing
-// material — see docs/design-seinode-validator-signing-key-lld.md §3. Do
-// not extract a shared volume helper across this and noderesource.buildNodePodSpec
-// without re-asserting that the bootstrap path stays signing-key-free.
+// SAFETY INVARIANT: the bootstrap pod-spec must never carry ValidatorSpec.SigningKey
+// volumes. Bootstrap pods are physically incapable of signing because no key
+// material is on their filesystem; do not extract a shared volume helper
+// with noderesource.buildNodePodSpec that would couple the two paths.
 func GenerateBootstrapJob(
 	node *seiv1alpha1.SeiNode,
 	snap *seiv1alpha1.SnapshotSource,

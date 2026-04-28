@@ -15,9 +15,9 @@ type ValidatorSpec struct {
 
 	// SigningKey declares the source of this validator's consensus signing
 	// key (priv_validator_key.json). When omitted, the node runs as a
-	// non-signing observer — suitable for pre-sync (Phase 1 of the
-	// validator-migration runbook) or for genesis-ceremony bootstraps that
-	// produce keys on-cluster. Mutually exclusive with GenesisCeremony.
+	// non-signing observer — pre-sync before cutover, or genesis-ceremony
+	// bootstraps that produce keys on-cluster. Mutually exclusive with
+	// GenesisCeremony.
 	// +optional
 	SigningKey *SigningKeySource `json:"signingKey,omitempty"`
 }
