@@ -38,6 +38,10 @@ func BootstrapLabels(node *seiv1alpha1.SeiNode) map[string]string {
 
 // GenerateBootstrapJob creates the batch Job that runs seid with --halt-height
 // to populate a PVC before the StatefulSet takes over.
+//
+// The pod-spec must never carry consensus signing material — bootstrap pods
+// are physically incapable of signing because no validator key file is on
+// their filesystem. assertNoSigningKeyOnBootstrapPod is the runtime guard.
 func GenerateBootstrapJob(
 	node *seiv1alpha1.SeiNode,
 	snap *seiv1alpha1.SnapshotSource,
@@ -48,6 +52,10 @@ func GenerateBootstrapJob(
 	}
 	labels := BootstrapLabels(node)
 	podSpec := buildBootstrapPodSpec(node, snap, platformCfg)
+
+	if err := assertNoSigningKeyOnBootstrapPod(node, &podSpec); err != nil {
+		return nil, err
+	}
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -317,4 +325,24 @@ func JobFailureReason(job *batchv1.Job) string {
 		}
 	}
 	return "bootstrap job failed"
+}
+
+// assertNoSigningKeyOnBootstrapPod fails closed if a future refactor
+// accidentally lands the validator's signing-key Secret on the bootstrap
+// pod-spec. The bootstrap path must never carry consensus signing material.
+func assertNoSigningKeyOnBootstrapPod(node *seiv1alpha1.SeiNode, spec *corev1.PodSpec) error {
+	if node.Spec.Validator == nil ||
+		node.Spec.Validator.SigningKey == nil ||
+		node.Spec.Validator.SigningKey.Secret == nil {
+		return nil
+	}
+	secretName := node.Spec.Validator.SigningKey.Secret.SecretName
+	for _, v := range spec.Volumes {
+		if v.Secret != nil && v.Secret.SecretName == secretName {
+			return fmt.Errorf("bootstrap pod-spec for %s/%s references signing-key Secret %q on volume %q; "+
+				"bootstrap pods must never carry consensus signing material",
+				node.Namespace, node.Name, secretName, v.Name)
+		}
+	}
+	return nil
 }

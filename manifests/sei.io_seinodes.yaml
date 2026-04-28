@@ -501,6 +501,40 @@ spec:
                     - index
                     - stakingAmount
                     type: object
+                  signingKey:
+                    description: |-
+                      SigningKey declares the source of this validator's consensus signing
+                      key (priv_validator_key.json). When omitted, the node runs as a
+                      non-signing observer — suitable for pre-sync (Phase 1 of the
+                      validator-migration runbook) or for genesis-ceremony bootstraps that
+                      produce keys on-cluster. Mutually exclusive with GenesisCeremony.
+                    properties:
+                      secret:
+                        description: |-
+                          Secret loads the signing key from a Kubernetes Secret in the
+                          SeiNode's namespace.
+                        properties:
+                          secretName:
+                            description: |-
+                              SecretName is the name of a Secret in the SeiNode's namespace.
+                              The controller never creates, mutates, or deletes this Secret —
+                              its lifecycle is fully external (kubectl, ESO, CSI Secrets Store, etc.).
+                              Immutable: re-pointing the consensus key on a running validator
+                              is a slashing risk; force delete-and-recreate to rotate.
+                            maxLength: 253
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: secretName is immutable
+                              rule: self == oldSelf
+                        required:
+                        - secretName
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one signing key source must be set
+                      rule: '(has(self.secret) ? 1 : 0) == 1'
                   snapshot:
                     description: |-
                       Snapshot configures how the node obtains its initial chain state.

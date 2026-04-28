@@ -50,6 +50,13 @@ func buildBootstrapPlan(
 		return nil, err
 	}
 
+	if needsValidateSigningKey(node) {
+		if err := appendTask(task.TaskTypeValidateSigningKey,
+			validateSigningKeyParams(node)); err != nil {
+			return nil, err
+		}
+	}
+
 	// Phase 1: Deploy bootstrap infrastructure
 	if err := appendTask(task.TaskTypeDeployBootstrapSvc,
 		&task.DeployBootstrapServiceParams{ServiceName: serviceName, Namespace: node.Namespace}); err != nil {

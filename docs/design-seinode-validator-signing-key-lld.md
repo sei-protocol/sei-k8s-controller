@@ -295,43 +295,34 @@ Like imported PVCs (import-volume LLD §5), Secrets referenced by `SigningKey` a
 
 ## 8. Cutover flow (operational)
 
-This LLD does not change the cutover *runbook* in `.tide/validator-migration.md:229-285` — it makes the *controller* support the runbook. The flow is:
+v1 supports a single shape: **deploy a SeiNode with `validator.signingKey` set from creation**. Mid-life patching of `SigningKey` onto a Running validator is not supported — `buildRunningPlan` only detects image drift and would not reconcile the StatefulSet pod-spec on a SigningKey change. Adding that capability is a follow-up (see §11).
 
 ```
-Phase 1: Pre-sync (no SigningKey)
-  kubectl apply <SeiNode without SigningKey>
-    → controller: buildBootstrapPlan
-    → bootstrap Job runs with halt-height
-    → production StatefulSet starts as non-signing observer
-    → seid block-syncs / state-syncs to chain tip
-    → SeiNode.status.phase = Running
-    → No priv_validator_key.json on disk (or stale-from-seid-init, ignored)
-    [old EC2 validator continues signing]
-
-Phase 2: Cutover (add SigningKey)
+Cutover (single-shot deployment):
   [stop old EC2 validator at height H; confirm process is dead]
   [scrape priv_validator_key.json from old EC2]
-  [wait for chain to advance ≥ M blocks past H — defense against re-org at cutover boundary]
+  [wait for chain to advance ≥ M blocks past H — defense against re-org at the cutover boundary]
   [create K8s Secret <name>-signing-key containing priv_validator_key.json]
-  kubectl patch seinode <name> --patch '{"spec":{"validator":{"signingKey":{"secret":{"secretName":"<name>-signing-key"}}}}}'
-    → controller observes spec change
-    → planner builds NodeUpdate plan (SigningKey added → StatefulSet diff)
-    → controller runs validate-signing-key
-       → Secret exists, key present and well-formed → SigningKeyReady=True
-    → apply-statefulset patches the StatefulSet pod template
-    → pod restarts with signing-key Secret mounted at config/priv_validator_key.json
-    → seid starts, finds no priv_validator_state.json on the PVC, creates a fresh one (height=0)
+  kubectl apply <SeiNode with validator.snapshot.bootstrapImage + validator.signingKey>
+    → controller: buildBootstrapPlan
+    → ensure-data-pvc, validate-signing-key (Secret exists, well-formed → SigningKeyReady=True)
+    → bootstrap Job runs with halt-height (no key material on bootstrap pod — safety invariant in §3)
+    → bootstrap Job exits, teardown
+    → production StatefulSet starts with signing-key Secret mounted at config/priv_validator_key.json
+    → seid starts, creates fresh priv_validator_state.json (height=0), block-syncs to chain tip
     → first signing opportunity is at chain tip ≫ H → seid signs (not a re-sign of any height the old validator signed)
 
-Phase 3: Verify
+Verify:
   Operator checks on-chain signing_info; controller reports SigningKeyReady=True
 ```
 
-The patch in Phase 2 triggers a NodeUpdate plan because the StatefulSet pod template now references new volumes — this falls out of the existing image-drift NodeUpdate machinery (CLAUDE.md "NodeUpdate plans"). Pod restart is the Phase 2 cutover event.
+### Operational tradeoff
 
-### Note on slashing protection during cutover
+The single-shot deployment trades cutover downtime (the bootstrap-Job sync window) for implementation simplicity. There is no Phase 1 pre-sync; the old EC2 validator must stop before the K8s validator is created. For arctic-1 and most pacific-1 timelines this is acceptable. Operators needing zero-downtime cutover (deploy without keys → pre-sync → patch keys in) require the drift detection deferred in §11.
 
-CometBFT auto-creates `priv_validator_state.json` on first start with zero state. The new validator's first signing opportunity is at chain tip, which is well past the old validator's last-signed height once the chain has advanced ≥ M blocks (M=20 is generous for Sei). The runbook's "wait M blocks before applying SigningKey" step is the operational protection against the narrow case where a chain re-org at the cutover boundary could produce a height-collision with the old validator. The controller does not inject `priv_validator_state.json` — see §11.
+### Slashing protection
+
+CometBFT auto-creates `priv_validator_state.json` on first start with zero state. The new validator's first signing opportunity is at chain tip, well past the old validator's last-signed height once the chain has advanced ≥ M blocks (M=20 is generous for Sei). The runbook's "wait M blocks past last-signed height before applying the SeiNode" step is the operational protection against the narrow case where a chain re-org at the cutover boundary could produce a height-collision with the old validator. The controller does not inject `priv_validator_state.json` — see §11.
 
 ### Why NodeUpdate naturally handles this
 
@@ -392,6 +383,7 @@ Out of scope for this LLD — they live in `~/workspace/platform/clusters/prod/m
 
 ## 11. What this LLD does NOT cover
 
+- **Mid-life `SigningKey` patch on a Running validator (drift detection).** v1 supports SigningKey set from SeiNode creation. Patching SigningKey onto an already-Running validator is a no-op today because `buildRunningPlan` only checks image drift. Adding this would require: (a) tracking the currently-mounted secretName in `SeiNodeStatus`, (b) extending `buildRunningPlan` to detect SigningKey drift, (c) building a re-apply plan that includes `validate-signing-key` + `apply-statefulset` + `observe-image`-equivalent rollout-watch. The plumbing already exists; the gap is just the drift trigger.
 - **Variants beyond `Secret`.** TMKMS, Horcrux, remote signer (Web3Signer / Vault / AWS-KMS-fronted), Tendermint KMS protocol over a Unix socket. Add as sibling fields under `SigningKeySource` when in-house validators need them; the union is shaped to accept them additively.
 - **Automated cutover orchestration.** The cutover in §8 is operator-driven (manual stop of EC2, manual scrape of keys, manual `kubectl apply`). Automating this end-to-end is `.tide/validator-migration.md` Decision #2 — explicitly deferred until first manual cutover succeeds.
 - **`priv_validator_state.json` injection.** This file is CometBFT's slashing-protection ledger. seid auto-creates it (height=0) on first start and owns it on the PVC thereafter; on pod restart it's read from the PVC, not from any external source. For the migration use case, transferring the old validator's state file is unnecessary because the cutover runbook already enforces a hard halt of the old validator and a wait for chain advance ≥ M blocks past `last_signed_height` before activating the new instance — at that point the new validator's first signing opportunity is far past anything the old validator signed. The file is also operational data, not secret material (height/round/step plus the most recent signature, all of which are public on-chain). If a future use case needs explicit state injection (e.g., automated chain-rollback tooling), add a separate ConfigMap-based source distinct from `SigningKey`.

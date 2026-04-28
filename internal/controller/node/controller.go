@@ -60,6 +60,7 @@ type SeiNodeReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile drives the SeiNode lifecycle. All status mutations after the
 // finalizer are accumulated in-memory and flushed in a single status patch.
@@ -214,6 +215,9 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 }
 
 func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+	// SigningKey-referenced Secrets are externally managed; the controller
+	// never deletes them. No cleanup needed here.
+
 	// Imported PVCs are managed externally — never delete them.
 	if node.Spec.DataVolume != nil && node.Spec.DataVolume.Import != nil &&
 		node.Spec.DataVolume.Import.PVCName != "" {

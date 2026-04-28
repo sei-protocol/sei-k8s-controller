@@ -77,73 +77,48 @@ If the new instance cannot reach peers immediately after cutover, it will miss b
 
 ---
 
-## Migration Strategy: Staged Cutover
+## Migration Strategy: Single-Shot Deployment
 
-The migration uses a **pre-sync + hard cutover** pattern. The new Kubernetes validator syncs to near-tip without signing keys, then at a coordinated moment the old instance is stopped and signing state is transferred to the new instance.
+The migration uses a **stop-old → deploy-new** pattern. The old EC2 validator stops, the operator scrapes its `priv_validator_key.json`, and a new K8s `SeiNode` is deployed with both a bootstrap snapshot configuration and the scraped key already mounted via Secret. The new validator starts signing once it catches up to chain tip.
 
-### Phase 1: Pre-Sync (No Signing Keys)
+`priv_validator_state.json` is not transferred — CometBFT auto-creates it on first start, and the "wait M blocks past last-signed height" step before deployment provides the slashing-protection envelope (see §Slashing protection below).
 
-Deploy a `SeiNode` with `spec.validator` and state sync (or S3 snapshot) to bootstrap and sync to near-tip. **The node does NOT have `priv_validator_key.json` — it runs as a non-signing full node in validator mode.**
+### Phase 1: Stop the Old Validator
 
-This phase can run for as long as needed. The old validator continues signing normally. There is zero risk because the new instance has no signing key.
+Stop the EC2 validator and confirm the process is dead. From this point onward, the validator is offline; downtime ends when the K8s validator catches up and begins signing.
 
-```mermaid
-graph LR
-    subgraph Old["Old EC2 Validator"]
-        A1[Signing blocks]
-        A2[Has priv_key]
-        A3[Active validator]
-    end
-    subgraph New["New K8s Validator"]
-        B1[Syncing to tip]
-        B2[NO priv_key]
-        B3[Observer only]
-    end
-```
+### Phase 2: Wait for Chain Advance
 
-**Exit criteria for Phase 1:**
-- New instance is synced to within ~10 blocks of tip
-- New instance has stable peer connections
-- New instance is healthy (RPC responding, not crash-looping)
+Wait until on-chain consensus has advanced ≥ M blocks past the old validator's last-signed height (M=20 is sufficient for Sei). This window is the slashing-protection envelope — once the chain is well past the old validator's last signed height, the K8s validator's first signing opportunity at chain tip cannot collide with anything the old validator signed, even under a re-org at the cutover boundary.
 
-### Phase 2: Hard Cutover (Coordinated)
+### Phase 3: Deploy New SeiNode
 
-This is the critical window. It must be executed as a single atomic sequence:
-
-```
-1. STOP old EC2 validator (confirm process is dead)
-2. COPY priv_validator_key.json from old → new
-3. COPY priv_validator_state.json from old → new
-4. START signing on new K8s validator (restart seid to pick up keys)
-```
+Scrape `priv_validator_key.json` from the EC2 host, create a Kubernetes Secret containing it, and apply a `SeiNode` manifest with both `validator.snapshot.bootstrapImage` (for sync) and `validator.signingKey.secret.secretName` (for signing).
 
 ```mermaid
 graph LR
     subgraph Old["Old EC2 Validator"]
         A1[STOPPED]
-        A2[priv_key removed]
     end
     subgraph New["New K8s Validator"]
-        B1[Picks up keys]
-        B2[Resumes signing]
-        B3[Active validator]
+        B1[Bootstrap Job: sync to halt-height]
+        B2[StatefulSet: mount Secret, catch up to tip]
+        B3[seid: start signing]
+        B1 --> B2 --> B3
     end
 ```
 
-**Timing:** The cutover window (step 1 → step 4) should be < 30 seconds to minimize missed blocks. This is achievable because:
-- Step 1: SSH kill + confirm (~5s)
-- Step 2-3: S3 copy or direct transfer (~5s)
-- Step 4: seid reads keys on startup, already synced to near-tip (~10-20s)
+**Downtime envelope:** the bootstrap Job's snapshot-restore + sync-to-halt-height time, plus the production StatefulSet's catch-up from halt-height to current tip. For arctic-1 testnet this is acceptable. Pacific-1 deployments may want the deferred zero-downtime variant — see §Deferred.
 
-### Phase 3: Verification
+### Phase 4: Verification
 
-After cutover:
+After signing begins:
 - Confirm new instance is signing blocks (check `signing_info` on-chain)
 - Confirm old instance is stopped and stays stopped
 - Monitor for missed blocks over next 100 blocks
 - Remove old EC2 instance from Terraform state (do NOT destroy yet — keep as cold backup)
 
-### Phase 4: Cleanup
+### Phase 5: Cleanup
 
 After 1000+ blocks with stable signing on new infrastructure:
 - Destroy old EC2 instance
@@ -214,75 +189,70 @@ When `SigningKey` is set, the StatefulSet pod spec must:
 
 The init container (`seid init`) must not overwrite these files if they already exist from the Secret mount.
 
-### 4. Pre-Sync Mode (No Signing Key)
-
-When `SigningKey` is nil, the validator runs as a non-signing observer. This is the Phase 1 state. The node syncs and peers normally but does not participate in consensus.
-
-When `SigningKey` is added (via `kubectl apply` with the updated manifest), the controller updates the StatefulSet to mount the Secret. The pod restarts and picks up the keys.
-
-**This two-step apply is the cutover mechanism:**
-1. Deploy with `signingKey: null` → syncs to tip
-2. Stop old instance, create Secret with keys, apply with `signingKey.secretRef` → pod restarts with keys
-
 ---
 
 ## Cutover Runbook (per validator)
 
 ### Prerequisites
 
-- [ ] New K8s validator SeiNode deployed and synced to within 10 blocks of tip
-- [ ] New K8s validator has stable peer connections (check sidecar logs)
-- [ ] K8s Secret for signing keys does NOT exist yet
 - [ ] Old EC2 validator is running and signing normally
 - [ ] Operator has SSH access to old EC2 instance
 - [ ] Operator has kubectl access to target cluster
+- [ ] K8s `SeiNode` manifest is prepared with `validator.snapshot.bootstrapImage`, `validator.snapshot.s3.targetHeight`, and `validator.signingKey.secret.secretName` set, but NOT yet applied
+- [ ] K8s Secret for the signing key does NOT exist yet
 
 ### Execution
 
 ```bash
-# 1. Confirm new node is synced
-kubectl exec pacific-1-validator-0 -c seid -- seid status | jq '.SyncInfo'
-# Verify: catching_up = false, latest_block_height near tip
-
-# 2. Stop old EC2 validator (THE POINT OF NO RETURN)
+# 1. Stop old EC2 validator (THE POINT OF NO RETURN — downtime begins here)
 ssh validator-0.ec2 'sudo systemctl stop seid && sudo systemctl disable seid'
-# Verify: process is dead
-ssh validator-0.ec2 'pgrep seid'  # Should return nothing
+ssh validator-0.ec2 'pgrep seid'  # must return nothing
 
-# 3. Copy signing state from old instance
+# 2. Note last-signed height for the slashing-protection wait
+LAST_HEIGHT=$(ssh validator-0.ec2 'cat /sei/data/priv_validator_state.json | jq -r .height')
+echo "Old validator last-signed height: $LAST_HEIGHT"
+
+# 3. Wait for chain to advance ≥ 20 blocks past LAST_HEIGHT
+#    (defends against re-org at the cutover boundary; chain tip queries via any RPC peer)
+while true; do
+  TIP=$(curl -s https://sei-rpc.example.com/status | jq -r .result.sync_info.latest_block_height)
+  if [ "$TIP" -ge "$((LAST_HEIGHT + 20))" ]; then break; fi
+  sleep 5
+done
+
+# 4. Scrape the consensus key from the (now-stopped) old instance
 ssh validator-0.ec2 'cat /sei/config/priv_validator_key.json' > /tmp/priv_validator_key.json
-ssh validator-0.ec2 'cat /sei/data/priv_validator_state.json' > /tmp/priv_validator_state.json
 
-# 4. Create K8s Secret with signing keys
-kubectl create secret generic pacific-1-validator-0-keys \
-  --from-file=priv_validator_key.json=/tmp/priv_validator_key.json \
-  --from-file=priv_validator_state.json=/tmp/priv_validator_state.json
+# 5. Create the K8s Secret holding ONLY priv_validator_key.json
+#    (priv_validator_state.json is NOT injected — CometBFT auto-creates it; the
+#    M-block wait above is the operational protection)
+kubectl create secret generic pacific-1-validator-0-key \
+  --from-file=priv_validator_key.json=/tmp/priv_validator_key.json
 
-# 5. Update SeiNode manifest to reference the Secret
-# (apply updated YAML with signingKey.secretRef)
+# 6. Apply the SeiNode manifest. This kicks off bootstrap-Job → sync → StatefulSet
+#    → seid signs once caught up to tip.
 kubectl apply -f pacific-1-validator-0.yaml
 
-# 6. Wait for pod restart and verify signing
+# 7. Watch for signing
 kubectl logs pacific-1-validator-0-0 -c seid -f | grep "signed proposal"
 
-# 7. Clean up local key copies
-rm /tmp/priv_validator_key.json /tmp/priv_validator_state.json
+# 8. Clean up local key copy (the on-disk file IS sensitive)
+shred -u /tmp/priv_validator_key.json
 ```
 
 ### Rollback
 
-If the new instance fails to start signing within 60 seconds:
+If the new instance fails to start signing:
 
 ```bash
 # Re-enable old EC2 validator
 ssh validator-0.ec2 'sudo systemctl enable seid && sudo systemctl start seid'
-# Delete the K8s Secret to prevent the new instance from signing
-kubectl delete secret pacific-1-validator-0-keys
-# Delete or scale down the K8s validator
+# Delete the K8s SeiNode and Secret
 kubectl delete seinode pacific-1-validator-0
+kubectl delete secret pacific-1-validator-0-key
 ```
 
-The old instance will resume from its last signed state. Since the new instance either never signed (no key mounted yet) or signed at heights after the old one stopped, there is no double-sign risk in this rollback path.
+The old instance will resume from its on-disk `priv_validator_state.json` (preserved on the EC2 host because we never modified it). The new K8s instance never signed unless step 7 confirmed signing — if it did, abort rollback and investigate, do NOT restart the EC2 instance.
 
 ---
 
@@ -290,18 +260,24 @@ The old instance will resume from its last signed state. Since the new instance 
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Phase1
-    state "Phase 1: Pre-Sync (no keys)" as Phase1
-    Phase1 --> Phase2 : Synced to tip + peers stable
+    [*] --> Stop
+    state "Stop old validator" as Stop
+    Stop --> Wait : process dead
 
-    state "Phase 2: Cutover (< 30s)" as Phase2
-    Phase2 --> Phase3 : Old stopped + keys transferred
+    state "Wait M blocks past last-signed" as Wait
+    Wait --> Apply : chain tip ≥ last-signed + 20
 
-    state "Phase 3: Verify (100 blocks)" as Phase3
-    Phase3 --> Phase4 : Stable signing confirmed
+    state "Apply SeiNode + Secret" as Apply
+    Apply --> Catchup : bootstrap → sync → StatefulSet
 
-    state "Phase 4: Cleanup (destroy)" as Phase4
-    Phase4 --> [*]
+    state "Catchup + first sign" as Catchup
+    Catchup --> Verify : seid signs first block
+
+    state "Verify (100 blocks)" as Verify
+    Verify --> Cleanup : stable signing
+
+    state "Cleanup (destroy EC2)" as Cleanup
+    Cleanup --> [*]
 ```
 
 ### Source of truth for signing state
@@ -309,10 +285,10 @@ stateDiagram-v2
 | Artifact | Location | Owner |
 |----------|----------|-------|
 | `priv_validator_key.json` | K8s Secret (sourced from AWS Secrets Manager) | Operator |
-| `priv_validator_state.json` | K8s Secret (initial), then seid updates on-disk | seid process |
+| `priv_validator_state.json` | K8s data PVC (auto-created by seid on first start, then continuously updated) | seid process |
 | Chain validator set | On-chain | Consensus |
 
-**Note on `priv_validator_state.json`:** This file is updated by seid after every signed block. The Secret provides the initial state at cutover time. After the first signed block on the new instance, the on-disk copy diverges from the Secret. This is expected — the Secret serves as the bootstrap, not the ongoing source of truth. If the pod restarts, seid reads from the on-disk copy in the PVC, not the Secret mount. The controller should mount the Secret with a lower priority than the PVC path, or copy-on-first-use.
+**Slashing protection:** The K8s validator boots with a fresh `priv_validator_state.json` (height=0). Its first signing opportunity is at chain tip — which is well past the old validator's last-signed height once the M-block wait has elapsed. This is the operational equivalent of state-file transfer; the chain advancing past the old last-signed height is what makes re-signing impossible, not the file content.
 
 ---
 
@@ -379,10 +355,11 @@ Pacific-1 has 2 validators. Migrate one at a time with the full team on-call. Ke
 
 | Feature | Rationale |
 |---------|-----------|
+| Zero-downtime cutover (pre-sync without keys, then patch SigningKey in mid-life) | Requires SigningKey-drift detection in `buildRunningPlan`; deferred per controller-LLD §11. Acceptable for arctic-1; reconsider for pacific-1 if downtime envelope is unacceptable. |
 | HSM / remote signer integration | Not in current sei-infra; add after migration is stable |
 | Sentry node topology (private validator + public sentries) | Not in current sei-infra; add as a follow-up |
 | Automated cutover orchestration | Manual cutover is safer for first migration; automate after confidence |
-| `priv_validator_state.json` auto-sync to Secret | Complex, seid owns this file at runtime; PVC is the source of truth |
+| `priv_validator_state.json` auto-sync to Secret | seid owns the file at runtime; M-block wait before deploy is the slashing-protection envelope |
 | Double-sign protection (Horcrux / TMKMS) | Valuable but not required for migration parity with sei-infra |
 | Validator registration (`create-validator` tx) | Only needed for new validators; migrated validators are already registered |
 
@@ -394,7 +371,7 @@ Pacific-1 has 2 validators. Migrate one at a time with the full team on-call. Ke
 |---|----------|-----------|---------------|
 | 1 | Use K8s Secret for key injection (not sidecar task) | Keys never transit controller/sidecar memory; standard K8s pattern; integrates with CSI/ESO | Two-way: can switch to sidecar task later |
 | 2 | Manual cutover (not automated) | Validator migration is safety-critical; human judgment for first migration reduces blast radius | Two-way: automate after first successful migration |
-| 3 | Pre-sync without keys (not with keys + disabled signing) | Eliminates any possibility of accidental signing during sync phase; no code needed to "disable" signing | Two-way: could add a signing-disabled flag later |
+| 3 | Single-shot deployment (stop → wait → deploy with key) | Avoids SigningKey-drift detection complexity; trades downtime for implementation simplicity | Two-way: zero-downtime variant slots in additively if drift detection is added |
 | 4 | Testnet-first rollout | Arctic-1 has 30 validators with lower stakes; validates tooling before pacific-1 | One-way in the sense that we learn from it |
 | 5 | One validator at a time | Limits blast radius; chain continues with N-1 validators during cutover | Two-way: could parallelize after confidence |
 
@@ -402,7 +379,7 @@ Pacific-1 has 2 validators. Migrate one at a time with the full team on-call. Ke
 
 ## Open Questions
 
-1. **`priv_validator_state.json` mount strategy:** The Secret mount provides initial state, but seid updates this file on every signed block. Should the controller copy from Secret → PVC on first use, or should the Secret be mounted read-only with seid configured to write to the PVC path? This affects pod restart behavior.
+1. **Downtime envelope for pacific-1:** Single-shot deployment requires the chain to advance ≥ 20 blocks past the old validator's last-signed height before the new K8s validator can be applied, plus bootstrap-Job sync time, plus catch-up to tip. For arctic-1 testnet this is tolerable. Pacific-1's downtime budget needs measurement on a dry-run before commit.
 
 2. **Monitoring during cutover:** What metrics/alerts should fire during the cutover window? We need to detect missed blocks in real-time, not after the fact.
 

@@ -18,6 +18,14 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if node.Spec.Validator == nil {
 		return fmt.Errorf("validator sub-spec is nil")
 	}
+	if sk := node.Spec.Validator.SigningKey; sk != nil {
+		if node.Spec.Validator.GenesisCeremony != nil {
+			return fmt.Errorf("validator: signingKey is mutually exclusive with genesisCeremony")
+		}
+		if sk.Secret == nil || sk.Secret.SecretName == "" {
+			return fmt.Errorf("validator: signingKey.secret.secretName is required")
+		}
+	}
 	if gc := node.Spec.Validator.GenesisCeremony; gc != nil {
 		if gc.ChainID == "" {
 			return fmt.Errorf("validator: genesisCeremony.chainId is required")

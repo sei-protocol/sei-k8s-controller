@@ -310,6 +310,24 @@ func NeedsBootstrap(node *seiv1alpha1.SeiNode) bool {
 		snap.S3 != nil && snap.S3.TargetHeight > 0
 }
 
+func needsValidateSigningKey(node *seiv1alpha1.SeiNode) bool {
+	if node.Spec.Validator == nil || node.Spec.Validator.SigningKey == nil {
+		return false
+	}
+	return node.Spec.Validator.SigningKey.Secret != nil &&
+		node.Spec.Validator.SigningKey.Secret.SecretName != ""
+}
+
+func validateSigningKeyParams(node *seiv1alpha1.SeiNode) any {
+	if !needsValidateSigningKey(node) {
+		return nil
+	}
+	return &task.ValidateSigningKeyParams{
+		SecretName: node.Spec.Validator.SigningKey.Secret.SecretName,
+		Namespace:  node.Namespace,
+	}
+}
+
 // isGenesisCeremonyNode returns true when the node participates in a group genesis ceremony.
 func isGenesisCeremonyNode(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Validator != nil && node.Spec.Validator.GenesisCeremony != nil
@@ -433,8 +451,14 @@ func buildBasePlan(
 	}
 
 	// Infrastructure tasks run before sidecar tasks.
-	prog := make([]string, 0, 3+len(sidecarProg))
-	prog = append(prog, task.TaskTypeEnsureDataPVC, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
+	prog := make([]string, 0, 4+len(sidecarProg))
+	prog = append(prog, task.TaskTypeEnsureDataPVC)
+	if needsValidateSigningKey(node) {
+		// Surfaces missing/malformed key material via SigningKeyReady before
+		// kubelet attempts the volume mount.
+		prog = append(prog, task.TaskTypeValidateSigningKey)
+	}
+	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
 	prog = append(prog, sidecarProg...)
 
 	planID := uuid.New().String()
@@ -473,6 +497,8 @@ func paramsForTaskType(
 		return &task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeObserveImage:
 		return &task.ObserveImageParams{NodeName: node.Name, Namespace: node.Namespace}
+	case task.TaskTypeValidateSigningKey:
+		return validateSigningKeyParams(node)
 
 	// Sidecar tasks
 	case TaskSnapshotRestore:

@@ -901,6 +901,53 @@ func TestTaskGenerateBootstrapJob_SidecarResources(t *testing.T) {
 	}
 }
 
+// TestTaskGenerateBootstrapJob_NeverHasSigningKeyVolume is the safety
+// regression guard for the load-bearing invariant in
+// docs/design-seinode-validator-signing-key-lld.md §3: the bootstrap pod
+// must never have access to consensus signing material. Even when a
+// SeiNode has SigningKey set on its spec, GenerateBootstrapJob must
+// produce a pod template with no signing-key volume.
+func TestTaskGenerateBootstrapJob_NeverHasSigningKeyVolume(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "atlantic-2",
+			Image:   "ghcr.io/sei-protocol/seid:latest",
+			Validator: &seiv1alpha1.ValidatorSpec{
+				Snapshot: &seiv1alpha1.SnapshotSource{
+					BootstrapImage: testBootstrapImageV1,
+					S3:             &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
+				},
+				SigningKey: &seiv1alpha1.SigningKeySource{
+					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+				},
+			},
+		},
+	}
+	snap := node.Spec.SnapshotSource()
+	job, err := task.GenerateBootstrapJob(node, snap, platformtest.Config())
+	if err != nil {
+		t.Fatalf("GenerateBootstrapJob error: %v", err)
+	}
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.Name == "signing-key" {
+			t.Fatalf("bootstrap Job pod-spec must NEVER include a signing-key volume "+
+				"(SAFETY INVARIANT — see LLD §3); found volume %+v", v)
+		}
+		if v.Secret != nil && v.Secret.SecretName == "validator-0-key" {
+			t.Fatalf("bootstrap Job pod-spec must NEVER mount the validator's signing Secret; "+
+				"found Secret-backed volume %q", v.Name)
+		}
+	}
+	for _, c := range job.Spec.Template.Spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == "signing-key" {
+				t.Fatalf("bootstrap Job container %q must NEVER have a signing-key mount", c.Name)
+			}
+		}
+	}
+}
+
 func TestSidecarURLForNode(t *testing.T) {
 	node := replayerNode()
 	got := planner.SidecarURLForNode(node)

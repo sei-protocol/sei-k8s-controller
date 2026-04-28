@@ -251,6 +251,11 @@ const (
 	// ConditionImportPVCReady indicates whether an imported data PVC passes all
 	// validation requirements. Only set on SeiNodes with spec.dataVolume.import.
 	ConditionImportPVCReady = "ImportPVCReady"
+
+	// ConditionSigningKeyReady indicates whether a referenced validator
+	// signing-key Secret passes all validation requirements. Only set on
+	// SeiNodes with spec.validator.signingKey.
+	ConditionSigningKeyReady = "SigningKeyReady"
 )
 
 // Reasons for the ImportPVCReady condition.
@@ -258,6 +263,13 @@ const (
 	ReasonPVCValidated = "PVCValidated" // import succeeded
 	ReasonPVCNotReady  = "PVCNotReady"  // transient: retry
 	ReasonPVCInvalid   = "PVCInvalid"   // terminal: fail the plan
+)
+
+// Reasons for the SigningKeyReady condition.
+const (
+	ReasonSigningKeyValidated = "SigningKeyValidated" // validation succeeded
+	ReasonSigningKeyNotReady  = "SigningKeyNotReady"  // transient: retry
+	ReasonSigningKeyInvalid   = "SigningKeyInvalid"   // terminal: fail the plan
 )
 
 // SeiNodeStatus defines the observed state of a SeiNode.

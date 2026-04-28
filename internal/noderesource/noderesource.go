@@ -236,6 +236,11 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 		},
 	}
 
+	signingVolumes := signingKeyVolumes(node)
+	volumes := make([]corev1.Volume, 0, 1+len(signingVolumes))
+	volumes = append(volumes, dataVolume)
+	volumes = append(volumes, signingVolumes...)
+
 	pool := p.NodepoolForMode(NodeMode(node))
 
 	spec := corev1.PodSpec{
@@ -256,7 +261,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 				},
 			},
 		},
-		Volumes: []corev1.Volume{dataVolume},
+		Volumes: volumes,
 	}
 
 	spec.ShareProcessNamespace = ptr.To(true)
@@ -395,16 +400,18 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 }
 
 func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
+	signingMounts := signingKeyMounts(node)
+	mounts := make([]corev1.VolumeMount, 0, 1+len(signingMounts))
+	mounts = append(mounts, corev1.VolumeMount{Name: "data", MountPath: dataDir})
+	mounts = append(mounts, signingMounts...)
 	container := corev1.Container{
 		Name:  "seid",
 		Image: node.Spec.Image,
 		Env: []corev1.EnvVar{
 			{Name: "TMPDIR", Value: dataDir + "/tmp"},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataDir},
-		},
-		Ports: ContainerPorts(),
+		VolumeMounts: mounts,
+		Ports:        ContainerPorts(),
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				TCPSocket: &corev1.TCPSocketAction{
@@ -453,4 +460,55 @@ func makeResources(cpu, memory string) corev1.ResourceRequirements {
 			corev1.ResourceMemory: resource.MustParse(memory),
 		},
 	}
+}
+
+const (
+	signingKeyVolumeName    = "signing-key"
+	privValidatorKeyDataKey = "priv_validator_key.json"
+)
+
+// signingKeyVolumes is called only from the production StatefulSet pod-spec.
+// The bootstrap Job pod-spec must never include these volumes — see the
+// safety invariant on task.GenerateBootstrapJob.
+func signingKeyVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
+	src := signingKeySecretSource(node)
+	if src == nil {
+		return nil
+	}
+	return []corev1.Volume{{
+		Name: signingKeyVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName:  src.SecretName,
+				DefaultMode: ptr.To[int32](0o400),
+				Items: []corev1.KeyToPath{
+					{Key: privValidatorKeyDataKey, Path: privValidatorKeyDataKey},
+				},
+			},
+		},
+	}}
+}
+
+// signingKeyMounts uses subPath deliberately: kubelet does not auto-refresh
+// subPath mounts, so a Secret edit cannot hot-swap the consensus key under
+// a running seid — which would risk signing two different blocks at the
+// same height. Rotating the key requires a deliberate pod restart paired
+// with on-chain MsgEditValidator.
+func signingKeyMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
+	if signingKeySecretSource(node) == nil {
+		return nil
+	}
+	return []corev1.VolumeMount{{
+		Name:      signingKeyVolumeName,
+		MountPath: dataDir + "/config/" + privValidatorKeyDataKey,
+		SubPath:   privValidatorKeyDataKey,
+		ReadOnly:  true,
+	}}
+}
+
+func signingKeySecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretSigningKeySource {
+	if node.Spec.Validator == nil || node.Spec.Validator.SigningKey == nil {
+		return nil
+	}
+	return node.Spec.Validator.SigningKey.Secret
 }

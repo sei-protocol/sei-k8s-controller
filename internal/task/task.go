@@ -201,10 +201,11 @@ var registry = map[string]taskDeserializer{
 	TaskTypeCollectAndSetPeers: deserializeCollectAndSetPeers,
 
 	// Controller-side infrastructure tasks
-	TaskTypeEnsureDataPVC:    deserializeEnsureDataPVC,
-	TaskTypeApplyStatefulSet: deserializeApplyStatefulSet,
-	TaskTypeApplyService:     deserializeApplyService,
-	TaskTypeObserveImage:     deserializeObserveImage,
+	TaskTypeEnsureDataPVC:      deserializeEnsureDataPVC,
+	TaskTypeApplyStatefulSet:   deserializeApplyStatefulSet,
+	TaskTypeApplyService:       deserializeApplyService,
+	TaskTypeObserveImage:       deserializeObserveImage,
+	TaskTypeValidateSigningKey: deserializeValidateSigningKey,
 
 	// Controller-side bootstrap tasks
 	TaskTypeDeployBootstrapSvc:     deserializeBootstrapService,

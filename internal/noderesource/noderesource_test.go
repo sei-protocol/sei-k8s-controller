@@ -704,3 +704,96 @@ func TestDefaultResourcesForMode_Archive(t *testing.T) {
 	g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("48")))
 	g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse("448Gi")))
 }
+
+// --- Signing key (validator) ---
+
+func newValidatorNodeWithSigningKey(name, namespace, secretName string) *seiv1alpha1.SeiNode {
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "atlantic-2",
+			Image:   "ghcr.io/sei-protocol/seid:latest",
+			Validator: &seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{
+					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: secretName},
+				},
+			},
+		},
+	}
+}
+
+func findVolume(volumes []corev1.Volume, name string) *corev1.Volume {
+	for i := range volumes {
+		if volumes[i].Name == name {
+			return &volumes[i]
+		}
+	}
+	return nil
+}
+
+func findVolumeMount(mounts []corev1.VolumeMount, name string) *corev1.VolumeMount {
+	for i := range mounts {
+		if mounts[i].Name == name {
+			return &mounts[i]
+		}
+	}
+	return nil
+}
+
+func TestSigningKey_SecretVolumePresentOnPodTemplate(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+
+	vol := findVolume(sts.Spec.Template.Spec.Volumes, signingKeyVolumeName)
+	g.Expect(vol).NotTo(BeNil(), "signing-key volume must be present on the StatefulSet pod template")
+	g.Expect(vol.Secret).NotTo(BeNil(), "signing-key volume must be Secret-backed")
+	g.Expect(vol.Secret.SecretName).To(Equal("validator-0-key"))
+	g.Expect(*vol.Secret.DefaultMode).To(Equal(int32(0o400)))
+	g.Expect(vol.Secret.Items).To(HaveLen(1))
+	g.Expect(vol.Secret.Items[0].Key).To(Equal(privValidatorKeyDataKey))
+	g.Expect(vol.Secret.Items[0].Path).To(Equal(privValidatorKeyDataKey))
+}
+
+func TestSigningKey_SeidContainerHasSubPathMount(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+	g.Expect(seid).NotTo(BeNil(), "seid main container must exist")
+
+	mount := findVolumeMount(seid.VolumeMounts, signingKeyVolumeName)
+	g.Expect(mount).NotTo(BeNil(), "seid container must have signing-key mount")
+	g.Expect(mount.MountPath).To(Equal(dataDir + "/config/" + privValidatorKeyDataKey))
+	g.Expect(mount.SubPath).To(Equal(privValidatorKeyDataKey))
+	g.Expect(mount.ReadOnly).To(BeTrue())
+}
+
+func TestSigningKey_SidecarContainerHasNoSigningMount(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+	g.Expect(sidecar).NotTo(BeNil(), "sei-sidecar init container must exist")
+
+	g.Expect(findVolumeMount(sidecar.VolumeMounts, signingKeyVolumeName)).To(BeNil(),
+		"sidecar container must NOT mount signing-key — has no business reading consensus material")
+}
+
+func TestSigningKey_Unset_NoSigningVolume(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default") // FullNode mode, no SigningKey
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+
+	g.Expect(findVolume(sts.Spec.Template.Spec.Volumes, signingKeyVolumeName)).To(BeNil(),
+		"non-signing-key SeiNode must not have a signing-key volume")
+
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+	g.Expect(seid).NotTo(BeNil())
+	g.Expect(findVolumeMount(seid.VolumeMounts, signingKeyVolumeName)).To(BeNil(),
+		"seid container must not have a signing-key mount when SigningKey is unset")
+}
