@@ -253,6 +253,33 @@ func TestValidateSigningKey_EmptySecretName_Terminal(t *testing.T) {
 	g.Expect(isTerminal(err)).To(BeTrue())
 }
 
+// --- tendermintValidatorKey serdes ---
+
+// TestTendermintValidatorKey_FixtureRoundTrip locks the on-disk shape that
+// seid emits and our pre-flight check reads. Fails loudly if a Tendermint
+// version change introduces a renamed/removed field that breaks parsing.
+func TestTendermintValidatorKey_FixtureRoundTrip(t *testing.T) {
+	g := NewWithT(t)
+
+	var parsed tendermintValidatorKey
+	g.Expect(json.Unmarshal([]byte(validKeyJSON), &parsed)).To(Succeed())
+
+	g.Expect(parsed.Address).To(Equal("1B2C3D4E5F60718293A4B5C6D7E8F90112345678"))
+	g.Expect(parsed.PubKey.Type).To(Equal("tendermint/PubKeyEd25519"))
+	g.Expect(parsed.PubKey.Value).To(Equal("qx2vCe1z4i7p+1mY3V8mO0WX1iU+Z+TQ5z6vE+VbX/Y="))
+	g.Expect(parsed.PrivKey.Type).To(Equal("tendermint/PrivKeyEd25519"))
+	g.Expect(parsed.PrivKey.Value).NotTo(BeEmpty())
+
+	// Re-marshal and confirm the round-trip preserves all five required fields.
+	out, err := json.Marshal(parsed)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(string(out)).To(ContainSubstring(`"address":"1B2C3D4E5F60718293A4B5C6D7E8F90112345678"`))
+	g.Expect(string(out)).To(ContainSubstring(`"pub_key":`))
+	g.Expect(string(out)).To(ContainSubstring(`"priv_key":`))
+	g.Expect(string(out)).To(ContainSubstring(`"type":"tendermint/PubKeyEd25519"`))
+	g.Expect(string(out)).To(ContainSubstring(`"type":"tendermint/PrivKeyEd25519"`))
+}
+
 // --- Convergence: missing-then-applied ---
 
 func TestValidateSigningKey_MissingThenApplied_Completes(t *testing.T) {

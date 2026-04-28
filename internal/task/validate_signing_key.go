@@ -18,6 +18,20 @@ const TaskTypeValidateSigningKey = "validate-signing-key"
 
 const privValidatorKeyDataKey = "priv_validator_key.json"
 
+// tendermintValidatorKey is the minimal shape required for the pre-flight
+// check; algorithm-specific value blobs are opaque here and validated by seid.
+type tendermintValidatorKey struct {
+	Address string `json:"address"`
+	PubKey  struct {
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	} `json:"pub_key"`
+	PrivKey struct {
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	} `json:"priv_key"`
+}
+
 type ValidateSigningKeyParams struct {
 	SecretName string `json:"secretName"`
 	Namespace  string `json:"namespace"`
@@ -101,20 +115,6 @@ func (e *validateSigningKeyExecution) validate(ctx context.Context, node *seiv1a
 
 func (e *validateSigningKeyExecution) Status(_ context.Context) ExecutionStatus {
 	return e.DefaultStatus()
-}
-
-// tendermintValidatorKey is the minimal shape required for the pre-flight
-// check; algorithm-specific value blobs are opaque here and validated by seid.
-type tendermintValidatorKey struct {
-	Address string `json:"address"`
-	PubKey  struct {
-		Type  string `json:"type"`
-		Value string `json:"value"`
-	} `json:"pub_key"`
-	PrivKey struct {
-		Type  string `json:"type"`
-		Value string `json:"value"`
-	} `json:"priv_key"`
 }
 
 // validateTendermintValidatorKey checks shape only. Cryptographic validity

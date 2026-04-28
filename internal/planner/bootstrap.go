@@ -50,9 +50,6 @@ func buildBootstrapPlan(
 		return nil, err
 	}
 
-	// Phase 0.5: fail fast on a misconfigured Secret before spinning up the
-	// bootstrap Job. The Secret never reaches the bootstrap pod (safety
-	// invariant on task.GenerateBootstrapJob).
 	if needsValidateSigningKey(node) {
 		if err := appendTask(task.TaskTypeValidateSigningKey,
 			validateSigningKeyParams(node)); err != nil {
