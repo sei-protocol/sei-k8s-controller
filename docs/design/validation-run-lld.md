@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft — under council review (`sei-protocol/sei-k8s-controller#139`). Council gate closed 2026-04-28. Cross-review pending; PR open against this repo for review.
+Draft — under council review (`sei-protocol/sei-k8s-controller#139`). Council gate closed 2026-04-28. Architectural refinement (sub-controller rails) added 2026-04-29. Cross-review pending; PR #143 open.
 
 This LLD is the substrate for one or more handoff implementation issues. It does **not** itself authorize implementation — it is the artifact the gate reviews.
 
@@ -12,22 +12,26 @@ Three differently-shaped validation workloads coexist on the Harbor cluster toda
 
 Critically, "validation" in this context isn't just "did the workload exit 0." Many failure modes are infrastructure-level invariants the workload can't see: validators dropped peer connections mid-run, `seid` memory grew unbounded, an alert fired during the load window. The current pattern can't express **observability-as-test-oracle** — composing workload signal with alert/PromQL signal into a single pass/fail.
 
-See `sei-protocol/sei-k8s-controller#139` for the full problem statement, OSS survey, and Phase 1 contract dependency. This LLD picks up where #139's open questions left off, integrating Round 1 specialist input and the user's directional decisions through the Round 2 gate close on 2026-04-28.
+A second axis of expansion is also already visible: workloads and sequences and chaos injection all want to operate against the same ephemeral chain substrate, but they are different actors with different lifecycles. Hard-coding "ValidationRun owns one Job" forecloses on sequencing (apply N steps in order) and chaos (inject failures during the window). The architecture below treats the chain substrate as one concern and the actors as composable, additively-extensible sub-controllers.
+
+See `sei-protocol/sei-k8s-controller#139` for the full problem statement, OSS survey, and Phase 1 contract dependency. This LLD picks up where #139's open questions left off, integrating Round 1 specialist input, the Round 2 user gate decisions through 2026-04-28, and the Round 3 architectural-refinement pass through 2026-04-29.
 
 ## Goals
 
-1. **One CRD, one reconciler that drives a validation workload to completion against an ephemeral chain** — `ValidationRun` owns the SNDs that constitute its chain, the workload `Job`, and the verdict aggregation. No external orchestrator required.
-2. **Workload contract parity with Phase 1** — `ValidationRun.spec.loadTest.workload` adopts the env-vars / exit-codes / termination-message / S3 contract from `sei-protocol/platform#235` verbatim. A Job manifest that runs under Phase 1 GHA glue runs unchanged under the controller.
-3. **Observability-as-test-oracle** — the verdict is `workload_exit_code AND ⋀rules`, where rules are typed (`alert` and `query` in v1) and evaluated continuously over the load window with a deterministic, auditable Prometheus contract. v1 ships continuous polling with stop-on-failure as a first-class behavior.
-4. **GitOps- and ad-hoc-friendly** — a `ValidationRun` is a self-contained, idempotent resource. Apply from GHA, Flux, kubectl, or a future bot; the controller takes it to a terminal phase exactly once.
+1. **One CRD, two cooperating sub-controllers in one binary that drive a validation Run to a terminal verdict against an ephemeral chain.** OrchestrationReconciler always runs; LoadGenerationReconciler is the v1 actor; SequenceReconciler and ChaosReconciler are designed-as-extension and gated off by default. The CR carries one plan per controller in `.status.plans.<controllerName>`.
+2. **Workload contract parity with Phase 1** — `ValidationRun.spec.load.workload` adopts the env-vars / exit-codes / termination-message / S3 contract from `sei-protocol/platform#235` verbatim. A Job manifest that runs under Phase 1 GHA glue runs unchanged under the controller.
+3. **Observability-as-test-oracle** — the verdict is `workload_exit_code AND ⋀rules`, where rules are typed (`alert` and `query` in v1) and evaluated continuously over the load window with a deterministic, auditable Prometheus contract. v1 ships continuous polling with stop-on-failure as a first-class behavior. Rules-only Runs (no `load`) are valid: the Run becomes passive monitoring of an existing chain.
+4. **GitOps- and ad-hoc-friendly** — a `ValidationRun` is a self-contained, idempotent resource. Apply from GHA, Flux, kubectl, or a future bot; the controllers take it to a terminal phase exactly once.
 5. **No cross-tenant blast radius** — same-namespace by construction (CEL-enforced) with one narrow exception (`alert.ruleRef` into namespaces labeled `sei.io/validation-shared-rules=true`). Tenants pre-provision SAs; controller is never an IAM controller.
+6. **v2 actor expansion is purely additive.** Adding sequence or chaos = registering a new sub-controller behind a Helm flag, plus stamping a new plan slot on `.status.plans`. No refactor of OrchestrationReconciler or LoadGenerationReconciler.
 
 ## Non-goals
 
 Adopted from #139 "Out of scope" plus the Round 1 + user refinements:
 
 - **`ValidationSuite` and `ValidationSchedule` controllers.** Kind names are reserved (CRDs install with v1) and the types are sketched here so v1 `ValidationRun` doesn't paint them into a corner. No reconcilers in v1.
-- **`SequenceTest` and `IntegrationTest` discriminator kinds.** v1 implements `LoadTest` only. The two future kinds are reserved one-paragraph each below to prove the discriminator union accommodates them.
+- **`SequenceSpec` and `ChaosSpec` reconcilers.** Field names reserved on `ValidationRunSpec` so the composable-block union does not have to change shape later. Admission-rejected at v1 until the sub-controllers register.
+- **`IntegrationTest` as a separate kind/discriminator.** The composable-blocks model collapses it: "stand up a chain + run a single container that validates" is just `load + rules` with the workload acting as a verifier. No separate kind needed.
 - **`container` rule type.** Reserved in the rule schema discussion; not in v1. Re-defer until a real heuristic ships outside Prometheus.
 - **`window-end` and `edge` rule modes.** v1 ships `continuous` semantics via the polling loop. Mode field collapses to a single behavior in v1 (no `mode` field on the wire); expansion is additive.
 - **Shadow-replayer migration.** Stays typed on `SeiNode.spec.replayer.resultExport.shadowResult`. Different shape.
@@ -38,71 +42,93 @@ Adopted from #139 "Out of scope" plus the Round 1 + user refinements:
 - **Pushgateway / Prometheus push of report metrics.** v1 pattern is `.status.report.s3Url` only — S3 is authoritative. Aggregation lives downstream.
 - **The controller minting ServiceAccounts or Pod Identity Associations.** Tenant pre-provisions. Forever.
 - **`spec.status.report.raw` (or any termination-message echo into status).** Cut at gate; consumers fetch from the S3 URL.
+- **`pods/exec` for sequence steps.** Rejected one-way door — when SequenceReconciler ships, transactions submit via short-lived `Job`s targeting RPC, not `kubectl exec` into validator pods.
 
 ## Architecture overview
 
-```
-                ┌─────────────────────────────────────────────────────────────┐
-                │              ValidationRun  (validation.sei.io/v1alpha1)    │
-                │  spec.type=LoadTest                                         │
-                │  spec.chain.{validators,fullNodes}  spec.loadTest           │
-                │  spec.rules[]  spec.results.s3  spec.timeouts               │
-                │  status.phase  status.plan  status.rules[]  status.report   │
-                └─────────────────────────────────────────────────────────────┘
-                         │ owns (OwnerReferences, blockOwnerDeletion=true)
-                         ▼
-            ┌──────────────────────────┬──────────────────────────────────┐
-            ▼                          ▼                                  ▼
-   SeiNodeDeployment            SeiNodeDeployment                 batch/v1.Job
-   {chainId}                    {chainId}-rpc                     {chainId}-{runId}
-   role=validator               role=fullNode                     workload pod(s)
-   genesis ceremony             peers→validators                  envs from contract
-            │                          │                                  │
-            └─── owns SeiNodes ────────┘                                  │
-                                                                           ▼
-                                                                  ConfigMap (rendered cfg)
-                                                                  emptyDir (RESULT_DIR)
-                                                                  S3 upload via Pod Identity
+The headline shift from earlier drafts: ValidationRun is reconciled by **two cooperating controllers in one binary**, each owning a distinct slice of the lifecycle and writing a distinct slice of `.status`. v2 actor controllers register identically alongside.
 
-                ┌─────────────────────────────────────────────────────────────┐
-                │  ValidationRun reconciler (plan-driven, internal/planner/)  │
-                │  ResolvePlan → persist plan → ExecutePlan                   │
-                │  Plan tasks (7):                                            │
-                │    ensure-chain → wait-chain-ready → resolve-endpoints →    │
-                │    render-config → apply-job → monitor-run → mark-done      │
-                └─────────────────────────────────────────────────────────────┘
-                         │                                       │
-                         ▼                                       ▼
-                Prometheus /api/v1/query                  workload Job + pod
-                (instant query per rule per interval)     status (terminal-state poll)
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        ValidationRun (CR)                                │
+│  spec.chain.deployments[]   spec.load   spec.rules[]   spec.timeouts     │
+│  status.phase   status.verdict   status.chain   status.rules[]           │
+│  status.report   status.workloadExitCode                                 │
+│  status.plans.orchestration   status.plans.loadGeneration                │
+│  status.conditions[TestRunning, TestComplete, Succeeded,                 │
+│                    TestCancelled, LoadComplete]                          │
+└──────────────────────────────────────────────────────────────────────────┘
+            ▲                                       ▲
+            │ Reconcile()                           │ Reconcile() (predicate-gated)
+            │                                       │
+┌───────────┴──────────────┐         ┌──────────────┴────────────┐
+│ OrchestrationReconciler  │  ──IPC──▶ LoadGenerationReconciler  │
+│ (always-on)              │  via    │ (Helm-opt-in; default on) │
+│ ControllerName=          │  status │ ControllerName=           │
+│   "validationrun-        │  conds  │   "validationrun-         │
+│    orchestration"        │  only   │    loadgeneration"        │
+│                          │         │                           │
+│ Owns: SND children       │         │ Owns: Job, ConfigMap      │
+│ Plan slot:               │         │ Plan slot:                │
+│   .status.plans.         │         │   .status.plans.          │
+│      orchestration       │         │      loadGeneration       │
+│ Field manager:           │         │ Field manager:            │
+│   validationrun-         │         │   validationrun-          │
+│    orchestration         │         │    loadgeneration         │
+│ Writes:                  │         │ Writes:                   │
+│  Conditions[TestRunning, │         │  Conditions[LoadComplete] │
+│             TestComplete,│         │  status.workloadExitCode  │
+│             Succeeded,   │         │  status.plans.            │
+│             TestCancelled│         │     loadGeneration        │
+│            ],            │         │                           │
+│  status.chain.*,         │         │                           │
+│  status.report.*,        │         │                           │
+│  status.rules[],         │         │                           │
+│  status.phase,           │         │                           │
+│  status.verdict,         │         │                           │
+│  status.plans.           │         │                           │
+│     orchestration        │         │                           │
+└──────────────────────────┘         └───────────────────────────┘
+            │                                       │
+            ▼                                       ▼
+   SeiNodeDeployments                     batch/v1.Job + ConfigMap
+   (one per spec.chain.deployments[i])    workload pod(s)
+   role=validator | fullNode              envs from contract
+            │                                       │
+            └─── owns SeiNodes ───┐                 │
+                                  ▼                 ▼
+                    Prometheus /api/v1/query   S3 upload via Pod Identity
+                    (per rule per interval)
 ```
 
-The validator and fullNodes SNDs are **always both materialized**. There is no validator-only topology in v1. The workload always connects to fullNodes-fleet endpoints; this is a controller invariant, not a per-Run knob.
+The two sub-controllers communicate **only through the CR's `.status`**. There is no direct in-process API between them; both watch the same CR and react to condition flips. This keeps each controller individually testable, individually opt-out-able via Helm, and gives v2 actor sub-controllers a clean integration point.
 
 **Phase machine** (mirrors Tekton/Argo, capitalized — *not* Testkube's lowercase):
 
 ```
-                           ┌──────────────┐
-              ┌────────────│   Pending    │
-              │            └──────┬───────┘
-              │                   │ planner builds plan, persists, requeue
-              │                   ▼
-              │            ┌──────────────┐
-              │            │   Running    │──── plan tasks execute ────┐
-              │            └──────┬───────┘                            │
-              │                   │                                    │
-              │       ┌───────────┼─────────────┬────────────┐         │
-              │       ▼           ▼             ▼            ▼         │
-              │  ┌─────────┐ ┌─────────┐  ┌─────────┐  ┌─────────┐     │
-              └─▶│Cancelled│ │Succeeded│  │ Failed  │  │  Error  │◀────┘
-                 └─────────┘ └─────────┘  └─────────┘  └─────────┘
+                         ┌──────────────┐
+            ┌────────────│   Pending    │
+            │            └──────┬───────┘
+            │                   │ OrchestrationReconciler builds plan,
+            │                   │ persists, sets phase=Running on persist
+            │                   ▼
+            │            ┌──────────────┐
+            │            │   Running    │── Orchestration plan tasks ──┐
+            │            └──────┬───────┘   (and, gated by             │
+            │                   │            Conditions[TestRunning],  │
+            │                   │            LoadGeneration tasks)     │
+            │       ┌───────────┼─────────────┬────────────┐           │
+            │       ▼           ▼             ▼            ▼           │
+            │  ┌─────────┐ ┌─────────┐  ┌─────────┐  ┌─────────┐       │
+            └─▶│Cancelled│ │Succeeded│  │ Failed  │  │  Error  │◀──────┘
+               └─────────┘ └─────────┘  └─────────┘  └─────────┘
 ```
 
-Terminal phases: `Succeeded` / `Failed` / `Error` / `Cancelled`. `Failed` = workload or rules said SUT misbehaved (test verdict). `Error` = controller couldn't ask (Prometheus 5xx, Job-create denial, infra failure that the workload signaled with exit code 2). The distinction matters for heartbeat alerting and for retry policy if/when added.
+Terminal phases: `Succeeded` / `Failed` / `Error` / `Cancelled`. `Failed` = workload or rules said SUT misbehaved (test verdict). `Error` = controller couldn't ask (Prometheus 5xx, Job-create denial, infra failure that the workload signaled with exit code 2). `Cancelled` = `metadata.deletionTimestamp != nil` OR `Conditions[TestCancelled]=True` (terminal-failure short-circuit). The distinction matters for heartbeat alerting and for retry policy if/when added. **Phase is owned exclusively by OrchestrationReconciler**; LoadGenerationReconciler never sets phase, only conditions.
 
 ## CRD types
 
-All three kinds live in `api/v1alpha1/` (group `validation.sei.io`, version `v1alpha1`). All three are namespaced.
+All three kinds (`ValidationRun`, `ValidationSuite`, `ValidationSchedule`) live in `api/v1alpha1/` (group `validation.sei.io`, version `v1alpha1`). All three are namespaced.
 
 ### `ValidationRun` — the load-bearing kind
 
@@ -125,69 +151,79 @@ type ValidationRun struct {
     Spec   ValidationRunSpec   `json:"spec,omitempty"`
     Status ValidationRunStatus `json:"status,omitempty"`
 }
+```
 
-// +kubebuilder:validation:XValidation:rule="self.type != 'LoadTest' || has(self.loadTest)",message="loadTest must be set when type=LoadTest"
-// +kubebuilder:validation:XValidation:rule="self.type != 'SequenceTest' || has(self.sequenceTest)",message="sequenceTest must be set when type=SequenceTest"
-// +kubebuilder:validation:XValidation:rule="self.type != 'IntegrationTest' || has(self.integrationTest)",message="integrationTest must be set when type=IntegrationTest"
-// +kubebuilder:validation:XValidation:rule="(has(self.loadTest)?1:0) + (has(self.sequenceTest)?1:0) + (has(self.integrationTest)?1:0) <= 1",message="at most one of loadTest, sequenceTest, integrationTest may be set"
+#### `ValidationRunSpec` — composable optional blocks (no discriminator)
+
+```go
+// +kubebuilder:validation:XValidation:rule="has(self.load) || has(self.sequence) || has(self.chaos) || (has(self.rules) && size(self.rules) > 0)",message="at least one of spec.load, spec.sequence, spec.chaos must be set, or spec.rules must be non-empty (rules-only Runs are valid as passive chain monitoring)"
+// +kubebuilder:validation:XValidation:rule="!has(self.sequence)",message="spec.sequence is reserved for v2; the SequenceReconciler is not registered in this controller version"
+// +kubebuilder:validation:XValidation:rule="!has(self.chaos)",message="spec.chaos is reserved for v2; the ChaosReconciler is not registered in this controller version"
 type ValidationRunSpec struct {
-    // Type discriminates which body (loadTest / sequenceTest / integrationTest) applies.
-    // Field name is `type`, not `kind`, to avoid visual collision with TypeMeta.kind.
-    // +kubebuilder:validation:Enum=LoadTest;SequenceTest;IntegrationTest
-    Type ValidationRunType `json:"type"`
-
-    // Chain is the ephemeral Sei chain this run executes against.
+    // Chain is the ephemeral Sei chain this run executes against. Required.
     Chain ChainSpec `json:"chain"`
 
-    // LoadTest is the body for type=LoadTest. Required iff Type=LoadTest.
-    // +optional
-    LoadTest *LoadTestSpec `json:"loadTest,omitempty"`
-
-    // SequenceTest — reserved future kind; not implemented in v1.
-    // Field reserved so the discriminator can expand additively.
-    // +optional
-    SequenceTest *SequenceTestSpec `json:"sequenceTest,omitempty"`
-
-    // IntegrationTest — reserved future kind; not implemented in v1.
-    // +optional
-    IntegrationTest *IntegrationTestSpec `json:"integrationTest,omitempty"`
-
-    // Rules is the set of typed validation rules evaluated alongside the
-    // workload. Pass = workload exit 0 AND all rule verdicts == Passed.
+    // Rules is the set of typed validation rules evaluated alongside any actor
+    // (load/sequence/chaos) over the run window. Pass = ⋀(rule.Passed) AND
+    // (workload exit 0 if load is set). A rules-only Run (rules but no actor)
+    // becomes passive monitoring of an existing chain.
     // +optional
     // +listType=map
     // +listMapKey=name
     // +kubebuilder:validation:MaxItems=32
     Rules []ValidationRule `json:"rules,omitempty"`
 
-    // Results configures where artifacts are uploaded. The controller
-    // does not upload — workloads upload via Pod Identity. The controller
-    // computes and stamps `status.report.s3Url` for downstream consumers.
+    // Results configures where artifacts are uploaded. Workloads upload via
+    // Pod Identity; the controller stamps `status.report.s3Url`.
     // +optional
     Results *ResultsSpec `json:"results,omitempty"`
 
     // Timeouts bound the run's wall-clock at named lifecycle points.
     // +optional
     Timeouts *RunTimeouts `json:"timeouts,omitempty"`
+
+    // ----- Composable optional actors. Multiple may coexist
+    //       (e.g., load + sequence; chaos + load).
+
+    // Load is the v1 actor — a containerized load generator owned by the
+    // LoadGenerationReconciler. Reconciler-gated; field is admissable in v1.
+    // +optional
+    Load *LoadSpec `json:"load,omitempty"`
+
+    // Sequence is reserved for v2 — an ordered list of state-change steps
+    // (governance proposal, validator-set churn, IBC bring-up). Admission
+    // rejects spec.sequence in v1 until SequenceReconciler ships.
+    // +optional
+    Sequence *SequenceSpec `json:"sequence,omitempty"`
+
+    // Chaos is reserved for v2 — a chaos-mesh-driven fault injection actor.
+    // Admission rejects spec.chaos in v1 until ChaosReconciler ships AND
+    // tenant namespace carries label sei.io/chaos-allowed=true AND controller
+    // is built with --enable-chaos-plan.
+    // +optional
+    Chaos *ChaosSpec `json:"chaos,omitempty"`
 }
-
-// +kubebuilder:validation:Enum=LoadTest;SequenceTest;IntegrationTest
-type ValidationRunType string
-
-const (
-    ValidationRunTypeLoadTest        ValidationRunType = "LoadTest"
-    ValidationRunTypeSequenceTest    ValidationRunType = "SequenceTest"
-    ValidationRunTypeIntegrationTest ValidationRunType = "IntegrationTest"
-)
 ```
 
-#### `ChainSpec` — embeds the `SeiNodeDeploymentSpec` shape
+##### Composable-blocks rationale
 
-The user's most refined call. The controller materializes **two** `SeiNodeDeployment` children (one validator, one fullNodes) with OwnerReferences to the `ValidationRun`. Cascade delete works.
+The earlier draft used a single discriminator `spec.type ∈ {LoadTest, SequenceTest, IntegrationTest}` with a body wrapper per kind. Three problems surfaced:
+
+1. **Sequence + load + chaos compose naturally.** Real test shapes mix actors: "submit a governance proposal (sequence), then drive load (load), then check rules (rules)." A discriminator forces separate Runs and an external orchestrator; composable blocks let one Run carry all three actors against one chain.
+2. **`IntegrationTest` collapses into `load + rules`.** "Stand up a chain, run one container that validates" is identical to a load actor whose Job just performs assertions instead of generating load. Splitting it into a separate kind was duplication.
+3. **The discriminator wrapper produced a one-way door.** If `spec.type` is enum-locked, adding "load + sequence in one Run" later requires either a fourth discriminator value or a schema migration. Composable blocks expand additively.
+
+CEL admission keeps the safety net: at least one actor block OR rules-only must be set. v2 reconcilers register additively. v1's two reserved blocks (`sequence`, `chaos`) are CEL-rejected at admission so users see a deterministic error rather than silently-ignored fields.
+
+#### `ChainSpec` — list of named SeiNodeDeployment configs
+
+The chain substrate is one or more `SeiNodeDeployment` children (one per entry in `chain.deployments[]`). Each entry names a deployment, declares its role (`validator` or `fullNode`), and embeds the full `SeiNodeDeploymentSpec` shape — operators write the same `template.spec.image / entrypoint / overrides / dataVolume` they already know from the existing nightly template.
 
 ```go
 // +kubebuilder:validation:XValidation:rule="self.chainId.matches('^[a-z0-9][a-z0-9-]*[a-z0-9]$')",message="chainId must be lowercase alphanumeric with hyphens"
-// +kubebuilder:validation:XValidation:rule="!has(self.fullNodes.genesis)",message="chain.fullNodes.genesis must be unset; full nodes inherit genesis from the validator ceremony"
+// +kubebuilder:validation:XValidation:rule="self.deployments.exists_one(d, d.role == 'validator')",message="exactly one deployment with role=validator is required"
+// +kubebuilder:validation:XValidation:rule="self.deployments.exists(d, d.role == 'fullNode')",message="at least one deployment with role=fullNode is required"
+// +kubebuilder:validation:XValidation:rule="self.deployments.all(d, d.role != 'fullNode' || !has(d.spec.genesis))",message="role=fullNode deployments must not declare genesis (full nodes inherit genesis from the validator ceremony)"
 type ChainSpec struct {
     // ChainID for the ephemeral chain. The controller injects this into
     // every materialized SND's genesis and into every SeiNode's chainId.
@@ -195,72 +231,90 @@ type ChainSpec struct {
     // +kubebuilder:validation:MaxLength=64
     ChainID string `json:"chainId"`
 
-    // Validators is the consensus-participating fleet. Required.
-    // The controller materializes a single SeiNodeDeployment named {chainId}
-    // in the same namespace, owned by this ValidationRun, with
-    //   - genesis.chainId = chainId           (injected if unset)
-    //   - template.spec.chainId = chainId     (injected if unset)
-    //   - template.spec.validator: {}         (injected; user values overridden
-    //                                          to enforce mode discriminator)
-    //   - template.spec.peers: [{label: {selector: {sei.io/chain-id: chainId}}}]
-    //                                          (injected if user did not specify)
+    // Deployments is the list of named SeiNodeDeployment configs that
+    // constitute this chain. Exactly one must have role=validator (the
+    // genesis-ceremony fleet); at least one must have role=fullNode (the
+    // RPC surface workloads connect to). Names are unique within the list.
     //
-    // User-set fields take precedence on every field except validator-mode
-    // discriminator and chainId — those two are controller-owned.
-    Validators sei_v1alpha1.SeiNodeDeploymentSpec `json:"validators"`
-
-    // FullNodes is the RPC/full-node fleet. REQUIRED in v1.
-    // The controller materializes a second SeiNodeDeployment named
-    // {chainId}-rpc, owned by this ValidationRun, with
-    //   - template.spec.chainId = chainId     (injected if unset)
-    //   - template.spec.fullNode: {}          (injected; mutually exclusive with validator)
-    //   - template.spec.peers: [{label: {selector: {sei.io/nodedeployment: chainId}}}]
-    //                                          (peer the validator SND, injected if unset)
-    //   - genesis is forbidden on this fleet (CEL-enforced; full nodes inherit
-    //                                          genesis from the validator ceremony)
+    // The controller materializes one SeiNodeDeployment per entry, named
+    // {chainId}-{deployments[i].name}, with OwnerReferences to the
+    // ValidationRun. Cascade-delete works.
     //
-    // The workload always connects to the fullNodes fleet's headless Services.
-    // There is no validator-fleet-endpoint mode in v1; consensus-poking workloads
-    // (a hypothetical future need) must be filed as a separate concern.
-    FullNodes sei_v1alpha1.SeiNodeDeploymentSpec `json:"fullNodes"`
+    // +listType=map
+    // +listMapKey=name
+    // +kubebuilder:validation:MinItems=2
+    // +kubebuilder:validation:MaxItems=8
+    Deployments []ChainDeployment `json:"deployments"`
 }
+
+// +kubebuilder:validation:XValidation:rule="self.role != 'validator' || !has(self.spec.template.spec.fullNode)",message="role=validator deployment must not set template.spec.fullNode"
+// +kubebuilder:validation:XValidation:rule="self.role != 'fullNode' || !has(self.spec.template.spec.validator)",message="role=fullNode deployment must not set template.spec.validator"
+type ChainDeployment struct {
+    // Name is unique within deployments[]. DNS-label. Used as the suffix
+    // on the materialized SND name and as the value of the
+    // sei.io/deployment-name label on owned objects.
+    // +kubebuilder:validation:MinLength=1
+    // +kubebuilder:validation:MaxLength=63
+    // +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+    Name string `json:"name"`
+
+    // Role discriminates the deployment's purpose for genesis-ceremony
+    // wiring and default peer-selector injection.
+    // +kubebuilder:validation:Enum=validator;fullNode
+    Role ChainDeploymentRole `json:"role"`
+
+    // Spec is the embedded SeiNodeDeploymentSpec. Controller injects:
+    //  - genesis.chainId = chainId (validator role only; if unset)
+    //  - template.spec.chainId = chainId (if unset)
+    //  - template.spec.validator: {} (validator role; if unset)
+    //  - template.spec.fullNode: {} (fullNode role; if unset)
+    //  - default peers: validators peer by sei.io/chain-id label;
+    //    fullNodes peer by sei.io/nodedeployment label pointing at
+    //    the validator-role SND. Injected when user omits peers.
+    //  - labels: sei.io/managed-by=validationrun, sei.io/run-id=<runName>,
+    //    sei.io/deployment-name=<name>, sei.io/chain-id=<chainId>
+    //
+    // User-set fields take precedence on every field except the role
+    // discriminator and chainId — those two are controller-owned.
+    Spec sei_v1alpha1.SeiNodeDeploymentSpec `json:"spec"`
+}
+
+// +kubebuilder:validation:Enum=validator;fullNode
+type ChainDeploymentRole string
+
+const (
+    ChainDeploymentRoleValidator ChainDeploymentRole = "validator"
+    ChainDeploymentRoleFullNode  ChainDeploymentRole = "fullNode"
+)
 ```
 
-CEL admission rules on `ChainSpec`:
+##### Why exactly one validator + ≥1 fullNode
 
-- `validators.template.spec.validator` may be unset (controller injects); when set, must be `{}` (controller rejects user-injected non-empty validator config because it'd contradict the genesis-ceremony controller flow). Enforced via webhook (CEL on embedded structs is weak for this).
-- `fullNodes.genesis` must be unset (full nodes inherit). CEL: `!has(self.fullNodes.genesis)`.
-- `fullNodes.template.spec.fullNode` may be unset (controller injects); when set, must be `{}`.
-- `validators.replicas >= 1`. `fullNodes.replicas >= 1` (the SND default of 1 makes this implicit).
+Three things drove the gate decision:
 
-##### Why embed instead of inline-template
+1. **The workload always wants RPC parity with users.** Validators run with mempool admission rules and consensus duty cycles that surface latency artifacts unrelated to the SUT under load. Full nodes are the realistic RPC surface. The workload always connects to fullNode-role endpoints; there is no validator-fleet-endpoint mode in v1.
+2. **One genesis ceremony per chain.** Allowing N validator deployments multiplies the genesis ceremony into a coordination problem the SND controller doesn't model. v1 codifies "exactly one validator deployment" so the existing genesis-ceremony plan applies cleanly.
+3. **List-of-deployments cleanly absorbs heterogeneity.** Some chains want a second fullNode fleet (e.g., archive-mode fullNodes for historical RPC, regular fullNodes for the workload). The list shape lets that compose without a new top-level field; both fleets are role=fullNode but differ in their embedded `Spec`.
 
-The embedded `SeiNodeDeploymentSpec` has three properties the user explicitly wants:
+This generalizes — but does not remove — the prior "two-SNDs-always-materialized" rule.
 
-1. **Field experience parity** — operators write the same `template.spec.image / entrypoint / overrides / dataVolume` shape they already know from the existing nightly template (`/Users/brandon/platform/clusters/harbor/nightly/templates/seinodedeployment.yaml`). One-shot migration: lift the YAML, drop into `chain.validators`, the controller fills in chainId/validator/peers.
-2. **Future SND features come for free** — when SND grows new fields (e.g., a new genesis override), `ValidationRun` consumes them without LLD churn.
-3. **Controller-injected fields are documented and overridable** — listing exactly what the controller touches (chainId, validator/fullNode discriminator, default peers) makes the contract auditable.
+##### What the prior `endpointPolicy` knob was
 
-##### Why both fleets are required (not just validators)
+The previous draft considered an `endpointPolicy: validators|fullNodes` field for which fleet the workload connects to. It is **dropped permanently**. With the deployments-list shape, the answer is always "the deployment(s) with `role: fullNode`." `resolve-endpoints` (Orchestration plan task) selects all fullNode-role SNDs' headless Services; if multiple fullNode-role deployments exist, the workload sees the union of their pod DNS names. Controllers don't pick "which fullNode fleet" — that's a future expansion handled by adding a `chain.deployments[i].endpointSelector` field if and when needed.
 
-Three things drove the gate decision to make `fullNodes` required:
+##### Embedded-SND trade-off (load-bearing)
 
-1. **The workload always wants RPC parity with users.** Validators run with mempool admission rules and consensus duty cycles that surface latency artifacts unrelated to the SUT under load. Full nodes are the realistic RPC surface.
-2. **Eliminating the optional path eliminates an `endpointPolicy` knob** that would otherwise be a one-way-door enum (default-flip risk, additive-only constraint). Two-fleet always = simpler RBAC discussion, simpler endpoint resolution, simpler architecture diagram.
-3. **The two existing real consumers (nightly seiload and Phase 1 qa-testing) both run the two-fleet topology already.** Codifying it is descriptive, not prescriptive.
+The embedded `SeiNodeDeploymentSpec` couples ValidationRun's CRD schema to SeiNodeDeployment's CRD schema. SND breaking changes break ValidationRun. Mitigation: same controller binary owns both; they version together. If/when validation gets its own controller binary or separate version cadence, switch to a `ChainTemplate` projection that copies fields explicitly. Document this as a re-evaluation trigger (≥1 SND breaking change forced ValidationRun's hand).
 
-##### Trade-off (load-bearing)
+#### `LoadSpec` — the v1 actor body
 
-This design **couples ValidationRun's CRD schema to SeiNodeDeployment's CRD schema**. SND breaking changes break ValidationRun. Mitigation: same controller binary owns both; they version together. If/when validation gets its own controller binary or separate version cadence, switch to a `ChainTemplate` projection that copies fields explicitly. Document this as a re-evaluation trigger (≥1 SND breaking change forced ValidationRun's hand).
-
-#### `LoadTestSpec` — the v1 discriminator body
-
-`spec.loadTest.workload` is the Phase 1 contract envelope, adopted **verbatim**.
+`spec.load.workload` is the Phase 1 contract envelope, adopted **verbatim**.
 
 ```go
-type LoadTestSpec struct {
-    // Workload is the containerized load generator. The controller materializes
-    // this as a batch/v1.Job named {chainId}-{runId-suffix} owned by the run.
+type LoadSpec struct {
+    // Workload is the containerized load generator. The
+    // LoadGenerationReconciler materializes this as a batch/v1.Job named
+    // {runName} owned by the ValidationRun.
     Workload WorkloadSpec `json:"workload"`
 
     // Duration is the run's load window. Surfaced to the workload as
@@ -284,7 +338,7 @@ type LoadTestSpec struct {
 // Reserved-env-var rejection: any user-supplied env entry whose `name` collides
 // with a controller-injected variable is rejected at admission via CEL.
 //
-// +kubebuilder:validation:XValidation:rule="!self.env.exists(e, e.name in ['CHAIN_RPC_URL','CHAIN_WS_URL','CHAIN_ID','RUN_ID','RESULT_DIR','DURATION_SECONDS','NAMESPACE','SHARD_INDEX','SHARD_COUNT'])",message="env names CHAIN_RPC_URL, CHAIN_WS_URL, CHAIN_ID, RUN_ID, RESULT_DIR, DURATION_SECONDS, NAMESPACE, SHARD_INDEX, SHARD_COUNT are reserved by the validation controller and must not be set in spec.loadTest.workload.env"
+// +kubebuilder:validation:XValidation:rule="!self.env.exists(e, e.name in ['CHAIN_RPC_URL','CHAIN_WS_URL','CHAIN_ID','RUN_ID','RESULT_DIR','DURATION_SECONDS','NAMESPACE','SHARD_INDEX','SHARD_COUNT'])",message="env names CHAIN_RPC_URL, CHAIN_WS_URL, CHAIN_ID, RUN_ID, RESULT_DIR, DURATION_SECONDS, NAMESPACE, SHARD_INDEX, SHARD_COUNT are reserved by the validation controller and must not be set in spec.load.workload.env"
 type WorkloadSpec struct {
     // Name is the workload identity used in S3 paths and metric labels
     // (e.g. "evm_transfer", "tokens"). Lowercase, hyphenless preferred.
@@ -307,8 +361,7 @@ type WorkloadSpec struct {
     // Controller-injected vars (CHAIN_RPC_URL, CHAIN_WS_URL, CHAIN_ID, RUN_ID,
     // RESULT_DIR, DURATION_SECONDS, NAMESPACE, SHARD_INDEX, SHARD_COUNT) are
     // reserved names — the CRD-level XValidation rule above hard-rejects any
-    // user attempt to set them. Authors get a deterministic admission error,
-    // not a silent override or runtime surprise.
+    // user attempt to set them.
     // +optional
     Env []corev1.EnvVar `json:"env,omitempty"`
 
@@ -322,7 +375,7 @@ type WorkloadSpec struct {
 
     // ServiceAccountName names the Pod Identity-bound SA. Defaults to
     // "{namespace}-runner". Tenant pre-provisions; controller validates
-    // existence at the Pending → Running transition.
+    // existence at the apply-job task.
     // +optional
     ServiceAccountName string `json:"serviceAccountName,omitempty"`
 
@@ -344,26 +397,24 @@ type WorkloadSpec struct {
 // File contents are arbitrary text (JSON, YAML, INI, plain).
 // +kubebuilder:validation:XValidation:rule="size(self.files) >= 1",message="config.files must have at least one entry"
 type WorkloadConfigSpec struct {
-    // Files maps filename (key in the ConfigMap, mounted basename) to body.
-    Files map[string]string `json:"files"`
-    // MountPath defaults to /etc/validation/config when empty.
+    Files     map[string]string `json:"files"`
     // +optional
-    MountPath string `json:"mountPath,omitempty"`
+    MountPath string            `json:"mountPath,omitempty"`
 }
 
 type WorkloadPodTemplate struct {
     // +optional
-    NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+    NodeSelector    map[string]string         `json:"nodeSelector,omitempty"`
     // +optional
-    Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+    Tolerations     []corev1.Toleration       `json:"tolerations,omitempty"`
     // +optional
     SecurityContext *corev1.PodSecurityContext `json:"securityContext,omitempty"`
     // +optional
-    Volumes []corev1.Volume `json:"volumes,omitempty"`
+    Volumes         []corev1.Volume           `json:"volumes,omitempty"`
     // +optional
-    VolumeMounts []corev1.VolumeMount `json:"volumeMounts,omitempty"`
+    VolumeMounts    []corev1.VolumeMount      `json:"volumeMounts,omitempty"`
     // +optional
-    Affinity *corev1.Affinity `json:"affinity,omitempty"`
+    Affinity        *corev1.Affinity          `json:"affinity,omitempty"`
 }
 ```
 
@@ -373,27 +424,55 @@ Adopted verbatim from Phase 1 (`/tmp/phase1-issue-body.md`):
 
 | Var | Value |
 |---|---|
-| `CHAIN_RPC_URL` | First resolved RPC endpoint (always fullNodes fleet). Tendermint port. |
+| `CHAIN_RPC_URL` | First resolved RPC endpoint (always fullNode-role deployment(s)). Tendermint port. |
 | `CHAIN_WS_URL`  | Same host, EVM WebSocket port (8546). |
 | `CHAIN_ID` | `spec.chain.chainId` |
 | `RUN_ID` | `metadata.name` of the ValidationRun (no UID — name is unique within ns) |
 | `RESULT_DIR` | `/var/run/validation/results` (mounted emptyDir) |
-| `DURATION_SECONDS` | `spec.loadTest.duration.Seconds()` |
+| `DURATION_SECONDS` | `spec.load.duration.Seconds()` |
 | `NAMESPACE` | `metadata.namespace` |
-| `SHARD_INDEX` | Injected per pod (0..replicas-1) via Pod-template field-ref expansion or downward API |
-| `SHARD_COUNT` | `spec.loadTest.replicas` |
+| `SHARD_INDEX` | Injected per pod (0..replicas-1) via Indexed-Job + downward-API on `JOB_COMPLETION_INDEX` |
+| `SHARD_COUNT` | `spec.load.replicas` |
 
-These names are CRD-rejected when supplied in `spec.loadTest.workload.env` — see the `XValidation` rule on `WorkloadSpec` above.
+These names are CRD-rejected when supplied in `spec.load.workload.env` — see the `XValidation` rule on `WorkloadSpec` above.
 
 ##### Exit-code semantics
 
 Adopted verbatim from Phase 1:
 
-- `0` → workload Succeeded (rules still gate the verdict)
-- `1` → workload Failed (test failure; `verdict=Failed`, `Reason=WorkloadAssertionFailed`)
-- `2` → infra-level failure (RPC unreachable, chain not ready); `verdict=Error`, `Reason=WorkloadInfraFailure`. Run terminates in `Error`, *not* `Failed`. Observability metric distinguishes; heartbeat alert ignores `Error` so blast radius is bounded.
+- `0` → workload Succeeded path (rules still gate the verdict)
+- `1` → workload Failed path (`verdict=Failed`, `Reason=WorkloadAssertionFailed`)
+- `2` → infra-level failure (`verdict=Error`, `Reason=WorkloadInfraFailure`). Run terminates in `Error`, *not* `Failed`. Heartbeat alert ignores `Error` so blast radius is bounded.
 
-#### `ValidationRule` — the alert + query schema
+#### `SequenceSpec` and `ChaosSpec` — reserved v2 placeholders
+
+```go
+// SequenceSpec is reserved for v2. Field name and outer struct shape are
+// load-bearing one-way doors; the body is intentionally empty until
+// SequenceReconciler ships. Admission rejects spec.sequence in v1.
+//
+// Sketch of v2 shape: ordered list of typed steps {applyPatch, submitTx,
+// awaitHeight, registerValidator, …}. Each step submits its work via a
+// short-lived Job targeting the chain RPC service — pods/exec is rejected
+// (see one-way doors). Reconciler is gated by predicate:
+// spec.sequence != nil AND Conditions[TestRunning]=True.
+type SequenceSpec struct {
+    // Reserved. Adding fields here is additive; renaming SequenceSpec is breaking.
+}
+
+// ChaosSpec is reserved for v2. Body intentionally empty. Admission rejects
+// spec.chaos in v1; in v2 admission additionally requires the run's namespace
+// to carry label sei.io/chaos-allowed=true AND controller built with
+// --enable-chaos-plan flag. Reconciler is gated by predicate:
+// spec.chaos != nil AND Conditions[TestRunning]=True.
+type ChaosSpec struct {
+    // Reserved. v2 sketch: list of chaos-mesh experiments (NetworkChaos,
+    // PodChaos, IOChaos) scoped to the chain's SND children, applied during
+    // the run window with cleanup at finalize.
+}
+```
+
+#### `ValidationRule` — alert + query schema
 
 ```go
 // +kubebuilder:validation:XValidation:rule="(has(self.alert)?1:0) + (has(self.query)?1:0) == 1",message="exactly one of alert or query must be set"
@@ -406,9 +485,7 @@ type ValidationRule struct {
     // +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
     Name string `json:"name"`
 
-    // Type discriminates the rule body.
-    // v1 implements: alert, query.
-    // Reserved for future expansion: container.
+    // Type discriminates the rule body. v1: alert, query.
     // +kubebuilder:validation:Enum=alert;query
     Type ValidationRuleType `json:"type"`
 
@@ -431,12 +508,7 @@ const (
 )
 
 type AlertRule struct {
-    // RuleRef points at a monitoring.coreos.com/v1.PrometheusRule.
-    // Name and Namespace are advisory (they help auditability; matching is
-    // by Alertname against the Prometheus ALERTS series). All three fields
-    // are required at v1 to lock the schema shape.
-    RuleRef AlertRuleRef `json:"ruleRef"`
-    // Timeout for the Prometheus instant query (default 30s, max 5m).
+    RuleRef AlertRuleRef     `json:"ruleRef"`
     // +optional
     // +kubebuilder:default="30s"
     Timeout *metav1.Duration `json:"timeout,omitempty"`
@@ -444,62 +516,49 @@ type AlertRule struct {
 
 // +kubebuilder:validation:XValidation:rule="self.alertname.size() > 0",message="alertname is required"
 type AlertRuleRef struct {
-    // Name of the PrometheusRule resource.
     // +kubebuilder:validation:MinLength=1
-    Name string `json:"name"`
-    // Namespace of the PrometheusRule. Same-namespace as the Run, OR a
-    // namespace labeled sei.io/validation-shared-rules=true (e.g., monitoring).
+    Name      string `json:"name"`
+    // Same-namespace as the Run, OR a namespace labeled
+    // sei.io/validation-shared-rules=true (e.g., monitoring).
     // +kubebuilder:validation:MinLength=1
     Namespace string `json:"namespace"`
-    // Alertname is the alert label that the rule fires under.
     // +kubebuilder:validation:MinLength=1
     Alertname string `json:"alertname"`
 }
 
 type QueryRule struct {
-    // PromQL is the query string. Window encoded inline (e.g. rate(...[5m])).
     // +kubebuilder:validation:MinLength=1
-    PromQL string `json:"promql"`
-    // Op is the comparator for verdict computation.
+    PromQL    string           `json:"promql"`
     // +kubebuilder:validation:Enum=">=";"<=";">";"<";"==";"!="
-    Op QueryComparator `json:"op"`
-    // Threshold is a stringified number (locked as string per OTel-expert
-    // Round 1 finding — switching numeric→string later would be a breaking
-    // CRD migration; the reverse is additive). Coerced to float64 at eval.
+    Op        QueryComparator  `json:"op"`
+    // OTel Round 1: numeric→string is breaking; string→numeric is additive.
     // +kubebuilder:validation:Pattern=`^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$`
-    Threshold string `json:"threshold"`
-    // Timeout for the Prometheus instant query.
+    Threshold string           `json:"threshold"`
     // +optional
     // +kubebuilder:default="30s"
-    Timeout *metav1.Duration `json:"timeout,omitempty"`
+    Timeout   *metav1.Duration `json:"timeout,omitempty"`
 }
 
 type RuleRunProperties struct {
-    // Interval is the polling cadence between evaluations of this rule
-    // during the run window. Default 30s. Min 5s, max 5m.
-    //
-    // The rule is evaluated at apply-job + Interval, then every Interval
-    // until the workload Job reaches a terminal state (or stop-on-failure
-    // cancels the run). A final sweep evaluates any rule whose interval
-    // is still pending at workload terminal time before the verdict is
-    // computed.
+    // Interval is the polling cadence. Default 30s. Min 5s, max 5m.
     // +optional
     // +kubebuilder:default="30s"
     // +kubebuilder:validation:Minimum=5
     // +kubebuilder:validation:Maximum=300
     Interval *metav1.Duration `json:"interval,omitempty"`
 
-    // StopOnFailure: if true, a Failed verdict on this rule short-circuits
-    // the run — the controller deletes the workload Job (cooperative cancel)
-    // and transitions to Phase=Failed. Default false (let the workload finish
-    // and aggregate all rule verdicts at the end).
+    // StopOnFailure: a Failed verdict short-circuits the run. The
+    // OrchestrationReconciler sets Conditions[TestCancelled]=True,
+    // which actor reconcilers (LoadGenerationReconciler) observe and
+    // halt cooperatively. The orchestration plan's monitor-task-completion
+    // task reads this condition and exits Failed.
     // +optional
     // +kubebuilder:default=false
     StopOnFailure bool `json:"stopOnFailure,omitempty"`
 
-    // Retry is the number of consecutive Errors tolerated before the
-    // rule is recorded as Error. Defaults to 3. Does NOT retry on Failed —
-    // verdicts of Failed are intentionally monotonic.
+    // Retry is the number of consecutive Errors tolerated before
+    // a rule matures into a permanent Error verdict. Defaults to 3.
+    // Does NOT retry on Failed (verdicts of Failed are monotonic).
     // +optional
     // +kubebuilder:default=3
     // +kubebuilder:validation:Minimum=0
@@ -508,16 +567,13 @@ type RuleRunProperties struct {
 }
 ```
 
-There is no `mode` field on `ValidationRule` in v1: there is exactly one evaluation cadence (continuous polling, with a final sweep at workload terminal). If a future use case demands `edge` (start-vs-end snapshot) or a single `window-end` instant, the field is additive — add `mode` with a default of `continuous`, store new modes only on objects that opt in.
+There is no `mode` field on `ValidationRule` in v1: there is exactly one evaluation cadence (continuous polling, with a final sweep at run terminal). `edge` and `window-end` are additive future modes.
 
 #### `ResultsSpec` and `RunTimeouts`
 
 ```go
 type ResultsSpec struct {
-    // S3 is informational only — the bucket layout is controller-baked
-    // (s3://harbor-validation-results/{namespace}/{job}/{runId}/) and locked.
-    // This struct exists to surface the resolved URL on status. v1 has no
-    // user-tunable fields; reserved for future bucket overrides.
+    // Reserved for future bucket overrides. v1 has no user-tunable fields.
     // +optional
     S3 *S3ResultsSpec `json:"s3,omitempty"`
 }
@@ -527,92 +583,115 @@ type S3ResultsSpec struct {
 }
 
 type RunTimeouts struct {
-    // ChainReady caps wait-chain-ready. Default 20m.
+    // ChainReady caps wait-chain-ready (Orchestration plan task #2). Default 20m.
     // +optional
     // +kubebuilder:default="20m"
     ChainReady *metav1.Duration `json:"chainReady,omitempty"`
 
     // RunDuration caps the workload Job's wall-clock from apply to terminal.
-    // When omitted, defaults to spec.loadTest.duration + 5m grace.
+    // When omitted and spec.load is set, defaults to spec.load.duration + 5m.
+    // For rules-only Runs (no spec.load), defaults to 1h.
     // +optional
     RunDuration *metav1.Duration `json:"runDuration,omitempty"`
 }
 ```
 
-#### `ValidationRunStatus`
+#### `ValidationRunStatus` — partitioned across plan slots and conditions
 
 ```go
 type ValidationRunStatus struct {
     // ObservedGeneration tracks the spec generation processed by the latest
-    // reconcile. Required for Tekton-style Succeeded condition semantics.
+    // reconcile. Set by OrchestrationReconciler — it is the single
+    // generation-tracking authority across both controllers.
     // +optional
     ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-    // Phase is the high-level lifecycle state. Capitalized — never lowercase.
+    // Phase is the high-level lifecycle state. Pascal-case.
+    // OWNER: OrchestrationReconciler.
     // +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Error;Cancelled
     // +optional
     Phase ValidationRunPhase `json:"phase,omitempty"`
 
     // Verdict is a denormalized human-friendly summary that mirrors a
-    // condition. Passed/Failed/Awaited/Error. Computed at terminal phase
-    // entry; remains stable thereafter.
+    // condition. Computed at terminal phase entry.
+    // OWNER: OrchestrationReconciler.
     // +optional
     // +kubebuilder:validation:Enum=Passed;Failed;Awaited;Error
     Verdict ValidationVerdict `json:"verdict,omitempty"`
 
-    // StartTime is the wall-clock time the run entered Running.
+    // StartTime / CompletionTime / Duration. OWNER: OrchestrationReconciler.
     // +optional
-    StartTime *metav1.Time `json:"startTime,omitempty"`
-
-    // CompletionTime is when the run entered a terminal phase.
+    StartTime      *metav1.Time `json:"startTime,omitempty"`
     // +optional
     CompletionTime *metav1.Time `json:"completionTime,omitempty"`
-
-    // Duration is the formatted CompletionTime - StartTime, surfaced
-    // for printcolumn convenience.
     // +optional
-    Duration string `json:"duration,omitempty"`
+    Duration       string       `json:"duration,omitempty"`
 
-    // Plan tracks the active reconciliation plan (same shape as SeiNode/SND).
-    // Nil when no plan is in progress (terminal phases or pre-plan-build).
+    // Plans carries one TaskPlan slot per registered controller. Each
+    // controller writes ONLY its own slot via its dedicated SSA field
+    // manager. There is no shared "active plan" — Orchestration and
+    // LoadGeneration progress in parallel against their own slots.
     // +optional
-    Plan *sei_v1alpha1.TaskPlan `json:"plan,omitempty"`
+    Plans ValidationRunPlans `json:"plans,omitempty"`
 
     // Chain reports the materialized SND children and resolved endpoints.
+    // OWNER: OrchestrationReconciler.
     // +optional
     Chain *ChainStatus `json:"chain,omitempty"`
 
-    // Job names the workload Job materialized for this run.
-    // +optional
-    Job *JobStatus `json:"job,omitempty"`
-
     // WorkloadExitCode is the exit code captured from the workload Job's
-    // pod once the Job reaches terminal state. Distinct from Job.Failed
-    // (which counts pod failures) — this is the actual exit-code signal.
-    // 0 = Succeeded path, 1 = Failed path, 2 = Error path. Unset until
-    // Conditions[TestComplete]=True.
+    // pod once the Job reaches terminal state. 0/1/2 per Phase 1 contract.
+    // OWNER: LoadGenerationReconciler.
+    // Unset until Conditions[LoadComplete]=True.
     // +optional
     WorkloadExitCode *int32 `json:"workloadExitCode,omitempty"`
 
     // Rules carries per-rule verdicts and supporting evidence. Updated
-    // continuously during the run by the monitor-run task.
+    // continuously by the orchestration plan's monitor-task-completion task.
+    // OWNER: OrchestrationReconciler.
     // +listType=map
     // +listMapKey=name
     // +optional
     Rules []RuleStatus `json:"rules,omitempty"`
 
-    // Report carries the resolved S3 URL. The full report (workload
-    // termination message, mochawesome HTML, JUnit XML, rules JSON)
-    // lives in S3 — `.status` carries only the URL, never the bytes.
+    // Report carries the resolved S3 URL. OWNER: OrchestrationReconciler.
     // +optional
     Report *ReportStatus `json:"report,omitempty"`
 
-    // Conditions includes the Tekton-style Succeeded condition and the
-    // monotonic TestComplete condition. See "Conditions" subsection.
+    // FailedPlan names the plan slot that caused the run to terminate in
+    // Failed/Error. v1 only ever stamps "loadGeneration" or empty (when the
+    // orchestration plan itself failed in chain bring-up). Reserved now so
+    // v2 reconcilers (sequence, chaos) can stamp "sequence"/"chaos" without
+    // schema churn. OWNER: OrchestrationReconciler.
+    // +optional
+    FailedPlan string `json:"failedPlan,omitempty"`
+
+    // Conditions includes Tekton-style Succeeded plus the run's coordination
+    // signals. See "Conditions and the single-writer table".
     // +listType=map
     // +listMapKey=type
     // +optional
     Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type ValidationRunPlans struct {
+    // Orchestration is the chain-bring-up + monitoring + finalize plan.
+    // OWNER: OrchestrationReconciler (field manager: validationrun-orchestration).
+    // +optional
+    Orchestration *sei_v1alpha1.TaskPlan `json:"orchestration,omitempty"`
+
+    // LoadGeneration is the workload-Job lifecycle plan.
+    // OWNER: LoadGenerationReconciler (field manager: validationrun-loadgeneration).
+    // Nil when spec.load is unset (rules-only Run) or when the
+    // LoadGenerationReconciler is disabled via Helm.
+    // +optional
+    LoadGeneration *sei_v1alpha1.TaskPlan `json:"loadGeneration,omitempty"`
+
+    // Reserved for v2 actor controllers. Adding fields here is additive.
+    // +optional
+    // Sequence *sei_v1alpha1.TaskPlan `json:"sequence,omitempty"`
+    // +optional
+    // Chaos    *sei_v1alpha1.TaskPlan `json:"chaos,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Error;Cancelled
@@ -631,52 +710,42 @@ const (
 type ValidationVerdict string
 
 type ChainStatus struct {
-    ValidatorsSND string   `json:"validatorsSND"`
-    FullNodesSND  string   `json:"fullNodesSND"`
-    RPCEndpoints  []string `json:"rpcEndpoints,omitempty"` // resolved at resolve-endpoints
+    // Deployments mirrors spec.chain.deployments[].name with the resolved
+    // SND child name and its current phase.
+    // +listType=map
+    // +listMapKey=name
+    Deployments  []ChainDeploymentStatus `json:"deployments"`
+    // RPCEndpoints is the union of fullNode-role deployments' resolved
+    // headless-Service pod DNS names + ports. Stamped at resolve-endpoints.
+    // +optional
+    RPCEndpoints []string `json:"rpcEndpoints,omitempty"`
 }
 
-type JobStatus struct {
-    Name        string       `json:"name"`
-    UID         string       `json:"uid,omitempty"`
-    StartTime   *metav1.Time `json:"startTime,omitempty"`
-    Completions int32        `json:"completions,omitempty"`
-    Active      int32        `json:"active,omitempty"`
-    Failed      int32        `json:"failed,omitempty"`
+type ChainDeploymentStatus struct {
+    Name    string                  `json:"name"`
+    Role    ChainDeploymentRole     `json:"role"`
+    SNDName string                  `json:"sndName"`
+    Phase   string                  `json:"phase,omitempty"` // mirror of SND.status.phase
 }
 
 // +kubebuilder:validation:XValidation:rule="(has(self.alert)?1:0) + (has(self.query)?1:0) <= 1",message="rule status carries at most one of alert or query"
 type RuleStatus struct {
-    Name    string             `json:"name"`
-    Type    ValidationRuleType `json:"type"`
-    Verdict ValidationVerdict  `json:"verdict"`
-    // Reason categorizes Error verdicts:
-    //   PrometheusRuleNotFound, NoSamples, AmbiguousResult, NaN,
-    //   PrometheusUnavailable, RBACDenied, Timeout
-    // and Failed verdicts:
-    //   ThresholdViolated (query), AlertFired (alert)
+    Name             string             `json:"name"`
+    Type             ValidationRuleType `json:"type"`
+    Verdict          ValidationVerdict  `json:"verdict"`
+    // Reason categorizes Error verdicts (PrometheusRuleNotFound, NoSamples,
+    // AmbiguousResult, NaN, PrometheusUnavailable, RBACDenied, Timeout) and
+    // Failed verdicts (ThresholdViolated, AlertFired).
     // +optional
-    Reason string `json:"reason,omitempty"`
-    // LastEvaluatedAt is the wall-clock time the most recent evaluation
-    // completed (irrespective of verdict). Required for idempotent polling
-    // across controller restarts — the monitor-run task uses this to compute
-    // the next evaluation deadline.
+    Reason           string             `json:"reason,omitempty"`
     // +optional
-    LastEvaluatedAt *metav1.Time `json:"lastEvaluatedAt,omitempty"`
-    // NextEvaluationAt is LastEvaluatedAt + RunProperties.Interval, or the
-    // run start + Interval before the first evaluation. The monitor-run task
-    // requeues at min(this) across all rules.
+    LastEvaluatedAt  *metav1.Time       `json:"lastEvaluatedAt,omitempty"`
     // +optional
-    NextEvaluationAt *metav1.Time `json:"nextEvaluationAt,omitempty"`
-    // Query carries the actualValue and threshold for query rules. Both
-    // strings — see OTel Round 1 schema-typing rationale. Reflects the
-    // most recent evaluation.
+    NextEvaluationAt *metav1.Time       `json:"nextEvaluationAt,omitempty"`
     // +optional
-    Query *QueryRuleStatus `json:"query,omitempty"`
-    // Alert carries the matched alert details for alert rules. Reflects
-    // the most recent evaluation.
+    Query            *QueryRuleStatus   `json:"query,omitempty"`
     // +optional
-    Alert *AlertRuleStatus `json:"alert,omitempty"`
+    Alert            *AlertRuleStatus   `json:"alert,omitempty"`
 }
 
 type QueryRuleStatus struct {
@@ -686,30 +755,46 @@ type QueryRuleStatus struct {
 }
 
 type AlertRuleStatus struct {
-    FiredCount  int32        `json:"firedCount"`            // count of ALERTS samples > 0 in window
+    FiredCount  int32        `json:"firedCount"`
     LastFiredAt *metav1.Time `json:"lastFiredAt,omitempty"`
 }
 
 type ReportStatus struct {
-    // S3URL is s3://harbor-validation-results/{namespace}/{job}/{runId}/
-    // (controller-stamped at terminal phase entry). The URL is programmatically
-    // derivable from the bucket layout convention; consumers fetch artifacts
-    // (termination-message.json, report.html, report.junit.xml, rules/*.json)
-    // directly from S3. The controller does not echo the workload's
-    // termination-message bytes into status.
+    // S3URL = s3://harbor-validation-results/{namespace}/{job}/{runId}/
+    // OWNER: OrchestrationReconciler. Stamped at finalize.
     // +optional
     S3URL string `json:"s3Url,omitempty"`
 }
 ```
 
-##### Conditions
+##### Conditions and the single-writer table
 
-Two condition types live on `.status.conditions`:
+Each condition has exactly one writing controller. SSA field-manager isolation enforces this — `validationrun-orchestration` and `validationrun-loadgeneration` never touch each other's owned condition keys. The orchestrator's status patch lists only the conditions it owns; the loadgenerator's patch lists only `LoadComplete`. controller-runtime + Kubernetes server-side apply preserves both sets correctly because they are partitioned by `type`.
 
-**`Succeeded`** — the Tekton-style "is this run done and how" signal:
+| Condition / status field | Owner controller | Field manager | Purpose |
+|---|---|---|---|
+| `Conditions[TestRunning]` | OrchestrationReconciler | `validationrun-orchestration` | Set True at the `mark-test-running` task; gates LoadGenerationReconciler's predicate |
+| `Conditions[TestComplete]` | OrchestrationReconciler | `validationrun-orchestration` | Set True at finalize; monotonic |
+| `Conditions[Succeeded]` | OrchestrationReconciler | `validationrun-orchestration` | Tekton-style; set at finalize |
+| `Conditions[TestCancelled]` | OrchestrationReconciler | `validationrun-orchestration` | Set True on stop-on-failure rule trip; observed by actor reconcilers |
+| `Conditions[LoadComplete]` | LoadGenerationReconciler | `validationrun-loadgeneration` | Set True when wait-job-terminal captures exit code |
+| `status.chain.*` | OrchestrationReconciler | `validationrun-orchestration` | |
+| `status.report.*` | OrchestrationReconciler | `validationrun-orchestration` | |
+| `status.rules[]` | OrchestrationReconciler | `validationrun-orchestration` | |
+| `status.phase` / `.verdict` / `.startTime` / `.completionTime` / `.duration` | OrchestrationReconciler | `validationrun-orchestration` | |
+| `status.failedPlan` | OrchestrationReconciler | `validationrun-orchestration` | |
+| `status.workloadExitCode` | LoadGenerationReconciler | `validationrun-loadgeneration` | Stamped at wait-job-terminal |
+| `status.plans.orchestration` | OrchestrationReconciler | `validationrun-orchestration` | |
+| `status.plans.loadGeneration` | LoadGenerationReconciler | `validationrun-loadgeneration` | |
 
-| status | reason | meaning |
-|---|---|---|
+`Succeeded` matches Tekton TaskRun/PipelineRun semantics — `kubectl wait --for=condition=Succeeded validationrun/X` is the contract.
+
+`TestRunning` is the gate the LoadGenerationReconciler watches: the controller's predicate fires only when this condition transitions to True. It is set by the orchestration plan's `mark-test-running` task after chain readiness and endpoint resolution succeed. Before that point the LoadGenerationReconciler short-circuits (no plan, no work).
+
+`TestCancelled` is the cross-controller stop signal: when monitor-task-completion observes a stop-on-failure rule trip, it sets this condition; LoadGenerationReconciler observes it on its next reconcile and halts (stops submitting tasks; in-flight work proceeds; chain teardown via cascade-delete is the rollback).
+
+| Condition `Succeeded` | status | reason | meaning |
+|---|---|---|---|
 | `Unknown` | `Pending` / `Running` | Not yet terminal |
 | `True` | `RunSucceeded` | Phase=Succeeded |
 | `False` | `WorkloadFailed` | Workload exit 1 |
@@ -719,33 +804,33 @@ Two condition types live on `.status.conditions`:
 | `False` | `ChainNotReady` | wait-chain-ready timed out |
 | `False` | `Cancelled` | Phase=Cancelled |
 
-**`TestComplete`** — monotonic "the workload Job has reached terminal state and we have its exit code." Set to `True` exactly once during a Run's lifetime; never reverts. Distinct from `Succeeded` because `TestComplete=True` does not imply pass/fail — it's the Job-side advance signal that lets `monitor-run` decide whether to stop polling rules.
+| Condition `TestComplete` | status | reason | meaning |
+|---|---|---|---|
+| `Unknown` | `Pending` / `Running` | Run not yet terminal |
+| `True` | `RunFinalized` | Orchestration plan reached finalize task; phase + verdict + S3 URL set |
 
-| status | reason | meaning |
-|---|---|---|
+| Condition `TestRunning` | status | reason | meaning |
+|---|---|---|---|
+| `Unknown` | `Pending` | Chain not yet ready |
+| `True` | `ChainReady` | Endpoints resolved; actor reconcilers may proceed |
+| `False` | `Cancelled` | Set False when the run terminates (closes the gate behind us) |
+
+| Condition `LoadComplete` | status | reason | meaning |
+|---|---|---|---|
 | `Unknown` | `Pending` / `Running` | Workload not yet terminal |
 | `True` | `JobTerminated` | Job reached Complete or Failed; `status.workloadExitCode` populated |
 | `True` | `JobTimedOut` | `spec.timeouts.runDuration` exceeded; controller cancelled the Job; exit code synthesized as 2 |
 
-`Succeeded` matches Tekton TaskRun/PipelineRun semantics ([Tekton TaskRun docs](https://github.com/tektoncd/pipeline/blob/main/docs/taskruns.md)) so existing tooling that watches Succeeded works unchanged. `kubectl wait --for=condition=Succeeded validationrun/X` is the contract.
+| Condition `TestCancelled` | status | reason | meaning |
+|---|---|---|---|
+| `Unknown` | `Pending` / `Running` | Not signalled |
+| `True` | `RuleStopOnFailure:{ruleName}` | Stop-on-failure tripped; actor reconcilers halt |
 
-`TestComplete` exists because `monitor-run` collapses Job-watching and rule-polling into one async loop and needs a durable "Job-side is done" flag that survives controller restarts. It also gives external consumers (e.g., a UI) a way to render "workload finished, rules still aggregating" without reading the plan structure.
+### Future kinds (one paragraph each, NOT detailed)
 
-### Future discriminator kinds (one paragraph each, NOT detailed)
+#### `ValidationSuite` — designed but NOT implemented in v1
 
-These are reserved on the discriminator union so v1's shape doesn't paint future expansion into a corner. The corresponding spec sub-structs are present in the type but **empty placeholder structs** at v1 — controller rejects `type=SequenceTest` and `type=IntegrationTest` at admission until their reconcilers ship.
-
-#### `SequenceTest` (future)
-
-A sequence of state changes applied to an ephemeral chain. The body holds an ordered list of "steps," each a typed action: apply a SeiNodeDeployment template patch (rolling validator update), submit a tx, register a validator, wait on a height, assert a query/alert. The driver is the controller; the steps share the same `chain` substrate as `LoadTest`. Fits cleanly because the chain owner is `ValidationRun`, not the kind body — the kind body just describes "what to do against the chain." Use case: validate Cosmos-SDK upgrade handlers (apply, halt height, switch image, resume), validator-set churn, IBC connection bring-up.
-
-#### `IntegrationTest` (future)
-
-Provision a chain (optionally bootstrap state from another chain via `chain.validators.genesis.fork` — already a real SND feature), then run a single container that performs end-to-end operations. Verdict is the container's exit code; rules are still optional and AND'd. Pair-of-pods cases (e.g., spin up two relayer containers and exercise IBC between two ephemeral chains) are *not* in this kind — that's `ValidationSuite`'s job. The kind exists as the cleanest expression of "stand up a chain, run one container, that container is the test."
-
-### `ValidationSuite` — designed but NOT implemented in v1
-
-Designed at field-level so `ValidationRun`'s shape doesn't lock out the suite parent. CRD ships with v1; no controller implements it. Attempting to create one returns an admission-time error from the controller webhook (`ValidationSuite reconciler not registered in this controller version`).
+Designed at field-level so `ValidationRun`'s shape doesn't lock out the suite parent. CRD ships with v1; no controller implements it. Attempting to create one returns an admission-time error (`ValidationSuite reconciler not registered in this controller version`).
 
 ```go
 // +kubebuilder:object:root=true
@@ -754,45 +839,34 @@ Designed at field-level so `ValidationRun`'s shape doesn't lock out the suite pa
 type ValidationSuite struct {
     metav1.TypeMeta   `json:",inline"`
     metav1.ObjectMeta `json:"metadata,omitempty"`
-
     Spec   ValidationSuiteSpec   `json:"spec,omitempty"`
     Status ValidationSuiteStatus `json:"status,omitempty"`
 }
 
 type ValidationSuiteSpec struct {
-    // Runs is an ordered list of inline ValidationRun specs. Each child
-    // run is materialized as a ValidationRun resource owned by the suite
-    // (OwnerReferences, blockOwnerDeletion).
     // +listType=map
     // +listMapKey=name
     // +kubebuilder:validation:MinItems=1
     Runs []SuiteRunSpec `json:"runs"`
-
-    // Concurrency controls how children are launched.
     // +optional
     // +kubebuilder:default=Sequential
     // +kubebuilder:validation:Enum=Sequential;Parallel
     Concurrency SuiteConcurrency `json:"concurrency,omitempty"`
-
-    // StopOnFailure (Sequential only) halts the suite at the first child
-    // that terminates Failed or Error. Default true (fail fast for CI).
     // +optional
     // +kubebuilder:default=true
     StopOnFailure bool `json:"stopOnFailure,omitempty"`
 }
 
 type SuiteRunSpec struct {
-    // Name is the suite-local identity used to compose the child Run name.
     // +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-    Name string `json:"name"`
-    // Spec is the inline ValidationRun spec for this child.
+    Name string            `json:"name"`
     Spec ValidationRunSpec `json:"spec"`
 }
 ```
 
 No DAG. Users wanting a DAG wrap suites in Argo (Litmus's "we outsource multi-experiment to Argo" lesson — [Litmus probes](https://docs.litmuschaos.io/docs/concepts/probes)).
 
-### `ValidationSchedule` — designed but NOT implemented in v1
+#### `ValidationSchedule` — designed but NOT implemented in v1
 
 Modeled on Argo `CronWorkflow` ([Argo CronWorkflow](https://argo-workflows.readthedocs.io/en/latest/cron-workflows/)) plus Chaos Mesh's annotation-pause refinement.
 
@@ -808,190 +882,230 @@ type ValidationSchedule struct {
 }
 
 type ValidationScheduleSpec struct {
-    // Schedules are one or more cron expressions in the IANA timezone.
-    // Multi-cron permits "weekday morning" + "weekend afternoon" without
-    // composing a single intersection.
     // +kubebuilder:validation:MinItems=1
     Schedules []string `json:"schedules"`
-
-    // Timezone is an IANA tz name (e.g., "America/New_York").
     // +optional
     // +kubebuilder:default=UTC
     Timezone string `json:"timezone,omitempty"`
-
-    // RunTemplate is the inline ValidationRun spec stamped per firing.
     RunTemplate ValidationRunSpec `json:"runTemplate"`
-
-    // ConcurrencyPolicy: Allow | Replace | Forbid.
     // +optional
     // +kubebuilder:default=Forbid
     // +kubebuilder:validation:Enum=Allow;Replace;Forbid
     ConcurrencyPolicy SchedConcurrency `json:"concurrencyPolicy,omitempty"`
-
-    // SuccessfulRunsHistoryLimit / FailedRunsHistoryLimit cap retained
-    // child runs (default 3 / 1).
     // +optional
     SuccessfulRunsHistoryLimit *int32 `json:"successfulRunsHistoryLimit,omitempty"`
     // +optional
     FailedRunsHistoryLimit *int32 `json:"failedRunsHistoryLimit,omitempty"`
-
-    // StartingDeadlineSeconds — if a firing is missed by more than this,
-    // skip rather than backfill. Default 60.
     // +optional
     // +kubebuilder:default=60
     StartingDeadlineSeconds *int64 `json:"startingDeadlineSeconds,omitempty"`
-
-    // Pause via annotation (validation.sei.io/paused: "true") rather than
-    // a spec field, so GitOps doesn't fight on/off toggles.
-    // (No spec.suspend; field deliberately absent — Chaos Mesh pattern.)
+    // Pause via annotation (validation.sei.io/paused: "true").
 }
 ```
 
 ## Lifecycle and plan tasks
 
-The reconciler integrates with the existing `internal/planner/` plan-driven architecture (see `/Users/brandon/sei-k8s-controller/internal/planner/doc.go`). A new builder lives at `internal/planner/validationrun.go` and produces the plan; a new resolver `ValidationRunResolver` lives in the controller package and follows the same `ResolvePlan → persist → ExecutePlan` shape as `NodeResolver` and `ForGroup`.
+The two sub-controllers each integrate with `internal/planner/` (see `/Users/brandon/sei-k8s-controller/internal/planner/doc.go`) but produce **independent plans** that progress in parallel. There is no barrier task; the LoadGenerationReconciler is gated **at event-delivery time** by a controller-runtime predicate.
 
-**Plan-driven invariants inherited from the existing controllers:**
+### OrchestrationReconciler — always-on
 
-- Plan persisted before any task executes (atomic creation).
-- Single-patch model: tasks mutate owned resources; executor mutates plan/phase in-memory; reconciler flushes once.
+**Purpose:** chain bring-up, endpoint resolution, gate-flip, monitoring, finalize. Owns every status field except `status.workloadExitCode`, `status.plans.loadGeneration`, and `Conditions[LoadComplete]`.
+
+**Builder location:** `internal/planner/validationrun_orchestration.go`. Resolver in the controller package follows the same `ResolvePlan → persist → ExecutePlan` shape as `NodeResolver` and `ForGroup`.
+
+**Plan tasks (ordered, sequential — 6 tasks):**
+
+```
+1. ensure-chain               (controller-side; SSA all SND children)
+2. wait-chain-ready           (controller-side, async; SND.status.phase=Ready)
+3. resolve-endpoints          (controller-side; LIST fullNode-role headless Services)
+4. mark-test-running          (controller-side; sets Conditions[TestRunning]=True;
+                               this is the gate-flip that lets actor reconcilers
+                               start their plans)
+5. monitor-task-completion    (controller-side, async; reads Conditions[LoadComplete],
+                               status.rules[], status.workloadExitCode; polls rules
+                               per RunProperties.Interval; computes stop-on-failure)
+6. finalize                   (controller-side; computes phase + verdict + report.s3Url;
+                               sets Conditions[TestComplete]=True, Conditions[Succeeded];
+                               flips Conditions[TestRunning]=False)
+
+Plan TargetPhase: ignored (see "TargetPhase decoupling" below)
+Plan FailedPhase: ignored
+```
+
+The 6-task collapse from the prior 7-task design pulls the workload-side concerns (`render-config` and `apply-job`) out of the orchestration plan and into LoadGenerationReconciler's plan. The orchestration plan no longer touches the Job at all; it observes condition state and aggregates verdicts.
+
+### LoadGenerationReconciler — Helm-opt-in (default on in v1)
+
+**Purpose:** materialize the workload Job and ConfigMap, watch to terminal, capture the exit code, set `Conditions[LoadComplete]=True`. That is the entire surface area.
+
+**Builder location:** `internal/planner/validationrun_loadgen.go`.
+
+**Plan tasks (ordered, sequential — 3 tasks):**
+
+```
+1. render-config            (controller-side; SSA ConfigMap with substitutions
+                             ${chainId}, ${rpcEndpoints}, ${runId}, ${namespace};
+                             skipped when spec.load.workload.config is unset)
+2. apply-job                (controller-side; SSA batch/v1.Job with Indexed
+                             completion mode, reserved-env injection, OwnerRef→Run)
+3. wait-job-terminal        (controller-side, async; watches Job to terminal,
+                             captures pod exit code, stamps status.workloadExitCode,
+                             sets Conditions[LoadComplete]=True)
+```
+
+**Predicate-gated reconciliation.** The reconciler's `SetupWithManager` registers with a `WithEventFilter` that fires only when both:
+
+- `spec.load != nil`, AND
+- `Conditions[TestRunning]` exists with `Status=True`
+
+```go
+// internal/controller/validationrun/loadgen_predicate.go
+var loadActorPredicate = predicate.Funcs{
+    CreateFunc: func(e event.CreateEvent) bool {
+        return shouldReconcileLoadGen(e.Object.(*validationv1alpha1.ValidationRun))
+    },
+    UpdateFunc: func(e event.UpdateEvent) bool {
+        return shouldReconcileLoadGen(e.ObjectNew.(*validationv1alpha1.ValidationRun))
+    },
+    DeleteFunc: func(e event.DeleteEvent) bool { return true },
+    GenericFunc: func(_ event.GenericEvent) bool { return false },
+}
+
+func shouldReconcileLoadGen(vr *validationv1alpha1.ValidationRun) bool {
+    if vr.Spec.Load == nil {
+        return false
+    }
+    cond := meta.FindStatusCondition(vr.Status.Conditions, "TestRunning")
+    return cond != nil && cond.Status == metav1.ConditionTrue
+}
+```
+
+Before `Conditions[TestRunning]=True`, the reconciler never sees an event for the CR (controller-runtime drops the event before invoking Reconcile). This is the controller-runtime-native "wait for upstream readiness" pattern — no barrier task, no polling, no synchronization primitive.
+
+`LoadGenerationReconciler.ResolvePlan` returns `(nil, nil)` if `spec.load == nil` even after the predicate fires (defense-in-depth) so re-running with `enabled=true` Helm but `spec.load=nil` Run is a no-op rather than an error.
+
+### Plan ownership and the executor
+
+Each controller passes its own `Named()` to the `controller-runtime` builder (so leader-election locks are independent and metric labels are partitioned):
+
+```go
+// OrchestrationReconciler
+ctrl.NewControllerManagedBy(mgr).
+    Named("validationrun-orchestration").
+    For(&validationv1alpha1.ValidationRun{}).
+    Owns(&seiv1alpha1.SeiNodeDeployment{}).
+    Complete(r)
+
+// LoadGenerationReconciler
+ctrl.NewControllerManagedBy(mgr).
+    Named("validationrun-loadgeneration").
+    For(&validationv1alpha1.ValidationRun{}, builder.WithPredicates(loadActorPredicate)).
+    Owns(&batchv1.Job{}).
+    Owns(&corev1.ConfigMap{}).
+    Complete(r)
+```
+
+The `planner.Executor[*ValidationRun]` is parameterized by the plan slot: each controller passes its own `slotAccessor` to the executor (a function `func(*ValidationRun) **TaskPlan` returning a pointer-to-pointer for the right slot, e.g., `&vr.Status.Plans.Orchestration`). The executor's existing single-patch model writes only the slot it was given. SSA's field-manager isolation handles the rest.
+
+### Plan-driven invariants inherited from the existing controllers
+
+- Each plan persisted before any task executes (atomic creation).
+- Single-patch model per controller per reconcile: tasks mutate owned resources; executor mutates plan/phase in-memory; reconciler flushes once via SSA with its dedicated field manager.
 - Planner owns conditions; executor never sets conditions.
-- Terminal plan observed by next reconcile, which sets the terminal phase.
+- Terminal plan observed by next reconcile, which (for OrchestrationReconciler only) sets the terminal phase. LoadGenerationReconciler does NOT set phase on terminal — it only sets `Conditions[LoadComplete]=True`; the orchestrator's monitor-task-completion task observes that condition and continues.
 
-### Plan structure
+### TargetPhase decoupling for v1
 
-There is exactly one plan kind for `ValidationRun` v1: the **run plan**, built when `phase ∈ {Pending, ""}` and torn down when terminal. No update plan (the spec is immutable on a Run; mutations are rejected at admission via CEL `self == oldSelf` on the substantive fields).
+`TaskPlan.TargetPhase` is typed `seiv1alpha1.SeiNodePhase` — its enum values (`Pending|Initializing|Running|Failed|Terminating`) do not align with `ValidationRunPhase` (`Pending|Running|Succeeded|Failed|Error|Cancelled`). For v1:
 
-```
-Phase: Pending
-  └─▶ planner builds plan, persists, sets phase=Running on persist
+- Both ValidationRun controllers leave `TaskPlan.TargetPhase` and `FailedPhase` empty in their built plans.
+- The executor's `setTargetPhase` short-circuit (when TargetPhase is empty, skip the phase write) handles this cleanly — already exercised by the existing NodeUpdate plans.
+- Phase transitions are owned exclusively by the orchestration plan's `finalize` task, which computes `Phase + Verdict + status.failedPlan` from `Conditions` + `status.workloadExitCode` + `status.rules[]` and writes them in the orchestrator's status patch.
+- LoadGenerationReconciler does NOT write `status.phase` ever. Its terminal-plan observation only sets `Conditions[LoadComplete]=True` and clears its own plan slot.
 
-Plan tasks (ordered, sequential — 7 tasks):
-  1. ensure-chain         (controller-side)
-  2. wait-chain-ready     (controller-side, async)
-  3. resolve-endpoints    (controller-side)
-  4. render-config        (controller-side)
-  5. apply-job            (controller-side)
-  6. monitor-run          (controller-side, async; combined Job-watch + rule polling)
-  7. mark-done            (controller-side, terminal-phase setter; stamps S3 URL)
-
-Plan TargetPhase: Succeeded   (set at executor's plan-completion step)
-Plan FailedPhase:  Failed      (set when a task fails terminally)
-Plan ErrorPhase:   Error       (carried via FailedTaskDetail.Reason dispatch
-                                in the planner; see Open Dependencies #2)
-```
-
-The collapse from the prior 10-task draft to 7 is deliberate. The previous `wait-job-terminal → resolve-rules → evaluate-rules → collect-report` quartet split state across four task records that actually share state — each held a piece of "is the workload done and what did the rules say" that the next task had to recover from `.status`. Folding them into `monitor-run` (with `mark-done` absorbing the trivial S3 URL stamp that `collect-report` previously owned) reduces controller-side state-shuttling. The `monitor-run` task itself is described under task #6 below.
-
-The `Failed` vs `Error` distinction is load-bearing for the heartbeat alert (which ignores Error). v1 carries the distinction via the planner's terminal-plan observation by inspecting `FailedTaskDetail.Reason` and choosing `Failed` vs `Error` (no shared TaskPlan type change).
+This is documented as Open Dependency #2 — when v2 lands a third actor, we may need a `TaskPlan` type with controller-typed `TargetPhase`/`FailedPhase`. v1 sidesteps the issue.
 
 ### Per-task contract
 
-Each task lives at `internal/task/validation/{name}.go`, follows the existing controller-side task pattern (`Submit / Poll / Apply` interface — see `internal/task/observe_image.go` for a worked example), and is registered in `internal/task/task.go`'s deserialize map.
+Each task lives at `internal/task/validation/{name}.go`, follows the existing controller-side task pattern (`Submit / Poll / Apply` interface — see `internal/task/observe_image.go`), and is registered in `internal/task/task.go`'s deserialize map.
 
-#### 1. `ensure-chain`
+#### Orchestration plan tasks
+
+##### 1. `ensure-chain`
 
 | Property | Value |
 |---|---|
 | Type constant | `validation.TaskTypeEnsureChain` |
 | Sync/Async | Sync |
-| Idempotent op | Server-side apply two SNDs (validators and fullNodes — both always materialized), with `OwnerReferences` to the Run. Field manager `validationrun-controller`. |
+| Idempotent op | Server-side apply one SND per `spec.chain.deployments[]` entry, named `{chainId}-{name}`, with `OwnerReferences` to the Run. Field manager `validationrun-orchestration`. |
 | Inputs | `Run.spec.chain` |
-| Success | Both SNDs exist with the expected spec hash |
+| Success | All SNDs exist with the expected spec hash |
 | Failure | API error (terminal after 3 retries → `Reason=ChainApplyFailed`); SND validation reject (terminal → `Reason=ChainSpecInvalid`) |
 
 Injected fields the task fills before SSA:
 
-- `genesis.chainId = chain.chainId` on the validator SND if unset; rejected at admission if set and mismatched.
+- `genesis.chainId = chain.chainId` on the validator-role SND if unset.
 - `template.spec.chainId = chain.chainId` on every template if unset.
-- `template.spec.validator: {}` on the validator SND template; `template.spec.fullNode: {}` on the fullNodes template.
-- Default `peers: [{label: {selector: {sei.io/chain-id: chainId}}}]` for validators and `[{label: {selector: {sei.io/nodedeployment: chainId}}}]` for fullNodes — when the user omitted `peers`.
-- Run-id label on every materialized object (`sei.io/run-id`, `sei.io/managed-by=validationrun`).
+- `template.spec.validator: {}` on validator-role SND templates; `template.spec.fullNode: {}` on fullNode-role templates.
+- Default `peers: [{label: {selector: {sei.io/chain-id: chainId}}}]` for validator-role and `[{label: {selector: {sei.io/nodedeployment: <validator-snd-name>}}}]` for fullNode-role — when the user omitted `peers`.
+- Labels on every materialized object: `sei.io/managed-by=validationrun`, `sei.io/run-id=<runName>`, `sei.io/chain-id=<chainId>`, `sei.io/deployment-name=<chainDeployment.name>`.
 
-#### 2. `wait-chain-ready`
+##### 2. `wait-chain-ready`
 
 | Property | Value |
 |---|---|
 | Type constant | `validation.TaskTypeWaitChainReady` |
 | Sync/Async | Async (RequeueAfter pattern) |
-| Idempotent op | GET both SNDs; check `status.phase == Ready` AND `status.conditions[NodesReady].status == True`. |
+| Idempotent op | GET each materialized SND; check `status.phase == Ready` AND `status.conditions[NodesReady].status == True`. |
 | Timeout | `spec.timeouts.chainReady` (default 20m) |
-| Failure | Timeout → `Reason=ChainNotReady`. SND `phase=Failed` → `Reason=ChainFailed` |
+| Failure | Timeout → `Reason=ChainNotReady`. Any SND `phase=Failed` → `Reason=ChainFailed` |
 
-**Open dependency on SND-readiness semantics.** The existing `SeiNodeDeployment.Status.Phase=Ready` (`/Users/brandon/sei-k8s-controller/api/v1alpha1/seinodedeployment_types.go:188`) is computed from child node `phase=Running` plus `ConditionNodesReady`. It does **not** today include a "all full nodes report `catching_up=false`" precondition — the `AwaitNodesCaughtUp` task exists (`/Users/brandon/sei-k8s-controller/internal/task/deployment.go:46-51`) and is invoked during hard-fork rollouts but not during initial bring-up.
+**Open dependency on SND-readiness semantics** unchanged from prior draft — see Open Dependencies #1. v1 ValidationRun ships without the `catching_up=false` precondition baked into SND `phase=Ready`.
 
-For genesis-ceremony chains (the ValidationRun common case) the validator fleet is producing blocks from height 0 and `catching_up=false` is essentially immediate after `phase=Ready`. For full nodes that block-sync, there is a real gap. Three options surfaced for the SND maintainer (file as companion sub-issue, not a v1 ValidationRun blocker):
-
-- **(a)** Extend SND status to include `CaughtUp` as a Ready precondition. Cleanest for ValidationRun. Minor schema add.
-- **(b)** Move catching_up into the SeiNode pod's readiness probe (`/health` endpoint that returns 503 while `catching_up=true`). Pod isn't Ready until caught up; SND `phase=Ready` automatically requires it. Cleanest for *all* SND consumers. Bigger change to the SeiNode probe contract.
-- **(c)** ValidationRun's `wait-chain-ready` task additionally GETs each child SeiNode and inspects a status field exposing catching_up. Requires SeiNode status to expose the field (it doesn't today), and pushes the responsibility into the wrong controller.
-
-**Recommendation:** option (b). Files cleanly into the existing SeiNode reconciler responsibility surface; benefits hard-fork rollouts and steady-state operations equally; ValidationRun's wait task reduces to just the SND phase poll. v1 ValidationRun can ship without the fix and accept that genesis-bootstrapping nightly is the dominant case (no real catch-up gap); the qa-testing workload also tolerates a few stale-mempool seconds.
-
-#### 3. `resolve-endpoints`
+##### 3. `resolve-endpoints`
 
 | Property | Value |
 |---|---|
 | Type constant | `validation.TaskTypeResolveEndpoints` |
 | Sync/Async | Sync |
-| Idempotent op | LIST headless Services with selector `sei.io/nodedeployment={chainId}-rpc`; build `{podDNSName}:{port}` list. Stamps `Run.status.chain.rpcEndpoints`. |
-| Selection | Always the fullNodes fleet (always materialized in v1). |
+| Idempotent op | LIST headless Services with selector `sei.io/managed-by=validationrun, sei.io/run-id=<runName>, sei.io/role=fullNode`; build `{podDNSName}:{port}` list across all fullNode-role deployments. Stamps `Run.status.chain.rpcEndpoints`. |
+| Selection | Always the union of all fullNode-role deployments. |
 | Failure | Empty result after 5 retries → `Reason=EndpointsNotResolvable` |
 
-This is the controller-side replacement for `kubectl get services -l sei.io/nodedeployment=...` in `k8s_nightly.yml:216`.
-
-#### 4. `render-config`
+##### 4. `mark-test-running`
 
 | Property | Value |
 |---|---|
-| Type constant | `validation.TaskTypeRenderConfig` |
-| Sync/Async | Sync |
-| Idempotent op | Apply ConfigMap with files from `loadTest.workload.config.files`, fixed-substitutions applied (`${chainId}`, `${rpcEndpoints}`, `${runId}`, `${namespace}`). OwnerRef → Run. Name `{runName}-config`. |
-| Skipped when | `loadTest.workload.config` unset |
-| Failure | API error → terminal `Reason=ConfigApplyFailed` |
+| Type constant | `validation.TaskTypeMarkTestRunning` |
+| Sync/Async | Sync (one-shot) |
+| Idempotent op | `meta.SetStatusCondition` with `Type=TestRunning, Status=True, Reason=ChainReady`. |
+| Side effect | Triggers LoadGenerationReconciler's predicate-gated event delivery on the next informer dispatch — controller-runtime's update event (the conditions array changed) is delivered through the predicate; if `spec.load != nil`, LoadGenerationReconciler reconciles and starts its plan. |
+| Failure | None (in-memory condition write; persisted via the normal status patch) |
 
-#### 5. `apply-job`
+##### 5. `monitor-task-completion`
 
-| Property | Value |
-|---|---|
-| Type constant | `validation.TaskTypeApplyJob` |
-| Sync/Async | Sync |
-| Idempotent op | SSA `batch/v1.Job` named `{runName}` with `spec.parallelism=replicas`, `spec.completions=replicas`, `spec.completionMode=Indexed`, `backoffLimit=0`. Pod template carries reserved env vars, mounted ConfigMap, RESULT_DIR emptyDir, `serviceAccountName=spec.workload.serviceAccountName \|\| {ns}-runner`. OwnerRef → Run. |
-| Failure | Forbidden (no SA) → terminal `Reason=ServiceAccountMissing`. Other API errors retried. |
-
-The controller does **not** carry Flux labels (`kustomize.toolkit.fluxcd.io/*`, `app.kubernetes.io/managed-by=flux`) on the Job, ConfigMap, or any owned object. Hard invariant — see One-Way Doors.
-
-#### 6. `monitor-run`
-
-This is the central task. It combines workload Job watching and per-rule continuous polling into a single async loop. State lives entirely in `.status` (`Conditions[TestComplete]`, `status.workloadExitCode`, per-rule `LastEvaluatedAt` / `NextEvaluationAt`) so the task is fully idempotent across controller restarts.
+This is the central observation task. It is the renamed-and-reduced successor to the prior `monitor-run` task. It does **not** watch the workload Job — that is LoadGenerationReconciler's job. It reads condition + status state and decides whether the run is done.
 
 | Property | Value |
 |---|---|
-| Type constant | `validation.TaskTypeMonitorRun` |
-| Sync/Async | Async (RequeueAfter; pod-watch refines requeue cadence) |
-| Inputs | `Run.spec.rules`, `Run.status.job`, `Run.status.rules`, `Run.status.conditions` |
-| Timeout | `spec.timeouts.runDuration` (default `loadTest.duration + 5m`) |
+| Type constant | `validation.TaskTypeMonitorTaskCompletion` |
+| Sync/Async | Async (RequeueAfter; refines requeue cadence by min rule interval) |
+| Inputs | `Run.spec.rules`, `Run.status.rules`, `Run.status.conditions[LoadComplete, ...]`, `Run.status.workloadExitCode` |
+| Timeout | `spec.timeouts.runDuration` |
 
 **Per-iteration behavior:**
 
 ```
-1. Job-side advance:
-     if Conditions[TestComplete] is not True:
-       GET workload Job (name = status.job.name)
-       if Job has reached terminal state (condition Complete=True OR Failed=True):
-         resolve workload-pod exit code via core/pods GET
-         status.workloadExitCode = exitCode
-         set Conditions[TestComplete] = True, Reason = JobTerminated
-       else if now > runStart + spec.timeouts.runDuration:
-         delete Job (cooperative cancel)
-         status.workloadExitCode = 2
-         set Conditions[TestComplete] = True, Reason = JobTimedOut
+1. Condition gathering:
+     loadComplete = Conditions[LoadComplete].Status == True (or spec.load == nil → treat as True at runStart+0)
+     // For rules-only Runs: monitor-task-completion's loadComplete defaults to
+     // True at task start; the run's "completion" is purely rule-driven.
 
 2. Rule-side advance (for each rule with verdict != Failed):
-     if rule.LastEvaluatedAt + Interval <= now:
-       (or: rule.LastEvaluatedAt is unset and now >= runStart + Interval)
+     if rule.LastEvaluatedAt + Interval <= now (or unset and now >= runStart + Interval):
        issue Prometheus instant query at time=now
-       classify into Passed | Failed | Error (per evaluate semantics below)
+       classify into Passed | Failed | Error (per per-rule semantics)
        update status.rules[i] with verdict, reason, query/alert evidence,
          LastEvaluatedAt = now,
          NextEvaluationAt = now + Interval
@@ -999,30 +1113,33 @@ This is the central task. It combines workload Job watching and per-rule continu
 3. Stop-on-failure:
      if any rule with RunProperties.StopOnFailure=true tripped to Failed
        in this iteration:
-       delete workload Job (cooperative cancel — Job pods get SIGTERM)
-       exit task as Failed, planner transitions Phase=Failed at next reconcile
+       set Conditions[TestCancelled] = True, Reason=RuleStopOnFailure:{ruleName}
+       exit task as Failed → planner advances to finalize, which sets
+         Phase=Failed and FailedPlan="" (orchestration's own ruling, no actor blame)
 
 4. Exit conditions:
-     if Conditions[TestComplete] = True AND no rule has verdict=Failed:
+     if loadComplete AND no rule has verdict=Failed:
        do a final sweep — for any rule whose NextEvaluationAt <= now+Interval
        (i.e., still pending) issue one last evaluation now
-       exit task Complete → planner advances to mark-done
+       exit task Complete → planner advances to finalize
 
-     if Conditions[TestComplete] = True AND some rule has verdict=Failed:
-       exit task Failed → planner transitions Phase=Failed (or Phase=Error
-       if the workload exit code was 2 and no rule Failed; mark-done resolves
-       the Failed-vs-Error distinction)
+     if loadComplete AND some rule has verdict=Failed:
+       exit task Failed → planner advances to finalize
 
 5. Else (still running):
      RequeueAfter min(
        earliest rule's NextEvaluationAt - now,
-       jobPollInterval (10s — used to bound Job-side observation latency)
+       loadCompletePollInterval (10s — bound on observing a condition flip
+                                    even though informer events drive most updates)
      )
 ```
 
-**Idempotency.** The task carries no in-memory state across reconciles. Every iteration recomputes from `.status`. Conditions[TestComplete] is monotonic — once set True, the Job-side advance step short-circuits without re-fetching Job. Per-rule LastEvaluatedAt provides the polling cursor that survives controller restarts and leader-election handover.
+**Idempotency.** The task carries no in-memory state across reconciles. Every iteration recomputes from `.status` (rules) and `.status.conditions` (LoadComplete). All advance is monotonic.
 
-**Prometheus client** lives at `internal/monitoring/prom.go` (new package) — one connection pool, one `otelhttp.NewTransport`, one set of metrics. URL configured by env (`VALIDATION_PROMETHEUS_URL`, default `http://prometheus-k8s.monitoring.svc:9090`) with `--prometheus-url` flag override.
+**Implementation invariants for this task** (load-bearing — see Implementation invariants subsection below):
+
+- Transient errors (Prometheus 5xx, network timeout, RBAC denial) return `RequeueAfter`, NEVER `task.TerminalError`. The existing executor's `RetryCount/MaxRetries` was designed for short-running sidecar tasks that re-execute on retry; a long-running poller would mature `MaxRetries` into a permanent failure incorrectly.
+- Per-rule `Retry` (in `RuleRunProperties`) governs the rule's *own* error budget — that is the right per-rule retry surface; the task-level retry is not used here.
 
 ##### Per-rule evaluation semantics
 
@@ -1045,84 +1162,199 @@ For a `query` rule (instant query of user PromQL):
 - Comparator passes → `verdict=Passed`. Comparator fails → `verdict=Failed`, `Reason=ThresholdViolated`.
 - Store `actualValue: string` and `threshold: string` losslessly in `.status.rules[].query`.
 
-##### Failure model
+##### Failure model (per rule)
 
-Per-rule:
+- `Failed` = "signal said SUT misbehaved" (alert fired in window, query violated threshold). Monotonic.
+- `Error` = "couldn't ask" (Prometheus 5xx, network timeout, RBAC denial, unresolved ref, NaN, NoSamples, AmbiguousResult). Decays — successful evaluation overwrites Error with Passed/Failed; matures into permanent Error after `Retry` consecutive Errors.
 
-- `Failed` = "signal said SUT misbehaved" (alert fired in window, query violated threshold)
-- `Error` = "couldn't ask" (Prometheus 5xx, network timeout, RBAC denial, unresolved ref, NaN, NoSamples, AmbiguousResult)
+##### PrometheusRule resolution (folded into monitor-task-completion's first iteration)
 
-`Failed` is monotonic — once a rule trips, it stays Failed. `Error` decays — a successful subsequent evaluation overwrites Error with Passed/Failed (the Retry budget governs how many consecutive Errors mature into a permanent rule-level Error verdict).
+For each rule with `type=alert`, the first evaluation iteration GETs the referenced `monitoring.coreos.com/v1.PrometheusRule`; verifies `alertname` exists in the rule's spec; validates cross-namespace policy. Per-rule failure of resolution writes `verdict=Error` with `Reason=PrometheusRuleNotFound` or `Reason=CrossNamespaceForbidden`; does NOT block other rules. If **all** rules fail resolution on first iteration, the task exits Error with `Reason=AllRulesUnresolved`.
 
-##### PrometheusRule resolution (folded into monitor-run's first iteration)
+##### 6. `finalize`
 
-For each rule with `type=alert`, the first evaluation iteration GETs the referenced `monitoring.coreos.com/v1.PrometheusRule`; verifies `alertname` exists in the rule's spec; validates cross-namespace policy (same-namespace OR target ns labeled `sei.io/validation-shared-rules=true`). Per-rule failure of resolution writes `verdict=Error` with `Reason=PrometheusRuleNotFound` or `Reason=CrossNamespaceForbidden`; does NOT block other rules. If **all** rules fail resolution on first iteration, the task exits Error with `Reason=AllRulesUnresolved`.
-
-#### 7. `mark-done`
-
-Computes the final phase + verdict + condition from accumulated state, and stamps the S3 URL. Pure in-memory aggregation plus one status patch:
+Computes the final phase + verdict + condition from accumulated state, stamps the S3 URL, and closes the `TestRunning` gate. Pure in-memory aggregation plus one status patch:
 
 ```
-exit := *status.workloadExitCode  (set by monitor-run)
-ruleVerdicts := status.rules[]
+loadComplete = Conditions[LoadComplete].Status == True (or spec.load == nil)
+exit         = *status.workloadExitCode (set by LoadGenerationReconciler; nil if load unset)
+ruleVerdicts = status.rules[]
+cancelled    = Conditions[TestCancelled].Status == True
 
-case exit == 2:                                  → Phase=Error, Reason=WorkloadInfraFailure
-case exit == 1 && any(rule.Failed):              → Phase=Failed, Reason=WorkloadFailed (primary), append RuleFailed conditions
-case exit == 1:                                  → Phase=Failed, Reason=WorkloadFailed
-case any(rule.Failed):                           → Phase=Failed, Reason=RuleFailed:{firstFailedRule}
-case all(rule.Passed):                           → Phase=Succeeded, Reason=RunSucceeded
-case any(rule.Error) && all others Passed:       → Phase=Error,  Reason=RuleError
+case cancelled:                                  → Phase=Failed, Reason=RuleStopOnFailure:{ruleName}, FailedPlan="" (orchestration's ruling)
+case spec.load != nil && exit == 2:              → Phase=Error, Reason=WorkloadInfraFailure, FailedPlan="loadGeneration"
+case spec.load != nil && exit == 1 && any(rule.Failed):
+                                                 → Phase=Failed, Reason=WorkloadFailed (primary), FailedPlan="loadGeneration", append RuleFailed conditions
+case spec.load != nil && exit == 1:              → Phase=Failed, Reason=WorkloadFailed, FailedPlan="loadGeneration"
+case any(rule.Failed):                           → Phase=Failed, Reason=RuleFailed:{firstFailedRule}, FailedPlan=""
+case all(rule.Passed) && (spec.load==nil || exit==0):
+                                                 → Phase=Succeeded, Reason=RunSucceeded
+case any(rule.Error) && all others Passed:       → Phase=Error,  Reason=RuleError, FailedPlan=""
 default:                                         → Phase=Error,  Reason=Unknown
 ```
 
-Sets `status.completionTime`, `status.duration`, the `Succeeded` condition, computes `status.report.s3Url = s3://harbor-validation-results/{ns}/{job}/{runId}/` from the bucket layout convention, and emits the `validation_run_terminal_total{verdict}` metric (heartbeat-alert input).
+Sets `status.completionTime`, `status.duration`, the `Succeeded` condition, sets `Conditions[TestComplete]=True, Reason=RunFinalized`, flips `Conditions[TestRunning]=False, Reason=Cancelled` (closes the gate so any in-flight LoadGenerationReconciler reconcile observes the cancellation), computes `status.report.s3Url = s3://harbor-validation-results/{ns}/{job}/{runId}/`, and emits the `validation_run_terminal_total{verdict}` metric (heartbeat-alert input).
 
 The S3 URL stamp is trivially derivable; the controller never reads from S3.
 
-### Cancellation
+#### LoadGeneration plan tasks
 
-`Cancelled` is reached via `metadata.deletionTimestamp != nil`. The reconciler stops issuing new tasks, lets the Job's grace period elapse, lets cascade-delete OwnerRefs purge SNDs/Job/ConfigMap, and clears its finalizer. No explicit `spec.cancel: true` field — `kubectl delete` is the contract.
+##### 1. `render-config`
 
-Stop-on-failure (a rule trip with `RunProperties.StopOnFailure=true`) is *not* `Cancelled`; it is `Failed`. The controller deletes the workload Job to halt load generation, but the Run itself reaches a terminal verdict, not a cancellation.
+| Property | Value |
+|---|---|
+| Type constant | `validation.TaskTypeRenderConfig` |
+| Sync/Async | Sync |
+| Idempotent op | Apply ConfigMap with files from `load.workload.config.files`, fixed-substitutions applied (`${chainId}`, `${rpcEndpoints}`, `${runId}`, `${namespace}` — sourced from `Run.status.chain.rpcEndpoints`). Field manager `validationrun-loadgeneration`. OwnerRef → Run. Name `{runName}-config`. |
+| Skipped when | `load.workload.config` unset |
+| Failure | API error → terminal `Reason=ConfigApplyFailed`, plan FailedPlan="loadGeneration" stamped by orchestrator's finalize |
+
+The substitution sources `${rpcEndpoints}` from `Run.status.chain.rpcEndpoints`, which OrchestrationReconciler stamped during `resolve-endpoints` before flipping `Conditions[TestRunning]`. The predicate guarantees this status field is populated before LoadGenerationReconciler reconciles.
+
+##### 2. `apply-job`
+
+| Property | Value |
+|---|---|
+| Type constant | `validation.TaskTypeApplyJob` |
+| Sync/Async | Sync |
+| Idempotent op | SSA `batch/v1.Job` named `{runName}` with `spec.parallelism=replicas`, `spec.completions=replicas`, `spec.completionMode=Indexed`, `backoffLimit=0`. Pod template carries reserved env vars (with `JOB_COMPLETION_INDEX` exposed as `SHARD_INDEX` via env-from-fieldRef), mounted ConfigMap, RESULT_DIR emptyDir, `serviceAccountName=spec.load.workload.serviceAccountName \|\| {ns}-runner`. Field manager `validationrun-loadgeneration`. OwnerRef → Run. |
+| Failure | Forbidden (no SA) → terminal `Reason=ServiceAccountMissing`. Other API errors retried. |
+
+The Job carries no Flux labels (`kustomize.toolkit.fluxcd.io/*`, `app.kubernetes.io/managed-by=flux`). Hard invariant — see One-Way Doors.
+
+##### 3. `wait-job-terminal`
+
+| Property | Value |
+|---|---|
+| Type constant | `validation.TaskTypeWaitJobTerminal` |
+| Sync/Async | Async (RequeueAfter; informer events on Owns(Job) refine cadence) |
+| Idempotent op | GET workload Job; if condition `Complete=True OR Failed=True`, GET the workload pod (label-selected), parse `pod.status.containerStatuses[].state.terminated.exitCode`, stamp `status.workloadExitCode` and set `Conditions[LoadComplete]=True, Reason=JobTerminated`. If `Conditions[TestCancelled]=True` was set by orchestrator, halt cooperatively (delete the Job; the cascade-delete on Run terminal will clean up regardless). |
+| Timeout | `spec.timeouts.runDuration` (default `load.duration + 5m`). On timeout, delete Job, synthesize exit code 2, set `Conditions[LoadComplete]=True, Reason=JobTimedOut`. |
+| Failure | API error → RequeueAfter (transient); plan-level terminal failure if Job spec is invalid (would have been caught at apply-job). |
+
+**Cancellation observation.** The task's idempotent loop checks `Conditions[TestCancelled]` first; when set True (by OrchestrationReconciler's monitor-task-completion stop-on-failure path), the task deletes the Job, sets `Conditions[LoadComplete]=True, Reason=Cancelled`, and exits Complete. This is the cooperative-halt contract: actor reconcilers do NOT undo work already done; the chain teardown via cascade-delete handles cleanup.
+
+### Cancellation contract
+
+`metadata.deletionTimestamp != nil` triggers the standard finalizer flow. OrchestrationReconciler clears its finalizer last; the cascade-delete OwnerReferences purge SNDs/Job/ConfigMap.
+
+`Conditions[TestCancelled]=True` is the **stop-on-failure** signal, set exclusively by OrchestrationReconciler's monitor-task-completion task when a stop-on-failure rule trips. Per-actor reconcilers (LoadGenerationReconciler) observe this condition on their next reconcile and halt cooperatively:
+
+- They stop submitting new tasks (the predicate continues to fire; the reconciler's plan resolver sees `TestCancelled=True` and short-circuits the build of new plans).
+- In-flight tasks proceed naturally to completion, but their `wait-job-terminal`-shaped tasks observe the cancellation and delete their owned Job to halt the actor's work.
+- They do NOT undo work already done. Chain teardown via cascade-delete is the rollback when the Run itself is deleted.
+- "Halt" is best-effort cooperative; the Run reaches `Phase=Failed`, NOT `Phase=Cancelled`. (`Cancelled` is reserved for `metadata.deletionTimestamp != nil`.)
+
+This contract scales to v2: when SequenceReconciler observes `TestCancelled=True`, it stops applying new sequence steps; when ChaosReconciler observes it, it stops scheduling new fault injections.
+
+### Implementation invariants
+
+These are runtime rules every controller and task implementation must follow. They are not visible in the CRD schema but are load-bearing for correctness.
+
+1. **Transient errors return `RequeueAfter`, never `task.TerminalError`.** `monitor-task-completion` (Prometheus poller) and `wait-job-terminal` (Job watcher) are long-running; the executor's `MaxRetries` budget would mature transient errors into permanent failures. Implementation invariant: only schema-violation, RBAC-denial, and missing-resource errors are terminal in these tasks; everything else requeues.
+2. **Plan-creation idempotency uses optimistic concurrency.** Status patches use resourceVersion-checked update, not blind SSA on the status subresource. Existing controllers (`SeiNodeReconciler`, etc.) already do this; both ValidationRun controllers reinforce the pattern. Two reconciles in the same generation that race on plan creation see a conflict; one retries.
+3. **Each controller's status patch carries only its owned fields.** Field-manager isolation is preserved by listing only the fields the controller owns in its SSA patch — never echoing back the other controller's conditions or plan slot.
+4. **No controller writes another controller's plan slot.** The executor is parameterized by slot; passing the wrong slot is a compile-time error in Go (different field type per slot).
+5. **`spec.load == nil` short-circuits LoadGenerationReconciler.** The predicate gate is the primary defense; the resolver's `(nil, nil)` return is the secondary defense.
+6. **`monitor-task-completion` treats absent `spec.load` as `Conditions[LoadComplete]=True` from t=0.** Rules-only Runs are well-formed; the orchestrator does not wait for a never-arriving load-complete signal.
 
 ## Validation rule semantics
 
-(Concise restatement; see `monitor-run` task above for the operative detail and OTel Round 1 for the rationale.)
+(Concise restatement; see `monitor-task-completion` task above for operative detail and OTel Round 1 for rationale.)
 
-- v1 evaluates rules continuously: each rule polls at `RunProperties.Interval` (default 30s, min 5s, max 5m) starting at `runStart + Interval`, with a final sweep at workload terminal time before mark-done aggregates.
+- v1 evaluates rules continuously: each rule polls at `RunProperties.Interval` (default 30s, min 5s, max 5m) starting at `runStart + Interval`, with a final sweep at run terminal time before finalize aggregates.
 - v1 types: `alert`, `query`. Future `container` reserved.
-- Both types use the same Prometheus HTTP client (`internal/monitoring/prom.go` — new package). One connection pool, one `otelhttp.NewTransport` instrumentation, one set of metrics.
-- Prometheus URL is configured by env var (`VALIDATION_PROMETHEUS_URL`, default `http://prometheus-k8s.monitoring.svc:9090`) with `--prometheus-url` flag override. Hardcode-with-flag-override per OTel Q2.
-- AND-of-rules pass semantics. OR/weighted aggregation explicitly out of scope; users compose OR with two ValidationRuns in a Suite.
-- Per-rule `verdict ∈ {Passed, Failed, Awaited, Error}` (4-state). `Awaited` is the pre-first-evaluation state visible in `.status` until each rule has at least one Prometheus result.
-- `Failed` is monotonic per rule (a rule that trips stays tripped — even if a later evaluation would have passed). `Error` is recoverable (decays to Passed/Failed on next successful evaluation; only matures into a permanent rule-level Error after `Retry` consecutive Errors).
-- `StopOnFailure: true` deletes the workload Job when its rule trips; the Run terminates Failed.
+- Both types use the same Prometheus HTTP client (`internal/monitoring/prom.go`). One connection pool, one `otelhttp.NewTransport`, one set of metrics.
+- Prometheus URL via env var (`VALIDATION_PROMETHEUS_URL`, default `http://prometheus-k8s.monitoring.svc:9090`) with `--prometheus-url` flag override.
+- AND-of-rules pass semantics. OR/weighted aggregation explicitly out of scope.
+- Per-rule `verdict ∈ {Passed, Failed, Awaited, Error}` (4-state). `Awaited` is the pre-first-evaluation state.
+- `Failed` is monotonic per rule. `Error` is recoverable (decays to Passed/Failed; matures into permanent Error after `Retry` consecutive Errors).
+- `StopOnFailure: true` on a rule that trips → OrchestrationReconciler sets `Conditions[TestCancelled]=True`; LoadGenerationReconciler halts; Run terminates Failed.
+
+## Helm chart and controller registration
+
+The controller binary is delivered via Helm (`charts/sei-k8s-controller/`). v1+ adds an `controllers` block to `values.yaml` that flag-gates each non-orchestration sub-controller. v2 actor controllers register identically.
+
+```yaml
+# values.yaml
+controllers:
+  orchestration:
+    enabled: true       # always-on; cannot disable. Setting this false errors at chart render.
+  loadGeneration:
+    enabled: true       # v1 default; default-on. Set to false for clusters that only host
+                        # validation infrastructure but do not run load workloads.
+  sequence:
+    enabled: false      # v2; reserved. Toggling true in v1 fails at controller startup
+                        # (reconciler not registered).
+  chaos:
+    enabled: false      # v2; reserved. Additionally requires --enable-chaos-plan flag
+                        # at the controller binary AND tenant namespace label
+                        # sei.io/chaos-allowed=true at admission.
+```
+
+`cmd/main.go` reads the controllers block from environment (`VALIDATION_LOADGEN_ENABLED`, etc., projected by the Helm chart) and conditionally calls `SetupWithManager`:
+
+```go
+type ControllersConfig struct {
+    OrchestrationEnabled  bool // pinned true; warn-and-true if user set false
+    LoadGenerationEnabled bool
+    SequenceEnabled       bool // v2; v1 binary errors if true
+    ChaosEnabled          bool // v2; v1 binary errors if true
+}
+
+// always-on
+if err := (&validationcontroller.OrchestrationReconciler{...}).SetupWithManager(mgr); err != nil {
+    setupLog.Error(err, "Failed to create controller", "controller", "ValidationRun-Orchestration")
+    os.Exit(1)
+}
+
+// opt-in
+if cfg.LoadGenerationEnabled {
+    if err := (&validationcontroller.LoadGenerationReconciler{...}).SetupWithManager(mgr); err != nil {
+        setupLog.Error(err, "Failed to create controller", "controller", "ValidationRun-LoadGeneration")
+        os.Exit(1)
+    }
+}
+
+// v2 — startup error in v1 if enabled
+if cfg.SequenceEnabled {
+    setupLog.Error(nil, "spec.controllers.sequence.enabled=true but SequenceReconciler is not registered in this controller version")
+    os.Exit(1)
+}
+if cfg.ChaosEnabled { /* same */ }
+```
+
+This makes the architecture's "v2 expansion is purely additive" claim a chart-level invariant, not a developer aspiration: enabling sequence in v2 is a values flip, not a refactor.
 
 ## Observability
 
-Per OTel Round 1, with cardinality discipline.
+Per OTel Round 1, with cardinality discipline. Metrics are emitted by both reconcilers; the controller name in metric labels distinguishes them.
 
 ### Controller metrics (emitted from the reconciler binary)
 
-| Instrument | Type | Labels | Cardinality |
-|---|---|---|---|
-| `validationrun_phase_transitions_total` | Counter | `from`, `to`, `reason` | ~200 series |
-| `validationrun_active` | UpDownCounter | `phase` | 5 series |
-| `validationrun_duration_seconds` | Histogram (`30,60,300,600,1800,3600,7200`) | `terminal_phase`, `workload_kind` | bounded |
-| `validation_rule_evaluation_duration_seconds` | Histogram (`0.05,0.1,0.5,1,5,10,30`) | `type`, `verdict` | 12 series |
-| `validation_rule_evaluations_total` | Counter | `type`, `verdict`, `reason` | bounded |
-| `validation_prometheus_query_errors_total` | Counter | `endpoint`, `error_type` | ≤8 series |
-| `validation_run_terminal_total` | Counter | `namespace`, `name`, `verdict` | **per-run** — see note below |
+| Instrument | Type | Labels | Cardinality | Owner |
+|---|---|---|---|---|
+| `validationrun_phase_transitions_total` | Counter | `from`, `to`, `reason` | ~200 series | OrchestrationReconciler |
+| `validationrun_active` | UpDownCounter | `phase` | 5 series | OrchestrationReconciler |
+| `validationrun_duration_seconds` | Histogram (`30,60,300,600,1800,3600,7200`) | `terminal_phase`, `actor` | bounded | OrchestrationReconciler |
+| `validation_rule_evaluation_duration_seconds` | Histogram (`0.05,0.1,0.5,1,5,10,30`) | `type`, `verdict` | 12 series | OrchestrationReconciler |
+| `validation_rule_evaluations_total` | Counter | `type`, `verdict`, `reason` | bounded | OrchestrationReconciler |
+| `validation_prometheus_query_errors_total` | Counter | `endpoint`, `error_type` | ≤8 series | OrchestrationReconciler |
+| `validationrun_loadgen_jobs_terminal_total` | Counter | `exit_code` (0/1/2/timeout) | 4 series | LoadGenerationReconciler |
+| `validationrun_loadgen_active_jobs` | UpDownCounter | (none) | 1 series | LoadGenerationReconciler |
+| `validation_run_terminal_total` | Counter | `namespace`, `name`, `verdict` | **per-run** — see note below | OrchestrationReconciler |
 
-**Note on `validation_run_terminal_total` cardinality.** `name` is unbounded and would normally be a hard reject. Exception: this is the heartbeat-alert input (per platform-engineer), which queries `increase(... [24h])`. The cardinality is bounded by the alerting path's retention (the metric is short-lived per run). If/when Prometheus pressure shows, drop `name` and switch heartbeat to a `validation_run_terminal_total{namespace, verdict}` aggregate. Document the upgrade path; ship the loud version first.
+`actor` label values: `load`, `sequence`, `chaos`, `rules-only` (and combinations joined by `+`, e.g., `load+rules`). Bounded at ~8 distinct values.
 
-**Note on `mode` label.** Round 1's OTel sketch carried a `mode` label on rule-evaluation metrics. v1 has no `mode` field on the wire (continuous is the only behavior), so the label is dropped. If a future mode lands, re-add it with care for cardinality.
+**Note on `validation_run_terminal_total` cardinality.** `name` is unbounded and would normally be a hard reject. Exception: this is the heartbeat-alert input (per platform-engineer), which queries `increase(... [24h])`. The cardinality is bounded by the alerting path's retention. If/when Prometheus pressure shows, drop `name` and switch heartbeat to a `validation_run_terminal_total{namespace, verdict}` aggregate. Document the upgrade path; ship the loud version first.
+
+**Note on `mode` label.** Round 1's OTel sketch carried a `mode` label on rule-evaluation metrics. v1 has no `mode` field on the wire (continuous is the only behavior), so the label is dropped. Re-add with care for cardinality if a future mode lands.
 
 **Labels rejected (cardinality bombs):** `chain_id`, `image_sha`, `run_id`. These go into trace attributes and structured log fields, not metrics.
 
 ### Traces
 
-One span per reconcile (`controller.kind=ValidationRun` + standard controller-runtime attributes). Child span per planner task — these are 1+ second I/O-bound ops where p99 matters. `monitor-run`'s per-iteration loop emits one span per Prometheus query. Use `otelhttp.NewTransport` on the Prometheus client (single-flight client lives in `internal/monitoring/`). Inject `traceID`/`spanID` into structured logs.
+One span per reconcile per controller (`controller.kind=ValidationRun, controller.name=validationrun-orchestration|loadgeneration` + standard controller-runtime attributes). Child span per planner task. `monitor-task-completion`'s per-iteration loop emits one span per Prometheus query. Use `otelhttp.NewTransport` on the Prometheus client (single-flight client lives in `internal/monitoring/`). Inject `traceID`/`spanID` into structured logs.
 
 ### Structured-report aggregation
 
@@ -1131,36 +1363,42 @@ One span per reconcile (`controller.kind=ValidationRun` + standard controller-ru
 - Pushgateway is the wrong tool for batch-job metrics (Prometheus docs explicitly warn).
 - The report shape isn't yet stable across `seiload` and `qa-testing`; locking before two real consumers is a trap.
 - Cardinality of `{run_id, image_sha, profile}` is the bomb the controller avoids.
-- `.status.report.raw` (a CEL-capped echo of the termination message) was cut at the Round 2 gate. Consumers that want the report fetch from `status.report.s3Url`; the URL is programmatically derivable from the bucket layout (`s3://harbor-validation-results/{namespace}/{job}/{runId}/`) so even consumers that don't yet wire-watch can compute it.
+- `.status.report.raw` (a CEL-capped echo of the termination message) was cut at the Round 2 gate. Consumers fetch from `status.report.s3Url`; the URL is programmatically derivable from the bucket layout.
 
-**Un-defer when:** ≥2 distinct report consumers want the same numeric AND a stable report-schema field has shipped. Add a separate `ReportExporter` controller that subscribes to terminal Runs and emits curated low-cardinality metrics. *Not* the Run controller's job.
+**Un-defer when:** ≥2 distinct report consumers want the same numeric AND a stable report-schema field has shipped. Add a separate `ReportExporter` controller that subscribes to terminal Runs and emits curated low-cardinality metrics. *Not* the Run controllers' job.
 
 ## RBAC and tenancy
 
 ### Controller-side ClusterRole (generated from kubebuilder markers)
 
+The two controllers share one ClusterRole — they live in one binary and one ServiceAccount. Markers go on each reconciler's package, but verbs are unioned at generation time.
+
 ```go
+// Both controllers
 // +kubebuilder:rbac:groups=validation.sei.io,resources=validationruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=validation.sei.io,resources=validationruns/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=validation.sei.io,resources=validationruns/finalizers,verbs=update
 // +kubebuilder:rbac:groups=validation.sei.io,resources=validationsuites;validationschedules,verbs=get;list;watch
 // +kubebuilder:rbac:groups=validation.sei.io,resources=validationsuites/status;validationschedules/status,verbs=get
+// OrchestrationReconciler
 // +kubebuilder:rbac:groups=sei.io,resources=seinodedeployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodedeployments/status,verbs=get
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules,verbs=get;list;watch
+// LoadGenerationReconciler
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheusrules,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+// Both
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 ```
 
-The controller deletes Jobs (cooperative cancel for stop-on-failure and run-duration timeout); `delete` verb on `batch/jobs` is load-bearing for that. SNDs are deleted only via cascade on Run delete — controller-initiated SND delete is reserved for finalizer cleanup and not exercised in steady state.
+LoadGenerationReconciler deletes Jobs (cooperative cancel for stop-on-failure and run-duration timeout); `delete` verb on `batch/jobs` is load-bearing. SNDs are deleted only via cascade on Run delete — controller-initiated SND delete is reserved for finalizer cleanup.
 
-Not granted: `secrets` write, `rbac.*`, `eks.*` (pod-identity AWS calls). Per platform-engineer: controller never mints SAs or PIAs.
+**Not granted:** `secrets` write, `rbac.*`, `eks.*` (pod-identity AWS calls), **`pods/exec`** (one-way-door — see Resolved decisions). Per platform-engineer: controller never mints SAs or PIAs.
 
 ### Tenant-side ClusterRole bundle (shipped in controller's manifests; bound per-namespace by tenants)
 
@@ -1170,16 +1408,18 @@ Not granted: `secrets` write, `rbac.*`, `eks.*` (pod-identity AWS calls). Per pl
 ### CEL admission rules (CRD-level)
 
 - Same-namespace enforcement on every reference except `alert.ruleRef.namespace` (which is allowed cross-namespace into label-allowlisted namespaces only — checked at admission via webhook because CEL can't see namespace labels).
-- `chain.fullNodes.genesis` forbidden via top-level CEL on `ChainSpec`.
-- `chain.fullNodes` is required (not pointer; required field on `ChainSpec`).
-- `chain.validators.template.spec.validator` if set must be `{}` (webhook).
-- Reserved env-var names rejected on `spec.loadTest.workload.env` via the `WorkloadSpec` `XValidation` rule.
-- Rule names unique within `spec.rules`.
-- Spec mutation: substantive fields are immutable on a Run after creation (CEL: `self == oldSelf` on `spec.chain`, `spec.loadTest`, `spec.rules`). Only metadata, finalizers, and status mutate.
+- `chain.deployments[role=fullNode].spec.genesis` forbidden (full nodes inherit; CEL on the list-map).
+- `chain.deployments` exactly one `role=validator` and ≥1 `role=fullNode` (CEL on the list-map).
+- `chain.deployments[].spec.template.spec.{validator|fullNode}` if set must align with role; if unset, controller injects `{}`.
+- Reserved env-var names rejected on `spec.load.workload.env` via the `WorkloadSpec` `XValidation` rule.
+- Rule names unique within `spec.rules` (list-map convention).
+- At least one of `spec.load`, `spec.sequence`, `spec.chaos` must be set OR `spec.rules` non-empty.
+- `spec.sequence` and `spec.chaos` admission-rejected in v1.
+- Spec mutation: substantive fields immutable on a Run after creation (CEL: `self == oldSelf` on `spec.chain`, `spec.load`, `spec.rules`, `spec.sequence`, `spec.chaos`). Only metadata, finalizers, and status mutate.
 
 ### Workload SA convention
 
-Tenant pre-provisions SA named `{namespace}-runner` (override via `spec.loadTest.workload.serviceAccountName`). Controller validates existence at the Pending → Running transition; missing SA terminates with `Reason=ServiceAccountMissing`. Controller never creates SAs.
+Tenant pre-provisions SA named `{namespace}-runner` (override via `spec.load.workload.serviceAccountName`). LoadGenerationReconciler validates existence at apply-job; missing SA terminates with `Reason=ServiceAccountMissing`. Controller never creates SAs.
 
 ## IRSA / Pod Identity / S3
 
@@ -1196,80 +1436,103 @@ Per platform-engineer Round 1:
     termination-message.json
     rules/{ruleName}.json
   ```
-  `{job}` is `spec.loadTest.workload.name`. New components only by *appending* — no new path levels.
+  `{job}` is `spec.load.workload.name` (or `"rules-only"` for rules-only Runs that skip the workload). New components only by *appending* — no new path levels.
 - Workloads upload via Pod Identity (already wired for nightly). Controller never writes to S3, never reads from S3, only computes the URL.
 
 ## Migration: nightly GHA → ValidationRun
 
 Per platform-engineer Round 1:
 
-- `clusters/harbor/nightly/` Flux config is **structurally unchanged**. Same namespace, SAs, RBAC, PodMonitors. Pod labels (set by controller from `spec.loadTest.workload.podTemplate` plus chain-id + run-id) keep selector compatibility.
-- `.github/workflows/k8s_nightly.yml` shrinks ~50%: each `kubectl wait`/`kubectl exec`/`envsubst`/`kubectl logs`/`aws s3 cp` step becomes a controller plan task. The workflow becomes:
+- `clusters/harbor/nightly/` Flux config is **structurally unchanged**. Same namespace, SAs, RBAC, PodMonitors. Pod labels (set by controller from `spec.load.workload.podTemplate` plus chain-id + run-id + deployment-name) keep selector compatibility.
+- `.github/workflows/k8s_nightly.yml` shrinks ~50%: each `kubectl wait`/`kubectl exec`/`envsubst`/`kubectl logs`/`aws s3 cp` step becomes a controller plan task (split across the orchestration plan and the loadgeneration plan). The workflow becomes:
   1. `cat <<EOF | envsubst | kubectl apply -f -` (one ValidationRun manifest)
   2. `kubectl wait --for=condition=Succeeded validationrun/${RUN_ID} --timeout=2h`
-  3. Read `.status.report.s3Url` and `.status.verdict` for the GHA summary; pull the report artifacts from S3 directly (the URL is the S3 prefix; the workload uploaded `report.log`, `report.html`, `report.junit.xml`, `termination-message.json`, and `rules/{name}.json` under it).
-- The race against `sei-chain` CI moves into the controller's `ensure-chain` task (digest-pinned image already present at apply time → no race; if not, the SND pulls and reports its own readiness).
-- `templates/seinodedeployment.yaml` and `templates/seiload-job.yaml` retire (subsumed into `ValidationRun.spec`). Both fleets (validators and fullNodes) are now controller-materialized; the existing nightly's two-SND topology lifts into `chain.validators` + `chain.fullNodes` directly.
+  3. Read `.status.report.s3Url` and `.status.verdict` for the GHA summary; pull the report artifacts from S3 directly.
+- The race against `sei-chain` CI moves into the controller's `ensure-chain` task.
+- `templates/seinodedeployment.yaml` and `templates/seiload-job.yaml` retire (subsumed into `ValidationRun.spec`). Both fleets (validators and fullNodes) lift into `chain.deployments[]` directly — the prior YAML's two SND templates become two list entries.
 
-The migration is opt-in per tenant: nightly can flip to ValidationRun while qa-testing still runs Phase 1's GHA-orchestrated bash, and vice versa. The Phase 1 contract guarantees the workload manifests remain identical.
+Migration is opt-in per tenant: nightly can flip to ValidationRun while qa-testing still runs Phase 1's GHA-orchestrated bash, and vice versa. The Phase 1 contract guarantees the workload manifests remain identical.
 
-The plan-task labels in this migration narrative align with the 7-task plan above: `kubectl wait` chain readiness → `wait-chain-ready`, the `kubectl get services` endpoint resolution → `resolve-endpoints`, the `envsubst | kubectl apply` profile ConfigMap → `render-config`, the seiload Job apply → `apply-job`, the `kubectl logs` tail + `kubectl wait --for=condition=complete` → `monitor-run`, the `aws s3 cp` summary upload (still workload-side via Pod Identity) → URL stamped at `mark-done`.
+The plan-task labels in this migration narrative align with the new task split:
+
+| Old workflow step | New plan task | Plan slot |
+|---|---|---|
+| `kubectl apply -f seinodedeployment.yaml` (×2) | `ensure-chain` | orchestration |
+| `kubectl wait --for=condition=Ready snd/...` | `wait-chain-ready` | orchestration |
+| `kubectl get services -l sei.io/nodedeployment=...` | `resolve-endpoints` | orchestration |
+| (gate flip — implicit in old workflow) | `mark-test-running` | orchestration |
+| `envsubst | kubectl apply -f profile.cm.yaml` | `render-config` | loadgeneration |
+| `kubectl apply -f seiload-job.yaml` | `apply-job` | loadgeneration |
+| `kubectl wait --for=condition=complete job/...` + `kubectl logs` tail | `wait-job-terminal` | loadgeneration |
+| (rule polling — new) | `monitor-task-completion` | orchestration |
+| `aws s3 cp` summary upload (workload-side via Pod Identity) | URL stamped at `finalize` | orchestration |
 
 ## Six open questions from #139 — answers
 
 | # | Question | Decision | Source |
 |---|---|---|---|
-| 1 | Embed workload spec, or reference a separate `ValidationWorkload` CR? | **Embed.** Reserve `spec.runRef` field name only (no fields). | PM Round 1 Q1 |
-| 2 | Probe `mode` enum: 3-mode, 5-mode, or defer? | **Defer.** v1 has no `mode` field; the only behavior is continuous polling. Add the field additively when `edge` or `window-end` semantics ship. | PM Round 1 Q2 + user input + Round 2 gate |
+| 1 | Embed workload spec, or reference a separate `ValidationWorkload` CR? | **Embed.** Reserve `spec.runRef` field name only. | PM Round 1 Q1 |
+| 2 | Probe `mode` enum: 3-mode, 5-mode, or defer? | **Defer.** v1 has no `mode` field; only behavior is continuous polling. | PM Round 1 Q2 + user input |
 | 3 | `ValidationSuite`'s own scheduler vs `ValidationSchedule`-only? | **Moot in v1** — both deferred. Schedule is the lever; Suite is a child orchestrator. | PM Round 1 Q3 |
 | 4 | S3 upload: top-level field, sidecar, or controller-side? | **Workload-side via Pod Identity.** Controller stamps URL only. | PM Round 1 Q4 + Phase 1 contract |
 | 5 | Kueue integration day 1? | **No.** Defer until ≥3 concurrent suites contend. | PM Round 1 Q5 |
 | 6 | Numeric vs stringified result aggregation? | **Stringified.** Adding numerics later is additive; removing them is breaking. | PM Round 1 Q6 + OTel one-way doors |
 
+The Round 3 architectural pass also resolved one unstated question: **how to orchestrate "chain bring-up + workload + rules" without a barrier task**. Answer: predicate-gated event delivery on a second sub-controller; `Conditions[TestRunning]` is the gate. (See Resolved decision #19.)
+
 ## Five one-way-door warnings from OSS survey — how design avoids each
 
 1. **Don't bake workload I/O abstractions into the Run (Tekton's `PipelineResource`).** ValidationRun has no typed I/O abstraction. The workload contract is env vars + exit codes + termination message + S3 — text-shaped, not typed Kubernetes objects. Avoided.
-2. **Don't lowercase your phase enum (Testkube's `passed`/`failed`).** All phase and verdict enums are Pascal-case (`Pending`, `Running`, `Succeeded`, `Failed`, `Error`, `Cancelled`; `Passed`, `Awaited`, `Error`). Tekton/Argo precedent. Avoided.
-3. **Don't pick a kind name twice (K6's `K6→TestRun`, Litmus's `Experiment→Fault`).** ValidationRun / ValidationSuite / ValidationSchedule chosen with explicit OSS-precedent alignment ("Run" not "Execution"). Discriminator (`type=LoadTest|SequenceTest|IntegrationTest`) absorbs new test shapes inside one kind name. Avoided.
-4. **Don't proliferate per-workload-type CRDs (Testkube's `TestWorkflow` consolidation).** One CRD with a discriminator union. Per-runner-type kinds explicitly rejected. Avoided.
+2. **Don't lowercase your phase enum (Testkube's `passed`/`failed`).** All phase and verdict enums are Pascal-case. Tekton/Argo precedent. Avoided.
+3. **Don't pick a kind name twice (K6's `K6→TestRun`, Litmus's `Experiment→Fault`).** ValidationRun / ValidationSuite / ValidationSchedule chosen with explicit OSS-precedent alignment. Composable-blocks shape (`load`, `sequence`, `chaos`) absorbs new test shapes inside one kind name. Avoided.
+4. **Don't proliferate per-workload-type CRDs (Testkube's `TestWorkflow` consolidation).** One CRD with composable optional blocks. Per-runner-type kinds explicitly rejected. Avoided.
 5. **Don't orchestrate complex DAGs in your suite CR (Litmus outsourced to Argo).** `ValidationSuite` (when implemented) is flat — sequential or parallel, with `stopOnFailure`. Users needing DAG wrap suites in Argo. Documented as non-goal. Avoided.
 
 ## Resolved one-way-door decisions
 
-These are decisions baked into the LLD that the council orchestrator surfaced for explicit user approval. The Round 2 gate closed on 2026-04-28; each row records the decision the user signed off on.
+These are decisions baked into the LLD that the council orchestrator surfaced for explicit user approval. Round 2 closed 2026-04-28; Round 3 architectural-refinement pass added rows 19–24 and modified rows 3, 4, 18 on 2026-04-29.
 
 | # | Decision | Rationale | Reverse cost |
 |---|---|---|---|
 | 1 | API group **`validation.sei.io`** (separate from `sei.io`) | Validation versions independently of node-platform CRDs | High — group rename = full migration |
-| 2 | Discriminator field name **`spec.type`** (not `spec.kind`) | Avoids visual collision with `TypeMeta.kind`; Litmus / K6 precedent | High — field rename = stored-object migration |
-| 3 | **`chain.validators` and `chain.fullNodes` embed `SeiNodeDeploymentSpec` directly** | Field-experience parity; future SND fields free; controller-injected fields documented | Medium — switch to projection if SND breakage forces |
-| 4 | **`chain.fullNodes` is required, not optional. No `endpointPolicy` knob.** Workload always connects to the fullNodes fleet. | Two-fleet topology codifies what both real consumers run; eliminates a one-way-door enum | Medium — adding a validator-only mode later requires bringing back an enum |
+| 2 | **Composable optional actor blocks** (`spec.load`, `spec.sequence`, `spec.chaos`) **instead of `spec.type` discriminator** | Real test shapes mix actors; discriminator was a one-way door | High — schema migration; v1 ships composable from start |
+| 3 | **`chain.deployments[]` list of named SeiNodeDeployment configs** with `role: validator|fullNode` | Generalizes the "validator + fullNodes" topology; absorbs heterogeneous fullNode fleets without new top-level fields | High — list shape rename = stored-object migration |
+| 4 | **Exactly one `role: validator` deployment, ≥1 `role: fullNode` deployment.** Workload always connects to fullNode-role endpoints. **No `endpointPolicy` knob — permanently dropped.** | Two-fleet topology codifies what both real consumers run; one validator + N fullNodes generalizes; removing endpointPolicy eliminates a one-way enum | Medium — adding a validator-only or selectable mode later requires new shape |
 | 5 | **`Failed` vs `Error` distinction** at phase level (heartbeat ignores Error) | Two terminal failure modes carry different operational signals | Low (additive) |
 | 6 | **Bucket prefix `s3://harbor-validation-results/{namespace}/{job}/{runId}/`** locked verbatim | Phase 1 already wires this | High — bucket migration |
 | 7 | **No Flux labels on owned children** (controller invariant) | Flux would prune controller-managed objects | High — Flux drift incident |
 | 8 | **Tenant pre-provisions SAs**; controller never IAM | Stay off the IAM control plane | High — auth model creep |
 | 9 | **`alert.ruleRef` cross-namespace** allowed only into label-allowlisted namespaces | Multi-tenancy by namespace; controller-mediated escape hatch | Low (additive) |
-| 10 | **Reserved env-var names rejected at admission via CEL XValidation** on `WorkloadSpec.env` | Hard reject is deterministic; avoids the silent-override surprise the prior draft proposed | Low (additive — names list extends additively) |
+| 10 | **Reserved env-var names rejected at admission via CEL XValidation** on `WorkloadSpec.env` | Hard reject is deterministic; avoids the silent-override surprise | Low (additive — names list extends additively) |
 | 11 | **`query.threshold` typed as `string`** with regex CEL | OTel Round 1 schema-typing; switch numeric→string is breaking | High |
-| 12 | **No `mode` field on `ValidationRule` in v1.** Continuous polling is the only behavior; field is additive when more modes ship. | Avoids locking in an enum value before semantics solidify | Low (additive) |
+| 12 | **No `mode` field on `ValidationRule` in v1** | Avoids locking in an enum value before semantics solidify | Low (additive) |
 | 13 | **`runProperties.interval` (default 30s, min 5s, max 5m)** is load-bearing for continuous polling | Polling cadence per rule | Low (additive — bounds may relax) |
-| 14 | **`runProperties.stopOnFailure` implemented in v1** (default `false`); controller deletes the workload Job to halt load when a rule trips | Real fast-fail path; not deferred | Low (additive — semantics expansion) |
-| 15 | **Two conditions: `Succeeded` (Tekton-style) and `TestComplete` (monotonic Job-side advance)** | `TestComplete` lets `monitor-run` carry idempotent state across restarts; external consumers can render "workload done, rules aggregating" | Low (additive — extra conditions stay additive) |
-| 16 | **`status.report.raw` cut entirely.** S3 URL is the only artifact pointer in `.status`. | Bounded `.status` size; URL is programmatically derivable; S3 is authoritative | Low (additive — re-add capped raw if a consumer demands without S3 access) |
-| 17 | **Spec immutability** (CEL `self == oldSelf` on `spec.chain`, `spec.loadTest`, `spec.rules`) | Re-runs are new ValidationRun resources; mutation semantics undefined | Medium — relaxation requires versioning |
-| 18 | **Plan task list collapses to 7** (`ensure-chain` → `wait-chain-ready` → `resolve-endpoints` → `render-config` → `apply-job` → `monitor-run` → `mark-done`) — `monitor-run` combines what was previously `wait-job-terminal` + `resolve-rules` + `evaluate-rules`; `mark-done` absorbs the trivial S3 URL stamp from `collect-report` | Reduces controller-side state-shuttling between tasks; per-rule polling state lives on `.status.rules[].lastEvaluatedAt` | Medium — splitting back out would touch every persisted Plan |
+| 14 | **`runProperties.stopOnFailure` implemented in v1** (default `false`); orchestrator sets `Conditions[TestCancelled]=True` and actor reconcilers halt cooperatively | Real fast-fail path; no barrier task needed | Low (additive — semantics expansion) |
+| 15 | **Five conditions: `TestRunning`, `TestComplete`, `Succeeded`, `TestCancelled`, `LoadComplete`** with single-writer field-manager isolation | Gate-flip + finalize + Tekton-style pass/fail + cross-controller cancel signal + actor-side complete signal | Low (additive — extra conditions stay additive) |
+| 16 | **`status.report.raw` cut entirely.** S3 URL is the only artifact pointer in `.status`. | Bounded `.status` size; URL is programmatically derivable | Low (additive — re-add capped raw if a consumer demands without S3 access) |
+| 17 | **Spec immutability** (CEL `self == oldSelf` on `spec.chain`, `spec.load`, `spec.rules`, `spec.sequence`, `spec.chaos`) | Re-runs are new ValidationRun resources | Medium — relaxation requires versioning |
+| 18 | **Two plans per Run, partitioned across `.status.plans.<controllerName>` slots.** Orchestration plan: `ensure-chain → wait-chain-ready → resolve-endpoints → mark-test-running → monitor-task-completion → finalize` (6 tasks). LoadGeneration plan: `render-config → apply-job → wait-job-terminal` (3 tasks). | Each controller owns its own plan; no cross-controller plan mutation; v2 actor controllers append plan slots additively | Medium — collapsing back to one plan would require status migration AND re-introducing a barrier task |
+| 19 | **Two cooperating sub-controllers in one binary** (`OrchestrationReconciler` always-on, `LoadGenerationReconciler` Helm-opt-in default-on). v2 actor controllers register identically. | Each controller is independently testable, opt-out-able, and v2-extensible. Replaces the prior single-controller-with-7-tasks design. | High — unwinding to one controller would re-introduce the cross-actor-orchestration problem composable blocks are designed to absorb |
+| 20 | **Predicate-gated event delivery** on `LoadGenerationReconciler` (`spec.load != nil AND Conditions[TestRunning]=True`). No barrier task; controller-runtime native gating. | Idiomatic; survives controller restart; no synchronization primitive required | Low (additive — predicate refines additively) |
+| 21 | **Field-manager isolation per controller** (`validationrun-orchestration`, `validationrun-loadgeneration`). Single-writer table enforces no two controllers ever write the same condition or status field. | SSA preserves both partitions correctly; concurrent writes are conflict-free by construction | Low (additive — adding fields keeps isolation) |
+| 22 | **`TaskPlan.TargetPhase` ignored by both ValidationRun controllers** (typed as `SeiNodePhase`, doesn't fit ValidationRunPhase). Phase transitions owned exclusively by orchestration plan's `finalize` task. | Avoids forcing a `TaskPlan` schema migration in v1; phase logic centralizes in one place | Medium — if v2 needs typed TargetPhase across actor plans, file the SND/SeiNode-side common-types update |
+| 23 | **Helm chart opt-in pattern** for actor controllers (`controllers.<name>.enabled`). v1 binary errors at startup if `sequence` or `chaos` is enabled. | Makes "v2 expansion is additive" a chart-level invariant | Low (additive — new actor flags append) |
+| 24 | **`pods/exec` REJECTED for v2 sequence steps.** When SequenceReconciler ships, sequence steps that submit chain transactions do so via short-lived `Job`s targeting RPC, NOT via `kubectl exec` into validator pods. Controller's RBAC will not include `pods/exec` ever. | `pods/exec` is a privileged escape hatch with audit-trail and security implications. Job-based sequence steps reuse the same Pod Identity / RBAC story already established. | Very High — adding `pods/exec` later requires a separate security review and an explicit RBAC promotion |
+| 25 | **Chaos plan namespace-label gate (v2).** When ChaosReconciler ships, chaos-mesh CRDs in tenant namespaces require namespace label `sei.io/chaos-allowed=true` (admission-webhook-enforced) AND controller built with `--enable-chaos-plan` (compile-time opt-in for v1 deployments). | Chaos is a privileged operation; namespace-label is the multi-tenancy gate; compile-time flag prevents accidental enablement | Low (additive — relaxing the label gate is an additive admission-rule change) |
+| 26 | **`status.failedPlan` field reserved in v1, populated by orchestration's `finalize` task.** Stamps `"loadGeneration"` (or `""` for orchestration's own ruling) on terminal Failed/Error in v1. v2 reconcilers stamp `"sequence"` / `"chaos"` without schema churn. | 2am on-call sees at a glance which actor caused the run to fail; v2-additive | Low (additive — new actor names append) |
 
 ## Open dependencies
 
 These are companion sub-issues the LLD discovers. **None block v1 ValidationRun.**
 
-1. **SND-readiness includes catching_up.** Recommend option (b): seid `/health` endpoint returns 503 while `catching_up=true`, kubelet readiness probe consumes it, SND `phase=Ready` automatically waits. File against `sei-protocol/sei-k8s-controller` (SND/SeiNode reconciler). v1 ValidationRun ships without this and accepts genesis-bootstrapped chains as the dominant case.
-2. **`TaskPlan.ErrorPhase` (or Reason-based dispatch).** v1 chooses Reason-based dispatch in the planner (no shared type change). Re-evaluate if a third controller needs the `Failed` vs `Error` distinction.
-3. **SND inline `genesis` rejection on full-node SND.** ValidationRun's webhook rejects `chain.fullNodes.genesis`, but the SND controller itself does not enforce "full-node SND has no genesis ceremony" — it currently relies on the user not providing it. File a small SND-side validation tightening to mirror.
+1. **SND-readiness includes catching_up.** Recommend option (b): seid `/health` endpoint returns 503 while `catching_up=true`, kubelet readiness probe consumes it, SND `phase=Ready` automatically waits. File against `sei-protocol/sei-k8s-controller`. v1 ValidationRun ships without this and accepts genesis-bootstrapped chains as the dominant case.
+2. **`TaskPlan.TargetPhase` typing.** v1 sidesteps by leaving the field empty in both ValidationRun controllers' plans and centralizing phase transitions in `finalize`. Re-evaluate when v2 lands a third actor plan that wants phase-shape parity with SND/SeiNode plans.
+3. **SND inline `genesis` rejection on full-node-role SND.** ValidationRun's CEL rejects `chain.deployments[role=fullNode].spec.genesis`, but the SND controller itself does not enforce "full-node SND has no genesis ceremony" — it currently relies on the user not providing it. File a small SND-side validation tightening to mirror.
 4. **PodMonitor for `sei-k8s-controller` itself.** Currently absent from `clusters/harbor/sei-k8s-controller/`. Add `:8080/metrics` plaintext PodMonitor; the new controller-side metrics in this LLD assume it. Per platform-engineer Round 1.
-5. **Heartbeat PrometheusRule.** One global `clusters/harbor/monitoring/alerts/validation-heartbeat.yaml` querying `validation_run_terminal_total`. Per platform-engineer Round 1 — generic across tenants. File alongside controller manifest delivery, not as a v1 ValidationRun blocker.
-6. **`validation` shared-rules monitoring namespace label.** `monitoring/` namespace gets `sei.io/validation-shared-rules=true` so `alert.ruleRef.namespace=monitoring` works. Single-line label add; document in tenant-onboarding README.
-7. **Shard env-var injection mechanism.** `SHARD_INDEX`/`SHARD_COUNT` per pod requires either Indexed-Job + downward-API or controller-rendered per-pod env. Recommend Indexed-Job (`spec.completionMode=Indexed`) with `JOB_COMPLETION_INDEX` mapped to `SHARD_INDEX` via env-from-fieldRef. Already a Phase 1 contract reservation.
+5. **Heartbeat PrometheusRule.** One global `clusters/harbor/monitoring/alerts/validation-heartbeat.yaml` querying `validation_run_terminal_total`. Per platform-engineer Round 1 — generic across tenants.
+6. **`validation` shared-rules monitoring namespace label.** `monitoring/` namespace gets `sei.io/validation-shared-rules=true` so `alert.ruleRef.namespace=monitoring` works. Single-line label add.
+7. **Shard env-var injection mechanism.** `SHARD_INDEX`/`SHARD_COUNT` per pod via Indexed-Job (`spec.completionMode=Indexed`) with `JOB_COMPLETION_INDEX` mapped to `SHARD_INDEX` via env-from-fieldRef. Already a Phase 1 contract reservation.
+8. **Helm chart `controllers.*` value plumbing.** Chart-level work to surface the per-controller enabled flags as env vars in the controller Deployment. Lands alongside the v1 controller manifest delivery.
 
 ## Future work
 
@@ -1277,13 +1540,14 @@ Each future item names the trigger that un-defers it.
 
 | Item | Un-defer trigger |
 |---|---|
+| **`SequenceReconciler` sub-controller** | First Cosmos-SDK upgrade test that needs ordered state changes. Lands as additive sub-controller; Helm flag `controllers.sequence.enabled=true`; admission un-rejects `spec.sequence`; new `status.plans.sequence` slot. Sequence steps submit via short-lived Jobs (not `pods/exec`). |
+| **`ChaosReconciler` sub-controller** | First chaos-mesh-driven failure-injection test. Lands as additive sub-controller; Helm flag + compile-time `--enable-chaos-plan` flag + tenant namespace label `sei.io/chaos-allowed=true`. New `status.plans.chaos` slot. |
 | `ValidationSuite` reconciler | First multi-Run flow that one human launching kubectl can't drive (≥3 chained Runs in CI). |
 | `ValidationSchedule` reconciler | Tenant wants to retire their GHA cron. Track first request. |
 | `container` rule type | Real heuristic ships outside Prometheus (e.g., balance reconciliation across two RPCs). |
 | `window-end` rule mode (single instant query at run end) | Use case where continuous polling cost is undesirable AND the result is only meaningful at run end. Re-add `mode` field with `continuous` default. |
-| `edge` rule mode (start-vs-end snapshot) | Spec-vs-end snapshot use case (e.g., "validators set didn't change during the run"). |
-| `SequenceTest` discriminator body | First Cosmos-SDK upgrade test that needs ordered state changes. |
-| `IntegrationTest` discriminator body | First "stand up a chain, run one container that does N RPC calls" workload. |
+| `edge` rule mode (start-vs-end snapshot) | Spec-vs-end snapshot use case. |
+| **`status.failedPlan` populated in OrchestrationReconciler when v2 actor plans land** | Already reserved in v1 schema; v1 stamps `"loadGeneration"` only. v2 reconcilers stamp `"sequence"` / `"chaos"` for at-a-glance fault attribution. |
 | `ReportExporter` controller (Pushgateway-shaped) | ≥2 consumers want the same numeric AND a stable report-schema field ships. |
 | Kueue admission control | ≥3 simultaneous suites contending; Prometheus shows queueing. |
 | `spec.runRef` (separate `ValidationDefinition` CR) | ≥10 distinct Runs sharing a workload definition; ConfigMap reuse insufficient. |
@@ -1291,43 +1555,47 @@ Each future item names the trigger that un-defers it.
 | Numeric `actualValue`/`threshold` typed fields on rule status | Regression-detection consumer ships and benefits from type safety. |
 | Multi-workload composition in one Run | Cross-workload barrier/sync requirements emerge. |
 | Live mid-run RPC fleet refresh | HPA on RPC fleet during a run becomes desired. |
-| Validator-only chain topology (no fullNodes fleet) | Consensus-poking workload demands it AND the operational cost of a one-knob enum is justified by ≥2 consumers. |
+| Validator-only chain topology (no fullNode-role deployments) | Consensus-poking workload demands it AND ≥2 consumers justify the operational cost of optional-fullNodes mode. |
+
+**v2 expansion is purely additive — by design.** Adding a sequence or chaos sub-controller does not refactor OrchestrationReconciler or LoadGenerationReconciler. The integration touch-points are: (a) new Helm flag, (b) admission un-rejects the corresponding `spec.<actor>` block, (c) new `status.plans.<name>` slot, (d) new condition `<Actor>Complete` written by the new controller via its own field manager, (e) the new controller's predicate watches `Conditions[TestRunning]=True` exactly like LoadGenerationReconciler does. No existing controller code changes.
 
 ### Argo Workflows re-evaluation triggers
 
-The /coral subcouncil unanimously concluded to ship the custom CRD (Path X) over Argo Workflows for v1 — the per-Run cost of a custom controller is small, and the surface area Argo would absorb (chain-readiness orchestration, structured rule verdicts, S3 URL stamping, stop-on-failure semantics) is the surface area the validation domain wants to own first-class. The Argo conversation should re-open under any of the following triggers:
+The /coral subcouncil unanimously concluded to ship the custom CRD over Argo Workflows for v1 — the per-Run cost of a custom controller is small, and the surface area Argo would absorb (chain-readiness orchestration, structured rule verdicts, S3 URL stamping, stop-on-failure semantics) is the surface area the validation domain wants to own first-class. The Argo conversation should re-open under any of the following triggers:
 
 - **Argo Workflows lands on Harbor for unrelated reasons** (data pipelines, CI consolidation). Marginal cost of a `WorkflowTemplate` + `CronWorkflow` drops to ~zero; `ValidationSchedule` becomes a free wrapping layer.
-- **A fourth distinct test-shape with real DAG needs lands** (chaos-mesh-driven sequences, multi-cluster fanouts). DAG-shaped orchestration is what Argo is genuinely better at; building it inside `ValidationSuite` would be reinventing.
-- **`ValidationSuite` needs DAG semantics, not flat sequential/parallel orchestration.** Same trigger as above, viewed from the Suite end.
-- **300-pod polling cost becomes a non-issue (i.e., we drop continuous mode and revert to window-end only).** The custom controller's main value-add over Argo is the per-rule polling loop with stop-on-failure; if the polling story collapses to a single instant query, the loop's value collapses with it and Argo's `Workflow` shape becomes broadly competitive.
+- **A fourth distinct test-shape with real DAG needs lands** (chaos-mesh-driven sequences, multi-cluster fanouts). DAG-shaped orchestration is what Argo is genuinely better at.
+- **`ValidationSuite` needs DAG semantics, not flat sequential/parallel orchestration.**
+- **300-pod polling cost becomes a non-issue (i.e., we drop continuous mode and revert to window-end only).** The custom controller's main value-add over Argo is the per-rule polling loop with stop-on-failure; if the polling story collapses to a single instant query, Argo's `Workflow` shape becomes broadly competitive.
 
-If any of these trigger, the conversation re-opens with a fresh /coral pass — not a unilateral pivot. The resolved decision stands until the trigger fires.
+If any of these trigger, the conversation re-opens with a fresh /coral pass — not a unilateral pivot.
 
 ## References
 
-### Round 0 + Round 1 + Round 2 artifacts (this council cycle)
+### Round 0 + Round 1 + Round 2 + Round 3 artifacts (this council cycle)
 
 - `sei-protocol/sei-k8s-controller#139` — entry brief, OSS survey, six open questions, five one-way-door warnings (`/tmp/validationrun-issue-body.md`)
 - `sei-protocol/platform#235` — Phase 1 workload contract issue (`/tmp/phase1-issue-body.md`)
 - Round 1 PM scope cuts (`/tmp/round1/pm-scope-cuts.md`)
 - Round 1 OTel rule semantics + observability (`/tmp/round1/otel-rule-semantics.md`)
 - Round 1 platform-engineer Harbor integration (`/tmp/round1/platform-integration.md`)
-- Round 2 user gate decisions (closed 2026-04-28) — encoded in the "Resolved one-way-door decisions" table above
+- Round 2 user gate decisions (closed 2026-04-28) — encoded in the "Resolved one-way-door decisions" table rows 1–18
+- Round 3 architectural-refinement pass (closed 2026-04-29) — encoded in rows 2, 3, 4, 18, 19–26 above
 
 ### In-repo (sei-k8s-controller)
 
 - `/Users/brandon/sei-k8s-controller/CLAUDE.md` — controller patterns, RBAC marker convention, plan-driven reconciler
 - `/Users/brandon/sei-k8s-controller/internal/planner/doc.go` — plan lifecycle, condition ownership, single-patch model
-- `/Users/brandon/sei-k8s-controller/internal/planner/{planner.go,group.go,full.go,validator.go,replay.go,executor.go}` — existing builder idiom; `validationrun.go` will follow the same pattern
+- `/Users/brandon/sei-k8s-controller/internal/planner/{planner.go,group.go,full.go,validator.go,replay.go,executor.go}` — existing builder idiom; `validationrun_orchestration.go` and `validationrun_loadgen.go` will follow the same pattern
 - `/Users/brandon/sei-k8s-controller/internal/task/{await_nodes_running.go,deployment.go,observe_image.go,task.go}` — controller-side task pattern, deserialize-map registration
 - `/Users/brandon/sei-k8s-controller/api/v1alpha1/{seinode_types.go,seinodedeployment_types.go,common_types.go,validator_types.go,full_node_types.go,replayer_types.go}` — existing CRD type idioms (CEL XValidation, kubebuilder markers, listType=map listMapKey)
+- `/Users/brandon/sei-k8s-controller/cmd/main.go` — controller registration pattern (the new `OrchestrationReconciler` and `LoadGenerationReconciler` register here, the latter behind `cfg.LoadGenerationEnabled`)
 - `/Users/brandon/sei-k8s-controller/docs/design/composable-genesis.md` — LLD style template
 
 ### In-repo (platform)
 
-- `/Users/brandon/platform/clusters/harbor/nightly/templates/seinodedeployment.yaml` — the working two-SND topology this design generalizes
-- `/Users/brandon/platform/.github/workflows/k8s_nightly.yml` — bash glue this CRD subsumes (every `kubectl wait`/`kubectl exec`/`envsubst`/`aws s3 cp` step becomes a plan task)
+- `/Users/brandon/platform/clusters/harbor/nightly/templates/seinodedeployment.yaml` — the working two-SND topology this design generalizes into `chain.deployments[]`
+- `/Users/brandon/platform/.github/workflows/k8s_nightly.yml` — bash glue this CRD subsumes
 
 ### OSS survey — direct precedents (only patterns cited above)
 
@@ -1339,3 +1607,4 @@ If any of these trigger, the conversation re-opens with a fresh /coral pass — 
 - Chaos Mesh Schedule types — annotation-based pause pattern — https://github.com/chaos-mesh/chaos-mesh/blob/master/api/v1alpha1/schedule_types.go
 - Testkube TestExecution types — what NOT to do (lowercase enum, per-runner CRDs) — https://github.com/kubeshop/testkube-operator/blob/main/api/tests/v3/test_types.go
 - Sonobuoy plugins doc — done-file convention (referenced for future `container` rule type) — https://github.com/vmware-tanzu/sonobuoy/blob/main/site/content/docs/main/plugins.md
+- controller-runtime `WithEventFilter` predicate pattern — predicate-gated reconciliation idiom (used for LoadGenerationReconciler's `Conditions[TestRunning]` gate) — https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/predicate
