@@ -26,6 +26,25 @@ Always use the available subagents for relevant work:
 - No `panic` in controller code. Return errors and let the reconciler retry.
 - Keep reconcile loops idempotent — every reconcile should converge toward desired state regardless of current state.
 
+### Status patches
+
+Status writes must use **optimistic concurrency** so a stale reconcile cannot silently overwrite a fresher one. Two near-simultaneous reconciles can both observe `status.plan == nil`, both build a plan, and without resourceVersion-checked patches the second silently wins — corrupting plan-creation idempotency.
+
+**Use:**
+
+```go
+patch := client.MergeFromWithOptions(obj.DeepCopy(), client.MergeFromWithOptimisticLock{})
+// ... mutate obj.Status ...
+if err := r.Status().Patch(ctx, obj, patch); err != nil { ... }
+```
+
+**Do not use** for status writes:
+- `client.MergeFrom(...)` without the `MergeFromWithOptimisticLock{}` option — produces a merge patch with no resourceVersion precondition; stale writes succeed silently.
+- `client.Status().Update(...)` without resourceVersion verification on the in-memory object.
+- `client.Apply` (server-side apply) on `.status` without explicit resourceVersion handling — field-manager isolation does not by itself prevent stale-write races for our plan-creation invariant.
+
+The single-patch reconcile model means each reconcile snapshots `obj.DeepCopy()` once, accumulates mutations in-memory, and flushes one optimistic-lock-protected `Status().Patch` at the end. Code-review checklist item: every `r.Status().Patch` call site must use a base built with `MergeFromWithOptimisticLock{}`.
+
 ### Testing
 - Tests use `testing` + `gomega` for assertions.
 - Test fixtures for platform config live in `internal/platform/platformtest/`.
