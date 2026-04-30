@@ -70,13 +70,12 @@ func (e *createExporterExecution) Execute(ctx context.Context) error {
 		Name: e.params.ExporterName, Namespace: e.params.Namespace,
 	}, existing)
 	if err == nil {
-		// If a previous attempt left a failed exporter, delete it so we
-		// can create a fresh one on the next reconcile.
 		if existing.Status.Phase == seiv1alpha1.PhaseFailed {
-			if delErr := e.cfg.KubeClient.Delete(ctx, existing); delErr != nil && !apierrors.IsNotFound(delErr) {
-				return fmt.Errorf("deleting failed exporter: %w", delErr)
-			}
-			return nil // next reconcile will re-enter Execute and create a new exporter
+			return Terminal(fmt.Errorf(
+				"exporter %s/%s is Failed — drain the SeiNodeDeployment and clear "+
+					"stale artifacts under %s/%s in the genesis-artifacts bucket before retrying",
+				e.params.Namespace, e.params.ExporterName,
+				e.params.SourceChainID, e.params.GroupName))
 		}
 		e.complete()
 		return nil
