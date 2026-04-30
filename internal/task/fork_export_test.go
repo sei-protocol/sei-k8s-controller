@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -149,7 +150,7 @@ func TestCreateExporter_Execute_Idempotent(t *testing.T) {
 	}
 }
 
-func TestCreateExporter_Execute_DeletesFailedExporter(t *testing.T) {
+func TestCreateExporter_Execute_FailsTerminallyOnFailedExporter(t *testing.T) {
 	group := testGroup()
 	failed := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
@@ -167,6 +168,7 @@ func TestCreateExporter_Execute_DeletesFailedExporter(t *testing.T) {
 	cfg := testGroupCfg(t, group, failed)
 
 	params := CreateExporterParams{
+		GroupName:     "fork-group",
 		ExporterName:  "fork-group-exporter",
 		Namespace:     "default",
 		SourceChainID: "pacific-1",
@@ -180,20 +182,19 @@ func TestCreateExporter_Execute_DeletesFailedExporter(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := exec.Execute(ctx); err != nil {
-		t.Fatalf("Execute: %v", err)
+	execErr := exec.Execute(ctx)
+	if execErr == nil {
+		t.Fatal("expected Terminal error for Failed exporter, got nil")
 	}
-	// Should NOT be complete — the failed exporter was deleted,
-	// next reconcile will re-enter and create a fresh one.
-	if exec.Status(ctx) != ExecutionRunning {
-		t.Fatalf("expected Running (pending recreate), got %s", exec.Status(ctx))
+	var te *TerminalError
+	if !errors.As(execErr, &te) {
+		t.Fatalf("expected *TerminalError, got %T: %v", execErr, execErr)
 	}
 
-	// Verify the failed exporter was deleted
+	// The Failed exporter must NOT be deleted — operator inspects + manually drains.
 	node := &seiv1alpha1.SeiNode{}
-	err = cfg.KubeClient.Get(ctx, types.NamespacedName{Name: "fork-group-exporter", Namespace: "default"}, node)
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("expected NotFound after deleting failed exporter, got %v", err)
+	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: "fork-group-exporter", Namespace: "default"}, node); err != nil {
+		t.Fatalf("Failed exporter must remain for operator inspection; got %v", err)
 	}
 }
 
