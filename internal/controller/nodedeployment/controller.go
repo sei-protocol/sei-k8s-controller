@@ -146,7 +146,7 @@ func (r *SeiNodeDeploymentReconciler) handleDeletion(ctx context.Context, group 
 		return ctrl.Result{}, nil
 	}
 
-	patch := client.MergeFrom(group.DeepCopy())
+	patch := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	group.Status.Phase = seiv1alpha1.GroupPhaseTerminating
 	if err := r.Status().Patch(ctx, group, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting terminating status: %w", err)

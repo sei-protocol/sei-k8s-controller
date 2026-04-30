@@ -45,7 +45,7 @@ func (e *switchTrafficExecution) Execute(ctx context.Context) error {
 		return Terminal(fmt.Errorf("no rollout status on group %s", e.params.GroupName))
 	}
 
-	patch := client.MergeFrom(group.DeepCopy())
+	patch := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	group.Status.Rollout.IncumbentRevision = e.params.EntrantRevision
 	if err := e.cfg.KubeClient.Status().Patch(ctx, group, patch); err != nil {
 		return fmt.Errorf("patching rollout revision: %w", err) // transient

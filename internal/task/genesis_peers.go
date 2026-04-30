@@ -86,6 +86,8 @@ func (e *collectAndSetPeersExecution) setPeersOnNodes(ctx context.Context, peers
 		if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, node); err != nil {
 			return fmt.Errorf("getting node %s: %w", name, err)
 		}
+		// Spec patch (not status); CLAUDE.md's optimistic-lock invariant
+		// applies to .status writes only. Idempotent under conflict.
 		patch := client.MergeFrom(node.DeepCopy())
 		node.Spec.Peers = []seiv1alpha1.PeerSource{
 			{Static: &seiv1alpha1.StaticPeerSource{Addresses: peers}},
