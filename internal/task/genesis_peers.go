@@ -86,6 +86,11 @@ func (e *collectAndSetPeersExecution) setPeersOnNodes(ctx context.Context, peers
 		if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, node); err != nil {
 			return fmt.Errorf("getting node %s: %w", name, err)
 		}
+		// Spec patch on a peer SeiNode (not a status patch). Intentional plain
+		// MergeFrom — the optimistic-lock invariant in CLAUDE.md applies to
+		// .status writes; spec patches on peer SeiNodes are idempotent (this
+		// task converges spec.Peers toward the assembled peer list and is
+		// safe to re-run on conflict).
 		patch := client.MergeFrom(node.DeepCopy())
 		node.Spec.Peers = []seiv1alpha1.PeerSource{
 			{Static: &seiv1alpha1.StaticPeerSource{Addresses: peers}},
