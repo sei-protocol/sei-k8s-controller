@@ -5,6 +5,8 @@ import (
 )
 
 // SeiNodeDeploymentSpec defines the desired state of a SeiNodeDeployment.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.genesis) || has(self.template.spec.validator)",message="genesis is meaningful only for validator-role deployments (full nodes inherit genesis from the validator ceremony's S3 artifact); remove spec.genesis or set template.spec.validator: {}"
 type SeiNodeDeploymentSpec struct {
 	// Replicas is the number of SeiNode instances to create.
 	// +kubebuilder:validation:Minimum=1

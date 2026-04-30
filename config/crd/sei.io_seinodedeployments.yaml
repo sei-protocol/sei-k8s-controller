@@ -862,6 +862,11 @@ spec:
             - template
             - updateStrategy
             type: object
+            x-kubernetes-validations:
+            - message: 'genesis is meaningful only for validator-role deployments
+                (full nodes inherit genesis from the validator ceremony''s S3 artifact);
+                remove spec.genesis or set template.spec.validator: {}'
+              rule: '!has(self.genesis) || has(self.template.spec.validator)'
           status:
             description: SeiNodeDeploymentStatus defines the observed state of a SeiNodeDeployment.
             properties:
