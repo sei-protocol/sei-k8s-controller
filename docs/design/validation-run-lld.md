@@ -1062,7 +1062,7 @@ Injected fields the task fills before SSA:
 | Timeout | `spec.timeouts.chainReady` (default 20m) |
 | Failure | Timeout → `Reason=ChainNotReady`. Any SND `phase=Failed` → `Reason=ChainFailed` |
 
-**Open dependency on SND-readiness semantics** unchanged from prior draft — see Open Dependencies #1. v1 ValidationRun ships without the `catching_up=false` precondition baked into SND `phase=Ready`.
+**SND readiness already gates on chain catch-up.** `internal/noderesource/noderesource.go:366-377` wires `readinessProbe.httpGet` at `seid:RPC_PORT/lag_status` (sei-tendermint's threshold-configured endpoint that returns non-200 while lagging behind chain tip). kubelet sees probe failure → Pod stays NotReady → Service excludes it → SND `phase=Ready` waits via the existing `ConditionNodesReady` aggregation. The `wait-chain-ready` task's poll on SND `phase=Ready` therefore does include the catching_up precondition transitively. (Earlier drafts of this LLD claimed this was a gap and proposed extending the seictl sidecar; that claim was based on incorrect investigation. See `sei-protocol/sei-k8s-controller#144` for the closed-as-already-implemented record.)
 
 ##### 3. `resolve-endpoints`
 
@@ -1503,7 +1503,7 @@ These are decisions baked into the LLD that the council orchestrator surfaced fo
 
 These are companion sub-issues the LLD discovers. **None block v1 ValidationRun.**
 
-1. **SND-readiness includes catching_up.** Recommend option (b): seid `/health` endpoint returns 503 while `catching_up=true`, kubelet readiness probe consumes it, SND `phase=Ready` automatically waits. File against `sei-protocol/sei-k8s-controller`. v1 ValidationRun ships without this and accepts genesis-bootstrapped chains as the dominant case.
+1. ~~**SND-readiness includes catching_up.**~~ **Resolved — already implemented.** The `seid:RPC_PORT/lag_status` readiness probe wired at `internal/noderesource/noderesource.go:366-377` (probing sei-tendermint's threshold-configured endpoint) gates Pod readiness on chain catch-up; SND `phase=Ready` waits via `ConditionNodesReady` aggregation. `sei-protocol/sei-k8s-controller#144` closed-as-already-implemented. Original draft of this LLD specified a multi-day seictl sidecar `/health` extension based on incorrect investigation; the existing seid-side mechanism is functionally equivalent and architecturally cleaner (no sidecar↔seid hop).
 2. **`TaskPlan.TargetPhase` typing.** v1 sidesteps by leaving the field empty in both ValidationRun controllers' plans and centralizing phase transitions in `finalize`. Re-evaluate when v2 lands a third actor plan that wants phase-shape parity with SND/SeiNode plans.
 3. **SND inline `genesis` rejection on full-node-role SND.** ValidationRun's CEL rejects `chain.deployments[role=fullNode].spec.genesis`, but the SND controller itself does not enforce "full-node SND has no genesis ceremony" — it currently relies on the user not providing it. File a small SND-side validation tightening to mirror.
 4. **PodMonitor for `sei-k8s-controller` itself.** Currently absent from `clusters/harbor/sei-k8s-controller/`. Add `:8080/metrics` plaintext PodMonitor; the new controller-side metrics in this LLD assume it. Per platform-engineer Round 1.
