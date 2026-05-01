@@ -1,6 +1,7 @@
 package nodedeployment
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -16,9 +17,7 @@ func nodeWithOrdinal(name, ordinal string, extraLabels map[string]string) seiv1a
 		groupLabel:        "pacific-1-wave",
 		groupOrdinalLabel: ordinal,
 	}
-	for k, v := range extraLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, extraLabels)
 	return seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
