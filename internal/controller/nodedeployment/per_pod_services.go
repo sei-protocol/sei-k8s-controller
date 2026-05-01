@@ -11,18 +11,9 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// populatePerPodServices builds the PerPodServices status entries from the
-// child SeiNode list. Pure function — no client calls. The headless Service
-// for each child has the same name as the SeiNode (see
-// noderesource.GenerateHeadlessService); ports come from seiconfig so a port
-// change in the chain runtime propagates through one canonical source.
-//
-// Exporter-role children are excluded to mirror populateIncumbentNodes.
-// Children missing the ordinal label are skipped (logged at V(1)) rather than
-// emitted with ordinal=0, which would scramble the sort order.
-//
-// Returns nil when no usable children exist; the caller assigns directly to
-// status without an empty-list intermediate so omitempty drops the field.
+// populatePerPodServices builds the PerPodServices status from child SeiNodes,
+// sorted by ordinal. Excludes exporter-role children. Returns nil when empty
+// so omitempty drops the field.
 func populatePerPodServices(log logr.Logger, nodes []seiv1alpha1.SeiNode) []seiv1alpha1.PerPodServiceStatus {
 	type entry struct {
 		status  seiv1alpha1.PerPodServiceStatus

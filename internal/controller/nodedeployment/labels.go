@@ -18,9 +18,8 @@ const (
 	managedByAnnotation = "sei.io/managed-by"
 )
 
-// seiNodeName is load-bearing: the resulting name is published as
-// Status.PerPodServices[].Name and matches the headless Service name. Renaming
-// or reformatting silently rewrites consumer handles.
+// seiNodeName is published as Status.PerPodServices[].Name and equals the
+// headless Service name; the format is part of the public interface.
 func seiNodeName(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
 	return fmt.Sprintf("%s-%d", group.Name, ordinal)
 }
