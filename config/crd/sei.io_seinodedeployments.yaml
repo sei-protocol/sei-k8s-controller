@@ -1036,6 +1036,43 @@ spec:
                   by the controller.
                 format: int64
                 type: integer
+              perPodServices:
+                description: |-
+                  PerPodServices lists the per-replica headless Services. Resolve each
+                  at {name}.{namespace}.svc; pod IPs are not included.
+                items:
+                  description: |-
+                    PerPodServiceStatus describes one child's headless Service.
+                    Name equals the child SeiNode name and the headless Service name.
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                    ports:
+                      description: |-
+                        PerPodServicePorts adds the stateful ports the cluster-internal Service
+                        omits. Field names are part of the public interface.
+                      properties:
+                        evmHttp:
+                          format: int32
+                          type: integer
+                        evmWs:
+                          format: int32
+                          type: integer
+                      required:
+                      - evmHttp
+                      - evmWs
+                      type: object
+                  required:
+                  - name
+                  - namespace
+                  - ports
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               phase:
                 description: Phase is the high-level lifecycle state.
                 enum:

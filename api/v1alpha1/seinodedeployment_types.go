@@ -256,6 +256,13 @@ type SeiNodeDeploymentStatus struct {
 	// +optional
 	InternalService *InternalServiceStatus `json:"internalService,omitempty"`
 
+	// PerPodServices lists the per-replica headless Services. Resolve each
+	// at {name}.{namespace}.svc; pod IPs are not included.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	PerPodServices []PerPodServiceStatus `json:"perPodServices,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -290,6 +297,21 @@ type InternalServicePorts struct {
 	EvmHttp int32 `json:"evmHttp"`
 	// Rest is the Cosmos REST (LCD) port (1317).
 	Rest int32 `json:"rest"`
+}
+
+// PerPodServiceStatus describes one child's headless Service.
+// Name equals the child SeiNode name and the headless Service name.
+type PerPodServiceStatus struct {
+	Name      string             `json:"name"`
+	Namespace string             `json:"namespace"`
+	Ports     PerPodServicePorts `json:"ports"`
+}
+
+// PerPodServicePorts adds the stateful ports the cluster-internal Service
+// omits. Field names are part of the public interface.
+type PerPodServicePorts struct {
+	EvmHttp int32 `json:"evmHttp"`
+	EvmWs   int32 `json:"evmWs"`
 }
 
 // GroupNodeStatus is a summary of a child SeiNode's state.
