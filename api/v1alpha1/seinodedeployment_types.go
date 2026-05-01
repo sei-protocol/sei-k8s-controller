@@ -256,6 +256,18 @@ type SeiNodeDeploymentStatus struct {
 	// +optional
 	InternalService *InternalServiceStatus `json:"internalService,omitempty"`
 
+	// PerPodServices reports the per-replica headless Services that expose
+	// stateful protocols kube-proxy cannot load-balance (EVM WebSocket).
+	// One entry per child SeiNode whose headless Service has been reconciled.
+	// Resolution model is DNS-only: consumers MUST resolve
+	// {name}.{namespace}.svc at dial time. Pod IPs are intentionally omitted
+	// (they're ephemeral; EndpointSlices already track them for callers who
+	// need live membership).
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	PerPodServices []PerPodServiceStatus `json:"perPodServices,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -290,6 +302,37 @@ type InternalServicePorts struct {
 	EvmHttp int32 `json:"evmHttp"`
 	// Rest is the Cosmos REST (LCD) port (1317).
 	Rest int32 `json:"rest"`
+}
+
+// PerPodServiceStatus describes one child's headless Service. The Service
+// itself is created by the per-node reconciler (see
+// internal/noderesource/noderesource.go GenerateHeadlessService); this status
+// type publishes its addressing schema so consumers don't have to enumerate
+// Services by label. Name == child SeiNode name == headless Service name.
+type PerPodServiceStatus struct {
+	// Name is the headless Service name (== child SeiNode name).
+	Name string `json:"name"`
+
+	// Namespace is the Service's namespace.
+	Namespace string `json:"namespace"`
+
+	// Ports enumerates the named ports the per-pod Service exposes that
+	// callers typically dial directly. Stateful ports (EVM WebSocket) are
+	// the primary motivator; HTTP ports are listed for symmetry so callers
+	// that want pod-affine HTTP (e.g. nonce-pinned EVM tx flows) can use
+	// the same handle.
+	Ports PerPodServicePorts `json:"ports"`
+}
+
+// PerPodServicePorts is the per-pod superset of InternalServicePorts; it
+// adds ports the cluster-internal Service intentionally omits because
+// kube-proxy can't load-balance them. Field names are part of the public
+// interface contract.
+type PerPodServicePorts struct {
+	// EvmHttp is the EVM JSON-RPC HTTP port (8545).
+	EvmHttp int32 `json:"evmHttp"`
+	// EvmWs is the EVM JSON-RPC WebSocket port (8546).
+	EvmWs int32 `json:"evmWs"`
 }
 
 // GroupNodeStatus is a summary of a child SeiNode's state.

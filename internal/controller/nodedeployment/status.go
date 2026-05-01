@@ -7,6 +7,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logr "sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -40,6 +41,7 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 	group.Status.Replicas = group.Spec.Replicas
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses
+	group.Status.PerPodServices = populatePerPodServices(logr.FromContext(ctx), nodes)
 
 	group.Status.Phase = computeGroupPhase(group, readyReplicas, group.Spec.Replicas, nodes)
 

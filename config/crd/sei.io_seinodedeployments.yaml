@@ -1036,6 +1036,59 @@ spec:
                   by the controller.
                 format: int64
                 type: integer
+              perPodServices:
+                description: |-
+                  PerPodServices reports the per-replica headless Services that expose
+                  stateful protocols kube-proxy cannot load-balance (EVM WebSocket).
+                  One entry per child SeiNode whose headless Service has been reconciled.
+                  Resolution model is DNS-only: consumers MUST resolve
+                  {name}.{namespace}.svc at dial time. Pod IPs are intentionally omitted
+                  (they're ephemeral; EndpointSlices already track them for callers who
+                  need live membership).
+                items:
+                  description: |-
+                    PerPodServiceStatus describes one child's headless Service. The Service
+                    itself is created by the per-node reconciler (see
+                    internal/noderesource/noderesource.go GenerateHeadlessService); this status
+                    type publishes its addressing schema so consumers don't have to enumerate
+                    Services by label. Name == child SeiNode name == headless Service name.
+                  properties:
+                    name:
+                      description: Name is the headless Service name (== child SeiNode
+                        name).
+                      type: string
+                    namespace:
+                      description: Namespace is the Service's namespace.
+                      type: string
+                    ports:
+                      description: |-
+                        Ports enumerates the named ports the per-pod Service exposes that
+                        callers typically dial directly. Stateful ports (EVM WebSocket) are
+                        the primary motivator; HTTP ports are listed for symmetry so callers
+                        that want pod-affine HTTP (e.g. nonce-pinned EVM tx flows) can use
+                        the same handle.
+                      properties:
+                        evmHttp:
+                          description: EvmHttp is the EVM JSON-RPC HTTP port (8545).
+                          format: int32
+                          type: integer
+                        evmWs:
+                          description: EvmWs is the EVM JSON-RPC WebSocket port (8546).
+                          format: int32
+                          type: integer
+                      required:
+                      - evmHttp
+                      - evmWs
+                      type: object
+                  required:
+                  - name
+                  - namespace
+                  - ports
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               phase:
                 description: Phase is the high-level lifecycle state.
                 enum:
