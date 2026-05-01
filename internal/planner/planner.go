@@ -16,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -707,11 +709,26 @@ func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, erro
 // mergeOverrides combines controller-generated overrides with user-specified
 // overrides. User overrides take precedence.
 func mergeOverrides(controllerOverrides, userOverrides map[string]string) map[string]string {
-	if len(controllerOverrides) == 0 && len(userOverrides) == 0 {
-		return nil
-	}
-	merged := make(map[string]string, len(controllerOverrides)+len(userOverrides))
+	merged := make(map[string]string, len(controllerOverrides)+len(userOverrides)+1)
 	maps.Copy(merged, controllerOverrides)
 	maps.Copy(merged, userOverrides)
+	applyForcedOverrides(merged, userOverrides)
 	return merged
+}
+
+const (
+	overrideKeyLoggingLevel = "logging.level"
+	enforcedLoggingLevel    = "info"
+)
+
+func applyForcedOverrides(merged, userOverrides map[string]string) {
+	if got, ok := userOverrides[overrideKeyLoggingLevel]; ok && got != enforcedLoggingLevel {
+		ctrl.Log.WithName("planner").Info(
+			"rejecting user override",
+			"key", overrideKeyLoggingLevel,
+			"user_value", got,
+			"forced_value", enforcedLoggingLevel,
+		)
+	}
+	merged[overrideKeyLoggingLevel] = enforcedLoggingLevel
 }
