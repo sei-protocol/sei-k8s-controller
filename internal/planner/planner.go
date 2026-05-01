@@ -44,6 +44,11 @@ const (
 	TaskAwaitNodesRunning      = task.TaskTypeAwaitNodesRunning
 )
 
+const (
+	overrideKeyLoggingLevel = "logging.level"
+	enforcedLoggingLevel    = "info"
+)
+
 // baseProgression defines the ordered task sequence for each bootstrap mode.
 var baseProgression = map[string][]string{
 	"snapshot":   {TaskSnapshotRestore, TaskConfigApply, TaskConfigValidate, TaskMarkReady},
@@ -715,11 +720,6 @@ func mergeOverrides(controllerOverrides, userOverrides map[string]string) map[st
 	applyForcedOverrides(merged, userOverrides)
 	return merged
 }
-
-const (
-	overrideKeyLoggingLevel = "logging.level"
-	enforcedLoggingLevel    = "info"
-)
 
 func applyForcedOverrides(merged, userOverrides map[string]string) {
 	if got, ok := userOverrides[overrideKeyLoggingLevel]; ok && got != enforcedLoggingLevel {
