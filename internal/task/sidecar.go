@@ -33,6 +33,7 @@ var (
 	_ taskParamser = (*GenerateGentxParams)(nil)
 	_ taskParamser = (*UploadGenesisArtifactsParams)(nil)
 	_ taskParamser = (*AssembleAndUploadGenesisParams)(nil)
+	_ taskParamser = (*AssembleForkGenesisParams)(nil)
 	_ taskParamser = (*SetGenesisPeersParams)(nil)
 )
 

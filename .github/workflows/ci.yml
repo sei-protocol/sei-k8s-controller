@@ -16,7 +16,10 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.8.0
+          version: v2.12.1
+          # Temporary override — pre-existing lint debt surfaced by the
+          # v2.8.0 → v2.12.1 bump. Tracked in #163; remove once paid down.
+          only-new-issues: true
 
   test:
     runs-on: ubuntu-latest

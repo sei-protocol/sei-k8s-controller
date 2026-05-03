@@ -34,25 +34,42 @@ func (p *genesisGroupPlanner) BuildPlan(
 		nodeParams[i] = task.GenesisNodeParam{Name: name}
 	}
 
+	accounts := make([]task.GenesisAccountEntry, len(group.Spec.Genesis.Accounts))
+	for i, a := range group.Spec.Genesis.Accounts {
+		accounts[i] = task.GenesisAccountEntry{Address: a.Address, Balance: a.Balance}
+	}
+
 	// Select assembler task based on whether this is a fork ceremony.
+	// Validate at planner-time so bech32 / shape errors hit
+	// `kubectl describe seinodedeployment` rather than a sidecar Job pod.
 	assembleTaskType := TaskAssembleGenesis
 	var assembleParams any
 
 	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) && group.Spec.Genesis.Fork != nil {
 		assembleTaskType = TaskAssembleGenesisFork
-		assembleParams = &task.AssembleForkGenesisParams{
+		p := &task.AssembleForkGenesisParams{
 			SourceChainID:  group.Spec.Genesis.Fork.SourceChainID,
 			ChainID:        group.Spec.Genesis.ChainID,
 			AccountBalance: group.Spec.Genesis.AccountBalance,
 			Namespace:      group.Namespace,
 			Nodes:          nodeParams,
+			Accounts:       accounts,
 		}
+		if err := p.Validate(); err != nil {
+			return nil, err
+		}
+		assembleParams = p
 	} else {
-		assembleParams = &task.AssembleAndUploadGenesisParams{
+		p := &task.AssembleAndUploadGenesisParams{
 			AccountBalance: group.Spec.Genesis.AccountBalance,
 			Namespace:      group.Namespace,
 			Nodes:          nodeParams,
+			Accounts:       accounts,
 		}
+		if err := p.Validate(); err != nil {
+			return nil, err
+		}
+		assembleParams = p
 	}
 
 	var tasks []seiv1alpha1.PlannedTask
