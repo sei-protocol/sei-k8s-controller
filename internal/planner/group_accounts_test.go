@@ -11,7 +11,10 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-const validSeiAddr = "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9"
+const (
+	validSeiAddr  = "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9"
+	validSeiAddr2 = "sei140x77qfrg4ncn27dauqjx3t83x4ummcpmrsjjl"
+)
 
 func groupWithAccounts(fork bool, accounts []seiv1alpha1.GenesisAccount) *seiv1alpha1.SeiNodeDeployment {
 	cond := seiv1alpha1.ConditionGenesisCeremonyNeeded
@@ -116,5 +119,50 @@ func TestBuildPlan_RejectsBadBech32_PlannerTime(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sei") {
 		t.Errorf("error: got %q", err.Error())
+	}
+}
+
+func TestBuildPlan_Fork_RejectsBadBech32_PlannerTime(t *testing.T) {
+	// Symmetric coverage: fork branch must also surface bech32 errors
+	// at planner time, not at sidecar-execute.
+	group := groupWithAccounts(true, []seiv1alpha1.GenesisAccount{
+		{Address: "cosmos1zg69v7y6hn00qy352euf40x77qfrg4ncjur58y", Balance: "1usei"},
+	})
+	p, _ := ForGroup(group)
+	_, err := p.BuildPlan(group)
+	if err == nil {
+		t.Fatal("expected planner-time error for non-sei address (fork branch)")
+	}
+}
+
+func TestBuildPlan_PropagatesMultipleAccounts(t *testing.T) {
+	// Locks in the slice copy at group.go:37-40 — if a future
+	// refactor switches the idiom and silently drops entries past
+	// index 0, this test catches it.
+	group := groupWithAccounts(false, []seiv1alpha1.GenesisAccount{
+		{Address: validSeiAddr, Balance: "1000usei"},
+		{Address: validSeiAddr2, Balance: "2000usei,500uatom"},
+	})
+	p, err := ForGroup(group)
+	if err != nil {
+		t.Fatalf("ForGroup: %v", err)
+	}
+	plan, err := p.BuildPlan(group)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	var params task.AssembleAndUploadGenesisParams
+	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(params.Accounts) != 2 {
+		t.Fatalf("Accounts: got %d, want 2", len(params.Accounts))
+	}
+	if params.Accounts[0].Address != validSeiAddr || params.Accounts[1].Address != validSeiAddr2 {
+		t.Errorf("addresses: got [%q, %q]", params.Accounts[0].Address, params.Accounts[1].Address)
+	}
+	if params.Accounts[1].Balance != "2000usei,500uatom" {
+		t.Errorf("multi-denom balance: got %q", params.Accounts[1].Balance)
 	}
 }

@@ -34,5 +34,3 @@ func (p *AssembleForkGenesisParams) taskType() string { return sidecar.TaskTypeA
 func (p *AssembleForkGenesisParams) toRequestParams() *map[string]any {
 	return p.toClientTask().ToTaskRequest().Params
 }
-
-var _ taskParamser = (*AssembleForkGenesisParams)(nil)
