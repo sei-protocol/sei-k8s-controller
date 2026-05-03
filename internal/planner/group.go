@@ -34,9 +34,16 @@ func (p *genesisGroupPlanner) BuildPlan(
 		nodeParams[i] = task.GenesisNodeParam{Name: name}
 	}
 
+	accounts := make([]task.GenesisAccountEntry, len(group.Spec.Genesis.Accounts))
+	for i, a := range group.Spec.Genesis.Accounts {
+		accounts[i] = task.GenesisAccountEntry{Address: a.Address, Balance: a.Balance}
+	}
+
 	// Select assembler task based on whether this is a fork ceremony.
 	assembleTaskType := TaskAssembleGenesis
-	var assembleParams any
+	var assembleParams interface {
+		Validate() error
+	}
 
 	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) && group.Spec.Genesis.Fork != nil {
 		assembleTaskType = TaskAssembleGenesisFork
@@ -46,13 +53,21 @@ func (p *genesisGroupPlanner) BuildPlan(
 			AccountBalance: group.Spec.Genesis.AccountBalance,
 			Namespace:      group.Namespace,
 			Nodes:          nodeParams,
+			Accounts:       accounts,
 		}
 	} else {
 		assembleParams = &task.AssembleAndUploadGenesisParams{
 			AccountBalance: group.Spec.Genesis.AccountBalance,
 			Namespace:      group.Namespace,
 			Nodes:          nodeParams,
+			Accounts:       accounts,
 		}
+	}
+
+	// Surface bech32 / shape errors at planner-time so they appear in
+	// `kubectl describe seinodedeployment` rather than burning a sidecar Job pod.
+	if err := assembleParams.Validate(); err != nil {
+		return nil, err
 	}
 
 	var tasks []seiv1alpha1.PlannedTask

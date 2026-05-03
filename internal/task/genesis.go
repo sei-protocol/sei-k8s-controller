@@ -59,18 +59,34 @@ func (p *UploadGenesisArtifactsParams) toRequestParams() *map[string]any {
 	return &m
 }
 
-// AssembleAndUploadGenesisParams are the serialized fields for the
-// group-level assemble-and-upload-genesis sidecar task.
-// S3 coordinates are derived by the sidecar from its environment.
+// Re-exported so the planner doesn't need a second seictl import.
+type (
+	GenesisNodeParam    = sidecar.GenesisNodeParam
+	GenesisAccountEntry = sidecar.GenesisAccountEntry
+)
+
+// AssembleAndUploadGenesisParams is the controller-side shell that
+// satisfies taskParamser. Wire format and validation come from
+// sidecar.AssembleAndUploadGenesisTask — single source of truth.
 type AssembleAndUploadGenesisParams struct {
-	AccountBalance string             `json:"accountBalance"`
-	Namespace      string             `json:"namespace"`
-	Nodes          []GenesisNodeParam `json:"nodes"`
+	AccountBalance string                `json:"accountBalance"`
+	Namespace      string                `json:"namespace"`
+	Nodes          []GenesisNodeParam    `json:"nodes"`
+	Accounts       []GenesisAccountEntry `json:"accounts,omitempty"`
 }
 
-// GenesisNodeParam identifies a node participating in the genesis ceremony.
-type GenesisNodeParam struct {
-	Name string `json:"name"`
+func (p *AssembleAndUploadGenesisParams) toClientTask() sidecar.AssembleAndUploadGenesisTask {
+	return sidecar.AssembleAndUploadGenesisTask{
+		AccountBalance: p.AccountBalance,
+		Namespace:      p.Namespace,
+		Nodes:          p.Nodes,
+		Accounts:       p.Accounts,
+	}
+}
+
+// Validate surfaces strict bech32 + shape checks at planner-time.
+func (p *AssembleAndUploadGenesisParams) Validate() error {
+	return p.toClientTask().Validate()
 }
 
 func (p *AssembleAndUploadGenesisParams) taskType() string {
@@ -78,16 +94,7 @@ func (p *AssembleAndUploadGenesisParams) taskType() string {
 }
 
 func (p *AssembleAndUploadGenesisParams) toRequestParams() *map[string]any {
-	nodes := make([]map[string]any, len(p.Nodes))
-	for i, n := range p.Nodes {
-		nodes[i] = map[string]any{"name": n.Name}
-	}
-	m := map[string]any{
-		"accountBalance": p.AccountBalance,
-		"namespace":      p.Namespace,
-		"nodes":          nodes,
-	}
-	return &m
+	return p.toClientTask().ToTaskRequest().Params
 }
 
 // SetGenesisPeersParams are the serialized fields for set-genesis-peers.
