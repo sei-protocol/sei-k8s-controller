@@ -14,6 +14,12 @@ import (
 const (
 	validSeiAddr  = "sei1zg69v7y6hn00qy352euf40x77qfrg4nclsjzp9"
 	validSeiAddr2 = "sei140x77qfrg4ncn27dauqjx3t83x4ummcpmrsjjl"
+
+	testAccountBalance  = "1000000usei"
+	testBalance1000usei = "1000usei"
+	testGroupName       = "test-group"
+	testNodeName        = "node-0"
+	sourceChainID       = "pacific-1"
 )
 
 func groupWithAccounts(fork bool, accounts []seiv1alpha1.GenesisAccount) *seiv1alpha1.SeiNodeDeployment {
@@ -22,23 +28,23 @@ func groupWithAccounts(fork bool, accounts []seiv1alpha1.GenesisAccount) *seiv1a
 		cond = seiv1alpha1.ConditionForkGenesisCeremonyNeeded
 	}
 	g := &seiv1alpha1.SeiNodeDeployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-group", Namespace: "nightly"},
+		ObjectMeta: metav1.ObjectMeta{Name: testGroupName, Namespace: "nightly"},
 		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 1,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
 				ChainID:        "arctic-1",
-				AccountBalance: "1000000usei",
+				AccountBalance: testAccountBalance,
 				Accounts:       accounts,
 			},
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
-			IncumbentNodes: []string{"node-0"},
+			IncumbentNodes: []string{testNodeName},
 			Conditions:     []metav1.Condition{{Type: cond, Status: metav1.ConditionTrue}},
 		},
 	}
 	if fork {
 		g.Spec.Genesis.Fork = &seiv1alpha1.ForkConfig{
-			SourceChainID: "pacific-1",
+			SourceChainID: sourceChainID,
 			SourceImage:   "ecr/img@sha256:abc",
 			ExportHeight:  100,
 		}
@@ -48,7 +54,7 @@ func groupWithAccounts(fork bool, accounts []seiv1alpha1.GenesisAccount) *seiv1a
 
 func TestBuildPlan_NonFork_PropagatesAccounts(t *testing.T) {
 	group := groupWithAccounts(false, []seiv1alpha1.GenesisAccount{
-		{Address: validSeiAddr, Balance: "1000usei"},
+		{Address: validSeiAddr, Balance: testBalance1000usei},
 	})
 	p, err := ForGroup(group)
 	if err != nil {
@@ -66,7 +72,7 @@ func TestBuildPlan_NonFork_PropagatesAccounts(t *testing.T) {
 	if len(params.Accounts) != 1 {
 		t.Fatalf("Accounts: got %d, want 1", len(params.Accounts))
 	}
-	if params.Accounts[0].Address != validSeiAddr || params.Accounts[0].Balance != "1000usei" {
+	if params.Accounts[0].Address != validSeiAddr || params.Accounts[0].Balance != testBalance1000usei {
 		t.Errorf("Accounts[0] = %+v", params.Accounts[0])
 	}
 }
@@ -140,7 +146,7 @@ func TestBuildPlan_PropagatesMultipleAccounts(t *testing.T) {
 	// refactor switches the idiom and silently drops entries past
 	// index 0, this test catches it.
 	group := groupWithAccounts(false, []seiv1alpha1.GenesisAccount{
-		{Address: validSeiAddr, Balance: "1000usei"},
+		{Address: validSeiAddr, Balance: testBalance1000usei},
 		{Address: validSeiAddr2, Balance: "2000usei,500uatom"},
 	})
 	p, err := ForGroup(group)

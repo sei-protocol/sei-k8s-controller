@@ -16,7 +16,7 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 3,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
-				ChainID: "arctic-1", AccountBalance: "1000000usei",
+				ChainID: "arctic-1", AccountBalance: testAccountBalance,
 			},
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
@@ -109,7 +109,7 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 1,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
-				ChainID: "pacific-1", AccountBalance: "1000000usei",
+				ChainID: sourceChainID, AccountBalance: testAccountBalance,
 			},
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
@@ -142,7 +142,7 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 }
 
 func TestBuildGroupForkPlan(t *testing.T) {
-	const sourceChain = "pacific-1"
+	const sourceChain = sourceChainID
 
 	group := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "fork-group", Namespace: "default"},
@@ -262,7 +262,7 @@ func TestBuildGroupForkPlan_NilForkSpecNoExporterTasks(t *testing.T) {
 			Replicas: 1,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
 				ChainID:        "test-1",
-				AccountBalance: "1000000usei",
+				AccountBalance: testAccountBalance,
 			},
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
@@ -298,7 +298,7 @@ func TestBuildGroupAssemblyPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
 			Replicas: 2,
 			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
 				ChainID:        "test-chain",
-				AccountBalance: "1000000usei",
+				AccountBalance: testAccountBalance,
 			},
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
