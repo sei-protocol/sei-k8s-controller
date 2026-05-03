@@ -1,4 +1,4 @@
-# sei-k8s-controller
+# Sei-k8s-controller
 
 A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) blockchain infrastructure. It defines two CRDs — `SeiNodeDeployment` and `SeiNode` — under the `sei.io/v1alpha1` API group.
 
