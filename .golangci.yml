@@ -42,6 +42,10 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # Test fixtures naturally repeat strings like namespaces and chain IDs.
+      - linters:
+          - goconst
+        path: _test\.go$
     paths:
       - third_party$
       - builtin$
