@@ -9,7 +9,6 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task/bootstrap"
 )
 
 func TestValidatorPlanner_Validate_SigningKey(t *testing.T) {
@@ -182,7 +181,7 @@ func TestValidatorPlanner_BuildPlan_IdentityInsertsValidateTasks_Bootstrap(t *te
 	pvcIdx := indexOfTaskType(plan, task.TaskTypeEnsureDataPVC)
 	signingIdx := indexOfTaskType(plan, task.TaskTypeValidateSigningKey)
 	nodeKeyIdx := indexOfTaskType(plan, task.TaskTypeValidateNodeKey)
-	deployJobIdx := indexOfTaskType(plan, bootstrap.TaskTypeJob)
+	deployJobIdx := indexOfTaskType(plan, task.TaskTypeDeployBootstrapJob)
 
 	if signingIdx < 0 {
 		t.Fatalf("plan must contain %s; got %v", task.TaskTypeValidateSigningKey, taskTypes(plan))

@@ -14,7 +14,7 @@ import (
 )
 
 type createEntrantNodesExecution struct {
-	Base
+	taskBase
 	params CreateEntrantNodesParams
 	cfg    ExecutionConfig
 }
@@ -27,9 +27,9 @@ func deserializeCreateEntrantNodes(id string, params json.RawMessage, cfg Execut
 		}
 	}
 	return &createEntrantNodesExecution{
-		Base:   Base{id: id, status: ExecutionRunning},
-		params: p,
-		cfg:    cfg,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -45,7 +45,7 @@ func (e *createEntrantNodesExecution) Execute(ctx context.Context) error {
 		}
 	}
 
-	e.Complete()
+	e.complete()
 	return nil
 }
 

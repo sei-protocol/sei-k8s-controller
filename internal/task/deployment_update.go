@@ -14,7 +14,7 @@ import (
 // --- UpdateNodeSpecs: patches child SeiNode specs (image) ---
 
 type updateNodeSpecsExecution struct {
-	Base
+	taskBase
 	params UpdateNodeSpecsParams
 	cfg    ExecutionConfig
 }
@@ -27,9 +27,9 @@ func deserializeUpdateNodeSpecs(id string, params json.RawMessage, cfg Execution
 		}
 	}
 	return &updateNodeSpecsExecution{
-		Base:   Base{id: id, status: ExecutionRunning},
-		params: p,
-		cfg:    cfg,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -61,7 +61,7 @@ func (e *updateNodeSpecsExecution) Execute(ctx context.Context) error {
 		logger.Info("updated node spec", "node", name, "image", desiredImage)
 	}
 
-	e.Complete()
+	e.complete()
 	return nil
 }
 
@@ -76,7 +76,7 @@ func (e *updateNodeSpecsExecution) Status(_ context.Context) ExecutionStatus {
 // only after the rollout is complete and the sidecar is re-initialized.
 
 type awaitSpecUpdateExecution struct {
-	Base
+	taskBase
 	params AwaitSpecUpdateParams
 	cfg    ExecutionConfig
 }
@@ -89,16 +89,16 @@ func deserializeAwaitSpecUpdate(id string, params json.RawMessage, cfg Execution
 		}
 	}
 	return &awaitSpecUpdateExecution{
-		Base:   Base{id: id, status: ExecutionRunning},
-		params: p,
-		cfg:    cfg,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
 func (e *awaitSpecUpdateExecution) Execute(_ context.Context) error { return nil }
 
 func (e *awaitSpecUpdateExecution) Status(ctx context.Context) ExecutionStatus {
-	if s, done := e.IsTerminal(); done {
+	if s, done := e.isTerminal(); done {
 		return s
 	}
 	// TODO: detect terminal pod failures (ImagePullBackOff, ErrImagePull) and
@@ -114,6 +114,6 @@ func (e *awaitSpecUpdateExecution) Status(ctx context.Context) ExecutionStatus {
 			return ExecutionRunning
 		}
 	}
-	e.Complete()
+	e.complete()
 	return ExecutionComplete
 }

@@ -1,11 +1,9 @@
-package bootstrap
+package task
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -22,12 +20,12 @@ type TeardownBootstrapParams struct {
 }
 
 type teardownBootstrapExecution struct {
-	task.Base
+	taskBase
 	params TeardownBootstrapParams
-	cfg    task.ExecutionConfig
+	cfg    ExecutionConfig
 }
 
-func deserializeBootstrapTeardown(id string, params json.RawMessage, cfg task.ExecutionConfig) (task.TaskExecution, error) {
+func deserializeBootstrapTeardown(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
 	var p TeardownBootstrapParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -35,9 +33,9 @@ func deserializeBootstrapTeardown(id string, params json.RawMessage, cfg task.Ex
 		}
 	}
 	return &teardownBootstrapExecution{
-		Base:   task.NewBase(id),
-		params: p,
-		cfg:    cfg,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -66,12 +64,12 @@ func (e *teardownBootstrapExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("fetching bootstrap service for deletion: %w", err)
 	}
 
-	e.Complete()
+	e.complete()
 	return nil
 }
 
-func (e *teardownBootstrapExecution) Status(ctx context.Context) task.ExecutionStatus {
-	if s, done := e.IsTerminal(); done {
+func (e *teardownBootstrapExecution) Status(ctx context.Context) ExecutionStatus {
+	if s, done := e.isTerminal(); done {
 		return s
 	}
 
@@ -82,8 +80,8 @@ func (e *teardownBootstrapExecution) Status(ctx context.Context) task.ExecutionS
 	svcGone := apierrors.IsNotFound(kc.Get(ctx, types.NamespacedName{Name: e.params.ServiceName, Namespace: ns}, &corev1.Service{}))
 
 	if jobGone && svcGone {
-		e.Complete()
-		return task.ExecutionComplete
+		e.complete()
+		return ExecutionComplete
 	}
-	return task.ExecutionRunning
+	return ExecutionRunning
 }

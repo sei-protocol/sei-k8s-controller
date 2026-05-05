@@ -1,4 +1,4 @@
-package bootstrap
+package task
 
 import (
 	"fmt"
@@ -22,9 +22,9 @@ const (
 	bootstrapComponentLabel         = "sei.io/component"
 )
 
-// PodInputs is the resolved pod-shape contract for a bootstrap Job
+// BootstrapPodInputs is the resolved pod-shape contract for a bootstrap Job
 // and its sibling headless Service.
-type PodInputs struct {
+type BootstrapPodInputs struct {
 	// Name is the resource name root used for both the Job and the Service.
 	// Pod hostname becomes "<Name>-0" so the in-cluster sidecar URL is
 	// "<Name>-0.<Name>.<Namespace>.svc.cluster.local". The data PVC the pod
@@ -53,7 +53,7 @@ type PodInputs struct {
 	HaltHeight int64
 
 	// ForbiddenSecretNames are Secret names that MUST NOT appear as Volume
-	// sources on the produced PodSpec. GenerateJob fails closed if
+	// sources on the produced PodSpec. GenerateBootstrapJob fails closed if
 	// any are mounted, so the bootstrap pod cannot carry validator signing
 	// material even if a future caller wires a Secret volume by accident.
 	// Adapters with a validator in scope populate this with the validator's
@@ -63,23 +63,23 @@ type PodInputs struct {
 }
 
 // JobName returns the bootstrap Job name for a given resource root.
-func JobName(name string) string {
+func BootstrapJobName(name string) string {
 	return fmt.Sprintf("%s-bootstrap", name)
 }
 
 // Labels returns labels for bootstrap Job resources.
-func Labels(name string) map[string]string {
+func BootstrapLabels(name string) map[string]string {
 	return map[string]string{
 		bootstrapNodeLabel:      name,
 		bootstrapComponentLabel: "bootstrap",
 	}
 }
 
-// GenerateJob creates the batch Job that runs seid with --halt-height
+// GenerateBootstrapJob creates the batch Job that runs seid with --halt-height
 // to populate a PVC before the consumer takes over. Fails closed if any
 // inputs.ForbiddenSecretNames Secret is mounted on the resulting PodSpec, so
 // bootstrap pods cannot carry validator signing material regardless of caller.
-func GenerateJob(inputs PodInputs, platformCfg platform.Config) (*batchv1.Job, error) {
+func GenerateBootstrapJob(inputs BootstrapPodInputs, platformCfg platform.Config) (*batchv1.Job, error) {
 	if inputs.Name == "" || inputs.Namespace == "" {
 		return nil, fmt.Errorf("bootstrap job requires Name and Namespace (got %q/%q)", inputs.Namespace, inputs.Name)
 	}
@@ -92,7 +92,7 @@ func GenerateJob(inputs PodInputs, platformCfg platform.Config) (*batchv1.Job, e
 	if inputs.HaltHeight <= 0 {
 		return nil, fmt.Errorf("bootstrap job requires HaltHeight > 0 (got %d for %s/%s)", inputs.HaltHeight, inputs.Namespace, inputs.Name)
 	}
-	labels := Labels(inputs.Name)
+	labels := BootstrapLabels(inputs.Name)
 	podSpec := buildBootstrapPodSpec(inputs, platformCfg)
 
 	if err := rejectForbiddenSecretMounts(&podSpec, inputs.ForbiddenSecretNames); err != nil {
@@ -101,7 +101,7 @@ func GenerateJob(inputs PodInputs, platformCfg platform.Config) (*batchv1.Job, e
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      JobName(inputs.Name),
+			Name:      BootstrapJobName(inputs.Name),
 			Namespace: inputs.Namespace,
 			Labels:    labels,
 		},
@@ -121,10 +121,10 @@ func GenerateJob(inputs PodInputs, platformCfg platform.Config) (*batchv1.Job, e
 	}, nil
 }
 
-// GenerateService creates a headless Service so the bootstrap pod
+// GenerateBootstrapService creates a headless Service so the bootstrap pod
 // registers as <Name>-0.<Name>.<Namespace>.svc.cluster.local.
-func GenerateService(inputs PodInputs) *corev1.Service {
-	labels := Labels(inputs.Name)
+func GenerateBootstrapService(inputs BootstrapPodInputs) *corev1.Service {
+	labels := BootstrapLabels(inputs.Name)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      inputs.Name,
@@ -192,7 +192,7 @@ func BuildSidecarContainer(image string, port int32, env []corev1.EnvVar, resour
 	return c
 }
 
-func buildBootstrapPodSpec(inputs PodInputs, platformCfg platform.Config) corev1.PodSpec {
+func buildBootstrapPodSpec(inputs BootstrapPodInputs, platformCfg platform.Config) corev1.PodSpec {
 	dataVolume := corev1.Volume{
 		Name: "data",
 		VolumeSource: corev1.VolumeSource{
@@ -294,7 +294,7 @@ func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args 
 	return []string{"/bin/bash", "-c"}, []string{script}
 }
 
-func bootstrapSeidInitContainer(inputs PodInputs) corev1.Container {
+func bootstrapSeidInitContainer(inputs BootstrapPodInputs) corev1.Container {
 	script := fmt.Sprintf(
 		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
 		bootstrapDataDir, inputs.ChainID, inputs.ChainID, bootstrapDataDir, bootstrapDataDir,

@@ -1,4 +1,4 @@
-package export
+package task
 
 import (
 	"fmt"
@@ -11,7 +11,6 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task/bootstrap"
 )
 
 const (
@@ -29,10 +28,10 @@ const (
 	uploadFileTaskType = "upload-file"
 )
 
-// PodInputs is the resolved pod-shape contract for an export Job. Built once
+// ExportJobInputs is the resolved pod-shape contract for an export Job. Built once
 // per call by the SND fork-genesis adapter. No SeiNode-shaped fields — the
 // fork path has only an SND in scope.
-type PodInputs struct {
+type ExportJobInputs struct {
 	Name      string
 	Namespace string
 
@@ -67,8 +66,8 @@ type PodInputs struct {
 	GenesisKey    string
 }
 
-// JobName returns the export Job name for a given resource root.
-func JobName(name string) string { return fmt.Sprintf("%s-export", name) }
+// ExportJobName returns the export Job name for a given resource root.
+func ExportJobName(name string) string { return fmt.Sprintf("%s-export", name) }
 
 // Labels returns the labels stamped on the export Job and its pod template.
 func Labels(name string) map[string]string {
@@ -78,7 +77,7 @@ func Labels(name string) map[string]string {
 	}
 }
 
-// GenerateJob produces the batch Job that runs `seid export`, POSTs the
+// GenerateExportJob produces the batch Job that runs `seid export`, POSTs the
 // resulting artifact path to the sidecar's upload-file task, polls until
 // terminal, and exits with a code derived from the task's outcome (0
 // success, 1 failure with the classified message echoed to stderr).
@@ -92,7 +91,7 @@ func Labels(name string) map[string]string {
 //     mid-upload of multi-GB exported state.
 //   - No ForbiddenSecretNames invariant — no validator in scope, the SND
 //     adapter never wires signing-key Secrets.
-func GenerateJob(inputs PodInputs, platformCfg platform.Config) (*batchv1.Job, error) {
+func GenerateExportJob(inputs ExportJobInputs, platformCfg platform.Config) (*batchv1.Job, error) {
 	if inputs.Name == "" || inputs.Namespace == "" {
 		return nil, fmt.Errorf("export job requires Name and Namespace (got %q/%q)", inputs.Namespace, inputs.Name)
 	}
@@ -123,7 +122,7 @@ func GenerateJob(inputs PodInputs, platformCfg platform.Config) (*batchv1.Job, e
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      JobName(inputs.Name),
+			Name:      ExportJobName(inputs.Name),
 			Namespace: inputs.Namespace,
 			Labels:    labels,
 		},
@@ -143,7 +142,7 @@ func GenerateJob(inputs PodInputs, platformCfg platform.Config) (*batchv1.Job, e
 	}, nil
 }
 
-func buildPodSpec(inputs PodInputs, platformCfg platform.Config) corev1.PodSpec {
+func buildPodSpec(inputs ExportJobInputs, platformCfg platform.Config) corev1.PodSpec {
 	dataVolume := corev1.Volume{
 		Name: "data",
 		VolumeSource: corev1.VolumeSource{
@@ -153,7 +152,7 @@ func buildPodSpec(inputs PodInputs, platformCfg platform.Config) corev1.PodSpec 
 		},
 	}
 
-	sidecar := bootstrap.BuildSidecarContainer(
+	sidecar := BuildSidecarContainer(
 		inputs.SidecarImage,
 		inputs.SidecarPort,
 		[]corev1.EnvVar{
@@ -218,7 +217,7 @@ func buildPodSpec(inputs PodInputs, platformCfg platform.Config) corev1.PodSpec 
 	}
 }
 
-func seidInitContainer(inputs PodInputs) corev1.Container {
+func seidInitContainer(inputs ExportJobInputs) corev1.Container {
 	script := fmt.Sprintf(
 		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
 		dataDir, inputs.ChainID, inputs.ChainID, dataDir, dataDir,

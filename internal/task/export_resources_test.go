@@ -1,4 +1,4 @@
-package export
+package task
 
 import (
 	"strings"
@@ -22,8 +22,8 @@ const (
 	testGenesisKey    = "atlantic-1/exported-state.json"
 )
 
-func validInputs() PodInputs {
-	return PodInputs{
+func validInputs() ExportJobInputs {
+	return ExportJobInputs{
 		Name:          testGroupRoot,
 		Namespace:     testNamespace,
 		ChainID:       testChainID,
@@ -40,9 +40,9 @@ func validInputs() PodInputs {
 }
 
 func TestGenerateJob_HappyPath(t *testing.T) {
-	job, err := GenerateJob(validInputs(), platformtest.Config())
+	job, err := GenerateExportJob(validInputs(), platformtest.Config())
 	if err != nil {
-		t.Fatalf("GenerateJob: %v", err)
+		t.Fatalf("GenerateExportJob: %v", err)
 	}
 	if job.Name != "fork-group-exporter-export" {
 		t.Errorf("Job name = %q, want fork-group-exporter-export", job.Name)
@@ -83,25 +83,25 @@ func TestGenerateJob_HappyPath(t *testing.T) {
 func TestGenerateJob_Validation(t *testing.T) {
 	tests := []struct {
 		name      string
-		mutate    func(*PodInputs)
+		mutate    func(*ExportJobInputs)
 		errSubstr string
 	}{
-		{"empty Name", func(in *PodInputs) { in.Name = "" }, "Name and Namespace"},
-		{"empty Namespace", func(in *PodInputs) { in.Namespace = "" }, "Name and Namespace"},
-		{"empty ChainID", func(in *PodInputs) { in.ChainID = "" }, "ChainID"},
-		{"empty SeidImage", func(in *PodInputs) { in.SeidImage = "" }, "SeidImage"},
-		{"empty PVCClaimName", func(in *PodInputs) { in.PVCClaimName = "" }, "PVCClaimName"},
-		{"zero ExportHeight", func(in *PodInputs) { in.ExportHeight = 0 }, "ExportHeight"},
-		{"negative ExportHeight", func(in *PodInputs) { in.ExportHeight = -1 }, "ExportHeight"},
-		{"empty GenesisBucket", func(in *PodInputs) { in.GenesisBucket = "" }, "GenesisBucket"},
-		{"empty GenesisRegion", func(in *PodInputs) { in.GenesisRegion = "" }, "GenesisRegion"},
-		{"empty GenesisKey", func(in *PodInputs) { in.GenesisKey = "" }, "GenesisKey"},
+		{"empty Name", func(in *ExportJobInputs) { in.Name = "" }, "Name and Namespace"},
+		{"empty Namespace", func(in *ExportJobInputs) { in.Namespace = "" }, "Name and Namespace"},
+		{"empty ChainID", func(in *ExportJobInputs) { in.ChainID = "" }, "ChainID"},
+		{"empty SeidImage", func(in *ExportJobInputs) { in.SeidImage = "" }, "SeidImage"},
+		{"empty PVCClaimName", func(in *ExportJobInputs) { in.PVCClaimName = "" }, "PVCClaimName"},
+		{"zero ExportHeight", func(in *ExportJobInputs) { in.ExportHeight = 0 }, "ExportHeight"},
+		{"negative ExportHeight", func(in *ExportJobInputs) { in.ExportHeight = -1 }, "ExportHeight"},
+		{"empty GenesisBucket", func(in *ExportJobInputs) { in.GenesisBucket = "" }, "GenesisBucket"},
+		{"empty GenesisRegion", func(in *ExportJobInputs) { in.GenesisRegion = "" }, "GenesisRegion"},
+		{"empty GenesisKey", func(in *ExportJobInputs) { in.GenesisKey = "" }, "GenesisKey"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := validInputs()
 			tt.mutate(&in)
-			_, err := GenerateJob(in, platformtest.Config())
+			_, err := GenerateExportJob(in, platformtest.Config())
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}

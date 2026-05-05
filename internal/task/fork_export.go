@@ -1,4 +1,4 @@
-package export
+package task
 
 import (
 	"context"
@@ -15,17 +15,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task/bootstrap"
 )
 
-// PVCName returns the data PVC name for a fork-genesis exporter.
-func PVCName(groupName string) string { return fmt.Sprintf("%s-exporter-data", groupName) }
-
-// BootstrapJobName returns the bootstrap-stage Job name for an exporter.
-func BootstrapJobName(groupName string) string {
-	return fmt.Sprintf("%s-exporter-bootstrap", groupName)
-}
+// ExporterPVCName returns the data PVC name for a fork-genesis exporter.
+func ExporterPVCName(groupName string) string { return fmt.Sprintf("%s-exporter-data", groupName) }
 
 // ExporterServiceName returns the headless Service name for an exporter.
 func ExporterServiceName(groupName string) string { return fmt.Sprintf("%s-exporter", groupName) }
@@ -43,30 +36,30 @@ type EnsureExporterPVCParams struct {
 }
 
 type ensureExporterPVCExecution struct {
-	task.Base
+	taskBase
 	params EnsureExporterPVCParams
-	cfg    task.ExecutionConfig
+	cfg    ExecutionConfig
 }
 
-func deserializeEnsureExporterPVC(id string, params json.RawMessage, cfg task.ExecutionConfig) (task.TaskExecution, error) {
+func deserializeEnsureExporterPVC(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
 	var p EnsureExporterPVCParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("deserializing ensure-exporter-pvc params: %w", err)
 		}
 	}
-	return &ensureExporterPVCExecution{Base: task.NewBase(id), params: p, cfg: cfg}, nil
+	return &ensureExporterPVCExecution{taskBase: taskBase{id: id, status: ExecutionRunning}, params: p, cfg: cfg}, nil
 }
 
 func (e *ensureExporterPVCExecution) Execute(ctx context.Context) error {
-	group, err := task.ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
+	group, err := ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
 	if err != nil {
-		return task.Terminal(err)
+		return Terminal(err)
 	}
 
 	size, err := resource.ParseQuantity(e.cfg.Platform.StorageSizeDefault)
 	if err != nil {
-		return task.Terminal(fmt.Errorf("parsing platform StorageSizeDefault %q: %w", e.cfg.Platform.StorageSizeDefault, err))
+		return Terminal(fmt.Errorf("parsing platform StorageSizeDefault %q: %w", e.cfg.Platform.StorageSizeDefault, err))
 	}
 	storageClass := e.cfg.Platform.StorageClassPerf
 
@@ -86,23 +79,23 @@ func (e *ensureExporterPVCExecution) Execute(ctx context.Context) error {
 	}
 	if err := e.cfg.KubeClient.Create(ctx, pvc); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			e.Complete()
+			e.complete()
 			return nil
 		}
 		return fmt.Errorf("creating exporter PVC: %w", err)
 	}
-	e.Complete()
+	e.complete()
 	return nil
 }
 
-func (e *ensureExporterPVCExecution) Status(ctx context.Context) task.ExecutionStatus {
-	if s, done := e.IsTerminal(); done {
+func (e *ensureExporterPVCExecution) Status(ctx context.Context) ExecutionStatus {
+	if s, done := e.isTerminal(); done {
 		return s
 	}
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := e.cfg.KubeClient.Get(ctx,
 		types.NamespacedName{Name: e.params.PVCName, Namespace: e.params.Namespace}, pvc); err == nil {
-		e.Complete()
+		e.complete()
 	}
 	return e.DefaultStatus()
 }
@@ -118,57 +111,57 @@ type ApplyBootstrapJobParams struct {
 }
 
 type applyBootstrapJobExecution struct {
-	task.Base
+	taskBase
 	params ApplyBootstrapJobParams
-	cfg    task.ExecutionConfig
+	cfg    ExecutionConfig
 }
 
-func deserializeApplyBootstrapJob(id string, params json.RawMessage, cfg task.ExecutionConfig) (task.TaskExecution, error) {
+func deserializeApplyBootstrapJob(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
 	var p ApplyBootstrapJobParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("deserializing apply-bootstrap-job params: %w", err)
 		}
 	}
-	return &applyBootstrapJobExecution{Base: task.NewBase(id), params: p, cfg: cfg}, nil
+	return &applyBootstrapJobExecution{taskBase: taskBase{id: id, status: ExecutionRunning}, params: p, cfg: cfg}, nil
 }
 
 func (e *applyBootstrapJobExecution) Execute(ctx context.Context) error {
-	group, err := task.ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
+	group, err := ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
 	if err != nil {
-		return task.Terminal(err)
+		return Terminal(err)
 	}
 	inputs := sndToBootstrapInputs(group, e.cfg.Platform)
-	job, err := bootstrap.GenerateJob(inputs, e.cfg.Platform)
+	job, err := GenerateBootstrapJob(inputs, e.cfg.Platform)
 	if err != nil {
-		return task.Terminal(fmt.Errorf("generating bootstrap job: %w", err))
+		return Terminal(fmt.Errorf("generating bootstrap job: %w", err))
 	}
 	if err := ctrl.SetControllerReference(group, job, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
 	if err := e.cfg.KubeClient.Create(ctx, job); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			e.Complete()
+			e.complete()
 			return nil
 		}
 		return fmt.Errorf("creating bootstrap job: %w", err)
 	}
-	e.Complete()
+	e.complete()
 	return nil
 }
 
-func (e *applyBootstrapJobExecution) Status(ctx context.Context) task.ExecutionStatus {
-	if s, done := e.IsTerminal(); done {
+func (e *applyBootstrapJobExecution) Status(ctx context.Context) ExecutionStatus {
+	if s, done := e.isTerminal(); done {
 		return s
 	}
-	group, err := task.ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
+	group, err := ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
 	if err != nil {
-		return task.ExecutionRunning
+		return ExecutionRunning
 	}
 	existing := &batchv1.Job{}
 	if err := e.cfg.KubeClient.Get(ctx,
-		types.NamespacedName{Name: BootstrapJobName(group.Name), Namespace: e.params.Namespace}, existing); err == nil {
-		e.Complete()
+		types.NamespacedName{Name: BootstrapJobName(exporterRoot(group.Name)), Namespace: e.params.Namespace}, existing); err == nil {
+		e.complete()
 	}
 	return e.DefaultStatus()
 }
@@ -184,45 +177,45 @@ type AwaitJobParams struct {
 }
 
 type awaitJobExecution struct {
-	task.Base
+	taskBase
 	params AwaitJobParams
-	cfg    task.ExecutionConfig
+	cfg    ExecutionConfig
 }
 
-func deserializeAwaitJob(id string, params json.RawMessage, cfg task.ExecutionConfig) (task.TaskExecution, error) {
+func deserializeAwaitJob(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
 	var p AwaitJobParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("deserializing await-job params: %w", err)
 		}
 	}
-	return &awaitJobExecution{Base: task.NewBase(id), params: p, cfg: cfg}, nil
+	return &awaitJobExecution{taskBase: taskBase{id: id, status: ExecutionRunning}, params: p, cfg: cfg}, nil
 }
 
 func (e *awaitJobExecution) Execute(_ context.Context) error { return nil }
 
-func (e *awaitJobExecution) Status(ctx context.Context) task.ExecutionStatus {
-	if s, done := e.IsTerminal(); done {
+func (e *awaitJobExecution) Status(ctx context.Context) ExecutionStatus {
+	if s, done := e.isTerminal(); done {
 		return s
 	}
 	job := &batchv1.Job{}
 	key := types.NamespacedName{Name: e.params.JobName, Namespace: e.params.Namespace}
 	if err := e.cfg.KubeClient.Get(ctx, key, job); err != nil {
 		if apierrors.IsNotFound(err) {
-			e.SetFailed(fmt.Errorf("job %s not found", e.params.JobName))
-			return task.ExecutionFailed
+			e.setFailed(fmt.Errorf("job %s not found", e.params.JobName))
+			return ExecutionFailed
 		}
-		return task.ExecutionRunning
+		return ExecutionRunning
 	}
-	if bootstrap.IsJobComplete(job) {
-		e.Complete()
-		return task.ExecutionComplete
+	if IsJobComplete(job) {
+		e.complete()
+		return ExecutionComplete
 	}
-	if bootstrap.IsJobFailed(job) {
-		e.SetFailed(fmt.Errorf("job %s failed: %s", e.params.JobName, bootstrap.JobFailureReason(job)))
-		return task.ExecutionFailed
+	if IsJobFailed(job) {
+		e.setFailed(fmt.Errorf("job %s failed: %s", e.params.JobName, JobFailureReason(job)))
+		return ExecutionFailed
 	}
-	return task.ExecutionRunning
+	return ExecutionRunning
 }
 
 // --- apply-export-job ---
@@ -234,30 +227,30 @@ type ApplyExportJobParams struct {
 }
 
 type applyExportJobExecution struct {
-	task.Base
+	taskBase
 	params ApplyExportJobParams
-	cfg    task.ExecutionConfig
+	cfg    ExecutionConfig
 }
 
-func deserializeApplyExportJob(id string, params json.RawMessage, cfg task.ExecutionConfig) (task.TaskExecution, error) {
+func deserializeApplyExportJob(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
 	var p ApplyExportJobParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("deserializing apply-export-job params: %w", err)
 		}
 	}
-	return &applyExportJobExecution{Base: task.NewBase(id), params: p, cfg: cfg}, nil
+	return &applyExportJobExecution{taskBase: taskBase{id: id, status: ExecutionRunning}, params: p, cfg: cfg}, nil
 }
 
 func (e *applyExportJobExecution) Execute(ctx context.Context) error {
-	group, err := task.ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
+	group, err := ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
 	if err != nil {
-		return task.Terminal(err)
+		return Terminal(err)
 	}
 	inputs := sndToExportInputs(group, e.cfg.Platform)
-	job, err := GenerateJob(inputs, e.cfg.Platform)
+	job, err := GenerateExportJob(inputs, e.cfg.Platform)
 	if err != nil {
-		return task.Terminal(fmt.Errorf("generating export job: %w", err))
+		return Terminal(fmt.Errorf("generating export job: %w", err))
 	}
 	if err := ctrl.SetControllerReference(group, job, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
@@ -271,22 +264,22 @@ func (e *applyExportJobExecution) Execute(ctx context.Context) error {
 		group.Status.Fork = &seiv1alpha1.ForkStatus{}
 	}
 	group.Status.Fork.ExportJobRef = fmt.Sprintf("%s/%s", job.Namespace, job.Name)
-	e.Complete()
+	e.complete()
 	return nil
 }
 
-func (e *applyExportJobExecution) Status(ctx context.Context) task.ExecutionStatus {
-	if s, done := e.IsTerminal(); done {
+func (e *applyExportJobExecution) Status(ctx context.Context) ExecutionStatus {
+	if s, done := e.isTerminal(); done {
 		return s
 	}
-	group, err := task.ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
+	group, err := ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
 	if err != nil {
-		return task.ExecutionRunning
+		return ExecutionRunning
 	}
 	existing := &batchv1.Job{}
 	if err := e.cfg.KubeClient.Get(ctx,
-		types.NamespacedName{Name: JobName(exporterRoot(group.Name)), Namespace: e.params.Namespace}, existing); err == nil {
-		e.Complete()
+		types.NamespacedName{Name: ExportJobName(exporterRoot(group.Name)), Namespace: e.params.Namespace}, existing); err == nil {
+		e.complete()
 	}
 	return e.DefaultStatus()
 }
@@ -302,19 +295,19 @@ type TeardownExporterParams struct {
 }
 
 type teardownExporterExecution struct {
-	task.Base
+	taskBase
 	params TeardownExporterParams
-	cfg    task.ExecutionConfig
+	cfg    ExecutionConfig
 }
 
-func deserializeTeardownExporter(id string, params json.RawMessage, cfg task.ExecutionConfig) (task.TaskExecution, error) {
+func deserializeTeardownExporter(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
 	var p TeardownExporterParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("deserializing teardown-exporter params: %w", err)
 		}
 	}
-	return &teardownExporterExecution{Base: task.NewBase(id), params: p, cfg: cfg}, nil
+	return &teardownExporterExecution{taskBase: taskBase{id: id, status: ExecutionRunning}, params: p, cfg: cfg}, nil
 }
 
 func (e *teardownExporterExecution) Execute(ctx context.Context) error {
@@ -329,12 +322,12 @@ func (e *teardownExporterExecution) Execute(ctx context.Context) error {
 			return fmt.Errorf("deleting %T %s: %w", obj, obj.GetName(), err)
 		}
 	}
-	e.Complete()
+	e.complete()
 	return nil
 }
 
-func (e *teardownExporterExecution) Status(ctx context.Context) task.ExecutionStatus {
-	if s, done := e.IsTerminal(); done {
+func (e *teardownExporterExecution) Status(ctx context.Context) ExecutionStatus {
+	if s, done := e.isTerminal(); done {
 		return s
 	}
 	// All four resources must be gone.
@@ -343,17 +336,17 @@ func (e *teardownExporterExecution) Status(ctx context.Context) task.ExecutionSt
 		{Name: e.params.ExportJob, Namespace: e.params.Namespace},
 	} {
 		if err := e.cfg.KubeClient.Get(ctx, key, &batchv1.Job{}); err == nil {
-			return task.ExecutionRunning
+			return ExecutionRunning
 		}
 	}
 	if err := e.cfg.KubeClient.Get(ctx,
 		types.NamespacedName{Name: e.params.ServiceName, Namespace: e.params.Namespace}, &corev1.Service{}); err == nil {
-		return task.ExecutionRunning
+		return ExecutionRunning
 	}
 	if err := e.cfg.KubeClient.Get(ctx,
 		types.NamespacedName{Name: e.params.PVCName, Namespace: e.params.Namespace}, &corev1.PersistentVolumeClaim{}); err == nil {
-		return task.ExecutionRunning
+		return ExecutionRunning
 	}
-	e.Complete()
-	return task.ExecutionComplete
+	e.complete()
+	return ExecutionComplete
 }

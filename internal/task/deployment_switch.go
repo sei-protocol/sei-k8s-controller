@@ -16,7 +16,7 @@ import (
 // switchTrafficExecution updates the group's deployment status to reflect
 // the entrant revision as active.
 type switchTrafficExecution struct {
-	Base
+	taskBase
 	params SwitchTrafficParams
 	cfg    ExecutionConfig
 }
@@ -29,9 +29,9 @@ func deserializeSwitchTraffic(id string, params json.RawMessage, cfg ExecutionCo
 		}
 	}
 	return &switchTrafficExecution{
-		Base:   Base{id: id, status: ExecutionRunning},
-		params: p,
-		cfg:    cfg,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -54,7 +54,7 @@ func (e *switchTrafficExecution) Execute(ctx context.Context) error {
 	log.FromContext(ctx).Info("traffic switched to entrant revision",
 		"group", e.params.GroupName, "revision", e.params.EntrantRevision)
 
-	e.Complete()
+	e.complete()
 	return nil
 }
 
@@ -64,7 +64,7 @@ func (e *switchTrafficExecution) Status(_ context.Context) ExecutionStatus {
 
 // teardownNodesExecution deletes incumbent SeiNode resources.
 type teardownNodesExecution struct {
-	Base
+	taskBase
 	params TeardownNodesParams
 	cfg    ExecutionConfig
 }
@@ -77,9 +77,9 @@ func deserializeTeardownNodes(id string, params json.RawMessage, cfg ExecutionCo
 		}
 	}
 	return &teardownNodesExecution{
-		Base:   Base{id: id, status: ExecutionRunning},
-		params: p,
-		cfg:    cfg,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
@@ -93,7 +93,7 @@ func (e *teardownNodesExecution) Execute(ctx context.Context) error {
 		logger.Info("deleted incumbent node", "node", name)
 	}
 
-	e.Complete()
+	e.complete()
 	return nil
 }
 

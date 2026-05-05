@@ -6,7 +6,6 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task/export"
 )
 
 const (
@@ -82,9 +81,9 @@ func (p *genesisGroupPlanner) BuildPlan(
 		exportJob := root + "-export"
 		serviceName := root
 
-		ensurePVC, err := buildPlannedTask(planID, export.TaskTypeEnsurePVC, planIndex,
-			&export.EnsureExporterPVCParams{
-				PVCName:   export.PVCName(group.Name),
+		ensurePVC, err := buildPlannedTask(planID, task.TaskTypeEnsureExporterPVC, planIndex,
+			&task.EnsureExporterPVCParams{
+				PVCName:   task.ExporterPVCName(group.Name),
 				Namespace: ns,
 			})
 		if err != nil {
@@ -92,37 +91,37 @@ func (p *genesisGroupPlanner) BuildPlan(
 		}
 		planIndex++
 
-		applyBootstrap, err := buildPlannedTask(planID, export.TaskTypeApplyBootstrapJob, planIndex,
-			&export.ApplyBootstrapJobParams{Namespace: ns})
+		applyBootstrap, err := buildPlannedTask(planID, task.TaskTypeApplyBootstrapJob, planIndex,
+			&task.ApplyBootstrapJobParams{Namespace: ns})
 		if err != nil {
 			return nil, err
 		}
 		planIndex++
 
-		awaitBootstrap, err := buildPlannedTask(planID, export.TaskTypeAwaitBootstrapJob, planIndex,
-			&export.AwaitJobParams{JobName: bootstrapJob, Namespace: ns})
+		awaitBootstrap, err := buildPlannedTask(planID, task.TaskTypeAwaitBootstrapJob, planIndex,
+			&task.AwaitJobParams{JobName: bootstrapJob, Namespace: ns})
 		if err != nil {
 			return nil, err
 		}
 		planIndex++
 
-		applyExport, err := buildPlannedTask(planID, export.TaskTypeApplyExportJob, planIndex,
-			&export.ApplyExportJobParams{Namespace: ns})
+		applyExport, err := buildPlannedTask(planID, task.TaskTypeApplyExportJob, planIndex,
+			&task.ApplyExportJobParams{Namespace: ns})
 		if err != nil {
 			return nil, err
 		}
 		planIndex++
 
-		awaitExport, err := buildPlannedTask(planID, export.TaskTypeAwaitExportJob, planIndex,
-			&export.AwaitJobParams{JobName: exportJob, Namespace: ns})
+		awaitExport, err := buildPlannedTask(planID, task.TaskTypeAwaitExportJob, planIndex,
+			&task.AwaitJobParams{JobName: exportJob, Namespace: ns})
 		if err != nil {
 			return nil, err
 		}
 		planIndex++
 
-		teardown, err := buildPlannedTask(planID, export.TaskTypeTeardownExporter, planIndex,
-			&export.TeardownExporterParams{
-				PVCName:      export.PVCName(group.Name),
+		teardown, err := buildPlannedTask(planID, task.TaskTypeTeardownExporter, planIndex,
+			&task.TeardownExporterParams{
+				PVCName:      task.ExporterPVCName(group.Name),
 				BootstrapJob: bootstrapJob,
 				ExportJob:    exportJob,
 				ServiceName:  serviceName,

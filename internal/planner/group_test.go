@@ -8,7 +8,6 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task/export"
 )
 
 func TestBuildGroupAssemblyPlan(t *testing.T) {
@@ -186,12 +185,12 @@ func TestBuildGroupForkPlan(t *testing.T) {
 	}
 
 	expectedTypes := []string{
-		export.TaskTypeEnsurePVC,
-		export.TaskTypeApplyBootstrapJob,
-		export.TaskTypeAwaitBootstrapJob,
-		export.TaskTypeApplyExportJob,
-		export.TaskTypeAwaitExportJob,
-		export.TaskTypeTeardownExporter,
+		task.TaskTypeEnsureExporterPVC,
+		task.TaskTypeApplyBootstrapJob,
+		task.TaskTypeAwaitBootstrapJob,
+		task.TaskTypeApplyExportJob,
+		task.TaskTypeAwaitExportJob,
+		task.TaskTypeTeardownExporter,
 		TaskAssembleGenesisFork,
 		task.TaskTypeCollectAndSetPeers,
 		TaskAwaitNodesRunning,
@@ -209,14 +208,14 @@ func TestBuildGroupForkPlan(t *testing.T) {
 	}
 
 	// Verify await-bootstrap-job and await-export-job point at the right Job names.
-	var awaitBootstrapParams export.AwaitJobParams
+	var awaitBootstrapParams task.AwaitJobParams
 	if err := json.Unmarshal(plan.Tasks[2].Params.Raw, &awaitBootstrapParams); err != nil {
 		t.Fatalf("unmarshal await-bootstrap-job params: %v", err)
 	}
 	if awaitBootstrapParams.JobName != "fork-group-exporter-bootstrap" {
 		t.Errorf("await-bootstrap-job JobName = %q, want fork-group-exporter-bootstrap", awaitBootstrapParams.JobName)
 	}
-	var awaitExportParams export.AwaitJobParams
+	var awaitExportParams task.AwaitJobParams
 	if err := json.Unmarshal(plan.Tasks[4].Params.Raw, &awaitExportParams); err != nil {
 		t.Fatalf("unmarshal await-export-job params: %v", err)
 	}

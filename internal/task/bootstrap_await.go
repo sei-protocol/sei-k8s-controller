@@ -1,11 +1,9 @@
-package bootstrap
+package task
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -18,12 +16,12 @@ type AwaitBootstrapCompleteParams struct {
 }
 
 type awaitBootstrapCompleteExecution struct {
-	task.Base
+	taskBase
 	params AwaitBootstrapCompleteParams
-	cfg    task.ExecutionConfig
+	cfg    ExecutionConfig
 }
 
-func deserializeBootstrapAwait(id string, params json.RawMessage, cfg task.ExecutionConfig) (task.TaskExecution, error) {
+func deserializeBootstrapAwait(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
 	var p AwaitBootstrapCompleteParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -31,16 +29,16 @@ func deserializeBootstrapAwait(id string, params json.RawMessage, cfg task.Execu
 		}
 	}
 	return &awaitBootstrapCompleteExecution{
-		Base:   task.NewBase(id),
-		params: p,
-		cfg:    cfg,
+		taskBase: taskBase{id: id, status: ExecutionRunning},
+		params:   p,
+		cfg:      cfg,
 	}, nil
 }
 
 func (e *awaitBootstrapCompleteExecution) Execute(_ context.Context) error { return nil }
 
-func (e *awaitBootstrapCompleteExecution) Status(ctx context.Context) task.ExecutionStatus {
-	if s, done := e.IsTerminal(); done {
+func (e *awaitBootstrapCompleteExecution) Status(ctx context.Context) ExecutionStatus {
+	if s, done := e.isTerminal(); done {
 		return s
 	}
 
@@ -48,20 +46,20 @@ func (e *awaitBootstrapCompleteExecution) Status(ctx context.Context) task.Execu
 	key := types.NamespacedName{Name: e.params.JobName, Namespace: e.params.Namespace}
 	if err := e.cfg.KubeClient.Get(ctx, key, job); err != nil {
 		if apierrors.IsNotFound(err) {
-			e.SetFailed(fmt.Errorf("bootstrap job %s not found", e.params.JobName))
-			return task.ExecutionFailed
+			e.setFailed(fmt.Errorf("bootstrap job %s not found", e.params.JobName))
+			return ExecutionFailed
 		}
-		return task.ExecutionRunning
+		return ExecutionRunning
 	}
 
 	if IsJobComplete(job) {
-		e.Complete()
-		return task.ExecutionComplete
+		e.complete()
+		return ExecutionComplete
 	}
 	if IsJobFailed(job) {
-		e.SetFailed(fmt.Errorf("bootstrap job failed: %s", JobFailureReason(job)))
-		return task.ExecutionFailed
+		e.setFailed(fmt.Errorf("bootstrap job failed: %s", JobFailureReason(job)))
+		return ExecutionFailed
 	}
 
-	return task.ExecutionRunning
+	return ExecutionRunning
 }
