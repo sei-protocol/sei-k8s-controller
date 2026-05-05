@@ -643,10 +643,10 @@ func TestGenerateNodeDataPVC_Archive(t *testing.T) {
 
 	pvc := GenerateDataPVC(node, platformtest.Config())
 
-	g.Expect(*pvc.Spec.StorageClassName).To(Equal("io2-archive"))
+	g.Expect(*pvc.Spec.StorageClassName).To(Equal("gp3-archive"))
 
 	storage := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-	g.Expect(storage.String()).To(Equal("25000Gi"))
+	g.Expect(storage.String()).To(Equal("40Ti"))
 }
 
 func TestBuildNodePodSpec_Archive_SchedulesOnArchiveNodepool(t *testing.T) {
@@ -683,8 +683,8 @@ func TestDefaultStorageForMode_Archive(t *testing.T) {
 	cfg := platformtest.Config()
 
 	sc, size := DefaultStorageForMode(string(seiconfig.ModeArchive), cfg)
-	g.Expect(sc).To(Equal("io2-archive"))
-	g.Expect(size).To(Equal("25000Gi"))
+	g.Expect(sc).To(Equal("gp3-archive"))
+	g.Expect(size).To(Equal("40Ti"))
 }
 
 func TestDefaultStorageForMode_FullNode(t *testing.T) {

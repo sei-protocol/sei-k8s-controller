@@ -48,11 +48,11 @@ spec:
           - name: SEI_STORAGE_CLASS_DEFAULT
             value: gp3
           - name: SEI_STORAGE_CLASS_ARCHIVE
-            value: io2-archive
+            value: gp3-archive
           - name: SEI_STORAGE_SIZE_DEFAULT
             value: 2000Gi
           - name: SEI_STORAGE_SIZE_ARCHIVE
-            value: 25000Gi
+            value: 40Ti
           - name: SEI_RESOURCE_CPU_ARCHIVE
             value: "48"
           - name: SEI_RESOURCE_MEM_ARCHIVE
