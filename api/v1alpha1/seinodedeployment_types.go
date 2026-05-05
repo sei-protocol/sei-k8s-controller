@@ -263,12 +263,9 @@ type SeiNodeDeploymentStatus struct {
 	// +optional
 	PerPodServices []PerPodServiceStatus `json:"perPodServices,omitempty"`
 
-	// Endpoints exposes composed in-cluster URLs derived from the resolved
-	// internal Service and per-pod Services. Each protocol field lists the
-	// aggregate ClusterIP URL at index 0 (when applicable) followed by per-pod
-	// URLs in stable pod-name (ordinal) order. Stateful protocols (EVM
-	// WebSocket) omit the aggregate entry because round-robin ClusterIP
-	// load-balancing breaks subscription state.
+	// Endpoints exposes composed in-cluster URLs derived from
+	// .status.internalService and .status.perPodServices. See the Endpoints
+	// type for the ordering contract.
 	// +optional
 	Endpoints *Endpoints `json:"endpoints,omitempty"`
 
@@ -278,19 +275,12 @@ type SeiNodeDeploymentStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// Endpoints is a per-protocol bundle of fully-composed in-cluster URLs.
-// Composition source of truth is .status.internalService and
-// .status.perPodServices; this is a derived convenience view so consumers
-// don't reassemble URLs themselves.
+// Endpoints lists composed in-cluster URLs per protocol.
 //
-// Ordering contract: aggregate ClusterIP URL at index 0 (when applicable);
-// per-pod URLs follow at indices 1..N in the same order as
-// .status.perPodServices (sorted by ordinal). EvmWs has no aggregate entry
-// because round-robin ClusterIP load-balancing does not work for stateful
-// WebSocket subscriptions; its entries are per-pod-only at indices 0..N-1.
-//
-// Until per-pod Services expose Tendermint Rpc/Rest ports, TendermintRpc
-// and TendermintRest contain only the aggregate entry.
+// Ordering: aggregate ClusterIP URL at index 0, per-pod URLs at indices
+// 1..N in .status.perPodServices order. EvmWs has no aggregate entry —
+// round-robin ClusterIP does not preserve WebSocket subscription state,
+// so its entries are per-pod-only at indices 0..N-1.
 type Endpoints struct {
 	// TendermintRpc lists Tendermint / CometBFT RPC URLs (http://). Aggregate
 	// only until per-pod Services expose port 26657.

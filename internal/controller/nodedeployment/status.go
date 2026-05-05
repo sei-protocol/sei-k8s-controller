@@ -42,9 +42,6 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses
 	group.Status.PerPodServices = populatePerPodServices(logr.FromContext(ctx), nodes)
-	// Compose endpoint URLs after both the internal Service and per-pod
-	// Services are observed — composeEndpoints reads from those status
-	// fields rather than re-deriving names/ports.
 	group.Status.Endpoints = composeEndpoints(group)
 
 	group.Status.Phase = computeGroupPhase(group, readyReplicas, group.Spec.Replicas, nodes)

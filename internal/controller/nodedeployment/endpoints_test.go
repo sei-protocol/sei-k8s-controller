@@ -85,8 +85,7 @@ func TestComposeEndpoints_EvmWsPerPodOnlyInOrder(t *testing.T) {
 }
 
 func TestComposeEndpoints_TendermintAggregateOnlyToday(t *testing.T) {
-	// Per-pod Services don't expose Tendermint Rpc / Rest yet (#158 MVP cut),
-	// so TendermintRpc and TendermintRest carry only the aggregate entry.
+	// PerPodServicePorts has no Rpc/Rest fields, so per-pod entries cannot be appended.
 	g := NewWithT(t)
 	group := &seiv1alpha1.SeiNodeDeployment{}
 	group.Status.InternalService = internalServiceStatus()
@@ -103,10 +102,7 @@ func TestComposeEndpoints_TendermintAggregateOnlyToday(t *testing.T) {
 }
 
 func TestComposeEndpoints_PerPodOrderMirrorsStatus(t *testing.T) {
-	// composeEndpoints must trust the order of group.Status.PerPodServices —
-	// populatePerPodServices already sorts by ordinal. Pass in a non-sorted
-	// order to confirm composeEndpoints does not re-sort (alphabetically or
-	// otherwise) on its own.
+	// Inputs in non-sorted order; composeEndpoints must preserve it (no re-sort).
 	g := NewWithT(t)
 	group := &seiv1alpha1.SeiNodeDeployment{}
 	group.Status.InternalService = internalServiceStatus()
@@ -132,9 +128,7 @@ func TestComposeEndpoints_PerPodOrderMirrorsStatus(t *testing.T) {
 }
 
 func TestComposeEndpoints_AggregateOnlyBeforePerPodObserved(t *testing.T) {
-	// During early reconcile the internal Service can be applied before any
-	// child SeiNode reports a per-pod Service. Endpoints should still be
-	// populated with just the aggregate entries.
+	// Transient early-reconcile state: internal Service applied before any per-pod Service.
 	g := NewWithT(t)
 	group := &seiv1alpha1.SeiNodeDeployment{}
 	group.Status.InternalService = internalServiceStatus()

@@ -931,12 +931,9 @@ spec:
                 x-kubernetes-list-type: map
               endpoints:
                 description: |-
-                  Endpoints exposes composed in-cluster URLs derived from the resolved
-                  internal Service and per-pod Services. Each protocol field lists the
-                  aggregate ClusterIP URL at index 0 (when applicable) followed by per-pod
-                  URLs in stable pod-name (ordinal) order. Stateful protocols (EVM
-                  WebSocket) omit the aggregate entry because round-robin ClusterIP
-                  load-balancing breaks subscription state.
+                  Endpoints exposes composed in-cluster URLs derived from
+                  .status.internalService and .status.perPodServices. See the Endpoints
+                  type for the ordering contract.
                 properties:
                   evmJsonRpc:
                     description: |-
