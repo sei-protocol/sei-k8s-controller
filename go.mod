@@ -9,7 +9,7 @@ require (
 	github.com/go-logr/logr v1.4.3
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.38.2
-	github.com/sei-protocol/sei-config v0.0.12
+	github.com/sei-protocol/sei-config v0.0.13
 	github.com/sei-protocol/seictl v0.0.37
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
