@@ -23,13 +23,7 @@ const (
 )
 
 // BootstrapPodInputs is the resolved pod-shape contract for a bootstrap Job
-// and its sibling headless Service. Built once per call by an adapter that
-// has the upstream context (today: a SeiNode for per-node bootstrap).
-// Helpers below operate on this struct only — they no longer reach into a
-// SeiNode.
-//
-// The Service path uses only Name, Namespace, and SidecarPort and tolerates
-// the rest being zero-valued; GenerateBootstrapJob enforces the full set.
+// and its sibling headless Service.
 type BootstrapPodInputs struct {
 	// Name is the resource name root used for both the Job and the Service.
 	// Pod hostname becomes "<Name>-0" so the in-cluster sidecar URL is
@@ -43,19 +37,10 @@ type BootstrapPodInputs struct {
 	// directory and what the sidecar advertises as its SEI_CHAIN_ID.
 	ChainID string
 
-	// SeidImage is the image for the seid-init container (runs `seid init`
-	// once before the main containers).
-	SeidImage string
+	// Image is the seid image used by both the seid-init container and the
+	// main "seid" container that runs `seid start --halt-height N`.
+	Image string
 
-	// BootstrapImage is the image for the main "seid" container that runs
-	// `seid start --halt-height N`. The per-SeiNode adapter resolves this
-	// to snap.BootstrapImage when set, else node.Spec.Image, and assigns
-	// the same value to SeidImage.
-	BootstrapImage string
-
-	// SidecarImage / SidecarPort / SidecarResources are resolved at the
-	// adapter (with platform defaults applied) so the helpers below can
-	// stay value-driven.
 	SidecarImage     string
 	SidecarPort      int32
 	SidecarResources *corev1.ResourceRequirements
@@ -64,13 +49,20 @@ type BootstrapPodInputs struct {
 	// Drives nodepool selection and resource sizing via platform.Config.
 	Mode string
 
-	// HaltHeight is the seid --halt-height value. Required for Job; ignored
-	// for Service.
+	// HaltHeight is the seid --halt-height value.
 	HaltHeight int64
+
+	// ForbiddenSecretNames are Secret names that MUST NOT appear as Volume
+	// sources on the produced PodSpec. GenerateBootstrapJob fails closed if
+	// any are mounted, so the bootstrap pod cannot carry validator signing
+	// material even if a future caller wires a Secret volume by accident.
+	// Adapters with a validator in scope populate this with the validator's
+	// signing-key and node-key Secret names; adapters with no validator in
+	// scope leave it nil.
+	ForbiddenSecretNames []string
 }
 
 // BootstrapJobName returns the bootstrap Job name for a given resource root.
-// Pure string formatter — no SeiNode required.
 func BootstrapJobName(name string) string {
 	return fmt.Sprintf("%s-bootstrap", name)
 }
@@ -84,33 +76,33 @@ func BootstrapLabels(name string) map[string]string {
 }
 
 // GenerateBootstrapJob creates the batch Job that runs seid with --halt-height
-// to populate a PVC before the consumer (a StatefulSet today, an export Job
-// tomorrow) takes over.
-//
-// The pod-spec deliberately omits validator signing material. The per-SeiNode
-// adapter calls assertNoSigningKeyOnBootstrapPod after this returns to enforce
-// that invariant; the SND fork-genesis adapter has no SeiNode and physically
-// cannot leak signing material.
-func GenerateBootstrapJob(in BootstrapPodInputs, platformCfg platform.Config) (*batchv1.Job, error) {
-	if in.Name == "" || in.Namespace == "" {
-		return nil, fmt.Errorf("bootstrap job requires Name and Namespace (got %q/%q)", in.Namespace, in.Name)
+// to populate a PVC before the consumer takes over. Fails closed if any
+// inputs.ForbiddenSecretNames Secret is mounted on the resulting PodSpec, so
+// bootstrap pods cannot carry validator signing material regardless of caller.
+func GenerateBootstrapJob(inputs BootstrapPodInputs, platformCfg platform.Config) (*batchv1.Job, error) {
+	if inputs.Name == "" || inputs.Namespace == "" {
+		return nil, fmt.Errorf("bootstrap job requires Name and Namespace (got %q/%q)", inputs.Namespace, inputs.Name)
 	}
-	if in.ChainID == "" {
-		return nil, fmt.Errorf("bootstrap job requires ChainID (%s/%s)", in.Namespace, in.Name)
+	if inputs.ChainID == "" {
+		return nil, fmt.Errorf("bootstrap job requires ChainID (%s/%s)", inputs.Namespace, inputs.Name)
 	}
-	if in.SeidImage == "" || in.BootstrapImage == "" {
-		return nil, fmt.Errorf("bootstrap job requires SeidImage and BootstrapImage (%s/%s)", in.Namespace, in.Name)
+	if inputs.Image == "" {
+		return nil, fmt.Errorf("bootstrap job requires Image (%s/%s)", inputs.Namespace, inputs.Name)
 	}
-	if in.HaltHeight <= 0 {
-		return nil, fmt.Errorf("bootstrap job requires HaltHeight > 0 (got %d for %s/%s)", in.HaltHeight, in.Namespace, in.Name)
+	if inputs.HaltHeight <= 0 {
+		return nil, fmt.Errorf("bootstrap job requires HaltHeight > 0 (got %d for %s/%s)", inputs.HaltHeight, inputs.Namespace, inputs.Name)
 	}
-	labels := BootstrapLabels(in.Name)
-	podSpec := buildBootstrapPodSpec(in, platformCfg)
+	labels := BootstrapLabels(inputs.Name)
+	podSpec := buildBootstrapPodSpec(inputs, platformCfg)
+
+	if err := rejectForbiddenSecretMounts(&podSpec, inputs.ForbiddenSecretNames); err != nil {
+		return nil, fmt.Errorf("bootstrap pod-spec for %s/%s: %w", inputs.Namespace, inputs.Name, err)
+	}
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      BootstrapJobName(in.Name),
-			Namespace: in.Namespace,
+			Name:      BootstrapJobName(inputs.Name),
+			Namespace: inputs.Namespace,
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
@@ -129,19 +121,14 @@ func GenerateBootstrapJob(in BootstrapPodInputs, platformCfg platform.Config) (*
 	}, nil
 }
 
-// GenerateBootstrapService creates a headless Service that provides stable
-// DNS for the bootstrap Job pod. The pod registers as
-// <Name>-0.<Name>.<Namespace>.svc.cluster.local. On the per-SeiNode bootstrap
-// path the Service name matches the eventual StatefulSet's headless Service
-// name so the sidecar URL is consistent across both phases. On the SND fork
-// path the Service is owned by the SeiNodeDeployment and named after the
-// exporter resource root.
-func GenerateBootstrapService(in BootstrapPodInputs) *corev1.Service {
-	labels := BootstrapLabels(in.Name)
+// GenerateBootstrapService creates a headless Service so the bootstrap pod
+// registers as <Name>-0.<Name>.<Namespace>.svc.cluster.local.
+func GenerateBootstrapService(inputs BootstrapPodInputs) *corev1.Service {
+	labels := BootstrapLabels(inputs.Name)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      in.Name,
-			Namespace: in.Namespace,
+			Name:      inputs.Name,
+			Namespace: inputs.Namespace,
 			Labels:    labels,
 		},
 		Spec: corev1.ServiceSpec{
@@ -149,30 +136,53 @@ func GenerateBootstrapService(in BootstrapPodInputs) *corev1.Service {
 			Selector:                 labels,
 			PublishNotReadyAddresses: true,
 			Ports: []corev1.ServicePort{
-				{Name: "sidecar", Port: in.SidecarPort, TargetPort: intstr.FromInt32(in.SidecarPort), Protocol: corev1.ProtocolTCP},
+				{Name: "sidecar", Port: inputs.SidecarPort, TargetPort: intstr.FromInt32(inputs.SidecarPort), Protocol: corev1.ProtocolTCP},
 			},
 		},
 	}
 }
 
-func buildBootstrapPodSpec(in BootstrapPodInputs, platformCfg platform.Config) corev1.PodSpec {
+// rejectForbiddenSecretMounts fails closed if podSpec mounts any Secret whose
+// name is in forbidden. Returns nil for an empty forbidden list.
+func rejectForbiddenSecretMounts(podSpec *corev1.PodSpec, forbidden []string) error {
+	if len(forbidden) == 0 {
+		return nil
+	}
+	forbiddenSet := make(map[string]struct{}, len(forbidden))
+	for _, name := range forbidden {
+		if name != "" {
+			forbiddenSet[name] = struct{}{}
+		}
+	}
+	for _, vol := range podSpec.Volumes {
+		if vol.Secret == nil {
+			continue
+		}
+		if _, isForbidden := forbiddenSet[vol.Secret.SecretName]; isForbidden {
+			return fmt.Errorf("forbidden Secret %q mounted on volume %q", vol.Secret.SecretName, vol.Name)
+		}
+	}
+	return nil
+}
+
+func buildBootstrapPodSpec(inputs BootstrapPodInputs, platformCfg platform.Config) corev1.PodSpec {
 	dataVolume := corev1.Volume{
 		Name: "data",
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-				ClaimName: fmt.Sprintf("data-%s", in.Name),
+				ClaimName: fmt.Sprintf("data-%s", inputs.Name),
 			},
 		},
 	}
 
 	sidecar := corev1.Container{
 		Name:          "sei-sidecar",
-		Image:         in.SidecarImage,
+		Image:         inputs.SidecarImage,
 		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env: []corev1.EnvVar{
-			{Name: "SEI_CHAIN_ID", Value: in.ChainID},
-			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", in.SidecarPort)},
+			{Name: "SEI_CHAIN_ID", Value: inputs.ChainID},
+			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", inputs.SidecarPort)},
 			{Name: "SEI_HOME", Value: bootstrapDataDir},
 			{Name: "SEI_GENESIS_BUCKET", Value: platformCfg.GenesisBucket},
 			{Name: "SEI_GENESIS_REGION", Value: platformCfg.GenesisRegion},
@@ -180,20 +190,20 @@ func buildBootstrapPodSpec(in BootstrapPodInputs, platformCfg platform.Config) c
 			{Name: "SEI_SNAPSHOT_REGION", Value: platformCfg.SnapshotRegion},
 		},
 		Ports: []corev1.ContainerPort{
-			{Name: "sidecar", ContainerPort: in.SidecarPort, Protocol: corev1.ProtocolTCP},
+			{Name: "sidecar", ContainerPort: inputs.SidecarPort, Protocol: corev1.ProtocolTCP},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: bootstrapDataDir},
 		},
 	}
-	if in.SidecarResources != nil {
-		sidecar.Resources = *in.SidecarResources
+	if inputs.SidecarResources != nil {
+		sidecar.Resources = *inputs.SidecarResources
 	}
 
-	seidCmd, seidArgs := bootstrapWaitCommand(in.SidecarPort, in.HaltHeight)
+	seidCmd, seidArgs := bootstrapWaitCommand(inputs.SidecarPort, inputs.HaltHeight)
 	seidContainer := corev1.Container{
 		Name:    "seid",
-		Image:   in.BootstrapImage,
+		Image:   inputs.Image,
 		Command: seidCmd,
 		Args:    seidArgs,
 		Env: []corev1.EnvVar{
@@ -202,16 +212,16 @@ func buildBootstrapPodSpec(in BootstrapPodInputs, platformCfg platform.Config) c
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: bootstrapDataDir},
 		},
-		Resources: bootstrapResourcesForMode(in.Mode, platformCfg),
+		Resources: bootstrapResourcesForMode(inputs.Mode, platformCfg),
 	}
 
-	seidInit := bootstrapSeidInitContainer(in)
+	seidInit := bootstrapSeidInitContainer(inputs)
 
-	pool := platformCfg.NodepoolForMode(in.Mode)
+	pool := platformCfg.NodepoolForMode(inputs.Mode)
 
 	return corev1.PodSpec{
-		Hostname:                      fmt.Sprintf("%s-0", in.Name),
-		Subdomain:                     in.Name,
+		Hostname:                      fmt.Sprintf("%s-0", inputs.Name),
+		Subdomain:                     inputs.Name,
 		ServiceAccountName:            platformCfg.ServiceAccount,
 		ShareProcessNamespace:         ptr.To(true),
 		RestartPolicy:                 corev1.RestartPolicyNever,
@@ -266,14 +276,14 @@ func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args 
 	return []string{"/bin/bash", "-c"}, []string{script}
 }
 
-func bootstrapSeidInitContainer(in BootstrapPodInputs) corev1.Container {
+func bootstrapSeidInitContainer(inputs BootstrapPodInputs) corev1.Container {
 	script := fmt.Sprintf(
 		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
-		bootstrapDataDir, in.ChainID, in.ChainID, bootstrapDataDir, bootstrapDataDir,
+		bootstrapDataDir, inputs.ChainID, inputs.ChainID, bootstrapDataDir, bootstrapDataDir,
 	)
 	return corev1.Container{
 		Name:  "seid-init",
-		Image: in.SeidImage,
+		Image: inputs.Image,
 		Command: []string{
 			"/bin/sh", "-c", script,
 		},

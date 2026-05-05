@@ -1,8 +1,6 @@
 package task
 
 import (
-	"fmt"
-
 	seiconfig "github.com/sei-protocol/sei-config"
 	corev1 "k8s.io/api/core/v1"
 
@@ -10,26 +8,23 @@ import (
 )
 
 // nodeToBootstrapInputs translates a SeiNode (and its resolved SnapshotSource,
-// when present) into the value-typed BootstrapPodInputs consumed by the
-// SeiNode-free bootstrap helpers in bootstrap_resources.go.
+// when present) into the value-typed BootstrapPodInputs.
 //
-// snap may be nil. The Service path (bootstrap_service.go) does not have a
-// snapshot in scope; only Name/Namespace/SidecarPort are read by the Service
-// builder, so this adapter still produces a usable struct in that case.
-// GenerateBootstrapJob enforces the Job-side invariants (BootstrapImage,
-// HaltHeight) directly.
+// snap may be nil; the Service path doesn't have a snapshot in scope and only
+// reads Name/Namespace/SidecarPort. GenerateBootstrapJob enforces the rest.
 //
 // Resolution rules:
-//   - BootstrapImage: snap.BootstrapImage if non-empty, else node.Spec.Image.
-//     SeidImage is set to the same value — both seid containers (init + main)
-//     share the bootstrap-resolved image today.
+//   - Image: snap.BootstrapImage if non-empty, else node.Spec.Image.
 //   - SidecarImage / SidecarPort: SeiNode override if set, else platform default.
-//   - Mode: derived from which Spec.{Archive,Validator} block is set.
+//   - Mode: derived from which Spec.{Archive,Validator} block is set; full otherwise.
 //   - HaltHeight: snap.S3.TargetHeight when snap.S3 is set; 0 otherwise.
+//   - ForbiddenSecretNames: validator's signing-key and node-key Secret names
+//     when the SeiNode is a validator. GenerateBootstrapJob fails closed if
+//     either ever lands as a Volume on the bootstrap pod.
 func nodeToBootstrapInputs(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSource) BootstrapPodInputs {
-	bootstrapImage := node.Spec.Image
+	image := node.Spec.Image
 	if snap != nil && snap.BootstrapImage != "" {
-		bootstrapImage = snap.BootstrapImage
+		image = snap.BootstrapImage
 	}
 
 	sidecarImage := bootstrapDefaultSidecarImage
@@ -63,40 +58,32 @@ func nodeToBootstrapInputs(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 	}
 
 	return BootstrapPodInputs{
-		Name:             node.Name,
-		Namespace:        node.Namespace,
-		ChainID:          node.Spec.ChainID,
-		SeidImage:        bootstrapImage,
-		BootstrapImage:   bootstrapImage,
-		SidecarImage:     sidecarImage,
-		SidecarPort:      sidecarPort,
-		SidecarResources: sidecarResources,
-		Mode:             mode,
-		HaltHeight:       haltHeight,
+		Name:                 node.Name,
+		Namespace:            node.Namespace,
+		ChainID:              node.Spec.ChainID,
+		Image:                image,
+		SidecarImage:         sidecarImage,
+		SidecarPort:          sidecarPort,
+		SidecarResources:     sidecarResources,
+		Mode:                 mode,
+		HaltHeight:           haltHeight,
+		ForbiddenSecretNames: validatorSecretNames(node),
 	}
 }
 
-// assertNoSigningKeyOnBootstrapPod fails closed if a future refactor
-// accidentally lands the validator's signing-key Secret on the bootstrap
-// pod-spec. The bootstrap path must never carry consensus signing material.
-//
-// Lives at the per-SeiNode adapter boundary because it reads
-// node.Spec.Validator.SigningKey.Secret.SecretName, which doesn't exist
-// in BootstrapPodInputs. SND fork-genesis paths physically cannot leak
-// signing material — there is no SeiNode and no Validator config in scope.
-func assertNoSigningKeyOnBootstrapPod(node *seiv1alpha1.SeiNode, spec *corev1.PodSpec) error {
-	if node.Spec.Validator == nil ||
-		node.Spec.Validator.SigningKey == nil ||
-		node.Spec.Validator.SigningKey.Secret == nil {
+// validatorSecretNames returns the Secret names referenced by a validator's
+// signing-key and node-key sources, so GenerateBootstrapJob can refuse to
+// produce a bootstrap pod that mounts either.
+func validatorSecretNames(node *seiv1alpha1.SeiNode) []string {
+	if node.Spec.Validator == nil {
 		return nil
 	}
-	secretName := node.Spec.Validator.SigningKey.Secret.SecretName
-	for _, v := range spec.Volumes {
-		if v.Secret != nil && v.Secret.SecretName == secretName {
-			return fmt.Errorf("bootstrap pod-spec for %s/%s references signing-key Secret %q on volume %q; "+
-				"bootstrap pods must never carry consensus signing material",
-				node.Namespace, node.Name, secretName, v.Name)
-		}
+	var names []string
+	if k := node.Spec.Validator.SigningKey; k != nil && k.Secret != nil && k.Secret.SecretName != "" {
+		names = append(names, k.Secret.SecretName)
 	}
-	return nil
+	if k := node.Spec.Validator.NodeKey; k != nil && k.Secret != nil && k.Secret.SecretName != "" {
+		names = append(names, k.Secret.SecretName)
+	}
+	return names
 }
