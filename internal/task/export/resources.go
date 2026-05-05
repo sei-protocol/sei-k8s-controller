@@ -11,6 +11,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task/bootstrap"
 )
 
 const (
@@ -152,28 +153,19 @@ func buildPodSpec(inputs PodInputs, platformCfg platform.Config) corev1.PodSpec 
 		},
 	}
 
-	sidecar := corev1.Container{
-		Name:          "sei-sidecar",
-		Image:         inputs.SidecarImage,
-		Command:       []string{"seictl", "serve"},
-		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
-		Env: []corev1.EnvVar{
+	sidecar := bootstrap.BuildSidecarContainer(
+		inputs.SidecarImage,
+		inputs.SidecarPort,
+		[]corev1.EnvVar{
 			{Name: "SEI_CHAIN_ID", Value: inputs.ChainID},
 			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", inputs.SidecarPort)},
 			{Name: "SEI_HOME", Value: dataDir},
 			{Name: "SEI_GENESIS_BUCKET", Value: platformCfg.GenesisBucket},
 			{Name: "SEI_GENESIS_REGION", Value: platformCfg.GenesisRegion},
 		},
-		Ports: []corev1.ContainerPort{
-			{Name: "sidecar", ContainerPort: inputs.SidecarPort, Protocol: corev1.ProtocolTCP},
-		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataDir},
-		},
-	}
-	if inputs.SidecarResources != nil {
-		sidecar.Resources = *inputs.SidecarResources
-	}
+		inputs.SidecarResources,
+		dataDir,
+	)
 
 	seidContainer := corev1.Container{
 		Name:    "seid",
@@ -264,10 +256,16 @@ func resourcesForMode(mode string, platformCfg platform.Config) corev1.ResourceR
 // `seid export`, POSTs the resulting artifact to the sidecar's upload-file
 // task over localhost, polls task status, and exits with the task outcome.
 //
+// Wire shape pinned to the sidecar's actual surface:
+//
+//   - POST /v0/tasks with body {"type":"upload-file","params":{...}} — single
+//     endpoint, type-in-envelope. Returns {"id":"<uuid>"}.
+//   - GET /v0/tasks/<id> for status polling. Status values "completed" /
+//     "failed" match sidecar/engine.TaskStatusCompleted / TaskStatusFailed.
+//
 // HTTP/1.0 over /dev/tcp because the seid distroless image has no curl/wget
 // and no jq. Same /dev/tcp pattern as bootstrap.bootstrapWaitCommand uses
-// for healthz polling. Status values matched here ("completed", "failed")
-// are pinned by sidecar/engine.TaskStatusCompleted / TaskStatusFailed.
+// for healthz polling.
 const exportTriggerScript = `set -euo pipefail
 
 # post_task POSTs JSON to the sidecar and echoes the response body.
@@ -302,10 +300,11 @@ done
 # Run the export. Stderr stays on the container's stderr stream.
 seid export --home /sei --height "${EXPORT_HEIGHT}" > /sei/tmp/exported-state.json
 
-# POST upload-file task; capture task id from the JSON response.
-BODY=$(printf '{"file":"/sei/tmp/exported-state.json","bucket":"%s","key":"%s","region":"%s"}' \
+# POST upload-file task. Body is the envelope {"type","params"} the sidecar's
+# /v0/tasks handler decodes; capture task id from the response.
+BODY=$(printf '{"type":"upload-file","params":{"file":"/sei/tmp/exported-state.json","bucket":"%s","key":"%s","region":"%s"}}' \
        "${GENESIS_BUCKET}" "${GENESIS_KEY}" "${GENESIS_REGION}")
-RESP=$(post_task localhost "${SIDECAR_PORT}" /v0/tasks/upload-file "${BODY}")
+RESP=$(post_task localhost "${SIDECAR_PORT}" /v0/tasks "${BODY}")
 TASK_ID=$(echo "$RESP" | grep -oE '"id":"[^"]+"' | head -1 | cut -d'"' -f4)
 if [ -z "$TASK_ID" ]; then
     echo "failed to extract task id from sidecar response" >&2

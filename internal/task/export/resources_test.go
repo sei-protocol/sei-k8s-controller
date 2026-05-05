@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sei-protocol/seictl/sidecar/engine"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
@@ -111,32 +112,51 @@ func TestGenerateJob_Validation(t *testing.T) {
 	}
 }
 
-// TestExportTriggerScript_PinsContract pins the bash const's wire shape: the
-// JSON keys POSTed (file/bucket/key/region) must match seictl's
-// UploadFileRequest tags, and the case-arm strings must match
-// engine.TaskStatusCompleted / TaskStatusFailed. A drift in either direction
-// silently breaks the seid container's poll loop in production — this test
-// catches it at controller-PR-review time.
+// TestExportTriggerScript_PinsContract pins the bash const's wire shape
+// against the actual sidecar HTTP surface (single POST /v0/tasks endpoint
+// with {type,params} envelope) and the engine status string constants. A
+// drift in either direction silently breaks the seid container's poll loop
+// in production — this test catches it at controller-PR-review time.
 func TestExportTriggerScript_PinsContract(t *testing.T) {
 	wantSubstrings := []string{
-		// JSON keys must match the upload-file task's UploadFileRequest tags.
+		// POST envelope shape: type + params, not a flat /v0/tasks/<type>.
+		`"type":"upload-file"`,
+		`"params":{`,
+		// JSON keys inside params must match the upload-file task's
+		// UploadFileRequest decoder.
 		`"file":"/sei/tmp/exported-state.json"`,
 		`"bucket":"%s"`,
 		`"key":"%s"`,
 		`"region":"%s"`,
-		// Sidecar URL path matches the registered task type.
-		"/v0/tasks/upload-file",
-		// Status case-arms match engine.TaskStatusCompleted / TaskStatusFailed.
-		"completed) exit 0",
-		"failed)",
+		// Sidecar route paths the bash actually hits.
+		"/v0/tasks ",   // POST endpoint (trailing space delimits path in printf)
+		"/v0/tasks/%s", // GET-by-id (the format string for polling)
+		"/v0/healthz",  // health gate
 		// Wall-clock timeout on the healthz wait so /dev/tcp failure can't hang.
 		"SECONDS",
-		// Healthz endpoint we wait on.
-		"/v0/healthz",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(exportTriggerScript, want) {
 			t.Errorf("exportTriggerScript missing %q", want)
 		}
+	}
+}
+
+// TestExportTriggerScript_PinsEngineStatusStrings asserts the bash case-arms
+// match the actual engine.TaskStatusCompleted / TaskStatusFailed string
+// values. Renaming those constants would silently break the seid container's
+// poll loop; this test fails fast at controller-PR-review time.
+func TestExportTriggerScript_PinsEngineStatusStrings(t *testing.T) {
+	if string(engine.TaskStatusCompleted) != "completed" {
+		t.Fatalf("engine.TaskStatusCompleted = %q, but bash matches \"completed\"", engine.TaskStatusCompleted)
+	}
+	if string(engine.TaskStatusFailed) != "failed" {
+		t.Fatalf("engine.TaskStatusFailed = %q, but bash matches \"failed\"", engine.TaskStatusFailed)
+	}
+	if !strings.Contains(exportTriggerScript, "completed) exit 0") {
+		t.Errorf("exportTriggerScript missing 'completed) exit 0' arm")
+	}
+	if !strings.Contains(exportTriggerScript, "failed)") {
+		t.Errorf("exportTriggerScript missing 'failed)' arm")
 	}
 }

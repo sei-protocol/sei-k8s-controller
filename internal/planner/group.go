@@ -17,10 +17,11 @@ const (
 
 type genesisGroupPlanner struct{}
 
-// exporterPVCSize sizes the fork-genesis exporter PVC. Hardcoded for now —
-// the SND CRD has no per-deployment PVC size override; revisit when the
-// fork-genesis path lands a real ceremony and we observe the actual
-// exported-state size.
+// exporterPVCSize sizes the fork-genesis exporter PVC. The bootstrap Job
+// writes seid's data dir up to halt-height into this PVC, so the size must
+// hold the full state at that height — not just the exported JSON. 500Gi
+// is enough for low-state test chains; pacific-1-scale chains will need a
+// per-SND override before the fork ceremony runs there.
 func exporterPVCSize() (resource.Quantity, error) {
 	return resource.ParseQuantity("500Gi")
 }

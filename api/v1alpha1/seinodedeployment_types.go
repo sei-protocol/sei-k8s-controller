@@ -433,6 +433,12 @@ const (
 	ConditionGenesisCeremonyNeeded     = "GenesisCeremonyNeeded"
 	ConditionForkGenesisCeremonyNeeded = "ForkGenesisCeremonyNeeded"
 	ConditionRolloutInProgress         = "RolloutInProgress"
+
+	// Fork-genesis sub-plan condition types. Set by the planner from terminal
+	// states of the corresponding sub-plan tasks.
+	ConditionForkBootstrapComplete = "ForkBootstrapComplete"
+	ConditionForkExportComplete    = "ForkExportComplete"
+	ConditionForkGenesisReady      = "ForkGenesisReady"
 )
 
 // +kubebuilder:object:root=true

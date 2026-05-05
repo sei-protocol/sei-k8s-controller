@@ -19,10 +19,6 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task/bootstrap"
 )
 
-// fieldOwner is the server-side apply field manager for resources owned by
-// the fork-genesis sub-plan.
-var fieldOwner = client.FieldOwner("seinode-controller")
-
 // PVCName returns the data PVC name for a fork-genesis exporter.
 func PVCName(groupName string) string { return fmt.Sprintf("%s-exporter-data", groupName) }
 
@@ -263,13 +259,15 @@ func (e *applyExportJobExecution) Execute(ctx context.Context) error {
 	if err := ctrl.SetControllerReference(group, job, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
-	if err := e.cfg.KubeClient.Create(ctx, job); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			e.Complete()
-			return nil
-		}
+	if err := e.cfg.KubeClient.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("creating export job: %w", err)
 	}
+	// Stamp Status.Fork.ExportJobRef so kubectl describe surfaces the Job
+	// to operators. The reconciler's single-patch flush picks this up.
+	if group.Status.Fork == nil {
+		group.Status.Fork = &seiv1alpha1.ForkStatus{}
+	}
+	group.Status.Fork.ExportJobRef = fmt.Sprintf("%s/%s", job.Namespace, job.Name)
 	e.Complete()
 	return nil
 }
@@ -356,5 +354,3 @@ func (e *teardownExporterExecution) Status(ctx context.Context) task.ExecutionSt
 	e.Complete()
 	return task.ExecutionComplete
 }
-
-var _ = fieldOwner // reserved for server-side apply migrations
