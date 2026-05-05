@@ -138,6 +138,10 @@ func TestExportTriggerScript_PinsContract(t *testing.T) {
 		"/v0/healthz",  // health gate
 		// Wall-clock timeout on the healthz wait so /dev/tcp failure can't hang.
 		"SECONDS",
+		// --streaming avoids OOM on multi-GB exports; --streaming-file routes the
+		// JSON directly to disk instead of through the in-memory stdout buffer.
+		"--streaming",
+		"--streaming-file /sei/tmp/exported-state.json",
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(exportTriggerScript, want) {
