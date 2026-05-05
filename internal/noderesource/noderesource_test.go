@@ -202,6 +202,24 @@ func TestNodeDataPVCClaimName_Snapshot(t *testing.T) {
 	g.Expect(DataPVCName(node)).To(Equal("data-snap-0"))
 }
 
+func TestNodeDataPVCClaimName_HonorsImport(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("mynet-0", "default")
+	node.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{
+		Import: &seiv1alpha1.DataVolumeImport{
+			PVCName: "preprovisioned-archive-0",
+		},
+	}
+	g.Expect(DataPVCName(node)).To(Equal("preprovisioned-archive-0"))
+}
+
+func TestNodeDataPVCClaimName_FallsBackWhenImportEmpty(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("mynet-0", "default")
+	node.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{}
+	g.Expect(DataPVCName(node)).To(Equal("data-mynet-0"))
+}
+
 // --- Main container ---
 
 func TestBuildNodeMainContainer_ImageAndEnv(t *testing.T) {

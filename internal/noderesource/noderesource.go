@@ -40,6 +40,9 @@ type PlatformConfig = platform.Config
 
 // DataPVCName returns the PVC name for a node's data volume.
 func DataPVCName(node *seiv1alpha1.SeiNode) string {
+	if dv := node.Spec.DataVolume; dv != nil && dv.Import != nil && dv.Import.PVCName != "" {
+		return dv.Import.PVCName
+	}
 	return fmt.Sprintf("data-%s", node.Name)
 }
 
