@@ -8,7 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
@@ -25,7 +24,9 @@ const (
 	nodeLabel      = "sei.io/node"
 	componentLabel = "sei.io/component"
 
-	uploadFileTaskType = "upload-file"
+	dataVolumeName        = "data"
+	seidContainerName     = "seid"
+	seidInitContainerName = "seid-init"
 )
 
 // ExportJobInputs is the resolved pod-shape contract for an export Job. Built once
@@ -69,8 +70,8 @@ type ExportJobInputs struct {
 // ExportJobName returns the export Job name for a given resource root.
 func ExportJobName(name string) string { return fmt.Sprintf("%s-export", name) }
 
-// Labels returns the labels stamped on the export Job and its pod template.
-func Labels(name string) map[string]string {
+// ExportLabels returns the labels stamped on the export Job and its pod template.
+func ExportLabels(name string) map[string]string {
 	return map[string]string{
 		nodeLabel:      name,
 		componentLabel: "exporter",
@@ -117,9 +118,10 @@ func GenerateExportJob(inputs ExportJobInputs, platformCfg platform.Config) (*ba
 		return nil, fmt.Errorf("export job requires GenesisKey (%s/%s)", inputs.Namespace, inputs.Name)
 	}
 
-	labels := Labels(inputs.Name)
+	labels := ExportLabels(inputs.Name)
 	podSpec := buildPodSpec(inputs, platformCfg)
 
+	ttl := int32(3600)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ExportJobName(inputs.Name),
@@ -127,8 +129,8 @@ func GenerateExportJob(inputs ExportJobInputs, platformCfg platform.Config) (*ba
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:            ptr.To(int32(0)),
-			TTLSecondsAfterFinished: ptr.To(int32(3600)),
+			BackoffLimit:            new(int32),
+			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
@@ -144,7 +146,7 @@ func GenerateExportJob(inputs ExportJobInputs, platformCfg platform.Config) (*ba
 
 func buildPodSpec(inputs ExportJobInputs, platformCfg platform.Config) corev1.PodSpec {
 	dataVolume := corev1.Volume{
-		Name: "data",
+		Name: dataVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: inputs.PVCClaimName,
@@ -167,7 +169,7 @@ func buildPodSpec(inputs ExportJobInputs, platformCfg platform.Config) corev1.Po
 	)
 
 	seidContainer := corev1.Container{
-		Name:    "seid",
+		Name:    seidContainerName,
 		Image:   inputs.SeidImage,
 		Command: []string{"/bin/bash", "-c"},
 		Args:    []string{exportTriggerScript},
@@ -180,7 +182,7 @@ func buildPodSpec(inputs ExportJobInputs, platformCfg platform.Config) corev1.Po
 			{Name: "SIDECAR_PORT", Value: fmt.Sprintf("%d", inputs.SidecarPort)},
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataDir},
+			{Name: dataVolumeName, MountPath: dataDir},
 		},
 		Resources: resourcesForMode(inputs.Mode, platformCfg),
 	}
@@ -188,13 +190,15 @@ func buildPodSpec(inputs ExportJobInputs, platformCfg platform.Config) corev1.Po
 	seidInit := seidInitContainer(inputs)
 	pool := platformCfg.NodepoolForMode(inputs.Mode)
 
+	shareProc := true
+	gracePeriod := terminationGracePeriod
 	return corev1.PodSpec{
 		Hostname:                      fmt.Sprintf("%s-0", inputs.Name),
 		Subdomain:                     inputs.Name,
 		ServiceAccountName:            platformCfg.ServiceAccount,
-		ShareProcessNamespace:         ptr.To(true),
+		ShareProcessNamespace:         &shareProc,
 		RestartPolicy:                 corev1.RestartPolicyNever,
-		TerminationGracePeriodSeconds: ptr.To(terminationGracePeriod),
+		TerminationGracePeriodSeconds: &gracePeriod,
 		Tolerations: []corev1.Toleration{
 			{Key: platformCfg.TolerationKey, Value: pool, Effect: corev1.TaintEffectNoSchedule},
 		},
@@ -223,11 +227,11 @@ func seidInitContainer(inputs ExportJobInputs) corev1.Container {
 		dataDir, inputs.ChainID, inputs.ChainID, dataDir, dataDir,
 	)
 	return corev1.Container{
-		Name:    "seid-init",
+		Name:    seidInitContainerName,
 		Image:   inputs.SeidImage,
 		Command: []string{"/bin/sh", "-c", script},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataDir},
+			{Name: dataVolumeName, MountPath: dataDir},
 		},
 	}
 }

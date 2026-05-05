@@ -183,7 +183,7 @@ func BuildSidecarContainer(image string, port int32, env []corev1.EnvVar, resour
 			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataMountPath},
+			{Name: dataVolumeName, MountPath: dataMountPath},
 		},
 	}
 	if resources != nil {
@@ -194,7 +194,7 @@ func BuildSidecarContainer(image string, port int32, env []corev1.EnvVar, resour
 
 func buildBootstrapPodSpec(inputs BootstrapPodInputs, platformCfg platform.Config) corev1.PodSpec {
 	dataVolume := corev1.Volume{
-		Name: "data",
+		Name: dataVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: fmt.Sprintf("data-%s", inputs.Name),
@@ -228,7 +228,7 @@ func buildBootstrapPodSpec(inputs BootstrapPodInputs, platformCfg platform.Confi
 			{Name: "TMPDIR", Value: bootstrapDataDir + "/tmp"},
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: bootstrapDataDir},
+			{Name: dataVolumeName, MountPath: bootstrapDataDir},
 		},
 		Resources: bootstrapResourcesForMode(inputs.Mode, platformCfg),
 	}
@@ -306,7 +306,7 @@ func bootstrapSeidInitContainer(inputs BootstrapPodInputs) corev1.Container {
 			"/bin/sh", "-c", script,
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: bootstrapDataDir},
+			{Name: dataVolumeName, MountPath: bootstrapDataDir},
 		},
 	}
 }

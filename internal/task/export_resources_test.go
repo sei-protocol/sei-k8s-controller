@@ -20,6 +20,10 @@ const (
 	testGenesisBucket = "sei-genesis"
 	testGenesisRegion = "eu-central-1"
 	testGenesisKey    = "atlantic-1/exported-state.json"
+
+	// errNameNamespace is the validation-error substring shared by the empty-Name
+	// and empty-Namespace branches of GenerateExportJob.
+	errNameNamespace = "Name and Namespace"
 )
 
 func validInputs() ExportJobInputs {
@@ -57,8 +61,8 @@ func TestGenerateJob_HappyPath(t *testing.T) {
 	if len(spec.InitContainers) != 2 {
 		t.Fatalf("expected 2 initContainers (seid-init + sei-sidecar), got %d", len(spec.InitContainers))
 	}
-	if spec.InitContainers[0].Name != "seid-init" {
-		t.Errorf("initContainer[0] = %q, want seid-init", spec.InitContainers[0].Name)
+	if spec.InitContainers[0].Name != seidInitContainerName {
+		t.Errorf("initContainer[0] = %q, want %q", spec.InitContainers[0].Name, seidInitContainerName)
 	}
 	if spec.InitContainers[1].Name != "sei-sidecar" {
 		t.Errorf("initContainer[1] = %q, want sei-sidecar", spec.InitContainers[1].Name)
@@ -66,8 +70,8 @@ func TestGenerateJob_HappyPath(t *testing.T) {
 	if spec.InitContainers[1].RestartPolicy == nil || *spec.InitContainers[1].RestartPolicy != corev1.ContainerRestartPolicyAlways {
 		t.Errorf("sei-sidecar restartPolicy = %v, want Always", spec.InitContainers[1].RestartPolicy)
 	}
-	if len(spec.Containers) != 1 || spec.Containers[0].Name != "seid" {
-		t.Fatalf("expected single seid main container, got %v", spec.Containers)
+	if len(spec.Containers) != 1 || spec.Containers[0].Name != seidContainerName {
+		t.Fatalf("expected single %q main container, got %v", seidContainerName, spec.Containers)
 	}
 	if len(spec.Containers[0].Args) != 1 || spec.Containers[0].Args[0] != exportTriggerScript {
 		t.Errorf("seid Args[0] != exportTriggerScript const")
@@ -86,8 +90,8 @@ func TestGenerateJob_Validation(t *testing.T) {
 		mutate    func(*ExportJobInputs)
 		errSubstr string
 	}{
-		{"empty Name", func(in *ExportJobInputs) { in.Name = "" }, "Name and Namespace"},
-		{"empty Namespace", func(in *ExportJobInputs) { in.Namespace = "" }, "Name and Namespace"},
+		{"empty Name", func(in *ExportJobInputs) { in.Name = "" }, errNameNamespace},
+		{"empty Namespace", func(in *ExportJobInputs) { in.Namespace = "" }, errNameNamespace},
 		{"empty ChainID", func(in *ExportJobInputs) { in.ChainID = "" }, "ChainID"},
 		{"empty SeidImage", func(in *ExportJobInputs) { in.SeidImage = "" }, "SeidImage"},
 		{"empty PVCClaimName", func(in *ExportJobInputs) { in.PVCClaimName = "" }, "PVCClaimName"},
