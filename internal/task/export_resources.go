@@ -300,8 +300,12 @@ until (exec 3<>/dev/tcp/localhost/${SIDECAR_PORT} \
     sleep 5
 done
 
-# Run the export. Stderr stays on the container's stderr stream.
-seid export --home /sei --height "${EXPORT_HEIGHT}" > /sei/tmp/exported-state.json
+# Run the export. --streaming writes directly to the file in chunks so the
+# seid process doesn't buffer multi-GB exports in memory (sei-chain has
+# historical OOM scars on the non-streaming path). Stderr stays on the
+# container's stderr stream.
+seid export --home /sei --height "${EXPORT_HEIGHT}" \
+    --streaming --streaming-file /sei/tmp/exported-state.json
 
 # POST upload-file task. Body is the envelope {"type","params"} the sidecar's
 # /v0/tasks handler decodes; capture task id from the response.
