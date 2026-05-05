@@ -929,6 +929,42 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              endpoints:
+                description: |-
+                  Endpoints exposes composed in-cluster URLs derived from
+                  .status.internalService and .status.perPodServices. See the Endpoints
+                  type for the ordering contract.
+                properties:
+                  evmJsonRpc:
+                    description: |-
+                      EvmJsonRpc lists EVM JSON-RPC HTTP URLs (http://). Aggregate at index 0,
+                      per-pod URLs at indices 1..N.
+                    items:
+                      type: string
+                    type: array
+                  evmWs:
+                    description: |-
+                      EvmWs lists EVM WebSocket URLs (ws://). Per-pod only — no aggregate
+                      entry, since round-robin ClusterIP breaks WebSocket subscription
+                      affinity.
+                    items:
+                      type: string
+                    type: array
+                  tendermintRest:
+                    description: |-
+                      TendermintRest lists Cosmos REST (LCD) URLs (http://). Aggregate only
+                      until per-pod Services expose port 1317.
+                    items:
+                      type: string
+                    type: array
+                  tendermintRpc:
+                    description: |-
+                      TendermintRpc lists Tendermint / CometBFT RPC URLs (http://). Aggregate
+                      only until per-pod Services expose port 26657.
+                    items:
+                      type: string
+                    type: array
+                type: object
               genesisHash:
                 description: GenesisHash is the SHA-256 hex digest of the assembled
                   genesis.json.

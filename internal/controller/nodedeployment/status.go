@@ -42,6 +42,7 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 	group.Status.ReadyReplicas = readyReplicas
 	group.Status.Nodes = nodeStatuses
 	group.Status.PerPodServices = populatePerPodServices(logr.FromContext(ctx), nodes)
+	group.Status.Endpoints = composeEndpoints(group)
 
 	group.Status.Phase = computeGroupPhase(group, readyReplicas, group.Spec.Replicas, nodes)
 

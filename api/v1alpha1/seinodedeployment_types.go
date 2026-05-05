@@ -263,10 +263,45 @@ type SeiNodeDeploymentStatus struct {
 	// +optional
 	PerPodServices []PerPodServiceStatus `json:"perPodServices,omitempty"`
 
+	// Endpoints exposes composed in-cluster URLs derived from
+	// .status.internalService and .status.perPodServices. See the Endpoints
+	// type for the ordering contract.
+	// +optional
+	Endpoints *Endpoints `json:"endpoints,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// Endpoints lists composed in-cluster URLs per protocol.
+//
+// Ordering: aggregate ClusterIP URL at index 0, per-pod URLs at indices
+// 1..N in .status.perPodServices order. EvmWs has no aggregate entry —
+// round-robin ClusterIP does not preserve WebSocket subscription state,
+// so its entries are per-pod-only at indices 0..N-1.
+type Endpoints struct {
+	// TendermintRpc lists Tendermint / CometBFT RPC URLs (http://). Aggregate
+	// only until per-pod Services expose port 26657.
+	// +optional
+	TendermintRpc []string `json:"tendermintRpc,omitempty"`
+
+	// TendermintRest lists Cosmos REST (LCD) URLs (http://). Aggregate only
+	// until per-pod Services expose port 1317.
+	// +optional
+	TendermintRest []string `json:"tendermintRest,omitempty"`
+
+	// EvmJsonRpc lists EVM JSON-RPC HTTP URLs (http://). Aggregate at index 0,
+	// per-pod URLs at indices 1..N.
+	// +optional
+	EvmJsonRpc []string `json:"evmJsonRpc,omitempty"`
+
+	// EvmWs lists EVM WebSocket URLs (ws://). Per-pod only — no aggregate
+	// entry, since round-robin ClusterIP breaks WebSocket subscription
+	// affinity.
+	// +optional
+	EvmWs []string `json:"evmWs,omitempty"`
 }
 
 // InternalServiceStatus reports the resolved in-cluster ClusterIP Service
