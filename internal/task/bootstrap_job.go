@@ -44,9 +44,13 @@ func (e *deployBootstrapJobExecution) Execute(ctx context.Context) error {
 		return err
 	}
 	snap := node.Spec.SnapshotSource()
-	job, err := GenerateBootstrapJob(node, snap, e.cfg.Platform)
+	inputs := nodeToBootstrapInputs(node, snap)
+	job, err := GenerateBootstrapJob(inputs, e.cfg.Platform)
 	if err != nil {
 		return fmt.Errorf("generating bootstrap job spec: %w", err)
+	}
+	if err := assertNoSigningKeyOnBootstrapPod(node, &job.Spec.Template.Spec); err != nil {
+		return err
 	}
 	if err := ctrl.SetControllerReference(node, job, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on bootstrap job: %w", err)
