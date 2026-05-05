@@ -32,12 +32,14 @@ func ExporterServiceName(groupName string) string { return fmt.Sprintf("%s-expor
 
 // --- ensure-exporter-pvc ---
 
+// EnsureExporterPVCParams carries the SND-side context needed to ensure the
+// exporter PVC. Storage size and class come from cfg.Platform at exec time
+// (matching the SeiNode-bootstrap path in internal/noderesource), so the
+// planner doesn't need a Platform reference and chain-specific sizing
+// (full vs archive) can change via env vars without touching plan params.
 type EnsureExporterPVCParams struct {
-	PVCName          string                              `json:"pvcName"`
-	Namespace        string                              `json:"namespace"`
-	StorageClassName *string                             `json:"storageClassName,omitempty"`
-	Size             resource.Quantity                   `json:"size"`
-	AccessModes      []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
+	PVCName   string `json:"pvcName"`
+	Namespace string `json:"namespace"`
 }
 
 type ensureExporterPVCExecution struct {
@@ -62,18 +64,19 @@ func (e *ensureExporterPVCExecution) Execute(ctx context.Context) error {
 		return task.Terminal(err)
 	}
 
-	accessModes := e.params.AccessModes
-	if len(accessModes) == 0 {
-		accessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+	size, err := resource.ParseQuantity(e.cfg.Platform.StorageSizeDefault)
+	if err != nil {
+		return task.Terminal(fmt.Errorf("parsing platform StorageSizeDefault %q: %w", e.cfg.Platform.StorageSizeDefault, err))
 	}
+	storageClass := e.cfg.Platform.StorageClassPerf
 
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: e.params.PVCName, Namespace: e.params.Namespace},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes:      accessModes,
-			StorageClassName: e.params.StorageClassName,
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			StorageClassName: &storageClass,
 			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: e.params.Size},
+				Requests: corev1.ResourceList{corev1.ResourceStorage: size},
 			},
 		},
 	}

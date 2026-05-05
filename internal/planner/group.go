@@ -3,7 +3,6 @@ package planner
 import (
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
-	"k8s.io/apimachinery/pkg/api/resource"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -16,15 +15,6 @@ const (
 )
 
 type genesisGroupPlanner struct{}
-
-// exporterPVCSize sizes the fork-genesis exporter PVC. The bootstrap Job
-// writes seid's data dir up to halt-height into this PVC, so the size must
-// hold the full state at that height — not just the exported JSON. 500Gi
-// is enough for low-state test chains; pacific-1-scale chains will need a
-// per-SND override before the fork ceremony runs there.
-func exporterPVCSize() (resource.Quantity, error) {
-	return resource.ParseQuantity("500Gi")
-}
 
 // BuildPlan constructs a TaskPlan for the SeiNodeDeployment that:
 //  1. Assembles all per-node genesis artifacts into a final genesis.json
@@ -92,16 +82,10 @@ func (p *genesisGroupPlanner) BuildPlan(
 		exportJob := root + "-export"
 		serviceName := root
 
-		size, err := exporterPVCSize()
-		if err != nil {
-			return nil, err
-		}
-
 		ensurePVC, err := buildPlannedTask(planID, export.TaskTypeEnsurePVC, planIndex,
 			&export.EnsureExporterPVCParams{
 				PVCName:   export.PVCName(group.Name),
 				Namespace: ns,
-				Size:      size,
 			})
 		if err != nil {
 			return nil, err
