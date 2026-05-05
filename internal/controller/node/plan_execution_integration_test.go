@@ -164,7 +164,7 @@ func TestIntegrationTaskFailure_FailsPlan(t *testing.T) {
 
 	// Fail the snapshot-restore task.
 	mock.taskResults = map[uuid.UUID]*sidecar.TaskResult{
-		taskUUID: completedResult(taskUUID, planner.TaskSnapshotRestore, strPtr("S3 access denied")),
+		taskUUID: completedResult(taskUUID, planner.TaskSnapshotRestore, new("S3 access denied")),
 	}
 	reconcileOnce(t, g, r, node.Name, node.Namespace)
 

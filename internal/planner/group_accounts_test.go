@@ -90,9 +90,9 @@ func TestBuildPlan_Fork_PropagatesAccounts(t *testing.T) {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	// Fork plan prepends 4 exporter tasks; assemble is at index 4.
+	// Fork plan prepends 6 exporter tasks; assemble is at index 6.
 	var params task.AssembleForkGenesisParams
-	if err := json.Unmarshal(plan.Tasks[4].Params.Raw, &params); err != nil {
+	if err := json.Unmarshal(plan.Tasks[6].Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(params.Accounts) != 1 {

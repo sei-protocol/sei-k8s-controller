@@ -234,7 +234,7 @@ func TestOrphanInternalService_RemovesOwnerRef(t *testing.T) {
 				Kind:       "SeiNodeDeployment",
 				Name:       group.Name,
 				UID:        group.UID,
-				Controller: boolPtr(true),
+				Controller: new(true),
 			}},
 		},
 	}
