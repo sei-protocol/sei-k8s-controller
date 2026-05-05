@@ -43,7 +43,8 @@ func (e *deployBootstrapServiceExecution) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	svc := GenerateBootstrapService(node)
+	inputs := nodeToBootstrapInputs(node, node.Spec.SnapshotSource())
+	svc := GenerateBootstrapService(inputs)
 	if err := ctrl.SetControllerReference(node, svc, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on bootstrap service: %w", err)
 	}
