@@ -62,12 +62,12 @@ type BootstrapPodInputs struct {
 	ForbiddenSecretNames []string
 }
 
-// JobName returns the bootstrap Job name for a given resource root.
+// BootstrapJobName returns the bootstrap Job name for a given resource root.
 func BootstrapJobName(name string) string {
 	return fmt.Sprintf("%s-bootstrap", name)
 }
 
-// Labels returns labels for bootstrap Job resources.
+// BootstrapLabels returns labels for bootstrap Job resources.
 func BootstrapLabels(name string) map[string]string {
 	return map[string]string{
 		bootstrapNodeLabel:      name,

@@ -477,7 +477,7 @@ func makeResources(cpu, memory string) corev1.ResourceRequirements {
 
 // signingKeyVolumes is called only from the production StatefulSet pod-spec.
 // The bootstrap Job pod-spec must never include these volumes — see the
-// safety invariant on bootstrap.GenerateJob.
+// safety invariant on task.GenerateBootstrapJob.
 func signingKeyVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
 	src := signingKeySecretSource(node)
 	if src == nil {
