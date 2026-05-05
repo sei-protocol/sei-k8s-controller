@@ -19,14 +19,22 @@ const (
 	testValidatorNodeKey   = "validator-0-nodekey"
 	testCustomSidecarImage = "ghcr.io/sei/sidecar:test"
 	testCustomSidecarPort  = int32(9099)
+
+	testNamespaceDefault = "default"
+	testChainPacific     = "pacific-1"
+	testChainAtlantic    = "atlantic-2"
+	testImageLatest      = "sei:latest"
+	testValidatorName    = "validator-0"
+	testExporterName     = "exporter"
+	testDataVolumeName   = "data"
 )
 
 func bootstrapTestReplayerNode() *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-replayer", Namespace: "default", Generation: 1},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-replayer", Namespace: testNamespaceDefault, Generation: 1},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "pacific-1",
-			Image:   "sei:latest",
+			ChainID: testChainPacific,
+			Image:   testImageLatest,
 			Replayer: &seiv1alpha1.ReplayerSpec{
 				Snapshot: seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
@@ -44,7 +52,7 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 		return &seiv1alpha1.SeiNode{
 			ObjectMeta: metav1.ObjectMeta{Name: "v0", Namespace: "consensus"},
 			Spec: seiv1alpha1.SeiNodeSpec{
-				ChainID: "atlantic-2",
+				ChainID: testChainAtlantic,
 				Image:   "sei:v1",
 				Validator: &seiv1alpha1.ValidatorSpec{
 					Snapshot: &seiv1alpha1.SnapshotSource{
@@ -94,9 +102,9 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 		{
 			name: "archive node maps to archive mode and has no forbidden secrets",
 			node: &seiv1alpha1.SeiNode{
-				ObjectMeta: metav1.ObjectMeta{Name: "archive-0", Namespace: "default"},
+				ObjectMeta: metav1.ObjectMeta{Name: "archive-0", Namespace: testNamespaceDefault},
 				Spec: seiv1alpha1.SeiNodeSpec{
-					ChainID: "pacific-1",
+					ChainID: testChainPacific,
 					Image:   "sei:archive",
 					Archive: &seiv1alpha1.ArchiveSpec{},
 				},
@@ -116,7 +124,7 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 			node: bootstrapTestReplayerNode(),
 			snap: &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 42}},
 			validate: func(t *testing.T, got BootstrapPodInputs) {
-				if got.Image != "sei:latest" {
+				if got.Image != testImageLatest {
 					t.Errorf("Image = %q, want fallback to Spec.Image", got.Image)
 				}
 			},
@@ -124,9 +132,9 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 		{
 			name: "full node with custom sidecar image and port",
 			node: &seiv1alpha1.SeiNode{
-				ObjectMeta: metav1.ObjectMeta{Name: "full-0", Namespace: "default"},
+				ObjectMeta: metav1.ObjectMeta{Name: "full-0", Namespace: testNamespaceDefault},
 				Spec: seiv1alpha1.SeiNodeSpec{
-					ChainID: "pacific-1",
+					ChainID: testChainPacific,
 					Image:   "sei:full",
 					FullNode: &seiv1alpha1.FullNodeSpec{
 						Snapshot: &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100}},
@@ -160,9 +168,9 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 		{
 			name: "default sidecar image when SeiNode.Sidecar is nil",
 			node: &seiv1alpha1.SeiNode{
-				ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "default"},
+				ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: testNamespaceDefault},
 				Spec: seiv1alpha1.SeiNodeSpec{
-					ChainID: "pacific-1",
+					ChainID: testChainPacific,
 					Image:   "sei:full",
 					FullNode: &seiv1alpha1.FullNodeSpec{
 						Snapshot: &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 1}},
@@ -174,7 +182,7 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 				if got.SidecarImage != bootstrapDefaultSidecarImage {
 					t.Errorf("SidecarImage = %q, want platform default %q", got.SidecarImage, bootstrapDefaultSidecarImage)
 				}
-				if got.SidecarPort != int32(seiconfig.PortSidecar) {
+				if got.SidecarPort != seiconfig.PortSidecar {
 					t.Errorf("SidecarPort = %d, want sei-config default %d", got.SidecarPort, seiconfig.PortSidecar)
 				}
 			},
@@ -187,8 +195,8 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 				if got.HaltHeight != 0 {
 					t.Errorf("HaltHeight = %d, want 0", got.HaltHeight)
 				}
-				if got.Image != "sei:latest" {
-					t.Errorf("Image = %q, want fallback %q", got.Image, "sei:latest")
+				if got.Image != testImageLatest {
+					t.Errorf("Image = %q, want fallback %q", got.Image, testImageLatest)
 				}
 			},
 		},
@@ -238,9 +246,9 @@ func TestGenerateBootstrapJob_Validation(t *testing.T) {
 	base := func() BootstrapPodInputs {
 		return BootstrapPodInputs{
 			Name:        "n",
-			Namespace:   "default",
-			ChainID:     "pacific-1",
-			Image:       "sei:latest",
+			Namespace:   testNamespaceDefault,
+			ChainID:     testChainPacific,
+			Image:       testImageLatest,
 			SidecarPort: 7777,
 			Mode:        string(seiconfig.ModeFull),
 			HaltHeight:  100,
@@ -315,9 +323,9 @@ func TestGenerateBootstrapJob_SidecarResources(t *testing.T) {
 // nor the validator's permanent node key (peer-reputation pollution risk).
 func TestGenerateBootstrapJob_NeverHasIdentityVolumes(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: testValidatorName, Namespace: testNamespaceDefault},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "atlantic-2",
+			ChainID: testChainAtlantic,
 			Image:   "ghcr.io/sei-protocol/seid:latest",
 			Validator: &seiv1alpha1.ValidatorSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
@@ -382,7 +390,7 @@ func TestRejectForbiddenSecretMounts(t *testing.T) {
 	}{
 		{
 			name:      "empty forbidden list passes",
-			volumes:   []corev1.Volume{{Name: "data"}},
+			volumes:   []corev1.Volume{{Name: testDataVolumeName}},
 			forbidden: nil,
 			wantErr:   "",
 		},
@@ -397,7 +405,7 @@ func TestRejectForbiddenSecretMounts(t *testing.T) {
 		{
 			name: "signing-key secret in list fails closed",
 			volumes: []corev1.Volume{
-				{Name: "data"},
+				{Name: testDataVolumeName},
 				{Name: "signing-key", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: testValidatorSecret}}},
 			},
 			forbidden: []string{testValidatorSecret, testValidatorNodeKey},
@@ -443,7 +451,7 @@ func TestRejectForbiddenSecretMounts(t *testing.T) {
 
 func TestGenerateBootstrapService_TolerantOfZeroFields(t *testing.T) {
 	svc := GenerateBootstrapService(BootstrapPodInputs{
-		Name:        "exporter",
+		Name:        testExporterName,
 		Namespace:   "fork",
 		SidecarPort: 7777,
 	})
@@ -456,7 +464,7 @@ func TestGenerateBootstrapService_TolerantOfZeroFields(t *testing.T) {
 	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 7777 {
 		t.Errorf("ports = %+v, want single sidecar port 7777", svc.Spec.Ports)
 	}
-	if svc.Spec.Selector[bootstrapNodeLabel] != "exporter" {
-		t.Errorf("selector node label = %q, want %q", svc.Spec.Selector[bootstrapNodeLabel], "exporter")
+	if svc.Spec.Selector[bootstrapNodeLabel] != testExporterName {
+		t.Errorf("selector node label = %q, want %q", svc.Spec.Selector[bootstrapNodeLabel], testExporterName)
 	}
 }

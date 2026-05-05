@@ -32,7 +32,7 @@ func nodeToBootstrapInputs(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 		sidecarImage = node.Spec.Sidecar.Image
 	}
 
-	sidecarPort := int32(seiconfig.PortSidecar)
+	sidecarPort := seiconfig.PortSidecar
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
 		sidecarPort = node.Spec.Sidecar.Port
 	}
