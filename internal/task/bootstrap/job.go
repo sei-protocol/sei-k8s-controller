@@ -1,9 +1,11 @@
-package task
+package bootstrap
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,12 +21,12 @@ type DeployBootstrapJobParams struct {
 }
 
 type deployBootstrapJobExecution struct {
-	taskBase
+	task.Base
 	params DeployBootstrapJobParams
-	cfg    ExecutionConfig
+	cfg    task.ExecutionConfig
 }
 
-func deserializeBootstrapJob(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
+func deserializeBootstrapJob(id string, params json.RawMessage, cfg task.ExecutionConfig) (task.TaskExecution, error) {
 	var p DeployBootstrapJobParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -32,20 +34,20 @@ func deserializeBootstrapJob(id string, params json.RawMessage, cfg ExecutionCon
 		}
 	}
 	return &deployBootstrapJobExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   task.NewBase(id),
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
 func (e *deployBootstrapJobExecution) Execute(ctx context.Context) error {
-	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
+	node, err := task.ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
 		return err
 	}
 	snap := node.Spec.SnapshotSource()
 	inputs := nodeToBootstrapInputs(node, snap)
-	job, err := GenerateBootstrapJob(inputs, e.cfg.Platform)
+	job, err := GenerateJob(inputs, e.cfg.Platform)
 	if err != nil {
 		return fmt.Errorf("generating bootstrap job spec: %w", err)
 	}
@@ -54,23 +56,23 @@ func (e *deployBootstrapJobExecution) Execute(ctx context.Context) error {
 	}
 	if err := e.cfg.KubeClient.Create(ctx, job); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			e.complete()
+			e.Complete()
 			return nil
 		}
 		return fmt.Errorf("creating bootstrap job: %w", err)
 	}
-	e.complete()
+	e.Complete()
 	return nil
 }
 
-func (e *deployBootstrapJobExecution) Status(ctx context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
+func (e *deployBootstrapJobExecution) Status(ctx context.Context) task.ExecutionStatus {
+	if s, done := e.IsTerminal(); done {
 		return s
 	}
 	existing := &batchv1.Job{}
 	key := types.NamespacedName{Name: e.params.JobName, Namespace: e.params.Namespace}
 	if err := e.cfg.KubeClient.Get(ctx, key, existing); err == nil {
-		e.complete()
+		e.Complete()
 	}
-	return e.status
+	return e.DefaultStatus()
 }

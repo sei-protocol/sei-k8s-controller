@@ -24,7 +24,7 @@ type ApplyStatefulSetParams struct {
 }
 
 type applyStatefulSetExecution struct {
-	taskBase
+	Base
 	params ApplyStatefulSetParams
 	cfg    ExecutionConfig
 }
@@ -37,9 +37,9 @@ func deserializeApplyStatefulSet(id string, params json.RawMessage, cfg Executio
 		}
 	}
 	return &applyStatefulSetExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -60,7 +60,7 @@ func (e *applyStatefulSetExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("applying statefulset: %w", err)
 	}
 
-	e.complete()
+	e.Complete()
 	return nil
 }
 

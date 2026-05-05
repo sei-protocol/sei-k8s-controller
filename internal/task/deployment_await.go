@@ -16,7 +16,7 @@ import (
 // awaitNodesAtHeightExecution submits await-condition(height=H) to each
 // node's sidecar and polls until all complete.
 type awaitNodesAtHeightExecution struct {
-	taskBase
+	Base
 	params AwaitNodesAtHeightParams
 	cfg    ExecutionConfig
 }
@@ -29,9 +29,9 @@ func deserializeAwaitNodesAtHeight(id string, params json.RawMessage, cfg Execut
 		}
 	}
 	return &awaitNodesAtHeightExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -63,21 +63,21 @@ func (e *awaitNodesAtHeightExecution) Execute(ctx context.Context) error {
 // deterministic IDs. No in-memory state is needed — task IDs are
 // recomputed on every call, making this restart-safe.
 func (e *awaitNodesAtHeightExecution) Status(ctx context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
+	if s, done := e.IsTerminal(); done {
 		return s
 	}
 	for _, name := range e.params.NodeNames {
 		taskID := deterministicDeploymentTaskID(name, "await-height", e.id)
 		status, err := e.pollSidecarTask(ctx, name, taskID)
 		if err != nil {
-			e.setFailed(err)
+			e.SetFailed(err)
 			return ExecutionFailed
 		}
 		if status != ExecutionComplete {
 			return status
 		}
 	}
-	e.complete()
+	e.Complete()
 	return ExecutionComplete
 }
 
@@ -114,7 +114,7 @@ func (e *awaitNodesAtHeightExecution) sidecarForNode(ctx context.Context, name s
 
 // awaitNodesCaughtUpExecution polls node sidecars until all report Ready.
 type awaitNodesCaughtUpExecution struct {
-	taskBase
+	Base
 	params AwaitNodesCaughtUpParams
 	cfg    ExecutionConfig
 }
@@ -127,16 +127,16 @@ func deserializeAwaitNodesCaughtUp(id string, params json.RawMessage, cfg Execut
 		}
 	}
 	return &awaitNodesCaughtUpExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
 func (e *awaitNodesCaughtUpExecution) Execute(_ context.Context) error { return nil }
 
 func (e *awaitNodesCaughtUpExecution) Status(ctx context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
+	if s, done := e.IsTerminal(); done {
 		return s
 	}
 	for _, name := range e.params.NodeNames {
@@ -144,7 +144,7 @@ func (e *awaitNodesCaughtUpExecution) Status(ctx context.Context) ExecutionStatu
 			return ExecutionRunning
 		}
 	}
-	e.complete()
+	e.Complete()
 	return ExecutionComplete
 }
 

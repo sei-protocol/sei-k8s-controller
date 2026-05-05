@@ -27,7 +27,7 @@ type EnsureDataPVCParams struct {
 }
 
 type ensureDataPVCExecution struct {
-	taskBase
+	Base
 	params EnsureDataPVCParams
 	cfg    ExecutionConfig
 }
@@ -40,9 +40,9 @@ func deserializeEnsureDataPVC(id string, params json.RawMessage, cfg ExecutionCo
 		}
 	}
 	return &ensureDataPVCExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -75,7 +75,7 @@ func (e *ensureDataPVCExecution) executeCreate(ctx context.Context, node *seiv1a
 		return fmt.Errorf("checking for existing data PVC: %w", err)
 	default:
 		if metav1.IsControlledBy(existing, node) {
-			e.complete()
+			e.Complete()
 			return nil
 		}
 		return Terminal(fmt.Errorf(
@@ -92,7 +92,7 @@ func (e *ensureDataPVCExecution) executeCreate(ctx context.Context, node *seiv1a
 		}
 		return fmt.Errorf("creating data PVC: %w", err)
 	}
-	e.complete()
+	e.Complete()
 	return nil
 }
 
@@ -108,7 +108,7 @@ func (e *ensureDataPVCExecution) executeImport(ctx context.Context, node *seiv1a
 	case err == nil:
 		setImportPVCCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonPVCValidated,
 			fmt.Sprintf("PVC %q passes all import requirements", name))
-		e.complete()
+		e.Complete()
 		return nil
 	case isTerminal(err):
 		setImportPVCCondition(node, metav1.ConditionFalse, seiv1alpha1.ReasonPVCInvalid, err.Error())

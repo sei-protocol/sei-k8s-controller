@@ -23,7 +23,7 @@ type ObserveImageParams struct {
 }
 
 type observeImageExecution struct {
-	taskBase
+	Base
 	params ObserveImageParams
 	cfg    ExecutionConfig
 }
@@ -36,9 +36,9 @@ func deserializeObserveImage(id string, params json.RawMessage, cfg ExecutionCon
 		}
 	}
 	return &observeImageExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -70,7 +70,7 @@ func (e *observeImageExecution) Execute(ctx context.Context) error {
 
 	// Rollout complete — stamp currentImage in-memory.
 	node.Status.CurrentImage = node.Spec.Image
-	e.complete()
+	e.Complete()
 	return nil
 }
 

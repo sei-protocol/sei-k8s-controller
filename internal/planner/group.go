@@ -1,13 +1,13 @@
 package planner
 
 import (
-	"fmt"
-
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task/export"
 )
 
 const (
@@ -16,6 +16,14 @@ const (
 )
 
 type genesisGroupPlanner struct{}
+
+// exporterPVCSize sizes the fork-genesis exporter PVC. Hardcoded for now —
+// the SND CRD has no per-deployment PVC size override; revisit when the
+// fork-genesis path lands a real ceremony and we observe the actual
+// exported-state size.
+func exporterPVCSize() (resource.Quantity, error) {
+	return resource.ParseQuantity("500Gi")
+}
 
 // BuildPlan constructs a TaskPlan for the SeiNodeDeployment that:
 //  1. Assembles all per-node genesis artifacts into a final genesis.json
@@ -74,58 +82,73 @@ func (p *genesisGroupPlanner) BuildPlan(
 
 	var tasks []seiv1alpha1.PlannedTask
 
-	// For fork ceremonies, prepend exporter lifecycle tasks.
+	// For fork ceremonies, prepend the SND-driven exporter sub-plan: PVC,
+	// bootstrap Job, await, export Job, await, teardown.
 	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) && group.Spec.Genesis.Fork != nil {
-		fork := group.Spec.Genesis.Fork
-		exporterName := fmt.Sprintf("%s-exporter", group.Name)
+		ns := group.Namespace
+		root := group.Name + "-exporter"
+		bootstrapJob := root + "-bootstrap"
+		exportJob := root + "-export"
+		serviceName := root
 
-		createExporter, err := buildPlannedTask(planID, task.TaskTypeCreateExporter, planIndex,
-			&task.CreateExporterParams{
-				GroupName:     group.Name,
-				ExporterName:  exporterName,
-				Namespace:     group.Namespace,
-				SourceChainID: fork.SourceChainID,
-				SourceImage:   fork.SourceImage,
-				ExportHeight:  fork.ExportHeight,
+		size, err := exporterPVCSize()
+		if err != nil {
+			return nil, err
+		}
+
+		ensurePVC, err := buildPlannedTask(planID, export.TaskTypeEnsurePVC, planIndex,
+			&export.EnsureExporterPVCParams{
+				PVCName:   export.PVCName(group.Name),
+				Namespace: ns,
+				Size:      size,
 			})
 		if err != nil {
 			return nil, err
 		}
 		planIndex++
 
-		awaitExporter, err := buildPlannedTask(planID, task.TaskTypeAwaitExporterRunning, planIndex,
-			&task.AwaitExporterRunningParams{
-				ExporterName: exporterName,
-				Namespace:    group.Namespace,
+		applyBootstrap, err := buildPlannedTask(planID, export.TaskTypeApplyBootstrapJob, planIndex,
+			&export.ApplyBootstrapJobParams{Namespace: ns})
+		if err != nil {
+			return nil, err
+		}
+		planIndex++
+
+		awaitBootstrap, err := buildPlannedTask(planID, export.TaskTypeAwaitBootstrapJob, planIndex,
+			&export.AwaitJobParams{JobName: bootstrapJob, Namespace: ns})
+		if err != nil {
+			return nil, err
+		}
+		planIndex++
+
+		applyExport, err := buildPlannedTask(planID, export.TaskTypeApplyExportJob, planIndex,
+			&export.ApplyExportJobParams{Namespace: ns})
+		if err != nil {
+			return nil, err
+		}
+		planIndex++
+
+		awaitExport, err := buildPlannedTask(planID, export.TaskTypeAwaitExportJob, planIndex,
+			&export.AwaitJobParams{JobName: exportJob, Namespace: ns})
+		if err != nil {
+			return nil, err
+		}
+		planIndex++
+
+		teardown, err := buildPlannedTask(planID, export.TaskTypeTeardownExporter, planIndex,
+			&export.TeardownExporterParams{
+				PVCName:      export.PVCName(group.Name),
+				BootstrapJob: bootstrapJob,
+				ExportJob:    exportJob,
+				ServiceName:  serviceName,
+				Namespace:    ns,
 			})
 		if err != nil {
 			return nil, err
 		}
 		planIndex++
 
-		submitExport, err := buildPlannedTask(planID, task.TaskTypeSubmitExportState, planIndex,
-			&task.SubmitExportStateParams{
-				ExporterName:  exporterName,
-				Namespace:     group.Namespace,
-				ExportHeight:  group.Spec.Genesis.Fork.ExportHeight,
-				SourceChainID: group.Spec.Genesis.Fork.SourceChainID,
-			})
-		if err != nil {
-			return nil, err
-		}
-		planIndex++
-
-		teardownExporter, err := buildPlannedTask(planID, task.TaskTypeTeardownExporter, planIndex,
-			&task.TeardownExporterParams{
-				ExporterName: exporterName,
-				Namespace:    group.Namespace,
-			})
-		if err != nil {
-			return nil, err
-		}
-		planIndex++
-
-		tasks = append(tasks, createExporter, awaitExporter, submitExport, teardownExporter)
+		tasks = append(tasks, ensurePVC, applyBootstrap, awaitBootstrap, applyExport, awaitExport, teardown)
 	}
 
 	assembleTask, err := buildPlannedTask(planID, assembleTaskType, planIndex, assembleParams)

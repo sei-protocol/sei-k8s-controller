@@ -38,7 +38,7 @@ type ValidateSigningKeyParams struct {
 }
 
 type validateSigningKeyExecution struct {
-	taskBase
+	Base
 	params ValidateSigningKeyParams
 	cfg    ExecutionConfig
 }
@@ -51,9 +51,9 @@ func deserializeValidateSigningKey(id string, params json.RawMessage, cfg Execut
 		}
 	}
 	return &validateSigningKeyExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -68,7 +68,7 @@ func (e *validateSigningKeyExecution) Execute(ctx context.Context) error {
 	case err == nil:
 		setSigningKeyCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonSigningKeyValidated,
 			fmt.Sprintf("Secret %q passes all signing-key validation rules", e.params.SecretName))
-		e.complete()
+		e.Complete()
 		return nil
 	case isTerminal(err):
 		setSigningKeyCondition(node, metav1.ConditionFalse, seiv1alpha1.ReasonSigningKeyInvalid, err.Error())

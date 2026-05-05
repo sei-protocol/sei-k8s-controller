@@ -34,7 +34,7 @@ type ValidateNodeKeyParams struct {
 }
 
 type validateNodeKeyExecution struct {
-	taskBase
+	Base
 	params ValidateNodeKeyParams
 	cfg    ExecutionConfig
 }
@@ -47,9 +47,9 @@ func deserializeValidateNodeKey(id string, params json.RawMessage, cfg Execution
 		}
 	}
 	return &validateNodeKeyExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -64,7 +64,7 @@ func (e *validateNodeKeyExecution) Execute(ctx context.Context) error {
 	case err == nil:
 		setNodeKeyCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonNodeKeyValidated,
 			fmt.Sprintf("Secret %q passes all node-key validation rules", e.params.SecretName))
-		e.complete()
+		e.Complete()
 		return nil
 	case isTerminal(err):
 		setNodeKeyCondition(node, metav1.ConditionFalse, seiv1alpha1.ReasonNodeKeyInvalid, err.Error())

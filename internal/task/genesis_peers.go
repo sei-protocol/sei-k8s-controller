@@ -23,7 +23,7 @@ type CollectAndSetPeersParams struct {
 }
 
 type collectAndSetPeersExecution struct {
-	taskBase
+	Base
 	params CollectAndSetPeersParams
 	cfg    ExecutionConfig
 }
@@ -36,9 +36,9 @@ func deserializeCollectAndSetPeers(id string, params json.RawMessage, cfg Execut
 		}
 	}
 	return &collectAndSetPeersExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -52,7 +52,7 @@ func (e *collectAndSetPeersExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("setting peers: %w", err) // transient
 	}
 
-	e.complete()
+	e.Complete()
 	return nil
 }
 

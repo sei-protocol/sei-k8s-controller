@@ -1,9 +1,11 @@
-package task
+package bootstrap
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,12 +21,12 @@ type DeployBootstrapServiceParams struct {
 }
 
 type deployBootstrapServiceExecution struct {
-	taskBase
+	task.Base
 	params DeployBootstrapServiceParams
-	cfg    ExecutionConfig
+	cfg    task.ExecutionConfig
 }
 
-func deserializeBootstrapService(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
+func deserializeBootstrapService(id string, params json.RawMessage, cfg task.ExecutionConfig) (task.TaskExecution, error) {
 	var p DeployBootstrapServiceParams
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -32,41 +34,41 @@ func deserializeBootstrapService(id string, params json.RawMessage, cfg Executio
 		}
 	}
 	return &deployBootstrapServiceExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   task.NewBase(id),
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
 func (e *deployBootstrapServiceExecution) Execute(ctx context.Context) error {
-	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
+	node, err := task.ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
 		return err
 	}
 	inputs := nodeToBootstrapInputs(node, node.Spec.SnapshotSource())
-	svc := GenerateBootstrapService(inputs)
+	svc := GenerateService(inputs)
 	if err := ctrl.SetControllerReference(node, svc, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on bootstrap service: %w", err)
 	}
 	if err := e.cfg.KubeClient.Create(ctx, svc); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			e.complete()
+			e.Complete()
 			return nil
 		}
 		return fmt.Errorf("creating bootstrap service: %w", err)
 	}
-	e.complete()
+	e.Complete()
 	return nil
 }
 
-func (e *deployBootstrapServiceExecution) Status(ctx context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
+func (e *deployBootstrapServiceExecution) Status(ctx context.Context) task.ExecutionStatus {
+	if s, done := e.IsTerminal(); done {
 		return s
 	}
 	existing := &corev1.Service{}
 	key := types.NamespacedName{Name: e.params.ServiceName, Namespace: e.params.Namespace}
 	if err := e.cfg.KubeClient.Get(ctx, key, existing); err == nil {
-		e.complete()
+		e.Complete()
 	}
-	return e.status
+	return e.DefaultStatus()
 }

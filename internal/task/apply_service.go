@@ -24,7 +24,7 @@ type ApplyServiceParams struct {
 }
 
 type applyServiceExecution struct {
-	taskBase
+	Base
 	params ApplyServiceParams
 	cfg    ExecutionConfig
 }
@@ -37,9 +37,9 @@ func deserializeApplyService(id string, params json.RawMessage, cfg ExecutionCon
 		}
 	}
 	return &applyServiceExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -60,7 +60,7 @@ func (e *applyServiceExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("applying service: %w", err)
 	}
 
-	e.complete()
+	e.Complete()
 	return nil
 }
 

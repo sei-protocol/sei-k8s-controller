@@ -6,6 +6,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task/bootstrap"
 )
 
 // buildBootstrapPlan constructs a unified Plan for nodes that need a
@@ -21,7 +22,7 @@ func buildBootstrapPlan(
 	planID := uuid.New().String()
 	planIndex := 0
 
-	jobName := task.BootstrapJobName(node.Name)
+	jobName := bootstrap.JobName(node.Name)
 	serviceName := node.Name
 
 	bootstrapProg, err := buildSidecarProgression(snap, peers)
@@ -64,12 +65,12 @@ func buildBootstrapPlan(
 	}
 
 	// Phase 1: Deploy bootstrap infrastructure
-	if err := appendTask(task.TaskTypeDeployBootstrapSvc,
-		&task.DeployBootstrapServiceParams{ServiceName: serviceName, Namespace: node.Namespace}); err != nil {
+	if err := appendTask(bootstrap.TaskTypeService,
+		&bootstrap.DeployBootstrapServiceParams{ServiceName: serviceName, Namespace: node.Namespace}); err != nil {
 		return nil, err
 	}
-	if err := appendTask(task.TaskTypeDeployBootstrapJob,
-		&task.DeployBootstrapJobParams{JobName: jobName, Namespace: node.Namespace}); err != nil {
+	if err := appendTask(bootstrap.TaskTypeJob,
+		&bootstrap.DeployBootstrapJobParams{JobName: jobName, Namespace: node.Namespace}); err != nil {
 		return nil, err
 	}
 
@@ -81,12 +82,12 @@ func buildBootstrapPlan(
 	}
 
 	// Phase 3: Wait for seid to reach halt-height, then tear down
-	if err := appendTask(task.TaskTypeAwaitBootstrapComplete,
-		&task.AwaitBootstrapCompleteParams{JobName: jobName, Namespace: node.Namespace}); err != nil {
+	if err := appendTask(bootstrap.TaskTypeAwait,
+		&bootstrap.AwaitBootstrapCompleteParams{JobName: jobName, Namespace: node.Namespace}); err != nil {
 		return nil, err
 	}
-	if err := appendTask(task.TaskTypeTeardownBootstrap,
-		&task.TeardownBootstrapParams{JobName: jobName, ServiceName: serviceName, Namespace: node.Namespace}); err != nil {
+	if err := appendTask(bootstrap.TaskTypeTeardown,
+		&bootstrap.TeardownBootstrapParams{JobName: jobName, ServiceName: serviceName, Namespace: node.Namespace}); err != nil {
 		return nil, err
 	}
 
@@ -140,7 +141,7 @@ func IsBootstrapComplete(plan *seiv1alpha1.TaskPlan) bool {
 		return false
 	}
 	for _, t := range plan.Tasks {
-		if t.Type == task.TaskTypeTeardownBootstrap {
+		if t.Type == bootstrap.TaskTypeTeardown {
 			return t.Status == seiv1alpha1.TaskComplete
 		}
 	}

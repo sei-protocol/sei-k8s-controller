@@ -16,7 +16,7 @@ import (
 // await-condition(height=H, action=SIGTERM) to each incumbent node's
 // sidecar. Completes immediately after submission (best-effort).
 type submitHaltSignalExecution struct {
-	taskBase
+	Base
 	params SubmitHaltSignalParams
 	cfg    ExecutionConfig
 }
@@ -29,9 +29,9 @@ func deserializeSubmitHaltSignal(id string, params json.RawMessage, cfg Executio
 		}
 	}
 	return &submitHaltSignalExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
@@ -42,7 +42,7 @@ func (e *submitHaltSignalExecution) Execute(ctx context.Context) error {
 		e.submitToNode(ctx, logger, name)
 	}
 
-	e.complete()
+	e.Complete()
 	return nil
 }
 

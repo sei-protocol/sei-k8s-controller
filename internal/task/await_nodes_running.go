@@ -25,7 +25,7 @@ type AwaitNodesRunningParams struct {
 }
 
 type awaitNodesRunningExecution struct {
-	taskBase
+	Base
 	params AwaitNodesRunningParams
 	cfg    ExecutionConfig
 }
@@ -38,16 +38,16 @@ func deserializeAwaitNodesRunning(id string, params json.RawMessage, cfg Executi
 		}
 	}
 	return &awaitNodesRunningExecution{
-		taskBase: taskBase{id: id, status: ExecutionRunning},
-		params:   p,
-		cfg:      cfg,
+		Base:   Base{id: id, status: ExecutionRunning},
+		params: p,
+		cfg:    cfg,
 	}, nil
 }
 
 func (e *awaitNodesRunningExecution) Execute(_ context.Context) error { return nil }
 
 func (e *awaitNodesRunningExecution) Status(ctx context.Context) ExecutionStatus {
-	if s, done := e.isTerminal(); done {
+	if s, done := e.IsTerminal(); done {
 		return s
 	}
 
@@ -62,13 +62,13 @@ func (e *awaitNodesRunningExecution) Status(ctx context.Context) ExecutionStatus
 		case seiv1alpha1.PhaseRunning:
 			running++
 		case seiv1alpha1.PhaseFailed:
-			e.setFailed(fmt.Errorf("node %s is in Failed phase", nodes[i].Name))
+			e.SetFailed(fmt.Errorf("node %s is in Failed phase", nodes[i].Name))
 			return ExecutionFailed
 		}
 	}
 
 	if running >= e.params.Expected {
-		e.complete()
+		e.Complete()
 		return ExecutionComplete
 	}
 	return ExecutionRunning

@@ -1,4 +1,4 @@
-package task
+package bootstrap
 
 import (
 	"strings"
@@ -74,13 +74,13 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 		name     string
 		node     *seiv1alpha1.SeiNode
 		snap     *seiv1alpha1.SnapshotSource
-		validate func(t *testing.T, got BootstrapPodInputs)
+		validate func(t *testing.T, got PodInputs)
 	}{
 		{
 			name: "validator with bootstrap image and identity secrets",
 			node: withValidator(testValidatorSecret, testValidatorNodeKey),
 			snap: withValidator(testValidatorSecret, testValidatorNodeKey).Spec.SnapshotSource(),
-			validate: func(t *testing.T, got BootstrapPodInputs) {
+			validate: func(t *testing.T, got PodInputs) {
 				if got.Image != testBootstrapImageV1 {
 					t.Errorf("Image = %q, want snapshot BootstrapImage %q", got.Image, testBootstrapImageV1)
 				}
@@ -110,7 +110,7 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 				},
 			},
 			snap: &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 42}},
-			validate: func(t *testing.T, got BootstrapPodInputs) {
+			validate: func(t *testing.T, got PodInputs) {
 				if got.Mode != string(seiconfig.ModeArchive) {
 					t.Errorf("Mode = %q, want archive", got.Mode)
 				}
@@ -123,7 +123,7 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 			name: "Image falls back to Spec.Image when snap.BootstrapImage is empty",
 			node: bootstrapTestReplayerNode(),
 			snap: &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 42}},
-			validate: func(t *testing.T, got BootstrapPodInputs) {
+			validate: func(t *testing.T, got PodInputs) {
 				if got.Image != testImageLatest {
 					t.Errorf("Image = %q, want fallback to Spec.Image", got.Image)
 				}
@@ -143,7 +143,7 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 				},
 			},
 			snap: &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100}},
-			validate: func(t *testing.T, got BootstrapPodInputs) {
+			validate: func(t *testing.T, got PodInputs) {
 				if got.SidecarImage != testCustomSidecarImage {
 					t.Errorf("SidecarImage = %q, want %q", got.SidecarImage, testCustomSidecarImage)
 				}
@@ -159,7 +159,7 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 			name: "replayer falls through to default mode (full)",
 			node: bootstrapTestReplayerNode(),
 			snap: bootstrapTestReplayerNode().Spec.SnapshotSource(),
-			validate: func(t *testing.T, got BootstrapPodInputs) {
+			validate: func(t *testing.T, got PodInputs) {
 				if got.Mode != string(seiconfig.ModeFull) {
 					t.Errorf("Mode = %q, want full (replayer falls through to default)", got.Mode)
 				}
@@ -178,7 +178,7 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 				},
 			},
 			snap: &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 1}},
-			validate: func(t *testing.T, got BootstrapPodInputs) {
+			validate: func(t *testing.T, got PodInputs) {
 				if got.SidecarImage != bootstrapDefaultSidecarImage {
 					t.Errorf("SidecarImage = %q, want platform default %q", got.SidecarImage, bootstrapDefaultSidecarImage)
 				}
@@ -191,7 +191,7 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 			name: "nil snapshot leaves HaltHeight zero and Image at Spec.Image",
 			node: bootstrapTestReplayerNode(),
 			snap: nil,
-			validate: func(t *testing.T, got BootstrapPodInputs) {
+			validate: func(t *testing.T, got PodInputs) {
 				if got.HaltHeight != 0 {
 					t.Errorf("HaltHeight = %d, want 0", got.HaltHeight)
 				}
@@ -216,15 +216,15 @@ func TestNodeToBootstrapInputs(t *testing.T) {
 	}
 }
 
-// --- GenerateBootstrapJob ---
+// --- GenerateJob ---
 
 func TestGenerateBootstrapJob(t *testing.T) {
 	node := bootstrapTestReplayerNode()
 	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
 	inputs := nodeToBootstrapInputs(node, node.Spec.SnapshotSource())
-	job, err := GenerateBootstrapJob(inputs, platformtest.Config())
+	job, err := GenerateJob(inputs, platformtest.Config())
 	if err != nil {
-		t.Fatalf("GenerateBootstrapJob error: %v", err)
+		t.Fatalf("GenerateJob error: %v", err)
 	}
 
 	if job.Name != "test-replayer-bootstrap" {
@@ -243,8 +243,8 @@ func TestGenerateBootstrapJob(t *testing.T) {
 }
 
 func TestGenerateBootstrapJob_Validation(t *testing.T) {
-	base := func() BootstrapPodInputs {
-		return BootstrapPodInputs{
+	base := func() PodInputs {
+		return PodInputs{
 			Name:        "n",
 			Namespace:   testNamespaceDefault,
 			ChainID:     testChainPacific,
@@ -256,21 +256,21 @@ func TestGenerateBootstrapJob_Validation(t *testing.T) {
 	}
 	tests := []struct {
 		name      string
-		mutate    func(*BootstrapPodInputs)
+		mutate    func(*PodInputs)
 		errSubstr string
 	}{
-		{"empty Name", func(in *BootstrapPodInputs) { in.Name = "" }, "Name and Namespace"},
-		{"empty Namespace", func(in *BootstrapPodInputs) { in.Namespace = "" }, "Name and Namespace"},
-		{"empty ChainID", func(in *BootstrapPodInputs) { in.ChainID = "" }, "ChainID"},
-		{"empty Image", func(in *BootstrapPodInputs) { in.Image = "" }, "Image"},
-		{"zero HaltHeight", func(in *BootstrapPodInputs) { in.HaltHeight = 0 }, "HaltHeight"},
-		{"negative HaltHeight", func(in *BootstrapPodInputs) { in.HaltHeight = -1 }, "HaltHeight"},
+		{"empty Name", func(in *PodInputs) { in.Name = "" }, "Name and Namespace"},
+		{"empty Namespace", func(in *PodInputs) { in.Namespace = "" }, "Name and Namespace"},
+		{"empty ChainID", func(in *PodInputs) { in.ChainID = "" }, "ChainID"},
+		{"empty Image", func(in *PodInputs) { in.Image = "" }, "Image"},
+		{"zero HaltHeight", func(in *PodInputs) { in.HaltHeight = 0 }, "HaltHeight"},
+		{"negative HaltHeight", func(in *PodInputs) { in.HaltHeight = -1 }, "HaltHeight"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			in := base()
 			tt.mutate(&in)
-			_, err := GenerateBootstrapJob(in, platformtest.Config())
+			_, err := GenerateJob(in, platformtest.Config())
 			if err == nil {
 				t.Fatalf("expected error, got nil")
 			}
@@ -287,7 +287,7 @@ func TestGenerateBootstrapJob_NilSnapshotProducesZeroHaltHeightError(t *testing.
 	if inputs.HaltHeight != 0 {
 		t.Fatalf("expected HaltHeight=0 from nil snapshot, got %d", inputs.HaltHeight)
 	}
-	_, err := GenerateBootstrapJob(inputs, platformtest.Config())
+	_, err := GenerateJob(inputs, platformtest.Config())
 	if err == nil || !strings.Contains(err.Error(), "HaltHeight") {
 		t.Fatalf("expected HaltHeight error, got %v", err)
 	}
@@ -305,9 +305,9 @@ func TestGenerateBootstrapJob_SidecarResources(t *testing.T) {
 		},
 	}
 	inputs := nodeToBootstrapInputs(node, node.Spec.SnapshotSource())
-	job, err := GenerateBootstrapJob(inputs, platformtest.Config())
+	job, err := GenerateJob(inputs, platformtest.Config())
 	if err != nil {
-		t.Fatalf("GenerateBootstrapJob error: %v", err)
+		t.Fatalf("GenerateJob error: %v", err)
 	}
 
 	sidecarContainer := job.Spec.Template.Spec.InitContainers[1]
@@ -342,9 +342,9 @@ func TestGenerateBootstrapJob_NeverHasIdentityVolumes(t *testing.T) {
 		},
 	}
 	inputs := nodeToBootstrapInputs(node, node.Spec.SnapshotSource())
-	job, err := GenerateBootstrapJob(inputs, platformtest.Config())
+	job, err := GenerateJob(inputs, platformtest.Config())
 	if err != nil {
-		t.Fatalf("GenerateBootstrapJob error: %v", err)
+		t.Fatalf("GenerateJob error: %v", err)
 	}
 
 	forbiddenVolumeNames := map[string]string{
@@ -447,10 +447,10 @@ func TestRejectForbiddenSecretMounts(t *testing.T) {
 	}
 }
 
-// --- GenerateBootstrapService ---
+// --- GenerateService ---
 
 func TestGenerateBootstrapService_TolerantOfZeroFields(t *testing.T) {
-	svc := GenerateBootstrapService(BootstrapPodInputs{
+	svc := GenerateService(PodInputs{
 		Name:        testExporterName,
 		Namespace:   "fork",
 		SidecarPort: 7777,

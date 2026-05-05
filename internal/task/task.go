@@ -18,14 +18,6 @@ import (
 // produce a stable, collision-free ID for each task instance.
 var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
-// Controller-managed task types — the sidecar has no handlers for these.
-const (
-	TaskTypeDeployBootstrapSvc     = "deploy-bootstrap-service"
-	TaskTypeDeployBootstrapJob     = "deploy-bootstrap-job"
-	TaskTypeAwaitBootstrapComplete = "await-bootstrap-complete"
-	TaskTypeTeardownBootstrap      = "teardown-bootstrap"
-)
-
 // fieldOwner is the server-side apply field manager for resources
 // owned by the seinode-controller.
 var fieldOwner = client.FieldOwner("seinode-controller")
@@ -48,7 +40,7 @@ const (
 //   - Return a plain error for transient failures — the executor retries.
 //   - Return Terminal(err) for permanent failures — the executor fails the plan.
 //
-// Implementations should embed taskBase for terminal-state caching and Err().
+// Implementations should embed Base for terminal-state caching and Err().
 type TaskExecution interface {
 	Execute(ctx context.Context) error
 	Status(ctx context.Context) ExecutionStatus
@@ -70,32 +62,32 @@ func Terminal(err error) error {
 	return &TerminalError{Err: err}
 }
 
-// taskBase provides standard lifecycle helpers for TaskExecution
+// Base provides standard lifecycle helpers for TaskExecution
 // implementations. Embed it to get terminal-state caching, error
 // tracking, and the Err() method.
-type taskBase struct {
+type Base struct {
 	id     string
 	status ExecutionStatus
 	err    error
 }
 
-// isTerminal returns the cached status and true if the task has reached
+// IsTerminal returns the cached status and true if the task has reached
 // a terminal state. Call at the top of Status() to short-circuit polling.
-func (b *taskBase) isTerminal() (ExecutionStatus, bool) {
+func (b *Base) IsTerminal() (ExecutionStatus, bool) {
 	if b.status == ExecutionComplete || b.status == ExecutionFailed {
 		return b.status, true
 	}
 	return "", false
 }
 
-// complete marks the task as successfully completed.
-func (b *taskBase) complete() {
+// Complete marks the task as successfully completed.
+func (b *Base) Complete() {
 	b.status = ExecutionComplete
 }
 
-// setFailed marks the task as failed with the given error.
+// SetFailed marks the task as failed with the given error.
 // Used by Status() methods to record failures detected during polling.
-func (b *taskBase) setFailed(err error) {
+func (b *Base) SetFailed(err error) {
 	b.status = ExecutionFailed
 	b.err = err
 }
@@ -103,15 +95,22 @@ func (b *taskBase) setFailed(err error) {
 // DefaultStatus returns the cached status, short-circuiting if terminal.
 // Fire-and-forget tasks that complete entirely within Execute can use this
 // as their Status implementation directly.
-func (b *taskBase) DefaultStatus() ExecutionStatus {
-	if s, done := b.isTerminal(); done {
+func (b *Base) DefaultStatus() ExecutionStatus {
+	if s, done := b.IsTerminal(); done {
 		return s
 	}
 	return b.status
 }
 
 // Err returns the error that caused failure, or nil.
-func (b *taskBase) Err() error { return b.err }
+func (b *Base) Err() error { return b.err }
+
+// NewBase constructs a Base in the Running state. Subpackages use this to
+// initialize their executions; id/status are unexported so the constructor
+// is the only valid entry point.
+func NewBase(id string) Base {
+	return Base{id: id, status: ExecutionRunning}
+}
 
 // UnknownTaskTypeError is returned by Deserialize for unrecognized task types.
 // The executor should treat this as a permanent failure.
@@ -167,18 +166,32 @@ func ResourceAs[T client.Object](cfg ExecutionConfig) (T, error) {
 	return r, nil
 }
 
-// taskDeserializer reconstructs a TaskExecution from serialized params.
-type taskDeserializer func(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error)
+// Deserializer reconstructs a TaskExecution from serialized params.
+// Exported so subpackages can register their own deserializers via Register.
+type Deserializer func(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error)
 
 // sidecarTask creates a deserializer for a sidecar-backed task type.
-func sidecarTask[T any](fireAndForget bool) taskDeserializer {
+func sidecarTask[T any](fireAndForget bool) Deserializer {
 	return func(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
 		return deserializeSidecar[T](id, params, cfg.BuildSidecarClient, fireAndForget)
 	}
 }
 
-// registry maps task type strings to their deserializers.
-var registry = map[string]taskDeserializer{
+// Register adds a deserializer for the given task type. Called from init() in
+// domain subpackages (e.g. internal/task/bootstrap). Panics on duplicate
+// registration so wiring errors surface at controller startup, not at first
+// reconcile.
+func Register(taskType string, d Deserializer) {
+	if _, exists := registry[taskType]; exists {
+		panic(fmt.Sprintf("task: duplicate registration for %q", taskType))
+	}
+	registry[taskType] = d
+}
+
+// registry maps task type strings to their deserializers. Domain subpackages
+// register their own entries via Register() in init(); this literal carries
+// the framework's own task types.
+var registry = map[string]Deserializer{
 	// Sidecar tasks
 	sidecar.TaskTypeSnapshotRestore:        sidecarTask[SnapshotRestoreParams](false),
 	sidecar.TaskTypeConfigureStateSync:     sidecarTask[ConfigureStateSyncParams](false),
@@ -208,12 +221,6 @@ var registry = map[string]taskDeserializer{
 	TaskTypeValidateSigningKey: deserializeValidateSigningKey,
 	TaskTypeValidateNodeKey:    deserializeValidateNodeKey,
 
-	// Controller-side bootstrap tasks
-	TaskTypeDeployBootstrapSvc:     deserializeBootstrapService,
-	TaskTypeDeployBootstrapJob:     deserializeBootstrapJob,
-	TaskTypeAwaitBootstrapComplete: deserializeBootstrapAwait,
-	TaskTypeTeardownBootstrap:      deserializeBootstrapTeardown,
-
 	// Controller-side deployment tasks
 	TaskTypeUpdateNodeSpecs:    deserializeUpdateNodeSpecs,
 	TaskTypeAwaitSpecUpdate:    deserializeAwaitSpecUpdate,
@@ -223,12 +230,6 @@ var registry = map[string]taskDeserializer{
 	TaskTypeAwaitNodesCaughtUp: deserializeAwaitNodesCaughtUp,
 	TaskTypeSwitchTraffic:      deserializeSwitchTraffic,
 	TaskTypeTeardownNodes:      deserializeTeardownNodes,
-
-	// Controller-side fork tasks
-	TaskTypeCreateExporter:       deserializeCreateExporter,
-	TaskTypeAwaitExporterRunning: deserializeAwaitExporterRunning,
-	TaskTypeSubmitExportState:    deserializeSubmitExportState,
-	TaskTypeTeardownExporter:     deserializeTeardownExporter,
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD
