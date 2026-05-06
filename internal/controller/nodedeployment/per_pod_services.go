@@ -12,8 +12,7 @@ import (
 )
 
 // populatePerPodServices builds the PerPodServices status from child SeiNodes,
-// sorted by ordinal. Excludes exporter-role children. Returns nil when empty
-// so omitempty drops the field.
+// sorted by ordinal. Returns nil when empty so omitempty drops the field.
 func populatePerPodServices(log logr.Logger, nodes []seiv1alpha1.SeiNode) []seiv1alpha1.PerPodServiceStatus {
 	type entry struct {
 		status  seiv1alpha1.PerPodServiceStatus
@@ -22,9 +21,6 @@ func populatePerPodServices(log logr.Logger, nodes []seiv1alpha1.SeiNode) []seiv
 	entries := make([]entry, 0, len(nodes))
 	for i := range nodes {
 		node := &nodes[i]
-		if node.Labels["sei.io/role"] == "exporter" {
-			continue
-		}
 		ordStr, ok := node.Labels[groupOrdinalLabel]
 		if !ok {
 			log.V(1).Info("per-pod service: skipping node missing ordinal label", "node", node.Name)

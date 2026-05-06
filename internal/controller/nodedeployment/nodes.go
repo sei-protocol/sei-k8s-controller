@@ -126,7 +126,7 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 }
 
 // populateIncumbentNodes lists child SeiNodes and records their names
-// on the group status. Exporter nodes are excluded.
+// on the group status.
 func (r *SeiNodeDeploymentReconciler) populateIncumbentNodes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	nodes, err := r.listChildSeiNodes(ctx, group)
 	if err != nil {
@@ -134,9 +134,6 @@ func (r *SeiNodeDeploymentReconciler) populateIncumbentNodes(ctx context.Context
 	}
 	names := make([]string, 0, len(nodes))
 	for i := range nodes {
-		if nodes[i].Labels["sei.io/role"] == "exporter" {
-			continue
-		}
 		names = append(names, nodes[i].Name)
 	}
 	group.Status.IncumbentNodes = names

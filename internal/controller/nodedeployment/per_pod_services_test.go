@@ -1,7 +1,6 @@
 package nodedeployment
 
 import (
-	"maps"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -12,17 +11,15 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-func nodeWithOrdinal(name, ordinal string, extraLabels map[string]string) seiv1alpha1.SeiNode {
-	labels := map[string]string{
-		groupLabel:        "pacific-1-wave",
-		groupOrdinalLabel: ordinal,
-	}
-	maps.Copy(labels, extraLabels)
+func nodeWithOrdinal(name, ordinal string) seiv1alpha1.SeiNode {
 	return seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "pacific-1",
-			Labels:    labels,
+			Labels: map[string]string{
+				groupLabel:        "pacific-1-wave",
+				groupOrdinalLabel: ordinal,
+			},
 		},
 	}
 }
@@ -37,9 +34,9 @@ func TestPopulatePerPodServices_AllHealthySorted(t *testing.T) {
 	g := NewWithT(t)
 	// Out-of-order on purpose; helper must sort by ordinal.
 	nodes := []seiv1alpha1.SeiNode{
-		nodeWithOrdinal("pacific-1-wave-2", "2", nil),
-		nodeWithOrdinal("pacific-1-wave-0", "0", nil),
-		nodeWithOrdinal("pacific-1-wave-1", "1", nil),
+		nodeWithOrdinal("pacific-1-wave-2", "2"),
+		nodeWithOrdinal("pacific-1-wave-0", "0"),
+		nodeWithOrdinal("pacific-1-wave-1", "1"),
 	}
 
 	got := populatePerPodServices(logr.Discard(), nodes)
@@ -60,9 +57,9 @@ func TestPopulatePerPodServices_OrdinalGapAfterScaleDown(t *testing.T) {
 	// Post-scale-down: ordinals 0, 2, 5 — non-contiguous but each entry
 	// must still appear in sorted order.
 	nodes := []seiv1alpha1.SeiNode{
-		nodeWithOrdinal("pacific-1-wave-5", "5", nil),
-		nodeWithOrdinal("pacific-1-wave-0", "0", nil),
-		nodeWithOrdinal("pacific-1-wave-2", "2", nil),
+		nodeWithOrdinal("pacific-1-wave-5", "5"),
+		nodeWithOrdinal("pacific-1-wave-0", "0"),
+		nodeWithOrdinal("pacific-1-wave-2", "2"),
 	}
 
 	got := populatePerPodServices(logr.Discard(), nodes)
@@ -71,21 +68,6 @@ func TestPopulatePerPodServices_OrdinalGapAfterScaleDown(t *testing.T) {
 	g.Expect(got[0].Name).To(Equal("pacific-1-wave-0"))
 	g.Expect(got[1].Name).To(Equal("pacific-1-wave-2"))
 	g.Expect(got[2].Name).To(Equal("pacific-1-wave-5"))
-}
-
-func TestPopulatePerPodServices_ExporterExcluded(t *testing.T) {
-	g := NewWithT(t)
-	nodes := []seiv1alpha1.SeiNode{
-		nodeWithOrdinal("pacific-1-wave-0", "0", nil),
-		nodeWithOrdinal("pacific-1-wave-1", "1", map[string]string{"sei.io/role": "exporter"}),
-		nodeWithOrdinal("pacific-1-wave-2", "2", nil),
-	}
-
-	got := populatePerPodServices(logr.Discard(), nodes)
-
-	g.Expect(got).To(HaveLen(2))
-	g.Expect(got[0].Name).To(Equal("pacific-1-wave-0"))
-	g.Expect(got[1].Name).To(Equal("pacific-1-wave-2"))
 }
 
 func TestPopulatePerPodServices_MissingOrdinalLabelSkipped(t *testing.T) {
@@ -98,7 +80,7 @@ func TestPopulatePerPodServices_MissingOrdinalLabelSkipped(t *testing.T) {
 		},
 	}
 	nodes := []seiv1alpha1.SeiNode{
-		nodeWithOrdinal("pacific-1-wave-0", "0", nil),
+		nodeWithOrdinal("pacific-1-wave-0", "0"),
 		noOrdinal,
 	}
 
@@ -110,9 +92,9 @@ func TestPopulatePerPodServices_MissingOrdinalLabelSkipped(t *testing.T) {
 
 func TestPopulatePerPodServices_UnparseableOrdinalSkipped(t *testing.T) {
 	g := NewWithT(t)
-	bad := nodeWithOrdinal("pacific-1-wave-junk", "not-a-number", nil)
+	bad := nodeWithOrdinal("pacific-1-wave-junk", "not-a-number")
 	nodes := []seiv1alpha1.SeiNode{
-		nodeWithOrdinal("pacific-1-wave-0", "0", nil),
+		nodeWithOrdinal("pacific-1-wave-0", "0"),
 		bad,
 	}
 
