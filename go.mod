@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.38.2
 	github.com/sei-protocol/sei-config v0.0.13
-	github.com/sei-protocol/seictl v0.0.45
+	github.com/sei-protocol/seictl v0.0.46
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
 	go.opentelemetry.io/otel/exporters/prometheus v0.65.0
