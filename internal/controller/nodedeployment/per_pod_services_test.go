@@ -11,13 +11,15 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
+const testGroupLabelValue = "pacific-1-wave"
+
 func nodeWithOrdinal(name, ordinal string) seiv1alpha1.SeiNode {
 	return seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "pacific-1",
 			Labels: map[string]string{
-				groupLabel:        "pacific-1-wave",
+				groupLabel:        testGroupLabelValue,
 				groupOrdinalLabel: ordinal,
 			},
 		},
