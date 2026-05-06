@@ -634,15 +634,17 @@ func configureStateSyncParams(snap *seiv1alpha1.SnapshotSource) *task.ConfigureS
 	return p
 }
 
-// commonOverrides returns controller overrides derived from node status
-// that apply to all node modes (e.g., external P2P address from the LB).
+// commonOverrides returns controller overrides that apply to all node modes.
+// sei-config defaults logging.level to "info"; we baseline it to "error" here.
+// spec.Overrides still wins via mergeOverrides for per-node verbosity.
 func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
-	if node.Status.ExternalAddress == "" {
-		return nil
+	out := map[string]string{
+		"logging.level": "error",
 	}
-	return map[string]string{
-		seiconfig.KeyP2PExternalAddress: node.Status.ExternalAddress,
+	if node.Status.ExternalAddress != "" {
+		out[seiconfig.KeyP2PExternalAddress] = node.Status.ExternalAddress
 	}
+	return out
 }
 
 // buildRunningPlan returns a steady-state drift plan, or nil if no drift.
