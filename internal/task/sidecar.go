@@ -48,8 +48,14 @@ func (e *sidecarExecution[T]) Execute(ctx context.Context) error {
 		return fmt.Errorf("invalid task UUID %q: %w", e.id, parseErr)
 	}
 
-	// Override Id at the TaskRequest layer rather than on the wrapper's
-	// embedded TaskMeta — keeps the executor decoupled from wrapper internals.
+	// Validate before submit so malformed params surface as a terminal task
+	// failure with a structured error, not a sidecar HTTP 400.
+	if err := e.params.Validate(); err != nil {
+		e.status = ExecutionFailed
+		e.err = fmt.Errorf("validating %s: %w", e.params.TaskType(), err)
+		return e.err
+	}
+
 	req := e.params.ToTaskRequest()
 	req.Id = &taskID
 

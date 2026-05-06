@@ -286,7 +286,11 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	for i := range nodes {
 		nodes[i] = sidecar.GenesisNodeParam{Name: fmt.Sprintf("node-%d", i)}
 	}
-	assembleParams, _ := json.Marshal(sidecar.AssembleAndUploadGenesisTask{Nodes: nodes})
+	assembleParams, _ := json.Marshal(sidecar.AssembleAndUploadGenesisTask{
+		AccountBalance: "1000usei",
+		Namespace:      "default",
+		Nodes:          nodes,
+	})
 
 	group.Status.Plan = &seiv1alpha1.TaskPlan{
 		ID:    planID,
