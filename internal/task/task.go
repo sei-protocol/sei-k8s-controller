@@ -194,7 +194,6 @@ var registry = map[string]taskDeserializer{
 	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[UploadGenesisArtifactsParams](false),
 	sidecar.TaskTypeAssembleGenesis:        sidecarTask[AssembleAndUploadGenesisParams](false),
 	sidecar.TaskTypeSetGenesisPeers:        sidecarTask[SetGenesisPeersParams](false),
-	sidecar.TaskTypeAssembleGenesisFork:    sidecarTask[AssembleForkGenesisParams](false),
 
 	// Controller-side group tasks
 	TaskTypeAwaitNodesRunning:  deserializeAwaitNodesRunning,
@@ -223,12 +222,6 @@ var registry = map[string]taskDeserializer{
 	TaskTypeAwaitNodesCaughtUp: deserializeAwaitNodesCaughtUp,
 	TaskTypeSwitchTraffic:      deserializeSwitchTraffic,
 	TaskTypeTeardownNodes:      deserializeTeardownNodes,
-
-	// Controller-side fork tasks
-	TaskTypeCreateExporter:       deserializeCreateExporter,
-	TaskTypeAwaitExporterRunning: deserializeAwaitExporterRunning,
-	TaskTypeSubmitExportState:    deserializeSubmitExportState,
-	TaskTypeTeardownExporter:     deserializeTeardownExporter,
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD

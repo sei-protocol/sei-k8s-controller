@@ -22,12 +22,8 @@ const (
 	sourceChainID       = "pacific-1"
 )
 
-func groupWithAccounts(fork bool, accounts []seiv1alpha1.GenesisAccount) *seiv1alpha1.SeiNodeDeployment {
-	cond := seiv1alpha1.ConditionGenesisCeremonyNeeded
-	if fork {
-		cond = seiv1alpha1.ConditionForkGenesisCeremonyNeeded
-	}
-	g := &seiv1alpha1.SeiNodeDeployment{
+func groupWithAccounts(accounts []seiv1alpha1.GenesisAccount) *seiv1alpha1.SeiNodeDeployment {
+	return &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: testGroupName, Namespace: "nightly"},
 		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 1,
@@ -39,21 +35,15 @@ func groupWithAccounts(fork bool, accounts []seiv1alpha1.GenesisAccount) *seiv1a
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{testNodeName},
-			Conditions:     []metav1.Condition{{Type: cond, Status: metav1.ConditionTrue}},
+			Conditions: []metav1.Condition{
+				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
+			},
 		},
 	}
-	if fork {
-		g.Spec.Genesis.Fork = &seiv1alpha1.ForkConfig{
-			SourceChainID: sourceChainID,
-			SourceImage:   "ecr/img@sha256:abc",
-			ExportHeight:  100,
-		}
-	}
-	return g
 }
 
-func TestBuildPlan_NonFork_PropagatesAccounts(t *testing.T) {
-	group := groupWithAccounts(false, []seiv1alpha1.GenesisAccount{
+func TestBuildPlan_PropagatesAccounts(t *testing.T) {
+	group := groupWithAccounts([]seiv1alpha1.GenesisAccount{
 		{Address: validSeiAddr, Balance: testBalance1000usei},
 	})
 	p, err := ForGroup(group)
@@ -77,31 +67,8 @@ func TestBuildPlan_NonFork_PropagatesAccounts(t *testing.T) {
 	}
 }
 
-func TestBuildPlan_Fork_PropagatesAccounts(t *testing.T) {
-	group := groupWithAccounts(true, []seiv1alpha1.GenesisAccount{
-		{Address: validSeiAddr, Balance: "5000usei"},
-	})
-	p, err := ForGroup(group)
-	if err != nil {
-		t.Fatalf("ForGroup: %v", err)
-	}
-	plan, err := p.BuildPlan(group)
-	if err != nil {
-		t.Fatalf("BuildPlan: %v", err)
-	}
-
-	// Fork plan prepends 4 exporter tasks; assemble is at index 4.
-	var params task.AssembleForkGenesisParams
-	if err := json.Unmarshal(plan.Tasks[4].Params.Raw, &params); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(params.Accounts) != 1 {
-		t.Fatalf("Accounts: got %d, want 1", len(params.Accounts))
-	}
-}
-
 func TestBuildPlan_NilAccountsOmitsField(t *testing.T) {
-	group := groupWithAccounts(false, nil)
+	group := groupWithAccounts(nil)
 	p, _ := ForGroup(group)
 	plan, err := p.BuildPlan(group)
 	if err != nil {
@@ -115,7 +82,7 @@ func TestBuildPlan_NilAccountsOmitsField(t *testing.T) {
 func TestBuildPlan_RejectsBadBech32_PlannerTime(t *testing.T) {
 	// Validate() runs at planner time so a bad address surfaces in
 	// kubectl describe rather than burning a sidecar Job pod.
-	group := groupWithAccounts(false, []seiv1alpha1.GenesisAccount{
+	group := groupWithAccounts([]seiv1alpha1.GenesisAccount{
 		{Address: "cosmos1zg69v7y6hn00qy352euf40x77qfrg4ncjur58y", Balance: "1usei"},
 	})
 	p, _ := ForGroup(group)
@@ -128,24 +95,11 @@ func TestBuildPlan_RejectsBadBech32_PlannerTime(t *testing.T) {
 	}
 }
 
-func TestBuildPlan_Fork_RejectsBadBech32_PlannerTime(t *testing.T) {
-	// Symmetric coverage: fork branch must also surface bech32 errors
-	// at planner time, not at sidecar-execute.
-	group := groupWithAccounts(true, []seiv1alpha1.GenesisAccount{
-		{Address: "cosmos1zg69v7y6hn00qy352euf40x77qfrg4ncjur58y", Balance: "1usei"},
-	})
-	p, _ := ForGroup(group)
-	_, err := p.BuildPlan(group)
-	if err == nil {
-		t.Fatal("expected planner-time error for non-sei address (fork branch)")
-	}
-}
-
 func TestBuildPlan_PropagatesMultipleAccounts(t *testing.T) {
 	// Locks in the slice copy at group.go:37-40 — if a future
 	// refactor switches the idiom and silently drops entries past
 	// index 0, this test catches it.
-	group := groupWithAccounts(false, []seiv1alpha1.GenesisAccount{
+	group := groupWithAccounts([]seiv1alpha1.GenesisAccount{
 		{Address: validSeiAddr, Balance: testBalance1000usei},
 		{Address: validSeiAddr2, Balance: "2000usei,500uatom"},
 	})

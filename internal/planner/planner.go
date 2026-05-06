@@ -85,8 +85,8 @@ func ForGroup(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
 	return nil, nil
 }
 
-// needsGenesisPlan returns true when either GenesisCeremonyNeeded or
-// ForkGenesisCeremonyNeeded condition is set with sufficient nodes.
+// needsGenesisPlan returns true when GenesisCeremonyNeeded is set with
+// sufficient nodes.
 func needsGenesisPlan(group *seiv1alpha1.SeiNodeDeployment) bool {
 	if group.Spec.Genesis == nil {
 		return false
@@ -94,9 +94,7 @@ func needsGenesisPlan(group *seiv1alpha1.SeiNodeDeployment) bool {
 	if group.Status.Plan != nil {
 		return false
 	}
-	genesisNeeded := hasCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
-	forkNeeded := hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded)
-	if !genesisNeeded && !forkNeeded {
+	if !hasCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded) {
 		return false
 	}
 	return allReplicasCreated(group)

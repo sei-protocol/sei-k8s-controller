@@ -1,19 +1,13 @@
 package planner
 
 import (
-	"fmt"
-
 	"github.com/google/uuid"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-const (
-	groupAssemblyMaxRetries = 180
-	TaskAssembleGenesisFork = sidecar.TaskTypeAssembleGenesisFork
-)
+const groupAssemblyMaxRetries = 180
 
 type genesisGroupPlanner struct{}
 
@@ -39,129 +33,50 @@ func (p *genesisGroupPlanner) BuildPlan(
 		accounts[i] = task.GenesisAccountEntry{Address: a.Address, Balance: a.Balance}
 	}
 
-	// Select assembler task based on whether this is a fork ceremony.
 	// Validate at planner-time so bech32 / shape errors hit
 	// `kubectl describe seinodedeployment` rather than a sidecar Job pod.
-	assembleTaskType := TaskAssembleGenesis
-	var assembleParams any
-
-	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) && group.Spec.Genesis.Fork != nil {
-		assembleTaskType = TaskAssembleGenesisFork
-		p := &task.AssembleForkGenesisParams{
-			SourceChainID:  group.Spec.Genesis.Fork.SourceChainID,
-			ChainID:        group.Spec.Genesis.ChainID,
-			AccountBalance: group.Spec.Genesis.AccountBalance,
-			Namespace:      group.Namespace,
-			Nodes:          nodeParams,
-			Accounts:       accounts,
-		}
-		if err := p.Validate(); err != nil {
-			return nil, err
-		}
-		assembleParams = p
-	} else {
-		p := &task.AssembleAndUploadGenesisParams{
-			AccountBalance: group.Spec.Genesis.AccountBalance,
-			Namespace:      group.Namespace,
-			Nodes:          nodeParams,
-			Accounts:       accounts,
-		}
-		if err := p.Validate(); err != nil {
-			return nil, err
-		}
-		assembleParams = p
+	assembleParams := &task.AssembleAndUploadGenesisParams{
+		AccountBalance: group.Spec.Genesis.AccountBalance,
+		Namespace:      group.Namespace,
+		Nodes:          nodeParams,
+		Accounts:       accounts,
+	}
+	if err := assembleParams.Validate(); err != nil {
+		return nil, err
 	}
 
-	var tasks []seiv1alpha1.PlannedTask
-
-	// For fork ceremonies, prepend exporter lifecycle tasks.
-	if hasCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded) && group.Spec.Genesis.Fork != nil {
-		fork := group.Spec.Genesis.Fork
-		exporterName := fmt.Sprintf("%s-exporter", group.Name)
-
-		createExporter, err := buildPlannedTask(planID, task.TaskTypeCreateExporter, planIndex,
-			&task.CreateExporterParams{
-				GroupName:     group.Name,
-				ExporterName:  exporterName,
-				Namespace:     group.Namespace,
-				SourceChainID: fork.SourceChainID,
-				SourceImage:   fork.SourceImage,
-				ExportHeight:  fork.ExportHeight,
-			})
-		if err != nil {
-			return nil, err
-		}
-		planIndex++
-
-		awaitExporter, err := buildPlannedTask(planID, task.TaskTypeAwaitExporterRunning, planIndex,
-			&task.AwaitExporterRunningParams{
-				ExporterName: exporterName,
-				Namespace:    group.Namespace,
-			})
-		if err != nil {
-			return nil, err
-		}
-		planIndex++
-
-		submitExport, err := buildPlannedTask(planID, task.TaskTypeSubmitExportState, planIndex,
-			&task.SubmitExportStateParams{
-				ExporterName:  exporterName,
-				Namespace:     group.Namespace,
-				ExportHeight:  group.Spec.Genesis.Fork.ExportHeight,
-				SourceChainID: group.Spec.Genesis.Fork.SourceChainID,
-			})
-		if err != nil {
-			return nil, err
-		}
-		planIndex++
-
-		teardownExporter, err := buildPlannedTask(planID, task.TaskTypeTeardownExporter, planIndex,
-			&task.TeardownExporterParams{
-				ExporterName: exporterName,
-				Namespace:    group.Namespace,
-			})
-		if err != nil {
-			return nil, err
-		}
-		planIndex++
-
-		tasks = append(tasks, createExporter, awaitExporter, submitExport, teardownExporter)
-	}
-
-	assembleTask, err := buildPlannedTask(planID, assembleTaskType, planIndex, assembleParams)
+	assembleTask, err := buildPlannedTask(planID, TaskAssembleGenesis, planIndex, assembleParams)
 	if err != nil {
 		return nil, err
 	}
 	assembleTask.MaxRetries = groupAssemblyMaxRetries
 	planIndex++
 
-	collectPeersParams := &task.CollectAndSetPeersParams{
-		GroupName: group.Name,
-		Namespace: group.Namespace,
-		NodeNames: incumbentNodes,
-	}
-	collectPeersTask, err := buildPlannedTask(planID, task.TaskTypeCollectAndSetPeers, planIndex, collectPeersParams)
+	collectPeersTask, err := buildPlannedTask(planID, task.TaskTypeCollectAndSetPeers, planIndex,
+		&task.CollectAndSetPeersParams{
+			GroupName: group.Name,
+			Namespace: group.Namespace,
+			NodeNames: incumbentNodes,
+		})
 	if err != nil {
 		return nil, err
 	}
 	planIndex++
 
-	awaitParams := &task.AwaitNodesRunningParams{
-		GroupName: group.Name,
-		Namespace: group.Namespace,
-		Expected:  len(incumbentNodes),
-		NodeNames: incumbentNodes,
-	}
-	awaitTask, err := buildPlannedTask(planID, TaskAwaitNodesRunning, planIndex, awaitParams)
+	awaitTask, err := buildPlannedTask(planID, TaskAwaitNodesRunning, planIndex,
+		&task.AwaitNodesRunningParams{
+			GroupName: group.Name,
+			Namespace: group.Namespace,
+			Expected:  len(incumbentNodes),
+			NodeNames: incumbentNodes,
+		})
 	if err != nil {
 		return nil, err
 	}
 
-	tasks = append(tasks, assembleTask, collectPeersTask, awaitTask)
-
 	return &seiv1alpha1.TaskPlan{
 		ID:    planID,
 		Phase: seiv1alpha1.TaskPlanActive,
-		Tasks: tasks,
+		Tasks: []seiv1alpha1.PlannedTask{assembleTask, collectPeersTask, awaitTask},
 	}, nil
 }
