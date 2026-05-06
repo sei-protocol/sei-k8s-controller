@@ -293,3 +293,58 @@ func TestGenerateSeiNode_DeepCopiesTemplate(t *testing.T) {
 	g.Expect(group.Spec.Template.Spec.Overrides).NotTo(HaveKey("modified"),
 		"modification to generated SeiNode should not mutate the group template")
 }
+
+func TestDetectGenesisCeremonyNeeded(t *testing.T) {
+	cases := []struct {
+		name        string
+		mutate      func(*seiv1alpha1.SeiNodeDeployment)
+		wantPresent bool
+		wantStatus  metav1.ConditionStatus
+	}{
+		{
+			name:        "no genesis spec clears condition",
+			mutate:      func(g *seiv1alpha1.SeiNodeDeployment) { g.Spec.Genesis = nil },
+			wantPresent: false,
+		},
+		{
+			name: "ceremony complete clears condition",
+			mutate: func(g *seiv1alpha1.SeiNodeDeployment) {
+				setCondition(g, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue, "Done", "")
+				setCondition(g, seiv1alpha1.ConditionGenesisCeremonyNeeded, metav1.ConditionTrue, "Stale", "")
+			},
+			wantPresent: false,
+		},
+		{
+			name: "plan in progress leaves condition untouched",
+			mutate: func(g *seiv1alpha1.SeiNodeDeployment) {
+				setCondition(g, seiv1alpha1.ConditionPlanInProgress, metav1.ConditionTrue, "Running", "")
+			},
+			wantPresent: false,
+		},
+		{
+			name:        "genesis configured sets condition true",
+			mutate:      func(g *seiv1alpha1.SeiNodeDeployment) {},
+			wantPresent: true,
+			wantStatus:  metav1.ConditionTrue,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			group := newTestGroup("archive-rpc", "sei")
+			group.Spec.Genesis = &seiv1alpha1.GenesisCeremonyConfig{ChainID: "pacific-1"}
+			tc.mutate(group)
+
+			r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
+			r.detectGenesisCeremonyNeeded(group)
+
+			cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyNeeded)
+			if !tc.wantPresent {
+				g.Expect(cond).To(BeNil())
+				return
+			}
+			g.Expect(cond).NotTo(BeNil())
+			g.Expect(cond.Status).To(Equal(tc.wantStatus))
+		})
+	}
+}
