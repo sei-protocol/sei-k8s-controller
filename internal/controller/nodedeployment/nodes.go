@@ -45,36 +45,23 @@ func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, gro
 	return nil
 }
 
-// detectGenesisCeremonyNeeded sets either GenesisCeremonyNeeded or
-// ForkGenesisCeremonyNeeded depending on whether the group has a fork
-// config. The genesis planner reads this condition to select the
-// appropriate assembler task.
+// detectGenesisCeremonyNeeded sets GenesisCeremonyNeeded when a genesis
+// ceremony is required.
 func (r *SeiNodeDeploymentReconciler) detectGenesisCeremonyNeeded(group *seiv1alpha1.SeiNodeDeployment) {
-	// Clear both conditions when not applicable.
 	if group.Spec.Genesis == nil {
 		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
-		removeCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded)
 		return
 	}
 	if hasConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
 		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
-		removeCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded)
 		return
 	}
 	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
 		return
 	}
 
-	if group.Spec.Genesis.Fork != nil {
-		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
-		setCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded, metav1.ConditionTrue,
-			"ForkConfigured", fmt.Sprintf("Fork genesis from %s",
-				group.Spec.Genesis.Fork.SourceChainID))
-	} else {
-		removeCondition(group, seiv1alpha1.ConditionForkGenesisCeremonyNeeded)
-		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded, metav1.ConditionTrue,
-			"GenesisConfigured", "Genesis ceremony configured")
-	}
+	setCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded, metav1.ConditionTrue,
+		"GenesisConfigured", "Genesis ceremony configured")
 }
 
 // detectDeploymentNeeded checks if deployment-worthy fields have changed

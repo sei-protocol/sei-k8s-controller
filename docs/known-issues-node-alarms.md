@@ -2,26 +2,7 @@
 
 Recurring alerts observed during SeiNode and SeiNodeDeployment deployments. These are expected during the bootstrap lifecycle but represent areas for improvement.
 
-## 1. SeiNodeFailed: Fork Genesis Validators Exhaust Retries
-
-**Alert:** `SeiNodeFailed` for `fork-test-0`, `fork-test-1`, `fork-test-2`
-**Environment:** prod
-**Severity:** critical (alert), expected (behavior)
-
-**What happens:** Fork genesis validator nodes start simultaneously with the exporter. Their `configure-genesis` task retries up to 180 times waiting for `genesis.json` to appear in S3. The exporter takes 20-30+ minutes to bootstrap (snapshot download + restore + state sync + replay to export height), but the validators exhaust retries before the exporter completes.
-
-**Root causes:**
-1. **Retry backoff bypass (fixed in PR #58):** Status patches triggered watch events that immediately requeued reconciles, collapsing ~90 minutes of intended backoff into ~6 minutes. Fix: `GenerationChangedPredicate` filters self-inflicted status updates. Requires controller image `d8d337b` or later.
-2. **No coordination between group plan and node plans:** Validators start their init plans immediately without waiting for the group plan's `assemble-genesis-fork` task to complete. The `configure-genesis` retry loop is a polling mechanism, not an event-driven wait.
-
-**Future improvements:**
-- Consider gating validator plan execution on a group-level condition (e.g., `GenesisCeremonyAssembled`)
-- Or increase `genesisConfigureMaxRetries` to account for long exporter bootstrap times
-- Or add `sei.io/retry-plan` annotation support so operators can retry failed validators without deleting them
-
----
-
-## 2. SeiNodeFailed: Shadow Replayer on Dev
+## 1. SeiNodeFailed: Shadow Replayer on Dev
 
 **Alert:** `SeiNodeFailed` for `pacific-1-shadow-replayer`
 **Environment:** dev
@@ -42,22 +23,6 @@ Recurring alerts observed during SeiNode and SeiNodeDeployment deployments. Thes
 - Use same host for both primary and witness when `useLocalSnapshot: true` (state sync only needs trust hash verification, not independent witnesses)
 - Add peer fallback: try multiple peers for block hash queries instead of failing on first error
 - Automate snapshot pipeline to keep recent snapshots available
-
----
-
-## 3. TaskFailureRateHigh: configure-genesis
-
-**Alert:** `TaskFailureRateHigh` for `configure-genesis`
-**Environment:** prod
-**Severity:** warning
-
-**What happens:** During fork genesis ceremonies, the `configure-genesis` task on validator nodes fails repeatedly because `genesis.json` hasn't been assembled yet. The task retries with backoff (maxRetries=180) until the group controller completes the assembly step.
-
-**This is expected behavior** — the retry loop is the coordination mechanism between the group plan (which assembles genesis) and the node plans (which consume it). The alert fires because >3 terminal failures occur within 15 minutes.
-
-**Future improvements:**
-- Tune alert threshold for fork genesis ceremonies (suppress during known group plan execution)
-- Or add a `GenesisCeremonyInProgress` label to the metric so the alert can exclude expected retries
 
 ---
 
