@@ -56,8 +56,6 @@ func (e *sidecarExecution[T]) Execute(ctx context.Context) error {
 		return e.err
 	}
 
-	// Override Id at the TaskRequest layer rather than on the wrapper's
-	// embedded TaskMeta — keeps the executor decoupled from wrapper internals.
 	req := e.params.ToTaskRequest()
 	req.Id = &taskID
 
