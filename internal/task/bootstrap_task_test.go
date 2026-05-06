@@ -47,11 +47,6 @@ func testNode() *seiv1alpha1.SeiNode {
 	}
 }
 
-func nodeBootstrapService(t *testing.T, node *seiv1alpha1.SeiNode) *corev1.Service {
-	t.Helper()
-	return GenerateBootstrapService(nodeToBootstrapInputs(node, node.Spec.SnapshotSource()))
-}
-
 func testCfg(t *testing.T, objs ...client.Object) ExecutionConfig {
 	t.Helper()
 	s := testScheme(t)
@@ -95,7 +90,7 @@ func TestDeployBootstrapService_Execute_CreatesService(t *testing.T) {
 
 func TestDeployBootstrapService_Execute_Idempotent(t *testing.T) {
 	node := testNode()
-	svc := nodeBootstrapService(t, node)
+	svc := GenerateBootstrapService(node)
 	cfg := testCfg(t, svc)
 
 	params := DeployBootstrapServiceParams{ServiceName: node.Name, Namespace: node.Namespace}
@@ -116,7 +111,7 @@ func TestDeployBootstrapService_Execute_Idempotent(t *testing.T) {
 
 func TestDeployBootstrapService_Status_DetectsExisting(t *testing.T) {
 	node := testNode()
-	svc := nodeBootstrapService(t, node)
+	svc := GenerateBootstrapService(node)
 	cfg := testCfg(t, svc)
 
 	params := DeployBootstrapServiceParams{ServiceName: node.Name, Namespace: node.Namespace}
@@ -136,7 +131,7 @@ func TestDeployBootstrapService_Status_DetectsExisting(t *testing.T) {
 func TestDeployBootstrapJob_Execute_CreatesJob(t *testing.T) {
 	node := testNode()
 	cfg := testCfg(t)
-	params := DeployBootstrapJobParams{JobName: BootstrapJobName(node.Name), Namespace: node.Namespace}
+	params := DeployBootstrapJobParams{JobName: BootstrapJobName(node), Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapJob("id-2", raw, cfg)
 	if err != nil {
@@ -152,7 +147,7 @@ func TestDeployBootstrapJob_Execute_CreatesJob(t *testing.T) {
 	}
 
 	job := &batchv1.Job{}
-	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: BootstrapJobName(node.Name), Namespace: node.Namespace}, job); err != nil {
+	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: BootstrapJobName(node), Namespace: node.Namespace}, job); err != nil {
 		t.Fatalf("job not found: %v", err)
 	}
 }
@@ -169,7 +164,7 @@ func TestDeployBootstrapJob_Execute_NilSnapshot(t *testing.T) {
 		Platform:   platformtest.Config(),
 	}
 
-	params := DeployBootstrapJobParams{JobName: BootstrapJobName(node.Name), Namespace: node.Namespace}
+	params := DeployBootstrapJobParams{JobName: BootstrapJobName(node), Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapJob("id-2", raw, cfg)
 	if err != nil {
@@ -186,12 +181,12 @@ func TestDeployBootstrapJob_Execute_NilSnapshot(t *testing.T) {
 func TestAwaitBootstrapComplete_JobRunning(t *testing.T) {
 	node := testNode()
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node.Name), Namespace: node.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node), Namespace: node.Namespace},
 		Status:     batchv1.JobStatus{Active: 1},
 	}
 	cfg := testCfg(t, job)
 
-	params := AwaitBootstrapCompleteParams{JobName: BootstrapJobName(node.Name), Namespace: node.Namespace}
+	params := AwaitBootstrapCompleteParams{JobName: BootstrapJobName(node), Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapAwait("id-3", raw, cfg)
 	if err != nil {
@@ -210,7 +205,7 @@ func TestAwaitBootstrapComplete_JobRunning(t *testing.T) {
 func TestAwaitBootstrapComplete_JobComplete(t *testing.T) {
 	node := testNode()
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node.Name), Namespace: node.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node), Namespace: node.Namespace},
 		Status: batchv1.JobStatus{
 			Conditions: []batchv1.JobCondition{
 				{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
@@ -219,7 +214,7 @@ func TestAwaitBootstrapComplete_JobComplete(t *testing.T) {
 	}
 	cfg := testCfg(t, job)
 
-	params := AwaitBootstrapCompleteParams{JobName: BootstrapJobName(node.Name), Namespace: node.Namespace}
+	params := AwaitBootstrapCompleteParams{JobName: BootstrapJobName(node), Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapAwait("id-3", raw, cfg)
 	if err != nil {
@@ -234,7 +229,7 @@ func TestAwaitBootstrapComplete_JobComplete(t *testing.T) {
 func TestAwaitBootstrapComplete_JobFailed(t *testing.T) {
 	node := testNode()
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node.Name), Namespace: node.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node), Namespace: node.Namespace},
 		Status: batchv1.JobStatus{
 			Conditions: []batchv1.JobCondition{
 				{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Message: "OOM killed"},
@@ -243,7 +238,7 @@ func TestAwaitBootstrapComplete_JobFailed(t *testing.T) {
 	}
 	cfg := testCfg(t, job)
 
-	params := AwaitBootstrapCompleteParams{JobName: BootstrapJobName(node.Name), Namespace: node.Namespace}
+	params := AwaitBootstrapCompleteParams{JobName: BootstrapJobName(node), Namespace: node.Namespace}
 	raw, _ := json.Marshal(params)
 	exec, err := deserializeBootstrapAwait("id-3", raw, cfg)
 	if err != nil {
@@ -278,7 +273,7 @@ func TestAwaitBootstrapComplete_JobNotFound(t *testing.T) {
 func TestTeardownBootstrap_Execute_DeletesResources(t *testing.T) {
 	node := testNode()
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node.Name), Namespace: node.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node), Namespace: node.Namespace},
 	}
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: node.Namespace},
@@ -286,7 +281,7 @@ func TestTeardownBootstrap_Execute_DeletesResources(t *testing.T) {
 	cfg := testCfg(t, job, svc)
 
 	params := TeardownBootstrapParams{
-		JobName:     BootstrapJobName(node.Name),
+		JobName:     BootstrapJobName(node),
 		ServiceName: node.Name,
 		Namespace:   node.Namespace,
 	}
@@ -302,7 +297,7 @@ func TestTeardownBootstrap_Execute_DeletesResources(t *testing.T) {
 	}
 
 	gotJob := &batchv1.Job{}
-	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: BootstrapJobName(node.Name), Namespace: node.Namespace}, gotJob); !apierrors.IsNotFound(err) {
+	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: BootstrapJobName(node), Namespace: node.Namespace}, gotJob); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected job to be deleted, got err=%v", err)
 	}
 	gotSvc := &corev1.Service{}
@@ -352,12 +347,12 @@ func TestTeardownBootstrap_Status_CompleteWhenGone(t *testing.T) {
 func TestTeardownBootstrap_Status_RunningWhilePresent(t *testing.T) {
 	node := testNode()
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node.Name), Namespace: node.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: BootstrapJobName(node), Namespace: node.Namespace},
 	}
 	cfg := testCfg(t, job)
 
 	params := TeardownBootstrapParams{
-		JobName:     BootstrapJobName(node.Name),
+		JobName:     BootstrapJobName(node),
 		ServiceName: node.Name,
 		Namespace:   node.Namespace,
 	}

@@ -44,8 +44,7 @@ func (e *deployBootstrapJobExecution) Execute(ctx context.Context) error {
 		return err
 	}
 	snap := node.Spec.SnapshotSource()
-	inputs := nodeToBootstrapInputs(node, snap)
-	job, err := GenerateBootstrapJob(inputs, e.cfg.Platform)
+	job, err := GenerateBootstrapJob(node, snap, e.cfg.Platform)
 	if err != nil {
 		return fmt.Errorf("generating bootstrap job spec: %w", err)
 	}
