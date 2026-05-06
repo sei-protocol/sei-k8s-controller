@@ -965,18 +965,6 @@ spec:
                       type: string
                     type: array
                 type: object
-              fork:
-                description: |-
-                  Fork tracks the SND-driven fork-genesis sub-plan. Populated when the
-                  deployment includes a Spec.Genesis.Fork configuration; otherwise nil.
-                properties:
-                  exportJobRef:
-                    description: |-
-                      ExportJobRef is the namespaced name of the export Job once
-                      apply-export-job creates it. Stays populated after teardown so
-                      operators can correlate `kubectl logs job/<ref>` with a past run.
-                    type: string
-                type: object
               genesisHash:
                 description: GenesisHash is the SHA-256 hex digest of the assembled
                   genesis.json.

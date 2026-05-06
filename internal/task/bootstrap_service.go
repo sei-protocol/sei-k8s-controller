@@ -43,8 +43,7 @@ func (e *deployBootstrapServiceExecution) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	inputs := nodeToBootstrapInputs(node, node.Spec.SnapshotSource())
-	svc := GenerateBootstrapService(inputs)
+	svc := GenerateBootstrapService(node)
 	if err := ctrl.SetControllerReference(node, svc, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on bootstrap service: %w", err)
 	}
@@ -68,5 +67,5 @@ func (e *deployBootstrapServiceExecution) Status(ctx context.Context) ExecutionS
 	if err := e.cfg.KubeClient.Get(ctx, key, existing); err == nil {
 		e.complete()
 	}
-	return e.DefaultStatus()
+	return e.status
 }

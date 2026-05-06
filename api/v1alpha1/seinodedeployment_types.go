@@ -269,25 +269,10 @@ type SeiNodeDeploymentStatus struct {
 	// +optional
 	Endpoints *Endpoints `json:"endpoints,omitempty"`
 
-	// Fork tracks the SND-driven fork-genesis sub-plan. Populated when the
-	// deployment includes a Spec.Genesis.Fork configuration; otherwise nil.
-	// +optional
-	Fork *ForkStatus `json:"fork,omitempty"`
-
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
-// ForkStatus reports observable state for the fork-genesis ceremony's
-// SND-owned exporter sub-plan.
-type ForkStatus struct {
-	// ExportJobRef is the namespaced name of the export Job once
-	// apply-export-job creates it. Stays populated after teardown so
-	// operators can correlate `kubectl logs job/<ref>` with a past run.
-	// +optional
-	ExportJobRef string `json:"exportJobRef,omitempty"`
 }
 
 // Endpoints lists composed in-cluster URLs per protocol.
@@ -433,12 +418,6 @@ const (
 	ConditionGenesisCeremonyNeeded     = "GenesisCeremonyNeeded"
 	ConditionForkGenesisCeremonyNeeded = "ForkGenesisCeremonyNeeded"
 	ConditionRolloutInProgress         = "RolloutInProgress"
-
-	// Fork-genesis sub-plan condition types. Set by the planner from terminal
-	// states of the corresponding sub-plan tasks.
-	ConditionForkBootstrapComplete = "ForkBootstrapComplete"
-	ConditionForkExportComplete    = "ForkExportComplete"
-	ConditionForkGenesisReady      = "ForkGenesisReady"
 )
 
 // +kubebuilder:object:root=true

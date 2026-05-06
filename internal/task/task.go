@@ -18,22 +18,12 @@ import (
 // produce a stable, collision-free ID for each task instance.
 var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
-// Controller-managed bootstrap task types (per-SeiNode bootstrap).
+// Controller-managed task types — the sidecar has no handlers for these.
 const (
 	TaskTypeDeployBootstrapSvc     = "deploy-bootstrap-service"
 	TaskTypeDeployBootstrapJob     = "deploy-bootstrap-job"
 	TaskTypeAwaitBootstrapComplete = "await-bootstrap-complete"
 	TaskTypeTeardownBootstrap      = "teardown-bootstrap"
-)
-
-// Controller-managed fork-genesis exporter task types (SND-driven).
-const (
-	TaskTypeEnsureExporterPVC = "ensure-exporter-pvc"
-	TaskTypeApplyBootstrapJob = "apply-bootstrap-job"
-	TaskTypeAwaitBootstrapJob = "await-bootstrap-job"
-	TaskTypeApplyExportJob    = "apply-export-job"
-	TaskTypeAwaitExportJob    = "await-export-job"
-	TaskTypeTeardownExporter  = "teardown-exporter"
 )
 
 // fieldOwner is the server-side apply field manager for resources
@@ -218,6 +208,12 @@ var registry = map[string]taskDeserializer{
 	TaskTypeValidateSigningKey: deserializeValidateSigningKey,
 	TaskTypeValidateNodeKey:    deserializeValidateNodeKey,
 
+	// Controller-side bootstrap tasks
+	TaskTypeDeployBootstrapSvc:     deserializeBootstrapService,
+	TaskTypeDeployBootstrapJob:     deserializeBootstrapJob,
+	TaskTypeAwaitBootstrapComplete: deserializeBootstrapAwait,
+	TaskTypeTeardownBootstrap:      deserializeBootstrapTeardown,
+
 	// Controller-side deployment tasks
 	TaskTypeUpdateNodeSpecs:    deserializeUpdateNodeSpecs,
 	TaskTypeAwaitSpecUpdate:    deserializeAwaitSpecUpdate,
@@ -228,19 +224,11 @@ var registry = map[string]taskDeserializer{
 	TaskTypeSwitchTraffic:      deserializeSwitchTraffic,
 	TaskTypeTeardownNodes:      deserializeTeardownNodes,
 
-	// Controller-side bootstrap tasks (per-SeiNode bootstrap)
-	TaskTypeDeployBootstrapSvc:     deserializeBootstrapService,
-	TaskTypeDeployBootstrapJob:     deserializeBootstrapJob,
-	TaskTypeAwaitBootstrapComplete: deserializeBootstrapAwait,
-	TaskTypeTeardownBootstrap:      deserializeBootstrapTeardown,
-
-	// Controller-side fork-genesis exporter tasks (SND-driven)
-	TaskTypeEnsureExporterPVC: deserializeEnsureExporterPVC,
-	TaskTypeApplyBootstrapJob: deserializeApplyBootstrapJob,
-	TaskTypeAwaitBootstrapJob: deserializeAwaitJob,
-	TaskTypeApplyExportJob:    deserializeApplyExportJob,
-	TaskTypeAwaitExportJob:    deserializeAwaitJob,
-	TaskTypeTeardownExporter:  deserializeTeardownExporter,
+	// Controller-side fork tasks
+	TaskTypeCreateExporter:       deserializeCreateExporter,
+	TaskTypeAwaitExporterRunning: deserializeAwaitExporterRunning,
+	TaskTypeSubmitExportState:    deserializeSubmitExportState,
+	TaskTypeTeardownExporter:     deserializeTeardownExporter,
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD

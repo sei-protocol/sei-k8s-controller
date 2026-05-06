@@ -21,7 +21,7 @@ func buildBootstrapPlan(
 	planID := uuid.New().String()
 	planIndex := 0
 
-	jobName := task.BootstrapJobName(node.Name)
+	jobName := task.BootstrapJobName(node)
 	serviceName := node.Name
 
 	bootstrapProg, err := buildSidecarProgression(snap, peers)
