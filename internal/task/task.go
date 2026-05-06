@@ -179,9 +179,7 @@ func sidecarTask[T sidecar.TaskBuilder](fireAndForget bool) taskDeserializer {
 
 // registry maps task type strings to their deserializers.
 var registry = map[string]taskDeserializer{
-	// Sidecar tasks — typed wrappers come from seictl/sidecar/client.
-	// configApplyTask is the one local exception (anonymous-embed of
-	// seiconfig.ConfigIntent so PlannedTask.Params.Raw stays flat).
+	// Sidecar tasks
 	sidecar.TaskTypeSnapshotRestore:        sidecarTask[sidecar.SnapshotRestoreTask](false),
 	sidecar.TaskTypeConfigureStateSync:     sidecarTask[sidecar.ConfigureStateSyncTask](false),
 	sidecar.TaskTypeAwaitCondition:         sidecarTask[sidecar.AwaitConditionTask](false),

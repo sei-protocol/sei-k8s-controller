@@ -5,12 +5,12 @@ import (
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 )
 
-// configApplyTask satisfies sidecar.TaskBuilder for the config-apply task.
-// It anonymously embeds seiconfig.ConfigIntent so on-disk PlannedTask.Params.Raw
-// stays as a flat camelCase shape (matching ConfigIntent's json tags),
-// while wire format and validation delegate to sidecar.ConfigApplyTask —
-// the single source of truth in seictl. Unexported because it has no
-// callers outside the deserialize registry.
+// configApplyTask satisfies sidecar.TaskBuilder for config-apply. The
+// embedded seiconfig.ConfigIntent flattens at marshal time, keeping
+// PlannedTask.Params.Raw on the same flat shape ConfigIntent's json tags
+// produce. Wire format and validation delegate to sidecar.ConfigApplyTask —
+// the seictl wrapper wraps the same fields in a nested Intent struct,
+// which would otherwise change the on-disk shape.
 type configApplyTask struct {
 	seiconfig.ConfigIntent
 }

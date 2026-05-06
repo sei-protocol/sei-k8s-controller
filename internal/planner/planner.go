@@ -507,9 +507,8 @@ func buildBasePlan(
 
 // paramsForTaskType constructs the appropriate params struct for a task type.
 // This is the single factory for all task params — every plan builder uses it.
-// Sidecar tasks return seictl client.*Task wrappers directly; the one
-// exception is config-apply, which returns seiconfig.ConfigIntent so on-disk
-// PlannedTask.Params.Raw stays as a flat camelCase shape.
+// Sidecar tasks return seictl client.*Task wrappers directly; config-apply
+// returns *seiconfig.ConfigIntent — see task.configApplyTask for why.
 func paramsForTaskType(
 	node *seiv1alpha1.SeiNode,
 	taskType string,

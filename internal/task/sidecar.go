@@ -48,9 +48,8 @@ func (e *sidecarExecution[T]) Execute(ctx context.Context) error {
 		return fmt.Errorf("invalid task UUID %q: %w", e.id, parseErr)
 	}
 
-	// Build wire payload via the seictl wrapper, then override Id with the
-	// controller's deterministic plan-task UUID. Overriding on TaskRequest
-	// keeps the executor decoupled from the wrapper's internal TaskMeta.
+	// Override Id at the TaskRequest layer rather than on the wrapper's
+	// embedded TaskMeta — keeps the executor decoupled from wrapper internals.
 	req := e.params.ToTaskRequest()
 	req.Id = &taskID
 
