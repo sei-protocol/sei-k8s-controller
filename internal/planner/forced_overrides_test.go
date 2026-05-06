@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 func TestMergeOverrides_ForcesLoggingLevelInfo(t *testing.T) {
@@ -93,7 +93,7 @@ func TestFullNodePlanner_ConfigApplyForcesLoggingLevel(t *testing.T) {
 		t.Fatal("config-apply task has no params")
 	}
 
-	var params task.ConfigApplyParams
+	var params seiconfig.ConfigIntent
 	if err := json.Unmarshal(configApply.Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal config-apply params: %v", err)
 	}

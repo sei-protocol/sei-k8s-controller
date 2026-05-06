@@ -2,6 +2,7 @@ package planner
 
 import (
 	"github.com/google/uuid"
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -23,19 +24,19 @@ func (p *genesisGroupPlanner) BuildPlan(
 	planIndex := 0
 	incumbentNodes := group.Status.IncumbentNodes
 
-	nodeParams := make([]task.GenesisNodeParam, len(incumbentNodes))
+	nodeParams := make([]sidecar.GenesisNodeParam, len(incumbentNodes))
 	for i, name := range incumbentNodes {
-		nodeParams[i] = task.GenesisNodeParam{Name: name}
+		nodeParams[i] = sidecar.GenesisNodeParam{Name: name}
 	}
 
-	accounts := make([]task.GenesisAccountEntry, len(group.Spec.Genesis.Accounts))
+	accounts := make([]sidecar.GenesisAccountEntry, len(group.Spec.Genesis.Accounts))
 	for i, a := range group.Spec.Genesis.Accounts {
-		accounts[i] = task.GenesisAccountEntry{Address: a.Address, Balance: a.Balance}
+		accounts[i] = sidecar.GenesisAccountEntry{Address: a.Address, Balance: a.Balance}
 	}
 
 	// Validate at planner-time so bech32 / shape errors hit
 	// `kubectl describe seinodedeployment` rather than a sidecar Job pod.
-	assembleParams := &task.AssembleAndUploadGenesisParams{
+	assembleParams := sidecar.AssembleAndUploadGenesisTask{
 		AccountBalance: group.Spec.Genesis.AccountBalance,
 		Namespace:      group.Namespace,
 		Nodes:          nodeParams,

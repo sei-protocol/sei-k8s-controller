@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -62,7 +63,7 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 		t.Fatal("task[0] params should not be nil")
 	}
 
-	var assembleParams task.AssembleAndUploadGenesisParams
+	var assembleParams sidecar.AssembleAndUploadGenesisTask
 	if err := json.Unmarshal(assembleTask.Params.Raw, &assembleParams); err != nil {
 		t.Fatalf("unmarshal assemble params: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	var params task.AssembleAndUploadGenesisParams
+	var params sidecar.AssembleAndUploadGenesisTask
 	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal params: %v", err)
 	}

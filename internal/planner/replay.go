@@ -6,7 +6,6 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type replayerPlanner struct {
@@ -38,8 +37,8 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return buildRunningPlan(node)
 	}
-	params := &task.ConfigApplyParams{
-		Mode:      string(seiconfig.ModeFull),
+	params := &seiconfig.ConfigIntent{
+		Mode:      seiconfig.ModeFull,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides()), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {

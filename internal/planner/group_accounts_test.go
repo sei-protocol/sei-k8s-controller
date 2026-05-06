@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 const (
@@ -55,7 +55,7 @@ func TestBuildPlan_PropagatesAccounts(t *testing.T) {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	var params task.AssembleAndUploadGenesisParams
+	var params sidecar.AssembleAndUploadGenesisTask
 	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestBuildPlan_PropagatesMultipleAccounts(t *testing.T) {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	var params task.AssembleAndUploadGenesisParams
+	var params sidecar.AssembleAndUploadGenesisTask
 	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

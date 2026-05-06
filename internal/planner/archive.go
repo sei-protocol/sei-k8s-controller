@@ -7,7 +7,6 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type archiveNodePlanner struct {
@@ -29,8 +28,8 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return buildRunningPlan(node)
 	}
-	return buildBasePlan(node, node.Spec.Peers, nil, &task.ConfigApplyParams{
-		Mode:      string(seiconfig.ModeArchive),
+	return buildBasePlan(node, node.Spec.Peers, nil, &seiconfig.ConfigIntent{
+		Mode:      seiconfig.ModeArchive,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
 	})
 }

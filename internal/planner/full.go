@@ -6,7 +6,6 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type fullNodePlanner struct {
@@ -34,8 +33,8 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 		return buildRunningPlan(node)
 	}
 	fn := node.Spec.FullNode
-	params := &task.ConfigApplyParams{
-		Mode:      string(seiconfig.ModeFull),
+	params := &seiconfig.ConfigIntent{
+		Mode:      seiconfig.ModeFull,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {

@@ -171,7 +171,7 @@ func ResourceAs[T client.Object](cfg ExecutionConfig) (T, error) {
 type taskDeserializer func(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error)
 
 // sidecarTask creates a deserializer for a sidecar-backed task type.
-func sidecarTask[T any](fireAndForget bool) taskDeserializer {
+func sidecarTask[T sidecar.TaskBuilder](fireAndForget bool) taskDeserializer {
 	return func(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
 		return deserializeSidecar[T](id, params, cfg.BuildSidecarClient, fireAndForget)
 	}
@@ -180,20 +180,20 @@ func sidecarTask[T any](fireAndForget bool) taskDeserializer {
 // registry maps task type strings to their deserializers.
 var registry = map[string]taskDeserializer{
 	// Sidecar tasks
-	sidecar.TaskTypeSnapshotRestore:        sidecarTask[SnapshotRestoreParams](false),
-	sidecar.TaskTypeConfigureStateSync:     sidecarTask[ConfigureStateSyncParams](false),
-	sidecar.TaskTypeAwaitCondition:         sidecarTask[AwaitConditionParams](false),
-	sidecar.TaskTypeConfigApply:            sidecarTask[ConfigApplyParams](false),
-	sidecar.TaskTypeConfigValidate:         sidecarTask[ConfigValidateParams](true),
-	sidecar.TaskTypeConfigureGenesis:       sidecarTask[ConfigureGenesisParams](false),
-	sidecar.TaskTypeDiscoverPeers:          sidecarTask[DiscoverPeersParams](false),
-	sidecar.TaskTypeMarkReady:              sidecarTask[MarkReadyParams](true),
-	sidecar.TaskTypeSnapshotUpload:         sidecarTask[SnapshotUploadParams](true),
-	sidecar.TaskTypeGenerateIdentity:       sidecarTask[GenerateIdentityParams](false),
-	sidecar.TaskTypeGenerateGentx:          sidecarTask[GenerateGentxParams](false),
-	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[UploadGenesisArtifactsParams](false),
-	sidecar.TaskTypeAssembleGenesis:        sidecarTask[AssembleAndUploadGenesisParams](false),
-	sidecar.TaskTypeSetGenesisPeers:        sidecarTask[SetGenesisPeersParams](false),
+	sidecar.TaskTypeSnapshotRestore:        sidecarTask[sidecar.SnapshotRestoreTask](false),
+	sidecar.TaskTypeConfigureStateSync:     sidecarTask[sidecar.ConfigureStateSyncTask](false),
+	sidecar.TaskTypeAwaitCondition:         sidecarTask[sidecar.AwaitConditionTask](false),
+	sidecar.TaskTypeConfigApply:            sidecarTask[configApplyTask](false),
+	sidecar.TaskTypeConfigValidate:         sidecarTask[sidecar.ConfigValidateTask](true),
+	sidecar.TaskTypeConfigureGenesis:       sidecarTask[sidecar.ConfigureGenesisTask](false),
+	sidecar.TaskTypeDiscoverPeers:          sidecarTask[sidecar.DiscoverPeersTask](false),
+	sidecar.TaskTypeMarkReady:              sidecarTask[sidecar.MarkReadyTask](true),
+	sidecar.TaskTypeSnapshotUpload:         sidecarTask[sidecar.SnapshotUploadTask](true),
+	sidecar.TaskTypeGenerateIdentity:       sidecarTask[sidecar.GenerateIdentityTask](false),
+	sidecar.TaskTypeGenerateGentx:          sidecarTask[sidecar.GenerateGentxTask](false),
+	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[sidecar.UploadGenesisArtifactsTask](false),
+	sidecar.TaskTypeAssembleGenesis:        sidecarTask[sidecar.AssembleAndUploadGenesisTask](false),
+	sidecar.TaskTypeSetGenesisPeers:        sidecarTask[sidecar.SetGenesisPeersTask](false),
 
 	// Controller-side group tasks
 	TaskTypeAwaitNodesRunning:  deserializeAwaitNodesRunning,
@@ -238,7 +238,7 @@ func Deserialize(taskType, id string, params json.RawMessage, cfg ExecutionConfi
 // deserializeSidecar is a generic helper that unmarshals params into a typed
 // struct and wraps it in a sidecarExecution. The sidecar client is built
 // lazily on first Execute/Status call via the buildSC factory.
-func deserializeSidecar[T any](id string, params json.RawMessage, buildSC func() (SidecarClient, error), fireAndForget bool) (TaskExecution, error) {
+func deserializeSidecar[T sidecar.TaskBuilder](id string, params json.RawMessage, buildSC func() (SidecarClient, error), fireAndForget bool) (TaskExecution, error) {
 	var p T
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &p); err != nil {
