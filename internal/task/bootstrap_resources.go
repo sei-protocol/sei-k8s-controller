@@ -165,36 +165,9 @@ func rejectForbiddenSecretMounts(podSpec *corev1.PodSpec, forbidden []string) er
 	return nil
 }
 
-// BuildSidecarContainer constructs the sei-sidecar native sidecar container
-// shared by the bootstrap Job and the SND fork-genesis export Job. Caller
-// supplies env so the bootstrap and export paths can scope env independently
-// (the bootstrap path needs SEI_SNAPSHOT_*; the export path doesn't).
-//
-// dataMountPath is the volume mount for the "data" PVC volume; both callers
-// pass platform.DataDir.
-func BuildSidecarContainer(image string, port int32, env []corev1.EnvVar, resources *corev1.ResourceRequirements, dataMountPath string) corev1.Container {
-	c := corev1.Container{
-		Name:          "sei-sidecar",
-		Image:         image,
-		Command:       []string{"seictl", "serve"},
-		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
-		Env:           env,
-		Ports: []corev1.ContainerPort{
-			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
-		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: dataVolumeName, MountPath: dataMountPath},
-		},
-	}
-	if resources != nil {
-		c.Resources = *resources
-	}
-	return c
-}
-
 func buildBootstrapPodSpec(inputs BootstrapPodInputs, platformCfg platform.Config) corev1.PodSpec {
 	dataVolume := corev1.Volume{
-		Name: dataVolumeName,
+		Name: "data",
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: fmt.Sprintf("data-%s", inputs.Name),
@@ -202,10 +175,12 @@ func buildBootstrapPodSpec(inputs BootstrapPodInputs, platformCfg platform.Confi
 		},
 	}
 
-	sidecar := BuildSidecarContainer(
-		inputs.SidecarImage,
-		inputs.SidecarPort,
-		[]corev1.EnvVar{
+	sidecar := corev1.Container{
+		Name:          "sei-sidecar",
+		Image:         inputs.SidecarImage,
+		Command:       []string{"seictl", "serve"},
+		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
+		Env: []corev1.EnvVar{
 			{Name: "SEI_CHAIN_ID", Value: inputs.ChainID},
 			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", inputs.SidecarPort)},
 			{Name: "SEI_HOME", Value: bootstrapDataDir},
@@ -214,9 +189,16 @@ func buildBootstrapPodSpec(inputs BootstrapPodInputs, platformCfg platform.Confi
 			{Name: "SEI_SNAPSHOT_BUCKET", Value: platformCfg.SnapshotBucket},
 			{Name: "SEI_SNAPSHOT_REGION", Value: platformCfg.SnapshotRegion},
 		},
-		inputs.SidecarResources,
-		bootstrapDataDir,
-	)
+		Ports: []corev1.ContainerPort{
+			{Name: "sidecar", ContainerPort: inputs.SidecarPort, Protocol: corev1.ProtocolTCP},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: bootstrapDataDir},
+		},
+	}
+	if inputs.SidecarResources != nil {
+		sidecar.Resources = *inputs.SidecarResources
+	}
 
 	seidCmd, seidArgs := bootstrapWaitCommand(inputs.SidecarPort, inputs.HaltHeight)
 	seidContainer := corev1.Container{
@@ -228,7 +210,7 @@ func buildBootstrapPodSpec(inputs BootstrapPodInputs, platformCfg platform.Confi
 			{Name: "TMPDIR", Value: bootstrapDataDir + "/tmp"},
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: dataVolumeName, MountPath: bootstrapDataDir},
+			{Name: "data", MountPath: bootstrapDataDir},
 		},
 		Resources: bootstrapResourcesForMode(inputs.Mode, platformCfg),
 	}
@@ -306,7 +288,7 @@ func bootstrapSeidInitContainer(inputs BootstrapPodInputs) corev1.Container {
 			"/bin/sh", "-c", script,
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: dataVolumeName, MountPath: bootstrapDataDir},
+			{Name: "data", MountPath: bootstrapDataDir},
 		},
 	}
 }

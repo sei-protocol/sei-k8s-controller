@@ -179,17 +179,15 @@ func TestBuildGroupForkPlan(t *testing.T) {
 		t.Errorf("phase = %q, want Active", plan.Phase)
 	}
 
-	// Fork plan: 6 exporter tasks + 3 shared tasks = 9
-	if len(plan.Tasks) != 9 {
-		t.Fatalf("expected 9 tasks, got %d", len(plan.Tasks))
+	// Fork plan: 4 exporter tasks + 3 shared tasks = 7
+	if len(plan.Tasks) != 7 {
+		t.Fatalf("expected 7 tasks, got %d", len(plan.Tasks))
 	}
 
 	expectedTypes := []string{
-		task.TaskTypeEnsureExporterPVC,
-		task.TaskTypeApplyBootstrapJob,
-		task.TaskTypeAwaitBootstrapJob,
-		task.TaskTypeApplyExportJob,
-		task.TaskTypeAwaitExportJob,
+		task.TaskTypeCreateExporter,
+		task.TaskTypeAwaitExporterRunning,
+		task.TaskTypeSubmitExportState,
 		task.TaskTypeTeardownExporter,
 		TaskAssembleGenesisFork,
 		task.TaskTypeCollectAndSetPeers,
@@ -207,25 +205,39 @@ func TestBuildGroupForkPlan(t *testing.T) {
 		}
 	}
 
-	// Verify await-bootstrap-job and await-export-job point at the right Job names.
-	var awaitBootstrapParams task.AwaitJobParams
-	if err := json.Unmarshal(plan.Tasks[2].Params.Raw, &awaitBootstrapParams); err != nil {
-		t.Fatalf("unmarshal await-bootstrap-job params: %v", err)
+	// Verify create-exporter params
+	var createParams task.CreateExporterParams
+	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &createParams); err != nil {
+		t.Fatalf("unmarshal create-exporter params: %v", err)
 	}
-	if awaitBootstrapParams.JobName != "fork-group-exporter-bootstrap" {
-		t.Errorf("await-bootstrap-job JobName = %q, want fork-group-exporter-bootstrap", awaitBootstrapParams.JobName)
+	if createParams.GroupName != "fork-group" {
+		t.Errorf("GroupName = %q, want %q", createParams.GroupName, "fork-group")
 	}
-	var awaitExportParams task.AwaitJobParams
-	if err := json.Unmarshal(plan.Tasks[4].Params.Raw, &awaitExportParams); err != nil {
-		t.Fatalf("unmarshal await-export-job params: %v", err)
+	if createParams.ExporterName != "fork-group-exporter" {
+		t.Errorf("ExporterName = %q, want %q", createParams.ExporterName, "fork-group-exporter")
 	}
-	if awaitExportParams.JobName != "fork-group-exporter-export" {
-		t.Errorf("await-export-job JobName = %q, want fork-group-exporter-export", awaitExportParams.JobName)
+	if createParams.SourceChainID != sourceChain {
+		t.Errorf("SourceChainID = %q, want %q", createParams.SourceChainID, sourceChain)
+	}
+	if createParams.SourceImage != "sei:v5.0.0" {
+		t.Errorf("SourceImage = %q, want %q", createParams.SourceImage, "sei:v5.0.0")
+	}
+	if createParams.ExportHeight != 100000 {
+		t.Errorf("ExportHeight = %d, want %d", createParams.ExportHeight, 100000)
 	}
 
-	// Verify assemble-genesis-fork params (now at index 6, after the 6 exporter tasks)
+	// Verify submit-export-state params
+	var submitParams task.SubmitExportStateParams
+	if err := json.Unmarshal(plan.Tasks[2].Params.Raw, &submitParams); err != nil {
+		t.Fatalf("unmarshal submit-export-state params: %v", err)
+	}
+	if submitParams.SourceChainID != sourceChain {
+		t.Errorf("submit SourceChainID = %q, want %q", submitParams.SourceChainID, sourceChain)
+	}
+
+	// Verify assemble-genesis-fork params
 	var assembleParams task.AssembleForkGenesisParams
-	if err := json.Unmarshal(plan.Tasks[6].Params.Raw, &assembleParams); err != nil {
+	if err := json.Unmarshal(plan.Tasks[4].Params.Raw, &assembleParams); err != nil {
 		t.Fatalf("unmarshal assemble-genesis-fork params: %v", err)
 	}
 	if assembleParams.SourceChainID != sourceChain {
@@ -235,9 +247,9 @@ func TestBuildGroupForkPlan(t *testing.T) {
 		t.Errorf("assemble Nodes = %d, want 2", len(assembleParams.Nodes))
 	}
 
-	// Verify assemble task has MaxRetries (now at index 6 after the 6 exporter tasks)
-	if plan.Tasks[6].MaxRetries != groupAssemblyMaxRetries {
-		t.Errorf("assemble MaxRetries = %d, want %d", plan.Tasks[6].MaxRetries, groupAssemblyMaxRetries)
+	// Verify assemble task has MaxRetries
+	if plan.Tasks[4].MaxRetries != groupAssemblyMaxRetries {
+		t.Errorf("assemble MaxRetries = %d, want %d", plan.Tasks[4].MaxRetries, groupAssemblyMaxRetries)
 	}
 }
 

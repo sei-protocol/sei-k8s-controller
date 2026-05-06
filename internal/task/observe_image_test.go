@@ -51,8 +51,7 @@ func observeImageCfg(t *testing.T, node *seiv1alpha1.SeiNode, sts *appsv1.Statef
 	}
 }
 
-//go:fix inline
-func int32Ptr(v int32) *int32 { return new(v) }
+func int32Ptr(v int32) *int32 { return &v }
 
 func newObserveImageExec(t *testing.T, cfg ExecutionConfig) TaskExecution {
 	t.Helper()

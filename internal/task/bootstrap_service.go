@@ -68,5 +68,5 @@ func (e *deployBootstrapServiceExecution) Status(ctx context.Context) ExecutionS
 	if err := e.cfg.KubeClient.Get(ctx, key, existing); err == nil {
 		e.complete()
 	}
-	return e.DefaultStatus()
+	return e.status
 }
