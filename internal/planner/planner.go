@@ -460,7 +460,7 @@ func buildBasePlan(
 	node *seiv1alpha1.SeiNode,
 	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
-	configApplyParams *task.ConfigApplyParams,
+	configIntent *seiconfig.ConfigIntent,
 ) (*seiv1alpha1.TaskPlan, error) {
 	sidecarProg, err := buildSidecarProgression(snap, peers)
 	if err != nil {
@@ -490,7 +490,7 @@ func buildBasePlan(
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, snap, configApplyParams))
+		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, snap, configIntent))
 		if err != nil {
 			return nil, err
 		}
@@ -507,11 +507,14 @@ func buildBasePlan(
 
 // paramsForTaskType constructs the appropriate params struct for a task type.
 // This is the single factory for all task params — every plan builder uses it.
+// Sidecar tasks return seictl client.*Task wrappers directly; the one
+// exception is config-apply, which returns seiconfig.ConfigIntent so on-disk
+// PlannedTask.Params.Raw stays as a flat camelCase shape.
 func paramsForTaskType(
 	node *seiv1alpha1.SeiNode,
 	taskType string,
 	snap *seiv1alpha1.SnapshotSource,
-	configApplyParams *task.ConfigApplyParams,
+	configIntent *seiconfig.ConfigIntent,
 ) any {
 	switch taskType {
 	// Infrastructure tasks
@@ -530,24 +533,24 @@ func paramsForTaskType(
 
 	// Sidecar tasks
 	case TaskSnapshotRestore:
-		return snapshotRestoreParams(snap)
+		return snapshotRestoreTask(snap)
 	case TaskConfigureGenesis:
-		return &task.ConfigureGenesisParams{}
+		return sidecar.ConfigureGenesisTask{}
 	case TaskConfigApply:
-		if configApplyParams != nil {
-			return configApplyParams
+		if configIntent != nil {
+			return configIntent
 		}
-		return &task.ConfigApplyParams{}
+		return &seiconfig.ConfigIntent{}
 	case TaskDiscoverPeers:
-		return discoverPeersParams(node)
+		return discoverPeersTask(node)
 	case TaskConfigureStateSync:
-		return configureStateSyncParams(snap)
+		return configureStateSyncTask(snap)
 	case TaskConfigValidate:
-		return &task.ConfigValidateParams{}
+		return sidecar.ConfigValidateTask{}
 	case TaskMarkReady:
-		return &task.MarkReadyParams{}
+		return sidecar.MarkReadyTask{}
 	case TaskSnapshotUpload:
-		return &task.SnapshotUploadParams{}
+		return sidecar.SnapshotUploadTask{}
 
 	// Genesis ceremony tasks — only valid when Validator.GenesisCeremony is set.
 	case TaskGenerateIdentity, TaskGenerateGentx, TaskUploadGenesisArtifacts, TaskSetGenesisPeers:
@@ -565,71 +568,69 @@ func genesisCeremonyTaskParams(node *seiv1alpha1.SeiNode, taskType string) any {
 	gc := node.Spec.Validator.GenesisCeremony
 	switch taskType {
 	case TaskGenerateIdentity:
-		return &task.GenerateIdentityParams{ChainID: gc.ChainID, Moniker: node.Name}
+		return sidecar.GenerateIdentityTask{ChainID: gc.ChainID, Moniker: node.Name}
 	case TaskGenerateGentx:
-		return &task.GenerateGentxParams{
+		return sidecar.GenerateGentxTask{
 			ChainID:        gc.ChainID,
 			StakingAmount:  gc.StakingAmount,
 			AccountBalance: gc.AccountBalance,
 			GenesisParams:  gc.GenesisParams,
 		}
 	case TaskUploadGenesisArtifacts:
-		return &task.UploadGenesisArtifactsParams{NodeName: node.Name}
+		return sidecar.UploadGenesisArtifactsTask{NodeName: node.Name}
 	case TaskSetGenesisPeers:
-		return &task.SetGenesisPeersParams{}
+		return sidecar.SetGenesisPeersTask{}
 	default:
 		return nil
 	}
 }
 
-func snapshotRestoreParams(snap *seiv1alpha1.SnapshotSource) *task.SnapshotRestoreParams {
+func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource) sidecar.SnapshotRestoreTask {
 	if snap == nil || snap.S3 == nil {
-		return &task.SnapshotRestoreParams{}
+		return sidecar.SnapshotRestoreTask{}
 	}
-	return &task.SnapshotRestoreParams{
-		TargetHeight: snap.S3.TargetHeight,
-	}
+	return sidecar.SnapshotRestoreTask{TargetHeight: snap.S3.TargetHeight}
 }
 
-func discoverPeersParams(node *seiv1alpha1.SeiNode) *task.DiscoverPeersParams {
+func discoverPeersTask(node *seiv1alpha1.SeiNode) sidecar.DiscoverPeersTask {
 	if len(node.Spec.Peers) == 0 {
-		return &task.DiscoverPeersParams{}
+		return sidecar.DiscoverPeersTask{}
 	}
-	var sources []task.PeerSourceParam
+	var sources []sidecar.PeerSource
 	for _, s := range node.Spec.Peers {
 		switch {
 		case s.EC2Tags != nil:
-			sources = append(sources, task.PeerSourceParam{
-				Type:   string(sidecar.PeerSourceEC2Tags),
+			sources = append(sources, sidecar.PeerSource{
+				Type:   sidecar.PeerSourceEC2Tags,
 				Region: s.EC2Tags.Region,
 				Tags:   s.EC2Tags.Tags,
 			})
 		case s.Static != nil:
-			sources = append(sources, task.PeerSourceParam{
-				Type:      string(sidecar.PeerSourceStatic),
+			sources = append(sources, sidecar.PeerSource{
+				Type:      sidecar.PeerSourceStatic,
 				Addresses: s.Static.Addresses,
 			})
 		case s.Label != nil:
-			sources = append(sources, task.PeerSourceParam{
-				Type:      string(sidecar.PeerSourceDNSEndpoints),
+			sources = append(sources, sidecar.PeerSource{
+				Type:      sidecar.PeerSourceDNSEndpoints,
 				Endpoints: node.Status.ResolvedPeers,
 			})
 		}
 	}
-	return &task.DiscoverPeersParams{Sources: sources}
+	return sidecar.DiscoverPeersTask{Sources: sources}
 }
 
-func configureStateSyncParams(snap *seiv1alpha1.SnapshotSource) *task.ConfigureStateSyncParams {
-	p := &task.ConfigureStateSyncParams{
+func configureStateSyncTask(snap *seiv1alpha1.SnapshotSource) sidecar.ConfigureStateSyncTask {
+	t := sidecar.ConfigureStateSyncTask{
 		UseLocalSnapshot: hasS3Snapshot(snap),
 	}
 	if snap != nil {
 		if snap.TrustPeriod != "" {
-			p.TrustPeriod = snap.TrustPeriod
+			t.TrustPeriod = snap.TrustPeriod
 		}
-		p.BackfillBlocks = snap.BackfillBlocks
+		t.BackfillBlocks = snap.BackfillBlocks
 	}
-	return p
+	return t
 }
 
 // commonOverrides returns controller overrides that apply to all node modes.

@@ -90,7 +90,7 @@ func testNode() *seiv1alpha1.SeiNode {
 
 func configGenesisParams(t *testing.T) *apiextensionsv1.JSON {
 	t.Helper()
-	raw, err := json.Marshal(task.ConfigureGenesisParams{})
+	raw, err := json.Marshal(sidecar.ConfigureGenesisTask{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +281,8 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		postSubmitResults: map[uuid.UUID]*sidecar.TaskResult{parsedID: completedResult},
 	}
 
-	assembleParams, _ := json.Marshal(task.AssembleAndUploadGenesisParams{
-		Nodes: []task.GenesisNodeParam{{Name: "node-0"}, {Name: "node-1"}, {Name: "node-2"}},
+	assembleParams, _ := json.Marshal(sidecar.AssembleAndUploadGenesisTask{
+		Nodes: []sidecar.GenesisNodeParam{{Name: "node-0"}, {Name: "node-1"}, {Name: "node-2"}},
 	})
 
 	group.Status.Plan = &seiv1alpha1.TaskPlan{

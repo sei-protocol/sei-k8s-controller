@@ -368,7 +368,7 @@ func TestBuildPlan_ParamsRoundTrip(t *testing.T) {
 	if snapshotTask == nil {
 		t.Fatal("expected snapshot-restore task in plan")
 	}
-	var params task.SnapshotRestoreParams
+	var params sidecar.SnapshotRestoreTask
 	if err := json.Unmarshal(snapshotTask.Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal error: %v", err)
 	}
@@ -394,9 +394,9 @@ func TestConfigApply_ParamsFromPlan(t *testing.T) {
 	}
 	g.Expect(configTask).NotTo(BeNil(), "no config-apply task in plan")
 
-	var params task.ConfigApplyParams
+	var params seiconfig.ConfigIntent
 	g.Expect(json.Unmarshal(configTask.Params.Raw, &params)).To(Succeed())
-	g.Expect(params.Mode).To(Equal(string(seiconfig.ModeFull)))
+	g.Expect(params.Mode).To(Equal(seiconfig.ModeFull))
 	g.Expect(params.Overrides["giga_executor.enabled"]).To(Equal("true"))
 }
 

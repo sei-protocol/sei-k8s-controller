@@ -10,38 +10,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// taskParamser is implemented by param structs that know how to convert
-// themselves into sidecar TaskRequest params. The *map[string]any return
-// type matches the generated sidecar client's TaskRequest.Params field.
-type taskParamser interface {
-	toRequestParams() *map[string]any
-	taskType() string
-}
-
-// Compile-time assertions that all sidecar param types implement taskParamser.
-var (
-	_ taskParamser = (*SnapshotRestoreParams)(nil)
-	_ taskParamser = (*ConfigureStateSyncParams)(nil)
-	_ taskParamser = (*AwaitConditionParams)(nil)
-	_ taskParamser = (*ConfigApplyParams)(nil)
-	_ taskParamser = (*ConfigValidateParams)(nil)
-	_ taskParamser = (*ConfigureGenesisParams)(nil)
-	_ taskParamser = (*DiscoverPeersParams)(nil)
-	_ taskParamser = (*MarkReadyParams)(nil)
-	_ taskParamser = (*SnapshotUploadParams)(nil)
-	_ taskParamser = (*GenerateIdentityParams)(nil)
-	_ taskParamser = (*GenerateGentxParams)(nil)
-	_ taskParamser = (*UploadGenesisArtifactsParams)(nil)
-	_ taskParamser = (*AssembleAndUploadGenesisParams)(nil)
-	_ taskParamser = (*SetGenesisPeersParams)(nil)
-)
-
 // sidecarExecution is a generic TaskExecution backed by the sidecar HTTP API.
-// T is the typed params struct. The sidecar client is constructed lazily via
-// buildSC on first use, allowing the executor to remain task-type-agnostic.
-// For fire-and-forget tasks (e.g., mark-ready, config-validate), Execute
-// succeeds and Status immediately returns Complete.
-type sidecarExecution[T any] struct {
+// T must satisfy sidecar.TaskBuilder so the executor can produce a TaskRequest
+// without knowing the concrete task type. The sidecar client is constructed
+// lazily via buildSC on first use. For fire-and-forget tasks (e.g., mark-ready,
+// config-validate), Execute succeeds and Status immediately returns Complete.
+type sidecarExecution[T sidecar.TaskBuilder] struct {
 	buildSC       func() (SidecarClient, error)
 	sc            SidecarClient
 	id            string
@@ -51,7 +25,6 @@ type sidecarExecution[T any] struct {
 	err           error
 }
 
-// ensureClient lazily constructs the sidecar client, caching it for reuse.
 func (e *sidecarExecution[T]) ensureClient() (SidecarClient, error) {
 	if e.sc != nil {
 		return e.sc, nil
@@ -70,24 +43,18 @@ func (e *sidecarExecution[T]) Execute(ctx context.Context) error {
 		return fmt.Errorf("building sidecar client: %w", err)
 	}
 
-	p, ok := any(&e.params).(taskParamser)
-	if !ok {
-		return fmt.Errorf("params type %T does not implement taskParamser", e.params)
-	}
-
 	taskID, parseErr := uuid.Parse(e.id)
 	if parseErr != nil {
 		return fmt.Errorf("invalid task UUID %q: %w", e.id, parseErr)
 	}
 
-	req := sidecar.TaskRequest{
-		Id:     &taskID,
-		Type:   p.taskType(),
-		Params: p.toRequestParams(),
-	}
+	// Build wire payload via the seictl wrapper, then override Id with the
+	// controller's deterministic plan-task UUID. Overriding on TaskRequest
+	// keeps the executor decoupled from the wrapper's internal TaskMeta.
+	req := e.params.ToTaskRequest()
+	req.Id = &taskID
 
-	_, err = sc.SubmitTask(ctx, req)
-	if err != nil {
+	if _, err := sc.SubmitTask(ctx, req); err != nil {
 		e.status = ExecutionFailed
 		e.err = fmt.Errorf("submitting %s: %w", req.Type, err)
 		return e.err

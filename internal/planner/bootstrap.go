@@ -16,7 +16,7 @@ func buildBootstrapPlan(
 	node *seiv1alpha1.SeiNode,
 	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
-	configApplyParams *task.ConfigApplyParams,
+	configIntent *seiconfig.ConfigIntent,
 ) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	planIndex := 0
@@ -75,7 +75,7 @@ func buildBootstrapPlan(
 
 	// Phase 2: Sidecar tasks on bootstrap pod (same progression as base, minus mark-ready)
 	for _, taskType := range bootstrapProg {
-		if err := appendTask(taskType, paramsForTaskType(node, taskType, snap, configApplyParams)); err != nil {
+		if err := appendTask(taskType, paramsForTaskType(node, taskType, snap, configIntent)); err != nil {
 			return nil, err
 		}
 	}
@@ -102,7 +102,7 @@ func buildBootstrapPlan(
 
 	// Phase 5: Post-bootstrap config on StatefulSet pod
 	for _, taskType := range postProg {
-		if err := appendTask(taskType, paramsForTaskType(node, taskType, nil, configApplyParams)); err != nil {
+		if err := appendTask(taskType, paramsForTaskType(node, taskType, nil, configIntent)); err != nil {
 			return nil, err
 		}
 	}
@@ -158,8 +158,8 @@ const genesisConfigureMaxRetries = 180
 // configure-genesis retries until the group controller has assembled and
 // uploaded genesis.json to S3.
 func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	configApplyParams := &task.ConfigApplyParams{
-		Mode:      string(seiconfig.ModeValidator),
+	configIntent := &seiconfig.ConfigIntent{
+		Mode:      seiconfig.ModeValidator,
 		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
 	}
 
@@ -180,7 +180,7 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, configApplyParams))
+		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, configIntent))
 		if err != nil {
 			return nil, err
 		}

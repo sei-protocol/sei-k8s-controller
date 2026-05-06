@@ -6,7 +6,6 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type validatorPlanner struct {
@@ -64,8 +63,8 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Ta
 		return buildGenesisPlan(node)
 	}
 	v := node.Spec.Validator
-	params := &task.ConfigApplyParams{
-		Mode:      string(seiconfig.ModeValidator),
+	params := &seiconfig.ConfigIntent{
+		Mode:      seiconfig.ModeValidator,
 		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {

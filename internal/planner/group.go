@@ -2,6 +2,7 @@ package planner
 
 import (
 	"github.com/google/uuid"
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -35,7 +36,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 
 	// Validate at planner-time so bech32 / shape errors hit
 	// `kubectl describe seinodedeployment` rather than a sidecar Job pod.
-	assembleParams := &task.AssembleAndUploadGenesisParams{
+	assembleParams := sidecar.AssembleAndUploadGenesisTask{
 		AccountBalance: group.Spec.Genesis.AccountBalance,
 		Namespace:      group.Namespace,
 		Nodes:          nodeParams,
