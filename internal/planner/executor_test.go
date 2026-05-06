@@ -3,6 +3,7 @@ package planner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -281,9 +282,11 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 		postSubmitResults: map[uuid.UUID]*sidecar.TaskResult{parsedID: completedResult},
 	}
 
-	assembleParams, _ := json.Marshal(sidecar.AssembleAndUploadGenesisTask{
-		Nodes: []sidecar.GenesisNodeParam{{Name: "node-0"}, {Name: "node-1"}, {Name: "node-2"}},
-	})
+	nodes := make([]sidecar.GenesisNodeParam, 3)
+	for i := range nodes {
+		nodes[i] = sidecar.GenesisNodeParam{Name: fmt.Sprintf("node-%d", i)}
+	}
+	assembleParams, _ := json.Marshal(sidecar.AssembleAndUploadGenesisTask{Nodes: nodes})
 
 	group.Status.Plan = &seiv1alpha1.TaskPlan{
 		ID:    planID,
