@@ -1,328 +1,182 @@
-# Design: Fork-Genesis Export — push the lifecycle into plan generation
+# Design: Fork-Genesis Export Job — replace cross-container exec with a Job pod
 
-**Status:** Revision 3 (force-pushed to Rev 2 PR after a simplification round)
+**Status:** Draft
 **Date:** 2026-05-05
 **Tracks:** sei-k8s-controller fork-genesis architectural fix
-**Related:** `internal/task/fork_export.go`, `internal/task/bootstrap_resources.go`, `seictl/sidecar/tasks/export_state.go`, `internal/planner/group.go`
+**Related:** `internal/task/fork_export.go`, `internal/task/bootstrap_resources.go`, `seictl/sidecar/tasks/export_state.go`
 
 ## Problem
 
-`submit-export-state` fails on every fork-genesis ceremony with:
+The fork-genesis ceremony's `submit-export-state` plan task fails terminally on every run with:
 
 ```
 exec: "seid": executable file not found in $PATH
 ```
 
-Root cause: `seictl/sidecar/tasks/export_state.go:85` does `exec.CommandContext(ctx, "seid", args...)` from inside the sei-sidecar container, which is distroless and ships only `seictl`. The `seid` binary lives in a separate container in the same pod. Pod containers share network and named volumes — not filesystems. The exec lookup is structurally impossible.
+Root cause at `seictl/sidecar/tasks/export_state.go:85`:
 
-## How this design evolved (Rev 1 → Rev 3)
+```go
+cmd := exec.CommandContext(ctx, "seid", args...)
+err := cmd.Run()
+```
 
-- **Rev 1 (merged at #169)** added `Spec.OneShot bool` + `PhaseBootstrapComplete` to opt the exporter SeiNode out of the StatefulSet phase.
-- **Rev 2** dropped `Spec.OneShot` after user feedback ("adding fields into the spec is a really bad smell"). Exporter no longer wrapped as a SeiNode — SND-level plan owns Jobs and PVC directly. Branch on `Spec.Genesis.Fork != nil` (already in spec). Proposed a fused `await-export-finished-and-upload` task with a sidecar in the export Job.
-- **Rev 3 (this revision)** drops the sidecar from the export Job entirely. Export Job is single-container; uses an init container to copy the `seictl` static binary, and chains `seid export > file && seictl upload` in the main container. `await-export-job` becomes a standard `Job.status.succeeded` poll, identical in shape to `await-bootstrap-job`. `BootstrapPodInputs` refactor lands as its own prep PR, and a sibling `ExportJobInputs` struct stays distinct rather than fusing the two builders.
+This runs **inside the sei-sidecar container** (distroless seictl image). The `seid` binary lives in a separate container in the same pod (the seid image). Pod containers share network and named volumes but **not filesystems** — each container has its own image rootfs. So the sidecar's exec lookup fails: there is no `seid` binary on its PATH, and no straightforward way to make it appear.
+
+Verified empirically: ran the full ceremony against a fresh 205208000 snapshot, plan failed at `submit-export-state` within seconds. SeiNode reached Running phase, sidecar API was reachable, S3 credentials worked — only the cross-container exec was broken.
 
 ## Goals
 
-1. Export-state phase succeeds end-to-end with no cross-container exec.
-2. No new SeiNode CRD spec fields, no new lifecycle phases — branch on existing semantic information.
-3. Reuse the bootstrap-Job pod-spec primitives (the seid + sei-sidecar container shape) without forcing a single fused builder for both bootstrap and export.
-4. Failure modes debuggable via `kubectl get jobs` + `kubectl logs` on the SND. Single-container export Job means one log stream.
-5. Status surface on the SND tells operators whether export succeeded, where the artifact lives, and which Job to read logs from.
+1. The export-state phase succeeds when invoked by the controller, producing the same `<sourceChainId>/exported-state.json` artifact in S3 that the broken flow targeted.
+2. Architectural shape mirrors the existing bootstrap-Job pattern in `internal/task/bootstrap_resources.go` rather than introducing a new orchestration primitive.
+3. Failure modes are debuggable from `kubectl get jobs` + `kubectl logs` without needing to grep controller logs first.
+4. No PVC `ReadWriteOnce` multi-attach pending state under any plan ordering.
 
 ## Non-goals
 
-1. Generalizing the export pattern to non-fork use cases.
-2. Changing the S3 artifact path or format. `assemble-genesis-fork` reads the same `<sourceChainId>/exported-state.json` it reads today.
-3. Validator-side plan changes. Identity/gentx generation and `configure-genesis` polling stay identical.
+1. Generalizing the export pattern to non-fork use cases. The export Job is fork-genesis-specific for now.
+2. Changing the S3 artifact path or format. Consumers continue to read `<sourceChainId>/exported-state.json` from `SEI_GENESIS_BUCKET`.
+3. Repackaging the seid image. The Job uses the operator-supplied source image as-is.
+4. Validator-side plan changes. Identity/gentx generation and `configure-genesis` polling stay identical.
 
-## Architectural decisions
+## Decisions
 
-### A1. Exporter is not a SeiNode — SND owns Jobs and PVC directly
+### D1. Use a Job pod with seid + sei-sidecar containers (mirror bootstrap pattern)
 
-The current `create-exporter` task creates a SeiNode CRD object that goes through the standard init plan (bootstrap Job → StatefulSet → Running). Rev 3 deletes that pattern. The SND-level fork-genesis sub-plan creates the PVC, the bootstrap Job, the export Job, and the headless Service directly — owner-referenced to the SND.
+Replace `submit-export-state` (sidecar HTTP-driven seid exec) with `deploy-export-job`. The new Job pod has:
 
-Why: the exporter's "lifecycle" only exists from the controller's point of view. The user never queries `kubectl get seinode <exporter>`. Modeling it as a SeiNode forces invariants (`Phase`, `Conditions`, `ResolvePlan` drift detection, NodeUpdate plans) that we then have to gate. Modeling it as Jobs avoids that ceremony entirely.
+- **`seid` main container** (uses `Spec.FullNode.Snapshot.BootstrapImage`, the same source image the bootstrap Job uses): runs `seid export --home /sei --height N > /sei/tmp/exported-state.json` and exits.
+- **`sei-sidecar` native sidecar container** (`restartPolicy: Always`, runs `seictl serve`): controller submits a new generic `upload-file` HTTP task that streams the JSON to S3.
 
-### A2. SND fork-genesis sub-plan
+The Job's main container exits on success; the sidecar exits when the Job's main container terminates. Mirrors the bootstrap Job's pod structure exactly.
 
-```
-ensure-exporter-pvc       PVC <group>-exporter-data, owner-ref'd to SND. Size + storageClassName
-                          copied from `Spec.Template.Spec.DataVolume`. RWO.
+**Alternatives considered**:
+- *Two-Jobs-in-sequence* (seid Job, then seictl-upload Job): doubles the K8s lifecycle bookkeeping with no payoff.
+- *Single-container shell pipe* (`seid export | aws s3 cp -`): forfeits `seis3.ClassifyS3Error` consistency we already have for snapshot-upload, and forces aws-cli into the seid image (manual install at runtime is a footgun).
 
-apply-bootstrap-job       Job <group>-exporter-bootstrap. Uses `GenerateBootstrapJob(BootstrapPodInputs)`
-                          — the helper refactored in PR A. seid + sei-sidecar containers
-                          (existing shape). seid runs `seid start --halt-height N`.
+### D2. Exporter SeiNode terminates at `BootstrapComplete`, no StatefulSet
 
-await-bootstrap-job       Polls Job.status.succeeded == 1.
+The exporter SeiNode currently goes Pending → Bootstrap → **Running** (StatefulSet). Add a new phase **`PhaseBootstrapComplete`** as a terminal-for-exporter state that the SeiNode reconciler reaches after the bootstrap Job exits when an explicit one-shot signal is set on the spec.
 
-apply-export-job          Job <group>-exporter-export. Uses new `GenerateExportJob(ExportJobInputs)`
-                          — single seid container, init container copies seictl binary into a
-                          shared emptyDir. Main container chains:
-                            seid export --home /sei --height N > /sei/tmp/exported-state.json
-                              && seictl upload --file /sei/tmp/exported-state.json \
-                                              --bucket <genesis> --key <chain>/exported-state.json
-                                              --region <region>
+**Explicit signal** (avoiding implicit role inference per platform-engineer's feedback): add `Spec.OneShot bool` to `SeiNodeSpec`. The `create-exporter` task sets it to `true` on the SeiNode it creates. The SeiNode planner reads this flag and:
 
-await-export-job          Same task type/code shape as await-bootstrap-job, parameterized by
-                          JobName. Reads pod.Status.ContainerStatuses[0].State.Terminated.ExitCode
-                          on failure to set Reason.
+- Builds the existing init plan up through `await-bootstrap-complete` and stops there.
+- Skips `apply-statefulset`, `apply-service`, sidecar bootstrap tasks (`config-apply` / `discover-peers` / `mark-ready`), and the Pending → Running transition.
+- Phase transitions to `BootstrapComplete` instead of `Running`.
 
-teardown-exporter         Deletes PVC + both Jobs explicitly. K8s cascade-GC from SND deletion is
-                          the abandonment-path safety net.
+The group plan replaces `await-exporter-running` with `await-bootstrap-complete` and slots `deploy-export-job` + `await-export-job` between it and `teardown-exporter`.
 
-assemble-genesis-fork     Unchanged. Reads <sourceChainId>/exported-state.json from S3.
+**Alternatives considered**:
+- *Labels-driven role inference* (existing `sei.io/role=exporter`): implicit, fragile under copy-paste.
+- *Pause/resume bracket on a real StatefulSet*: starts a long-running pod that does nothing useful before being paused; PVC RWO conflict tolerable only via Karpenter same-node scheduling, brittle.
+- *Drop the SeiNode wrapper for the exporter entirely*: forces re-implementing PVC provisioning + ownership + teardown at the SeiNodeDeployment level, breaks the "everything is a SeiNode" abstraction the controller relies on.
 
-collect-and-set-peers     Unchanged.
+### D3. Slim seictl's `export_state.go` to a generic `upload-file` task
 
-await-nodes-running       Unchanged.
-```
-
-Validator-side init plans untouched.
-
-### A3. Owner-refs to the SND (not a SeiNode)
-
-`ctrl.SetControllerReference(group, job, scheme)` for each of: PVC, bootstrap Job, export Job, headless Service.
-
-### A4. Refactor `GenerateBootstrapJob` to take `BootstrapPodInputs` as its own PR (PR A)
-
-Today: `GenerateBootstrapJob(node *SeiNode, snap *SnapshotSource, platformCfg) (*batchv1.Job, error)` — pulls fields off the SeiNode.
-
-PR A introduces:
+Drop the `seid` exec entirely. Replace the export-state task with a generic `upload-file` task with the request shape:
 
 ```go
-type BootstrapPodInputs struct {
-    Name             string  // Job/Service name
-    Namespace        string
-    ChainID          string
-    SeidImage        string  // for the seid-init container
-    BootstrapImage   string  // for the main "seid" container (snap.BootstrapImage with fallback to SeidImage)
-    SidecarImage     string  // resolved (with default)
-    SidecarPort      int32   // resolved (with default)
-    SidecarResources *corev1.ResourceRequirements
-    Mode             string  // "full" | "archive" | "validator"
-    HaltHeight       int64
-    PVCClaimName     string  // explicit, not derived from Name — the export Job needs to
-                             // mount the bootstrap-provisioned PVC by name
+type UploadFileRequest struct {
+    Path        string `json:"path"`        // path on the sidecar's mounted PVC
+    S3Bucket    string `json:"s3Bucket"`
+    S3Key       string `json:"s3Key"`
+    S3Region    string `json:"s3Region"`
+    ContentType string `json:"contentType,omitempty"`
 }
 ```
 
-`GenerateBootstrapJob(in BootstrapPodInputs) (*batchv1.Job, error)`. Existing per-SeiNode caller (`bootstrap_job.go::Execute`) adds a small `nodeToInputs(node, snap)` adapter and calls the new signature.
+Reuses the existing `seis3.UploaderFactory` and `seis3.ClassifyS3Error`. Independently useful for any future on-PVC artifact upload (not just exported-state JSON).
 
-`assertNoSigningKeyOnBootstrapPod` stays at the per-SeiNode adapter boundary — it reads `node.Spec.Validator.SigningKey.Secret.SecretName`, which doesn't exist in `BootstrapPodInputs`. The SND fork-genesis path doesn't have a SeiNode and physically cannot leak signing material, so the assertion is irrelevant on that path.
+The controller-side `deploy-export-job` task submits this `upload-file` task to the export Job's sidecar after the seid main container completes (detected via Job status, not sidecar polling).
 
-### A5. Separate `GenerateExportJob` builder, distinct from `GenerateBootstrapJob`
+### D4. Job owned by the exporter SeiNode
 
-The export Job is structurally different from bootstrap (no sidecar, different command shape). Don't fuse the builders. Sibling helper:
+`ctrl.SetControllerReference(node, job, scheme)` so the export Job has `ownerReferences[0]` pointing at the exporter SeiNode. Cascade-delete on `teardown-exporter` removes the Job (and its pods, and the headless Service mirroring `GenerateBootstrapService`).
 
-```go
-type ExportJobInputs struct {
-    Name             string  // <group>-exporter-export
-    Namespace        string
-    SeidImage        string  // = fork.SourceImage
-    SeictlImage      string  // pinned by digest, used by the init container
-    PVCClaimName     string  // = the bootstrap PVC, mounted read-write
-    ExportHeight     int64
-    ChainID          string  // = fork.SourceChainID, used in the seid export command
-    GenesisBucket    string  // from platformCfg
-    GenesisRegion    string  // from platformCfg
-    GenesisKey       string  // = "<sourceChainId>/exported-state.json"
-    Mode             string  // for nodepool selection (likely "full")
-    OwnerRef         metav1.OwnerReference  // SND
-    EmptyDirSizeLimit *resource.Quantity     // for the seictl-binary copy volume — small (~50Mi)
-}
-
-func GenerateExportJob(in ExportJobInputs) (*batchv1.Job, error)
-```
-
-Pod shape:
-
-```yaml
-spec:
-  restartPolicy: Never
-  initContainers:
-    - name: seictl-copy
-      image: <seictl-image-by-digest>
-      imagePullPolicy: IfNotPresent
-      command: ["sh", "-c", "cp /usr/local/bin/seictl /seictl/seictl && chmod +x /seictl/seictl"]
-      volumeMounts:
-        - { name: seictl-bin, mountPath: /seictl }
-  containers:
-    - name: seid
-      image: <seid-image>
-      command: ["/bin/bash", "-c"]
-      args: ["seid export --home /sei --height $EXPORT_HEIGHT > /sei/tmp/exported-state.json && /seictl/seictl upload --file /sei/tmp/exported-state.json --bucket $GENESIS_BUCKET --key $GENESIS_KEY --region $GENESIS_REGION"]
-      env:
-        - { name: EXPORT_HEIGHT, value: "<height>" }
-        - { name: GENESIS_BUCKET, value: "..." }
-        - { name: GENESIS_KEY, value: "..." }
-        - { name: GENESIS_REGION, value: "..." }
-        - (Pod Identity creds inherited via webhook-injected env)
-      volumeMounts:
-        - { name: data, mountPath: /sei }
-        - { name: seictl-bin, mountPath: /seictl }
-  volumes:
-    - name: data
-      persistentVolumeClaim: { claimName: <bootstrap PVC name> }
-    - name: seictl-bin
-      emptyDir:
-        medium: ""        # disk, not tmpfs
-        sizeLimit: 50Mi
-```
-
-`backoffLimit: 0`, no `terminationGracePeriodSeconds` tuning needed. Stderr stays on the container's stderr stream by default — only stdout is redirected to file. A seid panic remains visible in `kubectl logs`.
-
-The shared helpers between bootstrap and export Jobs (nodepool selection, tolerations, Karpenter `do-not-disrupt` annotation, common pod labels) live as standalone functions both builders call.
-
-### A6. `seictl upload` CLI subcommand (PR 1)
-
-New top-level CLI subcommand in seictl. Reuses `seis3.UploaderFactory` and `seis3.ClassifyS3Error` from the existing snapshot-upload path. Distinct exit codes for downstream classification:
-
-```
-exit 0  — success
-exit 10 — terminal S3 error (4xx, NoSuchBucket, AccessDenied, etc.) — operator must fix
-exit 11 — retryable S3 error (5xx, throttling, transient network) — re-run might succeed
-exit 1  — other (file not found, args invalid, etc.)
-```
-
-`await-export-job` on the controller side reads `pod.Status.ContainerStatuses[0].State.Terminated.ExitCode` and stamps `ForkExportComplete=False, Reason=UploadFailed (terminal|retryable)` on the SND.
-
-The seictl HTTP `upload-file` task that earlier revisions proposed is **not built**. Just the CLI.
-
-### A7. SND status surface
-
-New conditions on `SeiNodeDeployment.Status.Conditions`:
-
-- `ForkBootstrapComplete` — set after `await-bootstrap-job` succeeds. Reasons: `HaltHeightReached`, `SnapshotRestoreFailed`, `BootstrapJobFailed`.
-- `ForkExportComplete` — set after `await-export-job` succeeds. Reasons: `Uploaded`, `ExportFailed`, `UploadFailed`, `Unknown`.
-- `ForkGenesisReady` — set after `assemble-genesis-fork` lands the final `<chainId>/genesis.json`.
-
-New fields on `SeiNodeDeployment.Status.Fork`:
-
-- `ExportArtifactURL` — `s3://<genesis-bucket>/<sourceChainId>/exported-state.json` once uploaded.
-- `ExportedHeight` — the height that was exported, stamped after success.
-- `ExportJobRef` — namespaced name of the export Job, so operators can `kubectl logs job/<ref>` directly from `kubectl describe seinodedeployment`.
-
-### A8. Karpenter scheduling
-
-Both Jobs mirror existing bootstrap Job's annotations:
-- `karpenter.sh/do-not-disrupt: true` on the pod template
-- Same nodeSelector/tolerations/topologySpreadConstraints copied from the SND template (both Jobs run in the same AZ to share the same RWO PVC)
-
-Both Jobs use `restartPolicy: Never` and `backoffLimit: 0` (one-shot, fail-terminal).
-
-### A9. Single-AZ PVC across two Jobs
-
-The PVC is RWO and bound to a single AZ once the bootstrap Job's pod attaches it. The export Job's pod must land in the same AZ. Karpenter respects `topology.kubernetes.io/zone` on the bound PV; the second Job's pod will schedule into the same AZ or fail to schedule (which surfaces cleanly as a `Pending` pod with a `Multi-Attach`/`affinity` event). No silent corruption.
-
-Documenting this as expected operational behavior. Chaining the two Jobs into one isn't viable: the bootstrap Job needs the sidecar running concurrently with seid (HTTP healthz gate before seid starts), and that's a sidecar-container pattern, not an init-container pattern. Init containers run sequentially.
-
-### A10. Init container `seictl` binary distribution (PR 2)
-
-The export Job's init container uses the seictl image (pinned by digest) with `imagePullPolicy: IfNotPresent` to copy the static binary into a shared `emptyDir`. emptyDir sized at `50Mi` (binary is ~25 MB), `medium: ""` (disk, not tmpfs — multi-GB exported-state shouldn't share tmpfs). The seictl image's pin digest comes from `platform.Config` (or hardcoded near the existing `DefaultSidecarImage` constant — same image, different consumer).
-
-## Plan-shape diff
-
-| Before (current main) | After (Rev 3) |
-|---|---|
-| `create-exporter` (creates SeiNode) | `ensure-exporter-pvc` |
-| (SeiNode init plan: PVC + bootstrap Job + StatefulSet) | `apply-bootstrap-job` |
-| `await-exporter-running` (polls SeiNode phase) | `await-bootstrap-job` (polls Job) |
-| `submit-export-state` (broken: sidecar exec seid) | `apply-export-job` |
-| — | `await-export-job` (same shape as await-bootstrap-job) |
-| `teardown-exporter` (deletes SeiNode) | `teardown-exporter` (deletes PVC + Jobs + Service) |
-| `assemble-genesis-fork` | unchanged |
+PVC ownership stays as today (owned by the SeiNode via `ensure-data-pvc`).
 
 ## Implementation outline
 
-### PR A — `BootstrapPodInputs` refactor (standalone, ~150 LoC)
+### Plan reshape
 
-- `internal/task/bootstrap_resources.go`:
-  - Define `BootstrapPodInputs` struct (~30 LoC).
-  - Modify all 11 helper functions to take `BootstrapPodInputs` instead of `*SeiNode` (~50 LoC of mechanical s/`node.X`/`in.X`/).
-- `internal/task/bootstrap_job.go`:
-  - Add `nodeToBootstrapInputs(node, snap, platformCfg)` adapter (~25 LoC).
-  - `Execute` calls the adapter, then `GenerateBootstrapJob(inputs)`.
-  - `assertNoSigningKeyOnBootstrapPod(node, podSpec)` runs after the builder returns — unchanged signature.
-- `internal/task/bootstrap_task_test.go`: tests keep `*SeiNode` fixtures; the call site routes through the adapter. Should require ~10 LoC of plumbing changes.
+Group plan tasks (`internal/planner/group.go::buildForkPlan` or wherever the fork sub-plan is built):
 
-No fork-genesis changes. No behavior change. Standalone.
+| Before | After |
+|---|---|
+| `create-exporter` | `create-exporter` (sets `Spec.OneShot=true` on the new SeiNode) |
+| `await-exporter-running` | **`await-bootstrap-complete`** (new — polls exporter SeiNode for `BootstrapComplete` phase) |
+| `submit-export-state` | **`deploy-export-job`** (new — applies the export Job, owner-ref to exporter SeiNode) |
+| — | **`await-export-job`** (new — polls Job `.status.succeeded == 1`, then submits `upload-file` to its sidecar, polls for completion) |
+| `teardown-exporter` | `teardown-exporter` (unchanged contract — deletes SeiNode, cascades to Job + Service + PVC) |
+| `assemble-genesis-fork` | `assemble-genesis-fork` (unchanged) |
 
-### PR 1 — `seictl upload` CLI subcommand (seictl, ~80 LoC)
+Validator-side plans unchanged.
 
-- New file `seictl/upload.go` (or wherever CLI subcommands live):
-  - `upload --file PATH --bucket BUCKET --key KEY --region REGION [--content-type TYPE]`
-  - Uses `seis3.UploaderFactory` + `seis3.ClassifyS3Error`.
-  - Distinct exit codes per A6.
-- New CLI test exercising each exit-code path.
-- The HTTP `upload-file` sidecar task is **not** added.
+### Files added
 
-### PR 2 — Fork-genesis SND-driven plan (controller, ~250 LoC net new + ~350 LoC deleted)
+- `internal/task/fork_export_resources.go` — new
+  - `GenerateExportJob(node, params, platformCfg) (*batchv1.Job, error)` — builds the seid+sidecar Job pod modeled on `GenerateBootstrapJob`.
+  - `GenerateExportService(node) *corev1.Service` — headless service mirroring `GenerateBootstrapService` so the controller has stable DNS to reach the export Job's sidecar.
+  - `ExportJobName(node) string` — returns `<node>-export`.
+- `seictl/sidecar/tasks/upload_file.go` — new (replaces `export_state.go`)
+  - `UploadFileRequest`, `FileUploader`, `Handler()`. Uses `seis3.UploaderFactory`, `seis3.ClassifyS3Error`.
 
-Files added:
-- `internal/task/fork_exporter.go` — replaces `fork_export.go`. Task types and executions for `ensure-exporter-pvc`, `apply-bootstrap-job` (SND), `await-bootstrap-job` (SND, parameterized by JobName), `apply-export-job`, `await-export-job` (SND), `teardown-exporter` (SND). Helpers: `ExporterPVCName(group)`, `ExporterBootstrapJobName(group)`, `ExporterExportJobName(group)`, `ExporterServiceName(group)`.
-- `GenerateExportJob(in ExportJobInputs)` lives in this file (sibling to `GenerateBootstrapJob`).
+### Files modified
 
-Files modified:
-- `internal/planner/group.go` (or wherever the fork sub-plan is generated): emit the new task list above.
-- `internal/task/registry.go`: register new task types; remove `TaskTypeCreateExporter`, `TaskTypeAwaitExporterRunning`, `TaskTypeSubmitExportState`.
-- `go.mod`: bump seictl to PR 1's release.
-- `api/v1alpha1/seinodedeployment_types.go` (or wherever `Status.Fork` lives): add `ExportArtifactURL`, `ExportedHeight`, `ExportJobRef` fields.
+- `api/v1alpha1/seinode_types.go`:
+  - Add `OneShot bool` to `SeiNodeSpec`.
+  - Add `PhaseBootstrapComplete` constant alongside existing phases.
+- `internal/controller/node/` (the SeiNode planner):
+  - When `node.Spec.OneShot` is `true`, the init plan stops after `await-bootstrap-complete`. Phase transitions to `BootstrapComplete`. No StatefulSet, no service, no sidecar bootstrap.
+- `internal/task/fork_export.go`:
+  - `create-exporter`: set `Spec.OneShot=true` on the SeiNode it creates.
+  - Replace `submit-export-state` task type + execution with `deploy-export-job` and `await-export-job` types + executions.
+- `internal/task/registry.go` (or equivalent dispatcher table): swap registrations.
+- `seictl/sidecar/server.go` (or equivalent task registry): swap `TaskTypeExportState` for `TaskTypeUploadFile`.
+- `seictl/sidecar/client/tasks.go`: drop `TaskTypeExportState`, add `TaskTypeUploadFile`.
 
-Files deleted:
-- `internal/task/fork_export.go` (entire file — the four old task types).
-- `seictl/sidecar/tasks/export_state.go` references that become dangling — actual deletion lands in PR 3.
+### Dead code to delete outright
 
-### PR 3 — seictl: delete `export-state` HTTP task
+`internal/task/fork_export.go`:
+- `TaskTypeSubmitExportState` constant.
+- `SubmitExportStateParams` struct.
+- `submitExportStateExecution` struct + all methods (`Execute`, `Status`, `sidecarTaskID`, `deserializeSubmitExportState`).
+- `exportStateTimeout` const — replaced by Job `activeDeadlineSeconds` configured at the same value.
 
-- Delete `seictl/sidecar/tasks/export_state.go` + its test.
-- Remove `engine.TaskExportState` and `client.TaskTypeExportState`.
-- Remove the registration in `serve.go`.
+`seictl/sidecar/tasks/export_state.go`: entire file. Replaced by `upload_file.go`.
 
-Wait until PR 2 is in a deployed controller image before merging — once PR 3 ships in a seictl release, any controller still running old `submit-export-state` against new sidecar images breaks.
+`seictl/sidecar/tasks/`: registration of `TaskTypeExportState`. Replaced by `TaskTypeUploadFile`.
+
+`seictl/sidecar/client/tasks.go`: `TaskTypeExportState` constant + typed wrapper if any.
 
 ## Test plan
 
-Unit tests (PR A):
-- `nodeToBootstrapInputs` produces the expected struct from a representative SeiNode (table-driven over Mode).
-- Existing `bootstrap_task_test.go` cases still pass after the adapter routing.
+Unit tests:
+- `GenerateExportJob` produces correct pod spec (seid+sidecar containers, owner ref to SeiNode, expected env, no signing-key volume).
+- SeiNode planner with `Spec.OneShot=true` builds an init plan that stops at `await-bootstrap-complete`.
+- `deploy-export-job` task is idempotent on `IsAlreadyExists`.
+- `await-export-job` correctly transitions through Running → Complete on Job `.status.succeeded == 1` and submitted upload-file task completion.
+- Sidecar `upload-file` happy path + ClassifyS3Error coverage on PutObject failure.
 
-Unit tests (PR 1):
-- `seictl upload` happy path.
-- Exit-code 10 on `AccessDenied`.
-- Exit-code 11 on simulated 5xx.
-- Exit-code 1 on file-not-found.
+Integration test (mirrors the existing bootstrap-Job test pattern):
+- Create a SeiNodeDeployment with `Genesis.Fork`. Watch the exporter SeiNode reach `BootstrapComplete`, the export Job complete, the upload-file task complete, the Job + SeiNode get torn down by `teardown-exporter`, the validator plans flip Complete on `configure-genesis`.
 
-Unit tests (PR 2):
-- `GenerateExportJob(ExportJobInputs{...})` produces correct pod spec — table-driven.
-- `apply-bootstrap-job` and `apply-export-job` Execute is idempotent.
-- `await-bootstrap-job` and `await-export-job` Status table cases: not-yet-succeeded → Running; succeeded → Complete; failed (with various exit codes) → Failed with stamped Reason.
-- Planner: `buildForkPlan` for an SND with `Genesis.Fork` set emits the new task list; without it, no fork-export tasks appear.
-
-Integration smoke (post-PR-2 merge, on harbor):
-- Reconstitute the `eng-bdchatham` cell from git history. Apply. Watch the new flow run from `ensure-exporter-pvc` through `assemble-genesis-fork`. Verify `kubectl describe seinodedeployment` shows `ForkExportComplete=True` and `Status.Fork.ExportArtifactURL` populated.
-
-## Execution plan
-
-| PR | Repo | Scope | Reviewers |
-|---|---|---|---|
-| **A** | sei-k8s-controller | `BootstrapPodInputs` refactor in isolation, no fork-genesis changes | k8s-spec |
-| **1** | seictl | `seictl upload` CLI subcommand additively | k8s-spec |
-| **2** | sei-k8s-controller | New SND-driven fork-genesis plan tasks. Uses `BootstrapPodInputs` directly. Adds `GenerateExportJob`. Bumps seictl module. Adds `Status.Fork.*`. Deletes `fork_export.go` + four old task types. | k8s-spec + platform-eng |
-| **3** | seictl | Delete `export-state` HTTP task | k8s-spec |
-
-Each PR gets coral cross-review before user-tagging. PR A and PR 1 can land in parallel; PR 2 depends on both.
+End-to-end smoke (post-merge, on harbor):
+- Reconstitute `eng-bdchatham` cell from git history (the snapshot-of-the-fork-test SND we tore down earlier).
+- Apply, watch the new flow run from create-exporter through assemble-genesis-fork.
+- Expected runtime: ~5 min snapshot-restore → ~5 min `seid export` (pacific-1 v6.4.3 at height 205208000 produces ~5-15 GB JSON depending on chain size) → ~1-2 min upload → ~1-2 min assemble. Validators converge shortly after.
 
 ## Open questions
 
-1. **Job `activeDeadlineSeconds`**: 6h (matches the previous `exportStateTimeout`)? Per-Job differentiation (bootstrap shorter, export longer)?
-2. **`seictl upload` retry surface**: PR 1 ships single-attempt. If observed transient failures warrant it, expose an in-CLI `--retry-count` flag in a follow-up.
-3. **`Status.Fork.ExportJobRef` cleanup timing**: stays referenced on the SND status after `teardown-exporter` deletes the Job — operators can still see "what Job ran the export," even though `kubectl logs` against it now 404s. Acceptable historical breadcrumb, or zero out on teardown?
+1. **Export Job timeout surface**: today the `exportStateTimeout = 6 * time.Hour` lives in the controller's polling loop. When we move to a real Job, this becomes either `Job.spec.activeDeadlineSeconds` (the kubelet enforces it) or a controller-side polling timeout (the controller fails the plan task without killing the Job). Recommend: both — `activeDeadlineSeconds` for the kubelet to clean up runaway Jobs, plus a sidecar-side timeout on the upload-file task to bail if S3 upload stalls. The bootstrap pattern doesn't have this concern because `seid start --halt-height` is bounded by reaching the height.
+
+2. **`Spec.OneShot` discoverability**: should this field be visible to operators applying SeiNodeDeployments, or hidden from the user-facing CRD surface (i.e., always set by the controller, never set by humans)? Recommend: visible but with a docstring discouraging manual use. Keeps the wire format clean and lets future use cases (e.g., one-shot data-replay nodes) reuse it.
+
+3. **TTL on completed export Jobs**: `BootstrapJob` uses `TTLSecondsAfterFinished: 3600` (1h). For export Jobs, especially on failure, that's tight for human investigation. Recommend: 24h on success, 7d on failure (or no TTL on failure — leave to operator cleanup).
 
 ## References
 
-- Rev 1 (now superseded): merged at PR sei-k8s-controller#169.
-- Rev 2 (force-pushed to sei-k8s-controller#170 by this revision): the SND-driven sub-plan with sidecar-in-export-Job and a fused await-and-upload task.
-- Bootstrap-Job builder: `internal/task/bootstrap_resources.go:45-80` (`GenerateBootstrapJob`).
-- Bootstrap-Service builder: `internal/task/bootstrap_resources.go:91-109` (`GenerateBootstrapService`).
-- Existing fork-export tasks (to be deleted): `internal/task/fork_export.go`.
-- Coral round on Rev 3: kubernetes-specialist + platform-engineer aligned. Refinements folded into A4–A10 above.
+- Bootstrap-Job builder: `internal/task/bootstrap_resources.go:45-80` (`GenerateBootstrapJob`)
+- Bootstrap-Service builder: `internal/task/bootstrap_resources.go:91-109` (`GenerateBootstrapService`)
+- Existing fork-export tasks: `internal/task/fork_export.go`
+- Broken sidecar exec: `seictl/sidecar/tasks/export_state.go:85`
+- Coral review (k8s-specialist + platform-eng): see session transcript dated 2026-05-04 (recommended Option A in this design).
