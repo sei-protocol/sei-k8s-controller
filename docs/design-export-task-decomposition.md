@@ -89,6 +89,42 @@ Default `partSize` (8 MiB) is **not** raised. Larger parts (32–64 MiB) reduce 
 
 No additional implementation needed for streaming or multipart — the library handles both.
 
+## Deliverables
+
+Each item is a discrete unit of work with a clear consumer. Implementation order is roughly top-to-bottom — earlier deliverables unblock later ones.
+
+### 1. Headless Service for the exporter pod (`apply-exporter-service` task)
+
+**What.** A new controller-side task that creates a headless `Service` named `{group}-exporter` matching the export pod's `Subdomain`. Mirrors `bootstrap_resources.go::GenerateBootstrapService`. **Why.** The bash today talks to the sidecar via `localhost:7777`; the new Go path talks via cluster DNS (`{group}-exporter-0.{group}-exporter.{ns}.svc...`), which requires a Service backing the `Subdomain`. **Nuance.** `teardown-exporter` already deletes Services by name, so cleanup is consistent. This is the load-bearing prerequisite — without it, every `submit-export-upload` would fail name resolution.
+
+### 2. Seid container command rewrite
+
+**What.** Replace the 60-line bash blob in `internal/task/export_resources.go::exportTriggerScript` with a four-line shell command: pre-clean stale files, run `seid export --streaming-file X.part`, atomic-rename to `X.json` on success, then `sleep infinity`. **Why.** The atomic rename is the controller's signal that export finished cleanly — `--streaming-file` writes incrementally, so plain "file exists" is meaningless during export. `sleep infinity` keeps the seid container (and therefore the native sidecar) alive after a successful export so the controller can drive the upload step. **Nuance.** `&&` short-circuits make export-failure self-terminating: container exits non-zero, native sidecar dies, Job is Failed, controller's existing Job-watch path triggers plan failure. No new failure-handling code needed. `set -euo pipefail` preserves shell discipline so `rm`/`mv` errors don't get swallowed.
+
+### 3. `submit-export-upload` task
+
+**What.** A new controller-side task that calls `SidecarClient.SubmitTask("upload-file", UploadFileTask{File, Bucket, Key, Region, WaitTimeoutSec})` against the exporter pod's sidecar. **Why.** Replaces the bash POST to `/v0/tasks` with a typed Go call; failures become structured plan conditions instead of `kubectl logs` parsing. **Nuance.** Uses `sidecar.NewSidecarClientFromPodDNS` directly inside the execution (same pattern as `deployment_await.go::sidecarClientForNode`) rather than `cfg.BuildSidecarClient`, because the latter is wired for SeiNode-local clients in `cmd/main.go` and can't reach the exporter pod. Deterministic task UUID derived from `(planID, "submit-export-upload", planIndex)` makes the call idempotent across reconciles — submitting twice returns the existing in-flight task ID, not a duplicate upload.
+
+### 4. `await-export-upload` task
+
+**What.** A new controller-side task that polls `SidecarClient.GetTask(id)` until terminal. **Why.** Replaces the bash poll loop with the same Go primitive every other sidecar-backed task uses; surfaces the sidecar's classified `engine.TaskError` (with `Retryable` and `Hint` fields) directly as plan-condition reasons rather than the lossy `grep -oE '"error"...'` path. **Nuance.** Mirrors `awaitNodesAtHeightExecution`'s shape — typed `Status()` polls and maps `sidecar.Completed → ExecutionComplete`, `sidecar.Failed → ExecutionFailed`. The task ID it polls is read from the upstream `submit-export-upload` task's stamped result.
+
+### 5. `upload-file` task gains `WaitTimeoutSec` (seictl change)
+
+**What.** Add a `WaitTimeoutSec` field to `UploadFileRequest` / `UploadFileTask`. When non-zero, the sidecar polls `os.Stat(req.File)` every 5s up to that bound before opening the file for upload. **Why.** With the atomic-rename invariant, "file exists" ≡ "export complete," so the wait + upload semantics are causally coupled — one task does both rather than splitting into a separate `await-file` primitive. This avoids doubling the controller's RPC count for one ceremony and keeps the sidecar's surface narrower. **Nuance.** Zero/missing preserves today's behavior (open immediately, error if missing), so existing snapshot-upload-style callers don't change semantics. Planner passes `exportStateTimeout` (6h) explicitly so the bound matches the surrounding plan's timeout discipline.
+
+### 6. transfermanager streaming + concurrency knob
+
+**What.** The existing `aws-sdk-go-v2/feature/s3/transfermanager` already handles chunked reads and parallel multipart uploads — no library change. Expose `Concurrency` as a new field on `UploadFileRequest` so an operator can tune the parallelism. **Why.** Multi-GB exports cannot sit fully in memory, and the upload's wall-clock can dominate the ceremony's runtime. **Nuance.** `Body` is `io.Reader`; transfermanager reads `partSize`-bounded chunks (default 8 MiB) per concurrent upload — memory is bounded by `partSize × concurrency`, independent of total file size. Library default concurrency is 5; pacific-1's first prod run is the right place to tune (we have no in-tree S3 same-region throughput measurement to ground a specific number ahead of time). Default `partSize` stays at 8 MiB — larger parts (32–64 MiB) reduce request count but multiply the cost of a single part-failure retry.
+
+### 7. Test surface replacement
+
+**What.** Delete `TestExportTriggerScript_PinsContract` and `TestExportTriggerScript_PinsEngineStatusStrings` (those pinned bash substrings — the bash is gone). Add Go-level tests on the two new task executions using a mock `SidecarClient` (matches `bootstrap_resources_test.go` style), plus a focused `TestExportTriggerScript_PinsCompletionContract` asserting the simplified seid Args contain the `.part`/`mv`/`sleep infinity` rename pattern — those carry the atomic-completion invariant the controller now relies on. **Why.** The load-bearing invariants moved from bash text into Go behavior; tests follow. **Nuance.** Mock-`SidecarClient` pattern is already in tree (`executor_test.go`) — no new test infrastructure.
+
+### 8. (Kept, possibly drop) `await-export-job` task
+
+**What.** The existing "Job is Complete" task stays in the plan. **Why.** Catches "seid crashed mid-export" earlier and more directly than waiting for `submit-export-upload`'s `WaitTimeoutSec` to expire. **Nuance.** Today's plan executor is sequential; the failure mode is also caught (less directly) by `submit-export-upload` returning a wait-timeout. If we want to drop this for a leaner plan, we get a 6h-worst-case detection latency for that specific failure mode. Open question 5 for resolution.
+
 ## What gets deleted
 
 - `internal/task/export_resources.go::exportTriggerScript` const (~60 lines of bash). The seid container Args becomes the short pre-clean + `seid export && mv && sleep infinity` script described above; `set -euo pipefail` is the only inherited shell discipline.
