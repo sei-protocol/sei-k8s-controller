@@ -273,6 +273,10 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 			},
 		},
 		Volumes: volumes,
+		SecurityContext: &corev1.PodSecurityContext{
+			// Avoids recursive setxattr walk on the data PVC at pod start.
+			SELinuxChangePolicy: ptr.To(corev1.SELinuxChangePolicyMountOption),
+		},
 	}
 
 	spec.ShareProcessNamespace = ptr.To(true)
