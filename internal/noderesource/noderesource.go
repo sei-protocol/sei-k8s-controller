@@ -274,11 +274,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 		},
 		Volumes: volumes,
 		SecurityContext: &corev1.PodSecurityContext{
-			// Apply SELinux labels via mount option (constant time) instead of
-			// the default recursive xattr walk, which takes ~20 minutes on the
-			// 40 TiB archive PVC and stalls every pod recreation. Requires K8s
-			// 1.33+ (SELinuxMount GA) and a CSI driver that supports it; EBS
-			// CSI v1.30+ does.
+			// Avoids recursive setxattr walk on the data PVC at pod start.
 			SELinuxChangePolicy: ptr.To(corev1.SELinuxChangePolicyMountOption),
 		},
 	}
