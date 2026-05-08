@@ -50,7 +50,6 @@ func (p *genesisGroupPlanner) BuildPlan(
 	if err != nil {
 		return nil, err
 	}
-	assembleTask.MaxRetries = groupAssemblyMaxRetries
 	planIndex++
 
 	collectPeersTask, err := buildPlannedTask(planID, task.TaskTypeCollectAndSetPeers, planIndex,
