@@ -5,6 +5,7 @@ import (
 
 	. "github.com/onsi/gomega"
 	seiconfig "github.com/sei-protocol/sei-config"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -143,10 +144,6 @@ func TestGenerateNodeStatefulSet_BasicFields(t *testing.T) {
 	g.Expect(sts.Spec.VolumeClaimTemplates).To(BeEmpty())
 }
 
-// OnDelete locks in the contract that pod replacement is the SeiNode
-// controller's responsibility (via replace-pod), not the StatefulSet
-// controller's. Without this, RollingUpdate's "don't disturb unready pods"
-// guardrail would deadlock chain-upgrade-halt rollouts.
 func TestGenerateNodeStatefulSet_UsesOnDeleteUpdateStrategy(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")

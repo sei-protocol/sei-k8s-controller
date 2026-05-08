@@ -142,10 +142,7 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) *appsv1.St
 			Selector: &metav1.LabelSelector{
 				MatchLabels: SelectorLabels(node),
 			},
-			// OnDelete: pod lifecycle is the SeiNode controller's responsibility
-			// (via replace-pod). RollingUpdate's "don't disturb unready pods"
-			// guardrail would deadlock rollouts when seid is halted at a chain
-			// upgrade height.
+			// Pod lifecycle is the SeiNode controller's responsibility (replace-pod).
 			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
 				Type: appsv1.OnDeleteStatefulSetStrategyType,
 			},

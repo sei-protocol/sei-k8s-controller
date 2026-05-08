@@ -41,10 +41,9 @@ func deserializeReplacePod(id string, params json.RawMessage, cfg ExecutionConfi
 	}, nil
 }
 
-// Execute deletes pods at the StatefulSet's old revision so the rollout
-// proceeds even when the existing pod is unready (e.g. seid halted at a
-// chain upgrade height — K8s native RollingUpdate won't delete unready
-// pods, which deadlocks the rollout).
+// Execute deletes pods at the StatefulSet's old revision. Pairs with
+// the StatefulSet's OnDelete update strategy: pod lifecycle is the
+// SeiNode controller's responsibility, not the StatefulSet controller's.
 func (e *replacePodExecution) Execute(ctx context.Context) error {
 	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
