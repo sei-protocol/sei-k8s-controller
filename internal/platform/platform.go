@@ -5,7 +5,7 @@ import "fmt"
 const (
 	// DefaultSidecarImage is the seictl sidecar image used when not overridden
 	// by the SeiNode spec. Shared between the node controller and bootstrap task.
-	DefaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:d3ecb1a0d0f76366e468a7f771932690562238a3c45475b3353af422327eda65"
+	DefaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:a2af4e1b8ed4c12661a3c98cce050bae3f292cc7560abc2ba98fd7dfc80d9be5"
 
 	// DataDir is the mount path for the sei data volume inside node pods.
 	DataDir = "/sei"
