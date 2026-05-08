@@ -438,8 +438,8 @@ func marshalParams(v any) (*apiextensionsv1.JSON, error) {
 	return &apiextensionsv1.JSON{Raw: raw}, nil
 }
 
-// buildPlannedTask constructs a PlannedTask with deterministic ID and
-// serialized params.
+// buildPlannedTask constructs a PlannedTask with deterministic ID,
+// serialized params, and the task type's intrinsic retry budget.
 func buildPlannedTask(planID, taskType string, planIndex int, params any) (seiv1alpha1.PlannedTask, error) {
 	id := task.DeterministicTaskID(planID, taskType, planIndex)
 	p, err := marshalParams(params)
@@ -447,11 +447,28 @@ func buildPlannedTask(planID, taskType string, planIndex int, params any) (seiv1
 		return seiv1alpha1.PlannedTask{}, fmt.Errorf("task %s: %w", taskType, err)
 	}
 	return seiv1alpha1.PlannedTask{
-		Type:   taskType,
-		ID:     id,
-		Status: seiv1alpha1.TaskPending,
-		Params: p,
+		Type:       taskType,
+		ID:         id,
+		Status:     seiv1alpha1.TaskPending,
+		Params:     p,
+		MaxRetries: taskMaxRetries(taskType),
 	}, nil
+}
+
+// taskMaxRetries is the executor's retry budget per task type. Default 0
+// makes the first ExecutionFailed terminal. Wall-clock per N retries:
+// 5s + 10s + 20s + 30s*(N-3) for N>=3.
+func taskMaxRetries(taskType string) int {
+	switch taskType {
+	case TaskConfigureGenesis:
+		return genesisConfigureMaxRetries
+	case TaskAssembleGenesis:
+		return groupAssemblyMaxRetries
+	case TaskDiscoverPeers:
+		return discoverPeersMaxRetries
+	default:
+		return 0
+	}
 }
 
 // buildBasePlan builds a TaskPlan by starting with infrastructure tasks,
