@@ -16,8 +16,6 @@ import (
 
 const TaskTypeReplacePod = "replace-pod"
 
-// ReplacePodParams identifies the node whose StatefulSet pods should be
-// re-created at the new revision. Fields are serialized for plan observability.
 type ReplacePodParams struct {
 	NodeName  string `json:"nodeName"`
 	Namespace string `json:"namespace"`
@@ -43,18 +41,10 @@ func deserializeReplacePod(id string, params json.RawMessage, cfg ExecutionConfi
 	}, nil
 }
 
-// Execute deletes pods owned by the StatefulSet that are still at the old
-// revision after a NodeUpdate plan applied a new StatefulSet template.
-//
-// K8s native StatefulSet RollingUpdate refuses to delete pods that are not
-// Ready, which deadlocks the rollout when seid is intentionally unready —
-// e.g., halted at a chain upgrade height awaiting a binary swap. By
-// proactively deleting the old pod, we let the StatefulSet recreate it at
-// the new revision (StatefulSet's create path doesn't gate on readiness).
-//
-// Idempotent: pods already at the update revision are skipped, terminating
-// pods are skipped, and a missing StatefulSet is treated as a transient
-// retry (apply-statefulset is the preceding task and should have created it).
+// Execute deletes pods at the StatefulSet's old revision so the rollout
+// proceeds even when the existing pod is unready (e.g. seid halted at a
+// chain upgrade height — K8s native RollingUpdate won't delete unready
+// pods, which deadlocks the rollout).
 func (e *replacePodExecution) Execute(ctx context.Context) error {
 	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
@@ -70,13 +60,12 @@ func (e *replacePodExecution) Execute(ctx context.Context) error {
 		return fmt.Errorf("getting statefulset: %w", err)
 	}
 
-	// Wait for the StatefulSet controller to publish a non-empty UpdateRevision.
-	// Without it we can't tell which pods are stale.
+	if sts.Status.ObservedGeneration < sts.Generation {
+		return nil
+	}
 	if sts.Status.UpdateRevision == "" {
 		return nil
 	}
-
-	// Already converged — current matches update revision. Nothing to delete.
 	if sts.Status.CurrentRevision == sts.Status.UpdateRevision {
 		e.complete()
 		return nil
@@ -84,6 +73,14 @@ func (e *replacePodExecution) Execute(ctx context.Context) error {
 
 	if sts.Spec.Selector == nil || len(sts.Spec.Selector.MatchLabels) == 0 {
 		return Terminal(fmt.Errorf("statefulset %q has no selector; cannot identify owned pods", node.Name))
+	}
+
+	// Multi-replica needs ordinal-aware deletion (reverse-ordinal). Fail
+	// loud rather than silently violate StatefulSet rolling-update semantics.
+	if sts.Spec.Replicas != nil && *sts.Spec.Replicas > 1 {
+		return Terminal(fmt.Errorf(
+			"replace-pod does not support multi-replica StatefulSets (got replicas=%d); "+
+				"add ordinal-aware deletion before scaling up", *sts.Spec.Replicas))
 	}
 
 	pods := &corev1.PodList{}
@@ -97,7 +94,14 @@ func (e *replacePodExecution) Execute(ctx context.Context) error {
 	updateRev := sts.Status.UpdateRevision
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		if pod.Labels[appsv1.ControllerRevisionHashLabelKey] == updateRev {
+		if !ownedByStatefulSet(pod, sts) {
+			continue
+		}
+		hash, hasHash := pod.Labels[appsv1.ControllerRevisionHashLabelKey]
+		if !hasHash {
+			continue
+		}
+		if hash == updateRev {
 			continue
 		}
 		if pod.DeletionTimestamp != nil {
@@ -110,6 +114,15 @@ func (e *replacePodExecution) Execute(ctx context.Context) error {
 
 	e.complete()
 	return nil
+}
+
+func ownedByStatefulSet(pod *corev1.Pod, sts *appsv1.StatefulSet) bool {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "StatefulSet" && ref.UID == sts.UID {
+			return true
+		}
+	}
+	return false
 }
 
 // Status returns the cached execution status.

@@ -37,18 +37,25 @@ func replacePodNode() *seiv1alpha1.SeiNode {
 	}
 }
 
+const stsUID = types.UID("sts-uid-1")
+
 func stsForReplace(currentRev, updateRev string) *appsv1.StatefulSet {
+	one := int32(1)
 	return &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: replacePodNodeName, Namespace: replacePodNs},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: replacePodNodeName, Namespace: replacePodNs, UID: stsUID, Generation: 1,
+		},
 		Spec: appsv1.StatefulSetSpec{
+			Replicas: &one,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{
 				"app":            "seinode",
 				"sei.io/seinode": replacePodNodeName,
 			}},
 		},
 		Status: appsv1.StatefulSetStatus{
-			CurrentRevision: currentRev,
-			UpdateRevision:  updateRev,
+			ObservedGeneration: 1,
+			CurrentRevision:    currentRev,
+			UpdateRevision:     updateRev,
 		},
 	}
 }
@@ -59,10 +66,17 @@ func podForReplace(name, revisionHash string, terminating bool) *corev1.Pod {
 			Name:      name,
 			Namespace: replacePodNs,
 			Labels: map[string]string{
-				"app":                                    "seinode",
-				"sei.io/seinode":                         replacePodNodeName,
+				"app":                                 "seinode",
+				"sei.io/seinode":                      replacePodNodeName,
 				appsv1.ControllerRevisionHashLabelKey: revisionHash,
 			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "StatefulSet",
+				Name:       replacePodNodeName,
+				UID:        stsUID,
+				Controller: ptrBool(true),
+			}},
 		},
 	}
 	if terminating {
@@ -74,6 +88,8 @@ func podForReplace(name, revisionHash string, terminating bool) *corev1.Pod {
 	}
 	return pod
 }
+
+func ptrBool(b bool) *bool { return &b }
 
 func replacePodCfg(t *testing.T, node *seiv1alpha1.SeiNode, objs ...client.Object) ExecutionConfig {
 	t.Helper()
@@ -182,4 +198,85 @@ func TestReplacePod_StatefulSetMissing_TransientWait(t *testing.T) {
 
 	g.Expect(exec.Execute(context.Background())).To(Succeed())
 	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionRunning))
+}
+
+// STS controller hasn't observed the latest spec yet — its reported revisions
+// are stale. Task must wait, not delete.
+func TestReplacePod_StatefulSetGenerationStale_TransientWait(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("old-rev", "new-rev")
+	sts.Generation = 2
+	sts.Status.ObservedGeneration = 1 // stale
+	stalePod := podForReplace(replacePodNodeName+"-0", "old-rev", false)
+
+	cfg := replacePodCfg(t, node, sts, stalePod)
+	exec := newReplacePodExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionRunning))
+
+	// Pod must NOT have been deleted while STS revisions are stale.
+	got := &corev1.Pod{}
+	g.Expect(cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: stalePod.Name, Namespace: stalePod.Namespace}, got)).To(Succeed())
+}
+
+// Pod has no controller-revision-hash label — task skips it (don't delete
+// pods we don't recognize).
+func TestReplacePod_PodMissingRevisionHashLabel_Skipped(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("old-rev", "new-rev")
+	pod := podForReplace(replacePodNodeName+"-0", "old-rev", false)
+	delete(pod.Labels, appsv1.ControllerRevisionHashLabelKey)
+
+	cfg := replacePodCfg(t, node, sts, pod)
+	exec := newReplacePodExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	got := &corev1.Pod{}
+	g.Expect(cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, got)).To(Succeed())
+}
+
+// Pod matches the STS selector by labels but isn't actually owned by the STS
+// (e.g. a manually-applied pod with the same labels). Task skips it.
+func TestReplacePod_PodNotOwnedByStatefulSet_Skipped(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("old-rev", "new-rev")
+	pod := podForReplace(replacePodNodeName+"-0", "old-rev", false)
+	pod.OwnerReferences = nil // not owned by STS
+
+	cfg := replacePodCfg(t, node, sts, pod)
+	exec := newReplacePodExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	got := &corev1.Pod{}
+	g.Expect(cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, got)).To(Succeed())
+}
+
+// Multi-replica StatefulSets need ordinal-aware deletion; the task fails
+// loud rather than silently violating reverse-ordinal rolling-update semantics.
+func TestReplacePod_MultiReplica_TerminalError(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("old-rev", "new-rev")
+	three := int32(3)
+	sts.Spec.Replicas = &three
+
+	cfg := replacePodCfg(t, node, sts)
+	exec := newReplacePodExec(t, cfg)
+
+	err := exec.Execute(context.Background())
+	g.Expect(err).To(HaveOccurred())
+	var termErr *TerminalError
+	g.Expect(err).To(BeAssignableToTypeOf(termErr))
+	g.Expect(err.Error()).To(ContainSubstring("multi-replica"))
 }
