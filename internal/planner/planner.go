@@ -467,6 +467,8 @@ func taskMaxRetries(taskType string) int {
 		return groupAssemblyMaxRetries
 	case TaskDiscoverPeers:
 		return discoverPeersMaxRetries
+	case task.TaskTypeReplacePod:
+		return 3
 	default:
 		return 0
 	}
