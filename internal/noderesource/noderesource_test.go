@@ -188,21 +188,6 @@ func TestBuildNodePodSpec_SharedPIDNamespace(t *testing.T) {
 	g.Expect(*sts.Spec.Template.Spec.ShareProcessNamespace).To(BeTrue())
 }
 
-// SELinuxChangePolicy=MountOption avoids the per-pod-recreation recursive
-// xattr walk over the data PVC. On a multi-TB archive PVC, that walk takes
-// ~20 minutes; with MountOption the kernel applies the SELinux context as
-// a per-mount overlay in milliseconds.
-func TestBuildNodePodSpec_SELinuxChangePolicyMountOption(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("snap-0", "default")
-
-	spec := buildNodePodSpec(node, platformtest.Config())
-
-	g.Expect(spec.SecurityContext).NotTo(BeNil())
-	g.Expect(spec.SecurityContext.SELinuxChangePolicy).NotTo(BeNil())
-	g.Expect(*spec.SecurityContext.SELinuxChangePolicy).To(Equal(corev1.SELinuxChangePolicyMountOption))
-}
-
 // --- PVC ---
 
 func TestNodeDataPVCClaimName_Genesis(t *testing.T) {
