@@ -68,6 +68,7 @@ func TestBuildRunningPlan_ImageDrift_ReturnsNodeUpdatePlan(t *testing.T) {
 	want := []string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
+		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
 		TaskMarkReady,
 	}
@@ -380,10 +381,11 @@ func TestBuildRunningPlan_ImageDriftWinsOverSidecar(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan).NotTo(BeNil())
 	// Image update plan ends with MarkReady, which also resolves the sidecar.
-	g.Expect(plan.Tasks).To(HaveLen(4), "should be full node-update plan, not one-task mark-ready")
+	g.Expect(plan.Tasks).To(HaveLen(5), "should be full node-update plan, not one-task mark-ready")
 	g.Expect(planTaskTypes(plan)).To(Equal([]string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
+		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
 		TaskMarkReady,
 	}))

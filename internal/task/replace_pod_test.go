@@ -1,0 +1,185 @@
+package task
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+)
+
+const (
+	replacePodNodeName = "node-1"
+	replacePodNs       = "default"
+	stsSelectorLabel   = "statefulset.kubernetes.io/pod-name"
+)
+
+func replacePodNode() *seiv1alpha1.SeiNode {
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: replacePodNodeName, Namespace: replacePodNs, UID: "uid-1"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID:  "atlantic-2",
+			Image:    "sei:v2.0.0",
+			FullNode: &seiv1alpha1.FullNodeSpec{},
+		},
+		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning},
+	}
+}
+
+func stsForReplace(currentRev, updateRev string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: replacePodNodeName, Namespace: replacePodNs},
+		Spec: appsv1.StatefulSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{
+				"app":            "seinode",
+				"sei.io/seinode": replacePodNodeName,
+			}},
+		},
+		Status: appsv1.StatefulSetStatus{
+			CurrentRevision: currentRev,
+			UpdateRevision:  updateRev,
+		},
+	}
+}
+
+func podForReplace(name, revisionHash string, terminating bool) *corev1.Pod {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: replacePodNs,
+			Labels: map[string]string{
+				"app":                                    "seinode",
+				"sei.io/seinode":                         replacePodNodeName,
+				appsv1.ControllerRevisionHashLabelKey: revisionHash,
+			},
+		},
+	}
+	if terminating {
+		// Real deletion through the fake client requires a finalizer; we just
+		// pre-stamp deletionTimestamp via a k8s helper-style assignment.
+		now := metav1.Now()
+		pod.DeletionTimestamp = &now
+		pod.Finalizers = []string{"test/keep-around"}
+	}
+	return pod
+}
+
+func replacePodCfg(t *testing.T, node *seiv1alpha1.SeiNode, objs ...client.Object) ExecutionConfig {
+	t.Helper()
+	s := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := seiv1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+	return ExecutionConfig{KubeClient: c, Scheme: s, Resource: node}
+}
+
+func newReplacePodExec(t *testing.T, cfg ExecutionConfig) TaskExecution {
+	t.Helper()
+	raw, _ := json.Marshal(ReplacePodParams{NodeName: replacePodNodeName, Namespace: replacePodNs})
+	exec, err := deserializeReplacePod("rp-test", raw, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exec
+}
+
+// Stale-revision pod present → task deletes it and completes.
+func TestReplacePod_StalePod_DeletesAndCompletes(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("old-rev", "new-rev")
+	stalePod := podForReplace(replacePodNodeName+"-0", "old-rev", false)
+
+	cfg := replacePodCfg(t, node, sts, stalePod)
+	exec := newReplacePodExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	// Stale pod should be gone (or marked for deletion if a finalizer existed,
+	// but ours has none, so the fake client deletes it outright).
+	got := &corev1.Pod{}
+	err := cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: stalePod.Name, Namespace: stalePod.Namespace}, got)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(),
+		"expected stale pod to be deleted, got err=%v", err)
+}
+
+// Already at update revision → task is no-op (pod preserved, status complete).
+func TestReplacePod_AlreadyAtUpdateRevision_NoOp(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("new-rev", "new-rev")
+	currentPod := podForReplace(replacePodNodeName+"-0", "new-rev", false)
+
+	cfg := replacePodCfg(t, node, sts, currentPod)
+	exec := newReplacePodExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	got := &corev1.Pod{}
+	g.Expect(cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: currentPod.Name, Namespace: currentPod.Namespace}, got)).To(Succeed())
+}
+
+// Pod already terminating (deletionTimestamp present) → task skips it.
+// We assert the pod's finalizer wasn't stripped (i.e. task didn't double-delete).
+func TestReplacePod_TerminatingPod_Skipped(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("old-rev", "new-rev")
+	terminatingPod := podForReplace(replacePodNodeName+"-0", "old-rev", true)
+
+	cfg := replacePodCfg(t, node, sts, terminatingPod)
+	exec := newReplacePodExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	got := &corev1.Pod{}
+	g.Expect(cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: terminatingPod.Name, Namespace: terminatingPod.Namespace}, got)).To(Succeed())
+	g.Expect(got.DeletionTimestamp).NotTo(BeNil(), "terminating pod should still exist (finalizer holds it)")
+}
+
+// Empty UpdateRevision (StatefulSet status not yet populated) → task waits.
+func TestReplacePod_NoUpdateRevisionYet_TransientWait(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("rev-1", "") // UpdateRevision not yet set
+
+	cfg := replacePodCfg(t, node, sts)
+	exec := newReplacePodExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionRunning))
+}
+
+// StatefulSet missing entirely → task is a transient wait (apply-statefulset
+// preceded us; the controller will retry on the next reconcile).
+func TestReplacePod_StatefulSetMissing_TransientWait(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+
+	cfg := replacePodCfg(t, node) // no STS, no pods
+	exec := newReplacePodExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionRunning))
+}
