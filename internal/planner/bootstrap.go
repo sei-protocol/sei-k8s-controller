@@ -153,6 +153,11 @@ func IsBootstrapComplete(plan *seiv1alpha1.TaskPlan) bool {
 // genesis.json.
 const genesisConfigureMaxRetries = 180
 
+// discoverPeersMaxRetries gives ~9 minutes of retry (executor backoff
+// caps at 30s/attempt). Covers validator-RPC co-apply where the
+// validator's Tendermint RPC takes time to become reachable.
+const discoverPeersMaxRetries = 20
+
 // buildGenesisPlan constructs the full plan for genesis ceremony
 // nodes. Per-node artifact generation and upload runs first, then
 // configure-genesis retries until the group controller has assembled and
@@ -183,9 +188,6 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, configIntent))
 		if err != nil {
 			return nil, err
-		}
-		if taskType == TaskConfigureGenesis {
-			t.MaxRetries = genesisConfigureMaxRetries
 		}
 		tasks[i] = t
 	}

@@ -75,6 +75,12 @@ func TestArchivePlanner_WithPeers(t *testing.T) {
 	if !slices.Contains(types, TaskDiscoverPeers) {
 		t.Errorf("archive plan with peers should contain discover-peers, got %v", types)
 	}
+
+	for _, task := range plan.Tasks {
+		if task.Type == TaskDiscoverPeers && task.MaxRetries != discoverPeersMaxRetries {
+			t.Errorf("discover-peers MaxRetries = %d, want %d", task.MaxRetries, discoverPeersMaxRetries)
+		}
+	}
 }
 
 func TestArchivePlanner_SnapshotGenerationOverrides(t *testing.T) {
