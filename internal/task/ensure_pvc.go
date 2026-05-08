@@ -149,8 +149,10 @@ func (e *ensureDataPVCExecution) validateImport(
 		return fmt.Errorf("PVC %q phase is %q, waiting for Bound", name, pvc.Status.Phase)
 	}
 
-	if !slices.Contains(pvc.Spec.AccessModes, corev1.ReadWriteOnce) {
-		return Terminal(fmt.Errorf("PVC %q accessModes %v does not include ReadWriteOnce", name, pvc.Spec.AccessModes))
+	hasSingleWriter := slices.Contains(pvc.Spec.AccessModes, corev1.ReadWriteOnce) ||
+		slices.Contains(pvc.Spec.AccessModes, corev1.ReadWriteOncePod)
+	if !hasSingleWriter {
+		return Terminal(fmt.Errorf("PVC %q accessModes %v must include ReadWriteOnce or ReadWriteOncePod", name, pvc.Spec.AccessModes))
 	}
 
 	_, requiredStr := noderesource.DefaultStorageForMode(noderesource.NodeMode(node), e.cfg.Platform)

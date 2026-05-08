@@ -90,7 +90,10 @@ spec:
     storage: <size>                          # match the EBS volume size, e.g. 40Ti
   volumeMode: Filesystem
   accessModes:
-    - ReadWriteOnce                          # required — single consumer
+    - ReadWriteOncePod                       # preferred for archives (see §6.4) — activates
+                                             # SELinuxMountReadWriteOncePod, skips the ~20-min
+                                             # recursive setxattr walk on multi-TB volumes.
+                                             # ReadWriteOnce is also accepted by the validator.
   persistentVolumeReclaimPolicy: Retain      # required — preserves EBS across PVC lifecycle
   storageClassName: ""                       # required empty for static binding
   csi:
@@ -117,7 +120,7 @@ metadata:
     sei.io/ordinal: "0"
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteOncePod                       # must match the PV's access mode
   resources:
     requests:
       storage: <size>                        # match PV capacity exactly
@@ -129,7 +132,7 @@ spec:
 
 - PVC must be in the **same namespace** as the SeiNode.
 - PVC must be **`Bound`** at the time the SeiNode reconciles.
-- PVC must have **`ReadWriteOnce`** in `accessModes`.
+- PVC must have **`ReadWriteOnce` or `ReadWriteOncePod`** in `accessModes`. RWOP is preferred for new archives — see §6.4.
 - PVC's `status.capacity.storage` must be **>= the node mode's required size** (`noderesource.DefaultStorageForMode`).
 - PV's `Spec.Capacity.storage` must **exactly match** the PVC's reported capacity.
 - PV must not be in phase `Failed`; PVC must not be in phase `Lost`.
@@ -248,6 +251,64 @@ The required size comes from `noderesource.DefaultStorageForMode(NodeMode(node),
 
 EBS RWO is bound to one AZ. If the K8s node holding the pod fails, the pod can only reschedule onto another node in the same AZ (`nodeAffinity` on the PV enforces this). Loss of an entire AZ means the archive is offline until AZ recovers. Acceptable for archive nodes, which are not in any consensus path.
 
+### 6.4 SELinux mount labeling — use `ReadWriteOncePod`
+
+On SELinux-enforcing nodes (Bottlerocket on EKS), the kubelet applies per-pod MCS labels to the data volume at mount time. With the default `ReadWriteOnce` access mode, this is a **recursive setxattr walk over every inode** — on a multi-TB archive (40 TiB / 8.2M files on pacific-1), it takes ~20 minutes per pod recreation and runs every chain upgrade, image bump, or node move.
+
+The fix: declare the PV/PVC with `accessModes: [ReadWriteOncePod]` instead. RWOP activates `SELinuxMountReadWriteOncePod` (GA since K8s 1.27, default-on), which applies the SELinux context as a per-mount option in milliseconds rather than walking inodes.
+
+Why not `seLinuxChangePolicy: MountOption` on the pod? That requires the upstream `SELinuxMount` feature gate at the API server, which is default-off in K8s 1.33–1.36 and is not exposed to customers on managed EKS ([containers-roadmap#512](https://github.com/aws/containers-roadmap/issues/512)). RWOP sidesteps that constraint entirely.
+
+**For new archives**: declare RWOP from the start in §3's manifest. archive-1 (pacific-1, eu-central-1a) and archive-2 (eu-central-1c) ship this way. No migration cost.
+
+**For existing archives running RWO** (e.g. pacific-1's `archive-0` was created with RWO): migrate at the next natural pod-recreation event (next chain upgrade, image bump, etc.) — pod is going to recreate anyway, fold the access-mode swap into the same window.
+
+#### Migration procedure (RWO → RWOP, ~5–10 min downtime)
+
+`accessModes` is immutable on a bound PV/PVC, so the migration is a delete-and-recreate sequence. The underlying EBS volume is preserved by `Retain` reclaim policy and never touched.
+
+```bash
+# 1. Stop the pod (StatefulSet recreates it; new pod stays Pending until PVC is back)
+kubectl -n <chain-namespace> delete pod <archive-pod-name>
+
+# 2. Delete the PVC (PV moves Bound → Released; EBS volume preserved)
+kubectl -n <chain-namespace> delete pvc <pvc-name>
+
+# 3. Clear the PV's claimRef so it's bindable again (PV moves Released → Available)
+kubectl patch pv <pv-name> --type json \
+  -p '[{"op":"remove","path":"/spec/claimRef"}]'
+
+# 4. Patch PV.spec.accessModes — editable now because PV is Available
+kubectl patch pv <pv-name> --type json \
+  -p '[{"op":"replace","path":"/spec/accessModes","value":["ReadWriteOncePod"]}]'
+
+# 5. Land + apply the PVC manifest update (also RWOP).
+#    Under GitOps, merge the platform-repo PR; flux reconciles and recreates the PVC.
+#    PV → PVC re-binds via volumeName; StatefulSet's Pending pod proceeds.
+flux reconcile kustomization clusters/prod/protocol/<chain-id>
+```
+
+What stays the same across the migration:
+
+- **EBS volume** — never touched; `Retain` reclaim + the PV's `volumeHandle` re-references the same AWS volume.
+- **Names** — PV name, PVC name, EBS volume id all preserved. SeiNode → PVC → PV → EBS chain re-resolves automatically.
+- **SeiNode/SeiNodeDeployment spec** — no change; references PVC by name.
+
+Verification after the new pod is Running:
+
+```bash
+# Confirm RWOP is in effect on the bound objects
+kubectl get pv <pv-name> -o jsonpath='{.spec.accessModes}'   # expect ["ReadWriteOncePod"]
+kubectl get pvc -n <ns> <pvc-name> -o jsonpath='{.spec.accessModes}'  # expect ["ReadWriteOncePod"]
+
+# Confirm the kernel applied SELinux as a mount option (not via recursive walk)
+kubectl debug <pod-name> -c slx-check --target=seid --image=alpine:3.20 --profile=netadmin -- \
+  sh -c 'mount | grep "/sei "'
+# expect output to include  context=system_u:object_r:container_file_t:s0:c<N>,c<M>
+```
+
+If the `mount` line shows a `context=...` parameter, per-mount labeling is active and pod-start is fast (no 20-minute walk). If not, double-check the PV/PVC accessModes were both changed.
+
 ---
 
 ## 7. Cutover: swapping the underlying EBS
@@ -298,6 +359,7 @@ Before applying the SeiNode manifest:
 - [ ] EBS volume created in the target AZ, formatted xfs, populated with the layout in §2.
 - [ ] EBS detached from any source EC2 instance (AWS console shows `available`).
 - [ ] PV manifest applied with the correct `volumeHandle`, `nodeAffinity` AZ, and capacity.
+- [ ] PV and PVC `accessModes` set to `[ReadWriteOncePod]` (preferred — see §6.4) or `[ReadWriteOnce]`.
 - [ ] PVC manifest applied with matching `volumeName` and same namespace as the SeiNode.
 - [ ] `kubectl get pv,pvc` shows both `Bound`.
 - [ ] (If GitOps) the source-of-truth branch is the one driving the cluster — no drift.

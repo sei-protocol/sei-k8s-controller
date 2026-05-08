@@ -363,6 +363,24 @@ func TestEnsureDataPVC_Import_WrongAccessMode_Terminal(t *testing.T) {
 	g.Expect(importReasonFor(node)).To(Equal(seiv1alpha1.ReasonPVCInvalid))
 }
 
+// RWOP unblocks the SELinux-mount-labeling optimization on EKS 1.34
+// (SELinuxMountReadWriteOncePod, GA since K8s 1.27, default-on) without
+// needing the SELinuxMount feature gate that EKS doesn't expose. The
+// validator must accept it as a single-writer access mode.
+func TestEnsureDataPVC_Import_ReadWriteOncePod_AccessMode_Completes(t *testing.T) {
+	g := NewWithT(t)
+	node := importNode("data-rwop")
+	pvc := validImportedPVC("data-rwop", "default", "2000Gi")
+	pvc.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod}
+	pv := validImportedPV("pv-data-rwop", "2000Gi")
+	pv.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOncePod}
+
+	exec, _ := newEnsurePVCExec(t, node, pvc, pv)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(importReasonFor(node)).To(Equal(seiv1alpha1.ReasonPVCValidated))
+}
+
 func TestEnsureDataPVC_Import_CapacityTooSmall_Terminal(t *testing.T) {
 	g := NewWithT(t)
 	node := importNode("data-small")
