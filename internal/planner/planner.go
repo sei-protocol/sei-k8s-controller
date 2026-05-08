@@ -456,8 +456,9 @@ func buildPlannedTask(planID, taskType string, planIndex int, params any) (seiv1
 }
 
 // taskMaxRetries is the executor's retry budget per task type. Default 0
-// makes the first ExecutionFailed terminal. Wall-clock per N retries:
-// 5s + 10s + 20s + 30s*(N-3) for N>=3.
+// makes the first ExecutionFailed terminal. Wall-clock per N retries
+// (RetryCount is incremented before retryBackoff is called):
+// 10s for N=1; 10s + 20s + 30s*(N-2) for N>=2.
 func taskMaxRetries(taskType string) int {
 	switch taskType {
 	case TaskConfigureGenesis:
