@@ -143,6 +143,19 @@ func TestGenerateNodeStatefulSet_BasicFields(t *testing.T) {
 	g.Expect(sts.Spec.VolumeClaimTemplates).To(BeEmpty())
 }
 
+// OnDelete locks in the contract that pod replacement is the SeiNode
+// controller's responsibility (via replace-pod), not the StatefulSet
+// controller's. Without this, RollingUpdate's "don't disturb unready pods"
+// guardrail would deadlock chain-upgrade-halt rollouts.
+func TestGenerateNodeStatefulSet_UsesOnDeleteUpdateStrategy(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("mynet-0", "default")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+
+	g.Expect(sts.Spec.UpdateStrategy.Type).To(Equal(appsv1.OnDeleteStatefulSetStrategyType))
+}
+
 func TestGenerateNodeStatefulSet_AlwaysHasSidecar(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
