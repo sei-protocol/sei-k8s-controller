@@ -20,36 +20,34 @@ import (
 )
 
 const (
-	replacePodNodeName = "node-1"
-	replacePodNs       = "default"
-	stsSelectorLabel   = "statefulset.kubernetes.io/pod-name"
+	stsUID         = types.UID("sts-uid-1")
+	testReplaceNs  = "default"
+	testReplaceSTS = "node-1"
 )
 
 func replacePodNode() *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: replacePodNodeName, Namespace: replacePodNs, UID: "uid-1"},
+		ObjectMeta: metav1.ObjectMeta{Name: testReplaceSTS, Namespace: testReplaceNs},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID:  "atlantic-2",
-			Image:    "sei:v2.0.0",
+			ChainID:  "test-chain",
+			Image:    "test:v1",
 			FullNode: &seiv1alpha1.FullNodeSpec{},
 		},
 		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning},
 	}
 }
 
-const stsUID = types.UID("sts-uid-1")
-
 func stsForReplace(currentRev, updateRev string) *appsv1.StatefulSet {
 	one := int32(1)
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: replacePodNodeName, Namespace: replacePodNs, UID: stsUID, Generation: 1,
+			Name: testReplaceSTS, Namespace: testReplaceNs, UID: stsUID, Generation: 1,
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: &one,
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{
 				"app":            "seinode",
-				"sei.io/seinode": replacePodNodeName,
+				"sei.io/seinode": testReplaceSTS,
 			}},
 		},
 		Status: appsv1.StatefulSetStatus{
@@ -60,36 +58,33 @@ func stsForReplace(currentRev, updateRev string) *appsv1.StatefulSet {
 	}
 }
 
-func podForReplace(name, revisionHash string, terminating bool) *corev1.Pod {
+func podForReplace(revisionHash string, terminating bool) *corev1.Pod {
+	controller := true
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: replacePodNs,
+			Name:      testReplaceSTS + "-0",
+			Namespace: testReplaceNs,
 			Labels: map[string]string{
 				"app":                                 "seinode",
-				"sei.io/seinode":                      replacePodNodeName,
+				"sei.io/seinode":                      testReplaceSTS,
 				appsv1.ControllerRevisionHashLabelKey: revisionHash,
 			},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: "apps/v1",
 				Kind:       "StatefulSet",
-				Name:       replacePodNodeName,
+				Name:       testReplaceSTS,
 				UID:        stsUID,
-				Controller: ptrBool(true),
+				Controller: &controller,
 			}},
 		},
 	}
 	if terminating {
-		// Real deletion through the fake client requires a finalizer; we just
-		// pre-stamp deletionTimestamp via a k8s helper-style assignment.
 		now := metav1.Now()
 		pod.DeletionTimestamp = &now
 		pod.Finalizers = []string{"test/keep-around"}
 	}
 	return pod
 }
-
-func ptrBool(b bool) *bool { return &b }
 
 func replacePodCfg(t *testing.T, node *seiv1alpha1.SeiNode, objs ...client.Object) ExecutionConfig {
 	t.Helper()
@@ -106,7 +101,7 @@ func replacePodCfg(t *testing.T, node *seiv1alpha1.SeiNode, objs ...client.Objec
 
 func newReplacePodExec(t *testing.T, cfg ExecutionConfig) TaskExecution {
 	t.Helper()
-	raw, _ := json.Marshal(ReplacePodParams{NodeName: replacePodNodeName, Namespace: replacePodNs})
+	raw, _ := json.Marshal(ReplacePodParams{NodeName: testReplaceSTS, Namespace: testReplaceNs})
 	exec, err := deserializeReplacePod("rp-test", raw, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +114,7 @@ func TestReplacePod_StalePod_DeletesAndCompletes(t *testing.T) {
 	g := NewWithT(t)
 	node := replacePodNode()
 	sts := stsForReplace("old-rev", "new-rev")
-	stalePod := podForReplace(replacePodNodeName+"-0", "old-rev", false)
+	stalePod := podForReplace("old-rev", false)
 
 	cfg := replacePodCfg(t, node, sts, stalePod)
 	exec := newReplacePodExec(t, cfg)
@@ -141,7 +136,7 @@ func TestReplacePod_AlreadyAtUpdateRevision_NoOp(t *testing.T) {
 	g := NewWithT(t)
 	node := replacePodNode()
 	sts := stsForReplace("new-rev", "new-rev")
-	currentPod := podForReplace(replacePodNodeName+"-0", "new-rev", false)
+	currentPod := podForReplace("new-rev", false)
 
 	cfg := replacePodCfg(t, node, sts, currentPod)
 	exec := newReplacePodExec(t, cfg)
@@ -160,7 +155,7 @@ func TestReplacePod_TerminatingPod_Skipped(t *testing.T) {
 	g := NewWithT(t)
 	node := replacePodNode()
 	sts := stsForReplace("old-rev", "new-rev")
-	terminatingPod := podForReplace(replacePodNodeName+"-0", "old-rev", true)
+	terminatingPod := podForReplace("old-rev", true)
 
 	cfg := replacePodCfg(t, node, sts, terminatingPod)
 	exec := newReplacePodExec(t, cfg)
@@ -208,7 +203,7 @@ func TestReplacePod_StatefulSetGenerationStale_TransientWait(t *testing.T) {
 	sts := stsForReplace("old-rev", "new-rev")
 	sts.Generation = 2
 	sts.Status.ObservedGeneration = 1 // stale
-	stalePod := podForReplace(replacePodNodeName+"-0", "old-rev", false)
+	stalePod := podForReplace("old-rev", false)
 
 	cfg := replacePodCfg(t, node, sts, stalePod)
 	exec := newReplacePodExec(t, cfg)
@@ -228,7 +223,7 @@ func TestReplacePod_PodMissingRevisionHashLabel_Skipped(t *testing.T) {
 	g := NewWithT(t)
 	node := replacePodNode()
 	sts := stsForReplace("old-rev", "new-rev")
-	pod := podForReplace(replacePodNodeName+"-0", "old-rev", false)
+	pod := podForReplace("old-rev", false)
 	delete(pod.Labels, appsv1.ControllerRevisionHashLabelKey)
 
 	cfg := replacePodCfg(t, node, sts, pod)
@@ -248,7 +243,7 @@ func TestReplacePod_PodNotOwnedByStatefulSet_Skipped(t *testing.T) {
 	g := NewWithT(t)
 	node := replacePodNode()
 	sts := stsForReplace("old-rev", "new-rev")
-	pod := podForReplace(replacePodNodeName+"-0", "old-rev", false)
+	pod := podForReplace("old-rev", false)
 	pod.OwnerReferences = nil // not owned by STS
 
 	cfg := replacePodCfg(t, node, sts, pod)
