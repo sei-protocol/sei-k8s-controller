@@ -54,7 +54,8 @@ func (e *observeImageExecution) Execute(ctx context.Context) error {
 
 	sts := &appsv1.StatefulSet{}
 	key := types.NamespacedName{Name: node.Name, Namespace: node.Namespace}
-	if err := e.cfg.KubeClient.Get(ctx, key, sts); err != nil {
+	// Bypass cache: apply-statefulset just wrote this in the same reconcile.
+	if err := e.cfg.APIReader.Get(ctx, key, sts); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}

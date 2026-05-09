@@ -182,6 +182,7 @@ func main() {
 						return buildSidecarClient(node)
 					},
 					KubeClient:  kc,
+					APIReader:   mgr.GetAPIReader(),
 					Scheme:      mgr.GetScheme(),
 					Resource:    node,
 					Platform:    platformCfg,
@@ -225,6 +226,7 @@ func main() {
 						return buildSidecarClient(assemblerNode)
 					},
 					KubeClient:  kc,
+					APIReader:   mgr.GetAPIReader(),
 					Scheme:      mgr.GetScheme(),
 					Resource:    group,
 					Platform:    platformCfg,

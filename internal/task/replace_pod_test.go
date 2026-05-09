@@ -96,7 +96,7 @@ func replacePodCfg(t *testing.T, node *seiv1alpha1.SeiNode, objs ...client.Objec
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
-	return ExecutionConfig{KubeClient: c, Scheme: s, Resource: node}
+	return ExecutionConfig{KubeClient: c, APIReader: c, Scheme: s, Resource: node}
 }
 
 func newReplacePodExec(t *testing.T, cfg ExecutionConfig) TaskExecution {

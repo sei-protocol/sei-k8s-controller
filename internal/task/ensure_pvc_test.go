@@ -105,6 +105,7 @@ func newEnsurePVCExec(t *testing.T, node *seiv1alpha1.SeiNode, objs ...client.Ob
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
 	cfg := ExecutionConfig{
 		KubeClient: c,
+		APIReader:  c,
 		Scheme:     s,
 		Resource:   node,
 		Platform:   platformtest.Config(),
@@ -197,6 +198,7 @@ func TestEnsureDataPVC_Create_AlreadyExistsRace_Requeues(t *testing.T) {
 
 	cfg := ExecutionConfig{
 		KubeClient: c,
+		APIReader:  c,
 		Scheme:     s,
 		Resource:   node,
 		Platform:   platformtest.Config(),
@@ -269,7 +271,7 @@ func TestEnsureDataPVC_Import_PVCNotFound_ThenAppears_Completes(t *testing.T) {
 	s := ensurePVCScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	cfg := ExecutionConfig{
-		KubeClient: c, Scheme: s, Resource: node, Platform: platformtest.Config(),
+		KubeClient: c, APIReader: c, Scheme: s, Resource: node, Platform: platformtest.Config(),
 	}
 	raw, _ := json.Marshal(EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace})
 	exec, err := deserializeEnsureDataPVC("ensure-1", raw, cfg)
@@ -465,7 +467,7 @@ func TestEnsureDataPVC_Import_TransientValidationRepeats(t *testing.T) {
 	base := fake.NewClientBuilder().WithScheme(s).Build()
 	counter := &countingClient{Client: base}
 	cfg := ExecutionConfig{
-		KubeClient: counter, Scheme: s, Resource: node, Platform: platformtest.Config(),
+		KubeClient: counter, APIReader: counter, Scheme: s, Resource: node, Platform: platformtest.Config(),
 	}
 	raw, _ := json.Marshal(EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace})
 

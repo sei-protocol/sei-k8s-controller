@@ -151,10 +151,14 @@ type SidecarClient interface {
 type ExecutionConfig struct {
 	BuildSidecarClient func() (SidecarClient, error)
 	KubeClient         client.Client
-	Scheme             *runtime.Scheme
-	Resource           client.Object
-	Platform           platform.Config
-	ObjectStore        platform.ObjectStore
+	// APIReader bypasses the controller-runtime cache. Use when reading a
+	// resource the same plan just wrote — the cached client lags behind
+	// SSA writes by milliseconds-to-unbounded.
+	APIReader   client.Reader
+	Scheme      *runtime.Scheme
+	Resource    client.Object
+	Platform    platform.Config
+	ObjectStore platform.ObjectStore
 }
 
 // ResourceAs is a generic helper that type-asserts the Resource field.

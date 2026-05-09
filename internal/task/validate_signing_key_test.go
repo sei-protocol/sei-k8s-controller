@@ -81,6 +81,7 @@ func newValidateSigningKeyExec(t *testing.T, node *seiv1alpha1.SeiNode, objs ...
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
 	cfg := ExecutionConfig{
 		KubeClient: c,
+		APIReader:  c,
 		Scheme:     s,
 		Resource:   node,
 	}
