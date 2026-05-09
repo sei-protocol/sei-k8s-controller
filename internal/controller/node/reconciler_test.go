@@ -55,6 +55,7 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 				return task.ExecutionConfig{
 					BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
 					KubeClient:         c,
+					APIReader:          c,
 					Scheme:             s,
 					Resource:           node,
 					Platform:           platformtest.Config(),
