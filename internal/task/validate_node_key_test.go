@@ -55,6 +55,7 @@ func newValidateNodeKeyExec(t *testing.T, node *seiv1alpha1.SeiNode, objs ...cli
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
 	cfg := ExecutionConfig{
 		KubeClient: c,
+		APIReader:  c,
 		Scheme:     s,
 		Resource:   node,
 	}

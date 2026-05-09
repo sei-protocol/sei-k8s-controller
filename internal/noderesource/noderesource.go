@@ -142,6 +142,10 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) *appsv1.St
 			Selector: &metav1.LabelSelector{
 				MatchLabels: SelectorLabels(node),
 			},
+			// Pod lifecycle is the SeiNode controller's responsibility (replace-pod).
+			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
+				Type: appsv1.OnDeleteStatefulSetStrategyType,
+			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,

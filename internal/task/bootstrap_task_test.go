@@ -56,6 +56,7 @@ func testCfg(t *testing.T, objs ...client.Object) ExecutionConfig {
 		Build()
 	return ExecutionConfig{
 		KubeClient: c,
+		APIReader:  c,
 		Scheme:     s,
 		Resource:   testNode(),
 		Platform:   platformtest.Config(),
@@ -159,6 +160,7 @@ func TestDeployBootstrapJob_Execute_NilSnapshot(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	cfg := ExecutionConfig{
 		KubeClient: c,
+		APIReader:  c,
 		Scheme:     s,
 		Resource:   node,
 		Platform:   platformtest.Config(),

@@ -467,6 +467,8 @@ func taskMaxRetries(taskType string) int {
 		return groupAssemblyMaxRetries
 	case TaskDiscoverPeers:
 		return discoverPeersMaxRetries
+	case task.TaskTypeReplacePod:
+		return 3
 	default:
 		return 0
 	}
@@ -541,6 +543,8 @@ func paramsForTaskType(
 		return &task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeApplyService:
 		return &task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}
+	case task.TaskTypeReplacePod:
+		return &task.ReplacePodParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeObserveImage:
 		return &task.ObserveImageParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeValidateSigningKey:
@@ -708,6 +712,7 @@ func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, erro
 	prog := []string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
+		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
 		sidecar.TaskTypeMarkReady,
 	}

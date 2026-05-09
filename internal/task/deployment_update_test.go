@@ -50,6 +50,7 @@ func testDeploymentCfg(t *testing.T, group *seiv1alpha1.SeiNodeDeployment, nodes
 	c := builder.Build()
 	return ExecutionConfig{
 		KubeClient: c,
+		APIReader:  c,
 		Scheme:     s,
 		Resource:   group,
 		Platform:   platformtest.Config(),

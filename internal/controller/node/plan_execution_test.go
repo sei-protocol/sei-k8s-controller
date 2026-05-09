@@ -131,6 +131,7 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 				return task.ExecutionConfig{
 					BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
 					KubeClient:         c,
+					APIReader:          c,
 					Scheme:             s,
 					Resource:           node,
 					Platform:           platformtest.Config(),
@@ -796,6 +797,7 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 						return nil, fmt.Errorf("sidecar unavailable")
 					},
 					KubeClient: c,
+					APIReader:  c,
 					Scheme:     s,
 					Resource:   n,
 					Platform:   platformtest.Config(),

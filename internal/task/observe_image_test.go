@@ -46,6 +46,7 @@ func observeImageCfg(t *testing.T, node *seiv1alpha1.SeiNode, sts *appsv1.Statef
 	c := builder.Build()
 	return ExecutionConfig{
 		KubeClient: c,
+		APIReader:  c,
 		Scheme:     s,
 		Resource:   node,
 	}

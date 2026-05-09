@@ -5,6 +5,7 @@ import (
 
 	. "github.com/onsi/gomega"
 	seiconfig "github.com/sei-protocol/sei-config"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -141,6 +142,15 @@ func TestGenerateNodeStatefulSet_BasicFields(t *testing.T) {
 	g.Expect(sts.Spec.ServiceName).To(Equal("mynet-0"))
 	g.Expect(sts.Spec.Selector.MatchLabels).To(Equal(map[string]string{NodeLabel: "mynet-0"}))
 	g.Expect(sts.Spec.VolumeClaimTemplates).To(BeEmpty())
+}
+
+func TestGenerateNodeStatefulSet_UsesOnDeleteUpdateStrategy(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("mynet-0", "default")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+
+	g.Expect(sts.Spec.UpdateStrategy.Type).To(Equal(appsv1.OnDeleteStatefulSetStrategyType))
 }
 
 func TestGenerateNodeStatefulSet_AlwaysHasSidecar(t *testing.T) {
