@@ -33,6 +33,18 @@ const (
 
 	nodeKeyVolumeName = "node-key"
 	nodeKeyDataKey    = "node_key.json"
+
+	operatorKeyringVolumeName = "operator-keyring"
+	// operatorKeyringDirName matches the on-disk directory the Cosmos SDK
+	// file-backend keyring appends to $SEI_HOME — keyring.New(name, BackendFile,
+	// homeDir, ...) implicitly opens homeDir/keyring-file/.
+	operatorKeyringDirName  = "keyring-file"
+	keyringPassphraseEnvVar = "SEI_KEYRING_PASSPHRASE"
+
+	// sidecarNonRootUID is the nonroot UID/GID baked into distroless and
+	// chainguard static-debian12 base images. Pod-level fsGroup matches so
+	// the non-root sidecar can read kubelet-projected 0o400 Secret files.
+	sidecarNonRootUID int64 = 65532
 )
 
 // PlatformConfig is an alias for platform.Config.
@@ -251,14 +263,19 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 
 	signingVolumes := signingKeyVolumes(node)
 	nodeVolumes := nodeKeyVolumes(node)
-	volumes := make([]corev1.Volume, 0, 1+len(signingVolumes)+len(nodeVolumes))
+	keyringVolumes := operatorKeyringVolumes(node)
+	volumes := make([]corev1.Volume, 0, 1+len(signingVolumes)+len(nodeVolumes)+len(keyringVolumes))
 	volumes = append(volumes, dataVolume)
 	volumes = append(volumes, signingVolumes...)
 	volumes = append(volumes, nodeVolumes...)
+	volumes = append(volumes, keyringVolumes...)
 
 	pool := p.NodepoolForMode(NodeMode(node))
 
 	spec := corev1.PodSpec{
+		// automountServiceAccountToken is left at the kubelet default (true)
+		// — the projected token is a hard dependency for Phase 4 TokenReview
+		// authentication on sidecar HTTP endpoints (see #165).
 		ServiceAccountName: p.ServiceAccount,
 		Tolerations: []corev1.Toleration{
 			{Key: p.TolerationKey, Value: pool, Effect: corev1.TaintEffectNoSchedule},
@@ -280,6 +297,12 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	}
 
 	spec.ShareProcessNamespace = ptr.To(true)
+	// fsGroup is required so the non-root sidecar (UID 65532) can read
+	// 0o400 Secret-projected files (operator keyring) kubelet owns root:root.
+	fsGroup := sidecarNonRootUID
+	spec.SecurityContext = &corev1.PodSecurityContext{
+		FSGroup: &fsGroup,
+	}
 	spec.InitContainers = []corev1.Container{
 		buildSeidInitContainer(node),
 		buildSidecarContainer(node, p),
@@ -306,26 +329,35 @@ func SidecarPort(node *seiv1alpha1.SeiNode) int32 {
 
 func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.Container {
 	port := SidecarPort(node)
+	keyringEnv := operatorKeyringEnvVars(node)
+	env := make([]corev1.EnvVar, 0, 7+len(keyringEnv))
+	env = append(env,
+		corev1.EnvVar{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
+		corev1.EnvVar{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
+		corev1.EnvVar{Name: "SEI_HOME", Value: dataDir},
+		corev1.EnvVar{Name: "SEI_GENESIS_BUCKET", Value: p.GenesisBucket},
+		corev1.EnvVar{Name: "SEI_GENESIS_REGION", Value: p.GenesisRegion},
+		corev1.EnvVar{Name: "SEI_SNAPSHOT_BUCKET", Value: p.SnapshotBucket},
+		corev1.EnvVar{Name: "SEI_SNAPSHOT_REGION", Value: p.SnapshotRegion},
+	)
+	env = append(env, keyringEnv...)
+
+	keyringMounts := operatorKeyringMounts(node)
+	mounts := make([]corev1.VolumeMount, 0, 1+len(keyringMounts))
+	mounts = append(mounts, corev1.VolumeMount{Name: "data", MountPath: dataDir})
+	mounts = append(mounts, keyringMounts...)
+
 	c := corev1.Container{
 		Name:          "sei-sidecar",
 		Image:         sidecarImage(node),
 		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
-		Env: []corev1.EnvVar{
-			{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
-			{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
-			{Name: "SEI_HOME", Value: dataDir},
-			{Name: "SEI_GENESIS_BUCKET", Value: p.GenesisBucket},
-			{Name: "SEI_GENESIS_REGION", Value: p.GenesisRegion},
-			{Name: "SEI_SNAPSHOT_BUCKET", Value: p.SnapshotBucket},
-			{Name: "SEI_SNAPSHOT_REGION", Value: p.SnapshotRegion},
-		},
+		Env:           env,
 		Ports: []corev1.ContainerPort{
 			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataDir},
-		},
+		VolumeMounts:    mounts,
+		SecurityContext: sidecarSecurityContext(),
 		LivenessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
@@ -566,4 +598,87 @@ func nodeKeySecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretNodeKeySo
 		return nil
 	}
 	return node.Spec.Validator.NodeKey.Secret
+}
+
+// operatorKeyringVolumes projects the operator-keyring Secret as a directory
+// under $SEI_HOME/keyring-file/ — the Cosmos SDK file-backend layout.
+// Mounted on the sidecar container only; the seid main and bootstrap pods
+// never see this material.
+func operatorKeyringVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
+	src := operatorKeyringSecretSource(node)
+	if src == nil {
+		return nil
+	}
+	return []corev1.Volume{{
+		Name: operatorKeyringVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName:  src.SecretName,
+				DefaultMode: ptr.To[int32](0o400),
+			},
+		},
+	}}
+}
+
+func operatorKeyringMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
+	if operatorKeyringSecretSource(node) == nil {
+		return nil
+	}
+	return []corev1.VolumeMount{{
+		Name:      operatorKeyringVolumeName,
+		MountPath: dataDir + "/" + operatorKeyringDirName,
+		ReadOnly:  true,
+	}}
+}
+
+// operatorKeyringEnvVars injects the keyring unlock passphrase into the
+// sidecar process via a separate Secret reference. The passphrase lives in
+// its own Secret because the keyring data Secret is projected as a
+// directory — co-locating the passphrase as a data key would land it as a
+// file inside the keyring directory.
+func operatorKeyringEnvVars(node *seiv1alpha1.SeiNode) []corev1.EnvVar {
+	src := operatorKeyringSecretSource(node)
+	if src == nil {
+		return nil
+	}
+	key := src.PassphraseSecretRef.Key
+	if key == "" {
+		key = "passphrase"
+	}
+	return []corev1.EnvVar{{
+		Name: keyringPassphraseEnvVar,
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: src.PassphraseSecretRef.SecretName},
+				Key:                  key,
+			},
+		},
+	}}
+}
+
+func operatorKeyringSecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretOperatorKeyringSource {
+	if node.Spec.Validator == nil || node.Spec.Validator.OperatorKeyring == nil {
+		return nil
+	}
+	return node.Spec.Validator.OperatorKeyring.Secret
+}
+
+// sidecarSecurityContext locks the sidecar to non-root, read-only rootfs,
+// no privilege escalation, all caps dropped, and the runtime's default
+// seccomp profile. Scope is deliberately the sidecar only — applying the
+// same to the seid main container is a larger blast-radius change owned
+// by a different workstream.
+func sidecarSecurityContext() *corev1.SecurityContext {
+	yes, no := true, false
+	uid := sidecarNonRootUID
+	gid := sidecarNonRootUID
+	return &corev1.SecurityContext{
+		RunAsNonRoot:             &yes,
+		RunAsUser:                &uid,
+		RunAsGroup:               &gid,
+		AllowPrivilegeEscalation: &no,
+		ReadOnlyRootFilesystem:   &yes,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
 }

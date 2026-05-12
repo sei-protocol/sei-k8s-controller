@@ -261,6 +261,12 @@ const (
 	// node-key Secret passes all validation requirements. Only set on
 	// SeiNodes with spec.validator.nodeKey.
 	ConditionNodeKeyReady = "NodeKeyReady"
+
+	// ConditionOperatorKeyringReady indicates whether a referenced
+	// operator-keyring Secret pair (keyring data + passphrase) passes
+	// pre-flight validation. Only set on SeiNodes with
+	// spec.validator.operatorKeyring.
+	ConditionOperatorKeyringReady = "OperatorKeyringReady"
 )
 
 // Reasons for the ImportPVCReady condition.
@@ -282,6 +288,13 @@ const (
 	ReasonNodeKeyValidated = "NodeKeyValidated" // validation succeeded
 	ReasonNodeKeyNotReady  = "NodeKeyNotReady"  // transient: retry
 	ReasonNodeKeyInvalid   = "NodeKeyInvalid"   // terminal: fail the plan
+)
+
+// Reasons for the OperatorKeyringReady condition.
+const (
+	ReasonOperatorKeyringValidated = "OperatorKeyringValidated" // validation succeeded
+	ReasonOperatorKeyringNotReady  = "OperatorKeyringNotReady"  // transient: retry
+	ReasonOperatorKeyringInvalid   = "OperatorKeyringInvalid"   // terminal: fail the plan
 )
 
 // SeiNodeStatus defines the observed state of a SeiNode.

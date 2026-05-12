@@ -39,9 +39,10 @@ func BootstrapLabels(node *seiv1alpha1.SeiNode) map[string]string {
 // GenerateBootstrapJob creates the batch Job that runs seid with --halt-height
 // to populate a PVC before the StatefulSet takes over.
 //
-// The pod-spec must never carry consensus signing material — bootstrap pods
-// are physically incapable of signing because no validator key file is on
-// their filesystem. assertNoSigningKeyOnBootstrapPod is the runtime guard.
+// The pod-spec must never carry validator-owned credentials — bootstrap pods
+// are physically incapable of signing because no signing-key, operator
+// keyring, or keyring passphrase is on their filesystem or in their env.
+// assertNoValidatorSecretsOnBootstrapPod is the runtime guard.
 func GenerateBootstrapJob(
 	node *seiv1alpha1.SeiNode,
 	snap *seiv1alpha1.SnapshotSource,
@@ -53,7 +54,7 @@ func GenerateBootstrapJob(
 	labels := BootstrapLabels(node)
 	podSpec := buildBootstrapPodSpec(node, snap, platformCfg)
 
-	if err := assertNoSigningKeyOnBootstrapPod(node, &podSpec); err != nil {
+	if err := assertNoValidatorSecretsOnBootstrapPod(node, &podSpec); err != nil {
 		return nil, err
 	}
 
@@ -327,22 +328,73 @@ func JobFailureReason(job *batchv1.Job) string {
 	return "bootstrap job failed"
 }
 
-// assertNoSigningKeyOnBootstrapPod fails closed if a future refactor
-// accidentally lands the validator's signing-key Secret on the bootstrap
-// pod-spec. The bootstrap path must never carry consensus signing material.
-func assertNoSigningKeyOnBootstrapPod(node *seiv1alpha1.SeiNode, spec *corev1.PodSpec) error {
-	if node.Spec.Validator == nil ||
-		node.Spec.Validator.SigningKey == nil ||
-		node.Spec.Validator.SigningKey.Secret == nil {
+// assertNoValidatorSecretsOnBootstrapPod fails closed if a future refactor
+// accidentally lands ANY validator-owned Secret (signing key, operator
+// keyring, or keyring passphrase) on the bootstrap pod-spec. Bootstrap
+// pods run `seid start --halt-height` and must be physically incapable of
+// signing: no signing-related material on their filesystem, no operator
+// keyring material in their env.
+//
+// node-key is deliberately excluded — it carries no signing authority;
+// bootstrap mounting it would be a design bug elsewhere, not a slashing
+// risk.
+func assertNoValidatorSecretsOnBootstrapPod(node *seiv1alpha1.SeiNode, spec *corev1.PodSpec) error {
+	if node.Spec.Validator == nil {
 		return nil
 	}
-	secretName := node.Spec.Validator.SigningKey.Secret.SecretName
+	forbiddens := forbiddenBootstrapSecrets(node)
+	if len(forbiddens) == 0 {
+		return nil
+	}
+
 	for _, v := range spec.Volumes {
-		if v.Secret != nil && v.Secret.SecretName == secretName {
-			return fmt.Errorf("bootstrap pod-spec for %s/%s references signing-key Secret %q on volume %q; "+
-				"bootstrap pods must never carry consensus signing material",
-				node.Namespace, node.Name, secretName, v.Name)
+		if v.Secret == nil {
+			continue
+		}
+		for _, f := range forbiddens {
+			if v.Secret.SecretName == f.name {
+				return fmt.Errorf("bootstrap pod-spec for %s/%s references %s Secret %q on volume %q; "+
+					"bootstrap pods must never carry validator-owned credentials",
+					node.Namespace, node.Name, f.kind, f.name, v.Name)
+			}
 		}
 	}
+
+	// Env injection is a separate leakage path — kubelet resolves
+	// valueFrom.secretKeyRef regardless of volume mounts.
+	allContainers := make([]corev1.Container, 0, len(spec.Containers)+len(spec.InitContainers))
+	allContainers = append(allContainers, spec.Containers...)
+	allContainers = append(allContainers, spec.InitContainers...)
+	for _, c := range allContainers {
+		for _, ev := range c.Env {
+			if ev.ValueFrom == nil || ev.ValueFrom.SecretKeyRef == nil {
+				continue
+			}
+			for _, f := range forbiddens {
+				if ev.ValueFrom.SecretKeyRef.Name == f.name {
+					return fmt.Errorf("bootstrap pod-spec for %s/%s references %s Secret %q in container %q env; "+
+						"bootstrap pods must never carry validator-owned credentials",
+						node.Namespace, node.Name, f.kind, f.name, c.Name)
+				}
+			}
+		}
+	}
+
 	return nil
+}
+
+type forbiddenSecret struct{ name, kind string }
+
+func forbiddenBootstrapSecrets(node *seiv1alpha1.SeiNode) []forbiddenSecret {
+	var out []forbiddenSecret
+	if sk := node.Spec.Validator.SigningKey; sk != nil && sk.Secret != nil {
+		out = append(out, forbiddenSecret{sk.Secret.SecretName, "signing-key"})
+	}
+	if ok := node.Spec.Validator.OperatorKeyring; ok != nil && ok.Secret != nil {
+		out = append(out,
+			forbiddenSecret{ok.Secret.SecretName, "operator-keyring"},
+			forbiddenSecret{ok.Secret.PassphraseSecretRef.SecretName, "operator-keyring-passphrase"},
+		)
+	}
+	return out
 }

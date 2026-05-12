@@ -904,3 +904,151 @@ func TestNodeKey_BothMountsCoexist(t *testing.T) {
 	g.Expect(signingMount.MountPath).NotTo(Equal(nodeMount.MountPath),
 		"signing-key and node-key mounts must target distinct paths under /sei/config/")
 }
+
+// --- Operator keyring (validator) ---
+
+func newValidatorNodeWithOperatorKeyring(name, namespace string) *seiv1alpha1.SeiNode {
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "atlantic-2",
+			Image:   "ghcr.io/sei-protocol/seid:latest",
+			Validator: &seiv1alpha1.ValidatorSpec{
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName: "validator-0-opk",
+						KeyName:    "node_admin",
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{
+							SecretName: "validator-0-opk-passphrase",
+							Key:        "passphrase",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestOperatorKeyring_SecretVolumePresentOnPodTemplate(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithOperatorKeyring("validator-0", "default")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+
+	vol := findVolume(sts.Spec.Template.Spec.Volumes, operatorKeyringVolumeName)
+	g.Expect(vol).NotTo(BeNil(), "operator-keyring volume must be present on the StatefulSet pod template")
+	g.Expect(vol.Secret).NotTo(BeNil())
+	g.Expect(vol.Secret.SecretName).To(Equal("validator-0-opk"))
+	g.Expect(*vol.Secret.DefaultMode).To(Equal(int32(0o400)))
+	g.Expect(vol.Secret.Items).To(BeNil(),
+		"operator-keyring projects the whole Secret as a directory under keyring-file/")
+}
+
+func TestOperatorKeyring_SidecarContainerHasMountAndEnv(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithOperatorKeyring("validator-0", "default")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+	g.Expect(sidecar).NotTo(BeNil(), "sei-sidecar init container must exist")
+
+	mount := findVolumeMount(sidecar.VolumeMounts, operatorKeyringVolumeName)
+	g.Expect(mount).NotTo(BeNil(), "sidecar must mount operator-keyring volume")
+	g.Expect(mount.MountPath).To(Equal(dataDir + "/" + operatorKeyringDirName))
+	g.Expect(mount.ReadOnly).To(BeTrue())
+	g.Expect(mount.SubPath).To(BeEmpty(),
+		"operator-keyring is a directory mount, not subPath — sidecar needs the whole dir")
+
+	var passphraseEnv *corev1.EnvVar
+	for i := range sidecar.Env {
+		if sidecar.Env[i].Name == keyringPassphraseEnvVar {
+			passphraseEnv = &sidecar.Env[i]
+		}
+	}
+	g.Expect(passphraseEnv).NotTo(BeNil(), "sidecar must have %s env injected", keyringPassphraseEnvVar)
+	g.Expect(passphraseEnv.ValueFrom).NotTo(BeNil())
+	g.Expect(passphraseEnv.ValueFrom.SecretKeyRef).NotTo(BeNil())
+	g.Expect(passphraseEnv.ValueFrom.SecretKeyRef.Name).To(Equal("validator-0-opk-passphrase"))
+	g.Expect(passphraseEnv.ValueFrom.SecretKeyRef.Key).To(Equal("passphrase"))
+}
+
+func TestOperatorKeyring_SeidMainContainerHasNoMountOrEnv(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithOperatorKeyring("validator-0", "default")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+	g.Expect(seid).NotTo(BeNil(), "seid main container must exist")
+
+	g.Expect(findVolumeMount(seid.VolumeMounts, operatorKeyringVolumeName)).To(BeNil(),
+		"seid main container must NOT mount operator-keyring — has no business reading operator-account material")
+	g.Expect(envValue(seid.Env, keyringPassphraseEnvVar)).To(BeEmpty(),
+		"seid main container must not carry the keyring passphrase env")
+
+	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
+	g.Expect(seidInit).NotTo(BeNil(), "seid-init container must exist")
+	g.Expect(findVolumeMount(seidInit.VolumeMounts, operatorKeyringVolumeName)).To(BeNil(),
+		"seid-init must NOT mount operator-keyring")
+}
+
+func TestOperatorKeyring_Unset_NoVolumeOrMount(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+
+	g.Expect(findVolume(sts.Spec.Template.Spec.Volumes, operatorKeyringVolumeName)).To(BeNil())
+
+	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+	g.Expect(sidecar).NotTo(BeNil())
+	g.Expect(findVolumeMount(sidecar.VolumeMounts, operatorKeyringVolumeName)).To(BeNil(),
+		"sidecar must not mount operator-keyring when OperatorKeyring is unset")
+	g.Expect(envValue(sidecar.Env, keyringPassphraseEnvVar)).To(BeEmpty())
+}
+
+func TestSidecarContainer_SecurityContext(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+	g.Expect(sidecar).NotTo(BeNil())
+	g.Expect(sidecar.SecurityContext).NotTo(BeNil())
+
+	sc := sidecar.SecurityContext
+	g.Expect(*sc.RunAsNonRoot).To(BeTrue())
+	g.Expect(*sc.RunAsUser).To(Equal(int64(65532)))
+	g.Expect(*sc.RunAsGroup).To(Equal(int64(65532)))
+	g.Expect(*sc.ReadOnlyRootFilesystem).To(BeTrue())
+	g.Expect(*sc.AllowPrivilegeEscalation).To(BeFalse())
+	g.Expect(sc.Capabilities).NotTo(BeNil())
+	g.Expect(sc.Capabilities.Drop).To(ContainElement(corev1.Capability("ALL")))
+	g.Expect(sc.SeccompProfile).NotTo(BeNil())
+	g.Expect(sc.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
+}
+
+func TestSeidMainContainer_NoSecurityContextChange(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+	g.Expect(seid).NotTo(BeNil())
+	// seid main container hardening is an out-of-scope, larger blast-radius
+	// change owned by a different workstream.
+	g.Expect(seid.SecurityContext).To(BeNil())
+
+	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
+	g.Expect(seidInit).NotTo(BeNil())
+	g.Expect(seidInit.SecurityContext).To(BeNil())
+}
+
+func TestPodSpec_FSGroup(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default")
+
+	sts := GenerateStatefulSet(node, platformtest.Config())
+	g.Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
+	g.Expect(*sts.Spec.Template.Spec.SecurityContext.FSGroup).To(Equal(int64(65532)),
+		"pod-level fsGroup must match sidecar UID so non-root sidecar can read 0o400 Secret mounts")
+}
