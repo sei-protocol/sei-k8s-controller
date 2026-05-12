@@ -190,18 +190,18 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 }
 
 // assertNoOperatorKeyringOnSeidContainers fails closed if a future refactor
-// lands the operator-keyring volume on the seid main container or a
-// non-sidecar init container. Operator-keyring material is the sidecar's
-// alone: a compromised seid container reading that mount would collapse
-// the sidecar/seid trust boundary.
+// lands operator-keyring material on the seid main container or a non-sidecar
+// init container. Checks both the keyring volume mount AND env-var references
+// to the passphrase Secret — either alone is enough for a compromised seid
+// container to recover the unlocked operator key.
 //
-// No-op when the node has no operator-keyring configured — the volume is
-// only present when SecretOperatorKeyringSource is set, so there is
-// nothing to contain.
+// No-op when the node has no operator-keyring configured.
 func assertNoOperatorKeyringOnSeidContainers(node *seiv1alpha1.SeiNode, spec *corev1.PodSpec) error {
-	if operatorKeyringSecretSource(node) == nil {
+	src := operatorKeyringSecretSource(node)
+	if src == nil {
 		return nil
 	}
+	passphraseSecretName := src.PassphraseSecretRef.SecretName
 
 	check := func(c *corev1.Container) error {
 		for _, m := range c.VolumeMounts {
@@ -209,6 +209,21 @@ func assertNoOperatorKeyringOnSeidContainers(node *seiv1alpha1.SeiNode, spec *co
 				return fmt.Errorf("pod-spec for %s/%s mounts operator-keyring volume on container %q; "+
 					"operator-keyring is exclusively the sidecar's — mounting on seid would collapse the sidecar/seid trust boundary",
 					node.Namespace, node.Name, c.Name)
+			}
+		}
+		for _, ev := range c.Env {
+			if ev.ValueFrom != nil && ev.ValueFrom.SecretKeyRef != nil &&
+				ev.ValueFrom.SecretKeyRef.Name == passphraseSecretName {
+				return fmt.Errorf("pod-spec for %s/%s references operator-keyring passphrase Secret %q in env %q on container %q; "+
+					"the passphrase is exclusively the sidecar's",
+					node.Namespace, node.Name, passphraseSecretName, ev.Name, c.Name)
+			}
+		}
+		for _, ef := range c.EnvFrom {
+			if ef.SecretRef != nil && ef.SecretRef.Name == passphraseSecretName {
+				return fmt.Errorf("pod-spec for %s/%s references operator-keyring passphrase Secret %q via envFrom on container %q; "+
+					"the passphrase is exclusively the sidecar's",
+					node.Namespace, node.Name, passphraseSecretName, c.Name)
 			}
 		}
 		return nil

@@ -1072,9 +1072,11 @@ func TestPodSpec_FSGroup(t *testing.T) {
 // --- assertNoOperatorKeyringOnSeidContainers ---
 
 const (
-	keyringTestSeidInitName = "seid-init"
-	keyringTestSidecarName  = "sei-sidecar"
-	keyringTestMountPath    = "/sei/keyring-file"
+	keyringTestSeidInitName        = "seid-init"
+	keyringTestSidecarName         = "sei-sidecar"
+	keyringTestMountPath           = "/sei/keyring-file"
+	keyringTestPassphraseSecret    = "validator-0-opk-pass"
+	keyringTestPassphraseSecretKey = "passphrase"
 )
 
 func validatorNodeWithOperatorKeyring() *seiv1alpha1.SeiNode {
@@ -1088,8 +1090,8 @@ func validatorNodeWithOperatorKeyring() *seiv1alpha1.SeiNode {
 					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
 						SecretName: "validator-0-opk",
 						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{
-							SecretName: "validator-0-opk-pass",
-							Key:        "passphrase",
+							SecretName: keyringTestPassphraseSecret,
+							Key:        keyringTestPassphraseSecretKey,
 						},
 					},
 				},
@@ -1157,6 +1159,46 @@ func TestAssertNoOperatorKeyringOnSeidContainers_SeidInitMisMounted_Rejects(t *t
 	}
 	err := assertNoOperatorKeyringOnSeidContainers(node, spec)
 	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(`container "seid-init"`))
+}
+
+func TestAssertNoOperatorKeyringOnSeidContainers_PassphraseEnvOnSeidMain_Rejects(t *testing.T) {
+	g := NewWithT(t)
+	node := validatorNodeWithOperatorKeyring()
+	spec := &corev1.PodSpec{
+		Containers: []corev1.Container{
+			{Name: containerNameSeid, Env: []corev1.EnvVar{{
+				Name: "SEI_KEYRING_PASSPHRASE",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: keyringTestPassphraseSecret},
+						Key:                  keyringTestPassphraseSecretKey,
+					},
+				},
+			}}},
+		},
+	}
+	err := assertNoOperatorKeyringOnSeidContainers(node, spec)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(`passphrase Secret "` + keyringTestPassphraseSecret + `"`))
+	g.Expect(err.Error()).To(ContainSubstring(`container "seid"`))
+}
+
+func TestAssertNoOperatorKeyringOnSeidContainers_PassphraseEnvFromOnSeidInit_Rejects(t *testing.T) {
+	g := NewWithT(t)
+	node := validatorNodeWithOperatorKeyring()
+	spec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{
+			{Name: keyringTestSeidInitName, EnvFrom: []corev1.EnvFromSource{{
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: keyringTestPassphraseSecret},
+				},
+			}}},
+		},
+	}
+	err := assertNoOperatorKeyringOnSeidContainers(node, spec)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(`envFrom`))
 	g.Expect(err.Error()).To(ContainSubstring(`container "seid-init"`))
 }
 
