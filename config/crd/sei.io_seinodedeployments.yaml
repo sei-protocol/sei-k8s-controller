@@ -683,6 +683,89 @@ spec:
                             x-kubernetes-validations:
                             - message: exactly one node key source must be set
                               rule: '(has(self.secret) ? 1 : 0) == 1'
+                          operatorKeyring:
+                            description: |-
+                              OperatorKeyring declares the source of this validator's operator-account
+                              keyring used by the sidecar to sign and broadcast governance,
+                              MsgEditValidator, withdraw-rewards, and other operator-account
+                              transactions.
+
+                              Independently optional from signingKey/nodeKey: a validator may run as a
+                              non-signing observer with operatorKeyring set (governance-only
+                              operations), or as a consensus-signing validator without operatorKeyring
+                              (governance performed out-of-band).
+
+                              Mounted exclusively on the sidecar container; the seid main container
+                              and bootstrap pods never carry this material.
+                            properties:
+                              secret:
+                                description: |-
+                                  Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
+                                  in the SeiNode's namespace.
+                                properties:
+                                  keyName:
+                                    default: node_admin
+                                    description: |-
+                                      KeyName is the name of the keyring entry to use when signing
+                                      (the name passed to `seid keys add <name>`). Defaults to
+                                      "node_admin" to preserve continuity with the seienv convention.
+                                      Mutable — rotating to a different entry within the same Secret
+                                      is a routine operator-account change, not a slashing risk.
+
+                                      The default literal below MUST match DefaultOperatorKeyName —
+                                      kubebuilder markers cannot reference Go constants.
+                                    maxLength: 64
+                                    pattern: ^[a-zA-Z0-9_-]+$
+                                    type: string
+                                  passphraseSecretRef:
+                                    description: |-
+                                      PassphraseSecretRef names a separate Secret containing the keyring
+                                      unlock passphrase. Required for the file backend.
+                                    properties:
+                                      key:
+                                        description: |-
+                                          Key is the data key inside the Secret holding the passphrase.
+                                          Required — operators declare this explicitly rather than relying on
+                                          a default that hides where the passphrase actually lives.
+                                        maxLength: 253
+                                        minLength: 1
+                                        type: string
+                                      secretName:
+                                        description: SecretName names the passphrase
+                                          Secret in the SeiNode's namespace.
+                                        maxLength: 253
+                                        minLength: 1
+                                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                        type: string
+                                        x-kubernetes-validations:
+                                        - message: passphrase secretName is immutable
+                                          rule: self == oldSelf
+                                    required:
+                                    - key
+                                    - secretName
+                                    type: object
+                                  secretName:
+                                    description: |-
+                                      SecretName names a Secret in the SeiNode's namespace whose data keys
+                                      are the on-disk Cosmos SDK file-keyring layout. Minimum required:
+                                        <keyname>.info        (armored encrypted key blob)
+                                        <hex-of-address>.address  (name→address index)
+                                    maxLength: 253
+                                    minLength: 1
+                                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                    type: string
+                                    x-kubernetes-validations:
+                                    - message: secretName is immutable
+                                      rule: self == oldSelf
+                                required:
+                                - passphraseSecretRef
+                                - secretName
+                                type: object
+                            type: object
+                            x-kubernetes-validations:
+                            - message: exactly one operator keyring source must be
+                                set
+                              rule: '(has(self.secret) ? 1 : 0) == 1'
                           signingKey:
                             description: |-
                               SigningKey declares the source of this validator's consensus signing
@@ -773,6 +856,29 @@ spec:
                             Secrets — packing both keys in one Secret collapses the
                             bootstrap-pod trust boundary
                           rule: '!has(self.signingKey) || !has(self.nodeKey) || self.signingKey.secret.secretName
+                            != self.nodeKey.secret.secretName'
+                        - message: operatorKeyring and signingKey must reference distinct
+                            Secrets — collapsing them into one Secret would force
+                            the sidecar/seid trust boundary to evaporate
+                          rule: '!has(self.operatorKeyring) || !has(self.signingKey)
+                            || self.operatorKeyring.secret.secretName != self.signingKey.secret.secretName'
+                        - message: operatorKeyring and nodeKey must reference distinct
+                            Secrets
+                          rule: '!has(self.operatorKeyring) || !has(self.nodeKey)
+                            || self.operatorKeyring.secret.secretName != self.nodeKey.secret.secretName'
+                        - message: operatorKeyring data Secret and passphrase Secret
+                            must be distinct
+                          rule: '!has(self.operatorKeyring) || self.operatorKeyring.secret.secretName
+                            != self.operatorKeyring.secret.passphraseSecretRef.secretName'
+                        - message: operatorKeyring passphrase Secret must not equal
+                            signingKey Secret
+                          rule: '!has(self.operatorKeyring) || !has(self.signingKey)
+                            || self.operatorKeyring.secret.passphraseSecretRef.secretName
+                            != self.signingKey.secret.secretName'
+                        - message: operatorKeyring passphrase Secret must not equal
+                            nodeKey Secret
+                          rule: '!has(self.operatorKeyring) || !has(self.nodeKey)
+                            || self.operatorKeyring.secret.passphraseSecretRef.secretName
                             != self.nodeKey.secret.secretName'
                     required:
                     - chainId

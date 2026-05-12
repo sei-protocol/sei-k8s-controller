@@ -1,10 +1,21 @@
 package v1alpha1
 
+// DefaultOperatorKeyName matches the +kubebuilder:default on
+// SecretOperatorKeyringSource.KeyName. Referenced by the planner and
+// noderesource packages so defaulting stays consistent when admission
+// webhooks haven't run (e.g. in-memory specs in tests).
+const DefaultOperatorKeyName = "node_admin"
+
 // ValidatorSpec configures a consensus-participating validator node.
 // Validators bootstrap the same way as full nodes but participate in consensus.
 //
 // +kubebuilder:validation:XValidation:rule="has(self.signingKey) == has(self.nodeKey)",message="signingKey and nodeKey must be set together (validators get both or neither)"
 // +kubebuilder:validation:XValidation:rule="!has(self.signingKey) || !has(self.nodeKey) || self.signingKey.secret.secretName != self.nodeKey.secret.secretName",message="signingKey and nodeKey must reference distinct Secrets — packing both keys in one Secret collapses the bootstrap-pod trust boundary"
+// +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || !has(self.signingKey) || self.operatorKeyring.secret.secretName != self.signingKey.secret.secretName",message="operatorKeyring and signingKey must reference distinct Secrets — collapsing them into one Secret would force the sidecar/seid trust boundary to evaporate"
+// +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || !has(self.nodeKey) || self.operatorKeyring.secret.secretName != self.nodeKey.secret.secretName",message="operatorKeyring and nodeKey must reference distinct Secrets"
+// +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || self.operatorKeyring.secret.secretName != self.operatorKeyring.secret.passphraseSecretRef.secretName",message="operatorKeyring data Secret and passphrase Secret must be distinct"
+// +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || !has(self.signingKey) || self.operatorKeyring.secret.passphraseSecretRef.secretName != self.signingKey.secret.secretName",message="operatorKeyring passphrase Secret must not equal signingKey Secret"
+// +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || !has(self.nodeKey) || self.operatorKeyring.secret.passphraseSecretRef.secretName != self.nodeKey.secret.secretName",message="operatorKeyring passphrase Secret must not equal nodeKey Secret"
 type ValidatorSpec struct {
 	// Snapshot configures how the node obtains its initial chain state.
 	// When absent the node block-syncs from genesis.
@@ -35,6 +46,21 @@ type ValidatorSpec struct {
 	// first appears on the network when the production pod starts.
 	// +optional
 	NodeKey *NodeKeySource `json:"nodeKey,omitempty"`
+
+	// OperatorKeyring declares the source of this validator's operator-account
+	// keyring used by the sidecar to sign and broadcast governance,
+	// MsgEditValidator, withdraw-rewards, and other operator-account
+	// transactions.
+	//
+	// Independently optional from signingKey/nodeKey: a validator may run as a
+	// non-signing observer with operatorKeyring set (governance-only
+	// operations), or as a consensus-signing validator without operatorKeyring
+	// (governance performed out-of-band).
+	//
+	// Mounted exclusively on the sidecar container; the seid main container
+	// and bootstrap pods never carry this material.
+	// +optional
+	OperatorKeyring *OperatorKeyringSource `json:"operatorKeyring,omitempty"`
 }
 
 // SigningKeySource declares where a validator's consensus signing key
@@ -107,6 +133,80 @@ type SecretNodeKeySource struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="secretName is immutable"
 	SecretName string `json:"secretName"`
+}
+
+// OperatorKeyringSource declares where a validator's operator-account
+// keyring (used by the sidecar to sign governance, MsgEditValidator,
+// withdraw-rewards, and other operator-account transactions) comes from.
+// Exactly one variant must be set; variants are mutually exclusive.
+//
+// +kubebuilder:validation:XValidation:rule="(has(self.secret) ? 1 : 0) == 1",message="exactly one operator keyring source must be set"
+type OperatorKeyringSource struct {
+	// Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
+	// in the SeiNode's namespace.
+	// +optional
+	Secret *SecretOperatorKeyringSource `json:"secret,omitempty"`
+}
+
+// SecretOperatorKeyringSource references the Kubernetes Secrets that supply
+// the operator-account keyring directory and its unlock passphrase. The
+// controller never creates, mutates, or deletes either Secret — their
+// lifecycles are fully external (kubectl + SOPS, ESO, CSI Secrets Store).
+//
+// The keyring data and passphrase live in deliberately separate Secrets:
+// the data Secret is projected as a directory-shaped volume mount, so
+// co-locating the passphrase as a data key would project it as a file
+// under the keyring directory and the file-backend would treat it as
+// keyring contents.
+type SecretOperatorKeyringSource struct {
+	// SecretName names a Secret in the SeiNode's namespace whose data keys
+	// are the on-disk Cosmos SDK file-keyring layout. Minimum required:
+	//   <keyname>.info        (armored encrypted key blob)
+	//   <hex-of-address>.address  (name→address index)
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="secretName is immutable"
+	SecretName string `json:"secretName"`
+
+	// KeyName is the name of the keyring entry to use when signing
+	// (the name passed to `seid keys add <name>`). Defaults to
+	// "node_admin" to preserve continuity with the seienv convention.
+	// Mutable — rotating to a different entry within the same Secret
+	// is a routine operator-account change, not a slashing risk.
+	//
+	// The default literal below MUST match DefaultOperatorKeyName —
+	// kubebuilder markers cannot reference Go constants.
+	//
+	// +optional
+	// +kubebuilder:default="node_admin"
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9_-]+$`
+	KeyName string `json:"keyName,omitempty"`
+
+	// PassphraseSecretRef names a separate Secret containing the keyring
+	// unlock passphrase. Required for the file backend.
+	PassphraseSecretRef PassphraseSecretRef `json:"passphraseSecretRef"`
+}
+
+// PassphraseSecretRef points at a single data key inside a Secret.
+type PassphraseSecretRef struct {
+	// SecretName names the passphrase Secret in the SeiNode's namespace.
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="passphrase secretName is immutable"
+	SecretName string `json:"secretName"`
+
+	// Key is the data key inside the Secret holding the passphrase.
+	// Required — operators declare this explicitly rather than relying on
+	// a default that hides where the passphrase actually lives.
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Key string `json:"key"`
 }
 
 // GenesisCeremonyNodeConfig holds per-node genesis ceremony parameters.

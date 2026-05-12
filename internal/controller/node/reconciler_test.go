@@ -198,7 +198,8 @@ func TestNodeReconcile_RunningPhase_UpdatesStatefulSetImage(t *testing.T) {
 	node.Status.Phase = seiv1alpha1.PhaseRunning
 
 	// Pre-create a StatefulSet with the old image.
-	oldSts := noderesource.GenerateStatefulSet(node, platformtest.Config())
+	oldSts, err := noderesource.GenerateStatefulSet(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
 	oldSts.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
 
 	r, c := newNodeReconciler(t, node, oldSts)

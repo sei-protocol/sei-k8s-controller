@@ -139,6 +139,127 @@ func TestValidatorPlanner_Validate_SigningKey(t *testing.T) {
 	}
 }
 
+func TestValidatorPlanner_Validate_OperatorKeyringDistinctness(t *testing.T) {
+	const (
+		sk   = "validator-0-signing"
+		nk   = "validator-0-nodekey"
+		opk  = "validator-0-opk"
+		pass = "validator-0-opk-pass"
+	)
+	cases := []struct {
+		name    string
+		spec    seiv1alpha1.ValidatorSpec
+		wantErr string
+	}{
+		{
+			name: "all four secrets distinct is valid",
+			spec: seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: sk}},
+				NodeKey:    &seiv1alpha1.NodeKeySource{Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: nk}},
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName:          opk,
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{SecretName: pass},
+					},
+				},
+			},
+		},
+		{
+			name: "operatorKeyring Secret equals signingKey Secret is rejected",
+			spec: seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: sk}},
+				NodeKey:    &seiv1alpha1.NodeKeySource{Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: nk}},
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName:          sk,
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{SecretName: pass},
+					},
+				},
+			},
+			wantErr: "operatorKeyring Secret",
+		},
+		{
+			name: "operatorKeyring Secret equals nodeKey Secret is rejected",
+			spec: seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: sk}},
+				NodeKey:    &seiv1alpha1.NodeKeySource{Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: nk}},
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName:          nk,
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{SecretName: pass},
+					},
+				},
+			},
+			wantErr: "must differ from nodeKey Secret",
+		},
+		{
+			name: "operatorKeyring Secret equals its own passphrase Secret is rejected",
+			spec: seiv1alpha1.ValidatorSpec{
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName:          opk,
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{SecretName: opk},
+					},
+				},
+			},
+			wantErr: "must differ from its passphrase Secret",
+		},
+		{
+			name: "passphrase Secret equals signingKey Secret is rejected",
+			spec: seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: sk}},
+				NodeKey:    &seiv1alpha1.NodeKeySource{Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: nk}},
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName:          opk,
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{SecretName: sk},
+					},
+				},
+			},
+			wantErr: "passphrase Secret",
+		},
+		{
+			name: "passphrase Secret equals nodeKey Secret is rejected",
+			spec: seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: sk}},
+				NodeKey:    &seiv1alpha1.NodeKeySource{Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: nk}},
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName:          opk,
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{SecretName: nk},
+					},
+				},
+			},
+			wantErr: "passphrase Secret",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			node := &seiv1alpha1.SeiNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "pacific-1"},
+				Spec: seiv1alpha1.SeiNodeSpec{
+					ChainID:   "pacific-1",
+					Image:     "seid:v6.4.1",
+					Validator: &tc.spec,
+				},
+			}
+			err := (&validatorPlanner{}).Validate(node)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate: unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Validate: expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate: error = %q, want containing %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
 // taskTypes returns the ordered list of task types in a plan, for assertions.
 func taskTypes(plan *seiv1alpha1.TaskPlan) []string {
 	out := make([]string, len(plan.Tasks))
@@ -241,6 +362,135 @@ func TestValidatorPlanner_BuildPlan_IdentityInsertsValidateTasks_Base(t *testing
 	if pvcIdx >= signingIdx || signingIdx >= nodeKeyIdx || nodeKeyIdx >= stsIdx {
 		t.Fatalf("expected ordering pvc(%d) < signing(%d) < nodeKey(%d) < apply-statefulset(%d); got %v",
 			pvcIdx, signingIdx, nodeKeyIdx, stsIdx, taskTypes(plan))
+	}
+}
+
+func TestValidatorPlanner_BuildPlan_OperatorKeyringInsertsValidateTask_Base(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "pacific-1"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "pacific-1",
+			Image:   "seid:v6.4.1",
+			Validator: &seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{
+					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+				},
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName: "validator-0-opk",
+						KeyName:    "node_admin",
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{
+							SecretName: "validator-0-opk-passphrase",
+							Key:        "passphrase",
+						},
+					},
+				},
+			},
+		},
+	}
+	plan, err := (&validatorPlanner{}).BuildPlan(node)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	nodeKeyIdx := indexOfTaskType(plan, task.TaskTypeValidateNodeKey)
+	keyringIdx := indexOfTaskType(plan, task.TaskTypeValidateOperatorKeyring)
+	stsIdx := indexOfTaskType(plan, task.TaskTypeApplyStatefulSet)
+	if keyringIdx < 0 {
+		t.Fatalf("plan must contain %s; got %v", task.TaskTypeValidateOperatorKeyring, taskTypes(plan))
+	}
+	if nodeKeyIdx >= keyringIdx || keyringIdx >= stsIdx {
+		t.Fatalf("expected ordering nodeKey(%d) < operatorKeyring(%d) < apply-statefulset(%d); got %v",
+			nodeKeyIdx, keyringIdx, stsIdx, taskTypes(plan))
+	}
+
+	for _, pt := range plan.Tasks {
+		if pt.Type != task.TaskTypeValidateOperatorKeyring {
+			continue
+		}
+		raw := string(pt.Params.Raw)
+		if !strings.Contains(raw, "validator-0-opk") {
+			t.Fatalf("validate-operator-keyring params must reference data secretName; got %q", raw)
+		}
+		if !strings.Contains(raw, "validator-0-opk-passphrase") {
+			t.Fatalf("validate-operator-keyring params must reference passphrase secretName; got %q", raw)
+		}
+		if !strings.Contains(raw, "node_admin") {
+			t.Fatalf("validate-operator-keyring params must reference keyName; got %q", raw)
+		}
+	}
+}
+
+func TestValidatorPlanner_BuildPlan_OperatorKeyringInsertsValidateTask_Bootstrap(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "pacific-1"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "pacific-1",
+			Image:   "seid:v6.4.1",
+			Validator: &seiv1alpha1.ValidatorSpec{
+				Snapshot: &seiv1alpha1.SnapshotSource{
+					BootstrapImage: "ghcr.io/sei/bootstrap:v1",
+					S3:             &seiv1alpha1.S3SnapshotSource{TargetHeight: 12345678},
+				},
+				SigningKey: &seiv1alpha1.SigningKeySource{
+					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+				},
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName: "validator-0-opk",
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{
+							SecretName: "validator-0-opk-passphrase",
+						},
+					},
+				},
+			},
+		},
+	}
+	plan, err := (&validatorPlanner{}).BuildPlan(node)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	nodeKeyIdx := indexOfTaskType(plan, task.TaskTypeValidateNodeKey)
+	keyringIdx := indexOfTaskType(plan, task.TaskTypeValidateOperatorKeyring)
+	deployJobIdx := indexOfTaskType(plan, task.TaskTypeDeployBootstrapJob)
+	if keyringIdx < 0 {
+		t.Fatalf("plan must contain %s; got %v", task.TaskTypeValidateOperatorKeyring, taskTypes(plan))
+	}
+	if nodeKeyIdx >= keyringIdx || keyringIdx >= deployJobIdx {
+		t.Fatalf("expected ordering nodeKey(%d) < operatorKeyring(%d) < deploy-bootstrap-job(%d); got %v",
+			nodeKeyIdx, keyringIdx, deployJobIdx, taskTypes(plan))
+	}
+}
+
+func TestValidatorPlanner_BuildPlan_NoOperatorKeyringOmitsValidateTask(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "pacific-1"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "pacific-1",
+			Image:   "seid:v6.4.1",
+			Validator: &seiv1alpha1.ValidatorSpec{
+				SigningKey: &seiv1alpha1.SigningKeySource{
+					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+				},
+				NodeKey: &seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+				},
+			},
+		},
+	}
+	plan, err := (&validatorPlanner{}).BuildPlan(node)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if idx := indexOfTaskType(plan, task.TaskTypeValidateOperatorKeyring); idx >= 0 {
+		t.Fatalf("plan must not contain %s when OperatorKeyring is unset; got %v at index %d",
+			task.TaskTypeValidateOperatorKeyring, taskTypes(plan), idx)
 	}
 }
 

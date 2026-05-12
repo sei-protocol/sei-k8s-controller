@@ -49,7 +49,10 @@ func (e *applyStatefulSetExecution) Execute(ctx context.Context) error {
 		return err
 	}
 
-	desired := noderesource.GenerateStatefulSet(node, e.cfg.Platform)
+	desired, err := noderesource.GenerateStatefulSet(node, e.cfg.Platform)
+	if err != nil {
+		return Terminal(fmt.Errorf("generating statefulset: %w", err))
+	}
 	desired.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
 	if err := ctrl.SetControllerReference(node, desired, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on statefulset: %w", err)

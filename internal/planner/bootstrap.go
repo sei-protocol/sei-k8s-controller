@@ -62,6 +62,12 @@ func buildBootstrapPlan(
 			return nil, err
 		}
 	}
+	if needsValidateOperatorKeyring(node) {
+		if err := appendTask(task.TaskTypeValidateOperatorKeyring,
+			validateOperatorKeyringParams(node)); err != nil {
+			return nil, err
+		}
+	}
 
 	// Phase 1: Deploy bootstrap infrastructure
 	if err := appendTask(task.TaskTypeDeployBootstrapSvc,

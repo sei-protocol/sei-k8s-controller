@@ -351,6 +351,35 @@ func validateNodeKeyParams(node *seiv1alpha1.SeiNode) any {
 	}
 }
 
+func needsValidateOperatorKeyring(node *seiv1alpha1.SeiNode) bool {
+	if node.Spec.Validator == nil || node.Spec.Validator.OperatorKeyring == nil {
+		return false
+	}
+	s := node.Spec.Validator.OperatorKeyring.Secret
+	return s != nil && s.SecretName != ""
+}
+
+func validateOperatorKeyringParams(node *seiv1alpha1.SeiNode) any {
+	if !needsValidateOperatorKeyring(node) {
+		return nil
+	}
+	s := node.Spec.Validator.OperatorKeyring.Secret
+	// KeyName falls back to the CRD default for in-memory specs that
+	// haven't been through admission defaulting; PassphraseSecretRef.Key
+	// is required (no fallback).
+	keyName := s.KeyName
+	if keyName == "" {
+		keyName = seiv1alpha1.DefaultOperatorKeyName
+	}
+	return &task.ValidateOperatorKeyringParams{
+		SecretName:           s.SecretName,
+		KeyName:              keyName,
+		PassphraseSecretName: s.PassphraseSecretRef.SecretName,
+		PassphraseSecretKey:  s.PassphraseSecretRef.Key,
+		Namespace:            node.Namespace,
+	}
+}
+
 // isGenesisCeremonyNode returns true when the node participates in a group genesis ceremony.
 func isGenesisCeremonyNode(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Validator != nil && node.Spec.Validator.GenesisCeremony != nil
@@ -504,6 +533,9 @@ func buildBasePlan(
 	if needsValidateNodeKey(node) {
 		prog = append(prog, task.TaskTypeValidateNodeKey)
 	}
+	if needsValidateOperatorKeyring(node) {
+		prog = append(prog, task.TaskTypeValidateOperatorKeyring)
+	}
 	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
 	prog = append(prog, sidecarProg...)
 
@@ -551,6 +583,8 @@ func paramsForTaskType(
 		return validateSigningKeyParams(node)
 	case task.TaskTypeValidateNodeKey:
 		return validateNodeKeyParams(node)
+	case task.TaskTypeValidateOperatorKeyring:
+		return validateOperatorKeyringParams(node)
 
 	// Sidecar tasks
 	case TaskSnapshotRestore:
