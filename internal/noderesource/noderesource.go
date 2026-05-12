@@ -46,6 +46,10 @@ const (
 	operatorKeyringDirName  = "keyring-file"
 	keyringPassphraseEnvVar = "SEI_KEYRING_PASSPHRASE"
 
+	// sidecarTmpVolumeName backs an emptyDir at /tmp — required because the
+	// sidecar runs with ReadOnlyRootFilesystem and Go stdlib defaults to /tmp.
+	sidecarTmpVolumeName = "sidecar-tmp"
+
 	// sidecarNonRootUID is the nonroot UID/GID baked into distroless and
 	// chainguard static-debian12 base images. Pod-level fsGroup matches so
 	// the non-root sidecar can read kubelet-projected 0o400 Secret files.
@@ -322,8 +326,12 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	signingVolumes := signingKeyVolumes(node)
 	nodeVolumes := nodeKeyVolumes(node)
 	keyringVolumes := operatorKeyringVolumes(node)
-	volumes := make([]corev1.Volume, 0, 1+len(signingVolumes)+len(nodeVolumes)+len(keyringVolumes))
-	volumes = append(volumes, dataVolume)
+	sidecarTmpVolume := corev1.Volume{
+		Name:         sidecarTmpVolumeName,
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}
+	volumes := make([]corev1.Volume, 0, 2+len(signingVolumes)+len(nodeVolumes)+len(keyringVolumes))
+	volumes = append(volumes, dataVolume, sidecarTmpVolume)
 	volumes = append(volumes, signingVolumes...)
 	volumes = append(volumes, nodeVolumes...)
 	volumes = append(volumes, keyringVolumes...)
@@ -365,11 +373,14 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	// SecurityContext, separate the sidecar's SA) is tracked as a follow-up.
 	// See PR #220 review thread.
 	spec.ShareProcessNamespace = ptr.To(true)
-	// fsGroup is required so the non-root sidecar (UID 65532) can read
-	// 0o400 Secret-projected files (operator keyring) kubelet owns root:root.
+	// FSGroup grants the non-root sidecar UID read access to 0o400
+	// Secret-projected files. ChangePolicy=OnRootMismatch avoids recursive
+	// chown on every pod start (the "Always" default is costly on archive PVCs).
 	fsGroup := sidecarNonRootUID
+	fsGroupChangePolicy := corev1.FSGroupChangeOnRootMismatch
 	spec.SecurityContext = &corev1.PodSecurityContext{
-		FSGroup: &fsGroup,
+		FSGroup:             &fsGroup,
+		FSGroupChangePolicy: &fsGroupChangePolicy,
 	}
 	spec.InitContainers = []corev1.Container{
 		buildSeidInitContainer(node),
@@ -411,8 +422,11 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 	env = append(env, keyringEnv...)
 
 	keyringMounts := operatorKeyringMounts(node)
-	mounts := make([]corev1.VolumeMount, 0, 1+len(keyringMounts))
-	mounts = append(mounts, corev1.VolumeMount{Name: "data", MountPath: dataDir})
+	mounts := make([]corev1.VolumeMount, 0, 2+len(keyringMounts))
+	mounts = append(mounts,
+		corev1.VolumeMount{Name: "data", MountPath: dataDir},
+		corev1.VolumeMount{Name: sidecarTmpVolumeName, MountPath: "/tmp"},
+	)
 	mounts = append(mounts, keyringMounts...)
 
 	c := corev1.Container{

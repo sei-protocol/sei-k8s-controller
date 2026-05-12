@@ -187,8 +187,10 @@ func TestBuildNodePodSpec_Genesis_MountsExistingPVC(t *testing.T) {
 	spec := buildNodePodSpec(node, platformtest.Config())
 
 	g.Expect(spec.ServiceAccountName).To(Equal(platformtest.Config().ServiceAccount))
-	g.Expect(spec.Volumes).To(HaveLen(1))
+	g.Expect(spec.Volumes).To(HaveLen(2)) // data PVC + sidecar-tmp emptyDir
 	g.Expect(spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal("data-mynet-0"))
+	g.Expect(spec.Volumes[1].Name).To(Equal(sidecarTmpVolumeName))
+	g.Expect(spec.Volumes[1].EmptyDir).NotTo(BeNil())
 }
 
 func TestBuildNodePodSpec_Snapshot_MountsNodePVC(t *testing.T) {
@@ -410,8 +412,10 @@ func TestSidecarContainer_DataVolumeMount(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
-	g.Expect(sc.VolumeMounts).To(HaveLen(1))
+	g.Expect(sc.VolumeMounts).To(HaveLen(2))
 	g.Expect(sc.VolumeMounts[0].MountPath).To(Equal(dataDir))
+	g.Expect(sc.VolumeMounts[1].Name).To(Equal(sidecarTmpVolumeName))
+	g.Expect(sc.VolumeMounts[1].MountPath).To(Equal("/tmp"))
 }
 
 func TestSidecarContainer_CustomPort(t *testing.T) {
