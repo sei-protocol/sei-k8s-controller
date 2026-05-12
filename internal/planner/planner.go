@@ -368,11 +368,11 @@ func validateOperatorKeyringParams(node *seiv1alpha1.SeiNode) any {
 	// from a partially-defaulted in-memory spec still get the right values.
 	keyName := s.KeyName
 	if keyName == "" {
-		keyName = "node_admin"
+		keyName = seiv1alpha1.DefaultOperatorKeyName
 	}
 	passphraseKey := s.PassphraseSecretRef.Key
 	if passphraseKey == "" {
-		passphraseKey = "passphrase"
+		passphraseKey = seiv1alpha1.DefaultPassphraseSecretKey
 	}
 	return &task.ValidateOperatorKeyringParams{
 		SecretName:           s.SecretName,

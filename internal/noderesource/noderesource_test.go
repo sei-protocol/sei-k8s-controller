@@ -76,6 +76,18 @@ func envValue(envs []corev1.EnvVar, name string) string {
 	return ""
 }
 
+// mustGenerateStatefulSet wraps GenerateStatefulSet with a t.Fatal on
+// invariant violation. Used by tests that construct a valid SeiNode and
+// expect the runtime guard to pass.
+func mustGenerateStatefulSet(t *testing.T, node *seiv1alpha1.SeiNode, p PlatformConfig) *appsv1.StatefulSet {
+	t.Helper()
+	sts, err := GenerateStatefulSet(node, p)
+	if err != nil {
+		t.Fatalf("GenerateStatefulSet: %v", err)
+	}
+	return sts
+}
+
 // --- Pod labels ---
 
 func TestResourceLabelsForNode_DefaultsToNodeOnly(t *testing.T) {
@@ -120,7 +132,7 @@ func TestGenerateNodeStatefulSet_PodLabelsPropagate(t *testing.T) {
 		"sei.io/nodedeployment": "my-group",
 	}
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	g.Expect(sts.Labels).To(HaveKeyWithValue("sei.io/nodedeployment", "my-group"))
 	g.Expect(sts.Spec.Template.Labels).To(HaveKeyWithValue("sei.io/nodedeployment", "my-group"))
@@ -133,7 +145,7 @@ func TestGenerateNodeStatefulSet_BasicFields(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	g.Expect(sts.Name).To(Equal("mynet-0"))
 	g.Expect(sts.Namespace).To(Equal("default"))
@@ -148,7 +160,7 @@ func TestGenerateNodeStatefulSet_UsesOnDeleteUpdateStrategy(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	g.Expect(sts.Spec.UpdateStrategy.Type).To(Equal(appsv1.OnDeleteStatefulSetStrategyType))
 }
@@ -157,7 +169,7 @@ func TestGenerateNodeStatefulSet_AlwaysHasSidecar(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	g.Expect(initContainers).To(HaveLen(2))
@@ -192,7 +204,7 @@ func TestBuildNodePodSpec_SharedPIDNamespace(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	g.Expect(sts.Spec.Template.Spec.ShareProcessNamespace).NotTo(BeNil())
 	g.Expect(*sts.Spec.Template.Spec.ShareProcessNamespace).To(BeTrue())
@@ -347,7 +359,7 @@ func TestSidecarContainer_DefaultImage(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Port: 7777}
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Image).To(Equal(defaultSidecarImage))
@@ -358,7 +370,7 @@ func TestSidecarContainer_CustomImage(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Image: "custom/seictl:v3", Port: 7777}
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Image).To(Equal("custom/seictl:v3"))
@@ -368,7 +380,7 @@ func TestSidecarContainer_RestartPolicyAlways(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc).NotTo(BeNil())
@@ -380,7 +392,7 @@ func TestSidecarContainer_EnvVars(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	cfg := platformtest.Config()
@@ -395,7 +407,7 @@ func TestSidecarContainer_DataVolumeMount(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.VolumeMounts).To(HaveLen(1))
@@ -407,7 +419,7 @@ func TestSidecarContainer_CustomPort(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Port: 9999}
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Ports).To(HaveLen(1))
@@ -431,7 +443,7 @@ func TestSidecarContainer_CustomResources(t *testing.T) {
 		},
 	}
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Resources.Requests.Cpu().String()).To(Equal("250m"))
@@ -444,7 +456,7 @@ func TestSidecarContainer_NoResources_DefaultsToEmpty(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
 	g.Expect(sc.Resources.Requests).To(BeNil())
@@ -457,7 +469,7 @@ func TestSidecarMainContainer_StartupProbeTargetsHealthz(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid).NotTo(BeNil())
@@ -476,7 +488,7 @@ func TestSidecarMainContainer_StartupProbeUsesCustomPort(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Port: 9999}
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(9999))
@@ -486,7 +498,7 @@ func TestSidecarMainContainer_ReadinessProbeTargetsLagStatus(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid).NotTo(BeNil())
@@ -505,7 +517,7 @@ func TestSidecarMainContainer_WaitWrapper_PollsHealthzBeforeExec(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
@@ -524,7 +536,7 @@ func TestSidecarMainContainer_WaitWrapper_IncludesEntrypointArgs(t *testing.T) {
 		Args:    []string{"start", "--home", "/sei"},
 	}
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "/sei"`))
@@ -534,7 +546,7 @@ func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeidStart(t *test
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
@@ -546,7 +558,7 @@ func TestSidecarMainContainer_NilSidecarConfig_UsesDefaults(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = nil
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(int(seiconfig.PortSidecar)))
@@ -562,7 +574,7 @@ func TestSidecarMainContainer_WaitWrapper_UsesCustomPort(t *testing.T) {
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Port: 9999}
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/9999"))
@@ -574,7 +586,7 @@ func TestGenesisMode_SidecarPresent(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	g.Expect(initContainers).To(HaveLen(2))
@@ -586,7 +598,7 @@ func TestGenesisMode_NoSnapshotRestoreInitContainer(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
 	g.Expect(findInitContainer(initContainers, "snapshot-restore")).To(BeNil())
@@ -596,7 +608,7 @@ func TestGenesisMode_SharedPIDNamespace(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	g.Expect(sts.Spec.Template.Spec.ShareProcessNamespace).NotTo(BeNil())
 	g.Expect(*sts.Spec.Template.Spec.ShareProcessNamespace).To(BeTrue())
@@ -775,7 +787,7 @@ func TestSigningKey_SecretVolumePresentOnPodTemplate(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	vol := findVolume(sts.Spec.Template.Spec.Volumes, signingKeyVolumeName)
 	g.Expect(vol).NotTo(BeNil(), "signing-key volume must be present on the StatefulSet pod template")
@@ -791,7 +803,7 @@ func TestSigningKey_SeidContainerHasSubPathMount(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 	g.Expect(seid).NotTo(BeNil(), "seid main container must exist")
 
@@ -806,7 +818,7 @@ func TestSigningKey_SidecarContainerHasNoSigningMount(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 	g.Expect(sidecar).NotTo(BeNil(), "sei-sidecar init container must exist")
 
@@ -818,7 +830,7 @@ func TestSigningKey_Unset_NoSigningVolume(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default") // FullNode mode, no SigningKey
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	g.Expect(findVolume(sts.Spec.Template.Spec.Volumes, signingKeyVolumeName)).To(BeNil(),
 		"non-signing-key SeiNode must not have a signing-key volume")
@@ -835,7 +847,7 @@ func TestNodeKey_SecretVolumePresentOnPodTemplate(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	vol := findVolume(sts.Spec.Template.Spec.Volumes, nodeKeyVolumeName)
 	g.Expect(vol).NotTo(BeNil(), "node-key volume must be present on the StatefulSet pod template")
@@ -851,7 +863,7 @@ func TestNodeKey_SeidContainerHasSubPathMount(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 	g.Expect(seid).NotTo(BeNil(), "seid main container must exist")
 
@@ -866,7 +878,7 @@ func TestNodeKey_SidecarContainerHasNoNodeKeyMount(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 	g.Expect(sidecar).NotTo(BeNil(), "sei-sidecar init container must exist")
 
@@ -878,7 +890,7 @@ func TestNodeKey_Unset_NoNodeKeyVolume(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default") // FullNode mode, no NodeKey
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	g.Expect(findVolume(sts.Spec.Template.Spec.Volumes, nodeKeyVolumeName)).To(BeNil(),
 		"non-validator SeiNode must not have a node-key volume")
@@ -893,7 +905,7 @@ func TestNodeKey_BothMountsCoexist(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 	g.Expect(seid).NotTo(BeNil())
 
@@ -933,7 +945,7 @@ func TestOperatorKeyring_SecretVolumePresentOnPodTemplate(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithOperatorKeyring("validator-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	vol := findVolume(sts.Spec.Template.Spec.Volumes, operatorKeyringVolumeName)
 	g.Expect(vol).NotTo(BeNil(), "operator-keyring volume must be present on the StatefulSet pod template")
@@ -948,7 +960,7 @@ func TestOperatorKeyring_SidecarContainerHasMountAndEnv(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithOperatorKeyring("validator-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 	g.Expect(sidecar).NotTo(BeNil(), "sei-sidecar init container must exist")
 
@@ -976,7 +988,7 @@ func TestOperatorKeyring_SeidMainContainerHasNoMountOrEnv(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithOperatorKeyring("validator-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 	g.Expect(seid).NotTo(BeNil(), "seid main container must exist")
 
@@ -995,7 +1007,7 @@ func TestOperatorKeyring_Unset_NoVolumeOrMount(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
 	g.Expect(findVolume(sts.Spec.Template.Spec.Volumes, operatorKeyringVolumeName)).To(BeNil())
 
@@ -1010,7 +1022,7 @@ func TestSidecarContainer_SecurityContext(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 	g.Expect(sidecar).NotTo(BeNil())
 	g.Expect(sidecar.SecurityContext).NotTo(BeNil())
@@ -1031,7 +1043,7 @@ func TestSeidMainContainer_NoSecurityContextChange(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 	g.Expect(seid).NotTo(BeNil())
 	// seid main container hardening is an out-of-scope, larger blast-radius
@@ -1047,8 +1059,106 @@ func TestPodSpec_FSGroup(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	sts := GenerateStatefulSet(node, platformtest.Config())
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	g.Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
 	g.Expect(*sts.Spec.Template.Spec.SecurityContext.FSGroup).To(Equal(int64(65532)),
 		"pod-level fsGroup must match sidecar UID so non-root sidecar can read 0o400 Secret mounts")
+}
+
+// --- assertNoOperatorKeyringOnSeidContainers ---
+
+const (
+	keyringTestSeidInitName = "seid-init"
+	keyringTestSidecarName  = "sei-sidecar"
+	keyringTestMountPath    = "/sei/keyring-file"
+)
+
+func validatorNodeWithOperatorKeyring() *seiv1alpha1.SeiNode {
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "v-0", Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "sei-test",
+			Image:   "ghcr.io/sei-protocol/seid:latest",
+			Validator: &seiv1alpha1.ValidatorSpec{
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName: "validator-0-opk",
+						PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{
+							SecretName: "validator-0-opk-pass",
+							Key:        "passphrase",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestAssertNoOperatorKeyringOnSeidContainers_NoKeyringConfigured(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("v-0", "default")
+	// Even a deliberately mis-mounted volume must be ignored when no
+	// operator-keyring is configured — the guard is opt-in by spec.
+	spec := &corev1.PodSpec{
+		Containers: []corev1.Container{
+			{Name: containerNameSeid, VolumeMounts: []corev1.VolumeMount{
+				{Name: operatorKeyringVolumeName, MountPath: "/somewhere"},
+			}},
+		},
+	}
+	g.Expect(assertNoOperatorKeyringOnSeidContainers(node, spec)).To(Succeed())
+}
+
+func TestAssertNoOperatorKeyringOnSeidContainers_SidecarOnlyMount_Passes(t *testing.T) {
+	g := NewWithT(t)
+	node := validatorNodeWithOperatorKeyring()
+	spec := &corev1.PodSpec{
+		Containers: []corev1.Container{
+			{Name: containerNameSeid},
+		},
+		InitContainers: []corev1.Container{
+			{Name: keyringTestSeidInitName},
+			{Name: keyringTestSidecarName, VolumeMounts: []corev1.VolumeMount{
+				{Name: operatorKeyringVolumeName, MountPath: keyringTestMountPath},
+			}},
+		},
+	}
+	g.Expect(assertNoOperatorKeyringOnSeidContainers(node, spec)).To(Succeed())
+}
+
+func TestAssertNoOperatorKeyringOnSeidContainers_SeidMainMisMounted_Rejects(t *testing.T) {
+	g := NewWithT(t)
+	node := validatorNodeWithOperatorKeyring()
+	spec := &corev1.PodSpec{
+		Containers: []corev1.Container{
+			{Name: containerNameSeid, VolumeMounts: []corev1.VolumeMount{
+				{Name: operatorKeyringVolumeName, MountPath: keyringTestMountPath},
+			}},
+		},
+	}
+	err := assertNoOperatorKeyringOnSeidContainers(node, spec)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(`container "seid"`))
+}
+
+func TestAssertNoOperatorKeyringOnSeidContainers_SeidInitMisMounted_Rejects(t *testing.T) {
+	g := NewWithT(t)
+	node := validatorNodeWithOperatorKeyring()
+	spec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{
+			{Name: keyringTestSeidInitName, VolumeMounts: []corev1.VolumeMount{
+				{Name: operatorKeyringVolumeName, MountPath: keyringTestMountPath},
+			}},
+		},
+	}
+	err := assertNoOperatorKeyringOnSeidContainers(node, spec)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(`container "seid-init"`))
+}
+
+func TestGenerateStatefulSet_ProductionPodSpec_PassesGuard(t *testing.T) {
+	g := NewWithT(t)
+	node := validatorNodeWithOperatorKeyring()
+	_, err := GenerateStatefulSet(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
 }

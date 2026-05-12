@@ -168,6 +168,32 @@ func TestAssertNoValidatorSecretsOnBootstrapPod_PassphraseEnvInInitContainer_Rej
 	}
 }
 
+func TestAssertNoValidatorSecretsOnBootstrapPod_PassphraseEnvFrom_Rejects(t *testing.T) {
+	node := validatorNodeWithSecrets("sk", "opk", bootstrapTestPassphraseSecret)
+	spec := &corev1.PodSpec{
+		Containers: []corev1.Container{
+			{
+				Name: bootstrapTestSidecarContainer,
+				EnvFrom: []corev1.EnvFromSource{
+					{SecretRef: &corev1.SecretEnvSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: bootstrapTestPassphraseSecret},
+					}},
+				},
+			},
+		},
+	}
+	err := assertNoValidatorSecretsOnBootstrapPod(node, spec)
+	if err == nil {
+		t.Fatal("expected error for passphrase envFrom on bootstrap pod, got nil")
+	}
+	if !strings.Contains(err.Error(), "operator-keyring-passphrase") || !strings.Contains(err.Error(), bootstrapTestSidecarContainer) {
+		t.Fatalf("expected error to mention passphrase kind and container name, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "envFrom") {
+		t.Fatalf("expected error to mention envFrom path, got: %v", err)
+	}
+}
+
 func TestAssertNoValidatorSecretsOnBootstrapPod_NodeKeyExcluded(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: opkValidatorName, Namespace: opkNs},

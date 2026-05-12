@@ -566,6 +566,9 @@ spec:
                               "node_admin" to preserve continuity with the seienv convention.
                               Mutable — rotating to a different entry within the same Secret
                               is a routine operator-account change, not a slashing risk.
+
+                              The default literal below MUST match DefaultOperatorKeyName —
+                              kubebuilder markers cannot reference Go constants.
                             maxLength: 64
                             pattern: ^[a-zA-Z0-9_-]+$
                             type: string
@@ -576,8 +579,11 @@ spec:
                             properties:
                               key:
                                 default: passphrase
-                                description: Key is the data key inside the Secret.
-                                  Defaults to "passphrase".
+                                description: |-
+                                  Key is the data key inside the Secret. Defaults to "passphrase".
+
+                                  The default literal below MUST match DefaultPassphraseSecretKey —
+                                  kubebuilder markers cannot reference Go constants.
                                 maxLength: 253
                                 type: string
                               secretName:
@@ -716,6 +722,14 @@ spec:
                     be distinct
                   rule: '!has(self.operatorKeyring) || self.operatorKeyring.secret.secretName
                     != self.operatorKeyring.secret.passphraseSecretRef.secretName'
+                - message: operatorKeyring passphrase Secret must not equal signingKey
+                    Secret
+                  rule: '!has(self.operatorKeyring) || !has(self.signingKey) || self.operatorKeyring.secret.passphraseSecretRef.secretName
+                    != self.signingKey.secret.secretName'
+                - message: operatorKeyring passphrase Secret must not equal nodeKey
+                    Secret
+                  rule: '!has(self.operatorKeyring) || !has(self.nodeKey) || self.operatorKeyring.secret.passphraseSecretRef.secretName
+                    != self.nodeKey.secret.secretName'
             required:
             - chainId
             - image

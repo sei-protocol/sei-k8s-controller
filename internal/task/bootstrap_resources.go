@@ -361,7 +361,7 @@ func assertNoValidatorSecretsOnBootstrapPod(node *seiv1alpha1.SeiNode, spec *cor
 	}
 
 	// Env injection is a separate leakage path — kubelet resolves
-	// valueFrom.secretKeyRef regardless of volume mounts.
+	// valueFrom.secretKeyRef and envFrom.secretRef regardless of volume mounts.
 	allContainers := make([]corev1.Container, 0, len(spec.Containers)+len(spec.InitContainers))
 	allContainers = append(allContainers, spec.Containers...)
 	allContainers = append(allContainers, spec.InitContainers...)
@@ -373,6 +373,18 @@ func assertNoValidatorSecretsOnBootstrapPod(node *seiv1alpha1.SeiNode, spec *cor
 			for _, f := range forbiddens {
 				if ev.ValueFrom.SecretKeyRef.Name == f.name {
 					return fmt.Errorf("bootstrap pod-spec for %s/%s references %s Secret %q in container %q env; "+
+						"bootstrap pods must never carry validator-owned credentials",
+						node.Namespace, node.Name, f.kind, f.name, c.Name)
+				}
+			}
+		}
+		for _, ef := range c.EnvFrom {
+			if ef.SecretRef == nil {
+				continue
+			}
+			for _, f := range forbiddens {
+				if ef.SecretRef.Name == f.name {
+					return fmt.Errorf("bootstrap pod-spec for %s/%s references %s Secret %q in container %q envFrom; "+
 						"bootstrap pods must never carry validator-owned credentials",
 						node.Namespace, node.Name, f.kind, f.name, c.Name)
 				}

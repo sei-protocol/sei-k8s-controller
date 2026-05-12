@@ -28,6 +28,11 @@ const (
 	dataDir             = platform.DataDir
 	defaultSidecarImage = platform.DefaultSidecarImage
 
+	// Pod-spec container names. Used as both the .Name on built containers
+	// and the lookup key for the operator-keyring containment guard.
+	containerNameSeid    = "seid"
+	containerNameSidecar = "sei-sidecar"
+
 	signingKeyVolumeName    = "signing-key"
 	privValidatorKeyDataKey = "priv_validator_key.json"
 
@@ -138,9 +143,18 @@ func DefaultResourcesForMode(mode string, p PlatformConfig) corev1.ResourceRequi
 // ---------------------------------------------------------------------------
 
 // GenerateStatefulSet produces the desired StatefulSet for a SeiNode.
-func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) *appsv1.StatefulSet {
+//
+// Returns an error if the resulting pod-spec violates the operator-keyring
+// containment invariant — only the sidecar container may mount that volume,
+// never seid main or any non-sidecar init container.
+func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.StatefulSet, error) {
 	one := int32(1)
 	labels := ResourceLabels(node)
+	podSpec := buildNodePodSpec(node, p)
+
+	if err := assertNoOperatorKeyringOnSeidContainers(node, &podSpec); err != nil {
+		return nil, err
+	}
 
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -165,10 +179,54 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) *appsv1.St
 						"karpenter.sh/do-not-disrupt": "true",
 					},
 				},
-				Spec: buildNodePodSpec(node, p),
+				Spec: podSpec,
 			},
 		},
+	}, nil
+}
+
+// assertNoOperatorKeyringOnSeidContainers fails closed if a future refactor
+// lands the operator-keyring volume on the seid main container or a
+// non-sidecar init container. Operator-keyring material is the sidecar's
+// alone: a compromised seid container reading that mount would collapse
+// the sidecar/seid trust boundary.
+//
+// No-op when the node has no operator-keyring configured — the volume is
+// only present when SecretOperatorKeyringSource is set, so there is
+// nothing to contain.
+func assertNoOperatorKeyringOnSeidContainers(node *seiv1alpha1.SeiNode, spec *corev1.PodSpec) error {
+	if operatorKeyringSecretSource(node) == nil {
+		return nil
 	}
+
+	check := func(c *corev1.Container) error {
+		for _, m := range c.VolumeMounts {
+			if m.Name == operatorKeyringVolumeName {
+				return fmt.Errorf("pod-spec for %s/%s mounts operator-keyring volume on container %q; "+
+					"operator-keyring is exclusively the sidecar's — mounting on seid would collapse the sidecar/seid trust boundary",
+					node.Namespace, node.Name, c.Name)
+			}
+		}
+		return nil
+	}
+
+	for i := range spec.Containers {
+		if spec.Containers[i].Name == containerNameSidecar {
+			continue
+		}
+		if err := check(&spec.Containers[i]); err != nil {
+			return err
+		}
+	}
+	for i := range spec.InitContainers {
+		if spec.InitContainers[i].Name == containerNameSidecar {
+			continue
+		}
+		if err := check(&spec.InitContainers[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -273,10 +331,12 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	pool := p.NodepoolForMode(NodeMode(node))
 
 	spec := corev1.PodSpec{
-		// automountServiceAccountToken is left at the kubelet default (true)
-		// — the projected token is a hard dependency for Phase 4 TokenReview
-		// authentication on sidecar HTTP endpoints (see #165).
-		ServiceAccountName: p.ServiceAccount,
+		// AutomountServiceAccountToken is explicit here because the sidecar's
+		// future TokenReview-based authn (sei-protocol/seictl#165) requires
+		// the SA token mount. Cluster-default flips that silently disable
+		// this would break the auth path.
+		AutomountServiceAccountToken: ptr.To(true), //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
+		ServiceAccountName:           p.ServiceAccount,
 		Tolerations: []corev1.Toleration{
 			{Key: p.TolerationKey, Value: pool, Effect: corev1.TaintEffectNoSchedule},
 		},
@@ -296,6 +356,14 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 		Volumes: volumes,
 	}
 
+	// ShareProcessNamespace is currently enabled across all SeiNode pods. A
+	// compromised seid container can therefore read /proc/<sidecar>/environ
+	// and /proc/<sidecar>/mem, including the operator-keyring passphrase and
+	// the unlocked in-memory keyring. This is a known limitation of the v1
+	// trust boundary — not a one-way door. The broader sidecar/seid isolation
+	// hardening (drop shareProcessNamespace, harden the seid main container's
+	// SecurityContext, separate the sidecar's SA) is tracked as a follow-up.
+	// See PR #220 review thread.
 	spec.ShareProcessNamespace = ptr.To(true)
 	// fsGroup is required so the non-root sidecar (UID 65532) can read
 	// 0o400 Secret-projected files (operator keyring) kubelet owns root:root.
@@ -348,7 +416,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 	mounts = append(mounts, keyringMounts...)
 
 	c := corev1.Container{
-		Name:          "sei-sidecar",
+		Name:          containerNameSidecar,
 		Image:         sidecarImage(node),
 		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
@@ -454,7 +522,7 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	mounts = append(mounts, signingMounts...)
 	mounts = append(mounts, nodeMounts...)
 	container := corev1.Container{
-		Name:  "seid",
+		Name:  containerNameSeid,
 		Image: node.Spec.Image,
 		Env: []corev1.EnvVar{
 			{Name: "TMPDIR", Value: dataDir + "/tmp"},
@@ -643,7 +711,7 @@ func operatorKeyringEnvVars(node *seiv1alpha1.SeiNode) []corev1.EnvVar {
 	}
 	key := src.PassphraseSecretRef.Key
 	if key == "" {
-		key = "passphrase"
+		key = seiv1alpha1.DefaultPassphraseSecretKey
 	}
 	return []corev1.EnvVar{{
 		Name: keyringPassphraseEnvVar,
@@ -669,15 +737,12 @@ func operatorKeyringSecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretO
 // same to the seid main container is a larger blast-radius change owned
 // by a different workstream.
 func sidecarSecurityContext() *corev1.SecurityContext {
-	yes, no := true, false
-	uid := sidecarNonRootUID
-	gid := sidecarNonRootUID
 	return &corev1.SecurityContext{
-		RunAsNonRoot:             &yes,
-		RunAsUser:                &uid,
-		RunAsGroup:               &gid,
-		AllowPrivilegeEscalation: &no,
-		ReadOnlyRootFilesystem:   &yes,
+		RunAsNonRoot:             ptr.To(true),              //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
+		RunAsUser:                ptr.To(sidecarNonRootUID), //nolint:modernize // false-positive: new() takes a type, not a value
+		RunAsGroup:               ptr.To(sidecarNonRootUID), //nolint:modernize // false-positive: new() takes a type, not a value
+		AllowPrivilegeEscalation: ptr.To(false),             //nolint:modernize // ptr.To(false) is idiomatic; new(false) is invalid Go
+		ReadOnlyRootFilesystem:   ptr.To(true),              //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}

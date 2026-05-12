@@ -38,6 +38,9 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if node.Spec.Validator.NodeKey != nil && node.Spec.Validator.SigningKey == nil {
 		return fmt.Errorf("validator: nodeKey requires signingKey to be set")
 	}
+	if err := validateOperatorKeyringDistinctness(node.Spec.Validator); err != nil {
+		return err
+	}
 	if gc := node.Spec.Validator.GenesisCeremony; gc != nil {
 		if gc.ChainID == "" {
 			return fmt.Errorf("validator: genesisCeremony.chainId is required")
@@ -50,6 +53,40 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if snap := node.Spec.Validator.Snapshot; snap != nil && snap.BootstrapImage != "" {
 		if snap.S3 == nil || snap.S3.TargetHeight <= 0 {
 			return fmt.Errorf("validator: bootstrapImage requires s3 with targetHeight > 0")
+		}
+	}
+	return nil
+}
+
+// validateOperatorKeyringDistinctness mirrors the CRD XValidation rules
+// so the planner rejects identical specs even when admission webhooks
+// haven't run (in-memory specs in tests, or stale objects predating the
+// CRD update). The CEL rules remain the canonical surface — these checks
+// are defense in depth.
+func validateOperatorKeyringDistinctness(v *seiv1alpha1.ValidatorSpec) error {
+	if v.OperatorKeyring == nil || v.OperatorKeyring.Secret == nil {
+		return nil
+	}
+	opk := v.OperatorKeyring.Secret
+	pass := opk.PassphraseSecretRef.SecretName
+
+	if opk.SecretName != "" && opk.SecretName == pass {
+		return fmt.Errorf("validator: operatorKeyring data Secret %q must differ from its passphrase Secret", opk.SecretName)
+	}
+	if sk := v.SigningKey; sk != nil && sk.Secret != nil && sk.Secret.SecretName != "" {
+		if opk.SecretName == sk.Secret.SecretName {
+			return fmt.Errorf("validator: operatorKeyring Secret %q must differ from signingKey Secret", opk.SecretName)
+		}
+		if pass != "" && pass == sk.Secret.SecretName {
+			return fmt.Errorf("validator: operatorKeyring passphrase Secret %q must differ from signingKey Secret", pass)
+		}
+	}
+	if nk := v.NodeKey; nk != nil && nk.Secret != nil && nk.Secret.SecretName != "" {
+		if opk.SecretName == nk.Secret.SecretName {
+			return fmt.Errorf("validator: operatorKeyring Secret %q must differ from nodeKey Secret", opk.SecretName)
+		}
+		if pass != "" && pass == nk.Secret.SecretName {
+			return fmt.Errorf("validator: operatorKeyring passphrase Secret %q must differ from nodeKey Secret", pass)
 		}
 	}
 	return nil

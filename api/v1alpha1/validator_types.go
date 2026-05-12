@@ -1,5 +1,15 @@
 package v1alpha1
 
+// Defaults for SecretOperatorKeyringSource fields. Kept in lockstep with the
+// +kubebuilder:default markers on the corresponding struct fields and
+// referenced by the planner + noderesource packages so defaulting stays
+// consistent even when admission webhooks haven't run (e.g., in-memory
+// specs in tests, or controllers reading pre-defaulted objects).
+const (
+	DefaultOperatorKeyName     = "node_admin"
+	DefaultPassphraseSecretKey = "passphrase"
+)
+
 // ValidatorSpec configures a consensus-participating validator node.
 // Validators bootstrap the same way as full nodes but participate in consensus.
 //
@@ -8,6 +18,8 @@ package v1alpha1
 // +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || !has(self.signingKey) || self.operatorKeyring.secret.secretName != self.signingKey.secret.secretName",message="operatorKeyring and signingKey must reference distinct Secrets — collapsing them into one Secret would force the sidecar/seid trust boundary to evaporate"
 // +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || !has(self.nodeKey) || self.operatorKeyring.secret.secretName != self.nodeKey.secret.secretName",message="operatorKeyring and nodeKey must reference distinct Secrets"
 // +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || self.operatorKeyring.secret.secretName != self.operatorKeyring.secret.passphraseSecretRef.secretName",message="operatorKeyring data Secret and passphrase Secret must be distinct"
+// +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || !has(self.signingKey) || self.operatorKeyring.secret.passphraseSecretRef.secretName != self.signingKey.secret.secretName",message="operatorKeyring passphrase Secret must not equal signingKey Secret"
+// +kubebuilder:validation:XValidation:rule="!has(self.operatorKeyring) || !has(self.nodeKey) || self.operatorKeyring.secret.passphraseSecretRef.secretName != self.nodeKey.secret.secretName",message="operatorKeyring passphrase Secret must not equal nodeKey Secret"
 type ValidatorSpec struct {
 	// Snapshot configures how the node obtains its initial chain state.
 	// When absent the node block-syncs from genesis.
@@ -174,6 +186,9 @@ type SecretOperatorKeyringSource struct {
 	// Mutable — rotating to a different entry within the same Secret
 	// is a routine operator-account change, not a slashing risk.
 	//
+	// The default literal below MUST match DefaultOperatorKeyName —
+	// kubebuilder markers cannot reference Go constants.
+	//
 	// +optional
 	// +kubebuilder:default="node_admin"
 	// +kubebuilder:validation:MaxLength=64
@@ -196,6 +211,9 @@ type PassphraseSecretRef struct {
 	SecretName string `json:"secretName"`
 
 	// Key is the data key inside the Secret. Defaults to "passphrase".
+	//
+	// The default literal below MUST match DefaultPassphraseSecretKey —
+	// kubebuilder markers cannot reference Go constants.
 	//
 	// +optional
 	// +kubebuilder:default="passphrase"

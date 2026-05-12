@@ -17,9 +17,9 @@ import (
 
 const TaskTypeValidateOperatorKeyring = "validate-operator-keyring"
 
-// Cosmos SDK file-backend keyring layout: each entry materializes as
-// "<name>.info" (encrypted protobuf-marshaled LocalInfo) plus one or more
-// "<hex-of-bech32-bytes>.address" name→address index files.
+// File-keyring layout (documented in the operator runbook): each keyring
+// entry materializes as a "<name>.info" data key plus one or more
+// "<hex>.address" name→address index keys.
 const (
 	keyringInfoSuffix    = ".info"
 	keyringAddressSuffix = ".address"
@@ -82,8 +82,8 @@ func (e *validateOperatorKeyringExecution) Status(_ context.Context) ExecutionSt
 }
 
 // validate checks the shape of both Secrets. It deliberately does NOT
-// attempt to decrypt the keyring with the passphrase — running the Cosmos
-// SDK keyring backend inside the controller process would expand the
+// attempt to decrypt the keyring with the passphrase — running the
+// keyring backend inside the controller process would expand the
 // controller's TCB. Decryption is the sidecar's startup smoke test.
 func (e *validateOperatorKeyringExecution) validate(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	if e.params.SecretName == "" {
@@ -126,16 +126,16 @@ func (e *validateOperatorKeyringExecution) getSecret(ctx context.Context, name, 
 	return secret, nil
 }
 
-// validateKeyringShape walks Secret data keys looking for the Cosmos SDK
-// file-backend layout. Empty Secrets and Secrets missing either suffix
-// are operator-fixable defects (Terminal).
+// validateKeyringShape walks Secret data keys looking for the file-keyring
+// layout. Empty Secrets and Secrets missing either suffix are
+// operator-fixable defects (Terminal).
 func validateKeyringShape(secret *corev1.Secret, keyName string) error {
 	var infoKeys, addressKeys []string
 	for k, v := range secret.Data {
 		switch {
 		case strings.HasSuffix(k, keyringInfoSuffix):
 			if len(v) == 0 {
-				return Terminal(fmt.Errorf("secret %q data key %q is empty; file-keyring info blobs must be non-empty",
+				return Terminal(fmt.Errorf("secret %q data key %q is empty (expected non-empty keyring entry payload)",
 					secret.Name, k))
 			}
 			infoKeys = append(infoKeys, k)
@@ -144,11 +144,11 @@ func validateKeyringShape(secret *corev1.Secret, keyName string) error {
 		}
 	}
 	if len(infoKeys) == 0 {
-		return Terminal(fmt.Errorf("secret %q has no %q data keys; file-keyring requires at least one encrypted key blob",
+		return Terminal(fmt.Errorf("secret %q has no %q data keys (expected at least one keyring entry)",
 			secret.Name, "*"+keyringInfoSuffix))
 	}
 	if len(addressKeys) == 0 {
-		return Terminal(fmt.Errorf("secret %q has no %q data keys; file-keyring requires at least one name→address index",
+		return Terminal(fmt.Errorf("secret %q has no %q data keys (expected name→address index for at least one keyring entry)",
 			secret.Name, "*"+keyringAddressSuffix))
 	}
 	if keyName != "" {
