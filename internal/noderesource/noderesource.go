@@ -40,9 +40,9 @@ const (
 	nodeKeyDataKey    = "node_key.json"
 
 	operatorKeyringVolumeName = "operator-keyring"
-	// operatorKeyringDirName matches the on-disk directory the Cosmos SDK
-	// file-backend keyring appends to $SEI_HOME — keyring.New(name, BackendFile,
-	// homeDir, ...) implicitly opens homeDir/keyring-file/.
+	// operatorKeyringDirName is fixed by the Cosmos SDK file-backend keyring:
+	// keyring.New(name, BackendFile, homeDir, ...) opens homeDir/keyring-file/.
+	// Not a controller choice; this constant mirrors the SDK contract.
 	operatorKeyringDirName  = "keyring-file"
 	keyringPassphraseEnvVar = "SEI_KEYRING_PASSPHRASE"
 
@@ -339,10 +339,11 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	pool := p.NodepoolForMode(NodeMode(node))
 
 	spec := corev1.PodSpec{
-		// AutomountServiceAccountToken is explicit here because the sidecar's
-		// future TokenReview-based authn (sei-protocol/seictl#165) requires
-		// the SA token mount. Cluster-default flips that silently disable
-		// this would break the auth path.
+		// AutomountServiceAccountToken is explicit here because the future
+		// kube-rbac-proxy fronting the sidecar API (sei-protocol/seictl#165)
+		// calls TokenReview + SubjectAccessReview against the K8s API using
+		// the pod's projected SA token. Cluster-default flips that silently
+		// disable this would break the auth path.
 		AutomountServiceAccountToken: ptr.To(true), //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
 		ServiceAccountName:           p.ServiceAccount,
 		Tolerations: []corev1.Toleration{
@@ -723,16 +724,12 @@ func operatorKeyringEnvVars(node *seiv1alpha1.SeiNode) []corev1.EnvVar {
 	if src == nil {
 		return nil
 	}
-	key := src.PassphraseSecretRef.Key
-	if key == "" {
-		key = seiv1alpha1.DefaultPassphraseSecretKey
-	}
 	return []corev1.EnvVar{{
 		Name: keyringPassphraseEnvVar,
 		ValueFrom: &corev1.EnvVarSource{
 			SecretKeyRef: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: src.PassphraseSecretRef.SecretName},
-				Key:                  key,
+				Key:                  src.PassphraseSecretRef.Key,
 			},
 		},
 	}}

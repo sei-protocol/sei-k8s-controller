@@ -364,21 +364,18 @@ func validateOperatorKeyringParams(node *seiv1alpha1.SeiNode) any {
 		return nil
 	}
 	s := node.Spec.Validator.OperatorKeyring.Secret
-	// Defaults mirror the CRD kubebuilder:default markers so plans built
-	// from a partially-defaulted in-memory spec still get the right values.
+	// KeyName falls back to the CRD default for in-memory specs that
+	// haven't been through admission defaulting; PassphraseSecretRef.Key
+	// is required (no fallback).
 	keyName := s.KeyName
 	if keyName == "" {
 		keyName = seiv1alpha1.DefaultOperatorKeyName
-	}
-	passphraseKey := s.PassphraseSecretRef.Key
-	if passphraseKey == "" {
-		passphraseKey = seiv1alpha1.DefaultPassphraseSecretKey
 	}
 	return &task.ValidateOperatorKeyringParams{
 		SecretName:           s.SecretName,
 		KeyName:              keyName,
 		PassphraseSecretName: s.PassphraseSecretRef.SecretName,
-		PassphraseSecretKey:  passphraseKey,
+		PassphraseSecretKey:  s.PassphraseSecretRef.Key,
 		Namespace:            node.Namespace,
 	}
 }

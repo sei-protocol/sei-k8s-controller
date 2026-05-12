@@ -578,13 +578,12 @@ spec:
                               unlock passphrase. Required for the file backend.
                             properties:
                               key:
-                                default: passphrase
                                 description: |-
-                                  Key is the data key inside the Secret. Defaults to "passphrase".
-
-                                  The default literal below MUST match DefaultPassphraseSecretKey —
-                                  kubebuilder markers cannot reference Go constants.
+                                  Key is the data key inside the Secret holding the passphrase.
+                                  Required — operators declare this explicitly rather than relying on
+                                  a default that hides where the passphrase actually lives.
                                 maxLength: 253
+                                minLength: 1
                                 type: string
                               secretName:
                                 description: SecretName names the passphrase Secret
@@ -597,6 +596,7 @@ spec:
                                 - message: passphrase secretName is immutable
                                   rule: self == oldSelf
                             required:
+                            - key
                             - secretName
                             type: object
                           secretName:

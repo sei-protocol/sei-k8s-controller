@@ -23,6 +23,11 @@ const (
 	bootstrapComponentLabel         = "sei.io/component"
 )
 
+// forbiddenSecret pairs a Secret name with a human-readable kind, used by the
+// bootstrap-pod isolation guard to reject any validator-owned credential
+// material on the bootstrap pod-spec.
+type forbiddenSecret struct{ name, kind string }
+
 // BootstrapJobName returns the bootstrap Job name for a node.
 func BootstrapJobName(node *seiv1alpha1.SeiNode) string {
 	return fmt.Sprintf("%s-bootstrap", node.Name)
@@ -394,8 +399,6 @@ func assertNoValidatorSecretsOnBootstrapPod(node *seiv1alpha1.SeiNode, spec *cor
 
 	return nil
 }
-
-type forbiddenSecret struct{ name, kind string }
 
 func forbiddenBootstrapSecrets(node *seiv1alpha1.SeiNode) []forbiddenSecret {
 	var out []forbiddenSecret

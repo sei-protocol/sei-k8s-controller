@@ -1,14 +1,10 @@
 package v1alpha1
 
-// Defaults for SecretOperatorKeyringSource fields. Kept in lockstep with the
-// +kubebuilder:default markers on the corresponding struct fields and
-// referenced by the planner + noderesource packages so defaulting stays
-// consistent even when admission webhooks haven't run (e.g., in-memory
-// specs in tests, or controllers reading pre-defaulted objects).
-const (
-	DefaultOperatorKeyName     = "node_admin"
-	DefaultPassphraseSecretKey = "passphrase"
-)
+// DefaultOperatorKeyName matches the +kubebuilder:default on
+// SecretOperatorKeyringSource.KeyName. Referenced by the planner and
+// noderesource packages so defaulting stays consistent when admission
+// webhooks haven't run (e.g. in-memory specs in tests).
+const DefaultOperatorKeyName = "node_admin"
 
 // ValidatorSpec configures a consensus-participating validator node.
 // Validators bootstrap the same way as full nodes but participate in consensus.
@@ -144,18 +140,12 @@ type SecretNodeKeySource struct {
 // withdraw-rewards, and other operator-account transactions) comes from.
 // Exactly one variant must be set; variants are mutually exclusive.
 //
-// The CEL rule is shaped as a sum across all variants so adding a future
-// sibling (TMKMS, Vault, KMS) is purely additive — bump the sum by one term.
-//
 // +kubebuilder:validation:XValidation:rule="(has(self.secret) ? 1 : 0) == 1",message="exactly one operator keyring source must be set"
 type OperatorKeyringSource struct {
 	// Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
 	// in the SeiNode's namespace.
 	// +optional
 	Secret *SecretOperatorKeyringSource `json:"secret,omitempty"`
-
-	// Future siblings: TMKMS, Vault, KMS. When added, bump the
-	// XValidation sum-of-variants rule.
 }
 
 // SecretOperatorKeyringSource references the Kubernetes Secrets that supply
@@ -210,15 +200,13 @@ type PassphraseSecretRef struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="passphrase secretName is immutable"
 	SecretName string `json:"secretName"`
 
-	// Key is the data key inside the Secret. Defaults to "passphrase".
+	// Key is the data key inside the Secret holding the passphrase.
+	// Required — operators declare this explicitly rather than relying on
+	// a default that hides where the passphrase actually lives.
 	//
-	// The default literal below MUST match DefaultPassphraseSecretKey —
-	// kubebuilder markers cannot reference Go constants.
-	//
-	// +optional
-	// +kubebuilder:default="passphrase"
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	Key string `json:"key,omitempty"`
+	Key string `json:"key"`
 }
 
 // GenesisCeremonyNodeConfig holds per-node genesis ceremony parameters.
