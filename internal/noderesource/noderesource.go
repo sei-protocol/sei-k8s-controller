@@ -634,6 +634,21 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
 		},
+		SecurityContext: seidInitSecurityContext(),
+	}
+}
+
+// seidInitSecurityContext keeps the init at uid 0 (chown requires it) but
+// drops every cap except the three needed to chown, chmod, and set the
+// setgid bit on the prepared dirs.
+func seidInitSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: new(bool),
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+			Add:  []corev1.Capability{"CHOWN", "FOWNER", "FSETID"},
+		},
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
 }
 

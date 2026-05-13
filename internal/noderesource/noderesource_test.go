@@ -1054,10 +1054,6 @@ func TestSeidMainContainer_NoSecurityContextChange(t *testing.T) {
 	// seid main container hardening is an out-of-scope, larger blast-radius
 	// change owned by a different workstream.
 	g.Expect(seid.SecurityContext).To(BeNil())
-
-	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
-	g.Expect(seidInit).NotTo(BeNil())
-	g.Expect(seidInit.SecurityContext).To(BeNil())
 }
 
 func TestPodSpec_FSGroup(t *testing.T) {
@@ -1100,6 +1096,23 @@ func TestSeidInitContainer_PreparesSharedDirs(t *testing.T) {
 	g.Expect(chmodIdx).To(BeNumerically(">", chownIdx))
 	g.Expect(seidInitIdx).To(BeNumerically(">", chmodIdx),
 		"shared-dir prep must precede seid init so subsequent files inherit setgid group")
+}
+
+func TestSeidInitContainer_SecurityContext(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("mynet-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
+	g.Expect(seidInit).NotTo(BeNil())
+	g.Expect(seidInit.SecurityContext).NotTo(BeNil())
+	g.Expect(seidInit.SecurityContext.AllowPrivilegeEscalation).NotTo(BeNil())
+	g.Expect(*seidInit.SecurityContext.AllowPrivilegeEscalation).To(BeFalse())
+	g.Expect(seidInit.SecurityContext.Capabilities).NotTo(BeNil())
+	g.Expect(seidInit.SecurityContext.Capabilities.Drop).To(ConsistOf(corev1.Capability("ALL")))
+	g.Expect(seidInit.SecurityContext.Capabilities.Add).To(ConsistOf(
+		corev1.Capability("CHOWN"), corev1.Capability("FOWNER"), corev1.Capability("FSETID"),
+	))
 }
 
 // --- assertNoOperatorKeyringOnSeidContainers ---
