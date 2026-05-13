@@ -1091,12 +1091,18 @@ func TestSeidInitContainer_PreparesSharedDirs(t *testing.T) {
 	chownIdx := strings.Index(script, "chown 0:65532 /sei /sei/config /sei/data")
 	chmodIdx := strings.Index(script, "chmod 2775 /sei /sei/config /sei/data")
 	seidInitIdx := strings.Index(script, "seid init")
+	chownRIdx := strings.Index(script, "chown -R 0:65532 /sei/config")
+	chmodRIdx := strings.Index(script, "chmod -R g+rwX /sei/config")
 
 	g.Expect(mkdirIdx).To(BeNumerically(">=", 0))
 	g.Expect(chownIdx).To(BeNumerically(">", mkdirIdx))
 	g.Expect(chmodIdx).To(BeNumerically(">", chownIdx))
 	g.Expect(seidInitIdx).To(BeNumerically(">", chmodIdx),
 		"shared-dir prep must precede seid init so subsequent files inherit setgid group")
+	g.Expect(chownRIdx).To(BeNumerically(">", seidInitIdx),
+		"recursive chown must follow seid init to relax the mode-0600 files it creates")
+	g.Expect(chmodRIdx).To(BeNumerically(">", chownRIdx),
+		"recursive chmod follows the recursive chown")
 }
 
 func TestSeidInitContainer_SecurityContext(t *testing.T) {

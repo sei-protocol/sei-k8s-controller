@@ -615,15 +615,18 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 
 // buildSeidInitContainer runs seid init and prepares /sei, /sei/config,
 // /sei/data as 0:sidecarNonRootUID mode 2775 — group-writable with setgid
-// so new files seid creates inherit gid sidecarNonRootUID, which the
-// non-root sidecar needs for genesis assembly and snapshot restore.
+// so new files seid creates inherit gid sidecarNonRootUID. The recursive
+// chown + chmod g+rwX over /sei/config covers the validator-key files
+// seid init creates as mode 0600 so the non-root sidecar can overwrite
+// them with operator-derived identity (generate-identity task).
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`echo "preparing /sei perms" && mkdir -p %s/config %s/data && chown 0:%d %s %s/config %s/data && chmod 2775 %s %s/config %s/data && if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
+		`echo "preparing /sei perms" && mkdir -p %s/config %s/data && chown 0:%d %s %s/config %s/data && chmod 2775 %s %s/config %s/data && if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && chown -R 0:%d %s/config && chmod -R g+rwX %s/config && mkdir -p %s/tmp`,
 		dataDir, dataDir,
 		sidecarNonRootUID, dataDir, dataDir, dataDir,
 		dataDir, dataDir, dataDir,
-		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
+		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir,
+		sidecarNonRootUID, dataDir, dataDir, dataDir,
 	)
 	return corev1.Container{
 		Name:  "seid-init",
