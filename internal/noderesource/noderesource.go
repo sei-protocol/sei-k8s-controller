@@ -635,6 +635,7 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 // binary, same mount, same privilege floor). PSA `restricted`-eligible.
 // ReadOnlyRootFilesystem omitted: seid's Go runtime may use /tmp on the
 // rootfs and we don't wire an emptyDir for it on seid containers.
+// Closing this gap is tracked in #230.
 func seidNonRootSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             ptr.To(true),              //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
