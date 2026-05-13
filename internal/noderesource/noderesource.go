@@ -415,18 +415,14 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	// SecurityContext, separate the sidecar's SA) is tracked as a follow-up.
 	// See PR #220 review thread.
 	spec.ShareProcessNamespace = ptr.To(true)
-	// FSGroup grants the non-root sidecar UID read access to 0o400
-	// Secret-projected files. ChangePolicy=OnRootMismatch avoids recursive
-	// chown on every pod start (the "Always" default is costly on archive PVCs).
+	// Kubelet handles PVC ownership migration: on first mount of a legacy
+	// root-owned volume, OnRootMismatch triggers a recursive `chown :65532`
+	// + `chmod g+rwX`. Subsequent mounts skip the walk.
 	fsGroup := sidecarNonRootUID
 	fsGroupChangePolicy := corev1.FSGroupChangeOnRootMismatch
 	spec.SecurityContext = &corev1.PodSecurityContext{
 		FSGroup:             &fsGroup,
 		FSGroupChangePolicy: &fsGroupChangePolicy,
-		// seid (uid 0) writes into gid-65532-owned dirs created by seid-init,
-		// so its supplementary groups must include the sidecar gid to pick up
-		// group-write perms on /sei/config and /sei/data.
-		SupplementalGroups: []int64{sidecarNonRootUID},
 	}
 	initContainers := []corev1.Container{
 		buildSeidInitContainer(node),
@@ -582,8 +578,9 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	mounts = append(mounts, signingMounts...)
 	mounts = append(mounts, nodeMounts...)
 	container := corev1.Container{
-		Name:  containerNameSeid,
-		Image: node.Spec.Image,
+		Name:            containerNameSeid,
+		Image:           node.Spec.Image,
+		SecurityContext: seidNonRootSecurityContext(),
 		Env: []corev1.EnvVar{
 			{Name: "TMPDIR", Value: dataDir + "/tmp"},
 		},
@@ -613,16 +610,12 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	return container
 }
 
-// buildSeidInitContainer runs seid init and prepares /sei, /sei/config,
-// /sei/data as 0:sidecarNonRootUID mode 2775 — group-writable with setgid
-// so new files seid creates inherit gid sidecarNonRootUID, which the
-// non-root sidecar needs for genesis assembly and snapshot restore.
+// buildSeidInitContainer materializes /sei/config on first boot via
+// `seid init` and ensures /sei/tmp exists. No chown logic — kubelet
+// fsGroup handles PVC ownership.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`echo "preparing /sei perms" && mkdir -p %s/config %s/data && chown 0:%d %s %s/config %s/data && chmod 2775 %s %s/config %s/data && if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
-		dataDir, dataDir,
-		sidecarNonRootUID, dataDir, dataDir, dataDir,
-		dataDir, dataDir, dataDir,
+		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
 		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
 	)
 	return corev1.Container{
@@ -634,25 +627,23 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
 		},
-		SecurityContext: seidInitSecurityContext(),
+		SecurityContext: seidNonRootSecurityContext(),
 	}
 }
 
-// seidInitSecurityContext keeps the init at uid 0 (chown requires it) but
-// drops every cap except the three needed by the prep script: CHOWN for
-// `chown 0:65532`, FSETID to preserve the setgid bit on `chmod 2775`
-// (else chmod silently clears setgid when the file gid isn't the caller's
-// primary), and FOWNER as defense-in-depth for chmod on PVC dirs whose
-// uid may not match if a future script edit operates on paths it didn't
-// just chown.
-func seidInitSecurityContext() *corev1.SecurityContext {
+// seidNonRootSecurityContext is shared by seid main and seid-init (same
+// binary, same mount, same privilege floor). PSA `restricted`-eligible.
+// ReadOnlyRootFilesystem omitted: seid's Go runtime may use /tmp on the
+// rootfs and we don't wire an emptyDir for it on seid containers.
+// Closing this gap is tracked in #230.
+func seidNonRootSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
-		AllowPrivilegeEscalation: ptr.To(false), //nolint:modernize // ptr.To(false) is idiomatic; new(false) is invalid Go
-		Capabilities: &corev1.Capabilities{
-			Drop: []corev1.Capability{"ALL"},
-			Add:  []corev1.Capability{"CHOWN", "FOWNER", "FSETID"},
-		},
-		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		RunAsNonRoot:             ptr.To(true),              //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
+		RunAsUser:                ptr.To(sidecarNonRootUID), //nolint:modernize // ptr.To(65532) is idiomatic; new(int64) would zero
+		RunAsGroup:               ptr.To(sidecarNonRootUID), //nolint:modernize // ptr.To(65532) is idiomatic; new(int64) would zero
+		AllowPrivilegeEscalation: ptr.To(false),             //nolint:modernize // ptr.To(false) is idiomatic; new(false) is invalid Go
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
 }
 
