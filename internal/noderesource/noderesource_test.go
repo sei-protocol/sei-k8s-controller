@@ -1,6 +1,7 @@
 package noderesource
 
 import (
+	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -1067,6 +1068,38 @@ func TestPodSpec_FSGroup(t *testing.T) {
 	g.Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
 	g.Expect(*sts.Spec.Template.Spec.SecurityContext.FSGroup).To(Equal(int64(65532)),
 		"pod-level fsGroup must match sidecar UID so non-root sidecar can read 0o400 Secret mounts")
+}
+
+func TestPodSpec_SupplementalGroups(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	g.Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
+	g.Expect(sts.Spec.Template.Spec.SecurityContext.SupplementalGroups).To(ContainElement(int64(65532)),
+		"seid (uid 0) must be a member of the sidecar gid to write into gid-65532-owned dirs")
+}
+
+func TestSeidInitContainer_PreparesSharedDirs(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("mynet-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
+	g.Expect(seidInit).NotTo(BeNil())
+	g.Expect(seidInit.Command).To(HaveLen(3))
+
+	script := seidInit.Command[2]
+	mkdirIdx := strings.Index(script, "mkdir -p /sei/config /sei/data")
+	chownIdx := strings.Index(script, "chown 0:65532 /sei /sei/config /sei/data")
+	chmodIdx := strings.Index(script, "chmod 2775 /sei /sei/config /sei/data")
+	seidInitIdx := strings.Index(script, "seid init")
+
+	g.Expect(mkdirIdx).To(BeNumerically(">=", 0))
+	g.Expect(chownIdx).To(BeNumerically(">", mkdirIdx))
+	g.Expect(chmodIdx).To(BeNumerically(">", chownIdx))
+	g.Expect(seidInitIdx).To(BeNumerically(">", chmodIdx),
+		"shared-dir prep must precede seid init so subsequent files inherit setgid group")
 }
 
 // --- assertNoOperatorKeyringOnSeidContainers ---

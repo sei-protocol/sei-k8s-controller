@@ -423,6 +423,10 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	spec.SecurityContext = &corev1.PodSecurityContext{
 		FSGroup:             &fsGroup,
 		FSGroupChangePolicy: &fsGroupChangePolicy,
+		// seid (uid 0) writes into gid-65532-owned dirs created by seid-init,
+		// so its supplementary groups must include the sidecar gid to pick up
+		// group-write perms on /sei/config and /sei/data.
+		SupplementalGroups: []int64{sidecarNonRootUID},
 	}
 	initContainers := []corev1.Container{
 		buildSeidInitContainer(node),
@@ -611,7 +615,10 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
+		`mkdir -p %s/config %s/data && chown 0:%d %s %s/config %s/data && chmod 2775 %s %s/config %s/data && if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
+		dataDir, dataDir,
+		sidecarNonRootUID, dataDir, dataDir, dataDir,
+		dataDir, dataDir, dataDir,
 		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
 	)
 	return corev1.Container{
