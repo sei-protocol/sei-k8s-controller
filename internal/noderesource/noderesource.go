@@ -28,6 +28,18 @@ const (
 
 	dataDir = platform.DataDir
 
+	// homeVarRef is the K8s VariableReference form of HOME, substituted from
+	// container.Env at pod-create. Spelled `$(HOME)` (not `$HOME`) — only the
+	// K8s syntax is expanded by kubelet; shell-style refs are passed through
+	// literally and fail at exec.
+	homeVarRef = "$(HOME)"
+
+	// seidHomeFlag is the cosmos-sdk flag that sets seid's working dir.
+	seidHomeFlag = "--home"
+
+	// seidStartSubcommand is the seid subcommand that boots the node.
+	seidStartSubcommand = "start"
+
 	// Pod-spec container names. Used as both the .Name on built containers
 	// and the lookup key for the operator-keyring containment guard.
 	containerNameSeid               = "seid"
@@ -542,12 +554,11 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 }
 
 func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []string) {
+	// Canonical seid invocation; spec.Entrypoint is silently ignored as of
+	// HOME-based path resolution. "$HOME" (shell-expanded inside bash -c)
+	// resolves from the container env declared in buildNodeMainContainer.
 	cmd := "seid"
-	cmdArgs := []string{"start", "--home", dataDir}
-	if node.Spec.Entrypoint != nil && len(node.Spec.Entrypoint.Command) > 0 {
-		cmd = node.Spec.Entrypoint.Command[0]
-		cmdArgs = append(node.Spec.Entrypoint.Command[1:], node.Spec.Entrypoint.Args...)
-	}
+	cmdArgs := []string{seidStartSubcommand, seidHomeFlag, "$HOME"}
 
 	var b strings.Builder
 	b.WriteString(cmd)
@@ -577,13 +588,22 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	mounts = append(mounts, corev1.VolumeMount{Name: "data", MountPath: dataDir})
 	mounts = append(mounts, signingMounts...)
 	mounts = append(mounts, nodeMounts...)
+	// HOME must appear before TMPDIR so K8s VariableReference $(HOME) in
+	// args[] resolves at pod-create. K8s reads container.Env (not the
+	// process env) for variable substitution, ordered top-down.
 	container := corev1.Container{
 		Name:            containerNameSeid,
 		Image:           node.Spec.Image,
 		SecurityContext: seidNonRootSecurityContext(),
 		Env: []corev1.EnvVar{
+			{Name: "HOME", Value: dataDir},
 			{Name: "TMPDIR", Value: dataDir + "/tmp"},
 		},
+		// Canonical invocation; spec.Entrypoint is ignored as of this
+		// release. $(HOME) is K8s VariableReference syntax, substituted
+		// from container.Env before exec.
+		Command:      []string{"seid"},
+		Args:         []string{seidStartSubcommand, seidHomeFlag, homeVarRef},
 		VolumeMounts: mounts,
 		Ports:        ContainerPorts(),
 		StartupProbe: &corev1.Probe{
@@ -598,11 +618,6 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		},
 	}
 
-	if node.Spec.Entrypoint != nil {
-		container.Command = node.Spec.Entrypoint.Command
-		container.Args = node.Spec.Entrypoint.Args
-	}
-
 	if NeedsLongStartup(node) {
 		container.StartupProbe.FailureThreshold = 1800
 	}
@@ -610,19 +625,23 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	return container
 }
 
-// buildSeidInitContainer materializes /sei/config on first boot via
-// `seid init` and ensures /sei/tmp exists. No chown logic — kubelet
-// fsGroup handles PVC ownership.
+// buildSeidInitContainer materializes $HOME/config on first boot via
+// `seid init` and ensures $HOME/tmp exists. The script uses shell
+// $HOME (the script runs via /bin/sh -c) so the path stays in lock-step
+// with the HOME env var.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
-		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
+		`if [ -f "$HOME/config/genesis.json" ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home "$HOME" --overwrite; fi && mkdir -p "$HOME/tmp"`,
+		node.Spec.ChainID, node.Spec.ChainID,
 	)
 	return corev1.Container{
 		Name:  "seid-init",
 		Image: node.Spec.Image,
 		Command: []string{
 			"/bin/sh", "-c", script,
+		},
+		Env: []corev1.EnvVar{
+			{Name: "HOME", Value: dataDir},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},

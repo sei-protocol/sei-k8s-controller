@@ -25,7 +25,13 @@ type SeiNodeSpec struct {
 	// +optional
 	Peers []PeerSource `json:"peers,omitempty"`
 
-	// Entrypoint overrides the image command for the running node process.
+	// Entrypoint is silently ignored. The controller injects a canonical
+	// `seid start --home $(HOME)` invocation; HOME is set on the container
+	// env so the data dir stays in lock-step across seid main, seid-init,
+	// and bootstrap containers. Slated for removal in v1alpha2.
+	//
+	// Deprecated: ignored as of the release that introduced HOME-based path
+	// resolution. Remove the field from manifests at your convenience.
 	// +optional
 	Entrypoint *EntrypointConfig `json:"entrypoint,omitempty"`
 
