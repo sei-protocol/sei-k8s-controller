@@ -1,0 +1,29 @@
+# Example bindings for the sei-validator-task-submitter ClusterRole.
+# Two patterns: bind the controller's own SA so it can submit lifecycle
+# tasks, and bind a human-operator group sourced from cluster identity
+# (SSO via EKS access entries, OIDC, etc.).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sei-controller-task-submitter
+subjects:
+  - kind: ServiceAccount
+    name: sei-k8s-controller-manager
+    namespace: sei-k8s-controller-system
+roleRef:
+  kind: ClusterRole
+  name: sei-validator-task-submitter
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sei-validator-operators
+subjects:
+  - kind: Group
+    name: validator-operators
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: sei-validator-task-submitter
+  apiGroup: rbac.authorization.k8s.io

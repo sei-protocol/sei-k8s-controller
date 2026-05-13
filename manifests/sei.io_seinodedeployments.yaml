@@ -603,6 +603,34 @@ spec:
                                   More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                                 type: object
                             type: object
+                          tls:
+                            description: |-
+                              TLS, if set, fronts the sidecar API with kube-rbac-proxy on
+                              :8443 backed by a cert-manager-issued cert. Init-only:
+                              toggling on a Running SeiNode requires recreation. See seictl#165.
+                            properties:
+                              issuerRef:
+                                description: |-
+                                  IssuerRef references the cert-manager Issuer or ClusterIssuer
+                                  that signs the proxy's serving certificate.
+                                properties:
+                                  group:
+                                    default: cert-manager.io
+                                    type: string
+                                  kind:
+                                    default: Issuer
+                                    enum:
+                                    - Issuer
+                                    - ClusterIssuer
+                                    type: string
+                                  name:
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                            required:
+                            - issuerRef
+                            type: object
                         type: object
                       validator:
                         description: Validator configures a consensus-participating
