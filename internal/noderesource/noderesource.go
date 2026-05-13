@@ -904,7 +904,8 @@ func buildRBACProxyContainer(node *seiv1alpha1.SeiNode, _ PlatformConfig) corev1
 			// renewals propagate without a pod restart.
 			"--tls-reload-interval=30s",
 			"--ignore-paths=" + ignorePaths,
-			"--v=2",
+			// v=0 keeps request paths and identity headers out of logs.
+			"--v=0",
 		},
 		Ports: []corev1.ContainerPort{
 			{Name: servicePortNameAPI, ContainerPort: rbacProxyPort, Protocol: corev1.ProtocolTCP},
@@ -920,9 +921,10 @@ func buildRBACProxyContainer(node *seiv1alpha1.SeiNode, _ PlatformConfig) corev1
 	}
 }
 
-// bypassPaths is the authoritative list of paths the proxy lets through
-// without authn/authz. Must match the sidecar's middleware bypass list
-// (seictl sidecar/server/auth.go BypassPaths).
+// bypassPaths are skipped by kube-rbac-proxy authn AND authz. Must
+// match the sidecar's middleware bypass list (sidecar/server/auth.go).
+// SECURITY: only public health/metrics paths — never state, keyring,
+// or operator actions.
 func bypassPaths() []string {
 	return []string{pathHealthz, pathStartupz, pathLivez, pathMetrics}
 }
@@ -953,6 +955,9 @@ func proxyLivenessProbe() *corev1.Probe {
 	}
 }
 
+// proxyReadinessProbe gates pod readiness on the sidecar via the
+// proxy: --ignore-paths skips authn, but the proxy still forwards
+// upstream, so a wedged sidecar surfaces as 5xx here.
 func proxyReadinessProbe() *corev1.Probe {
 	return &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
