@@ -939,7 +939,7 @@ func TestNodeKey_BothMountsCoexist(t *testing.T) {
 	g.Expect(signingMount).NotTo(BeNil())
 	g.Expect(nodeMount).NotTo(BeNil())
 	g.Expect(signingMount.MountPath).NotTo(Equal(nodeMount.MountPath),
-		"signing-key and node-key mounts must target distinct paths under /sei/config/")
+		"signing-key and node-key mounts must target distinct paths under dataDir/config/")
 }
 
 // --- Operator keyring (validator) ---
@@ -1116,7 +1116,7 @@ func TestSeidInitContainer_BareScript(t *testing.T) {
 	// lock-step with the HOME env var declared on the container.
 	g.Expect(script).To(ContainSubstring(`seid init sei-test --chain-id sei-test --home "$HOME" --overwrite`))
 	g.Expect(script).To(ContainSubstring(`mkdir -p "$HOME/tmp"`))
-	g.Expect(script).NotTo(ContainSubstring("/sei"),
+	g.Expect(script).NotTo(ContainSubstring(dataDir),
 		"no hardcoded data dir — script must route through $HOME")
 
 	env := map[string]string{}
@@ -1145,7 +1145,7 @@ func expectSeidNonRootSecurityContext(g Gomega, sc *corev1.SecurityContext) {
 const (
 	keyringTestSeidInitName        = "seid-init"
 	keyringTestSidecarName         = "sei-sidecar"
-	keyringTestMountPath           = "/sei/keyring-file"
+	keyringTestMountPath           = "/.sei/keyring-file"
 	keyringTestPassphraseSecret    = "validator-0-opk-pass"
 	keyringTestPassphraseSecretKey = "passphrase"
 )
