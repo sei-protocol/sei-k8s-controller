@@ -415,19 +415,9 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	// SecurityContext, separate the sidecar's SA) is tracked as a follow-up.
 	// See PR #220 review thread.
 	spec.ShareProcessNamespace = ptr.To(true)
-	// FSGroup grants the non-root sidecar UID read access to 0o400
-	// Secret-projected files. ChangePolicy=OnRootMismatch avoids recursive
-	// chown on every pod start (the "Always" default is costly on archive PVCs).
-	// fsGroup with OnRootMismatch is the load-bearing migration primitive:
-	// on first mount of a legacy root-owned PVC, kubelet recursively chowns
-	// the volume's gid to sidecarNonRootUID and adds group rwX. seid + the
-	// sidecar both run as uid sidecarNonRootUID and access chain data via
-	// group perms. On subsequent mounts kubelet sees the root gid already
-	// matches and skips the walk — near-zero cost. New files seid creates
-	// land as uid:gid sidecarNonRootUID:sidecarNonRootUID via the process's
-	// own primary identity; legacy files retain uid 0 but become readable
-	// via the recursive gid chown. The volume self-converges to uniform
-	// uid 65532 ownership over time as files rotate.
+	// Kubelet handles PVC ownership migration: on first mount of a legacy
+	// root-owned volume, OnRootMismatch triggers a recursive `chown :65532`
+	// + `chmod g+rwX`. Subsequent mounts skip the walk.
 	fsGroup := sidecarNonRootUID
 	fsGroupChangePolicy := corev1.FSGroupChangeOnRootMismatch
 	spec.SecurityContext = &corev1.PodSecurityContext{
@@ -620,11 +610,9 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	return container
 }
 
-// buildSeidInitContainer runs `seid init` on first boot to materialize
-// /sei/config and ensures /sei/tmp exists. Runs as non-root; PVC
-// ownership is handled by kubelet's fsGroup OnRootMismatch (see
-// PodSecurityContext setup in buildNodePodSpec), so this container
-// needs no caps and no chown logic.
+// buildSeidInitContainer materializes /sei/config on first boot via
+// `seid init` and ensures /sei/tmp exists. No chown logic — kubelet
+// fsGroup handles PVC ownership.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
 		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
@@ -643,15 +631,10 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	}
 }
 
-// seidNonRootSecurityContext is shared between seid main and seid-init.
-// Both run the same binary, share the same /sei mount, and have the same
-// (low) privilege needs. ReadOnlyRootFilesystem is deliberately omitted —
-// seid is a Go binary that may use /tmp on the rootfs; the sidecar can
-// enforce RORFS because we mount an emptyDir at its /tmp, and we don't
-// duplicate that wiring on seid containers.
-//
-// PSA `restricted`-eligible: RunAsNonRoot, RunAsUser>0, drop ALL caps,
-// no privilege escalation, RuntimeDefault seccomp.
+// seidNonRootSecurityContext is shared by seid main and seid-init (same
+// binary, same mount, same privilege floor). PSA `restricted`-eligible.
+// ReadOnlyRootFilesystem omitted: seid's Go runtime may use /tmp on the
+// rootfs and we don't wire an emptyDir for it on seid containers.
 func seidNonRootSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             ptr.To(true),              //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
