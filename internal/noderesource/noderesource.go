@@ -5,9 +5,12 @@
 package noderesource
 
 import (
+	"bytes"
+	_ "embed"
 	"fmt"
 	"maps"
 	"strings"
+	"text/template"
 
 	seiconfig "github.com/sei-protocol/sei-config"
 	appsv1 "k8s.io/api/apps/v1"
@@ -21,6 +24,22 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
+
+// OwnershipSentinelV1 is the per-PVC marker for migration-v1 (data volume
+// chowned to sidecarNonRootUID:sidecarNonRootUID). Exported because
+// internal/task/bootstrap_resources.go must clear it on re-bootstrap so
+// the StatefulSet's seid-init re-runs the migration over whatever the
+// bootstrap Job rewrote as uid 0.
+//
+// Any future ownership migration MUST define a new sentinel (V2, etc.)
+// rather than reuse this path — old PVCs would otherwise short-circuit
+// the new migration on a stale marker.
+const OwnershipSentinelV1 = ".sei-k8s-controller-ownership-v1"
+
+//go:embed seid_init.sh.tmpl
+var seidInitScriptTmpl string
+
+var seidInitTemplate = template.Must(template.New("seid-init").Parse(seidInitScriptTmpl))
 
 const (
 	// NodeLabel is the standard label key used on all SeiNode-owned resources.
@@ -423,10 +442,6 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	spec.SecurityContext = &corev1.PodSecurityContext{
 		FSGroup:             &fsGroup,
 		FSGroupChangePolicy: &fsGroupChangePolicy,
-		// seid (uid 0) writes into gid-65532-owned dirs created by seid-init,
-		// so its supplementary groups must include the sidecar gid to pick up
-		// group-write perms on /sei/config and /sei/data.
-		SupplementalGroups: []int64{sidecarNonRootUID},
 	}
 	initContainers := []corev1.Container{
 		buildSeidInitContainer(node),
@@ -582,8 +597,9 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	mounts = append(mounts, signingMounts...)
 	mounts = append(mounts, nodeMounts...)
 	container := corev1.Container{
-		Name:  containerNameSeid,
-		Image: node.Spec.Image,
+		Name:            containerNameSeid,
+		Image:           node.Spec.Image,
+		SecurityContext: seidMainSecurityContext(),
 		Env: []corev1.EnvVar{
 			{Name: "TMPDIR", Value: dataDir + "/tmp"},
 		},
@@ -613,23 +629,16 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	return container
 }
 
-// buildSeidInitContainer runs seid init and prepares /sei, /sei/config,
-// /sei/data as 0:sidecarNonRootUID mode 2775 — group-writable with setgid
-// so new files seid creates inherit gid sidecarNonRootUID, which the
-// non-root sidecar needs for genesis assembly and snapshot restore.
+// buildSeidInitContainer wires the rendered seid_init.sh.tmpl into the
+// pod spec. The script's behavior, sentinel-versioning contract, and
+// ordering invariants live in the template comment block; keep that as
+// the source of truth.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
-	script := fmt.Sprintf(
-		`echo "preparing /sei perms" && mkdir -p %s/config %s/data && chown 0:%d %s %s/config %s/data && chmod 2775 %s %s/config %s/data && if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
-		dataDir, dataDir,
-		sidecarNonRootUID, dataDir, dataDir, dataDir,
-		dataDir, dataDir, dataDir,
-		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
-	)
 	return corev1.Container{
 		Name:  "seid-init",
 		Image: node.Spec.Image,
 		Command: []string{
-			"/bin/sh", "-c", script,
+			"/bin/sh", "-c", renderSeidInitScript(node.Spec.ChainID),
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
@@ -638,13 +647,35 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	}
 }
 
-// seidInitSecurityContext keeps the init at uid 0 (chown requires it) but
-// drops every cap except the three needed by the prep script: CHOWN for
-// `chown 0:65532`, FSETID to preserve the setgid bit on `chmod 2775`
-// (else chmod silently clears setgid when the file gid isn't the caller's
-// primary), and FOWNER as defense-in-depth for chmod on PVC dirs whose
-// uid may not match if a future script edit operates on paths it didn't
-// just chown.
+// renderSeidInitScript executes the embedded seid-init template with the
+// package-level constants and the per-node chain ID. The template parses
+// at init and the data fields match the schema, so the only failure mode
+// is a programmer mistake — surface via panic rather than threading an
+// unreachable error through every caller.
+func renderSeidInitScript(chainID string) string {
+	var buf bytes.Buffer
+	err := seidInitTemplate.Execute(&buf, struct {
+		DataDir      string
+		NonRootUID   int64
+		SentinelName string
+		ChainID      string
+	}{
+		DataDir:      dataDir,
+		NonRootUID:   sidecarNonRootUID,
+		SentinelName: OwnershipSentinelV1,
+		ChainID:      chainID,
+	})
+	if err != nil {
+		panic(fmt.Errorf("rendering seid-init template: %w", err))
+	}
+	return buf.String()
+}
+
+// seidInitSecurityContext keeps the init at uid 0 because the one-time
+// PVC ownership migration runs chown(2) which requires CAP_CHOWN. Drops
+// every other cap; FOWNER + FSETID are kept as defense-in-depth for the
+// chmod (FOWNER when operating on dirs the caller doesn't own, FSETID
+// to preserve setgid on `chmod 2775`).
 func seidInitSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		AllowPrivilegeEscalation: ptr.To(false), //nolint:modernize // ptr.To(false) is idiomatic; new(false) is invalid Go
@@ -653,6 +684,19 @@ func seidInitSecurityContext() *corev1.SecurityContext {
 			Add:  []corev1.Capability{"CHOWN", "FOWNER", "FSETID"},
 		},
 		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+}
+
+// seidMainSecurityContext runs seid as the same uid/gid as the sidecar so
+// both processes operate as owner on /sei/config files and the kernel's
+// uid-match check shortcircuits permission resolution. Replaces the
+// supplementalGroups + setgid asymmetry workaround that #229 layered on
+// top of the root-running seid.
+func seidMainSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		RunAsNonRoot: ptr.To(true),              //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
+		RunAsUser:    ptr.To(sidecarNonRootUID), //nolint:modernize // ptr.To(65532) is idiomatic; new(int64) would zero
+		RunAsGroup:   ptr.To(sidecarNonRootUID), //nolint:modernize // ptr.To(65532) is idiomatic; new(int64) would zero
 	}
 }
 

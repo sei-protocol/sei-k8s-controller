@@ -12,6 +12,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
@@ -234,10 +235,22 @@ func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args 
 	return []string{"/bin/bash", "-c"}, []string{script}
 }
 
+// bootstrapSeidInitContainer prepares the bootstrap Job's data directory.
+// Runs as uid 0; the bootstrap pod doesn't carry the StatefulSet's
+// SecurityContext + sidecar hardening because the Job writes chain data
+// then exits.
+//
+// Clears the StatefulSet's ownership-migration sentinel on exit so the
+// next StatefulSet pod's seid-init re-runs the chown -R over whatever
+// the bootstrap Job (running as root) just wrote. Without this, a
+// re-bootstrap on a previously-migrated PVC leaves root-owned files
+// behind a stamped sentinel and the StatefulSet's seid main (uid 65532)
+// EACCES on them.
 func bootstrapSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
+		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp && rm -f %s/%s`,
 		bootstrapDataDir, node.Spec.ChainID, node.Spec.ChainID, bootstrapDataDir, bootstrapDataDir,
+		bootstrapDataDir, noderesource.OwnershipSentinelV1,
 	)
 	return corev1.Container{
 		Name:  "seid-init",

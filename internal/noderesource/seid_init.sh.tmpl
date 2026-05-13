@@ -1,0 +1,35 @@
+#!/bin/sh
+# seid init + one-time {{.DataDir}} ownership migration to {{.NonRootUID}}:{{.NonRootUID}}.
+# Rendered by internal/noderesource.renderSeidInitScript; constants flow in
+# from the package-level Go consts.
+#
+# Container runs as uid 0 (chown(2) needs CAP_CHOWN). After the migration
+# sentinel is set, the chown branch is skipped and the script is a no-op
+# on subsequent restarts.
+#
+# Sentinel path is migration-v1. Any future ownership migration MUST use
+# a distinct sentinel path so old markers don't short-circuit it.
+#
+# Order matters: any new shared dir under {{.DataDir}} MUST be added to
+# the initial mkdir set so the chown -R covers it. /sei/tmp is here for
+# exactly that reason — seid main writes via TMPDIR and would EACCES if
+# a sub-dir got created after the sentinel locked the migration in.
+set -e
+
+echo "preparing {{.DataDir}} perms"
+
+mkdir -p {{.DataDir}}/config {{.DataDir}}/data {{.DataDir}}/tmp
+
+if [ -f {{.DataDir}}/config/genesis.json ]; then
+  echo "data directory already initialized, skipping seid init"
+else
+  seid init {{.ChainID}} --chain-id {{.ChainID}} --home {{.DataDir}} --overwrite
+fi
+
+if [ ! -f {{.DataDir}}/{{.SentinelName}} ]; then
+  echo "migrating {{.DataDir}} ownership to {{.NonRootUID}}:{{.NonRootUID}}"
+  chown -R {{.NonRootUID}}:{{.NonRootUID}} {{.DataDir}}
+  touch {{.DataDir}}/{{.SentinelName}}
+fi
+
+chmod 2775 {{.DataDir}} {{.DataDir}}/config {{.DataDir}}/data

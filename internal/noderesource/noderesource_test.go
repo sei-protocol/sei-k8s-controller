@@ -1045,16 +1045,17 @@ func TestSidecarContainer_SecurityContext(t *testing.T) {
 	g.Expect(sc.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
 }
 
-func TestSeidMainContainer_NoSecurityContextChange(t *testing.T) {
+func TestSeidMainContainer_RunsAsNonRoot(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 	g.Expect(seid).NotTo(BeNil())
-	// seid main container hardening is an out-of-scope, larger blast-radius
-	// change owned by a different workstream.
-	g.Expect(seid.SecurityContext).To(BeNil())
+	g.Expect(seid.SecurityContext).NotTo(BeNil())
+	g.Expect(seid.SecurityContext.RunAsNonRoot).To(Equal(ptr.To(true)))       //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
+	g.Expect(seid.SecurityContext.RunAsUser).To(Equal(ptr.To(int64(65532))))  //nolint:modernize
+	g.Expect(seid.SecurityContext.RunAsGroup).To(Equal(ptr.To(int64(65532)))) //nolint:modernize
 }
 
 func TestPodSpec_FSGroup(t *testing.T) {
@@ -1067,17 +1068,17 @@ func TestPodSpec_FSGroup(t *testing.T) {
 		"pod-level fsGroup must match sidecar UID so non-root sidecar can read 0o400 Secret mounts")
 }
 
-func TestPodSpec_SupplementalGroups(t *testing.T) {
+func TestPodSpec_NoSupplementalGroups(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	g.Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
-	g.Expect(sts.Spec.Template.Spec.SecurityContext.SupplementalGroups).To(ContainElement(int64(65532)),
-		"seid (uid 0) must be a member of the sidecar gid to write into gid-65532-owned dirs")
+	g.Expect(sts.Spec.Template.Spec.SecurityContext.SupplementalGroups).To(BeEmpty(),
+		"workaround for root-seid is no longer needed once seid runs as gid 65532 natively")
 }
 
-func TestSeidInitContainer_PreparesSharedDirs(t *testing.T) {
+func TestSeidInitContainer_OneTimeOwnershipMigration(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
 
@@ -1087,16 +1088,25 @@ func TestSeidInitContainer_PreparesSharedDirs(t *testing.T) {
 	g.Expect(seidInit.Command).To(HaveLen(3))
 
 	script := seidInit.Command[2]
-	mkdirIdx := strings.Index(script, "mkdir -p /sei/config /sei/data")
-	chownIdx := strings.Index(script, "chown 0:65532 /sei /sei/config /sei/data")
+	mkdirIdx := strings.Index(script, "mkdir -p /sei/config /sei/data /sei/tmp")
+	seidInitIdx := strings.Index(script, "seid init sei-test --chain-id sei-test --home /sei --overwrite")
+	sentinelGuardIdx := strings.Index(script, "[ ! -f /sei/.sei-k8s-controller-ownership-v1 ]")
+	chownRIdx := strings.Index(script, "chown -R 65532:65532 /sei")
+	sentinelTouchIdx := strings.Index(script, "touch /sei/.sei-k8s-controller-ownership-v1")
 	chmodIdx := strings.Index(script, "chmod 2775 /sei /sei/config /sei/data")
-	seidInitIdx := strings.Index(script, "seid init")
 
-	g.Expect(mkdirIdx).To(BeNumerically(">=", 0))
-	g.Expect(chownIdx).To(BeNumerically(">", mkdirIdx))
-	g.Expect(chmodIdx).To(BeNumerically(">", chownIdx))
-	g.Expect(seidInitIdx).To(BeNumerically(">", chmodIdx),
-		"shared-dir prep must precede seid init so subsequent files inherit setgid group")
+	g.Expect(mkdirIdx).To(BeNumerically(">=", 0),
+		"/sei/tmp must be created with /sei/config and /sei/data so the chown -R migration covers it; otherwise seid main (uid 65532) EACCEScreate-after-sentinel")
+	g.Expect(seidInitIdx).To(BeNumerically(">", mkdirIdx),
+		"seid init runs after dirs exist")
+	g.Expect(sentinelGuardIdx).To(BeNumerically(">", seidInitIdx),
+		"ownership migration must follow seid init so the files it creates also get chowned")
+	g.Expect(chownRIdx).To(BeNumerically(">", sentinelGuardIdx),
+		"recursive chown is inside the sentinel guard")
+	g.Expect(sentinelTouchIdx).To(BeNumerically(">", chownRIdx),
+		"sentinel marker is created after a successful chown")
+	g.Expect(chmodIdx).To(BeNumerically(">", sentinelTouchIdx),
+		"top-level chmod runs after the migration step")
 }
 
 func TestSeidInitContainer_SecurityContext(t *testing.T) {
