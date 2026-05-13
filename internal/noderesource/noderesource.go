@@ -423,6 +423,10 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	spec.SecurityContext = &corev1.PodSecurityContext{
 		FSGroup:             &fsGroup,
 		FSGroupChangePolicy: &fsGroupChangePolicy,
+		// seid (uid 0) writes into gid-65532-owned dirs created by seid-init,
+		// so its supplementary groups must include the sidecar gid to pick up
+		// group-write perms on /sei/config and /sei/data.
+		SupplementalGroups: []int64{sidecarNonRootUID},
 	}
 	initContainers := []corev1.Container{
 		buildSeidInitContainer(node),
@@ -609,9 +613,16 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	return container
 }
 
+// buildSeidInitContainer runs seid init and prepares /sei, /sei/config,
+// /sei/data as 0:sidecarNonRootUID mode 2775 — group-writable with setgid
+// so new files seid creates inherit gid sidecarNonRootUID, which the
+// non-root sidecar needs for genesis assembly and snapshot restore.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
+		`echo "preparing /sei perms" && mkdir -p %s/config %s/data && chown 0:%d %s %s/config %s/data && chmod 2775 %s %s/config %s/data && if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
+		dataDir, dataDir,
+		sidecarNonRootUID, dataDir, dataDir, dataDir,
+		dataDir, dataDir, dataDir,
 		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
 	)
 	return corev1.Container{
@@ -623,6 +634,25 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
 		},
+		SecurityContext: seidInitSecurityContext(),
+	}
+}
+
+// seidInitSecurityContext keeps the init at uid 0 (chown requires it) but
+// drops every cap except the three needed by the prep script: CHOWN for
+// `chown 0:65532`, FSETID to preserve the setgid bit on `chmod 2775`
+// (else chmod silently clears setgid when the file gid isn't the caller's
+// primary), and FOWNER as defense-in-depth for chmod on PVC dirs whose
+// uid may not match if a future script edit operates on paths it didn't
+// just chown.
+func seidInitSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr.To(false), //nolint:modernize // ptr.To(false) is idiomatic; new(false) is invalid Go
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+			Add:  []corev1.Capability{"CHOWN", "FOWNER", "FSETID"},
+		},
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
 }
 
