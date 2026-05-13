@@ -26,8 +26,7 @@ const (
 	// NodeLabel is the standard label key used on all SeiNode-owned resources.
 	NodeLabel = "sei.io/node"
 
-	dataDir             = platform.DataDir
-	defaultSidecarImage = platform.DefaultSidecarImage
+	dataDir = platform.DataDir
 
 	// Pod-spec container names. Used as both the .Name on built containers
 	// and the lookup key for the operator-keyring containment guard.
@@ -438,11 +437,11 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.PodSpe
 	return spec
 }
 
-func sidecarImage(node *seiv1alpha1.SeiNode) string {
+func sidecarImage(node *seiv1alpha1.SeiNode, p PlatformConfig) string {
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Image != "" {
 		return node.Spec.Sidecar.Image
 	}
-	return defaultSidecarImage
+	return p.SidecarImage
 }
 
 // SidecarPort returns the sidecar HTTP port for the node.
@@ -484,7 +483,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 
 	c := corev1.Container{
 		Name:          containerNameSidecar,
-		Image:         sidecarImage(node),
+		Image:         sidecarImage(node, p),
 		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env:           env,

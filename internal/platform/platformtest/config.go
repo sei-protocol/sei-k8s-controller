@@ -31,5 +31,8 @@ func Config() platform.Config {
 		GatewayNamespace:    "istio-system",
 		GatewayDomain:       "test.platform.sei.io",
 		KubeRBACProxyImage:  "quay.io/brancz/kube-rbac-proxy:v0.19.1",
+		// Arbitrary fixture; not authoritative. Production digest is set
+		// via SEI_SIDECAR_IMAGE in the platform repo's controller Deployment.
+		SidecarImage: "ghcr.io/sei-protocol/seictl@sha256:a2af4e1b8ed4c12661a3c98cce050bae3f292cc7560abc2ba98fd7dfc80d9be5",
 	}
 }

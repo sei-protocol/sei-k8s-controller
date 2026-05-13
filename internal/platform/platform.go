@@ -1,12 +1,11 @@
 package platform
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
-	// DefaultSidecarImage is the seictl sidecar image used when not overridden
-	// by the SeiNode spec. Shared between the node controller and bootstrap task.
-	DefaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:a2af4e1b8ed4c12661a3c98cce050bae3f292cc7560abc2ba98fd7dfc80d9be5"
-
 	// DataDir is the mount path for the sei data volume inside node pods.
 	DataDir = "/sei"
 
@@ -47,6 +46,7 @@ type Config struct {
 	GatewayPublicDomain string
 
 	KubeRBACProxyImage string
+	SidecarImage       string
 }
 
 // NodepoolForMode returns the Karpenter NodePool name for the given
@@ -85,9 +85,10 @@ func (c Config) Validate() error {
 		"SEI_GATEWAY_NAME":          c.GatewayName,
 		"SEI_GATEWAY_NAMESPACE":     c.GatewayNamespace,
 		"SEI_GATEWAY_DOMAIN":        c.GatewayDomain,
+		"SEI_SIDECAR_IMAGE":         c.SidecarImage,
 	}
 	for name, val := range required {
-		if val == "" {
+		if strings.TrimSpace(val) == "" {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
