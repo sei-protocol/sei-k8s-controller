@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
@@ -12,8 +11,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
-	"github.com/sei-protocol/sei-k8s-controller/internal/sidecartransport"
 )
 
 // awaitNodesAtHeightExecution submits await-condition(height=H) to each
@@ -112,7 +109,7 @@ func (e *awaitNodesAtHeightExecution) sidecarForNode(ctx context.Context, name s
 	if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, node); err != nil {
 		return nil, fmt.Errorf("getting node %s: %w", name, err)
 	}
-	return sidecarClientForNode(node)
+	return e.cfg.sidecarFor(node)
 }
 
 // awaitNodesCaughtUpExecution polls node sidecars until all report Ready.
@@ -156,7 +153,7 @@ func (e *awaitNodesCaughtUpExecution) isNodeReady(ctx context.Context, name stri
 	if err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: e.params.Namespace}, node); err != nil {
 		return false
 	}
-	sc, err := sidecarClientForNode(node)
+	sc, err := e.cfg.sidecarFor(node)
 	if err != nil {
 		return false
 	}
@@ -165,19 +162,6 @@ func (e *awaitNodesCaughtUpExecution) isNodeReady(ctx context.Context, name stri
 		return false
 	}
 	return resp.Status == sidecar.Ready
-}
-
-// sidecarClientForNode constructs a SidecarClient pointed at a
-// SeiNode's pod. URL building lives in noderesource so this site and
-// cmd/main.go's factory stay in sync (planner can't be imported here
-// — planner already imports task).
-func sidecarClientForNode(node *seiv1alpha1.SeiNode) (*sidecar.SidecarClient, error) {
-	url := noderesource.SidecarURLForNode(node)
-	if noderesource.SidecarTLSEnabled(node) {
-		rt := sidecartransport.New(sidecartransport.Config{})
-		return sidecar.NewSidecarClient(url, sidecar.WithHTTPDoer(&http.Client{Transport: rt}))
-	}
-	return sidecar.NewSidecarClient(url)
 }
 
 // deterministicDeploymentTaskID generates a UUID v5 scoped to deployment operations.

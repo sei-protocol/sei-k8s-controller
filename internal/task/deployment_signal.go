@@ -53,7 +53,7 @@ func (e *submitHaltSignalExecution) submitToNode(ctx context.Context, logger int
 		return
 	}
 
-	sc, err := sidecarClientForNode(node)
+	sc, err := e.cfg.sidecarFor(node)
 	if err != nil {
 		logger.Info("cannot build sidecar client for halt signal, skipping", "node", name, "error", err)
 		return

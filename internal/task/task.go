@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
@@ -150,7 +151,10 @@ type SidecarClient interface {
 // ExecutePlan returns.
 type ExecutionConfig struct {
 	BuildSidecarClient func() (SidecarClient, error)
-	KubeClient         client.Client
+	// NewSidecarClient returns a client for an arbitrary SeiNode rather
+	// than the reconciled Resource.
+	NewSidecarClient func(*seiv1alpha1.SeiNode) (*sidecar.SidecarClient, error)
+	KubeClient       client.Client
 	// APIReader bypasses the controller-runtime cache. Use when reading a
 	// resource the same plan just wrote — the cached client lags behind
 	// SSA writes by milliseconds-to-unbounded.
@@ -159,6 +163,13 @@ type ExecutionConfig struct {
 	Resource    client.Object
 	Platform    platform.Config
 	ObjectStore platform.ObjectStore
+}
+
+func (c ExecutionConfig) sidecarFor(node *seiv1alpha1.SeiNode) (*sidecar.SidecarClient, error) {
+	if c.NewSidecarClient == nil {
+		return nil, fmt.Errorf("ExecutionConfig.NewSidecarClient not configured")
+	}
+	return c.NewSidecarClient(node)
 }
 
 // ResourceAs is a generic helper that type-asserts the Resource field.

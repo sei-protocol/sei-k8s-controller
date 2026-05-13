@@ -64,7 +64,7 @@ func (e *collectAndSetPeersExecution) collectPeers(ctx context.Context) ([]strin
 			return nil, fmt.Errorf("getting node %s: %w", name, err)
 		}
 
-		sc, err := sidecarClientForNode(node)
+		sc, err := e.cfg.sidecarFor(node)
 		if err != nil {
 			return nil, fmt.Errorf("building sidecar client for %s: %w", name, err)
 		}

@@ -167,13 +167,19 @@ func main() {
 	objectStore := platform.NewS3ObjectStore()
 	kc := mgr.GetClient()
 
-	buildSidecarClient := func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
-		url := planner.SidecarURLForNode(node)
-		if !noderesource.SidecarTLSEnabled(node) {
-			return sidecar.NewSidecarClient(url)
+	// One transport per process: keepalive pool and SA-token cache
+	// shared across reconciles.
+	sharedTLSDoer := &http.Client{Transport: sidecartransport.New(sidecartransport.Config{})}
+
+	newSidecarClient := func(node *seiv1alpha1.SeiNode) (*sidecar.SidecarClient, error) {
+		url := noderesource.SidecarURLForNode(node)
+		if noderesource.SidecarTLSEnabled(node) {
+			return sidecar.NewSidecarClient(url, sidecar.WithHTTPDoer(sharedTLSDoer))
 		}
-		rt := sidecartransport.New(sidecartransport.Config{})
-		return sidecar.NewSidecarClient(url, sidecar.WithHTTPDoer(&http.Client{Transport: rt}))
+		return sidecar.NewSidecarClient(url)
+	}
+	buildSidecarClient := func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
+		return newSidecarClient(node)
 	}
 
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
@@ -190,12 +196,13 @@ func main() {
 					BuildSidecarClient: func() (task.SidecarClient, error) {
 						return buildSidecarClient(node)
 					},
-					KubeClient:  kc,
-					APIReader:   mgr.GetAPIReader(),
-					Scheme:      mgr.GetScheme(),
-					Resource:    node,
-					Platform:    platformCfg,
-					ObjectStore: objectStore,
+					NewSidecarClient: newSidecarClient,
+					KubeClient:       kc,
+					APIReader:        mgr.GetAPIReader(),
+					Scheme:           mgr.GetScheme(),
+					Resource:         node,
+					Platform:         platformCfg,
+					ObjectStore:      objectStore,
 				}
 			},
 		},
@@ -234,12 +241,13 @@ func main() {
 						}
 						return buildSidecarClient(assemblerNode)
 					},
-					KubeClient:  kc,
-					APIReader:   mgr.GetAPIReader(),
-					Scheme:      mgr.GetScheme(),
-					Resource:    group,
-					Platform:    platformCfg,
-					ObjectStore: objectStore,
+					NewSidecarClient: newSidecarClient,
+					KubeClient:       kc,
+					APIReader:        mgr.GetAPIReader(),
+					Scheme:           mgr.GetScheme(),
+					Resource:         group,
+					Platform:         platformCfg,
+					ObjectStore:      objectStore,
 				}
 			},
 		},
