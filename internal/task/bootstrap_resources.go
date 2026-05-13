@@ -164,6 +164,7 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 		Command: seidCmd,
 		Args:    seidArgs,
 		Env: []corev1.EnvVar{
+			{Name: "HOME", Value: bootstrapDataDir},
 			{Name: "TMPDIR", Value: bootstrapDataDir + "/tmp"},
 		},
 		VolumeMounts: []corev1.VolumeMount{
@@ -227,23 +228,26 @@ func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args 
 			`fi; `+
 			`sleep 5; done; `+
 			`echo "sidecar healthy, starting seid with halt-height %d"; `+
-			`seid start --home %s --halt-height %d; `+
+			`seid start --home "$HOME" --halt-height %d; `+
 			`rc=$?; if [ $rc -eq 130 ]; then echo "seid halted at target height (exit 130), treating as success"; exit 0; fi; exit $rc`,
-		port, haltHeight, bootstrapDataDir, haltHeight,
+		port, haltHeight, haltHeight,
 	)
 	return []string{"/bin/bash", "-c"}, []string{script}
 }
 
 func bootstrapSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
-		bootstrapDataDir, node.Spec.ChainID, node.Spec.ChainID, bootstrapDataDir, bootstrapDataDir,
+		`if [ -f "$HOME/config/genesis.json" ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home "$HOME" --overwrite; fi && mkdir -p "$HOME/tmp"`,
+		node.Spec.ChainID, node.Spec.ChainID,
 	)
 	return corev1.Container{
 		Name:  "seid-init",
 		Image: node.Spec.Image,
 		Command: []string{
 			"/bin/sh", "-c", script,
+		},
+		Env: []corev1.EnvVar{
+			{Name: "HOME", Value: bootstrapDataDir},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: bootstrapDataDir},

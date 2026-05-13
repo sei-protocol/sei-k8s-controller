@@ -256,15 +256,16 @@ func TestBuildNodeMainContainer_ImageAndEnv(t *testing.T) {
 	g.Expect(c.Name).To(Equal("seid"))
 	g.Expect(c.Image).To(Equal("ghcr.io/sei-protocol/seid:latest"))
 	g.Expect(c.Command).To(Equal([]string{"seid"}))
-	g.Expect(c.Args).To(Equal([]string{"start"}))
+	g.Expect(c.Args).To(Equal([]string{seidStartSubcommand, seidHomeFlag, homeVarRef}),
+		"controller injects canonical command; $(HOME) is K8s VariableReference, resolved from container.Env at pod-create")
 
-	var tmpDir string
+	env := map[string]string{}
 	for _, e := range c.Env {
-		if e.Name == "TMPDIR" {
-			tmpDir = e.Value
-		}
+		env[e.Name] = e.Value
 	}
-	g.Expect(tmpDir).To(Equal(dataDir + "/tmp"))
+	g.Expect(env).To(HaveKeyWithValue("HOME", dataDir),
+		"HOME must be declared first so $(HOME) in args resolves correctly")
+	g.Expect(env).To(HaveKeyWithValue("TMPDIR", dataDir+"/tmp"))
 }
 
 func TestBuildNodeMainContainer_DataVolumeMount(t *testing.T) {
@@ -297,12 +298,24 @@ func TestBuildNodeMainContainer_StartupProbe_Snapshot_HigherThreshold(t *testing
 	g.Expect(c.StartupProbe.FailureThreshold).To(Equal(int32(1800)))
 }
 
-func TestBuildNodeMainContainer_NoEntrypoint(t *testing.T) {
+func TestBuildNodeMainContainer_IgnoresEntrypoint(t *testing.T) {
 	g := NewWithT(t)
+	// snap-0 fixture has no spec.Entrypoint set; the controller still
+	// emits the canonical command — spec.Entrypoint is silently ignored
+	// as of HOME-based path resolution.
 	node := newSnapshotNode("snap-0", "default")
 	c := buildNodeMainContainer(node)
-	g.Expect(c.Command).To(BeNil())
-	g.Expect(c.Args).To(BeNil())
+	g.Expect(c.Command).To(Equal([]string{"seid"}))
+	g.Expect(c.Args).To(Equal([]string{seidStartSubcommand, seidHomeFlag, homeVarRef}))
+
+	// Setting spec.Entrypoint changes nothing — also ignored.
+	node.Spec.Entrypoint = &seiv1alpha1.EntrypointConfig{ //nolint:staticcheck // intentional: verifying the deprecated field is silently ignored
+		Command: []string{"some-other-binary"},
+		Args:    []string{"--ignored"},
+	}
+	c = buildNodeMainContainer(node)
+	g.Expect(c.Command).To(Equal([]string{"seid"}))
+	g.Expect(c.Args).To(Equal([]string{seidStartSubcommand, seidHomeFlag, homeVarRef}))
 }
 
 // --- Sidecar defaults ---
@@ -533,18 +546,23 @@ func TestSidecarMainContainer_WaitWrapper_PollsHealthzBeforeExec(t *testing.T) {
 	g.Expect(seid.Args[0]).To(ContainSubstring("exec seid"))
 }
 
-func TestSidecarMainContainer_WaitWrapper_IncludesEntrypointArgs(t *testing.T) {
+func TestSidecarMainContainer_WaitWrapper_IgnoresEntrypoint(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("gen-0", "default")
-	node.Spec.Entrypoint = &seiv1alpha1.EntrypointConfig{
-		Command: []string{"seid"},
-		Args:    []string{"start", "--home", "/sei"},
+	// Setting spec.Entrypoint must not change the emitted wait-then-exec
+	// script. The controller injects the canonical `seid start --home "$HOME"`
+	// invocation regardless; spec.Entrypoint is silently ignored.
+	node.Spec.Entrypoint = &seiv1alpha1.EntrypointConfig{ //nolint:staticcheck // intentional: verifying the deprecated field is silently ignored
+		Command: []string{"some-other-binary"},
+		Args:    []string{"--ignored"},
 	}
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
-	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "/sei"`))
+	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "$HOME"`))
+	g.Expect(seid.Args[0]).NotTo(ContainSubstring("some-other-binary"))
+	g.Expect(seid.Args[0]).NotTo(ContainSubstring("--ignored"))
 }
 
 func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeidStart(t *testing.T) {
@@ -555,7 +573,9 @@ func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeidStart(t *test
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
-	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "/sei"`))
+	// "$HOME" is shell-expanded inside the bash -c script; the HOME env
+	// var on the container resolves it to dataDir at exec time.
+	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "$HOME"`))
 }
 
 func TestSidecarMainContainer_NilSidecarConfig_UsesDefaults(t *testing.T) {
@@ -1092,8 +1112,19 @@ func TestSeidInitContainer_BareScript(t *testing.T) {
 	// fsGroup OnRootMismatch — not in this script.
 	g.Expect(script).NotTo(ContainSubstring("chown"))
 	g.Expect(script).NotTo(ContainSubstring("chmod"))
-	g.Expect(script).To(ContainSubstring("seid init sei-test --chain-id sei-test --home /sei --overwrite"))
-	g.Expect(script).To(ContainSubstring("mkdir -p /sei/tmp"))
+	// Script uses shell $HOME (runs via /bin/sh -c) so it stays in
+	// lock-step with the HOME env var declared on the container.
+	g.Expect(script).To(ContainSubstring(`seid init sei-test --chain-id sei-test --home "$HOME" --overwrite`))
+	g.Expect(script).To(ContainSubstring(`mkdir -p "$HOME/tmp"`))
+	g.Expect(script).NotTo(ContainSubstring("/sei"),
+		"no hardcoded data dir — script must route through $HOME")
+
+	env := map[string]string{}
+	for _, e := range seidInit.Env {
+		env[e.Name] = e.Value
+	}
+	g.Expect(env).To(HaveKeyWithValue("HOME", dataDir),
+		"HOME env var must match the seid main container so shell $HOME resolves consistently")
 }
 
 func expectSeidNonRootSecurityContext(g Gomega, sc *corev1.SecurityContext) {
