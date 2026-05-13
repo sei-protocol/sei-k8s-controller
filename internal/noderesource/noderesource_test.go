@@ -311,7 +311,7 @@ func TestSidecarImage_DefaultWhenEmpty(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{}
 
-	g.Expect(sidecarImage(node)).To(Equal(defaultSidecarImage))
+	g.Expect(sidecarImage(node, platformtest.Config())).To(Equal(platformtest.Config().SidecarImage))
 }
 
 func TestSidecarImage_DefaultWhenNil(t *testing.T) {
@@ -319,7 +319,7 @@ func TestSidecarImage_DefaultWhenNil(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	node.Spec.Sidecar = nil
 
-	g.Expect(sidecarImage(node)).To(Equal(defaultSidecarImage))
+	g.Expect(sidecarImage(node, platformtest.Config())).To(Equal(platformtest.Config().SidecarImage))
 }
 
 func TestSidecarImage_OverriddenWhenSet(t *testing.T) {
@@ -327,7 +327,7 @@ func TestSidecarImage_OverriddenWhenSet(t *testing.T) {
 	node := newSnapshotNode("snap-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Image: "custom/sidecar:v2"}
 
-	g.Expect(sidecarImage(node)).To(Equal("custom/sidecar:v2"))
+	g.Expect(sidecarImage(node, platformtest.Config())).To(Equal("custom/sidecar:v2"))
 }
 
 func TestSidecarPort_DefaultWhenZero(t *testing.T) {
@@ -364,7 +364,7 @@ func TestSidecarContainer_DefaultImage(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
-	g.Expect(sc.Image).To(Equal(defaultSidecarImage))
+	g.Expect(sc.Image).To(Equal(platformtest.Config().SidecarImage))
 }
 
 func TestSidecarContainer_CustomImage(t *testing.T) {
@@ -569,7 +569,7 @@ func TestSidecarMainContainer_NilSidecarConfig_UsesDefaults(t *testing.T) {
 	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/7777"))
 
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
-	g.Expect(sc.Image).To(Equal(defaultSidecarImage))
+	g.Expect(sc.Image).To(Equal(platformtest.Config().SidecarImage))
 	g.Expect(sc.Ports[0].ContainerPort).To(Equal(seiconfig.PortSidecar))
 }
 

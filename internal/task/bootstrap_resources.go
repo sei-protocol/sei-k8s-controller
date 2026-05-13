@@ -18,7 +18,6 @@ import (
 const (
 	bootstrapTerminationGracePeriod = int64(120)
 	bootstrapDataDir                = platform.DataDir
-	bootstrapDefaultSidecarImage    = platform.DefaultSidecarImage
 	bootstrapNodeLabel              = "sei.io/node"
 	bootstrapComponentLabel         = "sei.io/component"
 )
@@ -129,7 +128,7 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 	port := bootstrapSidecarPort(node)
 	sidecar := corev1.Container{
 		Name:          "sei-sidecar",
-		Image:         bootstrapSidecarImage(node),
+		Image:         bootstrapSidecarImage(node, platformCfg),
 		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env: []corev1.EnvVar{
@@ -252,11 +251,11 @@ func bootstrapSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	}
 }
 
-func bootstrapSidecarImage(node *seiv1alpha1.SeiNode) string {
+func bootstrapSidecarImage(node *seiv1alpha1.SeiNode, p platform.Config) string {
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Image != "" {
 		return node.Spec.Sidecar.Image
 	}
-	return bootstrapDefaultSidecarImage
+	return p.SidecarImage
 }
 
 func bootstrapSidecarPort(node *seiv1alpha1.SeiNode) int32 {

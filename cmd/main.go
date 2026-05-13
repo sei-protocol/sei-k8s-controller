@@ -157,12 +157,14 @@ func main() {
 		GatewayDomain:       os.Getenv("SEI_GATEWAY_DOMAIN"),
 		GatewayPublicDomain: os.Getenv("SEI_GATEWAY_PUBLIC_DOMAIN"),
 		KubeRBACProxyImage:  os.Getenv("SEI_KUBE_RBAC_PROXY_IMAGE"),
+		SidecarImage:        os.Getenv("SEI_SIDECAR_IMAGE"),
 	}
 
 	if err := platformCfg.Validate(); err != nil {
 		setupLog.Error(err, "Invalid platform configuration")
 		os.Exit(1)
 	}
+	setupLog.Info("Resolved sidecar image", "image", platformCfg.SidecarImage)
 
 	objectStore := platform.NewS3ObjectStore()
 	kc := mgr.GetClient()
