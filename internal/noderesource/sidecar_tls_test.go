@@ -133,7 +133,7 @@ func TestSeidStartupProbe_TargetsProxyHTTPSInTLSMode(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, withSidecarTLS(newGenesisNode("a", "default")), platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, containerNameSeid)
 	g.Expect(seid.StartupProbe.HTTPGet.Scheme).To(Equal(corev1.URISchemeHTTPS))
-	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(int(rbacProxyPort)))
+	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(int(RBACProxyPort)))
 }
 
 func TestServicePorts_AddsAPIPortWhenTLSSet(t *testing.T) {
@@ -146,7 +146,7 @@ func TestServicePorts_AddsAPIPortWhenTLSSet(t *testing.T) {
 	g.Expect(portNames).To(ContainElement(servicePortNameAPI))
 	for _, p := range svc.Spec.Ports {
 		if p.Name == servicePortNameAPI {
-			g.Expect(p.Port).To(Equal(rbacProxyPort))
+			g.Expect(p.Port).To(Equal(RBACProxyPort))
 		}
 	}
 }

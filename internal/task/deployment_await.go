@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
@@ -11,6 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
+	"github.com/sei-protocol/sei-k8s-controller/internal/sidecartransport"
 )
 
 // awaitNodesAtHeightExecution submits await-condition(height=H) to each
@@ -164,14 +167,17 @@ func (e *awaitNodesCaughtUpExecution) isNodeReady(ctx context.Context, name stri
 	return resp.Status == sidecar.Ready
 }
 
-// sidecarClientForNode constructs a SidecarClient from a SeiNode's
-// pod DNS name and sidecar port.
+// sidecarClientForNode constructs a SidecarClient pointed at a
+// SeiNode's pod. URL building lives in noderesource so this site and
+// cmd/main.go's factory stay in sync (planner can't be imported here
+// — planner already imports task).
 func sidecarClientForNode(node *seiv1alpha1.SeiNode) (*sidecar.SidecarClient, error) {
-	port := int32(7777)
-	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
-		port = node.Spec.Sidecar.Port
+	url := noderesource.SidecarURLForNode(node)
+	if noderesource.SidecarTLSEnabled(node) {
+		rt := sidecartransport.New(sidecartransport.Config{})
+		return sidecar.NewSidecarClient(url, sidecar.WithHTTPDoer(&http.Client{Transport: rt}))
 	}
-	return sidecar.NewSidecarClientFromPodDNS(node.Name, node.Namespace, port)
+	return sidecar.NewSidecarClient(url)
 }
 
 // deterministicDeploymentTaskID generates a UUID v5 scoped to deployment operations.

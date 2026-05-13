@@ -1,0 +1,21 @@
+# Binds the controller SA to sei-validator-task-submitter so the
+# controller can submit sidecar tasks via kube-rbac-proxy in TLS mode.
+# Cluster-wide grant — assumes the controller is the single trust
+# authority for all SeiNodes in the cluster. Multi-tenant deployments
+# (operators-other-than-platform creating SeiNodes) require a
+# different scoping model; see #224 follow-ups.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: sei-k8s-controller
+    app.kubernetes.io/managed-by: kustomize
+  name: controller-task-submitter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sei-validator-task-submitter
+subjects:
+- kind: ServiceAccount
+  name: controller-manager
+  namespace: system
