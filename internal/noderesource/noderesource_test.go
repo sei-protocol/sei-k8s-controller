@@ -1,7 +1,6 @@
 package noderesource
 
 import (
-	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -1045,18 +1044,6 @@ func TestSidecarContainer_SecurityContext(t *testing.T) {
 	g.Expect(sc.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
 }
 
-func TestSeidMainContainer_NoSecurityContextChange(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("snap-0", "default")
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
-	g.Expect(seid).NotTo(BeNil())
-	// seid main container hardening is an out-of-scope, larger blast-radius
-	// change owned by a different workstream.
-	g.Expect(seid.SecurityContext).To(BeNil())
-}
-
 func TestPodSpec_FSGroup(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
@@ -1064,20 +1051,34 @@ func TestPodSpec_FSGroup(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	g.Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
 	g.Expect(*sts.Spec.Template.Spec.SecurityContext.FSGroup).To(Equal(int64(65532)),
-		"pod-level fsGroup must match sidecar UID so non-root sidecar can read 0o400 Secret mounts")
+		"pod-level fsGroup is the migration primitive — kubelet OnRootMismatch chowns the volume gid on first mount")
+	g.Expect(*sts.Spec.Template.Spec.SecurityContext.FSGroupChangePolicy).To(Equal(corev1.FSGroupChangeOnRootMismatch),
+		"OnRootMismatch keeps the chown cost to once-per-PVC")
+	g.Expect(sts.Spec.Template.Spec.SecurityContext.SupplementalGroups).To(BeEmpty(),
+		"workaround for root-seid is no longer needed once seid runs as gid 65532 natively")
 }
 
-func TestPodSpec_SupplementalGroups(t *testing.T) {
+func TestSeidMainContainer_RunsAsNonRoot(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	g.Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
-	g.Expect(sts.Spec.Template.Spec.SecurityContext.SupplementalGroups).To(ContainElement(int64(65532)),
-		"seid (uid 0) must be a member of the sidecar gid to write into gid-65532-owned dirs")
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+	g.Expect(seid).NotTo(BeNil())
+	expectSeidNonRootSecurityContext(g, seid.SecurityContext)
 }
 
-func TestSeidInitContainer_PreparesSharedDirs(t *testing.T) {
+func TestSeidInitContainer_RunsAsNonRoot(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("mynet-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
+	g.Expect(seidInit).NotTo(BeNil())
+	expectSeidNonRootSecurityContext(g, seidInit.SecurityContext)
+}
+
+func TestSeidInitContainer_BareScript(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
 
@@ -1087,32 +1088,25 @@ func TestSeidInitContainer_PreparesSharedDirs(t *testing.T) {
 	g.Expect(seidInit.Command).To(HaveLen(3))
 
 	script := seidInit.Command[2]
-	mkdirIdx := strings.Index(script, "mkdir -p /sei/config /sei/data")
-	chownIdx := strings.Index(script, "chown 0:65532 /sei /sei/config /sei/data")
-	chmodIdx := strings.Index(script, "chmod 2775 /sei /sei/config /sei/data")
-	seidInitIdx := strings.Index(script, "seid init")
-
-	g.Expect(mkdirIdx).To(BeNumerically(">=", 0))
-	g.Expect(chownIdx).To(BeNumerically(">", mkdirIdx))
-	g.Expect(chmodIdx).To(BeNumerically(">", chownIdx))
-	g.Expect(seidInitIdx).To(BeNumerically(">", chmodIdx),
-		"shared-dir prep must precede seid init so subsequent files inherit setgid group")
+	// Migration logic (chown, chmod, sentinel) lives in the kubelet via
+	// fsGroup OnRootMismatch — not in this script.
+	g.Expect(script).NotTo(ContainSubstring("chown"))
+	g.Expect(script).NotTo(ContainSubstring("chmod"))
+	g.Expect(script).To(ContainSubstring("seid init sei-test --chain-id sei-test --home /sei --overwrite"))
+	g.Expect(script).To(ContainSubstring("mkdir -p /sei/tmp"))
 }
 
-func TestSeidInitContainer_SecurityContext(t *testing.T) {
-	g := NewWithT(t)
-	node := newGenesisNode("mynet-0", "default")
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
-	g.Expect(seidInit).NotTo(BeNil())
-	g.Expect(seidInit.SecurityContext).NotTo(BeNil())
-	g.Expect(seidInit.SecurityContext.AllowPrivilegeEscalation).To(Equal(ptr.To(false))) //nolint:modernize // ptr.To(false) is idiomatic; new(false) is invalid Go
-	g.Expect(seidInit.SecurityContext.Capabilities).NotTo(BeNil())
-	g.Expect(seidInit.SecurityContext.Capabilities.Drop).To(ConsistOf(corev1.Capability("ALL")))
-	g.Expect(seidInit.SecurityContext.Capabilities.Add).To(ConsistOf(
-		corev1.Capability("CHOWN"), corev1.Capability("FOWNER"), corev1.Capability("FSETID"),
-	))
+func expectSeidNonRootSecurityContext(g Gomega, sc *corev1.SecurityContext) {
+	g.Expect(sc).NotTo(BeNil())
+	g.Expect(sc.RunAsNonRoot).To(Equal(ptr.To(true)))              //nolint:modernize
+	g.Expect(sc.RunAsUser).To(Equal(ptr.To(int64(65532))))         //nolint:modernize
+	g.Expect(sc.RunAsGroup).To(Equal(ptr.To(int64(65532))))        //nolint:modernize
+	g.Expect(sc.AllowPrivilegeEscalation).To(Equal(ptr.To(false))) //nolint:modernize
+	g.Expect(sc.Capabilities).NotTo(BeNil())
+	g.Expect(sc.Capabilities.Drop).To(ConsistOf(corev1.Capability("ALL")))
+	g.Expect(sc.Capabilities.Add).To(BeEmpty())
+	g.Expect(sc.SeccompProfile).NotTo(BeNil())
+	g.Expect(sc.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
 }
 
 // --- assertNoOperatorKeyringOnSeidContainers ---
