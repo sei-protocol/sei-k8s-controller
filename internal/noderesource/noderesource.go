@@ -613,9 +613,13 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	return container
 }
 
+// buildSeidInitContainer runs seid init and prepares /sei, /sei/config,
+// /sei/data as 0:sidecarNonRootUID mode 2775 — group-writable with setgid
+// so new files seid creates inherit gid sidecarNonRootUID, which the
+// non-root sidecar needs for genesis assembly and snapshot restore.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`mkdir -p %s/config %s/data && chown 0:%d %s %s/config %s/data && chmod 2775 %s %s/config %s/data && if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
+		`echo "preparing /sei perms" && mkdir -p %s/config %s/data && chown 0:%d %s %s/config %s/data && chmod 2775 %s %s/config %s/data && if [ -f %s/config/genesis.json ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home %s --overwrite; fi && mkdir -p %s/tmp`,
 		dataDir, dataDir,
 		sidecarNonRootUID, dataDir, dataDir, dataDir,
 		dataDir, dataDir, dataDir,
