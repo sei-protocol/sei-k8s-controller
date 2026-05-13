@@ -206,6 +206,15 @@ func TestGenerateRBACProxyConfigMap_UsesGroupNotApiGroup(t *testing.T) {
 	g.Expect(cfg).NotTo(ContainSubstring("allowedPaths:"))
 }
 
+func TestGenerateStatefulSet_TLSEnabledButImageMissing_Errors(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+	cfg.KubeRBACProxyImage = ""
+	_, err := GenerateStatefulSet(withSidecarTLS(newGenesisNode("a", "default")), cfg)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("SEI_KUBE_RBAC_PROXY_IMAGE"))
+}
+
 // TestKeyringInvariant_WithBothFeatures locks the trust-boundary guard
 // (assertNoOperatorKeyringOnSeidContainers) under the combination of
 // OperatorKeyring AND TLS — the new kube-rbac-proxy container must

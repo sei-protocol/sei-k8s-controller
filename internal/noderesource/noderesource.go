@@ -165,6 +165,9 @@ func DefaultResourcesForMode(mode string, p PlatformConfig) corev1.ResourceRequi
 // containment invariant — only the sidecar container may mount that volume,
 // never seid main or any non-sidecar init container.
 func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.StatefulSet, error) {
+	if SidecarTLSEnabled(node) && p.KubeRBACProxyImage == "" {
+		return nil, fmt.Errorf("spec.sidecar.tls is set but SEI_KUBE_RBAC_PROXY_IMAGE is not configured on the controller")
+	}
 	one := int32(1)
 	labels := ResourceLabels(node)
 	podSpec := buildNodePodSpec(node, p)
