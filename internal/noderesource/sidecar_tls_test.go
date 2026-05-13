@@ -13,11 +13,8 @@ import (
 
 func withSidecarTLS(node *seiv1alpha1.SeiNode) *seiv1alpha1.SeiNode {
 	node.Spec.Sidecar.TLS = &seiv1alpha1.SidecarTLSSpec{
-		IssuerRef: seiv1alpha1.CertManagerIssuerRef{
-			Name:  "validator-ca",
-			Kind:  "ClusterIssuer",
-			Group: "cert-manager.io",
-		},
+		IssuerName: "validator-ca",
+		IssuerKind: "ClusterIssuer",
 	}
 	return node
 }
@@ -45,7 +42,7 @@ func TestPodSpec_ProxyContainerWhenTLSSet(t *testing.T) {
 
 	proxy := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameRBACProxy)
 	g.Expect(proxy).NotTo(BeNil())
-	g.Expect(proxy.Image).To(Equal(defaultRBACProxyImage))
+	g.Expect(proxy.Image).To(Equal(platformtest.Config().KubeRBACProxyImage))
 	g.Expect(*proxy.RestartPolicy).To(Equal(corev1.ContainerRestartPolicyAlways))
 	g.Expect(proxy.Args).To(ContainElement("--secure-listen-address=0.0.0.0:8443"))
 	g.Expect(proxy.Args).To(ContainElement("--upstream=http://127.0.0.1:7777/"))

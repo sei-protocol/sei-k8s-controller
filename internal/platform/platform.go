@@ -7,12 +7,6 @@ const (
 	// by the SeiNode spec. Shared between the node controller and bootstrap task.
 	DefaultSidecarImage = "ghcr.io/sei-protocol/seictl@sha256:a2af4e1b8ed4c12661a3c98cce050bae3f292cc7560abc2ba98fd7dfc80d9be5"
 
-	// DefaultRBACProxyImage is the kube-rbac-proxy image used to front the
-	// sidecar API when spec.sidecar.tls is set. Pinned to v0.19.x — verify
-	// the SAR rewrite mechanic still works against any newer release before
-	// bumping. Follow-up tracks digest pinning.
-	DefaultRBACProxyImage = "quay.io/brancz/kube-rbac-proxy:v0.19.1"
-
 	// DataDir is the mount path for the sei data volume inside node pods.
 	DataDir = "/sei"
 
@@ -51,6 +45,8 @@ type Config struct {
 	GatewayNamespace    string
 	GatewayDomain       string
 	GatewayPublicDomain string
+
+	KubeRBACProxyImage string
 }
 
 // NodepoolForMode returns the Karpenter NodePool name for the given
@@ -89,6 +85,7 @@ func (c Config) Validate() error {
 		"SEI_GATEWAY_NAME":          c.GatewayName,
 		"SEI_GATEWAY_NAMESPACE":     c.GatewayNamespace,
 		"SEI_GATEWAY_DOMAIN":        c.GatewayDomain,
+		"SEI_KUBE_RBAC_PROXY_IMAGE": c.KubeRBACProxyImage,
 	}
 	for name, val := range required {
 		if val == "" {

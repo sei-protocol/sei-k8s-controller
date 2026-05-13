@@ -360,8 +360,6 @@ func needsValidateOperatorKeyring(node *seiv1alpha1.SeiNode) bool {
 	return s != nil && s.SecretName != ""
 }
 
-var needsSidecarTLSResources = noderesource.SidecarTLSEnabled
-
 func validateOperatorKeyringParams(node *seiv1alpha1.SeiNode) any {
 	if !needsValidateOperatorKeyring(node) {
 		return nil
@@ -539,11 +537,9 @@ func buildBasePlan(
 	if needsValidateOperatorKeyring(node) {
 		prog = append(prog, task.TaskTypeValidateOperatorKeyring)
 	}
-	if needsSidecarTLSResources(node) {
-		// ConfigMap must exist before the pod schedules. Certificate
-		// CR can lag — cert-manager is async; kubelet retries the
-		// missing Secret mount until cert-manager populates it, and
-		// the proxy's startup probe has a 5min budget for first issue.
+	if noderesource.SidecarTLSEnabled(node) {
+		// Emit Cert + ConfigMap before pod schedules. Cert-manager
+		// is async; kubelet retries Secret mounts.
 		prog = append(prog, task.TaskTypeApplySidecarCert, task.TaskTypeApplyRBACProxyConfig)
 	}
 	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)

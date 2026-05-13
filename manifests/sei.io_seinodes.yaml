@@ -464,27 +464,20 @@ spec:
                       :8443 backed by a cert-manager-issued cert. Init-only:
                       toggling on a Running SeiNode requires recreation. See seictl#165.
                     properties:
-                      issuerRef:
+                      issuerKind:
+                        default: ClusterIssuer
+                        description: IssuerKind is "Issuer" (namespaced) or "ClusterIssuer".
+                        enum:
+                        - Issuer
+                        - ClusterIssuer
+                        type: string
+                      issuerName:
                         description: |-
-                          IssuerRef references the cert-manager Issuer or ClusterIssuer
+                          IssuerName references a cert-manager Issuer or ClusterIssuer
                           that signs the proxy's serving certificate.
-                        properties:
-                          group:
-                            default: cert-manager.io
-                            type: string
-                          kind:
-                            default: Issuer
-                            enum:
-                            - Issuer
-                            - ClusterIssuer
-                            type: string
-                          name:
-                            type: string
-                        required:
-                        - name
-                        type: object
+                        type: string
                     required:
-                    - issuerRef
+                    - issuerName
                     type: object
                 type: object
               validator:

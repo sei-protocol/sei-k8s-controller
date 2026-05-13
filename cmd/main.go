@@ -153,6 +153,7 @@ func main() {
 		GatewayNamespace:    os.Getenv("SEI_GATEWAY_NAMESPACE"),
 		GatewayDomain:       os.Getenv("SEI_GATEWAY_DOMAIN"),
 		GatewayPublicDomain: os.Getenv("SEI_GATEWAY_PUBLIC_DOMAIN"),
+		KubeRBACProxyImage:  os.Getenv("SEI_KUBE_RBAC_PROXY_IMAGE"),
 	}
 
 	if err := platformCfg.Validate(); err != nil {

@@ -202,24 +202,14 @@ type SidecarConfig struct {
 // SidecarTLSSpec configures the cert-manager-issued serving cert for
 // the kube-rbac-proxy fronting.
 type SidecarTLSSpec struct {
-	// IssuerRef references the cert-manager Issuer or ClusterIssuer
+	// IssuerName references a cert-manager Issuer or ClusterIssuer
 	// that signs the proxy's serving certificate.
 	// +kubebuilder:validation:Required
-	IssuerRef CertManagerIssuerRef `json:"issuerRef"`
-}
+	IssuerName string `json:"issuerName"`
 
-// CertManagerIssuerRef avoids importing cert-manager's Go types for
-// three stable fields.
-type CertManagerIssuerRef struct {
-	// +kubebuilder:validation:Required
-	Name string `json:"name"`
-
-	// +kubebuilder:default=Issuer
+	// IssuerKind is "Issuer" (namespaced) or "ClusterIssuer".
+	// +kubebuilder:default=ClusterIssuer
 	// +kubebuilder:validation:Enum=Issuer;ClusterIssuer
 	// +optional
-	Kind string `json:"kind,omitempty"`
-
-	// +kubebuilder:default=cert-manager.io
-	// +optional
-	Group string `json:"group,omitempty"`
+	IssuerKind string `json:"issuerKind,omitempty"`
 }

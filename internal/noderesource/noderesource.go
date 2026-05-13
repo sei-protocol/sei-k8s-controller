@@ -26,9 +26,8 @@ const (
 	// NodeLabel is the standard label key used on all SeiNode-owned resources.
 	NodeLabel = "sei.io/node"
 
-	dataDir               = platform.DataDir
-	defaultSidecarImage   = platform.DefaultSidecarImage
-	defaultRBACProxyImage = platform.DefaultRBACProxyImage
+	dataDir             = platform.DataDir
+	defaultSidecarImage = platform.DefaultSidecarImage
 
 	// Pod-spec container names. Used as both the .Name on built containers
 	// and the lookup key for the operator-keyring containment guard.
@@ -888,11 +887,11 @@ func sidecarReadinessProbe(node *seiv1alpha1.SeiNode, sidecarPort int32) *corev1
 // Probes live on this container, not the seictl sidecar: kubelet
 // failures restart the unhealthy container, and the proxy is the
 // externally-reachable endpoint.
-func buildRBACProxyContainer(node *seiv1alpha1.SeiNode, _ PlatformConfig) corev1.Container {
+func buildRBACProxyContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.Container {
 	ignorePaths := strings.Join(bypassPaths(), ",")
 	return corev1.Container{
 		Name:          containerNameRBACProxy,
-		Image:         defaultRBACProxyImage,
+		Image:         p.KubeRBACProxyImage,
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Args: []string{
 			fmt.Sprintf("--secure-listen-address=0.0.0.0:%d", rbacProxyPort),
@@ -997,9 +996,9 @@ func GenerateSidecarCertificate(node *seiv1alpha1.SeiNode) *unstructured.Unstruc
 		"commonName":  svcDNS,
 		"dnsNames":    []any{svcDNS, pod0DNS},
 		"issuerRef": map[string]any{
-			"name":  tls.IssuerRef.Name,
-			"kind":  tls.IssuerRef.Kind,
-			"group": tls.IssuerRef.Group,
+			"name":  tls.IssuerName,
+			"kind":  tls.IssuerKind,
+			"group": "cert-manager.io",
 		},
 	}, "spec")
 	return obj
