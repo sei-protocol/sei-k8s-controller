@@ -445,19 +445,10 @@ func bootstrapMode(snap *seiv1alpha1.SnapshotSource) string {
 	return "genesis"
 }
 
-// SidecarURLForNode builds the in-cluster sidecar URL for a node's
-// StatefulSet pod (used during Initializing and Running phases).
-func SidecarURLForNode(node *seiv1alpha1.SeiNode) string {
-	return fmt.Sprintf("http://%s-0.%s.%s.svc.cluster.local:%d",
-		node.Name, node.Name, node.Namespace, sidecarPortForNode(node))
-}
-
-func sidecarPortForNode(node *seiv1alpha1.SeiNode) int32 {
-	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Port != 0 {
-		return node.Spec.Sidecar.Port
-	}
-	return sidecar.DefaultPort
-}
+// SidecarURLForNode re-exports noderesource.SidecarURLForNode so
+// existing planner callers (and external tests) don't need to update
+// their import path.
+var SidecarURLForNode = noderesource.SidecarURLForNode
 
 // marshalParams serializes a task params struct to apiextensionsv1.JSON.
 func marshalParams(v any) (*apiextensionsv1.JSON, error) {

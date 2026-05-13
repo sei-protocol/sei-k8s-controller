@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"time"
@@ -26,8 +27,10 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
 	nodedeploymentcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	"github.com/sei-protocol/sei-k8s-controller/internal/sidecartransport"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -165,7 +168,12 @@ func main() {
 	kc := mgr.GetClient()
 
 	buildSidecarClient := func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
-		return sidecar.NewSidecarClient(planner.SidecarURLForNode(node))
+		url := planner.SidecarURLForNode(node)
+		if !noderesource.SidecarTLSEnabled(node) {
+			return sidecar.NewSidecarClient(url)
+		}
+		rt := sidecartransport.New(sidecartransport.Config{})
+		return sidecar.NewSidecarClient(url, sidecar.WithHTTPDoer(&http.Client{Transport: rt}))
 	}
 
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)

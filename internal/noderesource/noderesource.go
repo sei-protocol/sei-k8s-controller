@@ -39,7 +39,7 @@ const (
 	sidecarTLSVolumeName            = "sidecar-tls"
 	rbacProxyConfigMountPath        = "/etc/kube-rbac-proxy"
 	sidecarTLSMountPath             = "/etc/tls"
-	rbacProxyPort             int32 = 8443
+	RBACProxyPort             int32 = 8443
 
 	pathHealthz  = "/v0/healthz"
 	pathLivez    = "/v0/livez"
@@ -274,8 +274,8 @@ func GenerateHeadlessService(node *seiv1alpha1.SeiNode) *corev1.Service {
 	if SidecarTLSEnabled(node) {
 		ports = append(ports, corev1.ServicePort{
 			Name:       servicePortNameAPI,
-			Port:       rbacProxyPort,
-			TargetPort: intstr.FromInt32(rbacProxyPort),
+			Port:       RBACProxyPort,
+			TargetPort: intstr.FromInt32(RBACProxyPort),
 			Protocol:   corev1.ProtocolTCP,
 		})
 	}
@@ -518,7 +518,7 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 		startupProbeAction = corev1.HTTPGetAction{
 			Scheme: corev1.URISchemeHTTPS,
 			Path:   pathHealthz,
-			Port:   intstr.FromInt32(rbacProxyPort),
+			Port:   intstr.FromInt32(RBACProxyPort),
 		}
 	}
 	container.StartupProbe = &corev1.Probe{
@@ -897,7 +897,7 @@ func buildRBACProxyContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1
 		Image:         p.KubeRBACProxyImage,
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Args: []string{
-			fmt.Sprintf("--secure-listen-address=0.0.0.0:%d", rbacProxyPort),
+			fmt.Sprintf("--secure-listen-address=0.0.0.0:%d", RBACProxyPort),
 			fmt.Sprintf("--upstream=http://127.0.0.1:%d/", SidecarPort(node)),
 			"--config-file=" + rbacProxyConfigMountPath + "/config.yaml",
 			"--tls-cert-file=" + sidecarTLSMountPath + "/tls.crt",
@@ -910,7 +910,7 @@ func buildRBACProxyContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1
 			"--v=0",
 		},
 		Ports: []corev1.ContainerPort{
-			{Name: servicePortNameAPI, ContainerPort: rbacProxyPort, Protocol: corev1.ProtocolTCP},
+			{Name: servicePortNameAPI, ContainerPort: RBACProxyPort, Protocol: corev1.ProtocolTCP},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: rbacProxyConfigVolumeName, MountPath: rbacProxyConfigMountPath, ReadOnly: true},
@@ -934,7 +934,7 @@ func bypassPaths() []string {
 func proxyStartupProbe() *corev1.Probe {
 	return &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
-			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(rbacProxyPort)},
+			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(RBACProxyPort)},
 		},
 		InitialDelaySeconds: 5,
 		PeriodSeconds:       5,
@@ -948,7 +948,7 @@ func proxyLivenessProbe() *corev1.Probe {
 			HTTPGet: &corev1.HTTPGetAction{
 				Scheme: corev1.URISchemeHTTPS,
 				Path:   pathLivez,
-				Port:   intstr.FromInt32(rbacProxyPort),
+				Port:   intstr.FromInt32(RBACProxyPort),
 			},
 		},
 		InitialDelaySeconds: 5,
@@ -966,7 +966,7 @@ func proxyReadinessProbe() *corev1.Probe {
 			HTTPGet: &corev1.HTTPGetAction{
 				Scheme: corev1.URISchemeHTTPS,
 				Path:   pathHealthz,
-				Port:   intstr.FromInt32(rbacProxyPort),
+				Port:   intstr.FromInt32(RBACProxyPort),
 			},
 		},
 		InitialDelaySeconds: 2,
@@ -1038,4 +1038,19 @@ func GenerateRBACProxyConfigMap(node *seiv1alpha1.SeiNode) *corev1.ConfigMap {
 		},
 		Data: map[string]string{"config.yaml": config},
 	}
+}
+
+// SidecarURLForNode builds the in-cluster URL the controller uses to
+// reach a node's sidecar. TLS-enabled nodes route through the
+// kube-rbac-proxy on HTTPS :8443; otherwise plain HTTP on the
+// sidecar's own port. Single source of truth — both the planner
+// (for plan-execution clients) and deployment-await tasks call
+// through here.
+func SidecarURLForNode(node *seiv1alpha1.SeiNode) string {
+	scheme, port := "http", SidecarPort(node)
+	if SidecarTLSEnabled(node) {
+		scheme, port = "https", RBACProxyPort
+	}
+	return fmt.Sprintf("%s://%s-0.%s.%s.svc.cluster.local:%d",
+		scheme, node.Name, node.Name, node.Namespace, port)
 }

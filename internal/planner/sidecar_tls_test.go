@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"fmt"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -8,6 +9,31 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
+
+func TestSidecarURLForNode_PlainHTTP(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testValidatorName, Namespace: "sei"},
+	}
+	got := SidecarURLForNode(node)
+	want := fmt.Sprintf("http://%s-0.%s.sei.svc.cluster.local:7777", testValidatorName, testValidatorName)
+	if got != want {
+		t.Errorf("URL = %q, want %q", got, want)
+	}
+}
+
+func TestSidecarURLForNode_TLSRoutesThroughProxyHTTPS(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testValidatorName, Namespace: "sei"},
+		Spec: seiv1alpha1.SeiNodeSpec{Sidecar: &seiv1alpha1.SidecarConfig{
+			TLS: &seiv1alpha1.SidecarTLSSpec{IssuerName: "ca", IssuerKind: "ClusterIssuer"},
+		}},
+	}
+	got := SidecarURLForNode(node)
+	want := fmt.Sprintf("https://%s-0.%s.sei.svc.cluster.local:8443", testValidatorName, testValidatorName)
+	if got != want {
+		t.Errorf("URL = %q, want %q", got, want)
+	}
+}
 
 const (
 	testValidatorName = "validator-0"
