@@ -20,6 +20,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -536,6 +537,11 @@ func buildBasePlan(
 	if needsValidateOperatorKeyring(node) {
 		prog = append(prog, task.TaskTypeValidateOperatorKeyring)
 	}
+	if noderesource.SidecarTLSEnabled(node) {
+		// Emit Cert + ConfigMap before pod schedules. Cert-manager
+		// is async; kubelet retries Secret mounts.
+		prog = append(prog, task.TaskTypeApplySidecarCert, task.TaskTypeApplyRBACProxyConfig)
+	}
 	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
 	prog = append(prog, sidecarProg...)
 
@@ -575,6 +581,10 @@ func paramsForTaskType(
 		return &task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeApplyService:
 		return &task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}
+	case task.TaskTypeApplyRBACProxyConfig:
+		return &task.ApplyRBACProxyConfigParams{NodeName: node.Name, Namespace: node.Namespace}
+	case task.TaskTypeApplySidecarCert:
+		return &task.ApplySidecarCertParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeReplacePod:
 		return &task.ReplacePodParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeObserveImage:

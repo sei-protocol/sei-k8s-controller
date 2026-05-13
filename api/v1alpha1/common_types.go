@@ -191,4 +191,25 @@ type SidecarConfig struct {
 	// Resources defines CPU/memory requests and limits for the sidecar container.
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// TLS, if set, fronts the sidecar API with kube-rbac-proxy on
+	// :8443 backed by a cert-manager-issued cert. Init-only:
+	// toggling on a Running SeiNode requires recreation. See seictl#165.
+	// +optional
+	TLS *SidecarTLSSpec `json:"tls,omitempty"`
+}
+
+// SidecarTLSSpec configures the cert-manager-issued serving cert for
+// the kube-rbac-proxy fronting.
+type SidecarTLSSpec struct {
+	// IssuerName references a cert-manager Issuer or ClusterIssuer
+	// that signs the proxy's serving certificate.
+	// +kubebuilder:validation:Required
+	IssuerName string `json:"issuerName"`
+
+	// IssuerKind is "Issuer" (namespaced) or "ClusterIssuer".
+	// +kubebuilder:default=ClusterIssuer
+	// +kubebuilder:validation:Enum=Issuer;ClusterIssuer
+	// +optional
+	IssuerKind string `json:"issuerKind,omitempty"`
 }

@@ -30,5 +30,6 @@ func Config() platform.Config {
 		GatewayName:         "sei-gateway",
 		GatewayNamespace:    "istio-system",
 		GatewayDomain:       "test.platform.sei.io",
+		KubeRBACProxyImage:  "quay.io/brancz/kube-rbac-proxy:v0.19.1",
 	}
 }

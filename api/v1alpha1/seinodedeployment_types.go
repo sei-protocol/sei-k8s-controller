@@ -381,13 +381,13 @@ type RolloutStatus struct {
 
 // Status condition types for SeiNodeDeployment.
 const (
-	ConditionNodesReady                = "NodesReady"
-	ConditionRouteReady                = "RouteReady"
-	ConditionServiceMonitorReady       = "ServiceMonitorReady"
-	ConditionGenesisCeremonyComplete   = "GenesisCeremonyComplete"
-	ConditionPlanInProgress            = "PlanInProgress"
-	ConditionGenesisCeremonyNeeded     = "GenesisCeremonyNeeded"
-	ConditionRolloutInProgress         = "RolloutInProgress"
+	ConditionNodesReady              = "NodesReady"
+	ConditionRouteReady              = "RouteReady"
+	ConditionServiceMonitorReady     = "ServiceMonitorReady"
+	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
+	ConditionPlanInProgress          = "PlanInProgress"
+	ConditionGenesisCeremonyNeeded   = "GenesisCeremonyNeeded"
+	ConditionRolloutInProgress       = "RolloutInProgress"
 )
 
 // +kubebuilder:object:root=true

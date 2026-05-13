@@ -45,6 +45,8 @@ type Config struct {
 	GatewayNamespace    string
 	GatewayDomain       string
 	GatewayPublicDomain string
+
+	KubeRBACProxyImage string
 }
 
 // NodepoolForMode returns the Karpenter NodePool name for the given
