@@ -639,11 +639,15 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 }
 
 // seidInitSecurityContext keeps the init at uid 0 (chown requires it) but
-// drops every cap except the three needed to chown, chmod, and set the
-// setgid bit on the prepared dirs.
+// drops every cap except the three needed by the prep script: CHOWN for
+// `chown 0:65532`, FSETID to preserve the setgid bit on `chmod 2775`
+// (else chmod silently clears setgid when the file gid isn't the caller's
+// primary), and FOWNER as defense-in-depth for chmod on PVC dirs whose
+// uid may not match if a future script edit operates on paths it didn't
+// just chown.
 func seidInitSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
-		AllowPrivilegeEscalation: new(bool),
+		AllowPrivilegeEscalation: ptr.To(false), //nolint:modernize // ptr.To(false) is idiomatic; new(false) is invalid Go
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
 			Add:  []corev1.Capability{"CHOWN", "FOWNER", "FSETID"},
