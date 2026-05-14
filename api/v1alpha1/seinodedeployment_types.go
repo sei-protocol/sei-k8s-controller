@@ -235,8 +235,8 @@ type SeiNodeDeploymentStatus struct {
 	PerPodServices []PerPodServiceStatus `json:"perPodServices,omitempty"`
 
 	// Endpoints exposes composed in-cluster URLs derived from
-	// .status.internalService and .status.perPodServices. See the Endpoints
-	// type for the ordering contract.
+	// .status.internalService and .status.perPodServices. When
+	// .status.phase == Ready, .nodes is non-empty.
 	// +optional
 	Endpoints *Endpoints `json:"endpoints,omitempty"`
 
@@ -246,33 +246,49 @@ type SeiNodeDeploymentStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
-// Endpoints lists composed in-cluster URLs per protocol.
+// Endpoints lists composed in-cluster URLs for consuming this deployment.
+// Aggregate URLs sit at top-level scalars; per-pod URLs live in Nodes,
+// keyed by SeiNode name. When .status.phase == Ready, Nodes is non-empty
+// and each entry has at least Name plus its protocol URLs populated.
 //
-// Ordering: aggregate ClusterIP URL at index 0, per-pod URLs at indices
-// 1..N in .status.perPodServices order. EvmWs has no aggregate entry —
-// round-robin ClusterIP does not preserve WebSocket subscription state,
-// so its entries are per-pod-only at indices 0..N-1.
+// Stateless protocols (Tendermint RPC, Tendermint REST) are surfaced only
+// at the aggregate level — kube-proxy round-robins safely. Stateful
+// protocols (EVM JSON-RPC: filters, mempool, finalized-tag; EVM WebSocket:
+// subscriptions) are surfaced only per-pod, because they do not
+// load-balance correctly behind a kube-proxy L4 LB. Consumers that need
+// state-consistent EVM sequences pin to a single Nodes[N].
 type Endpoints struct {
-	// TendermintRpc lists Tendermint / CometBFT RPC URLs (http://). Aggregate
-	// only until per-pod Services expose port 26657.
+	// TendermintRpc is the aggregate Tendermint / CometBFT RPC URL (http://).
 	// +optional
-	TendermintRpc []string `json:"tendermintRpc,omitempty"`
+	TendermintRpc string `json:"tendermintRpc,omitempty"`
 
-	// TendermintRest lists Cosmos REST (LCD) URLs (http://). Aggregate only
-	// until per-pod Services expose port 1317.
+	// TendermintRest is the aggregate Cosmos REST (LCD) URL (http://).
 	// +optional
-	TendermintRest []string `json:"tendermintRest,omitempty"`
+	TendermintRest string `json:"tendermintRest,omitempty"`
 
-	// EvmJsonRpc lists EVM JSON-RPC HTTP URLs (http://). Aggregate at index 0,
-	// per-pod URLs at indices 1..N.
+	// Nodes lists per-pod URL bundles, keyed by SeiNode name. The list
+	// mirrors .status.perPodServices and exposes the protocols that
+	// require pod affinity (EVM JSON-RPC, EVM WebSocket).
+	// +listType=map
+	// +listMapKey=name
 	// +optional
-	EvmJsonRpc []string `json:"evmJsonRpc,omitempty"`
+	Nodes []NodeEndpoint `json:"nodes,omitempty"`
+}
 
-	// EvmWs lists EVM WebSocket URLs (ws://). Per-pod only — no aggregate
-	// entry, since round-robin ClusterIP breaks WebSocket subscription
-	// affinity.
+// NodeEndpoint is the per-pod URL bundle for a single SeiNode replica.
+// Name matches the SeiNode resource name and the corresponding entry in
+// .status.perPodServices.
+type NodeEndpoint struct {
+	// Name is the SeiNode resource name (also the headless Service name).
+	Name string `json:"name"`
+
+	// EvmJsonRpc is the per-pod EVM JSON-RPC HTTP URL (http://).
 	// +optional
-	EvmWs []string `json:"evmWs,omitempty"`
+	EvmJsonRpc string `json:"evmJsonRpc,omitempty"`
+
+	// EvmWs is the per-pod EVM WebSocket URL (ws://).
+	// +optional
+	EvmWs string `json:"evmWs,omitempty"`
 }
 
 // InternalServiceStatus reports the resolved in-cluster ClusterIP Service

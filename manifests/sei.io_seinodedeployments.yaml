@@ -1034,38 +1034,46 @@ spec:
               endpoints:
                 description: |-
                   Endpoints exposes composed in-cluster URLs derived from
-                  .status.internalService and .status.perPodServices. See the Endpoints
-                  type for the ordering contract.
+                  .status.internalService and .status.perPodServices. When
+                  .status.phase == Ready, .nodes is non-empty.
                 properties:
-                  evmJsonRpc:
+                  nodes:
                     description: |-
-                      EvmJsonRpc lists EVM JSON-RPC HTTP URLs (http://). Aggregate at index 0,
-                      per-pod URLs at indices 1..N.
+                      Nodes lists per-pod URL bundles, keyed by SeiNode name. The list
+                      mirrors .status.perPodServices and exposes the protocols that
+                      require pod affinity (EVM JSON-RPC, EVM WebSocket).
                     items:
-                      type: string
+                      description: |-
+                        NodeEndpoint is the per-pod URL bundle for a single SeiNode replica.
+                        Name matches the SeiNode resource name and the corresponding entry in
+                        .status.perPodServices.
+                      properties:
+                        evmJsonRpc:
+                          description: EvmJsonRpc is the per-pod EVM JSON-RPC HTTP
+                            URL (http://).
+                          type: string
+                        evmWs:
+                          description: EvmWs is the per-pod EVM WebSocket URL (ws://).
+                          type: string
+                        name:
+                          description: Name is the SeiNode resource name (also the
+                            headless Service name).
+                          type: string
+                      required:
+                      - name
+                      type: object
                     type: array
-                  evmWs:
-                    description: |-
-                      EvmWs lists EVM WebSocket URLs (ws://). Per-pod only — no aggregate
-                      entry, since round-robin ClusterIP breaks WebSocket subscription
-                      affinity.
-                    items:
-                      type: string
-                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                   tendermintRest:
-                    description: |-
-                      TendermintRest lists Cosmos REST (LCD) URLs (http://). Aggregate only
-                      until per-pod Services expose port 1317.
-                    items:
-                      type: string
-                    type: array
+                    description: TendermintRest is the aggregate Cosmos REST (LCD)
+                      URL (http://).
+                    type: string
                   tendermintRpc:
-                    description: |-
-                      TendermintRpc lists Tendermint / CometBFT RPC URLs (http://). Aggregate
-                      only until per-pod Services expose port 26657.
-                    items:
-                      type: string
-                    type: array
+                    description: TendermintRpc is the aggregate Tendermint / CometBFT
+                      RPC URL (http://).
+                    type: string
                 type: object
               genesisHash:
                 description: GenesisHash is the SHA-256 hex digest of the assembled

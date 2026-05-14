@@ -43,7 +43,20 @@ func TestComposeEndpoints_NilWhenStatusEmpty(t *testing.T) {
 	g.Expect(got).To(BeNil())
 }
 
-func TestComposeEndpoints_EvmJsonRpcAggregateThenPerPod(t *testing.T) {
+func TestComposeEndpoints_TendermintScalarsFromInternalService(t *testing.T) {
+	g := NewWithT(t)
+	group := &seiv1alpha1.SeiNodeDeployment{}
+	group.Status.InternalService = internalServiceStatus()
+
+	got := composeEndpoints(group)
+
+	g.Expect(got).NotTo(BeNil())
+	g.Expect(got.TendermintRpc).To(Equal("http://pacific-1-wave-internal.pacific-1.svc:26657"))
+	g.Expect(got.TendermintRest).To(Equal("http://pacific-1-wave-internal.pacific-1.svc:1317"))
+	g.Expect(got.Nodes).To(BeEmpty())
+}
+
+func TestComposeEndpoints_NodesPerPodInOrder(t *testing.T) {
 	g := NewWithT(t)
 	group := &seiv1alpha1.SeiNodeDeployment{}
 	group.Status.InternalService = internalServiceStatus()
@@ -56,52 +69,26 @@ func TestComposeEndpoints_EvmJsonRpcAggregateThenPerPod(t *testing.T) {
 	got := composeEndpoints(group)
 
 	g.Expect(got).NotTo(BeNil())
-	// 1 aggregate + N per-pod
-	g.Expect(got.EvmJsonRpc).To(HaveLen(4))
-	g.Expect(got.EvmJsonRpc[0]).To(Equal("http://pacific-1-wave-internal.pacific-1.svc:8545"))
-	g.Expect(got.EvmJsonRpc[1]).To(Equal("http://pacific-1-wave-0.pacific-1.svc:8545"))
-	g.Expect(got.EvmJsonRpc[2]).To(Equal("http://pacific-1-wave-1.pacific-1.svc:8545"))
-	g.Expect(got.EvmJsonRpc[3]).To(Equal("http://pacific-1-wave-2.pacific-1.svc:8545"))
+	g.Expect(got.Nodes).To(Equal([]seiv1alpha1.NodeEndpoint{
+		{
+			Name:       "pacific-1-wave-0",
+			EvmJsonRpc: "http://pacific-1-wave-0.pacific-1.svc:8545",
+			EvmWs:      "ws://pacific-1-wave-0.pacific-1.svc:8546",
+		},
+		{
+			Name:       "pacific-1-wave-1",
+			EvmJsonRpc: "http://pacific-1-wave-1.pacific-1.svc:8545",
+			EvmWs:      "ws://pacific-1-wave-1.pacific-1.svc:8546",
+		},
+		{
+			Name:       "pacific-1-wave-2",
+			EvmJsonRpc: "http://pacific-1-wave-2.pacific-1.svc:8545",
+			EvmWs:      "ws://pacific-1-wave-2.pacific-1.svc:8546",
+		},
+	}))
 }
 
-func TestComposeEndpoints_EvmWsPerPodOnlyInOrder(t *testing.T) {
-	g := NewWithT(t)
-	group := &seiv1alpha1.SeiNodeDeployment{}
-	group.Status.InternalService = internalServiceStatus()
-	group.Status.PerPodServices = []seiv1alpha1.PerPodServiceStatus{
-		perPodServiceStatus("pacific-1-wave-0"),
-		perPodServiceStatus("pacific-1-wave-1"),
-		perPodServiceStatus("pacific-1-wave-2"),
-	}
-
-	got := composeEndpoints(group)
-
-	g.Expect(got).NotTo(BeNil())
-	// Per-pod-only (no aggregate): exactly N entries.
-	g.Expect(got.EvmWs).To(HaveLen(3))
-	g.Expect(got.EvmWs[0]).To(Equal("ws://pacific-1-wave-0.pacific-1.svc:8546"))
-	g.Expect(got.EvmWs[1]).To(Equal("ws://pacific-1-wave-1.pacific-1.svc:8546"))
-	g.Expect(got.EvmWs[2]).To(Equal("ws://pacific-1-wave-2.pacific-1.svc:8546"))
-}
-
-func TestComposeEndpoints_TendermintAggregateOnlyToday(t *testing.T) {
-	// PerPodServicePorts has no Rpc/Rest fields, so per-pod entries cannot be appended.
-	g := NewWithT(t)
-	group := &seiv1alpha1.SeiNodeDeployment{}
-	group.Status.InternalService = internalServiceStatus()
-	group.Status.PerPodServices = []seiv1alpha1.PerPodServiceStatus{
-		perPodServiceStatus("pacific-1-wave-0"),
-		perPodServiceStatus("pacific-1-wave-1"),
-	}
-
-	got := composeEndpoints(group)
-
-	g.Expect(got).NotTo(BeNil())
-	g.Expect(got.TendermintRpc).To(ConsistOf("http://pacific-1-wave-internal.pacific-1.svc:26657"))
-	g.Expect(got.TendermintRest).To(ConsistOf("http://pacific-1-wave-internal.pacific-1.svc:1317"))
-}
-
-func TestComposeEndpoints_PerPodOrderMirrorsStatus(t *testing.T) {
+func TestComposeEndpoints_NodesOrderMirrorsStatus(t *testing.T) {
 	// Inputs in non-sorted order; composeEndpoints must preserve it (no re-sort).
 	g := NewWithT(t)
 	group := &seiv1alpha1.SeiNodeDeployment{}
@@ -114,17 +101,8 @@ func TestComposeEndpoints_PerPodOrderMirrorsStatus(t *testing.T) {
 
 	got := composeEndpoints(group)
 
-	g.Expect(got.EvmJsonRpc).To(Equal([]string{
-		"http://pacific-1-wave-internal.pacific-1.svc:8545",
-		"http://pacific-1-wave-2.pacific-1.svc:8545",
-		"http://pacific-1-wave-0.pacific-1.svc:8545",
-		"http://pacific-1-wave-5.pacific-1.svc:8545",
-	}))
-	g.Expect(got.EvmWs).To(Equal([]string{
-		"ws://pacific-1-wave-2.pacific-1.svc:8546",
-		"ws://pacific-1-wave-0.pacific-1.svc:8546",
-		"ws://pacific-1-wave-5.pacific-1.svc:8546",
-	}))
+	names := []string{got.Nodes[0].Name, got.Nodes[1].Name, got.Nodes[2].Name}
+	g.Expect(names).To(Equal([]string{"pacific-1-wave-2", "pacific-1-wave-0", "pacific-1-wave-5"}))
 }
 
 func TestComposeEndpoints_AggregateOnlyBeforePerPodObserved(t *testing.T) {
@@ -136,8 +114,25 @@ func TestComposeEndpoints_AggregateOnlyBeforePerPodObserved(t *testing.T) {
 	got := composeEndpoints(group)
 
 	g.Expect(got).NotTo(BeNil())
-	g.Expect(got.EvmJsonRpc).To(ConsistOf("http://pacific-1-wave-internal.pacific-1.svc:8545"))
-	g.Expect(got.EvmWs).To(BeEmpty())
-	g.Expect(got.TendermintRpc).To(HaveLen(1))
-	g.Expect(got.TendermintRest).To(HaveLen(1))
+	g.Expect(got.TendermintRpc).NotTo(BeEmpty())
+	g.Expect(got.TendermintRest).NotTo(BeEmpty())
+	g.Expect(got.Nodes).To(BeEmpty())
+}
+
+func TestComposeEndpoints_PerPodOnlyBeforeInternalObserved(t *testing.T) {
+	// Inverse transient: per-pod Services applied before internal Service.
+	g := NewWithT(t)
+	group := &seiv1alpha1.SeiNodeDeployment{}
+	group.Status.PerPodServices = []seiv1alpha1.PerPodServiceStatus{
+		perPodServiceStatus("pacific-1-wave-0"),
+	}
+
+	got := composeEndpoints(group)
+
+	g.Expect(got).NotTo(BeNil())
+	g.Expect(got.TendermintRpc).To(BeEmpty())
+	g.Expect(got.TendermintRest).To(BeEmpty())
+	g.Expect(got.Nodes).To(HaveLen(1))
+	g.Expect(got.Nodes[0].EvmJsonRpc).To(Equal("http://pacific-1-wave-0.pacific-1.svc:8545"))
+	g.Expect(got.Nodes[0].EvmWs).To(Equal("ws://pacific-1-wave-0.pacific-1.svc:8546"))
 }
