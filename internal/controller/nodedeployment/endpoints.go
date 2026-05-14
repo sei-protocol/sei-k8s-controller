@@ -7,8 +7,15 @@ import (
 )
 
 // composeEndpoints builds Endpoints from the resolved status fields.
-// Returns nil when neither has been observed, so omitempty leaves
-// .status.endpoints absent. See the Endpoints type for the ordering contract.
+// Returns nil when neither InternalService nor PerPodServices has been
+// observed, so omitempty leaves .status.endpoints absent.
+//
+// Aggregate scalars (TendermintRpc, TendermintRest) come from
+// InternalService; per-pod NodeEndpoint entries come from PerPodServices
+// and preserve its order. EVM JSON-RPC and EVM WebSocket are surfaced
+// per-pod only — the aggregate ClusterIP does not load-balance correctly
+// for stateful EVM sequences (filters, mempool, finalized-tag,
+// subscriptions). Consumers that need pod affinity pin to Nodes[N].
 func composeEndpoints(group *seiv1alpha1.SeiNodeDeployment) *seiv1alpha1.Endpoints {
 	internal := group.Status.InternalService
 	perPod := group.Status.PerPodServices
@@ -19,15 +26,16 @@ func composeEndpoints(group *seiv1alpha1.SeiNodeDeployment) *seiv1alpha1.Endpoin
 	out := &seiv1alpha1.Endpoints{}
 
 	if internal != nil {
-		out.TendermintRpc = []string{httpURL(internal.Name, internal.Namespace, internal.Ports.Rpc)}
-		out.TendermintRest = []string{httpURL(internal.Name, internal.Namespace, internal.Ports.Rest)}
-		out.EvmJsonRpc = []string{httpURL(internal.Name, internal.Namespace, internal.Ports.EvmHttp)}
+		out.TendermintRpc = httpURL(internal.Name, internal.Namespace, internal.Ports.Rpc)
+		out.TendermintRest = httpURL(internal.Name, internal.Namespace, internal.Ports.Rest)
 	}
 
-	for i := range perPod {
-		p := &perPod[i]
-		out.EvmJsonRpc = append(out.EvmJsonRpc, httpURL(p.Name, p.Namespace, p.Ports.EvmHttp))
-		out.EvmWs = append(out.EvmWs, wsURL(p.Name, p.Namespace, p.Ports.EvmWs))
+	for _, p := range perPod {
+		out.Nodes = append(out.Nodes, seiv1alpha1.NodeEndpoint{
+			Name:       p.Name,
+			EvmJsonRpc: httpURL(p.Name, p.Namespace, p.Ports.EvmHttp),
+			EvmWs:      wsURL(p.Name, p.Namespace, p.Ports.EvmWs),
+		})
 	}
 
 	return out
