@@ -7,7 +7,11 @@ import (
 
 const (
 	// DataDir is the mount path for the sei data volume inside node pods.
-	DataDir = "/sei"
+	// `/.sei` follows the conventional Cosmos SDK home layout (`~/.sei`),
+	// resolved against the seid container's HOME env var. Lock-step with
+	// the SEI_HOME env var injected on the sidecar container; both flow
+	// from this single constant.
+	DataDir = "/.sei"
 
 	// modeArchive matches seiconfig.ModeArchive without importing sei-config.
 	modeArchive = "archive"
