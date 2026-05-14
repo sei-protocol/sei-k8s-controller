@@ -280,6 +280,7 @@ type Endpoints struct {
 // .status.perPodServices.
 type NodeEndpoint struct {
 	// Name is the SeiNode resource name (also the headless Service name).
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
 	// EvmJsonRpc is the per-pod EVM JSON-RPC HTTP URL (http://).

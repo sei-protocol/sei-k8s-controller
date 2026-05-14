@@ -30,8 +30,7 @@ func composeEndpoints(group *seiv1alpha1.SeiNodeDeployment) *seiv1alpha1.Endpoin
 		out.TendermintRest = httpURL(internal.Name, internal.Namespace, internal.Ports.Rest)
 	}
 
-	for i := range perPod {
-		p := &perPod[i]
+	for _, p := range perPod {
 		out.Nodes = append(out.Nodes, seiv1alpha1.NodeEndpoint{
 			Name:       p.Name,
 			EvmJsonRpc: httpURL(p.Name, p.Namespace, p.Ports.EvmHttp),
