@@ -199,6 +199,40 @@ type SidecarConfig struct {
 	TLS *SidecarTLSSpec `json:"tls,omitempty"`
 }
 
+// CosmosExporterConfig enables an in-pod sei-cosmos-exporter container
+// that polls seid's local Cosmos gRPC + Tendermint RPC and exposes
+// Prometheus metrics on a fixed node-local port. Presence of this
+// struct (even empty) enables the container; absence leaves the pod
+// alone.
+//
+// Designed as a sidecar in the same pod so the exporter's
+// localhost-bound RPC assumption holds, per-pod identity (`pod` label)
+// flows through into metrics, and Karpenter consolidation never
+// collides on the listen port (which a DaemonSet would).
+//
+// The exporter always binds the upstream default port (9300) and the
+// container exposes it as the named port `cosmos-metrics`. Platform
+// PodMonitors target the named port, so per-node port overrides have
+// no use — the field is intentionally absent here.
+type CosmosExporterConfig struct {
+	// Image overrides the cosmos-exporter container image. When unset,
+	// the controller falls back to the SEI_COSMOS_EXPORTER_IMAGE
+	// platform default (mirrors how Sidecar.Image works). Primarily a
+	// debug/canary knob — production deployments rely on the platform
+	// default so image bumps are a single env-var change on the
+	// operator Deployment.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Resources defines CPU/memory requests and limits for the
+	// cosmos-exporter container. When unset, the controller applies
+	// scrape-friendly defaults (50m CPU req, 64Mi mem req, 384Mi mem
+	// limit, no CPU limit — CPU limits turn scrape-time pulls into
+	// visible scrape gaps under throttling).
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
 // SidecarTLSSpec configures the cert-manager-issued serving cert for
 // the kube-rbac-proxy fronting.
 type SidecarTLSSpec struct {
