@@ -158,6 +158,7 @@ func main() {
 		GatewayPublicDomain: os.Getenv("SEI_GATEWAY_PUBLIC_DOMAIN"),
 		KubeRBACProxyImage:  os.Getenv("SEI_KUBE_RBAC_PROXY_IMAGE"),
 		SidecarImage:        os.Getenv("SEI_SIDECAR_IMAGE"),
+		CosmosExporterImage: os.Getenv("SEI_COSMOS_EXPORTER_IMAGE"),
 	}
 
 	if err := platformCfg.Validate(); err != nil {

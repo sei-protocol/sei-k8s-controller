@@ -51,6 +51,10 @@ type Config struct {
 
 	KubeRBACProxyImage string
 	SidecarImage       string
+
+	// CosmosExporterImage is the sei-cosmos-exporter sidecar image.
+	// Required when any SeiNode sets spec.cosmosExporter: true.
+	CosmosExporterImage string
 }
 
 // NodepoolForMode returns the Karpenter NodePool name for the given

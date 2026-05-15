@@ -91,12 +91,18 @@ func mustGenerateStatefulSet(t *testing.T, node *seiv1alpha1.SeiNode, p Platform
 
 // --- Pod labels ---
 
-func TestResourceLabelsForNode_DefaultsToNodeOnly(t *testing.T) {
+func TestResourceLabelsForNode_DefaultsToSystemLabels(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 	labels := ResourceLabels(node)
 
-	g.Expect(labels).To(Equal(map[string]string{NodeLabel: "snap-0"}))
+	// newSnapshotNode sets ChainID="sei-test" + FullNode mode, so chain
+	// + role labels are stamped alongside sei.io/node.
+	g.Expect(labels).To(Equal(map[string]string{
+		NodeLabel:      node.Name,
+		"sei.io/chain": "sei-test",
+		"sei.io/role":  roleFullNode,
+	}))
 }
 
 func TestResourceLabelsForNode_MergesPodLabels(t *testing.T) {
@@ -109,7 +115,9 @@ func TestResourceLabelsForNode_MergesPodLabels(t *testing.T) {
 	labels := ResourceLabels(node)
 
 	g.Expect(labels).To(Equal(map[string]string{
-		NodeLabel:               "snap-0",
+		NodeLabel:               node.Name,
+		"sei.io/chain":          "sei-test",
+		"sei.io/role":           roleFullNode,
 		"sei.io/nodedeployment": "my-group",
 		"team":                  "platform",
 	}))
@@ -185,7 +193,8 @@ func TestBuildNodePodSpec_Genesis_MountsExistingPVC(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("mynet-0", "default")
 
-	spec := buildNodePodSpec(node, platformtest.Config())
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(spec.ServiceAccountName).To(Equal(platformtest.Config().ServiceAccount))
 	g.Expect(spec.Volumes).To(HaveLen(2)) // data PVC + sidecar-tmp emptyDir
@@ -198,7 +207,8 @@ func TestBuildNodePodSpec_Snapshot_MountsNodePVC(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")
 
-	spec := buildNodePodSpec(node, platformtest.Config())
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal("data-snap-0"))
 }
@@ -718,7 +728,8 @@ func TestBuildNodePodSpec_Archive_SchedulesOnArchiveNodepool(t *testing.T) {
 	g := NewWithT(t)
 	node := newArchiveNode("archive-0", "pacific-1")
 
-	spec := buildNodePodSpec(node, platformtest.Config())
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(spec.Tolerations).To(HaveLen(1))
 	g.Expect(spec.Tolerations[0].Key).To(Equal("sei.io/workload"))
@@ -735,7 +746,8 @@ func TestBuildNodePodSpec_FullNode_SchedulesOnDefaultNodepool(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("syncer-0", "pacific-1")
 
-	spec := buildNodePodSpec(node, platformtest.Config())
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(spec.Tolerations[0].Value).To(Equal("sei-node"))
 
@@ -1278,4 +1290,183 @@ func TestGenerateStatefulSet_ProductionPodSpec_PassesGuard(t *testing.T) {
 	node := validatorNodeWithOperatorKeyring()
 	_, err := GenerateStatefulSet(node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
+}
+
+// --- Cosmos exporter ---
+
+func TestCosmosExporter_AlwaysPresent(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+
+	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	g.Expect(ce).NotTo(BeNil())
+	g.Expect(sts.Spec.Template.Spec.Containers).To(HaveLen(2))
+}
+
+func TestCosmosExporter_DefaultImage(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+
+	g.Expect(ce.Image).To(Equal(platformtest.Config().CosmosExporterImage))
+}
+
+func TestCosmosExporter_PortIsFixed(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+
+	// Port is intentionally not user-configurable: the platform
+	// PodMonitor targets the named port `cosmos-metrics`.
+	g.Expect(ce.Ports[0].ContainerPort).To(Equal(int32(9300)))
+	g.Expect(ce.Ports[0].Name).To(Equal("cosmos-metrics"))
+}
+
+func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+	cfg := platformtest.Config()
+	cfg.CosmosExporterImage = ""
+
+	_, err := GenerateStatefulSet(node, cfg)
+
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("SEI_COSMOS_EXPORTER_IMAGE is required"))
+}
+
+func TestCosmosExporter_StartupProbeOnSeidGRPC(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+
+	// Startup probe gates ListenAndServe on seid's gRPC being up so the
+	// exporter doesn't log.Fatal() on its initial dial.
+	g.Expect(ce.StartupProbe).NotTo(BeNil())
+	g.Expect(ce.StartupProbe.TCPSocket).NotTo(BeNil())
+	g.Expect(ce.StartupProbe.TCPSocket.Port.IntVal).To(Equal(int32(9090)))
+}
+
+func TestCosmosExporter_MountsTmpEmptyDir(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+
+	var hasTmp bool
+	for _, m := range ce.VolumeMounts {
+		if m.Name == sidecarTmpVolumeName && m.MountPath == sidecarTmpMountPath {
+			hasTmp = true
+			break
+		}
+	}
+	g.Expect(hasTmp).To(BeTrue(), "cosmos-exporter must mount sidecar-tmp at /tmp (ReadOnlyRootFilesystem)")
+}
+
+func TestCosmosExporter_SeiArgs(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+
+	g.Expect(ce.Args).To(ContainElements(
+		"--denom", "usei",
+		"--denom-coefficient", "1000000",
+		"--bech-prefix", "sei",
+	))
+}
+
+func TestCosmosExporter_DefaultResources(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+
+	// 50m/64Mi requests, 256Mi memory limit, no CPU limit (see
+	// defaultCosmosExporterResources — scrape pulls would throttle).
+	cpuReq := ce.Resources.Requests[corev1.ResourceCPU]
+	memReq := ce.Resources.Requests[corev1.ResourceMemory]
+	memLim := ce.Resources.Limits[corev1.ResourceMemory]
+	g.Expect(cpuReq.String()).To(Equal("50m"))
+	g.Expect(memReq.String()).To(Equal("64Mi"))
+	g.Expect(memLim.String()).To(Equal("384Mi"))
+	_, hasCPULimit := ce.Resources.Limits[corev1.ResourceCPU]
+	g.Expect(hasCPULimit).To(BeFalse())
+}
+
+func TestResourceLabels_ChainAndRoleStampedUnconditionally(t *testing.T) {
+	g := NewWithT(t)
+	tests := []struct {
+		name     string
+		mutate   func(*seiv1alpha1.SeiNode)
+		expected string
+	}{
+		{"validator", func(n *seiv1alpha1.SeiNode) { n.Spec.Validator = &seiv1alpha1.ValidatorSpec{} }, roleValidator},
+		{"archive", func(n *seiv1alpha1.SeiNode) { n.Spec.Archive = &seiv1alpha1.ArchiveSpec{} }, roleArchive},
+		{"fullNode", func(n *seiv1alpha1.SeiNode) { n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{} }, roleFullNode},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &seiv1alpha1.SeiNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "ns"},
+				Spec:       seiv1alpha1.SeiNodeSpec{ChainID: "pacific-1", Image: "ghcr.io/sei-protocol/seid:latest"},
+			}
+			tt.mutate(node)
+
+			labels := ResourceLabels(node)
+
+			g.Expect(labels).To(HaveKeyWithValue("sei.io/chain", "pacific-1"))
+			g.Expect(labels).To(HaveKeyWithValue("sei.io/role", tt.expected))
+		})
+	}
+}
+
+func TestResourceLabels_ChainOmittedWhenChainIDEmpty(t *testing.T) {
+	g := NewWithT(t)
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "ns"},
+		Spec:       seiv1alpha1.SeiNodeSpec{FullNode: &seiv1alpha1.FullNodeSpec{}},
+	}
+
+	labels := ResourceLabels(node)
+
+	g.Expect(labels).NotTo(HaveKey("sei.io/chain"))
+}
+
+func TestResourceLabels_NotInSelector(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+
+	// Chain + role must NOT live in the immutable StatefulSet selector
+	// — otherwise renaming the chain (rare) or rolling between modes
+	// would require StatefulSet recreation. Only sei.io/node belongs
+	// in the selector.
+	g.Expect(sts.Spec.Selector.MatchLabels).NotTo(HaveKey("sei.io/chain"))
+	g.Expect(sts.Spec.Selector.MatchLabels).NotTo(HaveKey("sei.io/role"))
+	g.Expect(sts.Spec.Selector.MatchLabels).To(HaveLen(1))
+}
+
+func TestCosmosExporter_NonRootSecurityContext(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+
+	g.Expect(ce.SecurityContext).NotTo(BeNil())
+	g.Expect(ce.SecurityContext.RunAsNonRoot).NotTo(BeNil())
+	g.Expect(*ce.SecurityContext.RunAsNonRoot).To(BeTrue())
+	g.Expect(*ce.SecurityContext.RunAsUser).To(Equal(int64(65532)))
 }

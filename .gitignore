@@ -27,3 +27,4 @@ Thumbs.db
 # kubebuilder test assets are cached locally
 # but shouldn't be committed
 bin/k8s/
+.council/
