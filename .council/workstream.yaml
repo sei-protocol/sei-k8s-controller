@@ -1,0 +1,127 @@
+workstream:
+  description: "ValidationRun CRD LLD — design pass for ephemeral-chain validation workloads on Harbor"
+  tier: component
+  started: "2026-04-28T20:00:00Z"
+  updated: "2026-04-28T22:30:00Z"
+  source_issue: "https://github.com/sei-protocol/sei-k8s-controller/issues/139"
+  companion_issue: "https://github.com/sei-protocol/platform/issues/235"
+  decision_posture: "design pass — implementation is separate workstreams"
+
+phases:
+  - name: "Foundation"
+    status: completed
+    completed_at: "2026-04-28T20:00:00Z"
+    outputs:
+      - ".council/workstream.yaml"
+
+  - name: "Round 1 — Parallel specialist input gathering"
+    status: completed
+    completed_at: "2026-04-28T20:30:00Z"
+    outputs:
+      - "/tmp/round1/pm-scope-cuts.md"
+      - "/tmp/round1/otel-rule-semantics.md"
+      - "/tmp/round1/platform-integration.md"
+
+  - name: "Round 2 — LLD draft synthesis (kubernetes-specialist)"
+    status: completed
+    completed_at: "2026-04-28T21:00:00Z"
+    outputs:
+      - "/tmp/lld-draft.md (~1300 lines, 8500 words)"
+
+  - name: "Coral mid-council escalation — Argo Workflows pivot question"
+    status: completed
+    completed_at: "2026-04-28T22:00:00Z"
+    outputs:
+      - "Unanimous Path X (custom CRD) recommendation from all four specialists"
+      - "Argo un-defer triggers documented for Future Work section"
+    notes: |
+      User asked late in design pass whether to abandon custom CRD for Argo
+      Workflows. Engaged all four specialists in parallel. Unanimous: Path X.
+      Load-bearing reason: Argo can't natively own non-Pod CRDs cascade-style;
+      SND-as-cascading-child is central organizing primitive. Continuous-mode
+      polling makes Argo's per-step pod cost prohibitive (300 pods/run worst
+      case). Argo not currently deployed on Harbor — adoption is a multi-week
+      platform commitment. Re-open conversation on documented triggers.
+
+  - name: "One-way-door gate — CRD field name approvals"
+    status: completed
+    completed_at: "2026-04-28T22:30:00Z"
+    decisions:
+      - "API group: validation.sei.io (separate from sei.io)"
+      - "Discriminator field: spec.type (not spec.kind)"
+      - "chain.validators + chain.fullNodes: both required, type SeiNodeDeploymentSpec"
+      - "endpointPolicy field dropped; fullNodes-fleet endpoints always used"
+      - "Reserved env vars rejected at admission via CEL XValidation (not silent override)"
+      - "Failed vs Error distinct phase semantics; heartbeat alert ignores Error"
+      - "Single Succeeded condition (Tekton-style) + TestComplete condition (workload-completion boundary)"
+      - "Spec immutability via CEL self == oldSelf on substantive fields"
+      - "query.threshold typed as string with regex CEL"
+      - "Mode field dropped; continuous-only; runProperties.interval ships in v1 (default 30s)"
+      - "runProperties.stopOnFailure implemented in v1 (default false)"
+      - "S3 prefix s3://harbor-validation-results/{namespace}/{job}/{runId}/ locked"
+      - "No Flux labels on owned children (controller invariant)"
+      - "Tenant pre-provisions ServiceAccounts; controller never IAM"
+      - "alert.ruleRef cross-namespace allowed only into label-allowlisted namespaces"
+      - ".status.report.raw dropped entirely; .status.report.s3Url only"
+      - "Workload exit codes 1/2 aligned with Phase 1 contract"
+      - "validation_run_terminal_total{namespace, name, verdict} cardinality exception with downgrade path"
+    architectural_refinements:
+      - "Plan task count collapsed 10 → 7 (monitor-run combines wait-job-terminal + resolve-rules + evaluate-rules; mark-done absorbs collect-report's S3 URL stamp)"
+      - "monitor-run is the central polling task — single async loop, idempotent state in .status, cooperative Job cancel on stopOnFailure"
+      - "Conditions[TestComplete] as first-class status condition at workload-completion boundary"
+      - "Per-rule status gains lastEvaluatedAt + nextEvaluationAt for idempotent polling resumption"
+
+  - name: "LLD revision pass + capture"
+    status: in_progress
+    started_at: "2026-04-28T22:30:00Z"
+    plan: "kubernetes-specialist revises /tmp/lld-draft.md with gate decisions; output to /tmp/lld-final.md; /design captures into docs/design/validation-run-lld.md"
+
+  - name: "Cross-review"
+    status: pending
+    blocked_by: "LLD captured in repo"
+    plan: "all four specialists sign off; resolve findings before close"
+
+  - name: "Implementation handoff issues — companion sub-issues"
+    status: completed
+    completed_at: "2026-04-29T16:00:00Z"
+    outputs:
+      - "sei-protocol/sei-k8s-controller#144 — SND readiness includes catching_up"
+      - "sei-protocol/sei-k8s-controller#145 — SND admission validation rejects genesis on fullNode"
+      - "sei-protocol/sei-k8s-controller#146 — TaskPlan.TargetPhase generalization decision"
+      - "sei-protocol/sei-k8s-controller#147 — status-patch optimistic concurrency invariant"
+      - "sei-protocol/platform#243 — PodMonitor for sei-k8s-controller"
+      - "sei-protocol/platform#244 — heartbeat PrometheusRule on consecutive failures"
+      - "sei-protocol/platform#245 — label monitoring/ namespace with validation-shared-rules"
+    notes: |
+      The 7 companion sub-issues from the LLD's Open Dependencies section
+      are filed as independent workstreams. Implementation handoff issues
+      for the controllers themselves (types + deepcopy, reconcilers,
+      planner integration) will be filed when PR #143 review locks
+      direction.
+
+  - name: "Implementation handoff — controller code"
+    status: pending
+    blocked_by: "PR #143 review feedback locks design direction"
+    plan: "file ~6 controller implementation issues once LLD is approved: types+deepcopy, ValidationOrchestrationReconciler, ValidationLoadGenerationReconciler, planner builders for ValidationOrchestrationPlan and ValidationLoadGenerationPlan, monitor-task-completion task, RBAC + opt-in deployment plumbing"
+
+  - name: "Close council"
+    status: in_progress
+    plan: "verify all PR #143 review-blocking acceptance criteria from #139 are met OR explicitly tracked; archive workstream"
+
+outstanding_findings: []
+escalations: []
+
+acceptance_criteria_from_issue_139:
+  - "LLD merged in docs/design/ — IN PROGRESS (PR pending)"
+  - "LLD answers six open questions from OSS survey — DONE"
+  - "LLD enumerates five one-way-door warnings and how design avoids each — DONE"
+  - "Cross-review sign-offs from all four specialists — PENDING"
+  - "Design serves both Phase 1 consumers (seiload + qa-testing) — DONE"
+  - "Workload contract from platform#235 referenced as authoritative spec.workload envelope — DONE"
+  - "Implementation handoff issues filed — PENDING"
+
+constraints:
+  - "CRD field names are one-way doors per CLAUDE.md — must clear cross-review + user approval — RESOLVED"
+  - "Existing planner architecture is load-bearing — reuse plan-driven reconciler pattern — DONE"
+  - "OSS conventions take precedence over novelty — DONE"
+  - "Shadow-replayer stays out — not open for re-litigation in this council — DONE"

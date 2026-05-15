@@ -26,18 +26,12 @@ const (
 	// NodeLabel is the standard label key used on all SeiNode-owned resources.
 	NodeLabel = "sei.io/node"
 
-	// chainLabel is the per-pod label carrying the SeiNode's ChainID.
-	// Platform-owned ServiceMonitors and PodMonitors lift this into the
-	// `chain_id` metric label via __meta_kubernetes_pod_label_sei_io_chain
-	// relabeling. NOT in the StatefulSet selector — chain doesn't change
-	// on a running SeiNode and pod-template-only stamping keeps the
-	// selector immutable.
+	// chainLabel and roleLabel are observability identity labels lifted
+	// into `chain_id` and `component` metric labels by platform-owned
+	// (Pod|Service)Monitor relabelings. Pod-template only, never in the
+	// StatefulSet selector.
 	chainLabel = "sei.io/chain"
-
-	// roleLabel is the per-pod label carrying the node mode. Values:
-	// validator, archive, replayer, node. Same lift-via-relabel pattern
-	// as chainLabel; surfaces as the `component` metric label.
-	roleLabel = "sei.io/role"
+	roleLabel  = "sei.io/role"
 
 	dataDir = platform.DataDir
 
@@ -94,17 +88,10 @@ const (
 	sidecarNonRootUID int64 = 65532
 
 	// defaultCosmosExporterPort matches sei-cosmos-exporter's upstream
-	// default (main.go:302) and the legacy EC2
-	// install_sei_cosmos_exporter.sh:9300. Fixed — no per-node override:
-	// the platform PodMonitor selects via the named port
-	// `cosmos-metrics`, so the value is opaque to consumers.
+	// default. Platform PodMonitors target the named port `cosmos-metrics`.
 	defaultCosmosExporterPort int32 = 9300
 
-	// cosmosExporterScrapeLabel is the pod label stamped on every
-	// pod opting into cosmos-exporter scraping. A single cluster-wide
-	// PodMonitor in the platform repo (clusters/<env>/monitoring/)
-	// selects on this label and discovers all opted-in pods across
-	// namespaces.
+	// cosmosExporterScrapeLabel is the platform PodMonitor's selector.
 	cosmosExporterScrapeLabel      = "monitoring.sei.io/cosmos-exporter"
 	cosmosExporterScrapeLabelValue = "enabled"
 )
@@ -130,42 +117,25 @@ func SelectorLabels(node *seiv1alpha1.SeiNode) map[string]string {
 }
 
 // ResourceLabels returns labels for the StatefulSet pod template.
-// User-provided podLabels are applied first; system labels (sei.io/node
-// and observability discovery labels) are set last so they cannot be
-// overridden.
+// User-provided podLabels are applied first; system labels win.
 func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
 	labels := make(map[string]string, len(node.Spec.PodLabels)+4)
 	maps.Copy(labels, node.Spec.PodLabels)
 	labels[NodeLabel] = node.Name
-	// sei.io/chain and sei.io/role are observability identity labels:
-	// platform-owned PodMonitors and ServiceMonitors lift them into
-	// metric labels (chain_id, component) via
-	// __meta_kubernetes_pod_label_* relabeling instead of carrying the
-	// values in their own YAML. Stamped unconditionally so every seid
-	// pod is queryable by chain and role regardless of which exporter
-	// is enabled.
 	if node.Spec.ChainID != "" {
 		labels[chainLabel] = node.Spec.ChainID
 	}
 	if role := deriveRole(node); role != "" {
 		labels[roleLabel] = role
 	}
-	// Platform-owned discovery label: a single PodMonitor per chain
-	// in the observability stack selects on this and scrapes the
-	// cosmos-exporter sidecar's /metrics/* endpoints. Stamping the
-	// label here keeps the per-pod opt-in concern in the controller
-	// while the scrape policy stays in the platform repo (no per-SND
-	// PodMonitor reconcile loop).
 	if CosmosExporterEnabled(node) {
 		labels[cosmosExporterScrapeLabel] = cosmosExporterScrapeLabelValue
 	}
 	return labels
 }
 
-// deriveRole returns the role label value for the node mode, matching
-// the values nodedeployment.deriveComponent emits for ServiceMonitor
-// relabeling. Centralized here so the pod-label and the relabel-output
-// stay in lock-step. Empty string when no mode is set.
+// deriveRole mirrors nodedeployment.deriveComponent so the pod label
+// and the ServiceMonitor relabel-output stay in lock-step.
 func deriveRole(node *seiv1alpha1.SeiNode) string {
 	switch {
 	case node.Spec.Validator != nil:
@@ -519,7 +489,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 	spec.InitContainers = initContainers
 	containers := []corev1.Container{buildSidecarMainContainer(node, p)}
 	if CosmosExporterEnabled(node) {
-		ceContainer, err := buildCosmosExporterContainer(node, p)
+		ceContainer, err := buildCosmosExporterContainer(p)
 		if err != nil {
 			return corev1.PodSpec{}, err
 		}
@@ -635,26 +605,13 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 }
 
 // CosmosExporterEnabled reports whether the SeiNode opts into running
-// the sei-cosmos-exporter sidecar via spec.cosmosExporter (any non-nil
-// value, even an empty struct, enables it).
+// the sei-cosmos-exporter sidecar.
 func CosmosExporterEnabled(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.CosmosExporter != nil
+	return node.Spec.CosmosExporter
 }
 
-func cosmosExporterImage(node *seiv1alpha1.SeiNode, p PlatformConfig) string {
-	if node.Spec.CosmosExporter != nil && node.Spec.CosmosExporter.Image != "" {
-		return node.Spec.CosmosExporter.Image
-	}
-	return p.CosmosExporterImage
-}
-
-// defaultCosmosExporterResources returns scrape-friendly defaults. No
-// CPU limit on purpose: cosmos-exporter pulls from seid's local gRPC
-// on every scrape, and CPU throttling at the limit boundary turns those
-// pulls into visible scrape gaps. Memory ceiling caps blast radius.
-// 384Mi target headroom for /metrics/validators paginated delegation
-// pulls on large-validator-set chains (Limit defaults to 1000 in
-// upstream cosmos-exporter at main.go:305).
+// defaultCosmosExporterResources: no CPU limit — cosmos-exporter calls
+// seid's gRPC on every scrape; throttling turns into visible scrape gaps.
 func defaultCosmosExporterResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
@@ -667,59 +624,35 @@ func defaultCosmosExporterResources() corev1.ResourceRequirements {
 	}
 }
 
-// buildCosmosExporterContainer renders the sei-cosmos-exporter sidecar
-// that polls seid's local Cosmos gRPC (localhost:9090) + Tendermint RPC
-// (http://localhost:26657) and exposes Prometheus metrics on :9300.
-// Discovered by a platform-owned PodMonitor selecting on the
-// monitoring.sei.io/cosmos-exporter pod label.
-//
-// Args track sei-infra's legacy systemd unit
-// (sei-cosmos-exporter/install-sei-cosmos-exporter.sh): usei bond denom,
-// 1_000_000 coefficient (6-decimal display), `sei` bech32 prefix.
-//
-// Returns an error when no image source is configured (neither the
-// per-node Image override nor the platform-level SEI_COSMOS_EXPORTER_IMAGE
-// env): an empty Image field would surface as a confusing ErrImagePull
-// at pod scheduling time. Mirrors the KubeRBACProxyImage fail-fast
-// pattern in GenerateStatefulSet.
-func buildCosmosExporterContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.Container, error) {
-	image := cosmosExporterImage(node, p)
-	if image == "" {
-		return corev1.Container{}, fmt.Errorf("cosmos-exporter image is required: set SEI_COSMOS_EXPORTER_IMAGE on the operator Deployment or override .spec.cosmosExporter.image on the SeiNode")
+// buildCosmosExporterContainer renders the cosmos-exporter sidecar.
+// Image, args, port, and resources are fixed — no per-node knobs.
+func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
+	if p.CosmosExporterImage == "" {
+		return corev1.Container{}, fmt.Errorf("SEI_COSMOS_EXPORTER_IMAGE is required on the operator Deployment when any SeiNode sets spec.cosmosExporter: true")
 	}
-	c := corev1.Container{
+	return corev1.Container{
 		Name:  containerNameCosmosExporter,
-		Image: image,
+		Image: p.CosmosExporterImage,
 		Args: []string{
 			"--denom", "usei",
 			"--denom-coefficient", "1000000",
 			"--bech-prefix", "sei",
 			"--listen-address", fmt.Sprintf(":%d", defaultCosmosExporterPort),
-			// --node defaults to localhost:9090 (Cosmos gRPC).
-			// --tendermint-rpc defaults to http://localhost:26657.
-			// Both are pod-local because the exporter runs in the same
-			// pod as seid; no override needed.
+			// --node and --tendermint-rpc default to localhost; the
+			// exporter shares the pod's net ns with seid.
 		},
 		Ports: []corev1.ContainerPort{
 			{Name: "cosmos-metrics", ContainerPort: defaultCosmosExporterPort, Protocol: corev1.ProtocolTCP},
 		},
 		SecurityContext: sidecarSecurityContext(),
 		Resources:       defaultCosmosExporterResources(),
-		// Distroless + ReadOnlyRootFilesystem means /tmp would EROFS if
-		// the Go runtime or gRPC stack ever stages there. Reuse the
-		// sidecar-tmp emptyDir already in the pod's volume list at
-		// buildNodePodSpec — cheap insurance.
+		// /tmp: distroless + ReadOnlyRootFilesystem EROFS insurance.
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: sidecarTmpVolumeName, MountPath: "/tmp"},
 		},
-		// cosmos-exporter calls setChainID() + setDenom() against seid's
-		// gRPC at startup (main.go:162-163) and log.Fatal()s on first
-		// dial failure (main.go:159). Without a startup gate, the
-		// exporter crash-loops until seid's gRPC is up — cosmetic but
-		// noisy in dashboards. TCP-probe seid's gRPC port and treat
-		// that as our readiness-to-start signal. seiconfig.PortGRPC is
-		// unconditionally exposed by buildNodeMainContainer via
-		// ContainerPorts().
+		// cosmos-exporter Fatal()s on its initial gRPC dial. Gate
+		// startup on seid's gRPC port so we don't crash-loop until
+		// seid is up.
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				TCPSocket: &corev1.TCPSocketAction{
@@ -730,11 +663,7 @@ func buildCosmosExporterContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) (
 			PeriodSeconds:       5,
 			FailureThreshold:    60,
 		},
-	}
-	if node.Spec.CosmosExporter != nil && node.Spec.CosmosExporter.Resources != nil {
-		c.Resources = *node.Spec.CosmosExporter.Resources
-	}
-	return c, nil
+	}, nil
 }
 
 func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []string) {

@@ -34,8 +34,6 @@ func Config() platform.Config {
 		// Arbitrary fixture; not authoritative. Production digest is set
 		// via SEI_SIDECAR_IMAGE in the platform repo's controller Deployment.
 		SidecarImage: "ghcr.io/sei-protocol/seictl@sha256:a2af4e1b8ed4c12661a3c98cce050bae3f292cc7560abc2ba98fd7dfc80d9be5",
-		// Production digest is set via SEI_COSMOS_EXPORTER_IMAGE in the
-		// platform repo's controller Deployment.
 		CosmosExporterImage: "ghcr.io/sei-protocol/sei-cosmos-exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 	}
 }

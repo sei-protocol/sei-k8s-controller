@@ -45,14 +45,10 @@ type SeiNodeSpec struct {
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
 
-	// CosmosExporter, if set, runs sei-cosmos-exporter as an in-pod
-	// sidecar container scraping seid's local Cosmos gRPC + Tendermint
-	// RPC and exposing Prometheus metrics on :9300. The companion
-	// PodMonitor (emitted by the SeiNodeDeployment controller when its
-	// .spec.monitoring.cosmosExporter is also set) discovers and
-	// scrapes these endpoints.
+	// CosmosExporter runs sei-cosmos-exporter as an in-pod sidecar.
+	// Image and resources are operator-controlled; this is a toggle.
 	// +optional
-	CosmosExporter *CosmosExporterConfig `json:"cosmosExporter,omitempty"`
+	CosmosExporter bool `json:"cosmosExporter,omitempty"`
 
 	// PodLabels are additional labels merged into the StatefulSet pod template.
 	// The controller always sets sei.io/node; these are additive and applied

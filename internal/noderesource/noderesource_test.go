@@ -1307,7 +1307,7 @@ func TestCosmosExporter_AbsentByDefault(t *testing.T) {
 func TestCosmosExporter_PresentWhenOptedIn(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
@@ -1319,7 +1319,7 @@ func TestCosmosExporter_PresentWhenOptedIn(t *testing.T) {
 func TestCosmosExporter_DefaultImage(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1327,35 +1327,10 @@ func TestCosmosExporter_DefaultImage(t *testing.T) {
 	g.Expect(ce.Image).To(Equal(platformtest.Config().CosmosExporterImage))
 }
 
-func TestCosmosExporter_CustomImageOverride(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{Image: "custom/exporter:v9"}
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
-
-	g.Expect(ce.Image).To(Equal("custom/exporter:v9"))
-}
-
-func TestCosmosExporter_DefaultPort(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
-
-	g.Expect(ce.Ports).To(HaveLen(1))
-	g.Expect(ce.Ports[0].ContainerPort).To(Equal(int32(9300)))
-	g.Expect(ce.Ports[0].Name).To(Equal("cosmos-metrics"))
-	g.Expect(ce.Args).To(ContainElement(":9300"))
-}
-
 func TestCosmosExporter_PortIsFixed(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1369,20 +1344,20 @@ func TestCosmosExporter_PortIsFixed(t *testing.T) {
 func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 	cfg := platformtest.Config()
 	cfg.CosmosExporterImage = ""
 
 	_, err := GenerateStatefulSet(node, cfg)
 
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("cosmos-exporter image is required"))
+	g.Expect(err.Error()).To(ContainSubstring("SEI_COSMOS_EXPORTER_IMAGE is required"))
 }
 
 func TestCosmosExporter_StartupProbeOnSeidGRPC(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1397,7 +1372,7 @@ func TestCosmosExporter_StartupProbeOnSeidGRPC(t *testing.T) {
 func TestCosmosExporter_MountsTmpEmptyDir(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1415,7 +1390,7 @@ func TestCosmosExporter_MountsTmpEmptyDir(t *testing.T) {
 func TestCosmosExporter_SeiArgs(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1430,7 +1405,7 @@ func TestCosmosExporter_SeiArgs(t *testing.T) {
 func TestCosmosExporter_DefaultResources(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1445,25 +1420,6 @@ func TestCosmosExporter_DefaultResources(t *testing.T) {
 	g.Expect(memLim.String()).To(Equal("384Mi"))
 	_, hasCPULimit := ce.Resources.Limits[corev1.ResourceCPU]
 	g.Expect(hasCPULimit).To(BeFalse())
-}
-
-func TestCosmosExporter_CustomResourcesOverride(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{
-		Resources: &corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("100m"),
-				corev1.ResourceMemory: resource.MustParse("128Mi"),
-			},
-		},
-	}
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
-
-	cpuReq := ce.Resources.Requests[corev1.ResourceCPU]
-	g.Expect(cpuReq.String()).To(Equal("100m"))
 }
 
 func TestResourceLabels_ChainAndRoleStampedUnconditionally(t *testing.T) {
@@ -1532,7 +1488,7 @@ func TestCosmosExporter_PodLabelAbsentByDefault(t *testing.T) {
 func TestCosmosExporter_PodLabelPresentWhenOptedIn(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
@@ -1542,7 +1498,7 @@ func TestCosmosExporter_PodLabelPresentWhenOptedIn(t *testing.T) {
 func TestCosmosExporter_PodLabelNotOnSelector(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
@@ -1555,7 +1511,7 @@ func TestCosmosExporter_PodLabelNotOnSelector(t *testing.T) {
 func TestCosmosExporter_NonRootSecurityContext(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = &seiv1alpha1.CosmosExporterConfig{}
+	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
