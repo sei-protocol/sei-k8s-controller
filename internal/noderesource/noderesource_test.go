@@ -99,7 +99,7 @@ func TestResourceLabelsForNode_DefaultsToSystemLabels(t *testing.T) {
 	// newSnapshotNode sets ChainID="sei-test" + FullNode mode, so chain
 	// + role labels are stamped alongside sei.io/node.
 	g.Expect(labels).To(Equal(map[string]string{
-		NodeLabel:      "snap-0",
+		NodeLabel:      node.Name,
 		"sei.io/chain": "sei-test",
 		"sei.io/role":  roleFullNode,
 	}))
@@ -115,7 +115,7 @@ func TestResourceLabelsForNode_MergesPodLabels(t *testing.T) {
 	labels := ResourceLabels(node)
 
 	g.Expect(labels).To(Equal(map[string]string{
-		NodeLabel:               "snap-0",
+		NodeLabel:               node.Name,
 		"sei.io/chain":          "sei-test",
 		"sei.io/role":           roleFullNode,
 		"sei.io/nodedeployment": "my-group",
