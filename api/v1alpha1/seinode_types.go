@@ -45,11 +45,6 @@ type SeiNodeSpec struct {
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
 
-	// CosmosExporter runs sei-cosmos-exporter as an in-pod sidecar.
-	// Image and resources are operator-controlled; this is a toggle.
-	// +optional
-	CosmosExporter bool `json:"cosmosExporter,omitempty"`
-
 	// PodLabels are additional labels merged into the StatefulSet pod template.
 	// The controller always sets sei.io/node; these are additive and applied
 	// first so that system labels take precedence.

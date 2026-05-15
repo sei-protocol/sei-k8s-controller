@@ -101,7 +101,7 @@ func TestResourceLabelsForNode_DefaultsToSystemLabels(t *testing.T) {
 	g.Expect(labels).To(Equal(map[string]string{
 		NodeLabel:      "snap-0",
 		"sei.io/chain": "sei-test",
-		"sei.io/role":  "node",
+		"sei.io/role":  roleFullNode,
 	}))
 }
 
@@ -116,10 +116,10 @@ func TestResourceLabelsForNode_MergesPodLabels(t *testing.T) {
 
 	g.Expect(labels).To(Equal(map[string]string{
 		NodeLabel:               "snap-0",
-		"sei.io/chain":           "sei-test",
-		"sei.io/role":            "node",
-		"sei.io/nodedeployment":  "my-group",
-		"team":                   "platform",
+		"sei.io/chain":          "sei-test",
+		"sei.io/role":           roleFullNode,
+		"sei.io/nodedeployment": "my-group",
+		"team":                  "platform",
 	}))
 }
 
@@ -1294,20 +1294,9 @@ func TestGenerateStatefulSet_ProductionPodSpec_PassesGuard(t *testing.T) {
 
 // --- Cosmos exporter ---
 
-func TestCosmosExporter_AbsentByDefault(t *testing.T) {
+func TestCosmosExporter_AlwaysPresent(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-
-	g.Expect(findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)).To(BeNil())
-	g.Expect(sts.Spec.Template.Spec.Containers).To(HaveLen(1))
-}
-
-func TestCosmosExporter_PresentWhenOptedIn(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
@@ -1319,7 +1308,6 @@ func TestCosmosExporter_PresentWhenOptedIn(t *testing.T) {
 func TestCosmosExporter_DefaultImage(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1330,7 +1318,6 @@ func TestCosmosExporter_DefaultImage(t *testing.T) {
 func TestCosmosExporter_PortIsFixed(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1344,7 +1331,6 @@ func TestCosmosExporter_PortIsFixed(t *testing.T) {
 func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
 	cfg := platformtest.Config()
 	cfg.CosmosExporterImage = ""
 
@@ -1357,7 +1343,6 @@ func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
 func TestCosmosExporter_StartupProbeOnSeidGRPC(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1372,14 +1357,13 @@ func TestCosmosExporter_StartupProbeOnSeidGRPC(t *testing.T) {
 func TestCosmosExporter_MountsTmpEmptyDir(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
 
 	var hasTmp bool
 	for _, m := range ce.VolumeMounts {
-		if m.Name == sidecarTmpVolumeName && m.MountPath == "/tmp" {
+		if m.Name == sidecarTmpVolumeName && m.MountPath == sidecarTmpMountPath {
 			hasTmp = true
 			break
 		}
@@ -1390,7 +1374,6 @@ func TestCosmosExporter_MountsTmpEmptyDir(t *testing.T) {
 func TestCosmosExporter_SeiArgs(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1405,7 +1388,6 @@ func TestCosmosExporter_SeiArgs(t *testing.T) {
 func TestCosmosExporter_DefaultResources(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
@@ -1429,9 +1411,9 @@ func TestResourceLabels_ChainAndRoleStampedUnconditionally(t *testing.T) {
 		mutate   func(*seiv1alpha1.SeiNode)
 		expected string
 	}{
-		{"validator", func(n *seiv1alpha1.SeiNode) { n.Spec.Validator = &seiv1alpha1.ValidatorSpec{} }, "validator"},
-		{"archive", func(n *seiv1alpha1.SeiNode) { n.Spec.Archive = &seiv1alpha1.ArchiveSpec{} }, "archive"},
-		{"fullNode", func(n *seiv1alpha1.SeiNode) { n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{} }, "node"},
+		{"validator", func(n *seiv1alpha1.SeiNode) { n.Spec.Validator = &seiv1alpha1.ValidatorSpec{} }, roleValidator},
+		{"archive", func(n *seiv1alpha1.SeiNode) { n.Spec.Archive = &seiv1alpha1.ArchiveSpec{} }, roleArchive},
+		{"fullNode", func(n *seiv1alpha1.SeiNode) { n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{} }, roleFullNode},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1476,42 +1458,9 @@ func TestResourceLabels_NotInSelector(t *testing.T) {
 	g.Expect(sts.Spec.Selector.MatchLabels).To(HaveLen(1))
 }
 
-func TestCosmosExporter_PodLabelAbsentByDefault(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("ce-0", "default")
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-
-	g.Expect(sts.Spec.Template.Labels).NotTo(HaveKey("monitoring.sei.io/cosmos-exporter"))
-}
-
-func TestCosmosExporter_PodLabelPresentWhenOptedIn(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-
-	g.Expect(sts.Spec.Template.Labels).To(HaveKeyWithValue("monitoring.sei.io/cosmos-exporter", "enabled"))
-}
-
-func TestCosmosExporter_PodLabelNotOnSelector(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-
-	// The scrape label must NOT live in the immutable StatefulSet
-	// selector — otherwise toggling cosmos-exporter on or off would
-	// require StatefulSet recreation.
-	g.Expect(sts.Spec.Selector.MatchLabels).NotTo(HaveKey("monitoring.sei.io/cosmos-exporter"))
-}
-
 func TestCosmosExporter_NonRootSecurityContext(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
-	node.Spec.CosmosExporter = true
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)

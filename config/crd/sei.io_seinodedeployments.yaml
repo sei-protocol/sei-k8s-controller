@@ -225,11 +225,6 @@ spec:
                         description: ChainID of the chain this node belongs to.
                         minLength: 1
                         type: string
-                      cosmosExporter:
-                        description: |-
-                          CosmosExporter runs sei-cosmos-exporter as an in-pod sidecar.
-                          Image and resources are operator-controlled; this is a toggle.
-                        type: boolean
                       dataVolume:
                         description: |-
                           DataVolume configures the data PersistentVolumeClaim for this node.

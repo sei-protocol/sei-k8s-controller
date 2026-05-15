@@ -33,6 +33,11 @@ const (
 	chainLabel = "sei.io/chain"
 	roleLabel  = "sei.io/role"
 
+	roleValidator = "validator"
+	roleArchive   = "archive"
+	roleReplayer  = "replayer"
+	roleFullNode  = "node"
+
 	dataDir = platform.DataDir
 
 	// homeVarRef is the K8s VariableReference form of HOME, substituted from
@@ -49,16 +54,16 @@ const (
 
 	// Pod-spec container names. Used as both the .Name on built containers
 	// and the lookup key for the operator-keyring containment guard.
-	containerNameSeid               = "seid"
-	containerNameSidecar            = "sei-sidecar"
-	containerNameRBACProxy          = "kube-rbac-proxy"
-	containerNameCosmosExporter     = "cosmos-exporter"
-	servicePortNameAPI              = "api"
-	rbacProxyConfigVolumeName       = "rbac-proxy-config"
-	sidecarTLSVolumeName            = "sidecar-tls"
-	rbacProxyConfigMountPath        = "/etc/kube-rbac-proxy"
-	sidecarTLSMountPath             = "/etc/tls"
-	RBACProxyPort             int32 = 8443
+	containerNameSeid                 = "seid"
+	containerNameSidecar              = "sei-sidecar"
+	containerNameRBACProxy            = "kube-rbac-proxy"
+	containerNameCosmosExporter       = "cosmos-exporter"
+	servicePortNameAPI                = "api"
+	rbacProxyConfigVolumeName         = "rbac-proxy-config"
+	sidecarTLSVolumeName              = "sidecar-tls"
+	rbacProxyConfigMountPath          = "/etc/kube-rbac-proxy"
+	sidecarTLSMountPath               = "/etc/tls"
+	RBACProxyPort               int32 = 8443
 
 	pathHealthz  = "/v0/healthz"
 	pathLivez    = "/v0/livez"
@@ -81,6 +86,7 @@ const (
 	// sidecarTmpVolumeName backs an emptyDir at /tmp — required because the
 	// sidecar runs with ReadOnlyRootFilesystem and Go stdlib defaults to /tmp.
 	sidecarTmpVolumeName = "sidecar-tmp"
+	sidecarTmpMountPath  = "/tmp"
 
 	// sidecarNonRootUID is the nonroot UID/GID baked into distroless and
 	// chainguard static-debian12 base images. Pod-level fsGroup matches so
@@ -90,10 +96,6 @@ const (
 	// defaultCosmosExporterPort matches sei-cosmos-exporter's upstream
 	// default. Platform PodMonitors target the named port `cosmos-metrics`.
 	defaultCosmosExporterPort int32 = 9300
-
-	// cosmosExporterScrapeLabel is the platform PodMonitor's selector.
-	cosmosExporterScrapeLabel      = "monitoring.sei.io/cosmos-exporter"
-	cosmosExporterScrapeLabelValue = "enabled"
 )
 
 // PlatformConfig is an alias for platform.Config.
@@ -119,7 +121,7 @@ func SelectorLabels(node *seiv1alpha1.SeiNode) map[string]string {
 // ResourceLabels returns labels for the StatefulSet pod template.
 // User-provided podLabels are applied first; system labels win.
 func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
-	labels := make(map[string]string, len(node.Spec.PodLabels)+4)
+	labels := make(map[string]string, len(node.Spec.PodLabels)+3)
 	maps.Copy(labels, node.Spec.PodLabels)
 	labels[NodeLabel] = node.Name
 	if node.Spec.ChainID != "" {
@@ -127,9 +129,6 @@ func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
 	}
 	if role := deriveRole(node); role != "" {
 		labels[roleLabel] = role
-	}
-	if CosmosExporterEnabled(node) {
-		labels[cosmosExporterScrapeLabel] = cosmosExporterScrapeLabelValue
 	}
 	return labels
 }
@@ -139,13 +138,13 @@ func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
 func deriveRole(node *seiv1alpha1.SeiNode) string {
 	switch {
 	case node.Spec.Validator != nil:
-		return "validator"
+		return roleValidator
 	case node.Spec.Archive != nil:
-		return "archive"
+		return roleArchive
 	case node.Spec.Replayer != nil:
-		return "replayer"
+		return roleReplayer
 	case node.Spec.FullNode != nil:
-		return "node"
+		return roleFullNode
 	}
 	return ""
 }
@@ -487,15 +486,14 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 		initContainers = append(initContainers, buildRBACProxyContainer(node, p))
 	}
 	spec.InitContainers = initContainers
-	containers := []corev1.Container{buildSidecarMainContainer(node, p)}
-	if CosmosExporterEnabled(node) {
-		ceContainer, err := buildCosmosExporterContainer(p)
-		if err != nil {
-			return corev1.PodSpec{}, err
-		}
-		containers = append(containers, ceContainer)
+	ceContainer, err := buildCosmosExporterContainer(p)
+	if err != nil {
+		return corev1.PodSpec{}, err
 	}
-	spec.Containers = containers
+	spec.Containers = []corev1.Container{
+		buildSidecarMainContainer(node, p),
+		ceContainer,
+	}
 
 	return spec, nil
 }
@@ -540,7 +538,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 	mounts := make([]corev1.VolumeMount, 0, 2+len(keyringMounts))
 	mounts = append(mounts,
 		corev1.VolumeMount{Name: "data", MountPath: dataDir},
-		corev1.VolumeMount{Name: sidecarTmpVolumeName, MountPath: "/tmp"},
+		corev1.VolumeMount{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
 	)
 	mounts = append(mounts, keyringMounts...)
 
@@ -604,12 +602,6 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 	return container
 }
 
-// CosmosExporterEnabled reports whether the SeiNode opts into running
-// the sei-cosmos-exporter sidecar.
-func CosmosExporterEnabled(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.CosmosExporter
-}
-
 // defaultCosmosExporterResources: no CPU limit — cosmos-exporter calls
 // seid's gRPC on every scrape; throttling turns into visible scrape gaps.
 func defaultCosmosExporterResources() corev1.ResourceRequirements {
@@ -628,7 +620,7 @@ func defaultCosmosExporterResources() corev1.ResourceRequirements {
 // Image, args, port, and resources are fixed — no per-node knobs.
 func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
 	if p.CosmosExporterImage == "" {
-		return corev1.Container{}, fmt.Errorf("SEI_COSMOS_EXPORTER_IMAGE is required on the operator Deployment when any SeiNode sets spec.cosmosExporter: true")
+		return corev1.Container{}, fmt.Errorf("SEI_COSMOS_EXPORTER_IMAGE is required on the operator Deployment")
 	}
 	return corev1.Container{
 		Name:  containerNameCosmosExporter,
@@ -648,7 +640,7 @@ func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
 		Resources:       defaultCosmosExporterResources(),
 		// /tmp: distroless + ReadOnlyRootFilesystem EROFS insurance.
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: sidecarTmpVolumeName, MountPath: "/tmp"},
+			{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
 		},
 		// cosmos-exporter Fatal()s on its initial gRPC dial. Gate
 		// startup on seid's gRPC port so we don't crash-loop until
