@@ -316,6 +316,14 @@ type SeiNodeStatus struct {
 	// +optional
 	CurrentImage string `json:"currentImage,omitempty"`
 
+	// CurrentSidecarTLS captures the sidecar TLS configuration observed
+	// running on the owned StatefulSet. Stamped by the ObserveSidecarTLS
+	// task when a TLS-toggle NodeUpdate plan completes. Compared against
+	// spec.sidecar.tls to detect drift. Nil means TLS is not enabled on
+	// the running pod.
+	// +optional
+	CurrentSidecarTLS *SidecarTLSStatus `json:"currentSidecarTLS,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional

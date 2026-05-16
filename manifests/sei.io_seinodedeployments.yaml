@@ -612,8 +612,9 @@ spec:
                           tls:
                             description: |-
                               TLS, if set, fronts the sidecar API with kube-rbac-proxy on
-                              :8443 backed by a cert-manager-issued cert. Init-only:
-                              toggling on a Running SeiNode requires recreation. See seictl#165.
+                              :8443 backed by a cert-manager-issued cert. Toggling on a
+                              Running SeiNode triggers a NodeUpdate plan that provisions
+                              the Certificate + ConfigMap and cycles the pod.
                             properties:
                               issuerKind:
                                 default: ClusterIssuer

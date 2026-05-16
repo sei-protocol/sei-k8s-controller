@@ -193,8 +193,9 @@ type SidecarConfig struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
 	// TLS, if set, fronts the sidecar API with kube-rbac-proxy on
-	// :8443 backed by a cert-manager-issued cert. Init-only:
-	// toggling on a Running SeiNode requires recreation. See seictl#165.
+	// :8443 backed by a cert-manager-issued cert. Toggling on a
+	// Running SeiNode triggers a NodeUpdate plan that provisions
+	// the Certificate + ConfigMap and cycles the pod.
 	// +optional
 	TLS *SidecarTLSSpec `json:"tls,omitempty"`
 }
@@ -212,4 +213,13 @@ type SidecarTLSSpec struct {
 	// +kubebuilder:validation:Enum=Issuer;ClusterIssuer
 	// +optional
 	IssuerKind string `json:"issuerKind,omitempty"`
+}
+
+// SidecarTLSStatus is the observed sidecar TLS configuration. Nil means
+// TLS is not enabled on the running pod. Stamped by the ObserveSidecarTLS
+// task when a TLS-toggle NodeUpdate plan completes; compared against
+// spec.sidecar.tls to detect drift.
+type SidecarTLSStatus struct {
+	IssuerName string `json:"issuerName"`
+	IssuerKind string `json:"issuerKind"`
 }
