@@ -43,6 +43,10 @@ type PlatformConfig = platform.Config
 // SeiNodeReconciler reconciles a SeiNode object.
 type SeiNodeReconciler struct {
 	client.Client
+	// APIReader bypasses the controller-runtime cache. Used by preflight
+	// validation that must observe newly-provisioned Secrets without
+	// waiting for cache propagation.
+	APIReader    client.Reader
 	Scheme       *runtime.Scheme
 	Recorder     record.EventRecorder
 	Platform     PlatformConfig
@@ -104,6 +108,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
+
+	r.reconcileSidecarTLSReady(ctx, node)
 
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
 	if err := r.Planner.ResolvePlan(ctx, node); err != nil {

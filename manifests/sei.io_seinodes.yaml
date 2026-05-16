@@ -467,23 +467,25 @@ spec:
                   tls:
                     description: |-
                       TLS, if set, fronts the sidecar API with kube-rbac-proxy on
-                      :8443 backed by a cert-manager-issued cert. Init-only:
-                      toggling on a Running SeiNode requires recreation. See seictl#165.
+                      :8443 using TLS material from a Secret in the SeiNode's
+                      namespace. The Secret is operator-provisioned (e.g., via a
+                      cert-manager Certificate in the platform GitOps repo); this
+                      controller does not create it.
+
+                      Immutable post-creation. Toggling TLS on an existing SeiNode is a
+                      delete + recreate operation; data persists via the SeiNode's PVC
+                      retention mechanism.
                     properties:
-                      issuerKind:
-                        default: ClusterIssuer
-                        description: IssuerKind is "Issuer" (namespaced) or "ClusterIssuer".
-                        enum:
-                        - Issuer
-                        - ClusterIssuer
-                        type: string
-                      issuerName:
+                      secretName:
                         description: |-
-                          IssuerName references a cert-manager Issuer or ClusterIssuer
-                          that signs the proxy's serving certificate.
+                          SecretName is a kubernetes.io/tls Secret in the SeiNode's
+                          namespace. The cert SANs must include the DNS names published
+                          in status.sidecarTLS.requiredDNSNames; the controller validates
+                          this before allowing the pod to schedule.
+                        minLength: 1
                         type: string
                     required:
-                    - issuerName
+                    - secretName
                     type: object
                 type: object
               validator:
@@ -769,6 +771,11 @@ spec:
             - message: peers is required when replayer mode is set
               rule: '!has(self.replayer) || (has(self.peers) && size(self.peers) >
                 0)'
+            - message: spec.sidecar.tls is immutable; delete + recreate the SeiNode
+                to change TLS configuration
+              rule: '(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? true :
+                (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls ==
+                oldSelf.sidecar.tls)'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:
@@ -996,6 +1003,27 @@ spec:
                 items:
                   type: string
                 type: array
+              sidecarTLS:
+                description: |-
+                  SidecarTLS is set whenever spec.sidecar.tls is non-nil. Publishes
+                  the contract platform tooling must satisfy when provisioning the
+                  TLS Secret. Machine-readable replacement for naming-convention docs.
+                properties:
+                  requiredDNSNames:
+                    description: |-
+                      RequiredDNSNames is the SAN list the cert in SecretName must
+                      include. Derived from the SeiNode's headless service DNS.
+                    items:
+                      type: string
+                    type: array
+                  secretName:
+                    description: SecretName mirrors spec.sidecar.tls.secretName for
+                      visibility.
+                    type: string
+                required:
+                - requiredDNSNames
+                - secretName
+                type: object
             type: object
         type: object
     served: true

@@ -14,7 +14,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
@@ -951,11 +950,15 @@ func SidecarTLSEnabled(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Sidecar != nil && node.Spec.Sidecar.TLS != nil
 }
 
-// SidecarTLSSecretName is the cert-manager-managed Secret carrying the
-// proxy's TLS material. Exported because plan tasks reference it when
-// emitting the Certificate.
+// SidecarTLSSecretName returns the operator-provisioned kubernetes.io/tls
+// Secret name from spec.sidecar.tls.secretName. The controller does not
+// create this Secret; platform tooling provisions it ahead of SeiNode
+// creation. Returns empty when TLS is disabled.
 func SidecarTLSSecretName(node *seiv1alpha1.SeiNode) string {
-	return node.Name + "-sidecar-tls"
+	if !SidecarTLSEnabled(node) {
+		return ""
+	}
+	return node.Spec.Sidecar.TLS.SecretName
 }
 
 // RBACProxyConfigMapName is the ConfigMap carrying the proxy's
@@ -1117,38 +1120,6 @@ func proxyReadinessProbe() *corev1.Probe {
 		PeriodSeconds:       5,
 		FailureThreshold:    6,
 	}
-}
-
-// GenerateSidecarCertificate returns an unstructured Certificate so
-// the controller avoids depending on cert-manager Go types — the
-// three fields we need (apiVersion, kind, spec) are stable.
-func GenerateSidecarCertificate(node *seiv1alpha1.SeiNode) *unstructured.Unstructured {
-	if !SidecarTLSEnabled(node) {
-		return nil
-	}
-	tls := node.Spec.Sidecar.TLS
-	svcDNS := fmt.Sprintf("%s.%s.svc.cluster.local", node.Name, node.Namespace)
-	pod0DNS := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local", node.Name, node.Name, node.Namespace)
-
-	obj := &unstructured.Unstructured{}
-	obj.SetAPIVersion("cert-manager.io/v1")
-	obj.SetKind("Certificate")
-	obj.SetName(SidecarTLSSecretName(node))
-	obj.SetNamespace(node.Namespace)
-	obj.SetLabels(ResourceLabels(node))
-	_ = unstructured.SetNestedMap(obj.Object, map[string]any{
-		"secretName":  SidecarTLSSecretName(node),
-		"duration":    "2160h", // 90 days
-		"renewBefore": "360h",  // 15 days
-		"commonName":  svcDNS,
-		"dnsNames":    []any{svcDNS, pod0DNS},
-		"issuerRef": map[string]any{
-			"name":  tls.IssuerName,
-			"kind":  tls.IssuerKind,
-			"group": "cert-manager.io",
-		},
-	}, "spec")
-	return obj
 }
 
 // GenerateRBACProxyConfigMap produces the ConfigMap carrying the

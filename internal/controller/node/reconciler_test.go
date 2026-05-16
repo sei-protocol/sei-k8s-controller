@@ -45,11 +45,12 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		Build()
 	mock := &mockSidecarClient{}
 	r := &SeiNodeReconciler{
-		Client:   c,
-		Scheme:   s,
-		Recorder: record.NewFakeRecorder(100),
-		Platform: platformtest.Config(),
-		Planner:  &planner.NodeResolver{},
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(100),
+		Platform:  platformtest.Config(),
+		Planner:   &planner.NodeResolver{},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{

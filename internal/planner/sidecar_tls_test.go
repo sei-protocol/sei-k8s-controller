@@ -25,7 +25,7 @@ func TestSidecarURLForNode_TLSRoutesThroughProxyHTTPS(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: testValidatorName, Namespace: "sei"},
 		Spec: seiv1alpha1.SeiNodeSpec{Sidecar: &seiv1alpha1.SidecarConfig{
-			TLS: &seiv1alpha1.SidecarTLSSpec{IssuerName: "ca", IssuerKind: "ClusterIssuer"},
+			TLS: &seiv1alpha1.SidecarTLSSpec{SecretName: testValidatorName + "-tls"},
 		}},
 	}
 	got := SidecarURLForNode(node)
@@ -40,7 +40,7 @@ const (
 	testSeidImage     = "seid:v6.4.1"
 )
 
-func TestValidatorPlanner_BuildPlan_NoSidecarTLSTasksByDefault(t *testing.T) {
+func TestValidatorPlanner_BuildPlan_NoRBACProxyConfigTaskByDefault(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: testValidatorName, Namespace: sourceChainID},
 		Spec: seiv1alpha1.SeiNodeSpec{
@@ -53,10 +53,6 @@ func TestValidatorPlanner_BuildPlan_NoSidecarTLSTasksByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
-	if idx := indexOfTaskType(plan, task.TaskTypeApplySidecarCert); idx >= 0 {
-		t.Fatalf("plan must not contain %s without spec.sidecar.tls; got %v",
-			task.TaskTypeApplySidecarCert, taskTypes(plan))
-	}
 	if idx := indexOfTaskType(plan, task.TaskTypeApplyRBACProxyConfig); idx >= 0 {
 		t.Fatalf("plan must not contain %s without spec.sidecar.tls; got %v",
 			task.TaskTypeApplyRBACProxyConfig, taskTypes(plan))
@@ -64,13 +60,10 @@ func TestValidatorPlanner_BuildPlan_NoSidecarTLSTasksByDefault(t *testing.T) {
 }
 
 func tlsSpec() *seiv1alpha1.SidecarTLSSpec {
-	return &seiv1alpha1.SidecarTLSSpec{
-		IssuerName: "validator-ca",
-		IssuerKind: "ClusterIssuer",
-	}
+	return &seiv1alpha1.SidecarTLSSpec{SecretName: testValidatorName + "-tls"}
 }
 
-func TestValidatorPlanner_BuildPlan_SidecarTLSTasksSequencedBeforeStatefulSet(t *testing.T) {
+func TestValidatorPlanner_BuildPlan_RBACProxyConfigSequencedBeforeStatefulSet(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: testValidatorName, Namespace: sourceChainID},
 		Spec: seiv1alpha1.SeiNodeSpec{
@@ -84,31 +77,31 @@ func TestValidatorPlanner_BuildPlan_SidecarTLSTasksSequencedBeforeStatefulSet(t 
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
-	assertTLSTasksBeforeStatefulSet(t, plan)
+	assertRBACProxyConfigBeforeStatefulSet(t, plan)
 }
 
-// assertTLSTasksBeforeStatefulSet covers the invariant that the TLS
-// side-resources (Certificate, ConfigMap) are emitted before the
-// StatefulSet apply. The pod-spec includes the rbac-proxy ConfigMap
-// + TLS Secret as required volumes; if those don't exist the pod
-// stays Pending. Regression-locks the cursor-bot HIGH from PR #223.
-func assertTLSTasksBeforeStatefulSet(t *testing.T, plan *seiv1alpha1.TaskPlan) {
+// assertRBACProxyConfigBeforeStatefulSet locks the invariant that the
+// kube-rbac-proxy authz ConfigMap is emitted before the StatefulSet
+// apply. The pod-spec mounts the ConfigMap; if it doesn't exist the pod
+// stays Pending. (Under the externalized-Secret design the TLS material
+// itself is operator-provisioned and gated via the
+// SidecarTLSSecretReady condition; only the authz ConfigMap is in-plan.)
+func assertRBACProxyConfigBeforeStatefulSet(t *testing.T, plan *seiv1alpha1.TaskPlan) {
 	t.Helper()
-	certIdx := indexOfTaskType(plan, task.TaskTypeApplySidecarCert)
 	cfgIdx := indexOfTaskType(plan, task.TaskTypeApplyRBACProxyConfig)
 	stsIdx := indexOfTaskType(plan, task.TaskTypeApplyStatefulSet)
 
-	if certIdx < 0 || cfgIdx < 0 {
-		t.Fatalf("plan must contain both %s and %s; got %v",
-			task.TaskTypeApplySidecarCert, task.TaskTypeApplyRBACProxyConfig, taskTypes(plan))
+	if cfgIdx < 0 {
+		t.Fatalf("plan must contain %s; got %v",
+			task.TaskTypeApplyRBACProxyConfig, taskTypes(plan))
 	}
-	if certIdx >= stsIdx || cfgIdx >= stsIdx {
-		t.Fatalf("expected sidecar-cert(%d), rbac-proxy-config(%d) < apply-statefulset(%d); got %v",
-			certIdx, cfgIdx, stsIdx, taskTypes(plan))
+	if cfgIdx >= stsIdx {
+		t.Fatalf("expected rbac-proxy-config(%d) < apply-statefulset(%d); got %v",
+			cfgIdx, stsIdx, taskTypes(plan))
 	}
 }
 
-func TestBuildGenesisPlan_SidecarTLSTasksSequencedBeforeStatefulSet(t *testing.T) {
+func TestBuildGenesisPlan_RBACProxyConfigSequencedBeforeStatefulSet(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: testValidatorName, Namespace: sourceChainID},
 		Spec: seiv1alpha1.SeiNodeSpec{
@@ -122,5 +115,5 @@ func TestBuildGenesisPlan_SidecarTLSTasksSequencedBeforeStatefulSet(t *testing.T
 	if err != nil {
 		t.Fatalf("buildGenesisPlan: %v", err)
 	}
-	assertTLSTasksBeforeStatefulSet(t, plan)
+	assertRBACProxyConfigBeforeStatefulSet(t, plan)
 }

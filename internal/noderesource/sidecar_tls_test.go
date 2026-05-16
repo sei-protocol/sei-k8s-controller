@@ -13,8 +13,7 @@ import (
 
 func withSidecarTLS(node *seiv1alpha1.SeiNode) *seiv1alpha1.SeiNode {
 	node.Spec.Sidecar.TLS = &seiv1alpha1.SidecarTLSSpec{
-		IssuerName: "validator-ca",
-		IssuerKind: "ClusterIssuer",
+		SecretName: node.Name + "-tls",
 	}
 	return node
 }
@@ -159,27 +158,32 @@ func TestServicePorts_NoAPIPortWithoutTLS(t *testing.T) {
 	}
 }
 
-func TestGenerateSidecarCertificate_NilWithoutTLS(t *testing.T) {
+func TestSidecarTLSSecretName_ReadsFromSpec(t *testing.T) {
 	g := NewWithT(t)
-	g.Expect(GenerateSidecarCertificate(newGenesisNode("a", "default"))).To(BeNil())
+	g.Expect(SidecarTLSSecretName(newGenesisNode("a", "default"))).To(Equal(""),
+		"empty when TLS disabled")
+
+	node := withSidecarTLS(newGenesisNode("a", "default"))
+	g.Expect(SidecarTLSSecretName(node)).To(Equal("a-tls"),
+		"returns spec.sidecar.tls.secretName when TLS enabled")
 }
 
-func TestGenerateSidecarCertificate_HappyPath(t *testing.T) {
+func TestPodSpec_TLSVolumeUsesSecretNameFromSpec(t *testing.T) {
 	g := NewWithT(t)
-	cert := GenerateSidecarCertificate(withSidecarTLS(newGenesisNode("a", "default")))
-	g.Expect(cert).NotTo(BeNil())
-	g.Expect(cert.GetAPIVersion()).To(Equal("cert-manager.io/v1"))
-	g.Expect(cert.GetKind()).To(Equal("Certificate"))
-	g.Expect(cert.GetName()).To(Equal("a-sidecar-tls"))
+	node := withSidecarTLS(newGenesisNode("a", "default"))
+	node.Spec.Sidecar.TLS.SecretName = "custom-cert-secret"
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
-	spec, ok := unstructuredMap(cert, "spec")
-	g.Expect(ok).To(BeTrue())
-	g.Expect(spec["secretName"]).To(Equal("a-sidecar-tls"))
-	g.Expect(spec["commonName"]).To(Equal("a.default.svc.cluster.local"))
-
-	issuerRef, _ := spec["issuerRef"].(map[string]any)
-	g.Expect(issuerRef["name"]).To(Equal("validator-ca"))
-	g.Expect(issuerRef["kind"]).To(Equal("ClusterIssuer"))
+	var tlsVol *corev1.Volume
+	for i := range sts.Spec.Template.Spec.Volumes {
+		if sts.Spec.Template.Spec.Volumes[i].Name == sidecarTLSVolumeName {
+			tlsVol = &sts.Spec.Template.Spec.Volumes[i]
+			break
+		}
+	}
+	g.Expect(tlsVol).NotTo(BeNil())
+	g.Expect(tlsVol.Secret).NotTo(BeNil())
+	g.Expect(tlsVol.Secret.SecretName).To(Equal("custom-cert-secret"))
 }
 
 func TestGenerateRBACProxyConfigMap_NilWithoutTLS(t *testing.T) {
@@ -260,7 +264,3 @@ func TestRollback_RemovesProxyResources(t *testing.T) {
 	}
 }
 
-func unstructuredMap(u interface{ UnstructuredContent() map[string]any }, key string) (map[string]any, bool) {
-	v, ok := u.UnstructuredContent()[key].(map[string]any)
-	return v, ok
-}

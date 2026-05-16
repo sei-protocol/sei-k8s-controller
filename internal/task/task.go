@@ -219,7 +219,6 @@ var registry = map[string]taskDeserializer{
 	TaskTypeApplyStatefulSet:        deserializeApplyStatefulSet,
 	TaskTypeApplyService:            deserializeApplyService,
 	TaskTypeApplyRBACProxyConfig:    deserializeApplyRBACProxyConfig,
-	TaskTypeApplySidecarCert:        deserializeApplySidecarCert,
 	TaskTypeReplacePod:              deserializeReplacePod,
 	TaskTypeObserveImage:            deserializeObserveImage,
 	TaskTypeValidateSigningKey:      deserializeValidateSigningKey,
