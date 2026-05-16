@@ -1,8 +1,8 @@
 # SeiNodeDeployment — Pacific-1 RPC Fleet
 #
-# Three full nodes with public Gateway API routing and Prometheus
-# monitoring. Each SeiNode bootstraps from an S3 snapshot and
-# block-syncs to tip. Genesis is resolved automatically by the sidecar.
+# Three full nodes with public Gateway API routing. Each SeiNode
+# bootstraps from an S3 snapshot and block-syncs to tip. Genesis is
+# resolved automatically by the sidecar.
 apiVersion: sei.io/v1alpha1
 kind: SeiNodeDeployment
 metadata:

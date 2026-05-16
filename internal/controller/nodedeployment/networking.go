@@ -100,9 +100,9 @@ func generateExternalService(group *seiv1alpha1.SeiNodeDeployment) *corev1.Servi
 }
 
 // externalPortsForMode returns the public-facing port set — portsForMode
-// minus the `metrics` port, which belongs only on the per-pod headless
-// Services. Including it on the external Service made ServiceMonitor
-// selectors match both, so each pod was scraped twice.
+// minus the `metrics` port, which is a private scrape endpoint. The
+// platform-owned PodMonitor scrapes pods directly via the pod IP, so
+// the metrics port has no reason to surface on the public LB.
 //
 // TODO(sei-protocol/sei-config#7): replace with seiconfig.ExternalServicePorts
 // once that helper lands upstream. Keeping the filter local to the controller

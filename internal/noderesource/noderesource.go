@@ -133,8 +133,10 @@ func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
 	return labels
 }
 
-// deriveRole mirrors nodedeployment.deriveComponent so the pod label
-// and the ServiceMonitor relabel-output stay in lock-step.
+// deriveRole returns the role label value for the node's mode. Stamped
+// onto the pod template as `sei.io/role` and lifted into the `sei_role`
+// metric label by the platform PodMonitor (see
+// platform/clusters/*/monitoring/podmonitor-seid.yaml).
 func deriveRole(node *seiv1alpha1.SeiNode) string {
 	switch {
 	case node.Spec.Validator != nil:

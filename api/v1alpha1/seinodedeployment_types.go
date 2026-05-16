@@ -19,7 +19,7 @@ type SeiNodeDeploymentSpec struct {
 	Template SeiNodeTemplate `json:"template"`
 
 	// DeletionPolicy controls what happens to child SeiNodes and managed
-	// networking/monitoring resources when the SeiNodeDeployment is deleted.
+	// networking resources when the SeiNodeDeployment is deleted.
 	// "Delete" (default) cascades deletion. "Retain" orphans children
 	// and networking resources so they continue running independently.
 	// +optional

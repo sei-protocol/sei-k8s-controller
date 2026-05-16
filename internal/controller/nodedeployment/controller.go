@@ -75,7 +75,7 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Snapshot the status before any reconciliation mutates it in memory.
-	// Conditions set during networking/monitoring reconciliation are captured
+	// Conditions set during networking reconciliation are captured
 	// in the diff when updateStatus patches against this base.
 	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
