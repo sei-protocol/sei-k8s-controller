@@ -19,7 +19,7 @@ type SeiNodeDeploymentSpec struct {
 	Template SeiNodeTemplate `json:"template"`
 
 	// DeletionPolicy controls what happens to child SeiNodes and managed
-	// networking/monitoring resources when the SeiNodeDeployment is deleted.
+	// networking resources when the SeiNodeDeployment is deleted.
 	// "Delete" (default) cascades deletion. "Retain" orphans children
 	// and networking resources so they continue running independently.
 	// +optional
@@ -38,11 +38,6 @@ type SeiNodeDeploymentSpec struct {
 	// is private with only per-node headless Services.
 	// +optional
 	Networking *NetworkingConfig `json:"networking,omitempty"`
-
-	// Monitoring configures observability resources shared across
-	// all replicas.
-	// +optional
-	Monitoring *MonitoringConfig `json:"monitoring,omitempty"`
 
 	// UpdateStrategy controls how changes to the template are rolled out
 	// to child SeiNodes. Every deployment must declare an explicit strategy.
@@ -400,7 +395,6 @@ type RolloutStatus struct {
 const (
 	ConditionNodesReady              = "NodesReady"
 	ConditionRouteReady              = "RouteReady"
-	ConditionServiceMonitorReady     = "ServiceMonitorReady"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
 	ConditionPlanInProgress          = "PlanInProgress"
 	ConditionGenesisCeremonyNeeded   = "GenesisCeremonyNeeded"
