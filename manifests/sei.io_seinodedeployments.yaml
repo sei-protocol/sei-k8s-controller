@@ -127,28 +127,6 @@ spec:
                 required:
                 - chainId
                 type: object
-              monitoring:
-                description: |-
-                  Monitoring configures observability resources shared across
-                  all replicas.
-                properties:
-                  serviceMonitor:
-                    description: |-
-                      ServiceMonitor creates a monitoring.coreos.com/v1 ServiceMonitor.
-                      Presence (non-nil) enables it; set to nil to disable.
-                    properties:
-                      interval:
-                        default: 30s
-                        description: Interval is the Prometheus scrape interval.
-                        pattern: ^[0-9]+(ms|s|m|h)$
-                        type: string
-                      labels:
-                        additionalProperties:
-                          type: string
-                        description: Labels are added to the ServiceMonitor metadata.
-                        type: object
-                    type: object
-                type: object
               networking:
                 description: |-
                   Networking enables public networking for the deployment.

@@ -54,7 +54,6 @@ type SeiNodeDeploymentReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
 func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -115,11 +114,6 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 		}
 		return planResult, nil
-	}
-
-	if err := r.reconcileMonitoring(ctx, group); err != nil {
-		logger.Error(err, "reconciling monitoring")
-		return ctrl.Result{}, fmt.Errorf("reconciling monitoring: %w", err)
 	}
 
 	if err := r.updateStatus(ctx, group, statusBase); err != nil {

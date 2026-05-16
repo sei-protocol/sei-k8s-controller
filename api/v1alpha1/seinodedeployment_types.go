@@ -39,11 +39,6 @@ type SeiNodeDeploymentSpec struct {
 	// +optional
 	Networking *NetworkingConfig `json:"networking,omitempty"`
 
-	// Monitoring configures observability resources shared across
-	// all replicas.
-	// +optional
-	Monitoring *MonitoringConfig `json:"monitoring,omitempty"`
-
 	// UpdateStrategy controls how changes to the template are rolled out
 	// to child SeiNodes. Every deployment must declare an explicit strategy.
 	UpdateStrategy UpdateStrategy `json:"updateStrategy"`
@@ -400,7 +395,6 @@ type RolloutStatus struct {
 const (
 	ConditionNodesReady              = "NodesReady"
 	ConditionRouteReady              = "RouteReady"
-	ConditionServiceMonitorReady     = "ServiceMonitorReady"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
 	ConditionPlanInProgress          = "PlanInProgress"
 	ConditionGenesisCeremonyNeeded   = "GenesisCeremonyNeeded"

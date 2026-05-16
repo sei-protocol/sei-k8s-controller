@@ -401,7 +401,7 @@ func (r *SeiNodeDeploymentReconciler) orphanNetworkingResources(ctx context.Cont
 		return fmt.Errorf("fetching external Service for orphan: %w", err)
 	}
 
-	for _, gvk := range []schema.GroupVersionKind{httpRouteGVK(), serviceMonitorGVK()} {
+	for _, gvk := range []schema.GroupVersionKind{httpRouteGVK()} {
 		list := &unstructured.UnstructuredList{}
 		list.SetGroupVersionKind(gvk)
 		listErr := r.List(ctx, list, client.InNamespace(group.Namespace), client.MatchingLabels(resourceLabels(group)))

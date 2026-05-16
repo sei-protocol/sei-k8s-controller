@@ -37,9 +37,3 @@ spec:
           trustPeriod: "9999h0m0s"
 
   networking: {}
-
-  monitoring:
-    serviceMonitor:
-      interval: "30s"
-      labels:
-        release: prometheus
