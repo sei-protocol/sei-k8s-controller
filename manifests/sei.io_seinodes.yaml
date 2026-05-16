@@ -773,9 +773,9 @@ spec:
                 0)'
             - message: spec.sidecar.tls is immutable; delete + recreate the SeiNode
                 to change TLS configuration
-              rule: '(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? true :
-                (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls ==
-                oldSelf.sidecar.tls)'
+              rule: '(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? (!has(self.sidecar)
+                || !has(self.sidecar.tls)) : (has(self.sidecar) && has(self.sidecar.tls)
+                && self.sidecar.tls == oldSelf.sidecar.tls)'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:
@@ -1012,7 +1012,11 @@ spec:
                   requiredDNSNames:
                     description: |-
                       RequiredDNSNames is the SAN list the cert in SecretName must
-                      include. Derived from the SeiNode's headless service DNS.
+                      include. Derived from the SeiNode's headless service DNS:
+                      {name}.{namespace}.svc.cluster.local and
+                      {name}-0.{name}.{namespace}.svc.cluster.local. Pre-computable
+                      by platform tooling from the target spec; published here for
+                      verification rather than as a prerequisite handshake.
                     items:
                       type: string
                     type: array

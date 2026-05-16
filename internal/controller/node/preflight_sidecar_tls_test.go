@@ -256,7 +256,7 @@ func TestReconcileSidecarTLSReady_TLSDisabled_ClearsConditionAndStatus(t *testin
 	// Seed stale state to verify it's cleared.
 	node.Status.SidecarTLS = &seiv1alpha1.SidecarTLSStatus{SecretName: "stale", RequiredDNSNames: []string{"stale.example"}}
 	apimeta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
-		Type: seiv1alpha1.ConditionSidecarTLSSecretReady, Status: metav1.ConditionTrue, Reason: "Ready",
+		Type: seiv1alpha1.ConditionSidecarTLSSecretReady, Status: metav1.ConditionTrue, Reason: seiv1alpha1.ReasonTLSSecretReady,
 	})
 
 	r := tlsReconciler(t)
@@ -326,9 +326,15 @@ func TestReconcileSidecarTLSReady_TransitionEnabledToDisabled_Cleans(t *testing.
 	r.reconcileSidecarTLSReady(context.Background(), node)
 	g.Expect(node.Status.SidecarTLS).NotTo(BeNil())
 
-	// Operator drops spec.sidecar.tls (would be CEL-blocked in prod; this
-	// exercises the reconcile branch's defensive cleanup for the same-name
-	// transition that envtests reach via separate-object lifecycle).
+	// Exercises the same-in-memory-object cleanup path used when
+	// reconciling a fresh SeiNode after the prior one was deleted +
+	// recreated under the same name. CEL blocks in-place spec mutation
+	// in prod (see SeiNodeSpec XValidation rule); this test simulates
+	// what the controller sees on first reconcile of the recreated
+	// SeiNode if the prior controller-resident object was somehow stale.
+	// Cert/key pairing is intentionally NOT validated by the preflight
+	// (kube-rbac-proxy detects mismatch at bind time); per LLD §2 we
+	// validate cert SHAPE, not crypto consistency.
 	node.Spec.Sidecar = nil
 	r.reconcileSidecarTLSReady(context.Background(), node)
 

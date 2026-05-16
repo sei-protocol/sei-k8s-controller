@@ -925,8 +925,8 @@ spec:
                     - message: spec.sidecar.tls is immutable; delete + recreate the
                         SeiNode to change TLS configuration
                       rule: '(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls))
-                        ? true : (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls
-                        == oldSelf.sidecar.tls)'
+                        ? (!has(self.sidecar) || !has(self.sidecar.tls)) : (has(self.sidecar)
+                        && has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)'
                 required:
                 - spec
                 type: object

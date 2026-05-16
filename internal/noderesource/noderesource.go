@@ -953,7 +953,8 @@ func SidecarTLSEnabled(node *seiv1alpha1.SeiNode) bool {
 // SidecarTLSSecretName returns the operator-provisioned kubernetes.io/tls
 // Secret name from spec.sidecar.tls.secretName. The controller does not
 // create this Secret; platform tooling provisions it ahead of SeiNode
-// creation. Returns empty when TLS is disabled.
+// creation. Returns empty when TLS is disabled — callers should gate on
+// SidecarTLSEnabled before relying on the return value.
 func SidecarTLSSecretName(node *seiv1alpha1.SeiNode) string {
 	if !SidecarTLSEnabled(node) {
 		return ""

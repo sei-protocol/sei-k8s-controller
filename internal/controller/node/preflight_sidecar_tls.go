@@ -94,11 +94,12 @@ func validateTLSSecret(
 			return seiv1alpha1.ReasonTLSSecretNotFound,
 				fmt.Sprintf("secret %q not found in namespace %q", name, node.Namespace)
 		}
-		// Transient errors (network, RBAC) surface as NotFound — the next
-		// reconcile retries. Distinguishing them in the condition would
-		// add a reason without operator-actionable signal.
+		// Transient errors (network, RBAC) surface under the NotFound reason
+		// (the next reconcile retries). Message is prefixed so an operator
+		// who finds the Secret present can disambiguate without grepping
+		// controller logs.
 		return seiv1alpha1.ReasonTLSSecretNotFound,
-			fmt.Sprintf("getting Secret %q: %v", name, err)
+			fmt.Sprintf("transient error getting Secret %q: %v", name, err)
 	}
 
 	if secret.Type != corev1.SecretTypeTLS {

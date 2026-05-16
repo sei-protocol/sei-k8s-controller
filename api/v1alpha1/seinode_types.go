@@ -10,7 +10,7 @@ import (
 // the populated field determines the node's operating mode.
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, or validator must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
-// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? true : (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)",message="spec.sidecar.tls is immutable; delete + recreate the SeiNode to change TLS configuration"
+// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? (!has(self.sidecar) || !has(self.sidecar.tls)) : (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)",message="spec.sidecar.tls is immutable; delete + recreate the SeiNode to change TLS configuration"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// +kubebuilder:validation:MinLength=1
@@ -311,12 +311,14 @@ const (
 	ReasonOperatorKeyringInvalid   = "OperatorKeyringInvalid"   // terminal: fail the plan
 )
 
-// Reasons for the SidecarTLSSecretReady condition.
+// Reasons for the SidecarTLSSecretReady condition. String values are
+// prefixed to match the existing SigningKey/NodeKey/OperatorKeyring
+// reason convention so SRE tooling can grep across condition types.
 const (
-	ReasonTLSSecretReady        = "Ready"        // Secret present, well-formed, SANs match required DNS names
-	ReasonTLSSecretNotFound     = "NotFound"     // Secret not found in the SeiNode's namespace
-	ReasonTLSSecretMalformed    = "Malformed"    // Wrong type, empty tls.crt/tls.key, or unparseable cert
-	ReasonTLSSecretSANsMismatch = "SANsMismatch" // Cert parses but cert.DNSNames does not include required SANs
+	ReasonTLSSecretReady        = "TLSSecretReady"        // Secret present, well-formed, SANs match required DNS names
+	ReasonTLSSecretNotFound     = "TLSSecretNotFound"     // Secret not found in the SeiNode's namespace
+	ReasonTLSSecretMalformed    = "TLSSecretMalformed"    // Wrong type, empty tls.crt/tls.key, or unparseable cert
+	ReasonTLSSecretSANsMismatch = "TLSSecretSANsMismatch" // Cert parses but cert.DNSNames does not include required SANs
 )
 
 // SeiNodeStatus defines the observed state of a SeiNode.
@@ -374,7 +376,11 @@ type SidecarTLSStatus struct {
 	SecretName string `json:"secretName"`
 
 	// RequiredDNSNames is the SAN list the cert in SecretName must
-	// include. Derived from the SeiNode's headless service DNS.
+	// include. Derived from the SeiNode's headless service DNS:
+	// {name}.{namespace}.svc.cluster.local and
+	// {name}-0.{name}.{namespace}.svc.cluster.local. Pre-computable
+	// by platform tooling from the target spec; published here for
+	// verification rather than as a prerequisite handshake.
 	RequiredDNSNames []string `json:"requiredDNSNames"`
 }
 
