@@ -44,6 +44,14 @@ func deserializeObserveSidecarTLS(id string, params json.RawMessage, cfg Executi
 // drift detector observes the toggle as applied. Mirrors ObserveImage:
 // the StatefulSet template is the source of truth for pod composition,
 // so rollout convergence implies the live pod matches.
+//
+// Why rollout convergence is sufficient on a TLS-only toggle: enabling
+// (or rotating the Issuer for) TLS changes the pod template — new
+// Secret volume, new kube-rbac-proxy container, new :8443 port. The
+// template change bumps the StatefulSet's controller-revision hash,
+// so Status.UpdatedReplicas dips below *Spec.Replicas until the new
+// revision rolls. The check thus reliably gates on the new template
+// being live, same as ObserveImage gates on an image-change rollout.
 func (e *observeSidecarTLSExecution) Execute(ctx context.Context) error {
 	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {

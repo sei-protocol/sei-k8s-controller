@@ -226,7 +226,7 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 	}
 	switch {
 	case hasImage && hasTLS:
-		return "node-update+tls"
+		return "node-update-tls"
 	case hasTLS:
 		return "tls-toggle"
 	case hasImage:
@@ -782,6 +782,11 @@ func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error
 // fields drifted, then re-initializes the sidecar. At least one of
 // imageDrift or tlsDrift must be true.
 //
+// Task order is load-bearing: ApplyService runs before ReplacePod so
+// the headless Service advertises :8443 by the time the new pod with
+// kube-rbac-proxy is endpoint-eligible. The reverse order would create
+// a window where the Service exposes a port the live pod doesn't bind.
+//
 // FailedPhase is deliberately empty: a failure retries on the next reconcile
 // rather than transitioning the node out of Running.
 func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode, imageDrift, tlsDrift bool) (*seiv1alpha1.TaskPlan, error) {
@@ -855,16 +860,36 @@ func nodeUpdateReason(imageDrift, tlsDrift bool) string {
 func nodeUpdateMessage(node *seiv1alpha1.SeiNode, imageDrift, tlsDrift bool) string {
 	switch {
 	case imageDrift && tlsDrift:
-		return fmt.Sprintf("image drift detected: spec=%s current=%s; sidecar.tls drift detected: spec=%v current=%v",
+		return fmt.Sprintf("image drift detected: spec=%s current=%s; sidecar.tls drift detected: spec=%s current=%s",
 			node.Spec.Image, node.Status.CurrentImage,
-			node.Spec.Sidecar.TLS, node.Status.CurrentSidecarTLS)
+			formatTLSSpec(node.Spec.Sidecar.TLS),
+			formatTLSStatus(node.Status.CurrentSidecarTLS))
 	case tlsDrift:
-		return fmt.Sprintf("sidecar.tls drift detected: spec=%v current=%v",
-			node.Spec.Sidecar.TLS, node.Status.CurrentSidecarTLS)
+		return fmt.Sprintf("sidecar.tls drift detected: spec=%s current=%s",
+			formatTLSSpec(node.Spec.Sidecar.TLS),
+			formatTLSStatus(node.Status.CurrentSidecarTLS))
 	default:
 		return fmt.Sprintf("image drift detected: spec=%s current=%s",
 			node.Spec.Image, node.Status.CurrentImage)
 	}
+}
+
+// formatTLSSpec renders a *SidecarTLSSpec for operator-readable
+// condition messages. Avoids %v's Go-struct repr ("&{ca ClusterIssuer}").
+func formatTLSSpec(s *seiv1alpha1.SidecarTLSSpec) string {
+	if s == nil {
+		return "none"
+	}
+	return fmt.Sprintf("{issuerName=%s issuerKind=%s}", s.IssuerName, s.IssuerKind)
+}
+
+// formatTLSStatus renders a *SidecarTLSStatus for operator-readable
+// condition messages.
+func formatTLSStatus(s *seiv1alpha1.SidecarTLSStatus) string {
+	if s == nil {
+		return "none"
+	}
+	return fmt.Sprintf("{issuerName=%s issuerKind=%s}", s.IssuerName, s.IssuerKind)
 }
 
 // mergeOverrides combines controller-generated overrides with user-specified

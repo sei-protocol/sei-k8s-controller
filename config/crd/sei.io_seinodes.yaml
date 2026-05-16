@@ -849,6 +849,9 @@ spec:
                   the running pod.
                 properties:
                   issuerKind:
+                    enum:
+                    - Issuer
+                    - ClusterIssuer
                     type: string
                   issuerName:
                     type: string

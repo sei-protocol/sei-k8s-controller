@@ -202,6 +202,14 @@ type SidecarConfig struct {
 
 // SidecarTLSSpec configures the cert-manager-issued serving cert for
 // the kube-rbac-proxy fronting.
+//
+// SECURITY: IssuerName and IssuerKind select the trust anchor that
+// signs the proxy's serving cert. They are operator-trusted input —
+// the controller does not validate that the referenced Issuer is
+// platform-blessed. Clusters running multiple chains should gate
+// writes via a ValidatingAdmissionPolicy that pins IssuerName to the
+// per-chain CA, since a spec edit otherwise can reroute the trust
+// anchor for an already-Running node.
 type SidecarTLSSpec struct {
 	// IssuerName references a cert-manager Issuer or ClusterIssuer
 	// that signs the proxy's serving certificate.
@@ -219,7 +227,14 @@ type SidecarTLSSpec struct {
 // TLS is not enabled on the running pod. Stamped by the ObserveSidecarTLS
 // task when a TLS-toggle NodeUpdate plan completes; compared against
 // spec.sidecar.tls to detect drift.
+//
+// Reflects controller intent (StatefulSet rollout convergence) rather
+// than pod attestation — i.e., what the controller asked for, not a
+// proof of what each container reports. Downstream consumers should
+// not treat this field as authoritative for trust decisions.
 type SidecarTLSStatus struct {
 	IssuerName string `json:"issuerName"`
+
+	// +kubebuilder:validation:Enum=Issuer;ClusterIssuer
 	IssuerKind string `json:"issuerKind"`
 }

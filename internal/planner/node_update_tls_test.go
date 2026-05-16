@@ -109,6 +109,9 @@ func TestBuildRunningPlan_TLSDriftOnly_ReturnsTLSTogglePlan(t *testing.T) {
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 	g.Expect(cond.Reason).To(Equal("TLSToggleStarted"))
 	g.Expect(cond.Message).To(ContainSubstring("sidecar.tls drift detected"))
+	g.Expect(cond.Message).To(ContainSubstring("issuerName=" + testIssuer))
+	g.Expect(cond.Message).To(ContainSubstring("issuerKind=" + testKind))
+	g.Expect(cond.Message).To(ContainSubstring("current=none"))
 }
 
 func TestBuildRunningPlan_ImageAndTLSDrift_SingleCombinedPlan(t *testing.T) {
@@ -196,7 +199,7 @@ func TestClassifyPlan_NodeUpdateWithTLS(t *testing.T) {
 	node.Spec.Image = testImageV2
 	plan, err := buildRunningPlan(node)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(classifyPlan(plan)).To(Equal("node-update+tls"))
+	g.Expect(classifyPlan(plan)).To(Equal("node-update-tls"))
 }
 
 func TestClassifyPlan_NodeUpdateImageOnly(t *testing.T) {
