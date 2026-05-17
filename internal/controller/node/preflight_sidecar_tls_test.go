@@ -247,7 +247,7 @@ func tlsReconciler(t *testing.T, objs ...client.Object) *SeiNodeReconciler {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
-	return &SeiNodeReconciler{Client: c, APIReader: c, Scheme: s}
+	return &SeiNodeReconciler{Client: c, Scheme: s}
 }
 
 func TestReconcileSidecarTLSReady_TLSDisabled_ClearsConditionAndStatus(t *testing.T) {

@@ -22,6 +22,11 @@ import (
 // SidecarTLSSecretReady condition based on the referenced Secret's
 // presence + cert validity. Clears both when TLS is disabled.
 // Mutations are in-memory; caller's Status().Patch flushes.
+//
+// Reads via the cached client so Secret informer events requeue the
+// SeiNode automatically — operator-provisioned cert appearing after a
+// SeiNode was created (and gated as Pending) wakes reconciliation
+// without a separate poll loop.
 func (r *SeiNodeReconciler) reconcileSidecarTLSReady(ctx context.Context, node *seiv1alpha1.SeiNode) {
 	if !noderesource.SidecarTLSEnabled(node) {
 		apimeta.RemoveStatusCondition(&node.Status.Conditions, seiv1alpha1.ConditionSidecarTLSSecretReady)
@@ -35,7 +40,7 @@ func (r *SeiNodeReconciler) reconcileSidecarTLSReady(ctx context.Context, node *
 		RequiredDNSNames: required,
 	}
 
-	reason, msg := validateTLSSecret(ctx, r.APIReader, node, required)
+	reason, msg := validateTLSSecret(ctx, r.Client, node, required)
 	status := metav1.ConditionFalse
 	if reason == seiv1alpha1.ReasonTLSSecretReady {
 		status = metav1.ConditionTrue
@@ -59,7 +64,9 @@ func requiredDNSNames(node *seiv1alpha1.SeiNode) []string {
 }
 
 // validateTLSSecret returns the SidecarTLSSecretReady reason + message
-// for the Secret named in spec.sidecar.tls.secretName.
+// for the Secret named in spec.sidecar.tls.secretName. Required SANs
+// must appear in cert.DNSNames; Subject.CommonName, IP SANs, and URI
+// SANs do not satisfy the contract.
 func validateTLSSecret(
 	ctx context.Context,
 	reader client.Reader,
@@ -75,7 +82,7 @@ func validateTLSSecret(
 			return seiv1alpha1.ReasonTLSSecretNotFound,
 				fmt.Sprintf("secret %q not found in namespace %q", name, node.Namespace)
 		}
-		return seiv1alpha1.ReasonTLSSecretNotFound,
+		return seiv1alpha1.ReasonTLSSecretUnavailable,
 			fmt.Sprintf("transient error getting Secret %q: %v", name, err)
 	}
 

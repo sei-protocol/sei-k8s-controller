@@ -313,6 +313,7 @@ const (
 const (
 	ReasonTLSSecretReady        = "TLSSecretReady"        // ready
 	ReasonTLSSecretNotFound     = "TLSSecretNotFound"     // Secret missing
+	ReasonTLSSecretUnavailable  = "TLSSecretUnavailable"  // transient: API error reading the Secret
 	ReasonTLSSecretMalformed    = "TLSSecretMalformed"    // wrong type, empty tls.crt/tls.key, or unparseable cert
 	ReasonTLSSecretSANsMismatch = "TLSSecretSANsMismatch" // cert.DNSNames missing one or more required SANs
 )

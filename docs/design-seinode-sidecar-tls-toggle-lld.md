@@ -74,10 +74,8 @@ CRD-level immutability:
 
 ```go
 // SeiNodeSpec
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.sidecar.tls) || (has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)",message="spec.sidecar.tls is immutable; delete + recreate the SeiNode to change TLS configuration"
+// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? (!has(self.sidecar) || !has(self.sidecar.tls)) : (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)",message="spec.sidecar.tls is immutable; delete + recreate the SeiNode to change TLS configuration"
 ```
-
-(Exact CEL pending — the rule needs to handle nil sidecar gracefully. May land at the `SidecarConfig` level instead.)
 
 Status additions:
 

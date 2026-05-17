@@ -43,7 +43,6 @@ type PlatformConfig = platform.Config
 // SeiNodeReconciler reconciles a SeiNode object.
 type SeiNodeReconciler struct {
 	client.Client
-	APIReader    client.Reader
 	Scheme       *runtime.Scheme
 	Recorder     record.EventRecorder
 	Platform     PlatformConfig
@@ -63,7 +62,6 @@ type SeiNodeReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch
 
 // Reconcile drives the SeiNode lifecycle. All status mutations after the
 // finalizer are accumulated in-memory and flushed in a single status patch.
@@ -101,6 +99,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	statusBase := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
 	observedPhase := node.Status.Phase
 	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	prevTLSSecret := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarTLSSecretReady)
 
 	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
@@ -114,6 +113,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	r.emitSidecarReadinessEvent(node, prevSidecar)
+	r.emitSidecarTLSSecretEvent(node, prevTLSSecret)
 
 	var result ctrl.Result
 	var execErr error
@@ -256,5 +256,22 @@ func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode,
 		prev != nil && prev.Status == metav1.ConditionFalse:
 		r.Recorder.Event(node, corev1.EventTypeNormal, "SidecarReadinessRestored",
 			"sidecar Healthz returned 200; mark-ready gate is open")
+	}
+}
+
+func (r *SeiNodeReconciler) emitSidecarTLSSecretEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {
+	cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarTLSSecretReady)
+	if cur == nil {
+		return
+	}
+	switch {
+	case cur.Status == metav1.ConditionFalse &&
+		(prev == nil || prev.Status != metav1.ConditionFalse):
+		r.Recorder.Eventf(node, corev1.EventTypeWarning, "SidecarTLSSecretNotReady",
+			"sidecar TLS Secret %q: %s", node.Spec.Sidecar.TLS.SecretName, cur.Message)
+	case cur.Status == metav1.ConditionTrue &&
+		prev != nil && prev.Status == metav1.ConditionFalse:
+		r.Recorder.Event(node, corev1.EventTypeNormal, "SidecarTLSSecretReady",
+			"sidecar TLS Secret validated; plan gate is open")
 	}
 }
