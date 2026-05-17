@@ -99,10 +99,6 @@ func buildBootstrapPlan(
 
 	// Phase 4: Create production StatefulSet and Service (after bootstrap teardown frees the PVC)
 	if noderesource.SidecarTLSEnabled(node) {
-		if err := appendTask(task.TaskTypeApplySidecarCert,
-			&task.ApplySidecarCertParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
-			return nil, err
-		}
 		if err := appendTask(task.TaskTypeApplyRBACProxyConfig,
 			&task.ApplyRBACProxyConfigParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
 			return nil, err
@@ -187,7 +183,7 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 
 	prog := []string{task.TaskTypeEnsureDataPVC}
 	if noderesource.SidecarTLSEnabled(node) {
-		prog = append(prog, task.TaskTypeApplySidecarCert, task.TaskTypeApplyRBACProxyConfig)
+		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
 	}
 	prog = append(prog,
 		task.TaskTypeApplyStatefulSet,

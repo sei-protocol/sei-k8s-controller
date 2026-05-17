@@ -134,6 +134,12 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 	handleTerminalPlan(ctx, node)
 
+	// Gate plan creation on the TLS Secret. Any plan (init or image-
+	// drift rollout) eventually cycles the pod, which mounts the Secret.
+	if noderesource.SidecarTLSEnabled(node) && !sidecarTLSSecretReady(node) {
+		return nil
+	}
+
 	mode, err := plannerForMode(node)
 	if err != nil {
 		return err
@@ -157,6 +163,12 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		node.Status.PhaseTransitionTime = &now
 	}
 	return nil
+}
+
+// sidecarTLSSecretReady returns true iff the condition is present and True.
+func sidecarTLSSecretReady(node *seiv1alpha1.SeiNode) bool {
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarTLSSecretReady)
+	return cond != nil && cond.Status == metav1.ConditionTrue
 }
 
 // handleTerminalPlan handles completed or failed plans: clears conditions
@@ -529,9 +541,7 @@ func buildBasePlan(
 		prog = append(prog, task.TaskTypeValidateOperatorKeyring)
 	}
 	if noderesource.SidecarTLSEnabled(node) {
-		// Emit Cert + ConfigMap before pod schedules. Cert-manager
-		// is async; kubelet retries Secret mounts.
-		prog = append(prog, task.TaskTypeApplySidecarCert, task.TaskTypeApplyRBACProxyConfig)
+		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
 	}
 	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
 	prog = append(prog, sidecarProg...)
@@ -574,8 +584,6 @@ func paramsForTaskType(
 		return &task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeApplyRBACProxyConfig:
 		return &task.ApplyRBACProxyConfigParams{NodeName: node.Name, Namespace: node.Namespace}
-	case task.TaskTypeApplySidecarCert:
-		return &task.ApplySidecarCertParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeReplacePod:
 		return &task.ReplacePodParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeObserveImage:

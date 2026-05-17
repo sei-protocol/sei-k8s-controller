@@ -74,10 +74,8 @@ CRD-level immutability:
 
 ```go
 // SeiNodeSpec
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.sidecar.tls) || (has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)",message="spec.sidecar.tls is immutable; delete + recreate the SeiNode to change TLS configuration"
+// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? (!has(self.sidecar) || !has(self.sidecar.tls)) : (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)",message="spec.sidecar.tls is immutable; delete + recreate the SeiNode to change TLS configuration"
 ```
-
-(Exact CEL pending — the rule needs to handle nil sidecar gracefully. May land at the `SidecarConfig` level instead.)
 
 Status additions:
 
@@ -197,9 +195,9 @@ There is no `WaitForSidecarTLSSecret` task in the plan — its job is absorbed i
 
 If an operator attempts to mutate `spec.sidecar.tls`, the CRD CEL rejects the API request — no controller code runs.
 
-If the externally-provisioned Secret rotates (cert-manager renewal): kube-rbac-proxy's existing `--tls-reload-interval=30s` flag picks up the new material from the same Secret mount; no pod restart needed; no controller action. The pre-flight validation re-runs on each reconcile and continues stamping `SidecarTLSSecretReady=True` as long as the new cert still has matching SANs.
+If the externally-provisioned Secret rotates in place (cert-manager renewal with the same SANs): kube-rbac-proxy's existing `--tls-reload-interval=30s` flag picks up the new material from the same Secret mount; no pod restart needed; no controller action. Pre-flight re-runs each reconcile and continues stamping `SidecarTLSSecretReady=True`.
 
-If the Secret SAN coverage *changes* such that the contract breaks (e.g., wrong SANs after a misconfigured re-issuance): pre-flight flips the condition to `SidecarTLSSecretReady=False, Reason=SANsMismatch`. The Running node continues to serve traffic with the now-wrong cert (kube-rbac-proxy doesn't care about controller-side validation); operators get a visible signal via the condition and can fix the cert. The pod doesn't cycle; this is observability, not enforcement.
+If the Secret SAN coverage breaks (wrong SANs after a misconfigured re-issuance, Secret deleted, etc.): pre-flight flips the condition to `SidecarTLSSecretReady=False`. Plan creation is gated — any plan that fires under a broken Secret would eventually cycle the pod (image-drift NodeUpdate plans always do; even a mark-ready replan ultimately retries the sidecar HTTP call through the proxy), and a cycled pod with a missing or mis-SAN'd Secret won't bind cleanly. The Running node keeps serving on whatever cert kube-rbac-proxy is already bound to (no controller action can force a reload-from-bad-Secret), so the user-visible effect is "running pod stays as-is, no new rollouts until the operator fixes the Secret."
 
 ## 5. Operator workflow for "enable TLS on existing fleet"
 

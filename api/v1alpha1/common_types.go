@@ -192,24 +192,21 @@ type SidecarConfig struct {
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
-	// TLS, if set, fronts the sidecar API with kube-rbac-proxy on
-	// :8443 backed by a cert-manager-issued cert. Init-only:
-	// toggling on a Running SeiNode requires recreation. See seictl#165.
+	// TLS, if set, fronts the sidecar API with kube-rbac-proxy on :8443
+	// using TLS material from a Secret in the SeiNode's namespace. The
+	// Secret is operator-provisioned; this controller does not create
+	// it. Immutable.
 	// +optional
 	TLS *SidecarTLSSpec `json:"tls,omitempty"`
 }
 
-// SidecarTLSSpec configures the cert-manager-issued serving cert for
-// the kube-rbac-proxy fronting.
+// SidecarTLSSpec references an externally-provisioned TLS Secret.
 type SidecarTLSSpec struct {
-	// IssuerName references a cert-manager Issuer or ClusterIssuer
-	// that signs the proxy's serving certificate.
+	// SecretName is a kubernetes.io/tls Secret in the SeiNode's
+	// namespace. The cert SANs must include the DNS names published
+	// in status.sidecarTLS.requiredDNSNames; the controller validates
+	// this before allowing the pod to schedule.
 	// +kubebuilder:validation:Required
-	IssuerName string `json:"issuerName"`
-
-	// IssuerKind is "Issuer" (namespaced) or "ClusterIssuer".
-	// +kubebuilder:default=ClusterIssuer
-	// +kubebuilder:validation:Enum=Issuer;ClusterIssuer
-	// +optional
-	IssuerKind string `json:"issuerKind,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	SecretName string `json:"secretName"`
 }
