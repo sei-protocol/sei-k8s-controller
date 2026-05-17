@@ -134,11 +134,9 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 	handleTerminalPlan(ctx, node)
 
-	// Gate init plans on the TLS Secret. Running-phase plans bypass
-	// so image-drift rollouts proceed independently.
-	if noderesource.SidecarTLSEnabled(node) &&
-		node.Status.Phase != seiv1alpha1.PhaseRunning &&
-		!sidecarTLSSecretReady(node) {
+	// Gate plan creation on the TLS Secret. Any plan (init or image-
+	// drift rollout) eventually cycles the pod, which mounts the Secret.
+	if noderesource.SidecarTLSEnabled(node) && !sidecarTLSSecretReady(node) {
 		return nil
 	}
 
