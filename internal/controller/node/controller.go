@@ -173,6 +173,16 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 
+	// Pending nodes blocked on the SidecarTLSSecretReady gate poll for
+	// the Secret appearing. Without this the controller would wait on the
+	// informer resync (~10h) since the builder does not Watches() Secrets.
+	if noderesource.SidecarTLSEnabled(node) {
+		c := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarTLSSecretReady)
+		if c == nil || c.Status != metav1.ConditionTrue {
+			return ctrl.Result{RequeueAfter: statusPollInterval}, nil
+		}
+	}
+
 	return result, nil
 }
 

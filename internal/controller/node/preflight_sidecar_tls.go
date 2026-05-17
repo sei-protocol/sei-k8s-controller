@@ -23,10 +23,9 @@ import (
 // presence + cert validity. Clears both when TLS is disabled.
 // Mutations are in-memory; caller's Status().Patch flushes.
 //
-// Reads via the cached client so Secret informer events requeue the
-// SeiNode automatically — operator-provisioned cert appearing after a
-// SeiNode was created (and gated as Pending) wakes reconciliation
-// without a separate poll loop.
+// Reads via the cached client. Reconcile.statusPollInterval covers the
+// "Secret arrives after SeiNode" case — the controller does not Watches()
+// Secrets, so an explicit requeue loop drives convergence.
 func (r *SeiNodeReconciler) reconcileSidecarTLSReady(ctx context.Context, node *seiv1alpha1.SeiNode) {
 	if !noderesource.SidecarTLSEnabled(node) {
 		apimeta.RemoveStatusCondition(&node.Status.Conditions, seiv1alpha1.ConditionSidecarTLSSecretReady)
