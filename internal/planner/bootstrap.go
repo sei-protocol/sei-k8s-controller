@@ -99,10 +99,6 @@ func buildBootstrapPlan(
 
 	// Phase 4: Create production StatefulSet and Service (after bootstrap teardown frees the PVC)
 	if noderesource.SidecarTLSEnabled(node) {
-		// kube-rbac-proxy authz ConfigMap is controller-owned; the
-		// TLS Secret itself is operator-provisioned externally and
-		// gated on via the SidecarTLSSecretReady condition before
-		// this plan is built.
 		if err := appendTask(task.TaskTypeApplyRBACProxyConfig,
 			&task.ApplyRBACProxyConfigParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
 			return nil, err
@@ -187,10 +183,6 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 
 	prog := []string{task.TaskTypeEnsureDataPVC}
 	if noderesource.SidecarTLSEnabled(node) {
-		// kube-rbac-proxy authz ConfigMap is controller-owned; the
-		// TLS Secret itself is operator-provisioned externally and
-		// gated on via the SidecarTLSSecretReady condition before
-		// this plan is built.
 		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
 	}
 	prog = append(prog,

@@ -134,12 +134,8 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 	handleTerminalPlan(ctx, node)
 
-	// Gate init-plan creation on sidecar TLS readiness. The controller's
-	// preflight method (reconcileSidecarTLSReady) sets this condition
-	// before ResolvePlan runs. Mirrors the not-yet-ready behavior of
-	// referenced Secrets: stay in Pending until the operator provisions
-	// a valid Secret. Steady-state (Running) plans bypass this gate so
-	// observability stays live and image-drift plans still build.
+	// Gate init plans on the TLS Secret. Running-phase plans bypass
+	// so image-drift rollouts proceed independently.
 	if noderesource.SidecarTLSEnabled(node) &&
 		node.Status.Phase != seiv1alpha1.PhaseRunning &&
 		!sidecarTLSSecretReady(node) {
@@ -171,8 +167,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 	return nil
 }
 
-// sidecarTLSSecretReady returns true iff the SidecarTLSSecretReady
-// condition is present and True. Missing/False both gate plan creation.
+// sidecarTLSSecretReady returns true iff the condition is present and True.
 func sidecarTLSSecretReady(node *seiv1alpha1.SeiNode) bool {
 	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarTLSSecretReady)
 	return cond != nil && cond.Status == metav1.ConditionTrue
@@ -548,10 +543,6 @@ func buildBasePlan(
 		prog = append(prog, task.TaskTypeValidateOperatorKeyring)
 	}
 	if noderesource.SidecarTLSEnabled(node) {
-		// kube-rbac-proxy authz ConfigMap is controller-owned; the
-		// TLS Secret itself is operator-provisioned externally and
-		// gated on via the SidecarTLSSecretReady condition before
-		// this plan is built.
 		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
 	}
 	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)

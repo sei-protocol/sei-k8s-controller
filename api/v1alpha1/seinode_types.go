@@ -275,11 +275,9 @@ const (
 	// spec.validator.operatorKeyring.
 	ConditionOperatorKeyringReady = "OperatorKeyringReady"
 
-	// ConditionSidecarTLSSecretReady indicates whether the externally-
-	// provisioned TLS Secret referenced by spec.sidecar.tls.secretName
-	// is present, well-formed, and has SANs matching the required DNS
-	// names. Mirrors SigningKeyReady / NodeKeyReady / OperatorKeyringReady.
-	// Only set on SeiNodes with spec.sidecar.tls.
+	// ConditionSidecarTLSSecretReady reports whether the Secret named
+	// in spec.sidecar.tls.secretName is present, well-formed, and has
+	// SANs matching status.sidecarTLS.requiredDNSNames.
 	ConditionSidecarTLSSecretReady = "SidecarTLSSecretReady"
 )
 
@@ -311,14 +309,12 @@ const (
 	ReasonOperatorKeyringInvalid   = "OperatorKeyringInvalid"   // terminal: fail the plan
 )
 
-// Reasons for the SidecarTLSSecretReady condition. String values are
-// prefixed to match the existing SigningKey/NodeKey/OperatorKeyring
-// reason convention so SRE tooling can grep across condition types.
+// Reasons for the SidecarTLSSecretReady condition.
 const (
-	ReasonTLSSecretReady        = "TLSSecretReady"        // Secret present, well-formed, SANs match required DNS names
-	ReasonTLSSecretNotFound     = "TLSSecretNotFound"     // Secret not found in the SeiNode's namespace
-	ReasonTLSSecretMalformed    = "TLSSecretMalformed"    // Wrong type, empty tls.crt/tls.key, or unparseable cert
-	ReasonTLSSecretSANsMismatch = "TLSSecretSANsMismatch" // Cert parses but cert.DNSNames does not include required SANs
+	ReasonTLSSecretReady        = "TLSSecretReady"        // ready
+	ReasonTLSSecretNotFound     = "TLSSecretNotFound"     // Secret missing
+	ReasonTLSSecretMalformed    = "TLSSecretMalformed"    // wrong type, empty tls.crt/tls.key, or unparseable cert
+	ReasonTLSSecretSANsMismatch = "TLSSecretSANsMismatch" // cert.DNSNames missing one or more required SANs
 )
 
 // SeiNodeStatus defines the observed state of a SeiNode.
@@ -362,25 +358,17 @@ type SeiNodeStatus struct {
 	// +optional
 	ExternalAddress string `json:"externalAddress,omitempty"`
 
-	// SidecarTLS is set whenever spec.sidecar.tls is non-nil. Publishes
-	// the contract platform tooling must satisfy when provisioning the
-	// TLS Secret. Machine-readable replacement for naming-convention docs.
+	// SidecarTLS is set when spec.sidecar.tls is non-nil.
 	// +optional
 	SidecarTLS *SidecarTLSStatus `json:"sidecarTLS,omitempty"`
 }
 
-// SidecarTLSStatus declares the controller's expectations of the
-// referenced TLS Secret.
+// SidecarTLSStatus is the controller's view of the referenced TLS Secret.
 type SidecarTLSStatus struct {
-	// SecretName mirrors spec.sidecar.tls.secretName for visibility.
+	// SecretName mirrors spec.sidecar.tls.secretName.
 	SecretName string `json:"secretName"`
 
-	// RequiredDNSNames is the SAN list the cert in SecretName must
-	// include. Derived from the SeiNode's headless service DNS:
-	// {name}.{namespace}.svc.cluster.local and
-	// {name}-0.{name}.{namespace}.svc.cluster.local. Pre-computable
-	// by platform tooling from the target spec; published here for
-	// verification rather than as a prerequisite handshake.
+	// RequiredDNSNames is the SAN list the cert in SecretName must include.
 	RequiredDNSNames []string `json:"requiredDNSNames"`
 }
 

@@ -192,16 +192,10 @@ type SidecarConfig struct {
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
-	// TLS, if set, fronts the sidecar API with kube-rbac-proxy on
-	// :8443 using TLS material from a Secret in the SeiNode's
-	// namespace. The Secret is operator-provisioned (e.g., via a
-	// cert-manager Certificate in the platform GitOps repo); this
-	// controller does not create it.
-	//
-	// Immutable post-creation. Toggling TLS on an existing SeiNode is a
-	// delete + recreate operation; data persists via the SeiNode's PVC
-	// retention mechanism.
-	//
+	// TLS, if set, fronts the sidecar API with kube-rbac-proxy on :8443
+	// using TLS material from a Secret in the SeiNode's namespace. The
+	// Secret is operator-provisioned; this controller does not create
+	// it. Immutable.
 	// +optional
 	TLS *SidecarTLSSpec `json:"tls,omitempty"`
 }

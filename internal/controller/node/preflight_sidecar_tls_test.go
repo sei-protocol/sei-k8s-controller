@@ -326,15 +326,8 @@ func TestReconcileSidecarTLSReady_TransitionEnabledToDisabled_Cleans(t *testing.
 	r.reconcileSidecarTLSReady(context.Background(), node)
 	g.Expect(node.Status.SidecarTLS).NotTo(BeNil())
 
-	// Exercises the same-in-memory-object cleanup path used when
-	// reconciling a fresh SeiNode after the prior one was deleted +
-	// recreated under the same name. CEL blocks in-place spec mutation
-	// in prod (see SeiNodeSpec XValidation rule); this test simulates
-	// what the controller sees on first reconcile of the recreated
-	// SeiNode if the prior controller-resident object was somehow stale.
-	// Cert/key pairing is intentionally NOT validated by the preflight
-	// (kube-rbac-proxy detects mismatch at bind time); per LLD §2 we
-	// validate cert SHAPE, not crypto consistency.
+	// CEL blocks the in-place mutation in prod; this exercises the
+	// defensive cleanup branch.
 	node.Spec.Sidecar = nil
 	r.reconcileSidecarTLSReady(context.Background(), node)
 

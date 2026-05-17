@@ -43,9 +43,6 @@ type PlatformConfig = platform.Config
 // SeiNodeReconciler reconciles a SeiNode object.
 type SeiNodeReconciler struct {
 	client.Client
-	// APIReader bypasses the controller-runtime cache. Used by preflight
-	// validation that must observe newly-provisioned Secrets without
-	// waiting for cache propagation.
 	APIReader    client.Reader
 	Scheme       *runtime.Scheme
 	Recorder     record.EventRecorder

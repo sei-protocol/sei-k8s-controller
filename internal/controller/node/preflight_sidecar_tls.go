@@ -18,20 +18,10 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 )
 
-// reconcileSidecarTLSReady is the steady-state preflight branch for the
-// externally-provisioned sidecar TLS Secret. Mirrors the validate-signing-key
-// / validate-node-key / validate-operator-keyring pre-flight checks, but
-// runs as a controller method (not a plan task) so it gates plan creation
-// rather than plan execution.
-//
-// When TLS is disabled the condition and status struct are cleared.
-// When TLS is enabled the controller publishes status.sidecarTLS with the
-// required DNS names and sets SidecarTLSSecretReady according to the
-// Secret's presence + cert validity.
-//
-// All mutations are in-memory; the caller's Status().Patch flushes them.
-// No error return: every check resolves to a condition reason rather than a
-// reconcile failure, so the caller always proceeds to the rest of reconcile.
+// reconcileSidecarTLSReady publishes status.sidecarTLS and sets the
+// SidecarTLSSecretReady condition based on the referenced Secret's
+// presence + cert validity. Clears both when TLS is disabled.
+// Mutations are in-memory; caller's Status().Patch flushes.
 func (r *SeiNodeReconciler) reconcileSidecarTLSReady(ctx context.Context, node *seiv1alpha1.SeiNode) {
 	if !noderesource.SidecarTLSEnabled(node) {
 		apimeta.RemoveStatusCondition(&node.Status.Conditions, seiv1alpha1.ConditionSidecarTLSSecretReady)
@@ -59,9 +49,8 @@ func (r *SeiNodeReconciler) reconcileSidecarTLSReady(ctx context.Context, node *
 	})
 }
 
-// requiredDNSNames returns the SAN list the operator-provisioned cert must
-// include. Derived from the SeiNode's headless service DNS — the names
-// kube-rbac-proxy will be reached on from inside the cluster.
+// requiredDNSNames returns the headless service + pod-0 DNS names the
+// proxy is reached on from inside the cluster.
 func requiredDNSNames(node *seiv1alpha1.SeiNode) []string {
 	return []string{
 		fmt.Sprintf("%s.%s.svc.cluster.local", node.Name, node.Namespace),
@@ -69,16 +58,8 @@ func requiredDNSNames(node *seiv1alpha1.SeiNode) []string {
 	}
 }
 
-// validateTLSSecret reads the referenced Secret via the supplied reader
-// (typically the controller's APIReader to bypass the cache) and returns
-// the appropriate SidecarTLSSecretReady reason + message.
-//
-// Reasons:
-//   - Ready: Secret type kubernetes.io/tls, tls.crt/tls.key non-empty,
-//     cert parses, cert.DNSNames is a superset of required.
-//   - NotFound: Secret absent from the SeiNode's namespace.
-//   - Malformed: wrong Secret type, empty tls.crt/tls.key, or unparseable cert.
-//   - SANsMismatch: cert parses but does not cover the required DNS names.
+// validateTLSSecret returns the SidecarTLSSecretReady reason + message
+// for the Secret named in spec.sidecar.tls.secretName.
 func validateTLSSecret(
 	ctx context.Context,
 	reader client.Reader,
@@ -94,10 +75,6 @@ func validateTLSSecret(
 			return seiv1alpha1.ReasonTLSSecretNotFound,
 				fmt.Sprintf("secret %q not found in namespace %q", name, node.Namespace)
 		}
-		// Transient errors (network, RBAC) surface under the NotFound reason
-		// (the next reconcile retries). Message is prefixed so an operator
-		// who finds the Secret present can disambiguate without grepping
-		// controller logs.
 		return seiv1alpha1.ReasonTLSSecretNotFound,
 			fmt.Sprintf("transient error getting Secret %q: %v", name, err)
 	}
