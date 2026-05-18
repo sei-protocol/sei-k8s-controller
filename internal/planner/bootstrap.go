@@ -44,9 +44,14 @@ func buildBootstrapPlan(
 		return nil
 	}
 
-	// Phase 0: Ensure the data PVC exists (needed by both bootstrap Job and StatefulSet)
+	// Phase 0: Ensure data PVC + RBAC proxy ConfigMap exist (mounted by
+	// both the bootstrap pod and the production StatefulSet pod).
 	if err := appendTask(task.TaskTypeEnsureDataPVC,
 		&task.EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
+		return nil, err
+	}
+	if err := appendTask(task.TaskTypeApplyRBACProxyConfig,
+		&task.ApplyRBACProxyConfigParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
 		return nil, err
 	}
 
@@ -97,10 +102,6 @@ func buildBootstrapPlan(
 	}
 
 	// Phase 4: Create production StatefulSet and Service (after bootstrap teardown frees the PVC)
-	if err := appendTask(task.TaskTypeApplyRBACProxyConfig,
-		&task.ApplyRBACProxyConfigParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
-		return nil, err
-	}
 	if err := appendTask(task.TaskTypeApplyStatefulSet,
 		&task.ApplyStatefulSetParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
 		return nil, err

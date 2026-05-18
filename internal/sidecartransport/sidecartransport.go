@@ -34,7 +34,8 @@ func New(cfg Config) http.RoundTripper {
 		cfg.TokenPath = DefaultServiceAccountTokenPath
 	}
 	if cfg.Base == nil {
-		cfg.Base = http.DefaultTransport
+		// Clone so process-global DefaultTransport mutations don't leak in.
+		cfg.Base = http.DefaultTransport.(*http.Transport).Clone()
 	}
 	ts := transport.NewCachedFileTokenSource(cfg.TokenPath)
 	return transport.ResettableTokenSourceWrapTransport(ts)(cfg.Base)

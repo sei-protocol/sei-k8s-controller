@@ -47,10 +47,6 @@ func (e *applyRBACProxyConfigExecution) Execute(ctx context.Context) error {
 	}
 
 	desired := noderesource.GenerateRBACProxyConfigMap(node)
-	if desired == nil {
-		e.complete()
-		return nil
-	}
 	desired.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ConfigMap"))
 	if err := ctrl.SetControllerReference(node, desired, e.cfg.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference on rbac-proxy ConfigMap: %w", err)

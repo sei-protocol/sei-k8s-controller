@@ -12,6 +12,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
@@ -95,7 +96,6 @@ func GenerateBootstrapJob(
 // across both phases without overlap.
 func GenerateBootstrapService(node *seiv1alpha1.SeiNode) *corev1.Service {
 	labels := BootstrapLabels(node)
-	port := bootstrapSidecarPort(node)
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      node.Name,
@@ -107,7 +107,7 @@ func GenerateBootstrapService(node *seiv1alpha1.SeiNode) *corev1.Service {
 			Selector:                 labels,
 			PublishNotReadyAddresses: true,
 			Ports: []corev1.ServicePort{
-				{Name: "sidecar", Port: port, TargetPort: intstr.FromInt32(port), Protocol: corev1.ProtocolTCP},
+				{Name: "api", Port: noderesource.RBACProxyPort, TargetPort: intstr.FromInt32(noderesource.RBACProxyPort), Protocol: corev1.ProtocolTCP},
 			},
 		},
 	}
@@ -121,6 +121,14 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: bootstrapPVCClaimName(node),
+			},
+		},
+	}
+	proxyConfigVolume := corev1.Volume{
+		Name: "rbac-proxy-config",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: noderesource.RBACProxyConfigMapName(node)},
 			},
 		},
 	}
@@ -139,12 +147,27 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 			{Name: "SEI_GENESIS_REGION", Value: platformCfg.GenesisRegion},
 			{Name: "SEI_SNAPSHOT_BUCKET", Value: platformCfg.SnapshotBucket},
 			{Name: "SEI_SNAPSHOT_REGION", Value: platformCfg.SnapshotRegion},
-		},
-		Ports: []corev1.ContainerPort{
-			{Name: "sidecar", ContainerPort: port, Protocol: corev1.ProtocolTCP},
+			{Name: "SEI_SIDECAR_AUTHN_MODE", Value: "trusted-header"},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: bootstrapDataDir},
+		},
+	}
+	rbacProxy := corev1.Container{
+		Name:          "kube-rbac-proxy",
+		Image:         platformCfg.KubeRBACProxyImage,
+		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
+		Args: []string{
+			fmt.Sprintf("--insecure-listen-address=0.0.0.0:%d", noderesource.RBACProxyPort),
+			fmt.Sprintf("--upstream=http://127.0.0.1:%d/", port),
+			"--config-file=/etc/kube-rbac-proxy/config.yaml",
+			"--v=0",
+		},
+		Ports: []corev1.ContainerPort{
+			{Name: "api", ContainerPort: noderesource.RBACProxyPort, Protocol: corev1.ProtocolTCP},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "rbac-proxy-config", MountPath: "/etc/kube-rbac-proxy", ReadOnly: true},
 		},
 	}
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Resources != nil {
@@ -201,8 +224,8 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 				},
 			},
 		},
-		Volumes:        []corev1.Volume{dataVolume},
-		InitContainers: []corev1.Container{seidInit, sidecar},
+		Volumes:        []corev1.Volume{dataVolume, proxyConfigVolume},
+		InitContainers: []corev1.Container{seidInit, sidecar, rbacProxy},
 		Containers:     []corev1.Container{seidContainer},
 	}
 }
