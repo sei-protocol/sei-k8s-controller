@@ -58,8 +58,8 @@ func (e *ensureDataPVCExecution) Execute(ctx context.Context) error {
 	return e.executeCreate(ctx, node)
 }
 
-// executeCreate is Get-then-Create, failing if an unexpected PVC already exists.
-// Fixes #104.
+// executeCreate is Get-then-Create, failing if an unexpected PVC already
+// exists that the SeiNode does not own.
 func (e *ensureDataPVCExecution) executeCreate(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	desired := noderesource.GenerateDataPVC(node, e.cfg.Platform)
 	if err := ctrl.SetControllerReference(node, desired, e.cfg.Scheme); err != nil {

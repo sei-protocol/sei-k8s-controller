@@ -1,3 +1,8 @@
+// Package task contains the concrete TaskExecution implementations the
+// planner enqueues and the executor drives. Controller-side tasks talk
+// to the Kubernetes API; sidecar tasks proxy to the seictl sidecar HTTP
+// API. The registry maps task-type strings (as stored in PlannedTask.Type)
+// to their deserializers.
 package task
 
 import (
