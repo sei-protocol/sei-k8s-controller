@@ -10,7 +10,6 @@ import (
 // the populated field determines the node's operating mode.
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, or validator must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
-// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? (!has(self.sidecar) || !has(self.sidecar.tls)) : (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)",message="spec.sidecar.tls is immutable; delete + recreate the SeiNode to change TLS configuration"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// +kubebuilder:validation:MinLength=1
@@ -275,10 +274,6 @@ const (
 	// spec.validator.operatorKeyring.
 	ConditionOperatorKeyringReady = "OperatorKeyringReady"
 
-	// ConditionSidecarTLSSecretReady reports whether the Secret named
-	// in spec.sidecar.tls.secretName is present, well-formed, and has
-	// SANs matching status.sidecarTLS.requiredDNSNames.
-	ConditionSidecarTLSSecretReady = "SidecarTLSSecretReady"
 )
 
 // Reasons for the ImportPVCReady condition.
@@ -307,15 +302,6 @@ const (
 	ReasonOperatorKeyringValidated = "OperatorKeyringValidated" // validation succeeded
 	ReasonOperatorKeyringNotReady  = "OperatorKeyringNotReady"  // transient: retry
 	ReasonOperatorKeyringInvalid   = "OperatorKeyringInvalid"   // terminal: fail the plan
-)
-
-// Reasons for the SidecarTLSSecretReady condition.
-const (
-	ReasonTLSSecretReady        = "TLSSecretReady"        // ready
-	ReasonTLSSecretNotFound     = "TLSSecretNotFound"     // Secret missing
-	ReasonTLSSecretUnavailable  = "TLSSecretUnavailable"  // transient: API error reading the Secret
-	ReasonTLSSecretMalformed    = "TLSSecretMalformed"    // wrong type, empty tls.crt/tls.key, or unparseable cert
-	ReasonTLSSecretSANsMismatch = "TLSSecretSANsMismatch" // cert.DNSNames missing one or more required SANs
 )
 
 // SeiNodeStatus defines the observed state of a SeiNode.
@@ -358,19 +344,6 @@ type SeiNodeStatus struct {
 	// config so the node advertises a reachable address for gossip discovery.
 	// +optional
 	ExternalAddress string `json:"externalAddress,omitempty"`
-
-	// SidecarTLS is set when spec.sidecar.tls is non-nil.
-	// +optional
-	SidecarTLS *SidecarTLSStatus `json:"sidecarTLS,omitempty"`
-}
-
-// SidecarTLSStatus is the controller's view of the referenced TLS Secret.
-type SidecarTLSStatus struct {
-	// SecretName mirrors spec.sidecar.tls.secretName.
-	SecretName string `json:"secretName"`
-
-	// RequiredDNSNames is the SAN list the cert in SecretName must include.
-	RequiredDNSNames []string `json:"requiredDNSNames"`
 }
 
 // +kubebuilder:object:root=true

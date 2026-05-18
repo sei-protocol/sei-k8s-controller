@@ -191,22 +191,4 @@ type SidecarConfig struct {
 	// Resources defines CPU/memory requests and limits for the sidecar container.
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
-
-	// TLS, if set, fronts the sidecar API with kube-rbac-proxy on :8443
-	// using TLS material from a Secret in the SeiNode's namespace. The
-	// Secret is operator-provisioned; this controller does not create
-	// it. Immutable.
-	// +optional
-	TLS *SidecarTLSSpec `json:"tls,omitempty"`
-}
-
-// SidecarTLSSpec references an externally-provisioned TLS Secret.
-type SidecarTLSSpec struct {
-	// SecretName is a kubernetes.io/tls Secret in the SeiNode's
-	// namespace. The cert SANs must include the DNS names published
-	// in status.sidecarTLS.requiredDNSNames; the controller validates
-	// this before allowing the pod to schedule.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	SecretName string `json:"secretName"`
 }

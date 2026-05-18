@@ -94,6 +94,7 @@ func (c Config) Validate() error {
 		"SEI_GATEWAY_NAMESPACE":     c.GatewayNamespace,
 		"SEI_GATEWAY_DOMAIN":        c.GatewayDomain,
 		"SEI_SIDECAR_IMAGE":         c.SidecarImage,
+		"SEI_KUBE_RBAC_PROXY_IMAGE": c.KubeRBACProxyImage,
 	}
 	for name, val := range required {
 		if strings.TrimSpace(val) == "" {

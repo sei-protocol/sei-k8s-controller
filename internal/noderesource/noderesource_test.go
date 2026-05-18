@@ -181,9 +181,10 @@ func TestGenerateNodeStatefulSet_AlwaysHasSidecar(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	g.Expect(initContainers).To(HaveLen(2))
+	g.Expect(initContainers).To(HaveLen(3))
 	g.Expect(initContainers[0].Name).To(Equal("seid-init"))
 	g.Expect(initContainers[1].Name).To(Equal("sei-sidecar"))
+	g.Expect(initContainers[2].Name).To(Equal(containerNameRBACProxy))
 	g.Expect(findInitContainer(initContainers, "snapshot-restore")).To(BeNil())
 }
 
@@ -197,10 +198,12 @@ func TestBuildNodePodSpec_Genesis_MountsExistingPVC(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(spec.ServiceAccountName).To(Equal(platformtest.Config().ServiceAccount))
-	g.Expect(spec.Volumes).To(HaveLen(2)) // data PVC + sidecar-tmp emptyDir
+	g.Expect(spec.Volumes).To(HaveLen(3)) // data PVC + sidecar-tmp emptyDir + rbac-proxy-config ConfigMap
 	g.Expect(spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal("data-mynet-0"))
 	g.Expect(spec.Volumes[1].Name).To(Equal(sidecarTmpVolumeName))
 	g.Expect(spec.Volumes[1].EmptyDir).NotTo(BeNil())
+	g.Expect(spec.Volumes[2].Name).To(Equal(rbacProxyConfigVolumeName))
+	g.Expect(spec.Volumes[2].ConfigMap).NotTo(BeNil())
 }
 
 func TestBuildNodePodSpec_Snapshot_MountsNodePVC(t *testing.T) {
@@ -505,21 +508,23 @@ func TestSidecarMainContainer_StartupProbeTargetsHealthz(t *testing.T) {
 	g.Expect(probe).NotTo(BeNil())
 	g.Expect(probe.HTTPGet).NotTo(BeNil())
 	g.Expect(probe.HTTPGet.Path).To(Equal("/v0/healthz"))
-	g.Expect(probe.HTTPGet.Port.IntValue()).To(Equal(7777))
+	g.Expect(probe.HTTPGet.Port.IntValue()).To(Equal(int(RBACProxyPort)))
 	g.Expect(probe.InitialDelaySeconds).To(Equal(int32(5)))
 	g.Expect(probe.PeriodSeconds).To(Equal(int32(5)))
 	g.Expect(probe.FailureThreshold).To(Equal(int32(86400)))
 }
 
-func TestSidecarMainContainer_StartupProbeUsesCustomPort(t *testing.T) {
+// Custom spec.sidecar.port flows to the proxy --upstream, not to the
+// seid startup probe (probe always targets the proxy port).
+func TestProxyUpstreamUsesCustomSidecarPort(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Port: 9999}
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+	proxy := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameRBACProxy)
 
-	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(9999))
+	g.Expect(proxy.Args).To(ContainElement("--upstream=http://127.0.0.1:9999/"))
 }
 
 func TestSidecarMainContainer_ReadinessProbeTargetsLagStatus(t *testing.T) {
@@ -596,7 +601,7 @@ func TestSidecarMainContainer_NilSidecarConfig_UsesDefaults(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
-	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(int(seiconfig.PortSidecar)))
+	g.Expect(seid.StartupProbe.HTTPGet.Port.IntValue()).To(Equal(int(RBACProxyPort)))
 	g.Expect(seid.Args[0]).To(ContainSubstring("/dev/tcp/localhost/7777"))
 
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
@@ -624,9 +629,10 @@ func TestGenesisMode_SidecarPresent(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	g.Expect(initContainers).To(HaveLen(2))
+	g.Expect(initContainers).To(HaveLen(3))
 	g.Expect(initContainers[0].Name).To(Equal("seid-init"))
 	g.Expect(initContainers[1].Name).To(Equal("sei-sidecar"))
+	g.Expect(initContainers[2].Name).To(Equal(containerNameRBACProxy))
 }
 
 func TestGenesisMode_NoSnapshotRestoreInitContainer(t *testing.T) {
@@ -663,7 +669,7 @@ func TestGenerateNodeHeadlessService(t *testing.T) {
 	g.Expect(svc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
 	g.Expect(svc.Spec.PublishNotReadyAddresses).To(BeTrue())
 	g.Expect(svc.Spec.Selector).To(Equal(map[string]string{NodeLabel: "mynet-0"}))
-	g.Expect(svc.Spec.Ports).To(HaveLen(7))
+	g.Expect(svc.Spec.Ports).To(HaveLen(8))
 }
 
 func TestServicePorts_SevenExpectedPorts(t *testing.T) {
