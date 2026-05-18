@@ -91,10 +91,10 @@ type SnapshotSource struct {
 	BootstrapImage string `json:"bootstrapImage,omitempty"`
 }
 
-// S3SnapshotSource configures snapshot download from an S3 bucket.
-// The controller infers the bucket from the chain ID using the well-known
-// convention {chainId}-snapshots/state-sync/ and selects the latest snapshot
-// via latest.txt.
+// S3SnapshotSource configures snapshot download from the platform
+// snapshot bucket. The sidecar resolves objects under
+// {SEI_SNAPSHOT_BUCKET}/{chainID}/state-sync/ and selects the latest
+// snapshot via latest.txt.
 type S3SnapshotSource struct {
 	// TargetHeight is the block height the node should sync to after restoring.
 	// +kubebuilder:validation:Minimum=1

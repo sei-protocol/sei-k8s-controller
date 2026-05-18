@@ -10,14 +10,19 @@ const (
 	DeletionPolicyRetain DeletionPolicy = "Retain"
 )
 
-// NetworkingConfig enables public networking for the deployment.
+// NetworkingConfig is a presence-signal struct: its presence on a
+// SeiNodeDeployment opts the deployment into public networking.
 //
-// When present, the controller creates a ClusterIP Service (as the
-// HTTPRoute backend) and generates HTTPRoute resources on the platform
-// Gateway for each protocol the node mode supports. Hostnames are
-// derived automatically from the deployment name, namespace, and the
-// platform domain env vars.
+// Present: the controller provisions a ClusterIP Service plus HTTPRoute
+// resources on the platform Gateway for each protocol the node mode
+// supports, with hostnames derived from the deployment name, namespace,
+// and platform domain env vars.
 //
-// When absent (nil), the deployment is private — only per-node headless
-// Services exist for in-cluster access.
+// Absent (nil): the deployment is in-cluster only — the unconditional
+// internal ClusterIP Service and per-node headless Services exist, but
+// no Gateway-attached routes are created.
+//
+// The empty-struct shape is intentional. Concrete knobs (TLS, hostname
+// override, gateway-class selection) will be added here when real needs
+// emerge; the type exists today only to carry presence.
 type NetworkingConfig struct{}

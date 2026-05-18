@@ -127,7 +127,7 @@ func (s *SeiNodeSpec) SnapshotSource() *SnapshotSource {
 // Status
 // ---------------------------------------------------------------------------
 
-// TaskPlanPhase represents the overall state of an initialization plan.
+// TaskPlanPhase represents the overall state of a TaskPlan.
 // +kubebuilder:validation:Enum=Active;Complete;Failed
 type TaskPlanPhase string
 
@@ -137,7 +137,7 @@ const (
 	TaskPlanFailed   TaskPlanPhase = "Failed"
 )
 
-// TaskStatus represents the lifecycle state of a task (plan, monitor, etc.).
+// TaskStatus is the lifecycle state of a single PlannedTask.
 // +kubebuilder:validation:Enum=Pending;Complete;Failed
 type TaskStatus string
 
