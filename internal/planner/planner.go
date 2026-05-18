@@ -134,12 +134,6 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 	handleTerminalPlan(ctx, node)
 
-	// Gate plan creation on the TLS Secret. Any plan (init or image-
-	// drift rollout) eventually cycles the pod, which mounts the Secret.
-	if noderesource.SidecarTLSEnabled(node) && !sidecarTLSSecretReady(node) {
-		return nil
-	}
-
 	mode, err := plannerForMode(node)
 	if err != nil {
 		return err
@@ -163,12 +157,6 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		node.Status.PhaseTransitionTime = &now
 	}
 	return nil
-}
-
-// sidecarTLSSecretReady returns true iff the condition is present and True.
-func sidecarTLSSecretReady(node *seiv1alpha1.SeiNode) bool {
-	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarTLSSecretReady)
-	return cond != nil && cond.Status == metav1.ConditionTrue
 }
 
 // handleTerminalPlan handles completed or failed plans: clears conditions
@@ -540,9 +528,7 @@ func buildBasePlan(
 	if needsValidateOperatorKeyring(node) {
 		prog = append(prog, task.TaskTypeValidateOperatorKeyring)
 	}
-	if noderesource.SidecarTLSEnabled(node) {
-		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
-	}
+	prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
 	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
 	prog = append(prog, sidecarProg...)
 

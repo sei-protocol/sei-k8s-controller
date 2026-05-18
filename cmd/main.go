@@ -171,15 +171,11 @@ func main() {
 	kc := mgr.GetClient()
 
 	// One transport per process: keepalive pool and SA-token cache
-	// shared across reconciles.
-	sharedTLSDoer := &http.Client{Transport: sidecartransport.New(sidecartransport.Config{})}
+	// shared across reconciles. Bearer token authn for kube-rbac-proxy.
+	sharedDoer := &http.Client{Transport: sidecartransport.New(sidecartransport.Config{})}
 
 	newSidecarClient := func(node *seiv1alpha1.SeiNode) (*sidecar.SidecarClient, error) {
-		url := noderesource.SidecarURLForNode(node)
-		if noderesource.SidecarTLSEnabled(node) {
-			return sidecar.NewSidecarClient(url, sidecar.WithHTTPDoer(sharedTLSDoer))
-		}
-		return sidecar.NewSidecarClient(url)
+		return sidecar.NewSidecarClient(noderesource.SidecarURLForNode(node), sidecar.WithHTTPDoer(sharedDoer))
 	}
 	buildSidecarClient := func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
 		return newSidecarClient(node)

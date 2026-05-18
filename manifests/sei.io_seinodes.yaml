@@ -464,24 +464,6 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
-                  tls:
-                    description: |-
-                      TLS, if set, fronts the sidecar API with kube-rbac-proxy on :8443
-                      using TLS material from a Secret in the SeiNode's namespace. The
-                      Secret is operator-provisioned; this controller does not create
-                      it. Immutable.
-                    properties:
-                      secretName:
-                        description: |-
-                          SecretName is a kubernetes.io/tls Secret in the SeiNode's
-                          namespace. The cert SANs must include the DNS names published
-                          in status.sidecarTLS.requiredDNSNames; the controller validates
-                          this before allowing the pod to schedule.
-                        minLength: 1
-                        type: string
-                    required:
-                    - secretName
-                    type: object
                 type: object
               validator:
                 description: Validator configures a consensus-participating validator
@@ -766,11 +748,6 @@ spec:
             - message: peers is required when replayer mode is set
               rule: '!has(self.replayer) || (has(self.peers) && size(self.peers) >
                 0)'
-            - message: spec.sidecar.tls is immutable; delete + recreate the SeiNode
-                to change TLS configuration
-              rule: '(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? (!has(self.sidecar)
-                || !has(self.sidecar.tls)) : (has(self.sidecar) && has(self.sidecar.tls)
-                && self.sidecar.tls == oldSelf.sidecar.tls)'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:
@@ -998,22 +975,6 @@ spec:
                 items:
                   type: string
                 type: array
-              sidecarTLS:
-                description: SidecarTLS is set when spec.sidecar.tls is non-nil.
-                properties:
-                  requiredDNSNames:
-                    description: RequiredDNSNames is the SAN list the cert in SecretName
-                      must include.
-                    items:
-                      type: string
-                    type: array
-                  secretName:
-                    description: SecretName mirrors spec.sidecar.tls.secretName.
-                    type: string
-                required:
-                - requiredDNSNames
-                - secretName
-                type: object
             type: object
         type: object
     served: true

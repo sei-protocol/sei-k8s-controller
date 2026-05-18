@@ -184,9 +184,10 @@ func TestNodeReconcile_SnapshotNode_StatefulSetHasInitContainers(t *testing.T) {
 
 	sts := &appsv1.StatefulSet{}
 	g.Expect(c.Get(ctx, types.NamespacedName{Name: "snap-0", Namespace: "default"}, sts)).To(Succeed())
-	g.Expect(sts.Spec.Template.Spec.InitContainers).To(HaveLen(2))
+	g.Expect(sts.Spec.Template.Spec.InitContainers).To(HaveLen(3))
 	g.Expect(sts.Spec.Template.Spec.InitContainers[0].Name).To(Equal("seid-init"))
 	g.Expect(sts.Spec.Template.Spec.InitContainers[1].Name).To(Equal("sei-sidecar"))
+	g.Expect(sts.Spec.Template.Spec.InitContainers[2].Name).To(Equal("kube-rbac-proxy"))
 }
 
 func TestNodeReconcile_RunningPhase_UpdatesStatefulSetImage(t *testing.T) {

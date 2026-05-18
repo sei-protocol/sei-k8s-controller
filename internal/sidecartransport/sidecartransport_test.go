@@ -93,9 +93,3 @@ func TestNew_DefaultTokenPathConstant(t *testing.T) {
 	}
 }
 
-func TestDefaultTLSTransport_SkipsVerify(t *testing.T) {
-	tr := defaultTLSTransport()
-	if !tr.TLSClientConfig.InsecureSkipVerify {
-		t.Error("expected InsecureSkipVerify=true; see SECURITY POSTURE in package doc")
-	}
-}

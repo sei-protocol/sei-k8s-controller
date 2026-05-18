@@ -1,25 +1,10 @@
 // Package sidecartransport builds the http.RoundTripper the controller
-// uses to call a SeiNode sidecar when the sidecar is fronted by a
-// kube-rbac-proxy (spec.sidecar.tls set).
+// uses to call a SeiNode sidecar through its kube-rbac-proxy front.
 //
-// The transport:
-//   - Trusts the proxy's cert-manager-issued self-signed cert.
-//   - Reads the controller's projected ServiceAccount token via
-//     k8s.io/client-go/transport.NewCachedFileTokenSource, which
-//     refreshes from disk every ~minute and invalidates immediately
-//     on a 401 response.
-//   - Injects Authorization: Bearer <token> on every request.
-//
-// # SECURITY POSTURE — InsecureSkipVerify
-//
-// The kube-rbac-proxy cert is cert-manager self-signed; no external
-// chain to verify. Authn comes from the bearer token + TokenReview,
-// not cert identity. Trade-off: a pod with services/endpoints write
-// in the namespace can MITM and exfiltrate the controller SA token,
-// replayable against kube-apiserver until kubelet rotates it (~12
-// min). Compensating control: that namespace-local write already
-// grants equivalent CRD-manipulation power. CA pinning is the
-// cleaner path — follow-up to #224.
+// The transport reads the controller's projected ServiceAccount token
+// and injects Authorization: Bearer <token> on every request so the
+// proxy can run TokenReview + SubjectAccessReview against the K8s API.
+// Token refresh is handled by k8s.io/client-go/transport.
 package sidecartransport
 
 import (
@@ -32,15 +17,13 @@ import (
 // mounts on every pod by default.
 const DefaultServiceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
-// Config builds the trusted-header round-tripper.
+// Config builds the bearer-token round-tripper.
 type Config struct {
 	// TokenPath overrides the SA token location (tests inject a temp
 	// file). Defaults to DefaultServiceAccountTokenPath.
 	TokenPath string
 
-	// Base is the underlying RoundTripper; defaults to a
-	// defaultTLSTransport(). Settable so callers can swap in a
-	// fake (tests) or a CA-pinned transport (future hardening).
+	// Base is the underlying RoundTripper; defaults to http.DefaultTransport.
 	Base http.RoundTripper
 }
 
@@ -51,14 +34,8 @@ func New(cfg Config) http.RoundTripper {
 		cfg.TokenPath = DefaultServiceAccountTokenPath
 	}
 	if cfg.Base == nil {
-		cfg.Base = defaultTLSTransport()
+		cfg.Base = http.DefaultTransport
 	}
 	ts := transport.NewCachedFileTokenSource(cfg.TokenPath)
 	return transport.ResettableTokenSourceWrapTransport(ts)(cfg.Base)
-}
-
-func defaultTLSTransport() *http.Transport {
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSClientConfig = insecureTLSClientConfig()
-	return t
 }
