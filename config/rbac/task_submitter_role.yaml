@@ -1,0 +1,8 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: validator-task-submitter
+rules:
+  - apiGroups: ["sei.io"]
+    resources: ["seinodetasks"]
+    verbs: ["create", "get"]
