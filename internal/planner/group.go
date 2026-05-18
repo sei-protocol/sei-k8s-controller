@@ -1,8 +1,11 @@
 package planner
 
 import (
+	"encoding/json"
+
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -36,14 +39,12 @@ func (p *genesisGroupPlanner) BuildPlan(
 
 	// Validate at planner-time so bech32 / shape errors hit
 	// `kubectl describe seinodedeployment` rather than a sidecar Job pod.
-	assembleParams := task.AssembleAndUploadGenesisTask{
-		AssembleAndUploadGenesisTask: sidecar.AssembleAndUploadGenesisTask{
-			AccountBalance: group.Spec.Genesis.AccountBalance,
-			Namespace:      group.Namespace,
-			Nodes:          nodeParams,
-			Accounts:       accounts,
-		},
-		Overrides: group.Spec.Genesis.Overrides,
+	assembleParams := sidecar.AssembleAndUploadGenesisTask{
+		AccountBalance: group.Spec.Genesis.AccountBalance,
+		Namespace:      group.Namespace,
+		Nodes:          nodeParams,
+		Accounts:       accounts,
+		Overrides:      toRawMessages(group.Spec.Genesis.Overrides),
 	}
 	if err := assembleParams.Validate(); err != nil {
 		return nil, err
@@ -82,4 +83,19 @@ func (p *genesisGroupPlanner) BuildPlan(
 		Phase: seiv1alpha1.TaskPlanActive,
 		Tasks: []seiv1alpha1.PlannedTask{assembleTask, collectPeersTask, awaitTask},
 	}, nil
+}
+
+// toRawMessages converts the CRD's apiextensionsv1.JSON values (required by
+// OpenAPI/CEL on the API server side) into encoding/json.RawMessage values
+// (the wire shape the seictl sidecar consumes). Both store the same raw JSON
+// bytes; only the Go type differs.
+func toRawMessages(in map[string]apiextensionsv1.JSON) map[string]json.RawMessage {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(in))
+	for k, v := range in {
+		out[k] = json.RawMessage(v.Raw)
+	}
+	return out
 }

@@ -207,7 +207,7 @@ var registry = map[string]taskDeserializer{
 	sidecar.TaskTypeGenerateIdentity:       sidecarTask[sidecar.GenerateIdentityTask](false),
 	sidecar.TaskTypeGenerateGentx:          sidecarTask[sidecar.GenerateGentxTask](false),
 	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[sidecar.UploadGenesisArtifactsTask](false),
-	sidecar.TaskTypeAssembleGenesis:        sidecarTask[AssembleAndUploadGenesisTask](false),
+	sidecar.TaskTypeAssembleGenesis:        sidecarTask[sidecar.AssembleAndUploadGenesisTask](false),
 	sidecar.TaskTypeSetGenesisPeers:        sidecarTask[sidecar.SetGenesisPeersTask](false),
 
 	// Controller-side group tasks

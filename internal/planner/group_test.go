@@ -178,17 +178,17 @@ func TestBuildGroupAssemblyPlan_PropagatesOverrides(t *testing.T) {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	var params task.AssembleAndUploadGenesisTask
+	var params sidecar.AssembleAndUploadGenesisTask
 	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal assemble params: %v", err)
 	}
 	if len(params.Overrides) != 2 {
 		t.Fatalf("Overrides: got %d entries, want 2", len(params.Overrides))
 	}
-	if got := string(params.Overrides["staking.params.unbonding_time"].Raw); got != `"600s"` {
+	if got := string(params.Overrides["staking.params.unbonding_time"]); got != `"600s"` {
 		t.Errorf("staking.params.unbonding_time = %s, want \"600s\"", got)
 	}
-	if got := string(params.Overrides["gov.params.voting_period"].Raw); got != `"30s"` {
+	if got := string(params.Overrides["gov.params.voting_period"]); got != `"30s"` {
 		t.Errorf("gov.params.voting_period = %s, want \"30s\"", got)
 	}
 
@@ -232,7 +232,7 @@ func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
 		t.Fatalf("BuildPlan: %v", err)
 	}
 
-	var params task.AssembleAndUploadGenesisTask
+	var params sidecar.AssembleAndUploadGenesisTask
 	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
