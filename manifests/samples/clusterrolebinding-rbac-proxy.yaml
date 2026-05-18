@@ -1,16 +1,12 @@
-# Example binding for the kube-rbac-proxy ClusterRole. Substitute the
-# ServiceAccount name and namespace for the deployment running SeiNode
-# pods (this is the same SA the seictl sidecar container uses — see
-# platform.Config.ServiceAccount).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: sei-rbac-proxy
+  name: sei-k8s-rbac-proxy
 subjects:
   - kind: ServiceAccount
     name: <seinode-service-account>
     namespace: <seinode-namespace>
 roleRef:
   kind: ClusterRole
-  name: sei-rbac-proxy
+  name: sei-k8s-rbac-proxy
   apiGroup: rbac.authorization.k8s.io

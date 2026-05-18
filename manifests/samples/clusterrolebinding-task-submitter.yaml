@@ -1,8 +1,3 @@
-# Example binding for the sei-validator-task-submitter ClusterRole —
-# grants a human-operator group access to submit sidecar tasks. The
-# controller SA itself is bound automatically via the kustomize chart
-# (config/rbac/task_submitter_role_binding.yaml); only third-party
-# identities need their own bindings.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -13,5 +8,5 @@ subjects:
     apiGroup: rbac.authorization.k8s.io
 roleRef:
   kind: ClusterRole
-  name: sei-validator-task-submitter
+  name: sei-k8s-validator-task-submitter
   apiGroup: rbac.authorization.k8s.io
