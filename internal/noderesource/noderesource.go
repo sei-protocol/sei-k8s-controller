@@ -436,10 +436,10 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 	pool := p.NodepoolForMode(NodeMode(node))
 
 	spec := corev1.PodSpec{
-		// AutomountServiceAccountToken is explicit here because the future
-		// kube-rbac-proxy fronting the sidecar API (sei-protocol/seictl#165)
-		// calls TokenReview + SubjectAccessReview against the K8s API using
-		// the pod's projected SA token. Cluster-default flips that silently
+		// AutomountServiceAccountToken is explicit here because the
+		// kube-rbac-proxy fronting the sidecar API calls TokenReview +
+		// SubjectAccessReview against the K8s API using the pod's
+		// projected SA token. Cluster-default flips that silently
 		// disable this would break the auth path.
 		AutomountServiceAccountToken: ptr.To(true), //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
 		ServiceAccountName:           p.ServiceAccount,
@@ -466,10 +466,8 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 	// compromised seid container can therefore read /proc/<sidecar>/environ
 	// and /proc/<sidecar>/mem, including the operator-keyring passphrase and
 	// the unlocked in-memory keyring. This is a known limitation of the v1
-	// trust boundary — not a one-way door. The broader sidecar/seid isolation
-	// hardening (drop shareProcessNamespace, harden the seid main container's
-	// SecurityContext, separate the sidecar's SA) is tracked as a follow-up.
-	// See PR #220 review thread.
+	// trust boundary; tightening it (drop shareProcessNamespace, harden the
+	// seid SecurityContext, separate sidecar SA) is a separate workstream.
 	spec.ShareProcessNamespace = ptr.To(true)
 	// Kubelet handles PVC ownership migration: on first mount of a legacy
 	// root-owned volume, OnRootMismatch triggers a recursive `chown :65532`
@@ -743,8 +741,7 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 // seidNonRootSecurityContext is shared by seid main and seid-init (same
 // binary, same mount, same privilege floor). PSA `restricted`-eligible.
 // ReadOnlyRootFilesystem omitted: seid's Go runtime may use /tmp on the
-// rootfs and we don't wire an emptyDir for it on seid containers.
-// Closing this gap is tracked in #230.
+// rootfs and no emptyDir is wired for it on seid containers.
 func seidNonRootSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             ptr.To(true),              //nolint:modernize // ptr.To(true) is idiomatic; new(true) is invalid Go
@@ -930,8 +927,8 @@ func sidecarSecurityContext() *corev1.SecurityContext {
 	}
 }
 
-// RBACProxyConfigMapName is the ConfigMap carrying the proxy's
-// resourceAttributes + allow-paths config. Exported for the same reason.
+// RBACProxyConfigMapName returns the name of the ConfigMap carrying the
+// kube-rbac-proxy authorization config for a given SeiNode.
 func RBACProxyConfigMapName(node *seiv1alpha1.SeiNode) string {
 	return node.Name + "-rbac-proxy-config"
 }
