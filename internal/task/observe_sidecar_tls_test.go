@@ -70,7 +70,9 @@ func TestObserveSidecarTLS_RolloutComplete_StampsCurrent(t *testing.T) {
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: node.Namespace, Generation: 2},
 		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
-		Status:     appsv1.StatefulSetStatus{ObservedGeneration: 2, UpdatedReplicas: 1, Replicas: 1},
+		Status: appsv1.StatefulSetStatus{
+			ObservedGeneration: 2, UpdatedReplicas: 1, ReadyReplicas: 1, Replicas: 1,
+		},
 	}
 
 	exec := newObserveTLSExec(t, observeTLSCfg(t, node, sts))
@@ -78,6 +80,30 @@ func TestObserveSidecarTLS_RolloutComplete_StampsCurrent(t *testing.T) {
 	g.Expect(exec.Execute(context.Background())).To(Succeed())
 	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
 	g.Expect(node.Status.CurrentSidecarTLSSecretName).To(Equal("my-tls-cert"))
+}
+
+// TestObserveSidecarTLS_TemplateAppliedButProxyNotReady_StaysRunning is the
+// crashlooping-proxy scenario: kubelet has applied the new pod template
+// (UpdatedReplicas=1) but the proxy container's readiness probe is failing
+// (ReadyReplicas=0). The observer must NOT stamp status — otherwise
+// SidecarURLForNode would flip to HTTPS and MarkReady would hit
+// connection-refused against the unready proxy.
+func TestObserveSidecarTLS_TemplateAppliedButProxyNotReady_StaysRunning(t *testing.T) {
+	g := NewWithT(t)
+	node := observeTLSNode("my-tls-cert")
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: node.Namespace, Generation: 2},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
+		Status: appsv1.StatefulSetStatus{
+			ObservedGeneration: 2, UpdatedReplicas: 1, ReadyReplicas: 0, Replicas: 1,
+		},
+	}
+
+	exec := newObserveTLSExec(t, observeTLSCfg(t, node, sts))
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionRunning))
+	g.Expect(node.Status.CurrentSidecarTLSSecretName).To(BeEmpty())
 }
 
 func TestObserveSidecarTLS_RolloutInProgress_StaysRunning(t *testing.T) {

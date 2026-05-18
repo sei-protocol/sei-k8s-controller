@@ -67,7 +67,15 @@ func (e *observeSidecarTLSExecution) Execute(ctx context.Context) error {
 	if sts.Status.ObservedGeneration < sts.Generation {
 		return nil
 	}
-	if sts.Spec.Replicas == nil || sts.Status.UpdatedReplicas < *sts.Spec.Replicas {
+	if sts.Spec.Replicas == nil {
+		return nil
+	}
+	// Stricter than ObserveImage: require ReadyReplicas (kube-rbac-proxy
+	// passed its readiness probe), not just UpdatedReplicas (template
+	// applied). Stamping the status mirror flips SidecarURLForNode to
+	// HTTPS; if the proxy is still crash-looping, MarkReady would hit
+	// connection-refused. Gate on actual proxy serving.
+	if sts.Status.UpdatedReplicas < *sts.Spec.Replicas || sts.Status.ReadyReplicas < *sts.Spec.Replicas {
 		return nil
 	}
 

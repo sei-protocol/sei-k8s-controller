@@ -118,9 +118,10 @@ func TestBuildRunningPlan_ImageAndTLSEnable_CoCompose(t *testing.T) {
 }
 
 func TestBuildRunningPlan_ImageOnlyDrift_TLSAlreadyConverged(t *testing.T) {
-	// TLS is currently live; image drift fires. ObserveSidecarTLS is
-	// still injected (idempotent) so SidecarURLForNode stays correct
-	// after the pod cycle re-mounts the Secret on the new pod.
+	// Image drift on a node whose TLS is already converged. TLS-enable
+	// drift detector returns false (status mirrors spec), so the plan
+	// omits ApplyRBACProxyConfig and ObserveSidecarTLS — the existing
+	// ConfigMap and status mirror stand from the prior plan.
 	g := NewWithT(t)
 	node := tlsEnableRunningNode()
 	node.Status.CurrentSidecarTLSSecretName = tlsEnableSecretName // already converged
@@ -131,10 +132,7 @@ func TestBuildRunningPlan_ImageOnlyDrift_TLSAlreadyConverged(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan).NotTo(BeNil())
 
-	types := taskTypes(plan)
-	// No TLS-enable drift here — ObserveSidecarTLS not added because
-	// drift detector returned false (status already mirrors spec).
-	g.Expect(types).To(Equal([]string{
+	g.Expect(taskTypes(plan)).To(Equal([]string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
 		task.TaskTypeReplacePod,
@@ -191,7 +189,7 @@ func TestClassifyPlan_ImageAndTLSEnable(t *testing.T) {
 	setTLSSecretReady2(node, metav1.ConditionTrue)
 	plan, err := buildRunningPlan(node)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(classifyPlan(plan)).To(Equal("node-update+tls-enable"))
+	g.Expect(classifyPlan(plan)).To(Equal("node-update-tls-enable"))
 }
 
 // --- init-plan ObserveSidecarTLS insertion ---

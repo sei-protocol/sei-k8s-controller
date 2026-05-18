@@ -15,28 +15,29 @@ The first attempt at supporting TLS toggle on Running nodes (PR #254) added a dr
 
 This revision drops that approach entirely. The cert is no longer the controller's concern; it becomes platform-provisioned, mirroring how `spec.validator.signingKey`, `spec.validator.nodeKey`, `spec.validator.operatorKeyring`, and `spec.dataVolume.import.pvcName` already work.
 
-## 0.1 Design choice: externalize cert ownership; spec is immutable
+## 0.1 Design choice: externalize cert ownership; spec is set-once
 
-Three coupled decisions, each enabling the next:
+Three coupled decisions:
 
 **a) The controller does not provision the cert.** Operator/platform tooling (cert-manager `Certificate` in GitOps, or any other source) creates the `kubernetes.io/tls` Secret. The controller references it by name and gates progression on presence + cert validity. This matches every other security-sensitive resource in the SeiNode spec (`signingKey`, `nodeKey`, `operatorKeyring`, imported `PVC`).
 
-**b) `spec.sidecar.tls` is immutable post-creation.** Toggling TLS on an existing SeiNode is *not* a controller-orchestrated transition — it's a delete + recreate. The data PVC is retained externally (today via `spec.dataVolume.import.pvcName` pre-detach; future-cleaner via `spec.dataVolume.retainOnDelete`). At ~10 nodes for the foreseeable internal fleet, manual cycling is operationally fine and gives each transition a clean Pending → Running boundary instead of a mid-flight transport-mode flip.
+**b) `spec.sidecar.tls` is set-once.** Once set, the value is immutable: disable (`set → nil`) and swap (`A → B`) are rejected at admission via CEL. The one allowed transition is **enable post-creation** (`nil → set`), which triggers a NodeUpdate-style plan that cycles the pod with the proxy mount. This decision evolved across two PRs: #258 made the spec fully immutable on the rationale that delete + recreate at ~10 nodes was operationally fine; #262 un-deferred the enable case after operator validation that per-node delete + recreate is more friction than warranted, but kept disable and swap blocked because they remain genuinely irreversible (swap in particular implies a new trust anchor, which warrants a clean Pending → Running boundary). The transport-mode-flip-during-cycle concern is addressed by sourcing transport selection from `status.currentSidecarTLSSecretName` (observed) rather than spec.
 
 **c) The cert→SeiNode contract is machine-readable, not docs-only.** The controller publishes `status.sidecarTLS.{secretName, requiredDNSNames}` whenever TLS is enabled. Platform tooling reads this directly rather than re-deriving the K8s service DNS convention from documentation. The controller validates the Secret's cert SANs against this list before allowing the pod to schedule.
 
-What collapses under these decisions:
-- The drift detector (`sidecarTLSDrift`) — gone; immutable spec means no drift on Running nodes.
-- The status mirror (`status.currentSidecarTLS`) — gone; immutable spec means status = spec for TLS.
-- The condition reason expansion (`TLSToggleStarted`, `UpdateAndTLSToggleStarted`) — gone; toggle isn't a NodeUpdate.
-- `classifyPlan` discrimination — back to its pre-PR shape.
-- The `ApplySidecarCert` task and `GenerateSidecarCertificate` resource generator — gone; cert is external.
-- The `ObserveSidecarTLS` task — gone; nothing to observe on a Running node.
-- The Issuer trust-anchor security surface (`SidecarTLSSpec.IssuerName`/`IssuerKind`) — gone; trust-anchor selection happens entirely in platform tooling, outside the controller's blast radius.
+**d) Status is the source of truth for transport selection.** `SidecarURLForNode` reads `status.currentSidecarTLSSecretName` (observed), not `spec.sidecar.tls` (desired). The controller's sidecar client transport (cmd/main.go `newSidecarClient`) keys off the same observed field. Mid-rollout, the controller talks HTTP to the still-HTTP pod; after `ObserveSidecarTLS` stamps the mirror, both URL and transport flip together. This is the load-bearing fix for the windowing bug that bit the original PR #254 attempt.
 
-What stays:
-- `noderesource` pod/service generation with the existing `if SidecarTLSEnabled(node) { ... add proxy }` branching.
-- `ApplyRBACProxyConfig` task (the kube-rbac-proxy authz ConfigMap is controller-owned and depends on SeiNode namespace/name).
+**Load-bearing trust assumption:** the controller's `SidecarURLForNode` consumes `status.currentSidecarTLSSecretName`. Any actor with `seinodes/status` patch permission could flip the controller's transport selection (DoS on the reconcile loop, not data exfil — the sidecar still enforces its own auth). The existing RBAC (`manifests/role.yaml`) scopes status-write to the controller's own ServiceAccount only. This is canonical for controller-runtime managers but is now load-bearing; an admission-time check (ValidatingAdmissionPolicy) preventing non-controller writes to this field would be defense in depth.
+
+What lives in the controller under these decisions:
+- Drift detector `sidecarTLSEnableDrift` — narrow: spec set + status empty + preflight `SidecarTLSSecretReady=True`. Disable and swap aren't detector-handled because CEL blocks them at admission.
+- Status mirror `status.currentSidecarTLSSecretName` — drives transport selection; stamped only on rollout convergence (`StatefulSet.Status.ReadyReplicas >= *Replicas`) so a crashlooping proxy doesn't flip transport prematurely.
+- `ObserveSidecarTLS` task — polls StatefulSet rollout and stamps the mirror; injected before any sidecar HTTP task in every plan that brings up a TLS-enabled pod.
+- `ApplyRBACProxyConfig` task — controller-owned (the ConfigMap's SAR depends on namespace/name).
+
+What stays externalized:
+- The `kubernetes.io/tls` Secret containing cert + key.
+- Trust-anchor selection (Issuer / ClusterIssuer reference) — happens entirely in whatever produces the Secret.
 
 ## 1. CRD schema changes
 
@@ -45,13 +46,9 @@ What stays:
 
 // SidecarTLSSpec, if set, fronts the sidecar API with kube-rbac-proxy
 // on :8443 using TLS material from a Secret in the SeiNode's
-// namespace. The Secret is operator-provisioned (e.g., via a
-// cert-manager Certificate in the platform GitOps repo); this
-// controller does not create it.
-//
-// Immutable post-creation. Toggling TLS on an existing SeiNode is a
-// delete + recreate operation; data persists via the SeiNode's PVC
-// retention mechanism.
+// namespace. Operator-provisioned; the controller does not create it.
+// Set-once: enabling on an existing SeiNode is allowed (triggers a
+// NodeUpdate-style pod cycle); disable and swap are CEL-rejected.
 //
 // +optional
 TLS *SidecarTLSSpec `json:"tls,omitempty"`
@@ -191,33 +188,37 @@ There is no `WaitForSidecarTLSSecret` task in the plan — its job is absorbed i
 
 ## 4. Running-state behavior
 
-`buildRunningPlan` reverts to its pre-PR-#254 shape: image drift + sidecar re-approval, no TLS handling. There is no TLS drift to detect.
+`buildRunningPlan` detects two drifts: image drift (existing) and TLS-enable drift (added via #262). Both compose into one NodeUpdate plan when they co-fire; a single pod cycle covers both.
 
-If an operator attempts to mutate `spec.sidecar.tls`, the CRD CEL rejects the API request — no controller code runs.
+TLS-enable drift fires only on the `nil → set` transition (operator added `spec.sidecar.tls` to an existing SeiNode that previously had none). Disable and swap are CEL-rejected at admission; the detector never sees them. The plan composes `ApplyRBACProxyConfig → ApplyStatefulSet → ApplyService → ReplacePod → [ObserveImage if image drift] → ObserveSidecarTLS → MarkReady`. `ObserveSidecarTLS` polls StatefulSet rollout convergence (requires `ReadyReplicas >= *Replicas` so a crashlooping proxy doesn't flip transport prematurely), then stamps `status.currentSidecarTLSSecretName`.
 
 If the externally-provisioned Secret rotates in place (cert-manager renewal with the same SANs): kube-rbac-proxy's existing `--tls-reload-interval=30s` flag picks up the new material from the same Secret mount; no pod restart needed; no controller action. Pre-flight re-runs each reconcile and continues stamping `SidecarTLSSecretReady=True`.
 
-If the Secret SAN coverage breaks (wrong SANs after a misconfigured re-issuance, Secret deleted, etc.): pre-flight flips the condition to `SidecarTLSSecretReady=False`. Plan creation is gated — any plan that fires under a broken Secret would eventually cycle the pod (image-drift NodeUpdate plans always do; even a mark-ready replan ultimately retries the sidecar HTTP call through the proxy), and a cycled pod with a missing or mis-SAN'd Secret won't bind cleanly. The Running node keeps serving on whatever cert kube-rbac-proxy is already bound to (no controller action can force a reload-from-bad-Secret), so the user-visible effect is "running pod stays as-is, no new rollouts until the operator fixes the Secret."
+If the Secret SAN coverage breaks (wrong SANs after a misconfigured re-issuance, Secret deleted, etc.): pre-flight flips the condition to `SidecarTLSSecretReady=False`. Plan creation is gated for any TLS-required SeiNode whose condition is not Ready. The Running node keeps serving on whatever cert kube-rbac-proxy is already bound to (no controller action can force a reload-from-bad-Secret), so the user-visible effect is "running pod stays as-is, no new rollouts until the operator fixes the Secret."
 
-## 5. Operator workflow for "enable TLS on existing fleet"
+**Mid-rollout transport invariant:** `SidecarURLForNode` reads `status.currentSidecarTLSSecretName`; cmd/main.go's `newSidecarClient` keys its HTTP-doer choice on the same field. The two move in lockstep. During the enable rollout, both stay on HTTP while the old pod still listens on `:7777`; once `ObserveSidecarTLS` stamps the mirror, both flip to HTTPS for the new pod.
 
-The arctic-1 / atlantic-2 / pacific-1 use case:
+## 5. Operator workflow
 
-1. Platform tooling pre-provisions a `kubernetes.io/tls` Secret per SeiNode (cert-manager `Certificate` resources, GitOps-managed) with SANs matching the published `status.sidecarTLS.requiredDNSNames` — readable in advance from a dry-run of the target spec or from a known template.
-2. Per SeiNode (one at a time, governed by ops policy):
-   a. Detach the data PVC (existing `spec.dataVolume.import.pvcName` flow, or set `spec.dataVolume.retainOnDelete: true` if that lands first).
-   b. Delete the SeiNode.
-   c. Create a new SeiNode with the same name, `spec.sidecar.tls.secretName` set, and `spec.dataVolume.import.pvcName` pointing at the retained PVC.
-   d. Wait for `Phase=Running`.
+**Enable TLS at SeiNode creation:** apply a SeiNode with `spec.sidecar.tls.secretName` referencing a pre-provisioned `kubernetes.io/tls` Secret. SeiNode stays `Pending` with `SidecarTLSSecretReady=False/NotFound` until the Secret resolves; init plan runs once the condition flips to True.
 
-At ~10 nodes total, this is a one-time script. No SND-level orchestration changes needed; the SND already supports its existing rollout primitives.
+**Enable TLS on an existing Running SeiNode** (the arctic-1 / atlantic-2 / pacific-1 fleet path):
+
+1. Platform tooling provisions a `kubernetes.io/tls` Secret with SANs matching `status.sidecarTLS.requiredDNSNames` (pre-computable as `{name}.{ns}.svc.cluster.local` + `{name}-0.{name}.{ns}.svc.cluster.local`).
+2. Operator patches `spec.sidecar.tls.secretName` on the running SeiNode.
+3. Preflight validates the Secret on the next reconcile; condition flips to True.
+4. `sidecarTLSEnableDrift` fires; planner builds a NodeUpdate plan composing the proxy `ConfigMap` apply + StatefulSet/Service regen + pod cycle + observer + MarkReady.
+5. SeiNode stays in `Phase=Running` throughout; transport selection lags spec until `ObserveSidecarTLS` confirms `ReadyReplicas`.
+
+**Disable or swap:** delete + recreate the SeiNode. PVC retention via existing `spec.dataVolume.import.pvcName` (pre-detach) or future `spec.dataVolume.retainOnDelete`. Disable and swap remain CEL-rejected on existing objects because they require a clean Pending → Running boundary that mid-flight orchestration cannot provide.
 
 ## 6. Out of scope (deferred or unrelated)
 
 - **`spec.dataVolume.retainOnDelete: bool`** as a one-step PVC retention primitive (replaces the two-step pre-detach workflow). Small follow-up issue. Not blocking.
 - **SND-level retain-on-delete** ("delete the SND, keep the SeiNodes") — independently useful as a "drop the orchestrator, keep the fleet" escape hatch but unrelated to this LLD. Separate follow-up if desired.
-- **In-place TLS toggle on Running SeiNodes** — explicitly rejected in §0.1(b). Re-open as a separate design if the fleet scale or operational model changes such that delete + recreate is no longer feasible.
+- **In-place TLS disable or swap on Running SeiNodes** — CEL-rejected. Re-open as a separate design only if a coherent rollout path exists; today neither has one (disable would leave the proxy in place mid-flight serving stale state; swap implies a trust-anchor change that warrants Pending → Running).
 - **CA rotation observability** (cert fingerprint, SecretResourceVersion in status) — moot under the externalized-cert model; cert content is not the controller's concern.
+- **Admission-policy hardening of `status.currentSidecarTLSSecretName` writes.** The current trust assumption is that only the controller's ServiceAccount has `seinodes/status` patch permission. A ValidatingAdmissionPolicy preventing non-controller writes to this specific field would be defense in depth. Tracked separately.
 
 ## 7. Cross-cutting (operational notes)
 

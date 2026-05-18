@@ -57,6 +57,23 @@ func TestSidecarURLForNode_TLSSpecButNotYetObserved(t *testing.T) {
 	}
 }
 
+// TestSidecarURLForNode_StatusSetWithoutSpec exercises an edge case where
+// the status mirror is non-empty but spec.sidecar.tls is nil (e.g., a
+// hypothetical future disable transition mid-flight). The URL function
+// reads observed state only, so the controller still routes through TLS
+// until the next observer cycle clears the status mirror.
+func TestSidecarURLForNode_StatusSetWithoutSpec(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testValidatorName, Namespace: "sei"},
+		Status:     seiv1alpha1.SeiNodeStatus{CurrentSidecarTLSSecretName: testValidatorName + "-tls"},
+	}
+	got := SidecarURLForNode(node)
+	want := fmt.Sprintf("https://%s-0.%s.sei.svc.cluster.local:8443", testValidatorName, testValidatorName)
+	if got != want {
+		t.Errorf("URL = %q, want %q (status mirror is the source of truth)", got, want)
+	}
+}
+
 const (
 	testValidatorName = "validator-0"
 	testSeidImage     = "seid:v6.4.1"

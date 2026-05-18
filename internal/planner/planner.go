@@ -236,7 +236,7 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 	}
 	switch {
 	case hasImage && hasTLS:
-		return "node-update+tls-enable"
+		return "node-update-tls-enable"
 	case hasImage:
 		return "node-update"
 	case hasTLS:
@@ -555,15 +555,15 @@ func buildBasePlan(
 		prog = append(prog, task.TaskTypeValidateOperatorKeyring)
 	}
 	if noderesource.SidecarTLSEnabled(node) {
+		// ApplyRBACProxyConfig must precede ApplyStatefulSet (proxy
+		// mounts the ConfigMap). ObserveSidecarTLS must precede the
+		// sidecar HTTP progression so SidecarURLForNode picks up the
+		// TLS transport before SnapshotRestore / ConfigApply / MarkReady.
 		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
-	}
-	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
-	if noderesource.SidecarTLSEnabled(node) {
-		// Insert before the sidecar HTTP progression so SidecarURLForNode
-		// picks up the TLS transport mode (via the in-memory mutation of
-		// status.currentSidecarTLSSecretName) before the first sidecar
-		// HTTP call (SnapshotRestore / ConfigApply / MarkReady) fires.
+		prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
 		prog = append(prog, task.TaskTypeObserveSidecarTLS)
+	} else {
+		prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
 	}
 	prog = append(prog, sidecarProg...)
 
@@ -752,7 +752,7 @@ func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 // ResolvePlan gate also blocks plan creation when the condition is False,
 // so this is belt-and-suspenders.
 func sidecarTLSEnableDrift(node *seiv1alpha1.SeiNode) bool {
-	if !noderesource.SidecarTLSEnabled(node) {
+	if node.Spec.Sidecar == nil || node.Spec.Sidecar.TLS == nil {
 		return false
 	}
 	if node.Status.CurrentSidecarTLSSecretName == node.Spec.Sidecar.TLS.SecretName {

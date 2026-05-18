@@ -176,7 +176,12 @@ func main() {
 
 	newSidecarClient := func(node *seiv1alpha1.SeiNode) (*sidecar.SidecarClient, error) {
 		url := noderesource.SidecarURLForNode(node)
-		if noderesource.SidecarTLSEnabled(node) {
+		// Key the transport on the same observed-state field that
+		// SidecarURLForNode uses, not on spec. Mid-rollout (spec set,
+		// pod not yet cycled) the URL is still HTTP and the transport
+		// must match — otherwise mTLS-attempting doer hits an HTTP
+		// endpoint and the handshake fails.
+		if node.Status.CurrentSidecarTLSSecretName != "" {
 			return sidecar.NewSidecarClient(url, sidecar.WithHTTPDoer(sharedTLSDoer))
 		}
 		return sidecar.NewSidecarClient(url)
