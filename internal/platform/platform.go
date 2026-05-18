@@ -1,3 +1,6 @@
+// Package platform exposes the cluster-environment knobs (storage classes,
+// node pools, sidecar/exporter images, S3 buckets, Gateway coordinates)
+// the controller consumes when generating workload resources.
 package platform
 
 import (
@@ -53,7 +56,7 @@ type Config struct {
 	SidecarImage       string
 
 	// CosmosExporterImage is the sei-cosmos-exporter sidecar image.
-	// Required when any SeiNode sets spec.cosmosExporter: true.
+	// The cosmos-exporter container is attached to every SeiNode pod.
 	CosmosExporterImage string
 }
 
