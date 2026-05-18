@@ -624,7 +624,6 @@ func genesisCeremonyTaskParams(node *seiv1alpha1.SeiNode, taskType string) any {
 			ChainID:        gc.ChainID,
 			StakingAmount:  gc.StakingAmount,
 			AccountBalance: gc.AccountBalance,
-			GenesisParams:  gc.GenesisParams,
 		}
 	case TaskUploadGenesisArtifacts:
 		return sidecar.UploadGenesisArtifactsTask{NodeName: node.Name}

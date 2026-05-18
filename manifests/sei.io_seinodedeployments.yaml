@@ -114,10 +114,13 @@ spec:
                     type: string
                   overrides:
                     additionalProperties:
-                      type: string
+                      x-kubernetes-preserve-unknown-fields: true
                     description: |-
-                      Overrides is a flat map of dotted key paths merged on top of sei-config's
-                      GenesisDefaults(). Applied BEFORE gentx generation.
+                      Overrides is a flat map of dotted snake_case key paths to JSON values,
+                      merged on top of sei-config's GenesisDefaults() before gentx generation.
+                      Keys follow cosmos JSON encoding (e.g. "staking.params.unbonding_time")
+                      and values are arbitrary JSON (string, number, bool, object, array)
+                      matching the type at that path in the underlying genesis schema.
                     type: object
                   stakingAmount:
                     default: 10000000usei
@@ -127,6 +130,9 @@ spec:
                 required:
                 - chainId
                 type: object
+                x-kubernetes-validations:
+                - message: spec.genesis is immutable after creation
+                  rule: self == oldSelf
               networking:
                 description: |-
                   Networking enables public networking for the deployment.
@@ -607,11 +613,6 @@ spec:
                               chainId:
                                 description: ChainID of the genesis network.
                                 minLength: 1
-                                type: string
-                              genesisParams:
-                                description: |-
-                                  GenesisParams is a JSON string of genesis parameter overrides merged
-                                  on top of sei-config's GenesisDefaults(). Applied before gentx generation.
                                 type: string
                               index:
                                 description: Index is the node's ordinal within the

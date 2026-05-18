@@ -198,9 +198,9 @@ func (in *GenesisCeremonyConfig) DeepCopyInto(out *GenesisCeremonyConfig) {
 	}
 	if in.Overrides != nil {
 		in, out := &in.Overrides, &out.Overrides
-		*out = make(map[string]string, len(*in))
+		*out = make(map[string]apiextensionsv1.JSON, len(*in))
 		for key, val := range *in {
-			(*out)[key] = val
+			(*out)[key] = *val.DeepCopy()
 		}
 	}
 	if in.MaxCeremonyDuration != nil {

@@ -485,11 +485,6 @@ spec:
                         description: ChainID of the genesis network.
                         minLength: 1
                         type: string
-                      genesisParams:
-                        description: |-
-                          GenesisParams is a JSON string of genesis parameter overrides merged
-                          on top of sei-config's GenesisDefaults(). Applied before gentx generation.
-                        type: string
                       index:
                         description: Index is the node's ordinal within the group
                           (0-based).

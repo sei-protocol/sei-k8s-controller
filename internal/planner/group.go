@@ -36,11 +36,14 @@ func (p *genesisGroupPlanner) BuildPlan(
 
 	// Validate at planner-time so bech32 / shape errors hit
 	// `kubectl describe seinodedeployment` rather than a sidecar Job pod.
-	assembleParams := sidecar.AssembleAndUploadGenesisTask{
-		AccountBalance: group.Spec.Genesis.AccountBalance,
-		Namespace:      group.Namespace,
-		Nodes:          nodeParams,
-		Accounts:       accounts,
+	assembleParams := task.AssembleAndUploadGenesisTask{
+		AssembleAndUploadGenesisTask: sidecar.AssembleAndUploadGenesisTask{
+			AccountBalance: group.Spec.Genesis.AccountBalance,
+			Namespace:      group.Namespace,
+			Nodes:          nodeParams,
+			Accounts:       accounts,
+		},
+		Overrides: group.Spec.Genesis.Overrides,
 	}
 	if err := assembleParams.Validate(); err != nil {
 		return nil, err

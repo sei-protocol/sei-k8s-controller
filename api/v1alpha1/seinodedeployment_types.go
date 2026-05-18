@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -30,6 +31,7 @@ type SeiNodeDeploymentSpec struct {
 	// When set, the controller generates GenesisCeremonyNodeConfig for each
 	// child SeiNode and coordinates assembly of the final genesis.json.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec.genesis is immutable after creation"
 	Genesis *GenesisCeremonyConfig `json:"genesis,omitempty"`
 
 	// Networking enables public networking for the deployment.
@@ -97,10 +99,13 @@ type GenesisCeremonyConfig struct {
 	// +optional
 	Accounts []GenesisAccount `json:"accounts,omitempty"`
 
-	// Overrides is a flat map of dotted key paths merged on top of sei-config's
-	// GenesisDefaults(). Applied BEFORE gentx generation.
+	// Overrides is a flat map of dotted snake_case key paths to JSON values,
+	// merged on top of sei-config's GenesisDefaults() before gentx generation.
+	// Keys follow cosmos JSON encoding (e.g. "staking.params.unbonding_time")
+	// and values are arbitrary JSON (string, number, bool, object, array)
+	// matching the type at that path in the underlying genesis schema.
 	// +optional
-	Overrides map[string]string `json:"overrides,omitempty"`
+	Overrides map[string]apiextensionsv1.JSON `json:"overrides,omitempty"`
 
 	// MaxCeremonyDuration is the maximum time from group creation to genesis
 	// assembly completion. Default: "15m".
