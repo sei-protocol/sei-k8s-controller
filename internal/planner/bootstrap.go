@@ -112,6 +112,14 @@ func buildBootstrapPlan(
 		&task.ApplyServiceParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
 		return nil, err
 	}
+	if noderesource.SidecarTLSEnabled(node) {
+		// Inject before sidecar HTTP tasks so SidecarURLForNode picks up
+		// TLS transport (via status.currentSidecarTLSSecretName) first.
+		if err := appendTask(task.TaskTypeObserveSidecarTLS,
+			&task.ObserveSidecarTLSParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
+			return nil, err
+		}
+	}
 
 	// Phase 5: Post-bootstrap config on StatefulSet pod
 	for _, taskType := range postProg {
@@ -188,6 +196,13 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 	prog = append(prog,
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
+	)
+	if noderesource.SidecarTLSEnabled(node) {
+		// Inject before sidecar HTTP tasks so SidecarURLForNode picks up
+		// TLS transport before the first sidecar call.
+		prog = append(prog, task.TaskTypeObserveSidecarTLS)
+	}
+	prog = append(prog,
 		TaskGenerateIdentity,
 		TaskGenerateGentx,
 		TaskUploadGenesisArtifacts,

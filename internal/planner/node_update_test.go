@@ -97,7 +97,7 @@ func TestResolvePlan_NodeUpdate_SetsCondition(t *testing.T) {
 	g.Expect(cond).NotTo(BeNil(), "NodeUpdateInProgress condition should be set")
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 	g.Expect(cond.Reason).To(Equal("UpdateStarted"))
-	g.Expect(cond.Message).To(ContainSubstring("image drift detected"))
+	g.Expect(cond.Message).To(ContainSubstring("image drift"))
 }
 
 func TestResolvePlan_CompletedPlan_ClearsCondition(t *testing.T) {

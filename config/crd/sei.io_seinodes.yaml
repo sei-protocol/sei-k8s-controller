@@ -766,11 +766,11 @@ spec:
             - message: peers is required when replayer mode is set
               rule: '!has(self.replayer) || (has(self.peers) && size(self.peers) >
                 0)'
-            - message: spec.sidecar.tls is immutable; delete + recreate the SeiNode
-                to change TLS configuration
-              rule: '(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? (!has(self.sidecar)
-                || !has(self.sidecar.tls)) : (has(self.sidecar) && has(self.sidecar.tls)
-                && self.sidecar.tls == oldSelf.sidecar.tls)'
+            - message: 'spec.sidecar.tls is set-once: enabling on an existing SeiNode
+                is allowed, but disabling or changing requires delete + recreate'
+              rule: '(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? true :
+                (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls ==
+                oldSelf.sidecar.tls)'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:
@@ -840,6 +840,13 @@ spec:
                   StatefulSet rollout completes (currentRevision == updateRevision).
                   Parent controllers compare this against spec.image to determine
                   whether a spec change has been fully actuated.
+                type: string
+              currentSidecarTLSSecretName:
+                description: |-
+                  CurrentSidecarTLSSecretName is the spec.sidecar.tls.secretName
+                  observed on the live pod after the rollout converged. Drives the
+                  controller's sidecar client transport-mode selection (HTTP vs
+                  HTTPS). Empty when no TLS rollout has converged yet.
                 type: string
               externalAddress:
                 description: |-

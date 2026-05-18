@@ -29,11 +29,31 @@ func TestSidecarURLForNode_TLSRoutesThroughProxyHTTPS(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeSpec{Sidecar: &seiv1alpha1.SidecarConfig{
 			TLS: &seiv1alpha1.SidecarTLSSpec{SecretName: testValidatorName + "-tls"},
 		}},
+		Status: seiv1alpha1.SeiNodeStatus{CurrentSidecarTLSSecretName: testValidatorName + "-tls"},
 	}
 	got := SidecarURLForNode(node)
 	want := fmt.Sprintf("https://%s-0.%s.sei.svc.cluster.local:8443", testValidatorName, testValidatorName)
 	if got != want {
 		t.Errorf("URL = %q, want %q", got, want)
+	}
+}
+
+// TestSidecarURLForNode_TLSSpecButNotYetObserved exercises the mid-rollout
+// transport state: spec.sidecar.tls is set but the pod hasn't been cycled
+// (status.currentSidecarTLSSecretName empty). Controller MUST use plain
+// HTTP against the still-HTTP pod until the rollout converges.
+func TestSidecarURLForNode_TLSSpecButNotYetObserved(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testValidatorName, Namespace: "sei"},
+		Spec: seiv1alpha1.SeiNodeSpec{Sidecar: &seiv1alpha1.SidecarConfig{
+			TLS: &seiv1alpha1.SidecarTLSSpec{SecretName: testValidatorName + "-tls"},
+		}},
+		// Status.CurrentSidecarTLSSecretName intentionally empty.
+	}
+	got := SidecarURLForNode(node)
+	want := fmt.Sprintf("http://%s-0.%s.sei.svc.cluster.local:7777", testValidatorName, testValidatorName)
+	if got != want {
+		t.Errorf("mid-rollout URL = %q, want %q (must stay HTTP until ObserveSidecarTLS stamps status)", got, want)
 	}
 }
 

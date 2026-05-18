@@ -220,13 +220,27 @@ func setNodeUpdateCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionSt
 
 // classifyPlan returns the plan type for metrics.
 func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
+	var hasImage, hasTLS, hasInit bool
 	for _, t := range plan.Tasks {
 		switch t.Type {
 		case task.TaskTypeObserveImage:
-			return "node-update"
+			hasImage = true
+		case task.TaskTypeObserveSidecarTLS:
+			hasTLS = true
 		case task.TaskTypeEnsureDataPVC:
-			return "init"
+			hasInit = true
 		}
+	}
+	if hasInit {
+		return "init"
+	}
+	switch {
+	case hasImage && hasTLS:
+		return "node-update+tls-enable"
+	case hasImage:
+		return "node-update"
+	case hasTLS:
+		return "tls-enable"
 	}
 	if len(plan.Tasks) == 1 && plan.Tasks[0].Type == sidecar.TaskTypeMarkReady {
 		return "mark-ready-reapply"
@@ -544,6 +558,13 @@ func buildBasePlan(
 		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
 	}
 	prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
+	if noderesource.SidecarTLSEnabled(node) {
+		// Insert before the sidecar HTTP progression so SidecarURLForNode
+		// picks up the TLS transport mode (via the in-memory mutation of
+		// status.currentSidecarTLSSecretName) before the first sidecar
+		// HTTP call (SnapshotRestore / ConfigApply / MarkReady) fires.
+		prog = append(prog, task.TaskTypeObserveSidecarTLS)
+	}
 	prog = append(prog, sidecarProg...)
 
 	planID := uuid.New().String()
@@ -588,6 +609,8 @@ func paramsForTaskType(
 		return &task.ReplacePodParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeObserveImage:
 		return &task.ObserveImageParams{NodeName: node.Name, Namespace: node.Namespace}
+	case task.TaskTypeObserveSidecarTLS:
+		return &task.ObserveSidecarTLSParams{NodeName: node.Name, Namespace: node.Namespace}
 	case task.TaskTypeValidateSigningKey:
 		return validateSigningKeyParams(node)
 	case task.TaskTypeValidateNodeKey:
@@ -711,16 +734,31 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 }
 
 // buildRunningPlan returns a steady-state drift plan, or nil if no drift.
-// Image drift is checked first — its plan ends with MarkReady, so it also
-// resolves any stale sidecar.
+// Image drift and TLS-enable drift co-compose into one NodeUpdate plan so
+// a single pod cycle covers both.
 func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if node.Spec.Image != node.Status.CurrentImage {
+	if node.Spec.Image != node.Status.CurrentImage || sidecarTLSEnableDrift(node) {
 		return buildNodeUpdatePlan(node)
 	}
 	if sidecarNeedsReapproval(node) {
 		return buildMarkReadyPlan(node)
 	}
 	return nil, nil
+}
+
+// sidecarTLSEnableDrift reports whether the operator added spec.sidecar.tls
+// post-creation and the live pod hasn't yet been rolled with TLS.
+// Returns false unless the preflight has validated the Secret — the
+// ResolvePlan gate also blocks plan creation when the condition is False,
+// so this is belt-and-suspenders.
+func sidecarTLSEnableDrift(node *seiv1alpha1.SeiNode) bool {
+	if !noderesource.SidecarTLSEnabled(node) {
+		return false
+	}
+	if node.Status.CurrentSidecarTLSSecretName == node.Spec.Sidecar.TLS.SecretName {
+		return false
+	}
+	return sidecarTLSSecretReady(node)
 }
 
 func sidecarNeedsReapproval(node *seiv1alpha1.SeiNode) bool {
@@ -742,23 +780,39 @@ func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error
 	}, nil
 }
 
-// buildNodeUpdatePlan constructs a plan to roll out an image update on a
-// Running node. The plan applies the new StatefulSet spec, waits for the
-// rollout to complete, then re-initializes the sidecar.
+// buildNodeUpdatePlan constructs a plan to roll out an image update,
+// a TLS-enable transition, or both on a Running node. The plan applies
+// the regenerated StatefulSet spec, cycles the pod, observes whichever
+// fields drifted, then re-initializes the sidecar.
 //
 // FailedPhase is deliberately empty: a failure retries on the next reconcile
 // rather than transitioning the node out of Running.
 func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	imageDrift := node.Spec.Image != node.Status.CurrentImage
+	tlsEnable := sidecarTLSEnableDrift(node)
 	setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted",
-		fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage))
+		nodeUpdateMessage(node, imageDrift, tlsEnable))
 
-	prog := []string{
+	var prog []string
+	if tlsEnable {
+		// The kube-rbac-proxy authz ConfigMap is controller-owned and
+		// must exist before ApplyStatefulSet schedules the pod with the
+		// proxy container mount. The TLS Secret itself is operator-
+		// provisioned and already validated by preflight.
+		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
+	}
+	prog = append(prog,
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
 		task.TaskTypeReplacePod,
-		task.TaskTypeObserveImage,
-		sidecar.TaskTypeMarkReady,
+	)
+	if imageDrift {
+		prog = append(prog, task.TaskTypeObserveImage)
 	}
+	if tlsEnable {
+		prog = append(prog, task.TaskTypeObserveSidecarTLS)
+	}
+	prog = append(prog, sidecar.TaskTypeMarkReady)
 
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
@@ -775,6 +829,19 @@ func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, erro
 		Tasks:       tasks,
 		TargetPhase: seiv1alpha1.PhaseRunning,
 	}, nil
+}
+
+func nodeUpdateMessage(node *seiv1alpha1.SeiNode, imageDrift, tlsEnable bool) string {
+	switch {
+	case imageDrift && tlsEnable:
+		return fmt.Sprintf("image drift: spec=%s current=%s; tls enable: secretName=%s",
+			node.Spec.Image, node.Status.CurrentImage, node.Spec.Sidecar.TLS.SecretName)
+	case tlsEnable:
+		return fmt.Sprintf("tls enable: secretName=%s", node.Spec.Sidecar.TLS.SecretName)
+	default:
+		return fmt.Sprintf("image drift: spec=%s current=%s",
+			node.Spec.Image, node.Status.CurrentImage)
+	}
 }
 
 // mergeOverrides combines controller-generated overrides with user-specified

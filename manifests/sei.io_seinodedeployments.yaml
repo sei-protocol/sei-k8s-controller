@@ -895,11 +895,12 @@ spec:
                     - message: peers is required when replayer mode is set
                       rule: '!has(self.replayer) || (has(self.peers) && size(self.peers)
                         > 0)'
-                    - message: spec.sidecar.tls is immutable; delete + recreate the
-                        SeiNode to change TLS configuration
+                    - message: 'spec.sidecar.tls is set-once: enabling on an existing
+                        SeiNode is allowed, but disabling or changing requires delete
+                        + recreate'
                       rule: '(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls))
-                        ? (!has(self.sidecar) || !has(self.sidecar.tls)) : (has(self.sidecar)
-                        && has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)'
+                        ? true : (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls
+                        == oldSelf.sidecar.tls)'
                 required:
                 - spec
                 type: object
