@@ -85,12 +85,12 @@ func TestServicePorts_AlwaysIncludesAPIPort(t *testing.T) {
 	g.Expect(found).To(BeTrue(), "headless Service must publish the proxy API port")
 }
 
-func TestGenerateRBACProxyConfigMap_UsesGroupNotApiGroup(t *testing.T) {
+func TestGenerateRBACProxyConfigMap_UsesApiGroup(t *testing.T) {
 	g := NewWithT(t)
 	cm := GenerateRBACProxyConfigMap(newGenesisNode("a", "default"))
 	g.Expect(cm).NotTo(BeNil())
-	g.Expect(cm.Data["config.yaml"]).To(ContainSubstring("group: sei.io"),
-		"resourceAttributes uses 'group', not 'apiGroup' — kube-rbac-proxy unmarshals SAR ResourceAttributes, the field name is group")
+	g.Expect(cm.Data["config.yaml"]).To(ContainSubstring("apiGroup: sei.io"),
+		"field name must match kube-rbac-proxy's authz.ResourceAttributes struct (apiGroup, not group)")
 }
 
 func TestGenerateStatefulSet_ProxyImageMissing_Errors(t *testing.T) {

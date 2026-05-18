@@ -1013,10 +1013,10 @@ func proxyReadinessProbe() *corev1.Probe {
 
 // GenerateRBACProxyConfigMap produces the ConfigMap carrying the
 // kube-rbac-proxy authorization config — a single coarse SAR scoped
-// to (group=sei.io, resource=seinodetasks, namespace=<ns>, name=<node>).
-// Verb is derived from HTTP method by the proxy. Bypass paths live on
-// the proxy's --ignore-paths CLI flag, not this file (config-file
-// allowedPaths gates at the authz layer and still requires authn).
+// to (apiGroup=sei.io, resource=seinodetasks, namespace=<ns>, name=<node>).
+// Verb is derived from HTTP method by the proxy. The field name is
+// `apiGroup`, matching kube-rbac-proxy's authz.ResourceAttributes
+// struct (pkg/authz/auth.go).
 //
 // `name` scopes the SAR to the specific SeiNode so operators can bind
 // ClusterRoles with resourceNames to narrow access per-validator;
@@ -1025,7 +1025,7 @@ func GenerateRBACProxyConfigMap(node *seiv1alpha1.SeiNode) *corev1.ConfigMap {
 	config := strings.Join([]string{
 		"authorization:",
 		"  resourceAttributes:",
-		"    group: sei.io",
+		"    apiGroup: sei.io",
 		"    resource: seinodetasks",
 		"    namespace: " + node.Namespace,
 		"    name: " + node.Name,
