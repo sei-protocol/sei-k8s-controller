@@ -10,7 +10,7 @@ import (
 // the populated field determines the node's operating mode.
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, or validator must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
-// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? true : (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)",message="spec.sidecar.tls is set-once: enabling on an existing SeiNode is allowed, but disabling or changing requires delete + recreate"
+// +kubebuilder:validation:XValidation:rule="(!has(oldSelf.sidecar) || !has(oldSelf.sidecar.tls)) ? true : (has(self.sidecar) && has(self.sidecar.tls) && self.sidecar.tls == oldSelf.sidecar.tls)",message="spec.sidecar.tls is set-once; disable and swap require delete + recreate"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// +kubebuilder:validation:MinLength=1
@@ -363,10 +363,8 @@ type SeiNodeStatus struct {
 	// +optional
 	SidecarTLS *SidecarTLSStatus `json:"sidecarTLS,omitempty"`
 
-	// CurrentSidecarTLSSecretName is the spec.sidecar.tls.secretName
-	// observed on the live pod after the rollout converged. Drives the
-	// controller's sidecar client transport-mode selection (HTTP vs
-	// HTTPS). Empty when no TLS rollout has converged yet.
+	// CurrentSidecarTLSSecretName is the secretName observed on the
+	// live pod. Empty when TLS hasn't rolled out yet.
 	// +optional
 	CurrentSidecarTLSSecretName string `json:"currentSidecarTLSSecretName,omitempty"`
 }

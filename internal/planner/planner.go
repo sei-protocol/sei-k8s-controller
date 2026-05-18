@@ -555,13 +555,14 @@ func buildBasePlan(
 		prog = append(prog, task.TaskTypeValidateOperatorKeyring)
 	}
 	if noderesource.SidecarTLSEnabled(node) {
-		// ApplyRBACProxyConfig must precede ApplyStatefulSet (proxy
-		// mounts the ConfigMap). ObserveSidecarTLS must precede the
-		// sidecar HTTP progression so SidecarURLForNode picks up the
-		// TLS transport before SnapshotRestore / ConfigApply / MarkReady.
-		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
-		prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
-		prog = append(prog, task.TaskTypeObserveSidecarTLS)
+		// ConfigMap before StatefulSet (proxy mounts it); observer
+		// before sidecar HTTP tasks (transport flip).
+		prog = append(prog,
+			task.TaskTypeApplyRBACProxyConfig,
+			task.TaskTypeApplyStatefulSet,
+			task.TaskTypeApplyService,
+			task.TaskTypeObserveSidecarTLS,
+		)
 	} else {
 		prog = append(prog, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService)
 	}
@@ -733,9 +734,7 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	return out
 }
 
-// buildRunningPlan returns a steady-state drift plan, or nil if no drift.
-// Image drift and TLS-enable drift co-compose into one NodeUpdate plan so
-// a single pod cycle covers both.
+// buildRunningPlan returns a drift plan, or nil if none applies.
 func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Spec.Image != node.Status.CurrentImage || sidecarTLSEnableDrift(node) {
 		return buildNodeUpdatePlan(node)
@@ -746,11 +745,8 @@ func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 	return nil, nil
 }
 
-// sidecarTLSEnableDrift reports whether the operator added spec.sidecar.tls
-// post-creation and the live pod hasn't yet been rolled with TLS.
-// Returns false unless the preflight has validated the Secret — the
-// ResolvePlan gate also blocks plan creation when the condition is False,
-// so this is belt-and-suspenders.
+// sidecarTLSEnableDrift fires when spec.sidecar.tls is set, the pod
+// hasn't been rolled with TLS yet, and preflight has validated the Secret.
 func sidecarTLSEnableDrift(node *seiv1alpha1.SeiNode) bool {
 	if node.Spec.Sidecar == nil || node.Spec.Sidecar.TLS == nil {
 		return false
@@ -780,13 +776,8 @@ func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error
 	}, nil
 }
 
-// buildNodeUpdatePlan constructs a plan to roll out an image update,
-// a TLS-enable transition, or both on a Running node. The plan applies
-// the regenerated StatefulSet spec, cycles the pod, observes whichever
-// fields drifted, then re-initializes the sidecar.
-//
-// FailedPhase is deliberately empty: a failure retries on the next reconcile
-// rather than transitioning the node out of Running.
+// buildNodeUpdatePlan composes image-drift, TLS-enable drift, or both.
+// FailedPhase is empty: failures retry, not transition out of Running.
 func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	imageDrift := node.Spec.Image != node.Status.CurrentImage
 	tlsEnable := sidecarTLSEnableDrift(node)
@@ -795,10 +786,6 @@ func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, erro
 
 	var prog []string
 	if tlsEnable {
-		// The kube-rbac-proxy authz ConfigMap is controller-owned and
-		// must exist before ApplyStatefulSet schedules the pod with the
-		// proxy container mount. The TLS Secret itself is operator-
-		// provisioned and already validated by preflight.
 		prog = append(prog, task.TaskTypeApplyRBACProxyConfig)
 	}
 	prog = append(prog,

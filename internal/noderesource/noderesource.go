@@ -1155,12 +1155,9 @@ func GenerateRBACProxyConfigMap(node *seiv1alpha1.SeiNode) *corev1.ConfigMap {
 	}
 }
 
-// SidecarURLForNode builds the in-cluster URL the controller uses to
-// reach a node's sidecar. Routes through kube-rbac-proxy on HTTPS :8443
-// when the live pod is serving TLS; otherwise plain HTTP on the sidecar
-// port. Reads the OBSERVED state (Status.CurrentSidecarTLSSecretName),
-// not spec, so a mid-rollout SeiNode (spec.tls just set, pod not yet
-// cycled) keeps using HTTP until the new pod is up.
+// SidecarURLForNode returns the in-cluster URL for a node's sidecar.
+// HTTPS :8443 via kube-rbac-proxy when status reports TLS live;
+// otherwise plain HTTP on the sidecar port.
 func SidecarURLForNode(node *seiv1alpha1.SeiNode) string {
 	scheme, port := "http", SidecarPort(node)
 	if node.Status.CurrentSidecarTLSSecretName != "" {

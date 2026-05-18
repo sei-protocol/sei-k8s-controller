@@ -82,12 +82,8 @@ func TestObserveSidecarTLS_RolloutComplete_StampsCurrent(t *testing.T) {
 	g.Expect(node.Status.CurrentSidecarTLSSecretName).To(Equal("my-tls-cert"))
 }
 
-// TestObserveSidecarTLS_TemplateAppliedButProxyNotReady_StaysRunning is the
-// crashlooping-proxy scenario: kubelet has applied the new pod template
-// (UpdatedReplicas=1) but the proxy container's readiness probe is failing
-// (ReadyReplicas=0). The observer must NOT stamp status — otherwise
-// SidecarURLForNode would flip to HTTPS and MarkReady would hit
-// connection-refused against the unready proxy.
+// TestObserveSidecarTLS_TemplateAppliedButProxyNotReady_StaysRunning:
+// UpdatedReplicas=1 but ReadyReplicas=0 must not stamp status.
 func TestObserveSidecarTLS_TemplateAppliedButProxyNotReady_StaysRunning(t *testing.T) {
 	g := NewWithT(t)
 	node := observeTLSNode("my-tls-cert")

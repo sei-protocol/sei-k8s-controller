@@ -30,7 +30,6 @@ func tlsEnableRunningNode() *seiv1alpha1.SeiNode {
 		Status: seiv1alpha1.SeiNodeStatus{
 			Phase:        seiv1alpha1.PhaseRunning,
 			CurrentImage: tlsImageV1,
-			// CurrentSidecarTLSSecretName intentionally empty — TLS just enabled.
 		},
 	}
 }
@@ -98,7 +97,7 @@ func TestBuildRunningPlan_TLSEnableOnly(t *testing.T) {
 func TestBuildRunningPlan_ImageAndTLSEnable_CoCompose(t *testing.T) {
 	g := NewWithT(t)
 	node := tlsEnableRunningNode()
-	node.Spec.Image = tlsImageV2 // image drift on top of TLS enable
+	node.Spec.Image = tlsImageV2
 	setTLSSecretReady2(node, metav1.ConditionTrue)
 
 	plan, err := buildRunningPlan(node)
@@ -114,18 +113,14 @@ func TestBuildRunningPlan_ImageAndTLSEnable_CoCompose(t *testing.T) {
 		task.TaskTypeObserveImage,
 		task.TaskTypeObserveSidecarTLS,
 		TaskMarkReady,
-	}), "both observers run in one plan; single pod cycle covers both drifts")
+	}))
 }
 
 func TestBuildRunningPlan_ImageOnlyDrift_TLSAlreadyConverged(t *testing.T) {
-	// Image drift on a node whose TLS is already converged. TLS-enable
-	// drift detector returns false (status mirrors spec), so the plan
-	// omits ApplyRBACProxyConfig and ObserveSidecarTLS — the existing
-	// ConfigMap and status mirror stand from the prior plan.
 	g := NewWithT(t)
 	node := tlsEnableRunningNode()
-	node.Status.CurrentSidecarTLSSecretName = tlsEnableSecretName // already converged
-	node.Spec.Image = tlsImageV2                                  // image drift only
+	node.Status.CurrentSidecarTLSSecretName = tlsEnableSecretName
+	node.Spec.Image = tlsImageV2
 	setTLSSecretReady2(node, metav1.ConditionTrue)
 
 	plan, err := buildRunningPlan(node)
@@ -157,7 +152,6 @@ func TestResolvePlan_TLSEnable_SetsAndClearsCondition(t *testing.T) {
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 	g.Expect(cond.Message).To(ContainSubstring("tls enable"))
 
-	// Simulate plan completion + observer stamping the status mirror.
 	node.Status.Plan.Phase = seiv1alpha1.TaskPlanComplete
 	node.Status.CurrentSidecarTLSSecretName = tlsEnableSecretName
 

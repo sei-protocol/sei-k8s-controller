@@ -113,14 +113,8 @@ func buildBootstrapPlan(
 		return nil, err
 	}
 	if noderesource.SidecarTLSEnabled(node) {
-		// Inject between the production-pod StatefulSet apply and the
-		// Phase-5 post-bootstrap sidecar progression. Phase-2 bootstrap
-		// sidecar tasks run earlier against the bootstrap pod (plain
-		// HTTP, no proxy); status.CurrentSidecarTLSSecretName is empty
-		// at that point so SidecarURLForNode and newSidecarClient both
-		// use HTTP transport. After this task stamps the status mirror,
-		// Phase-5 sidecar tasks switch to HTTPS against the production
-		// pod's kube-rbac-proxy.
+		// Phase-2 tasks ran against the bootstrap pod (HTTP, no proxy);
+		// this stamps the status mirror so Phase-5 tasks use HTTPS.
 		if err := appendTask(task.TaskTypeObserveSidecarTLS,
 			&task.ObserveSidecarTLSParams{NodeName: node.Name, Namespace: node.Namespace}); err != nil {
 			return nil, err
@@ -204,8 +198,6 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		task.TaskTypeApplyService,
 	)
 	if noderesource.SidecarTLSEnabled(node) {
-		// Inject before sidecar HTTP tasks so SidecarURLForNode picks up
-		// TLS transport before the first sidecar call.
 		prog = append(prog, task.TaskTypeObserveSidecarTLS)
 	}
 	prog = append(prog,

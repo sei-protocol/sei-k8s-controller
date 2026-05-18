@@ -42,10 +42,8 @@ func deserializeObserveSidecarTLS(id string, params json.RawMessage, cfg Executi
 	}, nil
 }
 
-// Execute polls the StatefulSet rollout. Once converged, stamps
-// status.currentSidecarTLSSecretName from spec so the controller's
-// sidecar client transport-mode selection (SidecarURLForNode) picks
-// up the new live state before the plan's MarkReady call fires.
+// Execute polls StatefulSet rollout convergence and stamps
+// status.currentSidecarTLSSecretName from spec on success.
 func (e *observeSidecarTLSExecution) Execute(ctx context.Context) error {
 	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
@@ -70,11 +68,8 @@ func (e *observeSidecarTLSExecution) Execute(ctx context.Context) error {
 	if sts.Spec.Replicas == nil {
 		return nil
 	}
-	// Stricter than ObserveImage: require ReadyReplicas (kube-rbac-proxy
-	// passed its readiness probe), not just UpdatedReplicas (template
-	// applied). Stamping the status mirror flips SidecarURLForNode to
-	// HTTPS; if the proxy is still crash-looping, MarkReady would hit
-	// connection-refused. Gate on actual proxy serving.
+	// Require ReadyReplicas (proxy passed its readiness probe), not
+	// just UpdatedReplicas — stamping flips transport to HTTPS.
 	if sts.Status.UpdatedReplicas < *sts.Spec.Replicas || sts.Status.ReadyReplicas < *sts.Spec.Replicas {
 		return nil
 	}
