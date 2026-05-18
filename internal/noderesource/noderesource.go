@@ -950,6 +950,7 @@ func buildRBACProxyContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1
 			fmt.Sprintf("--upstream=http://127.0.0.1:%d/", SidecarPort(node)),
 			"--config-file=" + rbacProxyConfigMountPath + "/config.yaml",
 			"--ignore-paths=" + strings.Join(bypassPaths(), ","),
+			"--auth-header-fields-enabled=true",
 			"--v=0",
 		},
 		Ports: []corev1.ContainerPort{
