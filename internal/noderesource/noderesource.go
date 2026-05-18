@@ -550,8 +550,6 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 		},
 		VolumeMounts:    mounts,
 		SecurityContext: sidecarSecurityContext(),
-		LivenessProbe:   sidecarLivenessProbe(node, port),
-		ReadinessProbe:  sidecarReadinessProbe(node, port),
 	}
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Resources != nil {
 		c.Resources = *node.Spec.Sidecar.Resources
@@ -936,17 +934,6 @@ func sidecarSecurityContext() *corev1.SecurityContext {
 // resourceAttributes + allow-paths config. Exported for the same reason.
 func RBACProxyConfigMapName(node *seiv1alpha1.SeiNode) string {
 	return node.Name + "-rbac-proxy-config"
-}
-
-// Sidecar binds loopback; probes live on the kube-rbac-proxy container.
-// Pod readiness gates on all containers, so a wedged sidecar fails the
-// proxy's readiness probe (upstream returns 5xx) and the pod stays NotReady.
-func sidecarLivenessProbe(_ *seiv1alpha1.SeiNode, _ int32) *corev1.Probe {
-	return nil
-}
-
-func sidecarReadinessProbe(_ *seiv1alpha1.SeiNode, _ int32) *corev1.Probe {
-	return nil
 }
 
 // buildRBACProxyContainer fronts the loopback-bound sidecar with
