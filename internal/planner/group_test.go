@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -139,6 +140,113 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 	}
 	if len(params.Nodes) != 1 {
 		t.Errorf("expected 1 node, got %d", len(params.Nodes))
+	}
+}
+
+// Locks in plumbing of spec.genesis.overrides into the assemble-and-upload-genesis
+// task params; the sidecar consumes "overrides" from the wire request at
+// genesis-assembly time. Loss of this propagation is a silent regression that
+// would leave SIP-3 test clusters running with cosmos-default params.
+func TestBuildGroupAssemblyPlan_PropagatesOverrides(t *testing.T) {
+	overrides := map[string]apiextensionsv1.JSON{
+		"staking.params.unbonding_time": {Raw: []byte(`"600s"`)},
+		"gov.params.voting_period":      {Raw: []byte(`"30s"`)},
+	}
+	group := &seiv1alpha1.SeiNodeDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "ov-group", Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+			Replicas: 1,
+			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+				ChainID: sourceChainID, AccountBalance: testAccountBalance,
+				Overrides: overrides,
+			},
+		},
+		Status: seiv1alpha1.SeiNodeDeploymentStatus{
+			IncumbentNodes: []string{testNodeName},
+			Conditions: []metav1.Condition{
+				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	p, err := ForGroup(group)
+	if err != nil {
+		t.Fatalf("ForGroup: %v", err)
+	}
+	plan, err := p.BuildPlan(group)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	var params sidecar.AssembleAndUploadGenesisTask
+	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
+		t.Fatalf("unmarshal assemble params: %v", err)
+	}
+	if len(params.Overrides) != 2 {
+		t.Fatalf("Overrides: got %d entries, want 2", len(params.Overrides))
+	}
+	if got := string(params.Overrides["staking.params.unbonding_time"]); got != `"600s"` {
+		t.Errorf("staking.params.unbonding_time = %s, want \"600s\"", got)
+	}
+	if got := string(params.Overrides["gov.params.voting_period"]); got != `"30s"` {
+		t.Errorf("gov.params.voting_period = %s, want \"30s\"", got)
+	}
+
+	// Wire-shape check: TaskRequest.Params surfaces "overrides" as a flat
+	// map keyed by the same dotted paths, matching the sidecar contract.
+	req := params.ToTaskRequest()
+	if req.Params == nil {
+		t.Fatal("TaskRequest.Params should not be nil")
+	}
+	wire, ok := (*req.Params)["overrides"].(map[string]any)
+	if !ok {
+		t.Fatalf("TaskRequest.Params[\"overrides\"] not a map: %T", (*req.Params)["overrides"])
+	}
+	if _, ok := wire["staking.params.unbonding_time"]; !ok {
+		t.Errorf("wire overrides missing staking.params.unbonding_time: %#v", wire)
+	}
+}
+
+// Ensures the assemble-genesis Params shape stays the upstream title-cased one
+// when the user omits Overrides — guards against accidental field-rename drift.
+func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
+	group := &seiv1alpha1.SeiNodeDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "noov-group", Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+			Replicas: 1,
+			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+				ChainID: sourceChainID, AccountBalance: testAccountBalance,
+			},
+		},
+		Status: seiv1alpha1.SeiNodeDeploymentStatus{
+			IncumbentNodes: []string{testNodeName},
+			Conditions: []metav1.Condition{
+				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
+			},
+		},
+	}
+
+	p, _ := ForGroup(group)
+	plan, err := p.BuildPlan(group)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	var params sidecar.AssembleAndUploadGenesisTask
+	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(params.Overrides) != 0 {
+		t.Errorf("Overrides should be empty, got %d entries", len(params.Overrides))
+	}
+	// Wire request must not advertise an "overrides" key when unset; the
+	// sidecar treats an empty map and a missing key identically, but the
+	// missing-key shape avoids ambiguity in cross-version compatibility.
+	req := params.ToTaskRequest()
+	if req.Params != nil {
+		if _, present := (*req.Params)["overrides"]; present {
+			t.Errorf("TaskRequest.Params should not contain \"overrides\" when unset; got: %#v", *req.Params)
+		}
 	}
 }
 

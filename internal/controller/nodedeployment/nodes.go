@@ -222,7 +222,6 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeDeployment, ordinal int) *seiv1al
 			ChainID:        gc.ChainID,
 			StakingAmount:  gc.StakingAmount,
 			AccountBalance: gc.AccountBalance,
-			GenesisParams:  marshalOverrides(gc.Overrides),
 			Index:          int32(ordinal),
 		}
 	}

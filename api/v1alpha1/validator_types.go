@@ -226,11 +226,6 @@ type GenesisCeremonyNodeConfig struct {
 	// +kubebuilder:validation:MinLength=1
 	AccountBalance string `json:"accountBalance"`
 
-	// GenesisParams is a JSON string of genesis parameter overrides merged
-	// on top of sei-config's GenesisDefaults(). Applied before gentx generation.
-	// +optional
-	GenesisParams string `json:"genesisParams,omitempty"`
-
 	// Index is the node's ordinal within the group (0-based).
 	// +kubebuilder:validation:Minimum=0
 	Index int32 `json:"index"`
