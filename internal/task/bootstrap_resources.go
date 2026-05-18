@@ -161,6 +161,7 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 			fmt.Sprintf("--insecure-listen-address=0.0.0.0:%d", noderesource.RBACProxyPort),
 			fmt.Sprintf("--upstream=http://127.0.0.1:%d/", port),
 			"--config-file=/etc/kube-rbac-proxy/config.yaml",
+			"--auth-header-fields-enabled=true",
 			"--v=0",
 		},
 		Ports: []corev1.ContainerPort{

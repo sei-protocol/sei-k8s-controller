@@ -20,6 +20,8 @@ func TestPodSpec_AlwaysHasProxyContainer(t *testing.T) {
 	g.Expect(*proxy.RestartPolicy).To(Equal(corev1.ContainerRestartPolicyAlways))
 	g.Expect(proxy.Args).To(ContainElement("--insecure-listen-address=0.0.0.0:8443"))
 	g.Expect(proxy.Args).To(ContainElement("--upstream=http://127.0.0.1:7777/"))
+	g.Expect(proxy.Args).To(ContainElement("--auth-header-fields-enabled=true"),
+		"sidecar trusted-header authn mode requires the proxy to forward X-Remote-User")
 
 	for _, a := range proxy.Args {
 		g.Expect(a).NotTo(HavePrefix("--tls-cert-file="), "TLS args must not appear")
