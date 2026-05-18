@@ -445,9 +445,8 @@ func bootstrapMode(snap *seiv1alpha1.SnapshotSource) string {
 	return "genesis"
 }
 
-// SidecarURLForNode re-exports noderesource.SidecarURLForNode so
-// existing planner callers (and external tests) don't need to update
-// their import path.
+// SidecarURLForNode re-exports noderesource.SidecarURLForNode for callers
+// that already depend on the planner package.
 var SidecarURLForNode = noderesource.SidecarURLForNode
 
 // marshalParams serializes a task params struct to apiextensionsv1.JSON.
