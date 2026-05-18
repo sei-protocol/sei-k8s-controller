@@ -1,3 +1,6 @@
+// Package observability holds the shared OTel meter/attribute keys and the
+// PhaseTracker used by both controllers to surface kube-state-metrics-style
+// phase gauges and reconcile counters.
 package observability
 
 import (

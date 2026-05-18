@@ -35,10 +35,13 @@
 //
 // NodeUpdate plans roll out image changes on Running nodes. They are built
 // when spec.image != status.currentImage (drift detection). The task sequence
-// is: apply-statefulset, apply-service, observe-image, mark-ready. The planner
-// sets NodeUpdateInProgress=True on creation and clears it when the plan
-// completes or fails. FailedPhase is empty — failures retry on the next
-// reconcile rather than transitioning to Failed.
+// is: apply-statefulset, apply-service, replace-pod, observe-image, mark-ready.
+// replace-pod proactively deletes pods at the old StatefulSet revision so the
+// rollout proceeds even when seid is intentionally unready (e.g. halted at a
+// chain upgrade height). The planner sets NodeUpdateInProgress=True on
+// creation and clears it when the plan completes or fails. FailedPhase is
+// empty — failures retry on the next reconcile rather than transitioning to
+// Failed.
 //
 // When no drift is detected for a Running node, no plan is built. The node
 // sits in steady state with no active plan.
