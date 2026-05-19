@@ -81,6 +81,7 @@ func (e *updateNodeImageExecution) Execute(ctx context.Context) error {
 	patch.SetNamespace(target.Namespace)
 	patch.Spec.Image = e.params.Image
 
+	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
 	if err := e.cfg.KubeClient.Patch(ctx, patch, client.Apply, updateNodeImageFieldOwner, client.ForceOwnership); err != nil {
 		return fmt.Errorf("patching target spec.image: %w", err)
 	}
