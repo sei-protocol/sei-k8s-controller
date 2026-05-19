@@ -478,18 +478,18 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 		FSGroup:             &fsGroup,
 		FSGroupChangePolicy: &fsGroupChangePolicy,
 	}
-	spec.InitContainers = []corev1.Container{
-		buildSeidInitContainer(node),
-		buildSidecarContainer(node, p),
-		buildRBACProxyContainer(node, p),
-	}
 	ceContainer, err := buildCosmosExporterContainer(node, p)
 	if err != nil {
 		return corev1.PodSpec{}, err
 	}
+	spec.InitContainers = []corev1.Container{
+		buildSeidInitContainer(node),
+		buildSidecarContainer(node, p),
+		buildRBACProxyContainer(node, p),
+		ceContainer,
+	}
 	spec.Containers = []corev1.Container{
 		buildSidecarMainContainer(node, p),
-		ceContainer,
 	}
 
 	return spec, nil
@@ -614,8 +614,9 @@ func buildCosmosExporterContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) (
 		return corev1.Container{}, fmt.Errorf("SEI_COSMOS_EXPORTER_IMAGE is required on the operator Deployment")
 	}
 	return corev1.Container{
-		Name:  containerNameCosmosExporter,
-		Image: p.CosmosExporterImage,
+		Name:          containerNameCosmosExporter,
+		Image:         p.CosmosExporterImage,
+		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Args: []string{
 			"--denom", "usei",
 			"--denom-coefficient", "1000000",
