@@ -27,6 +27,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
 	nodedeploymentcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment"
+	nodetaskcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodetask"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
@@ -252,6 +253,32 @@ func main() {
 		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNodeDeployment")
+		os.Exit(1)
+	}
+
+	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
+	taskRecorder := mgr.GetEventRecorderFor("seinodetask-controller")
+	if err := (&nodetaskcontroller.SeiNodeTaskReconciler{
+		Client:   kc,
+		Scheme:   mgr.GetScheme(),
+		Recorder: taskRecorder,
+		Platform: platformCfg,
+		ConfigFor: func(_ context.Context, _ *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) task.ExecutionConfig {
+			return task.ExecutionConfig{
+				BuildSidecarClient: func() (task.SidecarClient, error) {
+					return buildSidecarClient(target)
+				},
+				NewSidecarClient: newSidecarClient,
+				KubeClient:       kc,
+				APIReader:        mgr.GetAPIReader(),
+				Scheme:           mgr.GetScheme(),
+				Resource:         target,
+				Platform:         platformCfg,
+				ObjectStore:      objectStore,
+			}
+		},
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "SeiNodeTask")
 		os.Exit(1)
 	}
 
