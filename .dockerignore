@@ -12,3 +12,10 @@
 
 # Re-include embedded shell scripts
 !**/*.sh
+
+# Re-include the runner image's per-kind Go text templates. The runner
+# Dockerfile (runner/Dockerfile) bakes runner/templates/ into the image
+# at /templates/. Without this re-include the seitask-runner build fails
+# at `COPY --from=builder /workspace/runner/templates /templates` with
+# "not found".
+!runner/templates/**
