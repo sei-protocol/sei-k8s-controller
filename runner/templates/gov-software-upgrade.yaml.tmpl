@@ -1,0 +1,25 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeTask
+metadata:
+  # name is rewritten to a deterministic value by the runner; this placeholder
+  # is here only to keep the manifest schema-valid pre-rewrite.
+  name: PLACEHOLDER
+spec:
+  kind: GovSoftwareUpgrade
+  target:
+    nodeRef:
+      name: {{ .NODE }}
+  timeoutSeconds: {{ with index . "TIMEOUT_SECONDS" }}{{ . }}{{ else }}600{{ end }}
+  govSoftwareUpgrade:
+    chainId: {{ .CHAIN_ID }}
+    keyName: {{ .KEY_NAME }}
+    title: {{ .TITLE | printf "%q" }}
+    description: {{ .DESCRIPTION | printf "%q" }}
+    upgradeName: {{ .UPGRADE_NAME }}
+    upgradeHeight: {{ .UPGRADE_HEIGHT }}
+    {{- with index . "UPGRADE_INFO" }}
+    upgradeInfo: {{ . | printf "%q" }}
+    {{- end }}
+    initialDeposit: {{ .INITIAL_DEPOSIT }}
+    fees: {{ .FEES }}
+    gas: {{ .GAS }}

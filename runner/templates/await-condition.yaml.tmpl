@@ -1,0 +1,16 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeTask
+metadata:
+  name: PLACEHOLDER
+spec:
+  kind: AwaitCondition
+  target:
+    nodeRef:
+      name: {{ .NODE }}
+  timeoutSeconds: {{ with index . "TIMEOUT_SECONDS" }}{{ . }}{{ else }}900{{ end }}
+  awaitCondition:
+    height:
+      targetHeight: {{ .TARGET_HEIGHT }}
+    {{- with index . "ACTION" }}
+    action: {{ . }}
+    {{- end }}
