@@ -140,7 +140,7 @@ spec:
                 echo "TARGET_HEIGHT=${EXISTING} already set; short-circuiting"
                 exit 0
               fi
-              RPC="http://${SEI_DEPLOYMENT}-0.${SEI_NAMESPACE}.svc.cluster.local:26657"
+              RPC="http://${SEI_DEPLOYMENT}-internal.${SEI_NAMESPACE}.svc.cluster.local:26657"
               CUR=$(curl -fsS "${RPC}/status" | sed -n 's/.*"latest_block_height":"\([0-9]*\)".*/\1/p')
               if [ -z "${CUR}" ]; then
                 echo "failed to parse latest_block_height from ${RPC}/status" >&2
@@ -233,7 +233,7 @@ spec:
           args:
             - |
               set -eu
-              REST="http://${SEI_DEPLOYMENT}-0.${SEI_NAMESPACE}.svc.cluster.local:1317"
+              REST="http://${SEI_DEPLOYMENT}-internal.${SEI_NAMESPACE}.svc.cluster.local:1317"
               # gov v1beta1 voting_period = 2
               for i in $(seq 1 150); do
                 BODY=$(curl -fsS "${REST}/cosmos/gov/v1beta1/proposals?proposal_status=2" || true)
@@ -382,7 +382,7 @@ spec:
           args:
             - |
               set -eu
-              REST="http://${SEI_DEPLOYMENT}-0.${SEI_NAMESPACE}.svc.cluster.local:1317"
+              REST="http://${SEI_DEPLOYMENT}-internal.${SEI_NAMESPACE}.svc.cluster.local:1317"
               for i in $(seq 1 300); do
                 STATUS=$(curl -fsS "${REST}/cosmos/gov/v1beta1/proposals/${PROPOSAL_ID}" \
                           | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p' | head -1)
