@@ -1,0 +1,599 @@
+# Chaos Mesh Workflow: major-upgrade scenario
+#
+# Acceptance test for the SeiNodeTask MVP. Expresses
+# sei-chain/integration_test/upgrade_module/major_upgrade_test.yaml as a
+# composition of SeiNodeTask CRs driven by the seitask-runner.
+#
+# !!! KNOWN BLOCKER (see scenarios/README.md "Status") !!!
+# The /workflow/vars/env.sh bridge described in the LLD assumes a volume
+# shared across Workflow Task steps. Chaos Mesh synthesizes one Pod per
+# Task, so a plain emptyDir does not actually persist across steps today.
+# This YAML is structured as if a real cross-step bridge existed (each
+# step declares the `vars` volume + mount) so it is forward-compatible
+# with the bridge that a follow-up PR will add (ConfigMap-as-env-store is
+# the recommended approach). Do not expect this Workflow to run
+# end-to-end until that bridge is in place.
+#
+# Scope
+# -----
+# Operates on an existing 4-validator SeiNodeDeployment named "$SEI_DEPLOYMENT"
+# in namespace "$SEI_NAMESPACE". Validators are named "$SEI_DEPLOYMENT-0" ..
+# "$SEI_DEPLOYMENT-3" (see internal/controller/nodedeployment/labels.go).
+#
+# Liveness model (post-trim)
+# --------------------------
+# Pre-upgrade RPC reachability and panic detection (RPC-down / stuck-at-H-1)
+# have been removed. Liveness is asserted only AFTER each upgrade step
+# completes, via SeiNodeTask AwaitCondition height-advance checks. A node
+# whose height advances past TARGET_HEIGHT+10 has, by construction, both
+# survived the upgrade boundary and is producing/applying blocks.
+#
+# Authoring discipline (LLD: docs/design/seinode-task-lld.md)
+# -----------------------------------------------------------
+# 1. Inter-step parameter passing is via /workflow/vars/env.sh (emptyDir).
+#    Steps that produce env vars use --output-jsonpath <jsonpath>=<ENV_VAR>;
+#    the runner sources /workflow/vars/env.sh at startup and merges sourced
+#    pairs into the template var map. Bash steps write to env.sh directly.
+#    See Status block in README for the bridge gap.
+#
+# 2. The remaining bash + curl step (`wait-for-proposal-to-pass`) is the
+#    documented MVP workaround for missing chain-query task kinds; the
+#    right primitive is an `AwaitCondition` proposal-status variant.
+#
+# 3. SeiNodeTask CR application is delegated to the seitask-runner image,
+#    which applies a rendered template, polls .status.phase, and extracts
+#    typed outputs.
+#
+# Placeholders (envsubst at apply time -- see scenarios/README.md)
+# ----------------------------------------------------------------
+#   $SEI_DEPLOYMENT          SeiNodeDeployment name
+#   $SEI_NAMESPACE           namespace of deployment + workflow
+#   $SEI_CHAIN_ID            chain ID (e.g. "majorupgrade-1")
+#   $SEI_PRE_UPGRADE_IMG     seid image the cluster is currently running
+#   $SEI_POST_UPGRADE_IMG    seid image the upgrade rolls out to
+#   $SEI_UPGRADE_NAME        upgrade plan name registered in seid
+#   $SEITASK_RUNNER_IMG      seitask-runner image (ECR/sha tag)
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: major-upgrade
+  labels:
+    sei.io/scenario: major-upgrade
+spec:
+  entry: major-upgrade
+  templates:
+    # ----- entry: serial pipeline mirroring major_upgrade_test.yaml ----------
+    - name: major-upgrade
+      templateType: Serial
+      deadline: 60m
+      children:
+        - compute-target-height
+        - submit-upgrade-proposal
+        - vote-yes-all-validators
+        - wait-for-proposal-to-pass
+        - early-upgrade-node-0
+        - wait-for-target-height-nodes-1-2-3
+        - upgrade-nodes-1-2-3
+        - await-post-upgrade-progress-nodes-1-2-3
+        - downgrade-node-0
+        - wait-for-target-height-node-0
+        - upgrade-node-0
+        - await-post-upgrade-progress-node-0
+
+    # ----------------------------------------------------------------------
+    # Step 1. compute-target-height
+    # Mirrors scripts/proposal_target_height.sh: current height + 100 blocks
+    # (30s at 300ms block time). Writes:
+    #   TARGET_HEIGHT     -- upgrade height + downgrade-side panic boundary
+    #   UPGRADE_HEIGHT    -- consumed by gov-software-upgrade.yaml.tmpl
+    #   POST_UPGRADE_HEIGHT -- TARGET_HEIGHT + 10; liveness check threshold
+    # ----------------------------------------------------------------------
+    - name: compute-target-height
+      templateType: Task
+      deadline: 5m
+      task:
+        container:
+          name: compute-target-height
+          image: curlimages/curl:8.10.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              RPC="http://${SEI_DEPLOYMENT}-0.${SEI_NAMESPACE}.svc.cluster.local:26657"
+              CUR=$(curl -fsS "${RPC}/status" | sed -n 's/.*"latest_block_height":"\([0-9]*\)".*/\1/p')
+              if [ -z "${CUR}" ]; then
+                echo "failed to parse latest_block_height from ${RPC}/status" >&2
+                exit 1
+              fi
+              TARGET=$((CUR + 100))
+              POST=$((TARGET + 10))
+              PANIC_BOUNDARY=$((TARGET - 1))
+              echo "current=${CUR} target=${TARGET} post=${POST} panic_boundary=${PANIC_BOUNDARY}"
+              mkdir -p /workflow/vars
+              {
+                echo "TARGET_HEIGHT=${TARGET}"
+                echo "UPGRADE_HEIGHT=${TARGET}"
+                echo "POST_UPGRADE_HEIGHT=${POST}"
+                echo "PANIC_BOUNDARY=${PANIC_BOUNDARY}"
+              } >> /workflow/vars/env.sh
+          env:
+            - {name: SEI_DEPLOYMENT, value: "$SEI_DEPLOYMENT"}
+            - {name: SEI_NAMESPACE,  value: "$SEI_NAMESPACE"}
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 2. submit-upgrade-proposal
+    # Submits software-upgrade proposal at UPGRADE_HEIGHT via node-0's
+    # sidecar. proposalId is extracted from typed .status.outputs and
+    # written to env.sh as PROPOSAL_ID for downstream steps.
+    # ----------------------------------------------------------------------
+    - name: submit-upgrade-proposal
+      templateType: Task
+      deadline: 10m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            # UPGRADE_HEIGHT is sourced from /workflow/vars/env.sh by the
+            # runner; no --var needed.
+            - --template=/templates/gov-software-upgrade.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-0
+            - --var=CHAIN_ID=$SEI_CHAIN_ID
+            - --var=KEY_NAME=node_admin
+            - --var=TITLE=major-upgrade scenario
+            - --var=DESCRIPTION=software-upgrade to $SEI_UPGRADE_NAME
+            - --var=UPGRADE_NAME=$SEI_UPGRADE_NAME
+            - --var=INITIAL_DEPOSIT=20000000usei
+            - --var=FEES=2000usei
+            - --var=GAS=500000
+            - --output-jsonpath=.status.outputs.govSoftwareUpgrade.proposalId=PROPOSAL_ID
+            - --output-jsonpath=.status.outputs.govSoftwareUpgrade.txHash=PROPOSAL_TX_HASH
+            - --timeout=8m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 3. vote-yes-all-validators (parallel, one CR per validator)
+    # Each runner sources PROPOSAL_ID from env.sh.
+    # ----------------------------------------------------------------------
+    - name: vote-yes-all-validators
+      templateType: Parallel
+      deadline: 10m
+      children:
+        - vote-node-0
+        - vote-node-1
+        - vote-node-2
+        - vote-node-3
+
+    - name: vote-node-0
+      templateType: Task
+      deadline: 8m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/gov-vote.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-0
+            - --var=CHAIN_ID=$SEI_CHAIN_ID
+            - --var=KEY_NAME=node_admin
+            - --var=OPTION=yes
+            - --var=FEES=2000usei
+            - --var=GAS=200000
+            - --timeout=5m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    - name: vote-node-1
+      templateType: Task
+      deadline: 8m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/gov-vote.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-1
+            - --var=CHAIN_ID=$SEI_CHAIN_ID
+            - --var=KEY_NAME=node_admin
+            - --var=OPTION=yes
+            - --var=FEES=2000usei
+            - --var=GAS=200000
+            - --timeout=5m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    - name: vote-node-2
+      templateType: Task
+      deadline: 8m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/gov-vote.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-2
+            - --var=CHAIN_ID=$SEI_CHAIN_ID
+            - --var=KEY_NAME=node_admin
+            - --var=OPTION=yes
+            - --var=FEES=2000usei
+            - --var=GAS=200000
+            - --timeout=5m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    - name: vote-node-3
+      templateType: Task
+      deadline: 8m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/gov-vote.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-3
+            - --var=CHAIN_ID=$SEI_CHAIN_ID
+            - --var=KEY_NAME=node_admin
+            - --var=OPTION=yes
+            - --var=FEES=2000usei
+            - --var=GAS=200000
+            - --timeout=5m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 4. wait-for-proposal-to-pass
+    # Polls REST gov endpoint on node-0 until status=PROPOSAL_STATUS_PASSED.
+    # The sidecar has no "wait-for-proposal" task; chain-as-medium via bash
+    # is the documented MVP workaround.
+    # ----------------------------------------------------------------------
+    - name: wait-for-proposal-to-pass
+      templateType: Task
+      deadline: 10m
+      task:
+        container:
+          name: wait-for-pass
+          image: curlimages/curl:8.10.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              . /workflow/vars/env.sh
+              REST="http://${SEI_DEPLOYMENT}-0.${SEI_NAMESPACE}.svc.cluster.local:1317"
+              for i in $(seq 1 300); do
+                STATUS=$(curl -fsS "${REST}/cosmos/gov/v1beta1/proposals/${PROPOSAL_ID}" \
+                          | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p' | head -1)
+                echo "attempt=${i} proposal=${PROPOSAL_ID} status=${STATUS:-unknown}"
+                [ "${STATUS}" = "PROPOSAL_STATUS_PASSED" ] && exit 0
+                sleep 1
+              done
+              echo "proposal ${PROPOSAL_ID} did not pass within timeout" >&2
+              exit 1
+          env:
+            - {name: SEI_DEPLOYMENT, value: "$SEI_DEPLOYMENT"}
+            - {name: SEI_NAMESPACE,  value: "$SEI_NAMESPACE"}
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 5. early-upgrade-node-0
+    # Patches node-0 image to the post-upgrade build. UpdateNodeImage
+    # completes on observed currentImage, NOT readiness (LLD: nodes are
+    # expected to CrashLoop after early upgrade).
+    # ----------------------------------------------------------------------
+    - name: early-upgrade-node-0
+      templateType: Task
+      deadline: 10m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/update-node-image.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-0
+            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
+            - --var=REQUIRE_PHASE=Running
+            - --timeout=8m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 6. wait-for-target-height-nodes-1-2-3 (parallel)
+    # Uses the controller-side AwaitNodesAtHeight task.
+    # ----------------------------------------------------------------------
+    - name: wait-for-target-height-nodes-1-2-3
+      templateType: Parallel
+      deadline: 15m
+      children:
+        - await-height-node-1
+        - await-height-node-2
+        - await-height-node-3
+
+    - name: await-height-node-1
+      templateType: Task
+      deadline: 12m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/await-nodes-at-height.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-1
+            - --timeout=10m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    - name: await-height-node-2
+      templateType: Task
+      deadline: 12m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/await-nodes-at-height.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-2
+            - --timeout=10m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    - name: await-height-node-3
+      templateType: Task
+      deadline: 12m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/await-nodes-at-height.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-3
+            - --timeout=10m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 7. upgrade-nodes-1-2-3 (serial)
+    # major_upgrade_test.yaml runs each as its own sequential input, so we
+    # serialize here too. Avoids stampeding the SeiNode reconciler.
+    # ----------------------------------------------------------------------
+    - name: upgrade-nodes-1-2-3
+      templateType: Serial
+      deadline: 30m
+      children:
+        - upgrade-node-1
+        - upgrade-node-2
+        - upgrade-node-3
+
+    - name: upgrade-node-1
+      templateType: Task
+      deadline: 10m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/update-node-image.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-1
+            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
+            - --var=REQUIRE_PHASE=Running
+            - --timeout=8m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    - name: upgrade-node-2
+      templateType: Task
+      deadline: 10m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/update-node-image.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-2
+            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
+            - --var=REQUIRE_PHASE=Running
+            - --timeout=8m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    - name: upgrade-node-3
+      templateType: Task
+      deadline: 10m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/update-node-image.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-3
+            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
+            - --var=REQUIRE_PHASE=Running
+            - --timeout=8m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 8. await-post-upgrade-progress-nodes-1-2-3 (parallel)
+    # Liveness assertion: each upgraded node advances past TARGET_HEIGHT+10
+    # (= POST_UPGRADE_HEIGHT). AwaitCondition over the height predicate; the
+    # runner sources POST_UPGRADE_HEIGHT from env.sh and binds it to
+    # TARGET_HEIGHT in the await-condition template.
+    # ----------------------------------------------------------------------
+    - name: await-post-upgrade-progress-nodes-1-2-3
+      templateType: Parallel
+      deadline: 10m
+      children:
+        - await-post-upgrade-progress-node-1
+        - await-post-upgrade-progress-node-2
+        - await-post-upgrade-progress-node-3
+
+    - name: await-post-upgrade-progress-node-1
+      templateType: Task
+      deadline: 8m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/await-condition.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-1
+            - --var=TARGET_HEIGHT=$POST_UPGRADE_HEIGHT
+            - --timeout=6m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    - name: await-post-upgrade-progress-node-2
+      templateType: Task
+      deadline: 8m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/await-condition.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-2
+            - --var=TARGET_HEIGHT=$POST_UPGRADE_HEIGHT
+            - --timeout=6m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    - name: await-post-upgrade-progress-node-3
+      templateType: Task
+      deadline: 8m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/await-condition.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-3
+            - --var=TARGET_HEIGHT=$POST_UPGRADE_HEIGHT
+            - --timeout=6m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 9. downgrade-node-0 (back to pre-upgrade image so it can catch up)
+    # ----------------------------------------------------------------------
+    - name: downgrade-node-0
+      templateType: Task
+      deadline: 10m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/update-node-image.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-0
+            - --var=IMAGE=$SEI_PRE_UPGRADE_IMG
+            - --var=REQUIRE_PHASE=Running
+            - --timeout=8m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 10. wait-for-target-height-node-0 (catching up after downgrade)
+    # Waits for height = PANIC_BOUNDARY (= TARGET_HEIGHT - 1) because
+    # node-0 is on the pre-upgrade binary and will panic AT TARGET_HEIGHT;
+    # the highest height it ever reaches is PANIC_BOUNDARY. The runner
+    # binds TARGET_HEIGHT=$PANIC_BOUNDARY at the --var boundary.
+    # ----------------------------------------------------------------------
+    - name: wait-for-target-height-node-0
+      templateType: Task
+      deadline: 15m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/await-nodes-at-height.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-0
+            - --var=TARGET_HEIGHT=$PANIC_BOUNDARY
+            - --timeout=12m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 11. upgrade-node-0 (final)
+    # ----------------------------------------------------------------------
+    - name: upgrade-node-0
+      templateType: Task
+      deadline: 10m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/update-node-image.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-0
+            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
+            - --var=REQUIRE_PHASE=Running
+            - --timeout=8m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
+
+    # ----------------------------------------------------------------------
+    # Step 12. await-post-upgrade-progress-node-0 (final liveness)
+    # AwaitCondition height >= POST_UPGRADE_HEIGHT. Same primitive as
+    # step 8; structured AwaitCondition task is the only liveness signal
+    # the scenario asserts on node-0.
+    # ----------------------------------------------------------------------
+    - name: await-post-upgrade-progress-node-0
+      templateType: Task
+      deadline: 8m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_RUNNER_IMG
+          args:
+            - --template=/templates/await-condition.yaml.tmpl
+            - --var=NODE=$SEI_DEPLOYMENT-0
+            - --var=TARGET_HEIGHT=$POST_UPGRADE_HEIGHT
+            - --timeout=6m
+          volumeMounts:
+            - {name: vars, mountPath: /workflow/vars}
+        volumes:
+          - {name: vars, emptyDir: {}}
