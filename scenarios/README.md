@@ -4,23 +4,13 @@ End-to-end Chaos Mesh Workflows that compose `SeiNodeTask` CRs to exercise
 chain-lifecycle behavior against real Kubernetes clusters. Each scenario is
 the acceptance test for one capability surface.
 
-> **Status: not yet runnable end-to-end.** `major-upgrade.yaml` is the
-> canonical structure for the major-upgrade scenario but depends on a
-> cross-step variable bridge that does not exist in Chaos Mesh's `Task`
-> template (each step is its own Pod; emptyDir volumes are Pod-scoped, not
-> Workflow-scoped). The `TARGET_HEIGHT` / `UPGRADE_HEIGHT` /
-> `POST_UPGRADE_HEIGHT` / `PANIC_BOUNDARY` / `PROPOSAL_ID` values computed
-> by early steps are not readable by subsequent steps without a bridge.
->
-> The YAML retains `/workflow/vars/env.sh` references and the `vars`
-> volume mounts on every step for forward-compatibility with that
-> bridge. A ConfigMap-based implementation will land in a separate PR
-> (follow-up issue TBD). Until then, this Workflow serves as the design
-> artifact and is **schema-validated only**:
->
-> ```bash
-> kubectl apply -f scenarios/major-upgrade.yaml --dry-run=client -o yaml > /dev/null
-> ```
+> **Status: runnable, gated on runner image publishing.** PR 6 closed the
+> cross-step variable bridge gap via a per-Workflow-run ConfigMap
+> (`workflow-vars-<run-id>`). The bash steps that compute `TARGET_HEIGHT`
+> and resolve `PROPOSAL_ID` `kubectl apply` the ConfigMap; every other
+> step reads values via `envFrom`. End-to-end runs require a published
+> `seitask-runner` image (see Prerequisites, item 4) -- everything else
+> is in-tree.
 
 ## Index
 
@@ -120,6 +110,9 @@ export SEI_PRE_UPGRADE_IMG=ghcr.io/sei-protocol/sei:v6.3.0
 export SEI_POST_UPGRADE_IMG=ghcr.io/sei-protocol/sei:v6.4.0
 export SEI_UPGRADE_NAME=v6.4.0
 export SEITASK_RUNNER_IMG=<registry>/sei/seitask-runner:<tag>
+# Unique per Workflow run -- drives the `workflow-vars-<id>` ConfigMap
+# name. Two concurrent runs of the same Workflow must not collide.
+export SEI_WORKFLOW_RUN_ID="$(date +%s)-$(openssl rand -hex 3)"
 
 envsubst < scenarios/major-upgrade.yaml \
   | kubectl apply -n "${SEI_NAMESPACE}" -f -
@@ -152,8 +145,9 @@ Per-step interpretation:
 
 | Step | What success means |
 |---|---|
-| `compute-target-height` | Wrote `TARGET_HEIGHT` / `UPGRADE_HEIGHT` / `POST_UPGRADE_HEIGHT` to env.sh. |
-| `submit-upgrade-proposal` | SeiNodeTask `.status.phase=Complete`, `proposalId` set. |
+| `compute-target-height` | Created `workflow-vars-${SEI_WORKFLOW_RUN_ID}` ConfigMap with `TARGET_HEIGHT` / `UPGRADE_HEIGHT` / `POST_UPGRADE_HEIGHT` / `PANIC_BOUNDARY`. |
+| `submit-upgrade-proposal` | SeiNodeTask `.status.phase=Complete`. proposalId is NOT extracted here (sidecar structured outputs are intentionally empty post-PR 3); `resolve-proposal-id` derives it from the chain. |
+| `resolve-proposal-id` | Polled gov REST for a voting-period proposal whose plan name matches `$SEI_UPGRADE_NAME`, merged `PROPOSAL_ID` into the workflow-vars ConfigMap. |
 | `vote-yes-all-validators` | All 4 vote tasks Complete. |
 | `wait-for-proposal-to-pass` | Proposal observed `PROPOSAL_STATUS_PASSED`. |
 | `early-upgrade-node-0` | SeiNode status.currentImage observed equal to post-upgrade image (NOT readiness -- see LLD). |
@@ -172,36 +166,54 @@ kubectl delete workflow -n majorupgrade major-upgrade
 # Workflow does NOT delete the SeiNodeTask CRs it created (intentional --
 # you want them visible for post-mortem). Remove them explicitly:
 kubectl delete seinodetasks -n majorupgrade --all
+# Per-run ConfigMaps (labeled with sei.io/workflow-run) accumulate across
+# runs. The Workflow does not garbage-collect them; an operator clears
+# them out by label:
+kubectl delete configmap -n majorupgrade -l sei.io/workflow-run
+# or for a single run:
+kubectl delete configmap -n majorupgrade "workflow-vars-${SEI_WORKFLOW_RUN_ID}"
 # Tear down the testnet:
 kubectl delete -f scenarios/testnet-deployment.yaml
 ```
 
+## Cross-step variable bridge (PR 6)
+
+Chaos Mesh Workflow Task steps are each their own Pod, so emptyDir
+volumes cannot carry state across steps. The bridge is a per-run
+ConfigMap named `workflow-vars-${SEI_WORKFLOW_RUN_ID}` in the same
+namespace as the Workflow:
+
+- **Producer steps** (`compute-target-height`, `resolve-proposal-id`)
+  use `alpine/k8s` (curl + kubectl + jq) to compute or query values and
+  `kubectl apply` the ConfigMap. `compute-target-height` creates it with
+  `--from-literal` x4 and labels it `sei.io/workflow-run`; later
+  producers read-modify-write via `kubectl get -o json | jq | apply`.
+
+- **Consumer steps** receive every key as a container env var via
+  `envFrom: configMapRef: name: workflow-vars-$SEI_WORKFLOW_RUN_ID`. The
+  runner's `--var KEY=$(KEY)` arguments use the Kubernetes container env
+  expansion (`$(VAR)`), which kubelet resolves against the env at
+  container start. The runner sees concrete `--var KEY=<value>` strings
+  and no longer needs to source any file.
+
+- **Concurrency:** the ConfigMap name is parameterized on
+  `$SEI_WORKFLOW_RUN_ID`, which the operator generates at apply time
+  (see the `export SEI_WORKFLOW_RUN_ID=...` line above). Two concurrent
+  runs of the same Workflow get distinct ConfigMaps.
+  **Caveat:** `resolve-proposal-id` filters voting-period proposals by
+  `content.plan.name` (= `$SEI_UPGRADE_NAME`). Running two concurrent
+  scenarios on the **same chain** with the **same upgrade name** lets
+  either run resolve to whichever proposal sorts first. Use a distinct
+  `$SEI_UPGRADE_NAME` per concurrent run, or treat the chain as serially
+  owned by one scenario at a time.
+
+- **Cleanup:** ConfigMaps are not garbage-collected by the Workflow.
+  Operators clear them via the `sei.io/workflow-run` label (see Cleanup
+  above). A future enhancement is to set an `ownerReference` on the
+  ConfigMap pointing at the Workflow CR so it cascades on Workflow
+  deletion.
+
 ## Known limitations / deferred capability
-
-The cross-step variable bridge gap (load-bearing for end-to-end runs) is
-called out in the **Status** block at the top of this README. Three viable
-bridges, in increasing implementation cost:
-
-- **(a) ConfigMap-as-env-store.** A `<workflow>-vars` ConfigMap created
-  alongside the Workflow. Each step mounts it at `/workflow/vars/`.
-  Producer steps `kubectl patch configmap` to add KEY=value entries. The
-  runner image must grow `kubectl` or learn to write outputs to a
-  ConfigMap via the K8s API. RBAC additions: `configmaps: get;watch;patch`
-  on the runner SA. Tradeoff: mounted ConfigMap updates take up to
-  kubelet sync interval (60s default) to appear -- acceptable because
-  the next Pod starts AFTER the previous Pod finishes and will see the
-  snapshot at its own mount time.
-- **(b) Argo Workflows native parameters.** Migrate scenarios from Chaos
-  Mesh Workflow to Argo. Argo has first-class `outputs.parameters` /
-  `inputs.parameters`. Chaos resources stay, but composition moves to
-  Argo. Larger lift; correct long-term.
-- **(c) Custom Workflow extension.** Patch Chaos Mesh to add
-  workflow-scoped volume claims. Upstream PR territory.
-
-Recommendation: ship (a) as the immediate follow-up PR. Plan (b) in
-parallel for the post-MVP roadmap.
-
-Other deferred items:
 
 1. **Liveness via post-upgrade height-advance check only.** This Workflow
    does not assert pre-upgrade running state, does not detect the panic
@@ -215,10 +227,14 @@ Other deferred items:
    (`AssertLogContains`, `AwaitCondition` with a `panicked` predicate)
    that no current scenario actually requires.
 
-2. **No chain-query task kind for proposals.** `compute-target-height`
-   and `wait-for-proposal-to-pass` are bash + curl against the per-pod
-   headless Service RPC/REST. The right primitive is an `AwaitCondition`
-   extension with `proposalStatus` / `heightAdvancing` predicates.
+2. **No chain-query task kind for proposals.** `compute-target-height`,
+   `resolve-proposal-id`, and `wait-for-proposal-to-pass` are bash +
+   curl against the per-pod headless Service RPC/REST. The right
+   primitive is an `AwaitCondition` extension with `proposalStatus` /
+   `proposalIdByPlanName` / `heightAdvancing` predicates that emits the
+   resolved value to the standard outputs path. Migrating those three
+   steps to a structured kind also lets us delete the `configmaps` RBAC
+   verbs (only the runner's outputs ConfigMap-write would remain).
 
 3. **`UpdateNodeImage` completes on image-applied, not Ready.** Required
    by this scenario (early-upgrade is expected to CrashLoop), but
@@ -228,12 +244,19 @@ Other deferred items:
 4. **The runner image is not yet auto-published.** Add a `runner` step to
    `.github/workflows/ecr.yml` once this scenario is wired into a CI job.
 
-5. **No native Workflow parameter passing.** Chaos Mesh 2.5/2.6/2.7 do not
-   pass values across `Task` steps -- we use the emptyDir env-file bridge
-   at `/workflow/vars/env.sh`. Future Argo migration replaces this with
-   `outputs.parameters` / `inputs.parameters`.
+5. **ConfigMap is not owner-referenced to the Workflow.** Cleanup is
+   manual today. A follow-up that adds an `ownerReferences` entry to
+   the ConfigMap (pointing at the Workflow CR) would make Workflow
+   deletion cascade. Punt until the runner manages the ConfigMap
+   lifecycle natively.
 
-6. **No fan-out from a single step.** The 4-vote step is hard-coded to
+6. **Argo Workflows migration is still on the long-term roadmap.** The
+   ConfigMap bridge is the MVP. Argo's `outputs.parameters` /
+   `inputs.parameters` is more ergonomic and avoids the per-run
+   ConfigMap garbage. Plan that migration once we have more than one
+   scenario worth porting.
+
+7. **No fan-out from a single step.** The 4-vote step is hard-coded to
    4 children rather than `--per-node-selector=role=validator`. We could
    collapse the four `vote-node-*` templates into one fan-out runner if
    the SeiNodes carry a consistent label, but the explicit per-node form

@@ -4,16 +4,6 @@
 # sei-chain/integration_test/upgrade_module/major_upgrade_test.yaml as a
 # composition of SeiNodeTask CRs driven by the seitask-runner.
 #
-# !!! KNOWN BLOCKER (see scenarios/README.md "Status") !!!
-# The /workflow/vars/env.sh bridge described in the LLD assumes a volume
-# shared across Workflow Task steps. Chaos Mesh synthesizes one Pod per
-# Task, so a plain emptyDir does not actually persist across steps today.
-# This YAML is structured as if a real cross-step bridge existed (each
-# step declares the `vars` volume + mount) so it is forward-compatible
-# with the bridge that a follow-up PR will add (ConfigMap-as-env-store is
-# the recommended approach). Do not expect this Workflow to run
-# end-to-end until that bridge is in place.
-#
 # Scope
 # -----
 # Operates on an existing 4-validator SeiNodeDeployment named "$SEI_DEPLOYMENT"
@@ -28,15 +18,42 @@
 # whose height advances past TARGET_HEIGHT+10 has, by construction, both
 # survived the upgrade boundary and is producing/applying blocks.
 #
+# Cross-step variable bridge (the PR 6 mechanism)
+# -----------------------------------------------
+# Chaos Mesh synthesizes one Pod per Task step, so emptyDir cannot span
+# steps. We bridge inter-step variables through a per-Workflow-run
+# ConfigMap: `workflow-vars-$SEI_WORKFLOW_RUN_ID`, in the same namespace
+# as the Workflow.
+#
+#   producer steps  -- `kubectl create cm ... --dry-run=client -o yaml |
+#                       kubectl apply -f -` to merge KEY=VALUE entries.
+#   consumer steps  -- `envFrom: configMapRef: name: workflow-vars-...`
+#                      so every key arrives as a container env var. The
+#                      runner's `--var KEY=$VALUE` shell expansion and
+#                      `$VAR` interpolation in args work transparently.
+#
+# Producer images that need both curl and kubectl use `alpine/k8s` so the
+# bash step can poll the chain REST API and patch the ConfigMap in the
+# same container. The runner image itself is distroless and never touches
+# the ConfigMap directly; values arrive as env vars only.
+#
+# PROPOSAL_ID resolution (chain-as-medium)
+# ----------------------------------------
+# PR 3 deliberately cut sidecar-derived structured outputs, so
+# .status.outputs.govSoftwareUpgrade.proposalId is empty by design. We
+# resolve PROPOSAL_ID by querying the chain itself: a `resolve-proposal-id`
+# step polls `/cosmos/gov/v1beta1/proposals?proposal_status=2` (voting
+# period) on node-0 until a proposal matching $SEI_UPGRADE_NAME appears,
+# then writes PROPOSAL_ID into the same workflow-vars ConfigMap.
+#
 # Authoring discipline (LLD: docs/design/seinode-task-lld.md)
 # -----------------------------------------------------------
-# 1. Inter-step parameter passing is via /workflow/vars/env.sh (emptyDir).
-#    Steps that produce env vars use --output-jsonpath <jsonpath>=<ENV_VAR>;
-#    the runner sources /workflow/vars/env.sh at startup and merges sourced
-#    pairs into the template var map. Bash steps write to env.sh directly.
-#    See Status block in README for the bridge gap.
+# 1. Inter-step parameter passing is via the workflow-vars ConfigMap
+#    (see above). Bash steps mutate it via kubectl; runner steps read it
+#    via `envFrom`. No volumes/volumeMounts are used for cross-step state.
 #
-# 2. The remaining bash + curl step (`wait-for-proposal-to-pass`) is the
+# 2. The remaining bash + curl steps (`compute-target-height`,
+#    `resolve-proposal-id`, `wait-for-proposal-to-pass`) are the
 #    documented MVP workaround for missing chain-query task kinds; the
 #    right primitive is an `AwaitCondition` proposal-status variant.
 #
@@ -53,6 +70,8 @@
 #   $SEI_POST_UPGRADE_IMG    seid image the upgrade rolls out to
 #   $SEI_UPGRADE_NAME        upgrade plan name registered in seid
 #   $SEITASK_RUNNER_IMG      seitask-runner image (ECR/sha tag)
+#   $SEI_WORKFLOW_RUN_ID     unique per-run id (recommended: short ULID
+#                            or epoch+suffix). Drives ConfigMap name.
 ---
 apiVersion: chaos-mesh.org/v1alpha1
 kind: Workflow
@@ -60,6 +79,7 @@ metadata:
   name: major-upgrade
   labels:
     sei.io/scenario: major-upgrade
+    sei.io/workflow-run: "$SEI_WORKFLOW_RUN_ID"
 spec:
   entry: major-upgrade
   templates:
@@ -70,6 +90,7 @@ spec:
       children:
         - compute-target-height
         - submit-upgrade-proposal
+        - resolve-proposal-id
         - vote-yes-all-validators
         - wait-for-proposal-to-pass
         - early-upgrade-node-0
@@ -84,10 +105,14 @@ spec:
     # ----------------------------------------------------------------------
     # Step 1. compute-target-height
     # Mirrors scripts/proposal_target_height.sh: current height + 100 blocks
-    # (30s at 300ms block time). Writes:
-    #   TARGET_HEIGHT     -- upgrade height + downgrade-side panic boundary
-    #   UPGRADE_HEIGHT    -- consumed by gov-software-upgrade.yaml.tmpl
+    # (30s at 300ms block time). Creates the workflow-vars ConfigMap and
+    # populates it with:
+    #   TARGET_HEIGHT       -- upgrade height + downgrade-side panic boundary
+    #   UPGRADE_HEIGHT      -- consumed by gov-software-upgrade.yaml.tmpl
     #   POST_UPGRADE_HEIGHT -- TARGET_HEIGHT + 10; liveness check threshold
+    #   PANIC_BOUNDARY      -- TARGET_HEIGHT - 1; downgrade-catchup target
+    # Idempotent: --dry-run=client | apply -f - upserts the ConfigMap on
+    # retries, so a re-run of this step recomputes the values cleanly.
     # ----------------------------------------------------------------------
     - name: compute-target-height
       templateType: Task
@@ -95,11 +120,22 @@ spec:
       task:
         container:
           name: compute-target-height
-          image: curlimages/curl:8.10.1
+          image: alpine/k8s:1.31.0
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -eu
+              # Idempotency guard: if the ConfigMap already has TARGET_HEIGHT,
+              # a previous run of this step already computed and broadcast it;
+              # recomputing now would shift the target above what
+              # submit-upgrade-proposal already broadcast, corrupting downstream
+              # height-waits. Short-circuit cleanly.
+              EXISTING=$(kubectl get configmap "workflow-vars-${SEI_WORKFLOW_RUN_ID}" \
+                -o jsonpath='{.data.TARGET_HEIGHT}' 2>/dev/null || true)
+              if [ -n "${EXISTING}" ]; then
+                echo "TARGET_HEIGHT=${EXISTING} already set; short-circuiting"
+                exit 0
+              fi
               RPC="http://${SEI_DEPLOYMENT}-0.${SEI_NAMESPACE}.svc.cluster.local:26657"
               CUR=$(curl -fsS "${RPC}/status" | sed -n 's/.*"latest_block_height":"\([0-9]*\)".*/\1/p')
               if [ -z "${CUR}" ]; then
@@ -110,26 +146,26 @@ spec:
               POST=$((TARGET + 10))
               PANIC_BOUNDARY=$((TARGET - 1))
               echo "current=${CUR} target=${TARGET} post=${POST} panic_boundary=${PANIC_BOUNDARY}"
-              mkdir -p /workflow/vars
-              {
-                echo "TARGET_HEIGHT=${TARGET}"
-                echo "UPGRADE_HEIGHT=${TARGET}"
-                echo "POST_UPGRADE_HEIGHT=${POST}"
-                echo "PANIC_BOUNDARY=${PANIC_BOUNDARY}"
-              } >> /workflow/vars/env.sh
+              kubectl create configmap "workflow-vars-${SEI_WORKFLOW_RUN_ID}" \
+                --from-literal=TARGET_HEIGHT="${TARGET}" \
+                --from-literal=UPGRADE_HEIGHT="${TARGET}" \
+                --from-literal=POST_UPGRADE_HEIGHT="${POST}" \
+                --from-literal=PANIC_BOUNDARY="${PANIC_BOUNDARY}" \
+                --dry-run=client -o yaml \
+              | kubectl label -f - --local -o yaml \
+                  sei.io/workflow-run="${SEI_WORKFLOW_RUN_ID}" \
+                  sei.io/scenario=major-upgrade \
+              | kubectl apply -f -
           env:
-            - {name: SEI_DEPLOYMENT, value: "$SEI_DEPLOYMENT"}
-            - {name: SEI_NAMESPACE,  value: "$SEI_NAMESPACE"}
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+            - {name: SEI_DEPLOYMENT,       value: "$SEI_DEPLOYMENT"}
+            - {name: SEI_NAMESPACE,        value: "$SEI_NAMESPACE"}
+            - {name: SEI_WORKFLOW_RUN_ID,  value: "$SEI_WORKFLOW_RUN_ID"}
 
     # ----------------------------------------------------------------------
     # Step 2. submit-upgrade-proposal
     # Submits software-upgrade proposal at UPGRADE_HEIGHT via node-0's
-    # sidecar. proposalId is extracted from typed .status.outputs and
-    # written to env.sh as PROPOSAL_ID for downstream steps.
+    # sidecar. UPGRADE_HEIGHT arrives via envFrom (workflow-vars ConfigMap)
+    # and is referenced by the runner's --var expansion.
     # ----------------------------------------------------------------------
     - name: submit-upgrade-proposal
       templateType: Task
@@ -139,8 +175,6 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
-            # UPGRADE_HEIGHT is sourced from /workflow/vars/env.sh by the
-            # runner; no --var needed.
             - --template=/templates/gov-software-upgrade.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-0
             - --var=CHAIN_ID=$SEI_CHAIN_ID
@@ -148,20 +182,77 @@ spec:
             - --var=TITLE=major-upgrade scenario
             - --var=DESCRIPTION=software-upgrade to $SEI_UPGRADE_NAME
             - --var=UPGRADE_NAME=$SEI_UPGRADE_NAME
+            - --var=UPGRADE_HEIGHT=$(UPGRADE_HEIGHT)
             - --var=INITIAL_DEPOSIT=20000000usei
             - --var=FEES=2000usei
             - --var=GAS=500000
-            - --output-jsonpath=.status.outputs.govSoftwareUpgrade.proposalId=PROPOSAL_ID
-            - --output-jsonpath=.status.outputs.govSoftwareUpgrade.txHash=PROPOSAL_TX_HASH
             - --timeout=8m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
+
+    # ----------------------------------------------------------------------
+    # Step 2b. resolve-proposal-id
+    # PR 3 cut sidecar structured outputs, so we resolve PROPOSAL_ID from
+    # the chain. Polls the gov REST endpoint for voting-period proposals
+    # whose content.plan.name matches $SEI_UPGRADE_NAME (legacy proposal
+    # shape) OR whose messages[].content.plan.name matches (v1 shape).
+    # Writes PROPOSAL_ID into the workflow-vars ConfigMap.
+    #
+    # Retry: 150 attempts * 2s = 300s window (matches the step deadline).
+    # Tendermint mempool typically promotes the submitted tx within 1-2
+    # blocks (~600ms-1s at 300ms block time); the wider window absorbs
+    # cluster load spikes and node-0 RPC hiccups.
+    # ----------------------------------------------------------------------
+    - name: resolve-proposal-id
+      templateType: Task
+      deadline: 5m
+      task:
+        container:
+          name: resolve-proposal-id
+          image: alpine/k8s:1.31.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              REST="http://${SEI_DEPLOYMENT}-0.${SEI_NAMESPACE}.svc.cluster.local:1317"
+              # gov v1beta1 voting_period = 2
+              for i in $(seq 1 150); do
+                BODY=$(curl -fsS "${REST}/cosmos/gov/v1beta1/proposals?proposal_status=2" || true)
+                # Try v1beta1 shape first (content.plan.name), then v1 shape
+                # (messages[].content.plan.name). jq is bundled in alpine/k8s.
+                PID=$(printf '%s' "${BODY}" | jq -r --arg n "${SEI_UPGRADE_NAME}" '
+                  .proposals // []
+                  | map(select(
+                      (.content.plan.name? == $n)
+                      or (.messages? // [] | map(.content.plan.name? // empty) | index($n))
+                    ))
+                  | .[0].proposal_id // empty
+                ')
+                if [ -n "${PID}" ] && [ "${PID}" != "null" ]; then
+                  echo "resolved proposal_id=${PID} for upgrade=${SEI_UPGRADE_NAME}"
+                  # Merge PROPOSAL_ID into the existing ConfigMap. Read the
+                  # current data, add PROPOSAL_ID, re-apply. --dry-run=client
+                  # ensures the apply is a merge, not a wipe.
+                  kubectl get configmap "workflow-vars-${SEI_WORKFLOW_RUN_ID}" -o json \
+                  | jq --arg pid "${PID}" '.data.PROPOSAL_ID=$pid' \
+                  | kubectl apply -f -
+                  exit 0
+                fi
+                echo "attempt=${i} no voting-period proposal matching ${SEI_UPGRADE_NAME} yet"
+                sleep 2
+              done
+              echo "timed out resolving PROPOSAL_ID for upgrade=${SEI_UPGRADE_NAME}" >&2
+              exit 1
+          env:
+            - {name: SEI_DEPLOYMENT,       value: "$SEI_DEPLOYMENT"}
+            - {name: SEI_NAMESPACE,        value: "$SEI_NAMESPACE"}
+            - {name: SEI_UPGRADE_NAME,     value: "$SEI_UPGRADE_NAME"}
+            - {name: SEI_WORKFLOW_RUN_ID,  value: "$SEI_WORKFLOW_RUN_ID"}
 
     # ----------------------------------------------------------------------
     # Step 3. vote-yes-all-validators (parallel, one CR per validator)
-    # Each runner sources PROPOSAL_ID from env.sh.
+    # Each runner receives PROPOSAL_ID via envFrom workflow-vars ConfigMap.
     # ----------------------------------------------------------------------
     - name: vote-yes-all-validators
       templateType: Parallel
@@ -184,14 +275,14 @@ spec:
             - --var=NODE=$SEI_DEPLOYMENT-0
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=KEY_NAME=node_admin
+            - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
             - --var=FEES=2000usei
             - --var=GAS=200000
             - --timeout=5m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     - name: vote-node-1
       templateType: Task
@@ -205,14 +296,14 @@ spec:
             - --var=NODE=$SEI_DEPLOYMENT-1
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=KEY_NAME=node_admin
+            - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
             - --var=FEES=2000usei
             - --var=GAS=200000
             - --timeout=5m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     - name: vote-node-2
       templateType: Task
@@ -226,14 +317,14 @@ spec:
             - --var=NODE=$SEI_DEPLOYMENT-2
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=KEY_NAME=node_admin
+            - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
             - --var=FEES=2000usei
             - --var=GAS=200000
             - --timeout=5m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     - name: vote-node-3
       templateType: Task
@@ -247,20 +338,20 @@ spec:
             - --var=NODE=$SEI_DEPLOYMENT-3
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=KEY_NAME=node_admin
+            - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
             - --var=FEES=2000usei
             - --var=GAS=200000
             - --timeout=5m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
     # Step 4. wait-for-proposal-to-pass
     # Polls REST gov endpoint on node-0 until status=PROPOSAL_STATUS_PASSED.
     # The sidecar has no "wait-for-proposal" task; chain-as-medium via bash
-    # is the documented MVP workaround.
+    # is the documented MVP workaround. PROPOSAL_ID arrives via envFrom.
     # ----------------------------------------------------------------------
     - name: wait-for-proposal-to-pass
       templateType: Task
@@ -273,7 +364,6 @@ spec:
           args:
             - |
               set -eu
-              . /workflow/vars/env.sh
               REST="http://${SEI_DEPLOYMENT}-0.${SEI_NAMESPACE}.svc.cluster.local:1317"
               for i in $(seq 1 300); do
                 STATUS=$(curl -fsS "${REST}/cosmos/gov/v1beta1/proposals/${PROPOSAL_ID}" \
@@ -287,10 +377,9 @@ spec:
           env:
             - {name: SEI_DEPLOYMENT, value: "$SEI_DEPLOYMENT"}
             - {name: SEI_NAMESPACE,  value: "$SEI_NAMESPACE"}
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
     # Step 5. early-upgrade-node-0
@@ -311,14 +400,14 @@ spec:
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
     # Step 6. wait-for-target-height-nodes-1-2-3 (parallel)
-    # Uses the controller-side AwaitNodesAtHeight task.
+    # Uses the controller-side AwaitNodesAtHeight task. TARGET_HEIGHT
+    # arrives via envFrom workflow-vars ConfigMap.
     # ----------------------------------------------------------------------
     - name: wait-for-target-height-nodes-1-2-3
       templateType: Parallel
@@ -338,11 +427,11 @@ spec:
           args:
             - --template=/templates/await-nodes-at-height.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-1
+            - --var=TARGET_HEIGHT=$(TARGET_HEIGHT)
             - --timeout=10m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     - name: await-height-node-2
       templateType: Task
@@ -354,11 +443,11 @@ spec:
           args:
             - --template=/templates/await-nodes-at-height.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-2
+            - --var=TARGET_HEIGHT=$(TARGET_HEIGHT)
             - --timeout=10m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     - name: await-height-node-3
       templateType: Task
@@ -370,11 +459,11 @@ spec:
           args:
             - --template=/templates/await-nodes-at-height.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-3
+            - --var=TARGET_HEIGHT=$(TARGET_HEIGHT)
             - --timeout=10m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
     # Step 7. upgrade-nodes-1-2-3 (serial)
@@ -402,10 +491,9 @@ spec:
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     - name: upgrade-node-2
       templateType: Task
@@ -420,10 +508,9 @@ spec:
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     - name: upgrade-node-3
       templateType: Task
@@ -438,17 +525,16 @@ spec:
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
     # Step 8. await-post-upgrade-progress-nodes-1-2-3 (parallel)
     # Liveness assertion: each upgraded node advances past TARGET_HEIGHT+10
-    # (= POST_UPGRADE_HEIGHT). AwaitCondition over the height predicate; the
-    # runner sources POST_UPGRADE_HEIGHT from env.sh and binds it to
-    # TARGET_HEIGHT in the await-condition template.
+    # (= POST_UPGRADE_HEIGHT). AwaitCondition over the height predicate;
+    # POST_UPGRADE_HEIGHT arrives via envFrom and is bound to TARGET_HEIGHT
+    # in the await-condition template.
     # ----------------------------------------------------------------------
     - name: await-post-upgrade-progress-nodes-1-2-3
       templateType: Parallel
@@ -468,12 +554,11 @@ spec:
           args:
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-1
-            - --var=TARGET_HEIGHT=$POST_UPGRADE_HEIGHT
+            - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
             - --timeout=6m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     - name: await-post-upgrade-progress-node-2
       templateType: Task
@@ -485,12 +570,11 @@ spec:
           args:
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-2
-            - --var=TARGET_HEIGHT=$POST_UPGRADE_HEIGHT
+            - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
             - --timeout=6m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     - name: await-post-upgrade-progress-node-3
       templateType: Task
@@ -502,12 +586,11 @@ spec:
           args:
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-3
-            - --var=TARGET_HEIGHT=$POST_UPGRADE_HEIGHT
+            - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
             - --timeout=6m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
     # Step 9. downgrade-node-0 (back to pre-upgrade image so it can catch up)
@@ -525,17 +608,16 @@ spec:
             - --var=IMAGE=$SEI_PRE_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
     # Step 10. wait-for-target-height-node-0 (catching up after downgrade)
     # Waits for height = PANIC_BOUNDARY (= TARGET_HEIGHT - 1) because
     # node-0 is on the pre-upgrade binary and will panic AT TARGET_HEIGHT;
-    # the highest height it ever reaches is PANIC_BOUNDARY. The runner
-    # binds TARGET_HEIGHT=$PANIC_BOUNDARY at the --var boundary.
+    # the highest height it ever reaches is PANIC_BOUNDARY. PANIC_BOUNDARY
+    # arrives via envFrom and is bound to TARGET_HEIGHT for this template.
     # ----------------------------------------------------------------------
     - name: wait-for-target-height-node-0
       templateType: Task
@@ -547,12 +629,11 @@ spec:
           args:
             - --template=/templates/await-nodes-at-height.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-0
-            - --var=TARGET_HEIGHT=$PANIC_BOUNDARY
+            - --var=TARGET_HEIGHT=$(PANIC_BOUNDARY)
             - --timeout=12m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
     # Step 11. upgrade-node-0 (final)
@@ -570,10 +651,9 @@ spec:
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
     # Step 12. await-post-upgrade-progress-node-0 (final liveness)
@@ -591,9 +671,8 @@ spec:
           args:
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-0
-            - --var=TARGET_HEIGHT=$POST_UPGRADE_HEIGHT
+            - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
             - --timeout=6m
-          volumeMounts:
-            - {name: vars, mountPath: /workflow/vars}
-        volumes:
-          - {name: vars, emptyDir: {}}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-$SEI_WORKFLOW_RUN_ID

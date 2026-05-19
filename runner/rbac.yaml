@@ -4,6 +4,14 @@
 #
 # Namespaced (Role, not ClusterRole) — the runner only operates on resources
 # in the same namespace as the Workflow.
+#
+# The `configmaps` verbs cover the PR 6 cross-step variable bridge: bash
+# steps (compute-target-height, resolve-proposal-id) upsert
+# `workflow-vars-<run-id>` via `kubectl apply`, and every other step reads
+# values via `envFrom: configMapRef`. The kubelet itself needs no extra
+# RBAC for the envFrom read — it uses kubelet credentials, not the
+# workload SA — but the producer steps run `kubectl get/create/apply`
+# under the workload SA and therefore require these verbs.
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -29,6 +37,14 @@ rules:
 - apiGroups: ["sei.io"]
   resources: ["seinodes"]
   verbs: ["get", "list", "watch"]
+# ConfigMaps: workflow-vars-<run-id> upsert by producer bash steps.
+# `create`+`patch` are the apply-path verbs; `get`+`list`+`watch` support
+# read-modify-write (resolve-proposal-id merges PROPOSAL_ID into the
+# existing object); `update` covers the non-SSA apply path some kubectl
+# versions emit.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
