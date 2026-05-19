@@ -84,6 +84,7 @@ rules:
   resources:
   - seinodedeployments
   - seinodes
+  - seinodetasks
   verbs:
   - create
   - delete
@@ -97,6 +98,7 @@ rules:
   resources:
   - seinodedeployments/finalizers
   - seinodes/finalizers
+  - seinodetasks/finalizers
   verbs:
   - update
 - apiGroups:
@@ -104,6 +106,7 @@ rules:
   resources:
   - seinodedeployments/status
   - seinodes/status
+  - seinodetasks/status
   verbs:
   - get
   - patch
