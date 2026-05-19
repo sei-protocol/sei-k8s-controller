@@ -1346,18 +1346,30 @@ func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("SEI_COSMOS_EXPORTER_IMAGE is required"))
 }
 
-func TestCosmosExporter_StartupProbeOnSeidGRPC(t *testing.T) {
+func TestCosmosExporter_StartupProbe_FullNodeTargetsGRPC(t *testing.T) {
 	g := NewWithT(t)
-	node := newSnapshotNode("ce-0", "default")
+	node := newSnapshotNode("ce-fn-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
 
-	// Startup probe gates ListenAndServe on seid's gRPC being up so the
-	// exporter doesn't log.Fatal() on its initial dial.
 	g.Expect(ce.StartupProbe).NotTo(BeNil())
 	g.Expect(ce.StartupProbe.TCPSocket).NotTo(BeNil())
 	g.Expect(ce.StartupProbe.TCPSocket.Port.IntVal).To(Equal(int32(9090)))
+	g.Expect(ce.StartupProbe.FailureThreshold).To(Equal(int32(120)))
+}
+
+func TestCosmosExporter_StartupProbe_ValidatorTargetsTendermintRPC(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("ce-val-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+
+	g.Expect(ce.StartupProbe).NotTo(BeNil())
+	g.Expect(ce.StartupProbe.TCPSocket).NotTo(BeNil())
+	g.Expect(ce.StartupProbe.TCPSocket.Port.IntVal).To(Equal(int32(26657)))
+	g.Expect(ce.StartupProbe.FailureThreshold).To(Equal(int32(120)))
 }
 
 func TestCosmosExporter_MountsTmpEmptyDir(t *testing.T) {
