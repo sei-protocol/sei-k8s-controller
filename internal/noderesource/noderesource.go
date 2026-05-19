@@ -599,9 +599,9 @@ func defaultCosmosExporterResources() corev1.ResourceRequirements {
 	}
 }
 
-// cosmosExporterStartupProbePort: validators probe Tendermint RPC (gRPC
+// cosmosExporterReadinessProbePort: validators probe Tendermint RPC (gRPC
 // is disabled), other modes probe seid's gRPC.
-func cosmosExporterStartupProbePort(node *seiv1alpha1.SeiNode) int32 {
+func cosmosExporterReadinessProbePort(node *seiv1alpha1.SeiNode) int32 {
 	if node.Spec.Validator != nil {
 		return seiconfig.PortRPC
 	}
@@ -633,15 +633,15 @@ func buildCosmosExporterContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) (
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
 		},
-		StartupProbe: &corev1.Probe{
+		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				TCPSocket: &corev1.TCPSocketAction{
-					Port: intstr.FromInt32(cosmosExporterStartupProbePort(node)),
+					Port: intstr.FromInt32(cosmosExporterReadinessProbePort(node)),
 				},
 			},
 			InitialDelaySeconds: 5,
-			PeriodSeconds:       5,
-			FailureThreshold:    120,
+			PeriodSeconds:       10,
+			FailureThreshold:    3,
 		},
 	}, nil
 }

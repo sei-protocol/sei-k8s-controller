@@ -1346,30 +1346,34 @@ func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("SEI_COSMOS_EXPORTER_IMAGE is required"))
 }
 
-func TestCosmosExporter_StartupProbe_FullNodeTargetsGRPC(t *testing.T) {
+func TestCosmosExporter_ReadinessProbe_FullNodeTargetsGRPC(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-fn-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
 
-	g.Expect(ce.StartupProbe).NotTo(BeNil())
-	g.Expect(ce.StartupProbe.TCPSocket).NotTo(BeNil())
-	g.Expect(ce.StartupProbe.TCPSocket.Port.IntVal).To(Equal(int32(9090)))
-	g.Expect(ce.StartupProbe.FailureThreshold).To(Equal(int32(120)))
+	g.Expect(ce.StartupProbe).To(BeNil())
+	g.Expect(ce.ReadinessProbe).NotTo(BeNil())
+	g.Expect(ce.ReadinessProbe.TCPSocket).NotTo(BeNil())
+	g.Expect(ce.ReadinessProbe.TCPSocket.Port.IntVal).To(Equal(int32(9090)))
+	g.Expect(ce.ReadinessProbe.PeriodSeconds).To(Equal(int32(10)))
+	g.Expect(ce.ReadinessProbe.FailureThreshold).To(Equal(int32(3)))
 }
 
-func TestCosmosExporter_StartupProbe_ValidatorTargetsTendermintRPC(t *testing.T) {
+func TestCosmosExporter_ReadinessProbe_ValidatorTargetsTendermintRPC(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("ce-val-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
 
-	g.Expect(ce.StartupProbe).NotTo(BeNil())
-	g.Expect(ce.StartupProbe.TCPSocket).NotTo(BeNil())
-	g.Expect(ce.StartupProbe.TCPSocket.Port.IntVal).To(Equal(int32(26657)))
-	g.Expect(ce.StartupProbe.FailureThreshold).To(Equal(int32(120)))
+	g.Expect(ce.StartupProbe).To(BeNil())
+	g.Expect(ce.ReadinessProbe).NotTo(BeNil())
+	g.Expect(ce.ReadinessProbe.TCPSocket).NotTo(BeNil())
+	g.Expect(ce.ReadinessProbe.TCPSocket.Port.IntVal).To(Equal(int32(26657)))
+	g.Expect(ce.ReadinessProbe.PeriodSeconds).To(Equal(int32(10)))
+	g.Expect(ce.ReadinessProbe.FailureThreshold).To(Equal(int32(3)))
 }
 
 func TestCosmosExporter_MountsTmpEmptyDir(t *testing.T) {
