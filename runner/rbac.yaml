@@ -1,0 +1,43 @@
+# RBAC for seitask-runner — apply alongside each Chaos Mesh Workflow that uses
+# the runner image. The Workflow's `task.container.serviceAccountName` must
+# reference this ServiceAccount.
+#
+# Namespaced (Role, not ClusterRole) — the runner only operates on resources
+# in the same namespace as the Workflow.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: seitask-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: seitask-runner
+rules:
+# SeiNodeTask: create + read + SSA-patch (apply uses PATCH with
+# application/apply-patch+yaml, which requires the `patch` verb in addition
+# to `create` — `create` alone 403s on the second invocation).
+- apiGroups: ["sei.io"]
+  resources: ["seinodetasks"]
+  verbs: ["create", "get", "list", "watch", "patch", "update"]
+- apiGroups: ["sei.io"]
+  resources: ["seinodetasks/status"]
+  verbs: ["get"]
+# SeiNode: read-only, for --per-node-selector fan-out mode. Omit if your
+# Workflows only use single-node invocations.
+- apiGroups: ["sei.io"]
+  resources: ["seinodes"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: seitask-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: seitask-runner
+subjects:
+- kind: ServiceAccount
+  name: seitask-runner

@@ -1,0 +1,17 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeTask
+metadata:
+  name: PLACEHOLDER
+spec:
+  kind: GovVote
+  target:
+    nodeRef:
+      name: {{ .NODE }}
+  timeoutSeconds: {{ with index . "TIMEOUT_SECONDS" }}{{ . }}{{ else }}300{{ end }}
+  govVote:
+    chainId: {{ .CHAIN_ID }}
+    keyName: {{ .KEY_NAME }}
+    proposalId: {{ .PROPOSAL_ID }}
+    option: {{ .OPTION }}
+    fees: {{ .FEES }}
+    gas: {{ .GAS }}
