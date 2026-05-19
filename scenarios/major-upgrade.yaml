@@ -141,9 +141,23 @@ spec:
                 exit 0
               fi
               RPC="http://${SEI_DEPLOYMENT}-internal.${SEI_NAMESPACE}.svc.cluster.local:26657"
-              CUR=$(curl -fsS "${RPC}/status" | sed -n 's/.*"latest_block_height":"\([0-9]*\)".*/\1/p')
+              # `seictl nd watch --until=Ready` returns when SeiNode pods
+              # report Running, but seid's RPC server may take a few more
+              # seconds to actually bind port 26657. Retry the first chain
+              # query for up to 90s rather than fail single-shot.
+              CUR=""
+              for i in $(seq 1 30); do
+                CUR=$(curl -fsS --connect-timeout 3 "${RPC}/status" 2>/dev/null \
+                  | sed -n 's/.*"latest_block_height":"\([0-9]*\)".*/\1/p' || true)
+                if [ -n "${CUR}" ]; then
+                  echo "got height=${CUR} on attempt=${i}"
+                  break
+                fi
+                echo "attempt=${i} RPC not ready yet; retrying in 3s"
+                sleep 3
+              done
               if [ -z "${CUR}" ]; then
-                echo "failed to parse latest_block_height from ${RPC}/status" >&2
+                echo "failed to parse latest_block_height from ${RPC}/status after 30 attempts" >&2
                 exit 1
               fi
               TARGET=$((CUR + 100))
