@@ -181,10 +181,11 @@ func TestGenerateNodeStatefulSet_AlwaysHasSidecar(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	g.Expect(initContainers).To(HaveLen(3))
+	g.Expect(initContainers).To(HaveLen(4))
 	g.Expect(initContainers[0].Name).To(Equal("seid-init"))
 	g.Expect(initContainers[1].Name).To(Equal("sei-sidecar"))
 	g.Expect(initContainers[2].Name).To(Equal(containerNameRBACProxy))
+	g.Expect(initContainers[3].Name).To(Equal(containerNameCosmosExporter))
 	g.Expect(findInitContainer(initContainers, "snapshot-restore")).To(BeNil())
 }
 
@@ -629,10 +630,11 @@ func TestGenesisMode_SidecarPresent(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	initContainers := sts.Spec.Template.Spec.InitContainers
 
-	g.Expect(initContainers).To(HaveLen(3))
+	g.Expect(initContainers).To(HaveLen(4))
 	g.Expect(initContainers[0].Name).To(Equal("seid-init"))
 	g.Expect(initContainers[1].Name).To(Equal("sei-sidecar"))
 	g.Expect(initContainers[2].Name).To(Equal(containerNameRBACProxy))
+	g.Expect(initContainers[3].Name).To(Equal(containerNameCosmosExporter))
 }
 
 func TestGenesisMode_NoSnapshotRestoreInitContainer(t *testing.T) {
@@ -1306,9 +1308,23 @@ func TestCosmosExporter_AlwaysPresent(t *testing.T) {
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
 	g.Expect(ce).NotTo(BeNil())
-	g.Expect(sts.Spec.Template.Spec.Containers).To(HaveLen(2))
+	g.Expect(findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)).To(BeNil(),
+		"cosmos-exporter must be an init container with RestartPolicy=Always, not a regular main container")
+	g.Expect(sts.Spec.Template.Spec.Containers).To(HaveLen(1))
+}
+
+func TestCosmosExporter_IsNativeSidecar(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("ce-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
+
+	g.Expect(ce).NotTo(BeNil())
+	g.Expect(ce.RestartPolicy).NotTo(BeNil())
+	g.Expect(*ce.RestartPolicy).To(Equal(corev1.ContainerRestartPolicyAlways))
 }
 
 func TestCosmosExporter_DefaultImage(t *testing.T) {
@@ -1316,7 +1332,7 @@ func TestCosmosExporter_DefaultImage(t *testing.T) {
 	node := newSnapshotNode("ce-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
 
 	g.Expect(ce.Image).To(Equal(platformtest.Config().CosmosExporterImage))
 }
@@ -1326,7 +1342,7 @@ func TestCosmosExporter_PortIsFixed(t *testing.T) {
 	node := newSnapshotNode("ce-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
 
 	// Port is intentionally not user-configurable: the platform
 	// PodMonitor targets the named port `cosmos-metrics`.
@@ -1351,7 +1367,7 @@ func TestCosmosExporter_ReadinessProbe_FullNodeTargetsGRPC(t *testing.T) {
 	node := newSnapshotNode("ce-fn-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
 
 	g.Expect(ce.StartupProbe).To(BeNil())
 	g.Expect(ce.ReadinessProbe).NotTo(BeNil())
@@ -1366,7 +1382,7 @@ func TestCosmosExporter_ReadinessProbe_ValidatorTargetsTendermintRPC(t *testing.
 	node := newGenesisNode("ce-val-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
 
 	g.Expect(ce.StartupProbe).To(BeNil())
 	g.Expect(ce.ReadinessProbe).NotTo(BeNil())
@@ -1381,7 +1397,7 @@ func TestCosmosExporter_MountsTmpEmptyDir(t *testing.T) {
 	node := newSnapshotNode("ce-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
 
 	var hasTmp bool
 	for _, m := range ce.VolumeMounts {
@@ -1398,7 +1414,7 @@ func TestCosmosExporter_SeiArgs(t *testing.T) {
 	node := newSnapshotNode("ce-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
 
 	g.Expect(ce.Args).To(ContainElements(
 		"--denom", "usei",
@@ -1412,7 +1428,7 @@ func TestCosmosExporter_DefaultResources(t *testing.T) {
 	node := newSnapshotNode("ce-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
 
 	// 50m/64Mi requests, 256Mi memory limit, no CPU limit (see
 	// defaultCosmosExporterResources — scrape pulls would throttle).
@@ -1485,7 +1501,7 @@ func TestCosmosExporter_NonRootSecurityContext(t *testing.T) {
 	node := newSnapshotNode("ce-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+	ce := findInitContainer(sts.Spec.Template.Spec.InitContainers, containerNameCosmosExporter)
 
 	g.Expect(ce.SecurityContext).NotTo(BeNil())
 	g.Expect(ce.SecurityContext.RunAsNonRoot).NotTo(BeNil())
