@@ -26,6 +26,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
@@ -45,6 +47,15 @@ const (
 	targetWaitInterval = 5 * time.Second
 
 	defaultRequirePhaseTimeout = 5 * time.Minute
+
+	// sidecarExecuteTimeout bounds the SubmitTask HTTP call. The shared
+	// HTTP client has no Timeout (cmd/main.go); without an explicit ctx
+	// deadline, a wedged sidecar that TCP-accepts but stalls could pin
+	// a reconcile worker until the OS-level socket timeout (~75s).
+	sidecarExecuteTimeout = 30 * time.Second
+
+	// sidecarStatusTimeout bounds the GetTask HTTP call. Same reasoning.
+	sidecarStatusTimeout = 15 * time.Second
 )
 
 // resultRequeueImmediate mirrors planner.ResultRequeueImmediate without
@@ -225,7 +236,10 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 	}
 
 	if cr.Status.Task.Status == seiv1alpha1.TaskPending {
-		if err := exec.Execute(ctx); err != nil {
+		execCtx, cancel := context.WithTimeout(ctx, sidecarExecuteTimeout)
+		err := exec.Execute(execCtx)
+		cancel()
+		if err != nil {
 			var terminal *task.TerminalError
 			if errors.As(err, &terminal) {
 				cr.Status.Task.Status = seiv1alpha1.TaskFailed
@@ -241,7 +255,9 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 		}
 	}
 
-	switch exec.Status(ctx) {
+	statusCtx, cancel := context.WithTimeout(ctx, sidecarStatusTimeout)
+	defer cancel()
+	switch exec.Status(statusCtx) {
 	case task.ExecutionComplete:
 		cr.Status.Task.Status = seiv1alpha1.TaskComplete
 		populateOutputs(cr, target)
@@ -274,35 +290,114 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 }
 
 // taskParamsForKind dispatches CR.spec.kind to the internal/task registry.
-// PR 3 will add the sidecar-backed kinds (GovVote, GovSoftwareUpgrade,
-// AwaitCondition, AwaitNodesAtHeight).
+// For sidecar-backed kinds we marshal the sidecar TaskBuilder struct
+// directly: the registry's sidecarTask[T] helper unmarshals back into the
+// same typed struct, then calls ToTaskRequest(). Field names on the
+// sidecar structs (PascalCase, no JSON tags) are the wire keys.
 func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask) (taskType string, params json.RawMessage, err error) {
 	switch cr.Spec.Kind {
 	case seiv1alpha1.SeiNodeTaskKindUpdateNodeImage:
 		if cr.Spec.UpdateNodeImage == nil {
 			return "", nil, errors.New("spec.updateNodeImage is required for kind=UpdateNodeImage")
 		}
-		raw, mErr := json.Marshal(task.UpdateNodeImageParams{
+		return marshalTaskParams(task.TaskTypeUpdateNodeImage, task.UpdateNodeImageParams{
 			NodeName:  cr.Spec.Target.NodeRef.Name,
 			Namespace: cr.Namespace,
 			Image:     cr.Spec.UpdateNodeImage.Image,
 		})
-		if mErr != nil {
-			return "", nil, fmt.Errorf("marshaling update-node-image params: %w", mErr)
+
+	case seiv1alpha1.SeiNodeTaskKindGovVote:
+		p := cr.Spec.GovVote
+		if p == nil {
+			return "", nil, errors.New("spec.govVote is required for kind=GovVote")
 		}
-		return task.TaskTypeUpdateNodeImage, raw, nil
+		return marshalTaskParams(sidecar.TaskTypeGovVote, sidecar.GovVoteTask{
+			ChainID:    p.ChainID,
+			KeyName:    p.KeyName,
+			ProposalID: p.ProposalID,
+			Option:     p.Option,
+			Memo:       p.Memo,
+			Fees:       p.Fees,
+			Gas:        p.Gas,
+		})
+
+	case seiv1alpha1.SeiNodeTaskKindGovSoftwareUpgrade:
+		p := cr.Spec.GovSoftwareUpgrade
+		if p == nil {
+			return "", nil, errors.New("spec.govSoftwareUpgrade is required for kind=GovSoftwareUpgrade")
+		}
+		return marshalTaskParams(sidecar.TaskTypeGovSoftwareUpgrade, sidecar.GovSoftwareUpgradeTask{
+			ChainID:        p.ChainID,
+			KeyName:        p.KeyName,
+			Title:          p.Title,
+			Description:    p.Description,
+			UpgradeName:    p.UpgradeName,
+			UpgradeHeight:  p.UpgradeHeight,
+			UpgradeInfo:    p.UpgradeInfo,
+			InitialDeposit: p.InitialDeposit,
+			Memo:           p.Memo,
+			Fees:           p.Fees,
+			Gas:            p.Gas,
+		})
+
+	case seiv1alpha1.SeiNodeTaskKindAwaitCondition:
+		p := cr.Spec.AwaitCondition
+		if p == nil {
+			return "", nil, errors.New("spec.awaitCondition is required for kind=AwaitCondition")
+		}
+		if p.Height == nil {
+			return "", nil, errors.New("spec.awaitCondition.height is required (height is the only condition wired in MVP)")
+		}
+		return marshalTaskParams(sidecar.TaskTypeAwaitCondition, sidecar.AwaitConditionTask{
+			Condition:    sidecar.ConditionHeight,
+			TargetHeight: p.Height.TargetHeight,
+			Action:       p.Action,
+		})
+
+	case seiv1alpha1.SeiNodeTaskKindAwaitNodesAtHeight:
+		// Single-node target: map to the sidecar's per-node primitive
+		// (await-condition height=H) rather than the deployment-scoped
+		// controller-side awaitNodesAtHeight task. This keeps the CR's
+		// status.task.id equal to the sidecar task ID and avoids the
+		// fan-out fixture for a fan-of-one.
+		p := cr.Spec.AwaitNodesAtHeight
+		if p == nil {
+			return "", nil, errors.New("spec.awaitNodesAtHeight is required for kind=AwaitNodesAtHeight")
+		}
+		return marshalTaskParams(sidecar.TaskTypeAwaitCondition, sidecar.AwaitConditionTask{
+			Condition:    sidecar.ConditionHeight,
+			TargetHeight: p.TargetHeight,
+		})
+
 	default:
-		return "", nil, fmt.Errorf("kind %q is not wired in this build (PR 3 will add sidecar-backed kinds)", cr.Spec.Kind)
+		return "", nil, fmt.Errorf("kind %q is not wired in this build", cr.Spec.Kind)
 	}
 }
 
-// populateOutputs stamps the typed per-kind outputs on Complete.
-func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) {
-	if cr.Status.Outputs == nil {
-		cr.Status.Outputs = &seiv1alpha1.SeiNodeTaskOutputs{}
+func marshalTaskParams(taskType string, v any) (string, json.RawMessage, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshaling %s params: %w", taskType, err)
 	}
+	return taskType, raw, nil
+}
+
+// populateOutputs stamps the typed per-kind outputs on Complete.
+//
+// Sidecar-backed kinds (GovVote, GovSoftwareUpgrade, AwaitCondition,
+// AwaitNodesAtHeight) intentionally do NOT populate status.outputs in this
+// PR. The sidecar's TaskResult shape carries the values, but extracting
+// them would require structural changes on the sidecar side (typed
+// per-task result payloads). We defer that work and leave the typed
+// output fields on the CRD unset and forward-compatible. Downstream
+// consumers coordinate via chain queries (chain-as-medium), not
+// task-to-task currying. See conversation history / PR 3 scope notes.
+func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) {
 	switch cr.Spec.Kind {
 	case seiv1alpha1.SeiNodeTaskKindUpdateNodeImage:
+		if cr.Status.Outputs == nil {
+			cr.Status.Outputs = &seiv1alpha1.SeiNodeTaskOutputs{}
+		}
 		cr.Status.Outputs.UpdateNodeImage = &seiv1alpha1.UpdateNodeImageOutputs{
 			AppliedImage: target.Status.CurrentImage,
 		}

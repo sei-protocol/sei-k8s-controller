@@ -214,6 +214,8 @@ var registry = map[string]taskDeserializer{
 	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[sidecar.UploadGenesisArtifactsTask](false),
 	sidecar.TaskTypeAssembleGenesis:        sidecarTask[sidecar.AssembleAndUploadGenesisTask](false),
 	sidecar.TaskTypeSetGenesisPeers:        sidecarTask[sidecar.SetGenesisPeersTask](false),
+	sidecar.TaskTypeGovVote:                sidecarTask[sidecar.GovVoteTask](false),
+	sidecar.TaskTypeGovSoftwareUpgrade:     sidecarTask[sidecar.GovSoftwareUpgradeTask](false),
 
 	// Controller-side group tasks
 	TaskTypeAwaitNodesRunning:  deserializeAwaitNodesRunning,
