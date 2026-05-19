@@ -1,0 +1,525 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: seinodetasks.sei.io
+spec:
+  group: sei.io
+  names:
+    kind: SeiNodeTask
+    listKind: SeiNodeTaskList
+    plural: seinodetasks
+    shortNames:
+    - snt
+    singular: seinodetask
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.kind
+      name: Kind
+      type: string
+    - jsonPath: .spec.target.nodeRef.name
+      name: Target
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SeiNodeTask is the Schema for the seinodetasks API — a single-shot
+          operation against a single SeiNode. See docs/design/seinode-task-lld.md
+          (PR sei-protocol/sei-k8s-controller#277) for the interface contract.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SeiNodeTaskSpec defines the desired state of a SeiNodeTask.
+
+              Exactly one payload sub-spec matching spec.kind must be set; the CEL rule
+              below mirrors SeiNodeSpec.fullNode|archive|replayer|validator.
+
+              Field names locked at v1alpha1 — see docs/design/seinode-task-lld.md
+              (PR sei-protocol/sei-k8s-controller#277).
+            properties:
+              awaitCondition:
+                description: AwaitCondition is the payload for kind=AwaitCondition.
+                properties:
+                  action:
+                    description: |-
+                      Action is an optional post-condition action the sidecar performs
+                      after the condition is met. Currently the only recognized value is
+                      "SIGTERM_SEID", which sends SIGTERM to the local seid process.
+                      Leave empty for a pure wait.
+                    enum:
+                    - SIGTERM_SEID
+                    type: string
+                  height:
+                    description: |-
+                      Height waits until the local node reports a latest height >=
+                      targetHeight. Maps to sidecar await-condition with condition=height.
+                    properties:
+                      targetHeight:
+                        description: TargetHeight is the block height the local node
+                          must reach.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                    required:
+                    - targetHeight
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: 'exactly one condition must be set (currently: height)'
+                  rule: '(has(self.height) ? 1 : 0) == 1'
+              awaitNodesAtHeight:
+                description: AwaitNodesAtHeight is the payload for kind=AwaitNodesAtHeight.
+                properties:
+                  targetHeight:
+                    description: TargetHeight is the block height the target node
+                      must reach.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                required:
+                - targetHeight
+                type: object
+              govSoftwareUpgrade:
+                description: GovSoftwareUpgrade is the payload for kind=GovSoftwareUpgrade.
+                properties:
+                  chainId:
+                    description: |-
+                      ChainID is the chain ID the proposal targets. Cross-checked against
+                      the local node's reported chain ID by the sidecar.
+                    minLength: 1
+                    type: string
+                  description:
+                    description: Description is the on-chain proposal description.
+                    minLength: 1
+                    type: string
+                  fees:
+                    description: Fees is the tx fee in coin notation (e.g. "2000usei").
+                      usei-only.
+                    minLength: 1
+                    type: string
+                  gas:
+                    description: Gas is the tx gas limit.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  initialDeposit:
+                    description: |-
+                      InitialDeposit is the proposal deposit in coin notation (e.g.
+                      "10000000usei"). Sei gov rejects non-usei denominations; the sidecar
+                      pre-validates.
+                    minLength: 1
+                    type: string
+                  keyName:
+                    description: KeyName names the keyring entry that signs the proposal.
+                    minLength: 1
+                    type: string
+                  memo:
+                    description: |-
+                      Memo is the optional tx memo. The sidecar appends a `taskID=<id>` tag
+                      for on-chain audit; do not pre-tag.
+                    type: string
+                  title:
+                    description: Title is the on-chain proposal title.
+                    minLength: 1
+                    type: string
+                  upgradeHeight:
+                    description: UpgradeHeight is the block height at which the upgrade
+                      is scheduled.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  upgradeInfo:
+                    description: UpgradeInfo is the optional Plan.Info string (e.g.
+                      binary checksums).
+                    type: string
+                  upgradeName:
+                    description: |-
+                      UpgradeName is the upgrade plan name. Must match an upgrade handler
+                      registered in the target binary.
+                    minLength: 1
+                    type: string
+                required:
+                - chainId
+                - description
+                - fees
+                - gas
+                - initialDeposit
+                - keyName
+                - title
+                - upgradeHeight
+                - upgradeName
+                type: object
+              govVote:
+                description: GovVote is the payload for kind=GovVote.
+                properties:
+                  chainId:
+                    description: ChainID is the chain ID the vote targets.
+                    minLength: 1
+                    type: string
+                  fees:
+                    description: Fees is the tx fee in coin notation (e.g. "2000usei").
+                      usei-only.
+                    minLength: 1
+                    type: string
+                  gas:
+                    description: Gas is the tx gas limit.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  keyName:
+                    description: KeyName names the keyring entry that signs the vote.
+                    minLength: 1
+                    type: string
+                  memo:
+                    description: |-
+                      Memo is the optional tx memo. The sidecar appends a `taskID=<id>` tag;
+                      do not pre-tag.
+                    type: string
+                  option:
+                    description: Option is the vote choice. Mirrors gov v1beta1 VoteOption
+                      parse rules.
+                    enum:
+                    - "yes"
+                    - "no"
+                    - abstain
+                    - no_with_veto
+                    - no-with-veto
+                    type: string
+                  proposalId:
+                    description: ProposalID is the on-chain proposal ID being voted
+                      on.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                required:
+                - chainId
+                - fees
+                - gas
+                - keyName
+                - option
+                - proposalId
+                type: object
+              kind:
+                description: |-
+                  Kind selects the task implementation. Immutable after creation.
+                  The matching payload sub-spec (govSoftwareUpgrade, govVote, etc.)
+                  must be set; all others must be unset.
+                enum:
+                - GovSoftwareUpgrade
+                - GovVote
+                - AwaitCondition
+                - UpdateNodeImage
+                - AwaitNodesAtHeight
+                type: string
+              target:
+                description: |-
+                  Target identifies the single SeiNode this task operates on. Fan-out
+                  targeting (label selectors) is intentionally out of scope at the CRD
+                  layer — express fan-out at the seitask-runner / Chaos Workflow layer.
+                properties:
+                  nodeRef:
+                    description: NodeRef is a same-namespace reference to a SeiNode.
+                    properties:
+                      name:
+                        description: Name of the SeiNode in the same namespace as
+                          the SeiNodeTask.
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  requirePhase:
+                    default: Running
+                    description: |-
+                      RequirePhase is the SeiNode phase that must be observed on the target
+                      before the task is dispatched. When the target is not in this phase
+                      within RequirePhaseTimeout, the task is failed terminally.
+                    enum:
+                    - Pending
+                    - Initializing
+                    - Running
+                    - Failed
+                    - Terminating
+                    type: string
+                  requirePhaseTimeout:
+                    default: 5m
+                    description: |-
+                      RequirePhaseTimeout bounds how long the reconciler waits for the
+                      target to reach RequirePhase before failing the task. Default 5m.
+                    type: string
+                required:
+                - nodeRef
+                type: object
+              timeoutSeconds:
+                description: |-
+                  TimeoutSeconds bounds the total time the reconciler will spend driving
+                  this task to a terminal state, measured from first reconcile after
+                  status.task is populated. When 0 (default), no upper bound is applied
+                  and the task runs until it completes, fails terminally, or is deleted.
+                format: int32
+                minimum: 0
+                type: integer
+              updateNodeImage:
+                description: UpdateNodeImage is the payload for kind=UpdateNodeImage.
+                properties:
+                  image:
+                    description: |-
+                      Image is the desired seid container image (with tag/digest). Patched
+                      onto target.spec.image via SSA with fieldOwner=seinode-task-controller.
+                    maxLength: 512
+                    minLength: 1
+                    type: string
+                required:
+                - image
+                type: object
+            required:
+            - kind
+            - target
+            type: object
+            x-kubernetes-validations:
+            - message: exactly one of govSoftwareUpgrade, govVote, awaitCondition,
+                updateNodeImage, or awaitNodesAtHeight must be set
+              rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
+                1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage)
+                ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) == 1'
+            - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
+              rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
+            - message: spec.govVote is required when kind=GovVote
+              rule: self.kind != 'GovVote' || has(self.govVote)
+            - message: spec.awaitCondition is required when kind=AwaitCondition
+              rule: self.kind != 'AwaitCondition' || has(self.awaitCondition)
+            - message: spec.updateNodeImage is required when kind=UpdateNodeImage
+              rule: self.kind != 'UpdateNodeImage' || has(self.updateNodeImage)
+            - message: spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight
+              rule: self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)
+            - message: spec.kind is immutable
+              rule: self.kind == oldSelf.kind
+          status:
+            description: SeiNodeTaskStatus defines the observed state of a SeiNodeTask.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the most recent .metadata.generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              outputs:
+                description: |-
+                  Outputs surfaces typed per-kind results. Exactly one sub-field is
+                  populated, matching spec.kind. Populated only on phase=Complete.
+                properties:
+                  awaitCondition:
+                    description: AwaitCondition outputs for kind=AwaitCondition.
+                    properties:
+                      observedValue:
+                        description: |-
+                          ObservedValue is the value of the awaited quantity at the moment the
+                          condition was satisfied. For condition=height, this is the latest
+                          block height observed by the sidecar at the time it returned.
+                        format: int64
+                        type: integer
+                    type: object
+                  awaitNodesAtHeight:
+                    description: AwaitNodesAtHeight outputs for kind=AwaitNodesAtHeight.
+                    properties:
+                      currentHeight:
+                        description: |-
+                          CurrentHeight is the latest height observed on the target node at
+                          task completion (i.e. >= spec.awaitNodesAtHeight.targetHeight).
+                        format: int64
+                        type: integer
+                    type: object
+                  govSoftwareUpgrade:
+                    description: GovSoftwareUpgrade outputs for kind=GovSoftwareUpgrade.
+                    properties:
+                      height:
+                        description: |-
+                          Height is the block height at which the tx was included, when
+                          inclusion was observed by the sidecar.
+                        format: int64
+                        type: integer
+                      proposalId:
+                        description: |-
+                          ProposalID is the on-chain proposal ID parsed from the inclusion
+                          response events. Empty when the sidecar could not determine
+                          inclusion before result-persist.
+                        format: int64
+                        type: integer
+                      txHash:
+                        description: TxHash is the upper-case hex-encoded transaction
+                          hash.
+                        type: string
+                    type: object
+                  govVote:
+                    description: GovVote outputs for kind=GovVote.
+                    properties:
+                      height:
+                        description: Height is the block height at which the tx was
+                          included.
+                        format: int64
+                        type: integer
+                      txHash:
+                        description: TxHash is the upper-case hex-encoded transaction
+                          hash.
+                        type: string
+                    type: object
+                  updateNodeImage:
+                    description: UpdateNodeImage outputs for kind=UpdateNodeImage.
+                    properties:
+                      appliedImage:
+                        description: |-
+                          AppliedImage is the image now observed on target.status.currentImage.
+                          Equal to spec.updateNodeImage.image.
+                        type: string
+                    type: object
+                type: object
+              phase:
+                description: Phase is the high-level lifecycle state.
+                enum:
+                - Pending
+                - Running
+                - Complete
+                - Failed
+                type: string
+              phaseTransitionTime:
+                description: PhaseTransitionTime is when the task last changed phases.
+                format: date-time
+                type: string
+              startedAt:
+                description: |-
+                  StartedAt is when the controller first observed the task (used as the
+                  reference point for spec.timeoutSeconds).
+                format: date-time
+                type: string
+              targetFirstObservedAt:
+                description: |-
+                  TargetFirstObservedAt is when the controller first observed the target
+                  SeiNode in a non-RequirePhase state (used as the reference point for
+                  spec.target.requirePhaseTimeout). Cleared once the phase is met.
+                format: date-time
+                type: string
+              task:
+                description: |-
+                  Task tracks the synthesized one-shot task that backs this CR. Populated
+                  atomically on the first reconcile that successfully resolves the
+                  target and mints the deterministic task ID. Once set, .task.id is
+                  stable for the lifetime of the CR.
+                properties:
+                  err:
+                    description: Err is the error message if the task failed.
+                    type: string
+                  id:
+                    description: ID is the deterministic UUID v5 used as the sidecar
+                      task ID.
+                    type: string
+                  status:
+                    description: Status is the lifecycle state of the underlying execution.
+                    enum:
+                    - Pending
+                    - Complete
+                    - Failed
+                    type: string
+                  submittedAt:
+                    description: |-
+                      SubmittedAt is when the task was first submitted to the sidecar.
+                      Nil before submission.
+                    format: date-time
+                    type: string
+                required:
+                - id
+                - status
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
