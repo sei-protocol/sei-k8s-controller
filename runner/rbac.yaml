@@ -45,6 +45,13 @@ rules:
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list", "watch", "create", "patch", "update"]
+# Chaos Mesh Workflow: read-only. compute-target-height looks up the
+# parent Workflow CR's UID so it can stamp the workflow-vars ConfigMap
+# with an ownerReference. Deletion of the Workflow then cascades
+# garbage-collection of the ConfigMap automatically.
+- apiGroups: ["chaos-mesh.org"]
+  resources: ["workflows"]
+  verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
