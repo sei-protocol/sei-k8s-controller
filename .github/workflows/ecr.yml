@@ -30,11 +30,28 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/build-push-action@v6
+      - name: Build and push controller image
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: linux/amd64
           tags: ${{ steps.ecr-login.outputs.registry }}/sei/sei-k8s-controller:${{ inputs.tag || github.sha }}
+          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
+          cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
+
+      # The runner image is the orchestration container used by Chaos Mesh
+      # Workflows in scenarios/ — it ships its own per-kind Go text templates
+      # and applies SeiNodeTask CRs via the dynamic client. Built from the
+      # same repo context as the controller; the only difference is the
+      # Dockerfile path.
+      - name: Build and push seitask-runner image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: runner/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.ecr-login.outputs.registry }}/sei/seitask-runner:${{ inputs.tag || github.sha }}
           cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
