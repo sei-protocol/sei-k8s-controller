@@ -9,8 +9,8 @@ the acceptance test for one capability surface.
 > cross-step variable bridge that does not exist in Chaos Mesh's `Task`
 > template (each step is its own Pod; emptyDir volumes are Pod-scoped, not
 > Workflow-scoped). The `TARGET_HEIGHT` / `UPGRADE_HEIGHT` /
-> `POST_UPGRADE_HEIGHT` / `PROPOSAL_ID` values computed by early steps are
-> not readable by subsequent steps without a bridge.
+> `POST_UPGRADE_HEIGHT` / `PANIC_BOUNDARY` / `PROPOSAL_ID` values computed
+> by early steps are not readable by subsequent steps without a bridge.
 >
 > The YAML retains `/workflow/vars/env.sh` references and the `vars`
 > volume mounts on every step for forward-compatibility with that
