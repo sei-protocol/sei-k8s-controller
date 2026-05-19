@@ -483,7 +483,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 		buildSidecarContainer(node, p),
 		buildRBACProxyContainer(node, p),
 	}
-	ceContainer, err := buildCosmosExporterContainer(p)
+	ceContainer, err := buildCosmosExporterContainer(node, p)
 	if err != nil {
 		return corev1.PodSpec{}, err
 	}
@@ -599,9 +599,17 @@ func defaultCosmosExporterResources() corev1.ResourceRequirements {
 	}
 }
 
+// cosmosExporterStartupProbePort: validators probe Tendermint RPC (gRPC
+// is disabled), other modes probe seid's gRPC.
+func cosmosExporterStartupProbePort(node *seiv1alpha1.SeiNode) int32 {
+	if node.Spec.Validator != nil {
+		return seiconfig.PortRPC
+	}
+	return seiconfig.PortGRPC
+}
+
 // buildCosmosExporterContainer renders the cosmos-exporter sidecar.
-// Image, args, port, and resources are fixed — no per-node knobs.
-func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
+func buildCosmosExporterContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.Container, error) {
 	if p.CosmosExporterImage == "" {
 		return corev1.Container{}, fmt.Errorf("SEI_COSMOS_EXPORTER_IMAGE is required on the operator Deployment")
 	}
@@ -625,18 +633,15 @@ func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
 		},
-		// cosmos-exporter Fatal()s on its initial gRPC dial. Gate
-		// startup on seid's gRPC port so we don't crash-loop until
-		// seid is up.
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				TCPSocket: &corev1.TCPSocketAction{
-					Port: intstr.FromInt32(seiconfig.PortGRPC),
+					Port: intstr.FromInt32(cosmosExporterStartupProbePort(node)),
 				},
 			},
 			InitialDelaySeconds: 5,
 			PeriodSeconds:       5,
-			FailureThreshold:    60,
+			FailureThreshold:    120,
 		},
 	}, nil
 }
