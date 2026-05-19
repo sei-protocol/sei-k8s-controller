@@ -207,11 +207,11 @@ namespace as the Workflow:
   `$SEI_UPGRADE_NAME` per concurrent run, or treat the chain as serially
   owned by one scenario at a time.
 
-- **Cleanup:** ConfigMaps are not garbage-collected by the Workflow.
-  Operators clear them via the `sei.io/workflow-run` label (see Cleanup
-  above). A future enhancement is to set an `ownerReference` on the
-  ConfigMap pointing at the Workflow CR so it cascades on Workflow
-  deletion.
+- **Cleanup:** the ConfigMap carries an `ownerReference` pointing at the
+  parent Workflow CR (`major-upgrade-$SEI_WORKFLOW_RUN_ID`). Deleting the
+  Workflow cascades garbage-collection of the ConfigMap automatically
+  via kube-controller-manager. Operators can still clean up by label
+  (`-l sei.io/workflow-run`) if multiple Workflows are torn down at once.
 
 ## Known limitations / deferred capability
 
@@ -244,19 +244,13 @@ namespace as the Workflow:
 4. **The runner image is not yet auto-published.** Add a `runner` step to
    `.github/workflows/ecr.yml` once this scenario is wired into a CI job.
 
-5. **ConfigMap is not owner-referenced to the Workflow.** Cleanup is
-   manual today. A follow-up that adds an `ownerReferences` entry to
-   the ConfigMap (pointing at the Workflow CR) would make Workflow
-   deletion cascade. Punt until the runner manages the ConfigMap
-   lifecycle natively.
-
-6. **Argo Workflows migration is still on the long-term roadmap.** The
+5. **Argo Workflows migration is still on the long-term roadmap.** The
    ConfigMap bridge is the MVP. Argo's `outputs.parameters` /
    `inputs.parameters` is more ergonomic and avoids the per-run
    ConfigMap garbage. Plan that migration once we have more than one
    scenario worth porting.
 
-7. **No fan-out from a single step.** The 4-vote step is hard-coded to
+6. **No fan-out from a single step.** The 4-vote step is hard-coded to
    4 children rather than `--per-node-selector=role=validator`. We could
    collapse the four `vote-node-*` templates into one fan-out runner if
    the SeiNodes carry a consistent label, but the explicit per-node form

@@ -76,7 +76,11 @@
 apiVersion: chaos-mesh.org/v1alpha1
 kind: Workflow
 metadata:
-  name: major-upgrade
+  # Workflow CR name carries the run ID so two concurrent applies don't
+  # collide on the same CR. The workflow-vars ConfigMap (see
+  # compute-target-height) sets ownerReferences to this CR so a Workflow
+  # deletion cascades to the ConfigMap.
+  name: major-upgrade-$SEI_WORKFLOW_RUN_ID
   labels:
     sei.io/scenario: major-upgrade
     sei.io/workflow-run: "$SEI_WORKFLOW_RUN_ID"
@@ -146,6 +150,17 @@ spec:
               POST=$((TARGET + 10))
               PANIC_BOUNDARY=$((TARGET - 1))
               echo "current=${CUR} target=${TARGET} post=${POST} panic_boundary=${PANIC_BOUNDARY}"
+              # Look up the parent Workflow's UID so we can stamp an
+              # ownerReference on the ConfigMap. When the Workflow CR is
+              # deleted, kube-controller-manager garbage-collects the
+              # ConfigMap automatically — no operator-managed cleanup.
+              WORKFLOW_UID=$(kubectl get workflow.chaos-mesh.org \
+                "major-upgrade-${SEI_WORKFLOW_RUN_ID}" \
+                -o jsonpath='{.metadata.uid}')
+              if [ -z "${WORKFLOW_UID}" ]; then
+                echo "failed to resolve Workflow UID for major-upgrade-${SEI_WORKFLOW_RUN_ID}" >&2
+                exit 1
+              fi
               kubectl create configmap "workflow-vars-${SEI_WORKFLOW_RUN_ID}" \
                 --from-literal=TARGET_HEIGHT="${TARGET}" \
                 --from-literal=UPGRADE_HEIGHT="${TARGET}" \
@@ -155,6 +170,9 @@ spec:
               | kubectl label -f - --local -o yaml \
                   sei.io/workflow-run="${SEI_WORKFLOW_RUN_ID}" \
                   sei.io/scenario=major-upgrade \
+              | kubectl patch -f - --local --type=merge --patch \
+                  "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"chaos-mesh.org/v1alpha1\",\"kind\":\"Workflow\",\"name\":\"major-upgrade-${SEI_WORKFLOW_RUN_ID}\",\"uid\":\"${WORKFLOW_UID}\",\"controller\":false,\"blockOwnerDeletion\":false}]}}" \
+                  -o yaml \
               | kubectl apply -f -
           env:
             - {name: SEI_DEPLOYMENT,       value: "$SEI_DEPLOYMENT"}
