@@ -557,8 +557,8 @@ spec:
                       secret:
                         description: |-
                           Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
-                          in the SeiNode's namespace. When unset, the sidecar reads the keyring
-                          written by the gentx task on the shared data PVC instead.
+                          in the SeiNode's namespace. Overrides the default test-backend keyring
+                          on the data PVC.
                         properties:
                           keyName:
                             default: node_admin

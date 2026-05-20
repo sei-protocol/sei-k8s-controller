@@ -135,28 +135,24 @@ type SecretNodeKeySource struct {
 	SecretName string `json:"secretName"`
 }
 
-// OperatorKeyringSource declares where a validator's operator-account
+// OperatorKeyringSource overrides where a validator's operator-account
 // keyring (used by the sidecar to sign governance, MsgEditValidator,
 // withdraw-rewards, and other operator-account transactions) comes from.
-// Setting this field is the validator's opt-in to sidecar signing.
 //
-// Two shapes, distinguished by whether .secret is set:
+// Validators sign by default: when this field is omitted, the controller
+// wires the sidecar's keyring to the data PVC's test-backend directory
+// ($SEI_HOME/keyring-test/) — the same path the generate-gentx task writes
+// the validator key to when the SeiNode is provisioned via a genesis
+// ceremony. No passphrase; the test backend is unencrypted.
 //
-//   - .secret set: load a Cosmos SDK file-backend keyring from the named
-//     Secret (production). Sidecar unlocks it with the referenced passphrase.
-//   - .secret unset (empty block): reuse the keyring written by the
-//     genesis-ceremony gentx task at $SEI_HOME/keyring-test/ on the data
-//     PVC (Cosmos SDK test backend, unencrypted). Intended for bench /
-//     ephemeral chains where the PVC is the natural trust boundary.
-//
-// Production chains should always set .secret. An empty block on a prod
-// chain means sign-tx tasks fail at execution with "key not found" — the
-// sidecar opens an empty keyring rather than silently falling back to an
-// unintended identity.
+// Set .secret to override with a passphrase-locked, projected-Secret-backed
+// keyring (file backend). Use this when the operator key is rotated
+// externally, sourced from an HSM-export, or shared across infrastructure
+// the SeiNode controller doesn't own.
 type OperatorKeyringSource struct {
 	// Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
-	// in the SeiNode's namespace. When unset, the sidecar reads the keyring
-	// written by the gentx task on the shared data PVC instead.
+	// in the SeiNode's namespace. Overrides the default test-backend keyring
+	// on the data PVC.
 	// +optional
 	Secret *SecretOperatorKeyringSource `json:"secret,omitempty"`
 }
