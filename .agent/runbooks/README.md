@@ -7,7 +7,6 @@ Distinct from:
 - **`CLAUDE.md`** (repo root) — *always-loaded* project conventions and architecture for Claude Code sessions
 - **`AGENTS.md`** (if/when added) — same idea, cross-tool format
 - **`docs/`** — human-oriented design documents, LLDs, RFCs, post-mortems
-- **`.claude/agents/`** — repo-local agent definitions (subagents)
 
 This directory is **on-demand**: an agent loads a runbook only when the operator points it here ("check `.agent/runbooks/<file>` for context") or when it's solving a problem the runbook covers. Keeping these out of `CLAUDE.md` saves context-window tokens during routine work and keeps high-volume reference material from crowding always-loaded instructions.
 
@@ -43,6 +42,5 @@ Agents fetch this `README.md` to discover what's available, then `WebFetch` the 
 - *Why* design decisions were made — that's `docs/design-*.md` (LLDs, ADRs, RFCs)
 - Always-loaded project conventions — that's `CLAUDE.md` / `AGENTS.md`
 - Invokable slash-command procedures — that's `.claude/skills/<name>/SKILL.md`
-- Repo-local agent definitions — that's `.claude/agents/`
 
 If a doc grows beyond procedural reference into a multi-section design rationale, move it to `docs/` and leave a one-line pointer here.
