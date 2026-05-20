@@ -6,7 +6,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 )
 
 // Downward-API env vars projecting the parent Workflow's identity onto each
@@ -63,8 +62,8 @@ func (w WorkflowIdentity) OwnerRef() metav1.OwnerReference {
 		Kind:               workflowKind,
 		Name:               w.Name,
 		UID:                w.UID,
-		Controller:         ptr.To(false),
-		BlockOwnerDeletion: ptr.To(false),
+		Controller:         new(bool),
+		BlockOwnerDeletion: new(bool),
 	}
 }
 

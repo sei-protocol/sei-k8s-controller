@@ -12,8 +12,9 @@ import (
 
 func newKeygenCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "keygen",
-		Usage: "Generate a fresh BIP-39 mnemonic and cosmos secp256k1 keypair, write it to a per-run Secret, and stamp the address into workflow-vars",
+		Name: "keygen",
+		Usage: "Generate a fresh BIP-39 mnemonic and cosmos secp256k1 keypair, write it to a " +
+			"per-run Secret, and stamp the address into workflow-vars",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "key-name",

@@ -21,8 +21,14 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+const (
+	testNamespace      = "nightly"
+	testWorkflowName   = "wf-test"
+	testWorkflowVarsCM = "workflow-vars-wf-test"
+)
+
 func testIdentity() WorkflowIdentity {
-	return WorkflowIdentity{Name: "wf-test", UID: "uid-test", Namespace: "nightly"}
+	return WorkflowIdentity{Name: testWorkflowName, UID: "uid-test", Namespace: testNamespace}
 }
 
 func TestEnsureWorkflowVarsCM_CreatesWithOwnerRef(t *testing.T) {
@@ -34,7 +40,7 @@ func TestEnsureWorkflowVarsCM_CreatesWithOwnerRef(t *testing.T) {
 	}
 
 	got := &corev1.ConfigMap{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "nightly", Name: "workflow-vars-wf-test"}, got); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, got); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if got.Data[string(KeyRunID)] != "wf-test" {
@@ -47,7 +53,7 @@ func TestEnsureWorkflowVarsCM_CreatesWithOwnerRef(t *testing.T) {
 
 func TestEnsureWorkflowVarsCM_AlreadyExistsIsNoError(t *testing.T) {
 	existing := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "workflow-vars-wf-test", Namespace: "nightly"},
+		ObjectMeta: metav1.ObjectMeta{Name: testWorkflowVarsCM, Namespace: testNamespace},
 		Data:       map[string]string{string(KeyRunID): "wf-test"},
 	}
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(existing).Build()
@@ -59,7 +65,7 @@ func TestEnsureWorkflowVarsCM_AlreadyExistsIsNoError(t *testing.T) {
 
 func TestSetVars_MergesIntoExisting(t *testing.T) {
 	existing := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "workflow-vars-wf-test", Namespace: "nightly"},
+		ObjectMeta: metav1.ObjectMeta{Name: testWorkflowVarsCM, Namespace: testNamespace},
 		Data:       map[string]string{string(KeyRunID): "wf-test"},
 	}
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(existing).Build()
@@ -73,7 +79,7 @@ func TestSetVars_MergesIntoExisting(t *testing.T) {
 	}
 
 	got := &corev1.ConfigMap{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "nightly", Name: "workflow-vars-wf-test"}, got); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, got); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if got.Data[string(KeyRunID)] != "wf-test" {

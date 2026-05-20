@@ -9,13 +9,13 @@ func TestLoadWorkflowIdentity(t *testing.T) {
 	t.Run("all set", func(t *testing.T) {
 		t.Setenv(EnvWorkflowName, "release-test-abc")
 		t.Setenv(EnvWorkflowUID, "uid-xyz")
-		t.Setenv(EnvNamespace, "nightly")
+		t.Setenv(EnvNamespace, testNamespace)
 
 		w, err := LoadWorkflowIdentity()
 		if err != nil {
 			t.Fatalf("LoadWorkflowIdentity: %v", err)
 		}
-		if w.Name != "release-test-abc" || string(w.UID) != "uid-xyz" || w.Namespace != "nightly" {
+		if w.Name != "release-test-abc" || string(w.UID) != "uid-xyz" || w.Namespace != testNamespace {
 			t.Fatalf("got %+v", w)
 		}
 	})

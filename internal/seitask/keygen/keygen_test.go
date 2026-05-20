@@ -23,8 +23,16 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+const (
+	testKeyName        = "admin"
+	testNamespace      = "nightly"
+	testWorkflowName   = "wf-test"
+	testSecretName     = "admin-wf-test"
+	testWorkflowVarsCM = "workflow-vars-wf-test"
+)
+
 func testWorkflow() taskimg.WorkflowIdentity {
-	return taskimg.WorkflowIdentity{Name: "wf-test", UID: "uid-test", Namespace: "nightly"}
+	return taskimg.WorkflowIdentity{Name: testWorkflowName, UID: "uid-test", Namespace: testNamespace}
 }
 
 // Sanity check: keygen produces a Secret with the right shape + a
@@ -34,11 +42,11 @@ func TestRun_CreatesSecretAndWorkflowVars(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
 	w := testWorkflow()
 
-	res, err := Run(context.Background(), c, Params{KeyName: "admin", Workflow: w})
+	res, err := Run(context.Background(), c, Params{KeyName: testKeyName, Workflow: w})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.SecretName != "admin-wf-test" {
+	if res.SecretName != testSecretName {
 		t.Fatalf("SecretName: got %q, want admin-wf-test", res.SecretName)
 	}
 	if !strings.HasPrefix(res.Address, "sei1") {
@@ -47,7 +55,7 @@ func TestRun_CreatesSecretAndWorkflowVars(t *testing.T) {
 
 	// Secret must carry the mnemonic + address.
 	secret := &corev1.Secret{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "nightly", Name: "admin-wf-test"}, secret); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testSecretName}, secret); err != nil {
 		t.Fatalf("Get Secret: %v", err)
 	}
 	mnemonic, ok := secret.Data[SecretMnemonicKey]
@@ -64,16 +72,16 @@ func TestRun_CreatesSecretAndWorkflowVars(t *testing.T) {
 
 	// workflow-vars ConfigMap must carry ADMIN_ADDRESS + ADMIN_SECRET_NAME.
 	cm := &corev1.ConfigMap{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "nightly", Name: "workflow-vars-wf-test"}, cm); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, cm); err != nil {
 		t.Fatalf("Get CM: %v", err)
 	}
 	if got := cm.Data[string(taskimg.KeyAdminAddress)]; got != res.Address {
 		t.Fatalf("CM ADMIN_ADDRESS = %q, want %q", got, res.Address)
 	}
-	if got := cm.Data[string(taskimg.KeyAdminSecretName)]; got != "admin-wf-test" {
+	if got := cm.Data[string(taskimg.KeyAdminSecretName)]; got != testSecretName {
 		t.Fatalf("CM ADMIN_SECRET_NAME = %q, want admin-wf-test", got)
 	}
-	if got := cm.Data[string(taskimg.KeyRunID)]; got != "wf-test" {
+	if got := cm.Data[string(taskimg.KeyRunID)]; got != testWorkflowName {
 		t.Fatalf("CM RUN_ID = %q, want wf-test", got)
 	}
 }
@@ -85,19 +93,19 @@ func TestRun_Idempotent(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
 	w := testWorkflow()
 
-	first, err := Run(context.Background(), c, Params{KeyName: "admin", Workflow: w})
+	first, err := Run(context.Background(), c, Params{KeyName: testKeyName, Workflow: w})
 	if err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
 
 	// Drop the workflow-vars CM to simulate it being cleared somewhere.
 	cm := &corev1.ConfigMap{}
-	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "nightly", Name: "workflow-vars-wf-test"}, cm)
+	_ = c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, cm)
 	if err := c.Delete(context.Background(), cm); err != nil {
 		t.Fatalf("delete CM: %v", err)
 	}
 
-	second, err := Run(context.Background(), c, Params{KeyName: "admin", Workflow: w})
+	second, err := Run(context.Background(), c, Params{KeyName: testKeyName, Workflow: w})
 	if err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -105,7 +113,7 @@ func TestRun_Idempotent(t *testing.T) {
 		t.Fatalf("identity rotated on second Run: %q -> %q", first.Address, second.Address)
 	}
 	// CM should be re-created.
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "nightly", Name: "workflow-vars-wf-test"}, &corev1.ConfigMap{}); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, &corev1.ConfigMap{}); err != nil {
 		t.Fatalf("CM not re-created on idempotent run: %v", err)
 	}
 }
@@ -118,8 +126,8 @@ func TestRun_RejectsBadInputs(t *testing.T) {
 		p    Params
 	}{
 		{"empty key name", Params{KeyName: "", Workflow: testWorkflow()}},
-		{"missing workflow name", Params{KeyName: "admin", Workflow: taskimg.WorkflowIdentity{Namespace: "ns"}}},
-		{"missing workflow namespace", Params{KeyName: "admin", Workflow: taskimg.WorkflowIdentity{Name: "wf"}}},
+		{"missing workflow name", Params{KeyName: testKeyName, Workflow: taskimg.WorkflowIdentity{Namespace: "ns"}}},
+		{"missing workflow namespace", Params{KeyName: testKeyName, Workflow: taskimg.WorkflowIdentity{Name: "wf"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Run(context.Background(), c, tc.p)
@@ -137,7 +145,7 @@ func TestRun_StampsOwnerReferences(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
 	w := testWorkflow()
 
-	if _, err := Run(context.Background(), c, Params{KeyName: "admin", Workflow: w}); err != nil {
+	if _, err := Run(context.Background(), c, Params{KeyName: testKeyName, Workflow: w}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -147,15 +155,15 @@ func TestRun_StampsOwnerReferences(t *testing.T) {
 	} {
 		var name string
 		if _, ok := target.(*corev1.Secret); ok {
-			name = "admin-wf-test"
+			name = testSecretName
 		} else {
-			name = "workflow-vars-wf-test"
+			name = testWorkflowVarsCM
 		}
-		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "nightly", Name: name}, target); err != nil {
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: name}, target); err != nil {
 			t.Fatalf("Get %s: %v", name, err)
 		}
 		refs := target.GetOwnerReferences()
-		if len(refs) != 1 || refs[0].Kind != "Workflow" || refs[0].Name != "wf-test" || string(refs[0].UID) != "uid-test" {
+		if len(refs) != 1 || refs[0].Kind != "Workflow" || refs[0].Name != testWorkflowName || string(refs[0].UID) != "uid-test" {
 			t.Fatalf("%s ownerRefs = %+v", name, refs)
 		}
 	}
