@@ -34,7 +34,7 @@ This failure mode is the intersection of three facts that are not going away:
 
 1. The sidecar's mark-ready gate is correct design for initialization (it ensures config-apply / snapshot-restore completed before `seid` is allowed to boot) but wrong posture for restart (the PVC is already populated; there is nothing to block on).
 2. Pods will be replaced in production. Chaos testing forces it. Spot/preemption forces it. Node drains force it. OOM forces it. This is not a rare edge case.
-3. Sidecar self-detection ("if `$SEI_HOME/data/` is populated, skip the ready gate") is called out as a future sidecar improvement in `inplace-update-strategy.md` but requires a sidecar release coordinated with validator operators. The controller fix is independent and ships now.
+3. Sidecar self-detection ("if `$SEI_HOME/data/` is populated, skip the ready gate") is a possible future sidecar improvement but requires a sidecar release coordinated with validator operators. The controller fix is independent and ships now.
 
 Therefore the right place to handle this is exactly where steady-state drift is already handled: the SeiNode reconciler's running-phase planner.
 
@@ -114,7 +114,7 @@ The SeiNode reconciler grows a new method that probes Healthz and POSTs `mark-re
 
 **Rejected.** This breaks two invariants:
 1. Plans are the unit of observability. The rollout status, the `NodeUpdateInProgress`-style condition, the plan-duration metric, and the `PhaseTransition` event all key off `status.plan`. Inline mutations skip every one of them.
-2. It adds a second code path that talks to the sidecar from the reconciler proper. `inplace-update-strategy.md` explicitly preserves the single-writer invariant — the sidecar is driven through the plan executor, full stop. The `awaitNodesCaughtUpExecution` task in `deployment_await.go:138` is the template: controller-side polling task, executed by the plan executor, reachable via the same `buildSidecarClient` the executor already wires up.
+2. It adds a second code path that talks to the sidecar from the reconciler proper. The existing pattern preserves the single-writer invariant — the sidecar is driven through the plan executor, full stop. The `awaitNodesCaughtUpExecution` task in `deployment_await.go:138` is the template: controller-side polling task, executed by the plan executor, reachable via the same `buildSidecarClient` the executor already wires up.
 
 ### Option C: cheap probe inline, plan if needed (hybrid)
 
@@ -442,9 +442,9 @@ If the probe ever misbehaves in production, it can be disabled with zero code ch
 
 ## Non-Goals
 
-- **Sidecar self-detection of existing chain data.** Called out in `inplace-update-strategy.md` as a future sidecar improvement. Independent of this fix; this fix works with or without it.
+- **Sidecar self-detection of existing chain data.** A possible future sidecar improvement. Independent of this fix; this fix works with or without it.
 - **Handling stuck sidecar recovery (e.g., sidecar binary broken).** If the sidecar itself is wedged, `mark-ready` submissions will either timeout or be rejected. The alert rule will fire. An operator investigates. This PR does not try to auto-recover from a broken sidecar — that's not a drift, it's a failure, and the right response is paging.
-- **Extending this pattern to SeiNodeDeployment-level orchestration.** The deployment controller already has its own readiness plumbing through `AwaitNodesCaughtUp` and (in `inplace-update-strategy.md`) the `ReadinessApproved` condition. This fix is scoped to the SeiNode reconciler.
+- **Extending this pattern to SeiNodeDeployment-level orchestration.** The deployment controller already has its own readiness plumbing through `AwaitNodesCaughtUp` and the `ReadinessApproved` condition. This fix is scoped to the SeiNode reconciler.
 - **Replacing the init-plan's terminal `MarkReady` task.** That task is still correct for initialization. This fix adds a second path for the post-init case.
 
 ## Implementation Order

@@ -260,92 +260,7 @@ Kubernetes DNS resolves cross-namespace service names with the full FQDN. No spe
 
 ---
 
-## Use Case 3: Test Upgrade Flows (HardFork Deployments)
-
-**Goal:** Validate a HardFork deployment in staging before running it in production.
-
-### Architecture
-
-Create a genesis network, let it produce blocks, then apply a HardFork update strategy with a new image. The operator orchestrates the halt-height signaling, entrant node creation, binary switch, and teardown.
-
-### Manifests
-
-**Initial deployment:**
-
-```yaml
-apiVersion: sei.io/v1alpha1
-kind: SeiNodeGroup
-metadata:
-  name: upgrade-test
-  namespace: staging
-spec:
-  replicas: 4
-
-  genesis:
-    chainId: upgrade-test-1
-    stakingAmount: "10000000usei"
-    accountBalance: "1000000000000000000000usei"
-    overrides:
-      # Set a low halt height so the upgrade triggers quickly
-      # (in practice, use a realistic height for staging)
-
-  template:
-    metadata:
-      labels:
-        sei.io/role: validator
-    spec:
-      chainId: upgrade-test-1
-      image: "ghcr.io/sei-protocol/sei:v6.3.0"
-      entrypoint:
-        command: ["seid"]
-        args: ["start", "--home", "/sei"]
-      sidecar:
-        image: ghcr.io/sei-protocol/seictl@sha256:2cb320dd...
-      validator: {}
-
-  updateStrategy:
-    type: HardFork
-
-  networking:
-    service:
-      type: ClusterIP
-```
-
-**Trigger the upgrade (edit the image and set halt height):**
-
-```yaml
-spec:
-  template:
-    spec:
-      image: "ghcr.io/sei-protocol/sei:v7.0.0"
-  updateStrategy:
-    type: HardFork
-    hardFork:
-      haltHeight: 1000
-```
-
-The operator detects the templateHash change, creates entrant nodes with the new image, signals the incumbent nodes to halt at the specified height via `await-condition` with SIGTERM, waits for the entrants to catch up, switches the external Service selector to the new revision, and tears down the incumbents.
-
-### Networking During Upgrades
-
-During a HardFork deployment, the external Service selector adds `sei.io/revision: {incumbentRevision}` to pin traffic to the active set. After the switch, the selector updates to the entrant revision. For internal testing, this means:
-
-- Any pod targeting the ClusterIP external Service sees zero-downtime if the halt and switch complete within the Service's readiness probe window.
-- You can observe both sets simultaneously by targeting headless Services directly:
-  - Incumbent: `upgrade-test-0-0.upgrade-test-0.staging.svc.cluster.local`
-  - Entrant: `upgrade-test-g2-0-0.upgrade-test-g2-0.staging.svc.cluster.local`
-
-### What Is Missing or Could Be Improved
-
-1. **No staging-specific halt height automation.** In production, the halt height is coordinated across the network. In staging, you want the chain to produce enough blocks to exercise the upgrade handler, then halt. There is no built-in "halt after N blocks" semantic -- you must calculate and set the height manually.
-
-2. **No upgrade dry-run mode.** A mode that creates entrant nodes, verifies they sync past the upgrade height, but does NOT switch traffic or tear down incumbents would let teams validate upgrade compatibility without committing to the switch.
-
-3. **No rollback.** HardFork deployments are one-way. If the new binary fails, the plan enters Failed state. The incumbents are already halted. Recovery requires manual intervention (new group, restore from snapshot). For staging this is acceptable, but documenting the recovery path would help.
-
----
-
-## Use Case 4: Debug Individual Node Behavior
+## Use Case 3: Debug Individual Node Behavior
 
 **Goal:** Connect directly to a specific node in a group for debugging -- inspect RPC responses, check sync status, query state.
 
@@ -410,7 +325,7 @@ done
 
 ---
 
-## Use Case 5: Mirror Production Traffic
+## Use Case 4: Mirror Production Traffic
 
 **Goal:** Replay production RPC traffic against a test fleet to validate correctness before cutover.
 
@@ -496,7 +411,6 @@ The mirror VirtualService references `pacific-1-rpc-external.default.svc.cluster
 | Headless Service (per-node, automatic) | P2P networking, sidecar communication | **Direct node debugging, per-node load testing, side-by-side comparison** |
 | `peers[].label.selector` | Cross-group peer discovery | **Compose multi-role test networks without hardcoded addresses** |
 | `genesis` | N/A (production chains have existing genesis) | **Bootstrap private test chains from scratch** |
-| `updateStrategy.type: HardFork` | Coordinate binary upgrades across production fleet | **Validate upgrade handlers in staging before production** |
 
 ## Summary: What Is Missing for Internal Developer Workflows
 
@@ -504,8 +418,6 @@ The mirror VirtualService references `pacific-1-rpc-external.default.svc.cluster
 |-----|--------|-------------------|
 | Cross-group dependency ordering | RPC groups applied before genesis completes must retry for up to 30 min | `dependsOn` field on SeiNodeGroup, or a Condition-based readiness gate |
 | In-cluster genesis distribution | Test networks require S3 access for genesis sharing | ConfigMap or PVC-based genesis source as alternative to S3 |
-| Halt-after-N-blocks for staging | Must manually calculate halt height for upgrade testing | `updateStrategy.hardFork.haltAfterBlocks` relative offset |
-| Upgrade dry-run mode | Cannot validate upgrade compatibility without committing to the switch | `updateStrategy.dryRun: true` that creates entrants but skips switch |
 | Service-level request metrics | No HTTP request metrics from the operator for load test analysis | Istio telemetry in the mesh, or a metrics sidecar on the external Service |
 | Operator-managed Istio resources | VirtualService/DestinationRule for mirroring are manually applied | `networking.istio` section or separate CRD for traffic management |
 | Load test lifecycle | Load test jobs are standalone, no coordination with group readiness | `SeiLoadTest` CRD or `loadTest` field that gates on group Ready |
