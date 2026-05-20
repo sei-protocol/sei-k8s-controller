@@ -433,65 +433,21 @@ spec:
                 name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
     # ----------------------------------------------------------------------
-    # Step 6. wait-for-target-height-nodes-1-2-3 (parallel)
-    # Uses the controller-side AwaitNodesAtHeight task. TARGET_HEIGHT
-    # arrives via envFrom workflow-vars ConfigMap.
+    # Step 6. wait-for-target-height-nodes-1-2-3 (sleep)
+    # Crude but reliable: nodes 1-3 are on the pre-upgrade binary and will
+    # panic-halt the moment they reach the upgrade height. Their RPC dies
+    # with them, so RPC-polled height-awaits stall indefinitely. Sleep long
+    # enough that the chain has provably passed the upgrade height (TARGET =
+    # CUR+200 ≈ 120s at Sei's ~600ms blocks, plus voting/tally margin).
     # ----------------------------------------------------------------------
     - name: wait-for-target-height-nodes-1-2-3
-      templateType: Parallel
-      deadline: 15m
-      children:
-        - await-height-node-1
-        - await-height-node-2
-        - await-height-node-3
-
-    - name: await-height-node-1
       templateType: Task
-      deadline: 12m
+      deadline: 5m
       task:
         container:
-          name: runner
-          image: $SEITASK_RUNNER_IMG
-          args:
-            - --template=/templates/await-nodes-at-height.yaml.tmpl
-            - --var=NODE=$SEI_DEPLOYMENT-1
-            - --var=TARGET_HEIGHT=$(TARGET_HEIGHT)
-            - --timeout=10m
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
-
-    - name: await-height-node-2
-      templateType: Task
-      deadline: 12m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_RUNNER_IMG
-          args:
-            - --template=/templates/await-nodes-at-height.yaml.tmpl
-            - --var=NODE=$SEI_DEPLOYMENT-2
-            - --var=TARGET_HEIGHT=$(TARGET_HEIGHT)
-            - --timeout=10m
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
-
-    - name: await-height-node-3
-      templateType: Task
-      deadline: 12m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_RUNNER_IMG
-          args:
-            - --template=/templates/await-nodes-at-height.yaml.tmpl
-            - --var=NODE=$SEI_DEPLOYMENT-3
-            - --var=TARGET_HEIGHT=$(TARGET_HEIGHT)
-            - --timeout=10m
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
+          name: sleep
+          image: alpine/k8s:1.31.0
+          command: ["/bin/sh", "-c", "sleep 180"]
 
     # ----------------------------------------------------------------------
     # Step 7. upgrade-nodes-1-2-3 (serial)
