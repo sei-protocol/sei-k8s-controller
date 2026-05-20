@@ -50,7 +50,6 @@ func TestCompletePlan_ClearsRolloutInProgress(t *testing.T) {
 	group := newTestGroup("archive-rpc", "sei")
 	group.Generation = 3
 	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
-		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
 		TargetHash: "newhash1234",
 		StartedAt:  metav1.Now(),
 	}
@@ -99,7 +98,6 @@ func TestFailPlan_ClearsRolloutInProgress(t *testing.T) {
 	group := newTestGroup("archive-rpc", "sei")
 	group.Generation = 3
 	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
-		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
 		TargetHash: "newhash1234",
 		StartedAt:  metav1.Now(),
 	}

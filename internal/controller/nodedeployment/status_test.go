@@ -73,10 +73,7 @@ func TestComputeGroupPhase_Upgrading(t *testing.T) {
 	g := NewWithT(t)
 	group := emptyGroup()
 	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
-		Strategy:          seiv1alpha1.UpdateStrategyBlueGreen,
-		TargetHash:        "abc123",
-		IncumbentRevision: "1",
-		EntrantRevision:   "2",
+		TargetHash: "abc123",
 	}
 	setPlanInProgress(group, "Deployment", "deploying")
 	nodes := makeNodes(3, seiv1alpha1.PhaseRunning)

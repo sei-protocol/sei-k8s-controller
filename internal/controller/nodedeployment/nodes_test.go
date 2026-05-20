@@ -210,9 +210,8 @@ func TestDetectDeploymentNeeded_InPlace_SetsRolloutInProgress(t *testing.T) {
 	g.Expect(cond.Reason).To(Equal("TemplateChanged"))
 
 	g.Expect(group.Status.Rollout).NotTo(BeNil())
-	g.Expect(group.Status.Rollout.Strategy).To(Equal(seiv1alpha1.UpdateStrategyInPlace))
 	g.Expect(group.Status.Rollout.TargetHash).NotTo(BeEmpty())
-	g.Expect(group.Status.Rollout.IncumbentNodes).To(ConsistOf("archive-rpc-0", "archive-rpc-1", "archive-rpc-2"))
+	g.Expect(group.Status.IncumbentNodes).To(ConsistOf("archive-rpc-0", "archive-rpc-1", "archive-rpc-2"))
 }
 
 func TestDetectDeploymentNeeded_InPlace_AlreadyActive_SameTarget(t *testing.T) {
@@ -228,7 +227,6 @@ func TestDetectDeploymentNeeded_InPlace_AlreadyActive_SameTarget(t *testing.T) {
 		"TemplateChanged", "already rolling")
 
 	existingRollout := &seiv1alpha1.RolloutStatus{
-		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
 		TargetHash: currentHash,
 	}
 	group.Status.Rollout = existingRollout
@@ -250,7 +248,6 @@ func TestDetectDeploymentNeeded_InPlace_Supersedes_StaleRollout(t *testing.T) {
 		"TemplateChanged", "already rolling")
 
 	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
-		Strategy:   seiv1alpha1.UpdateStrategyInPlace,
 		TargetHash: "stale-hash",
 	}
 	group.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
@@ -262,6 +259,11 @@ func TestDetectDeploymentNeeded_InPlace_Supersedes_StaleRollout(t *testing.T) {
 	g.Expect(group.Status.Plan).To(BeNil())
 }
 
+// Defense in depth: the CRD enum rejects empty Type at the apiserver,
+// but in-memory specs (tests, controller-internal copies after a CRD
+// downgrade-then-upgrade) might omit it. The migration handler logs a
+// warning and treats it as InPlace rather than panicking on an empty
+// strategy string.
 func TestDetectDeploymentNeeded_EmptyType_TreatedAsInPlace(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
@@ -273,11 +275,29 @@ func TestDetectDeploymentNeeded_EmptyType_TreatedAsInPlace(t *testing.T) {
 	r.detectDeploymentNeeded(group)
 
 	g.Expect(group.Status.Rollout).NotTo(BeNil())
-	g.Expect(group.Status.Rollout.Strategy).To(Equal(seiv1alpha1.UpdateStrategyInPlace))
 
 	cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
 	g.Expect(cond).NotTo(BeNil())
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+}
+
+// Regression armor for the empty-incumbents guard in detectDeploymentNeeded.
+// If populateIncumbentNodes finds zero children (stale owner refs after a
+// manual edit, etc.), a rollout with empty node lists would create a plan
+// whose tasks all complete as no-ops and re-fire indefinitely.
+func TestDetectDeploymentNeeded_NoIncumbentNodes_NoRollout(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.UpdateStrategy = seiv1alpha1.UpdateStrategy{Type: seiv1alpha1.UpdateStrategyInPlace}
+	group.Status.TemplateHash = testOldHash
+	group.Status.IncumbentNodes = nil
+
+	r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
+	r.detectDeploymentNeeded(group)
+
+	g.Expect(group.Status.Rollout).To(BeNil())
+	cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
+	g.Expect(cond).To(BeNil())
 }
 
 func TestGenerateSeiNode_DeepCopiesTemplate(t *testing.T) {

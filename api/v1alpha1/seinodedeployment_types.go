@@ -47,34 +47,17 @@ type SeiNodeDeploymentSpec struct {
 }
 
 // UpdateStrategyType identifies the deployment strategy.
-// +kubebuilder:validation:Enum=InPlace;BlueGreen;HardFork
+// +kubebuilder:validation:Enum=InPlace
 type UpdateStrategyType string
 
 const (
-	UpdateStrategyInPlace   UpdateStrategyType = "InPlace"
-	UpdateStrategyBlueGreen UpdateStrategyType = "BlueGreen"
-	UpdateStrategyHardFork  UpdateStrategyType = "HardFork"
+	UpdateStrategyInPlace UpdateStrategyType = "InPlace"
 )
 
 // UpdateStrategy controls how spec changes propagate to child SeiNodes.
-// +kubebuilder:validation:XValidation:rule="self.type != 'HardFork' || (has(self.hardFork) && self.hardFork.haltHeight > 0)",message="hardFork strategy requires haltHeight > 0"
 type UpdateStrategy struct {
 	// Type selects the deployment strategy.
 	Type UpdateStrategyType `json:"type"`
-
-	// HardFork configures blue-green deployment at a specific block height.
-	// Required when type is HardFork.
-	// +optional
-	HardFork *HardForkStrategy `json:"hardFork,omitempty"`
-}
-
-// HardForkStrategy configures a blue-green deployment at a specific block height.
-type HardForkStrategy struct {
-	// HaltHeight is the block height at which the old binary is stopped
-	// via sidecar SIGTERM. The new binary must include an upgrade handler
-	// that continues from this height.
-	// +kubebuilder:validation:Minimum=1
-	HaltHeight int64 `json:"haltHeight"`
 }
 
 // GenesisCeremonyConfig configures genesis ceremony orchestration for a node group.
@@ -363,37 +346,16 @@ type RouteStatus struct {
 	Protocol string `json:"protocol,omitempty"`
 }
 
-// RolloutStatus tracks an in-progress rollout. Used by all strategies
-// to report per-node convergence state.
+// RolloutStatus tracks an in-progress rollout. Presence on the parent
+// SeiNodeDeployment is the single source of truth for "rollout in
+// progress" — `Status.Rollout != nil` and the `RolloutInProgress`
+// condition move together.
 type RolloutStatus struct {
-	// Strategy is the strategy type driving this rollout.
-	Strategy UpdateStrategyType `json:"strategy"`
-
 	// TargetHash is the templateHash being rolled out to.
 	TargetHash string `json:"targetHash"`
 
 	// StartedAt is when the rollout was first detected.
 	StartedAt metav1.Time `json:"startedAt"`
-
-	// IncumbentNodes lists the names of the currently active SeiNode
-	// resources. Only populated for BlueGreen and HardFork strategies.
-	// +optional
-	IncumbentNodes []string `json:"incumbentNodes,omitempty"`
-
-	// EntrantNodes lists the names of the new SeiNode resources being
-	// created. Only populated for BlueGreen and HardFork strategies.
-	// +optional
-	EntrantNodes []string `json:"entrantNodes,omitempty"`
-
-	// IncumbentRevision identifies the generation of the currently live nodes.
-	// Only populated for BlueGreen and HardFork strategies.
-	// +optional
-	IncumbentRevision string `json:"incumbentRevision,omitempty"`
-
-	// EntrantRevision identifies the generation of the new nodes.
-	// Only populated for BlueGreen and HardFork strategies.
-	// +optional
-	EntrantRevision string `json:"entrantRevision,omitempty"`
 }
 
 // Status condition types for SeiNodeDeployment.
@@ -412,7 +374,7 @@ const (
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Revision",type=string,JSONPath=`.status.rollout.entrantRevision`,priority=1
+// +kubebuilder:printcolumn:name="Target",type=string,JSONPath=`.status.rollout.targetHash`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SeiNodeDeployment is the Schema for the seinodedeployments API.
