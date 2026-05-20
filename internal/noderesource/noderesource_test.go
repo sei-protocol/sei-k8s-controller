@@ -1015,9 +1015,9 @@ func TestOperatorKeyring_SidecarContainerHasMountAndEnv(t *testing.T) {
 		"operator-keyring is a directory mount, not subPath — sidecar needs the whole dir")
 
 	g.Expect(envValue(sidecar.Env, keyringBackendEnvVar)).To(Equal(keyringBackendFile),
-		"sidecar must have SEI_KEYRING_BACKEND=file so the SDK opens the projected Secret as a file-backend keyring; without this the SDK falls back to its compile-time default which has no distroless analogue")
+		"SEI_KEYRING_BACKEND=file required; SDK 'os' default has no distroless analogue")
 	g.Expect(envValue(sidecar.Env, keyringDirEnvVar)).To(Equal(dataDir),
-		"SEI_KEYRING_DIR must point at $SEI_HOME — the SDK appends keyring-file/ itself; passing a deeper path makes the SDK look at $SEI_HOME/keyring-file/keyring-file/")
+		"SEI_KEYRING_DIR=$SEI_HOME; SDK appends keyring-file/ (doubled path otherwise)")
 
 	var passphraseEnv *corev1.EnvVar
 	for i := range sidecar.Env {
@@ -1032,10 +1032,9 @@ func TestOperatorKeyring_SidecarContainerHasMountAndEnv(t *testing.T) {
 	g.Expect(passphraseEnv.ValueFrom.SecretKeyRef.Key).To(Equal("passphrase"))
 }
 
-// TestOperatorKeyring_ValidatorWithoutSecret_TestBackend covers the implicit
-// default: a validator without .secret gets a test-backend keyring rooted at
-// $SEI_HOME so the SDK resolves to $SEI_HOME/keyring-test/, where the
-// generate-gentx task writes the validator key during the genesis ceremony.
+// Validator without .secret defaults to a test-backend keyring rooted at
+// $SEI_HOME — SDK resolves to $SEI_HOME/keyring-test/, where generate-gentx
+// writes the validator key.
 func TestOperatorKeyring_ValidatorWithoutSecret_TestBackend(t *testing.T) {
 	g := NewWithT(t)
 	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
@@ -1045,26 +1044,24 @@ func TestOperatorKeyring_ValidatorWithoutSecret_TestBackend(t *testing.T) {
 	g.Expect(sidecar).NotTo(BeNil(), "sei-sidecar init container must exist")
 
 	g.Expect(envValue(sidecar.Env, keyringBackendEnvVar)).To(Equal(keyringBackendTest),
-		"validators without .secret default to the test backend so the sidecar reads the gentx-written keyring on the data PVC")
+		"default test backend reads the gentx-written keyring on the data PVC")
 	g.Expect(envValue(sidecar.Env, keyringDirEnvVar)).To(Equal(dataDir),
-		"SEI_KEYRING_DIR must be $SEI_HOME — the SDK appends keyring-test/ itself; passing $SEI_HOME/keyring-test makes the SDK resolve $SEI_HOME/keyring-test/keyring-test/")
+		"SEI_KEYRING_DIR=$SEI_HOME; SDK appends keyring-test/ (doubled path otherwise)")
 	g.Expect(envValue(sidecar.Env, keyringPassphraseEnvVar)).To(BeEmpty(),
-		"test backend is unencrypted; no passphrase env should be set")
+		"test backend is unencrypted; no passphrase env")
 
 	g.Expect(findVolume(sts.Spec.Template.Spec.Volumes, operatorKeyringVolumeName)).To(BeNil(),
 		"no .secret means no projected Secret volume — the keyring lives on the data PVC")
 
 	dataMount := findVolumeMount(sidecar.VolumeMounts, "data")
 	g.Expect(dataMount).NotTo(BeNil(),
-		"sidecar must mount the data PVC — generate-gentx writes the operator key there and sign-and-broadcast reads it back")
+		"sidecar mounts the data PVC: generate-gentx writes the operator key, sign-and-broadcast reads it")
 	g.Expect(dataMount.MountPath).To(Equal(dataDir))
 	g.Expect(dataMount.ReadOnly).To(BeFalse(),
-		"data mount must be read-write so generate-gentx can write $SEI_HOME/keyring-test/")
+		"data mount must be RW for generate-gentx to write $SEI_HOME/keyring-test/")
 }
 
-// TestOperatorKeyring_NonValidator_NoEnv guards the non-validator branch:
-// SeiNodes without a Validator spec (full nodes, snapshots) must not receive
-// keyring env vars — they have nothing to sign for.
+// Non-validator SeiNodes get no keyring env vars — nothing to sign for.
 func TestOperatorKeyring_NonValidator_NoEnv(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("snap-0", "default")

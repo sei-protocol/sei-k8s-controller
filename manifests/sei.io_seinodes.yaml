@@ -556,9 +556,8 @@ spec:
                     properties:
                       secret:
                         description: |-
-                          Secret sources the keyring from a Cosmos SDK file-backend Kubernetes
-                          Secret in the SeiNode's namespace, projected into the sidecar at
-                          $SEI_HOME/keyring-file/.
+                          Secret sources the keyring from a file-backend Secret in the SeiNode's
+                          namespace, projected at $SEI_HOME/keyring-file/.
                         properties:
                           keyName:
                             default: node_admin

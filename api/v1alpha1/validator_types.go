@@ -135,26 +135,20 @@ type SecretNodeKeySource struct {
 	SecretName string `json:"secretName"`
 }
 
-// OperatorKeyringSource configures the source of a validator's operator-
-// account keyring — the keyring the sidecar uses to sign governance,
-// MsgEditValidator, withdraw-rewards, and other operator-account
-// transactions.
+// OperatorKeyringSource configures the keyring the sidecar uses to sign
+// operator-account transactions (governance, MsgEditValidator, withdraw-
+// rewards, etc).
 //
-// With this field unset, the controller wires the sidecar to a test-
-// backend keyring at $SEI_HOME/keyring-test/ on the shared data PVC. This
-// is the same path the generate-gentx task writes the validator key to
-// during a genesis ceremony, so genesis-provisioned validators sign
-// without additional configuration. The test backend is unencrypted.
+// Unset: sidecar reads a test-backend keyring at $SEI_HOME/keyring-test/
+// on the data PVC — the path generate-gentx writes the validator key to
+// during a genesis ceremony. Unencrypted.
 //
-// Set .secret to source the keyring from a passphrase-locked Secret
-// projected into the sidecar (file backend). This is the path for
-// operators whose operator key is rotated externally, sourced from an
-// HSM-export, or shared across infrastructure the SeiNode controller
-// doesn't own.
+// Set .secret: source the keyring from a passphrase-locked Secret (file
+// backend). Use when the operator key is rotated externally, sourced from
+// an HSM, or shared across infrastructure the controller doesn't own.
 type OperatorKeyringSource struct {
-	// Secret sources the keyring from a Cosmos SDK file-backend Kubernetes
-	// Secret in the SeiNode's namespace, projected into the sidecar at
-	// $SEI_HOME/keyring-file/.
+	// Secret sources the keyring from a file-backend Secret in the SeiNode's
+	// namespace, projected at $SEI_HOME/keyring-file/.
 	// +optional
 	Secret *SecretOperatorKeyringSource `json:"secret,omitempty"`
 }
