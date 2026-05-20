@@ -73,21 +73,38 @@ The four sei-side images are all small Go binaries using controller-runtime clie
 
 ### Task image contract
 
-- **Inputs**: env vars (rendered by Chaos Mesh from Workflow template) + optionally a mounted ConfigMap with a typed spec (for `seitask-provision-snd`, which needs a structured SND payload too large for env).
-- **Outputs**: writes to the workflow-vars ConfigMap (`workflow-vars-${RUN_ID}`) via `kubectl create configmap --dry-run=client -o yaml | kubectl apply -f -` merge. Downstream Tasks consume via `envFrom: configMapRef:`. This is the existing major-upgrade pattern; we standardize it.
-- **Exit codes**: 0 pass / 1 task-fail / 2 infra-fail. Matches release-test.ts. Chaos Mesh treats non-zero as Failed; the infra-fail vs test-fail split surfaces in S3-uploaded result records.
-- **Cleanup**: each Task image is single-shot and stateless. Resources it creates (SND, Secret) carry `ownerReferences` to the parent Workflow CR. Workflow deletion cascades. No trap-on-EXIT logic.
+- **Inputs**: env vars (rendered by Chaos Mesh from Workflow template) + optionally a mounted ConfigMap with a typed spec (for `seitask-provision-snd`, which needs a structured SND payload too large for env). **No `envsubst`-style placeholders** inside scenario YAML. Per-run substitution uses Chaos Mesh's native `{{ .Workflow.Name }}` / `inputs.parameters.*` (rendered by the workflow controller, not by the orchestrator). The CronJob applies the scenario YAML literally; the per-run identifier is injected as a Workflow parameter.
+- **Outputs**: typed read/write of the per-run ConfigMap (`workflow-vars-<workflow-name>`) via controller-runtime `client.Patch(obj, client.MergeFromWithOptimisticLock{})`. **No `kubectl` shell-out from inside the Task images** — same status-patch discipline the controller uses (see `CLAUDE.md`). The CM ops live in `internal/taskimg/cm.go`. Downstream Tasks consume the merged CM via `envFrom: configMapRef:`.
+- **Exit codes**: 0 pass / 1 task-fail / 2 infra-fail. Matches release-test.ts. Chaos Mesh treats any non-zero as Failed identically; the 1-vs-2 split surfaces only in `seitask-upload-report` (reads a sentinel key the failing Task writes to the CM before exit).
+- **Cleanup**: every resource a Task image creates (SND, Secret, ConfigMap entry) carries an `ownerReference` to the parent Workflow CR. The Workflow's UID is injected into each Task pod via the downward API on a fixed env var (`SEI_WORKFLOW_NAME`, `SEI_WORKFLOW_UID`) so the helper in `internal/taskimg/ownerref.go` can stamp it without an extra API lookup. Workflow deletion cascades to everything; no trap-on-EXIT logic. ownerReferences point at the Workflow CR, never at the Task pod or WorkflowNode (both go away before SND lifecycle completes).
 
 ### Cross-step state
 
-The major-upgrade workflow already uses a per-run ConfigMap (`workflow-vars-${RUN_ID}`) with an `ownerReference` to the Workflow for GC. We standardize this:
+The major-upgrade workflow already uses a per-run ConfigMap with an `ownerReference` to the Workflow for GC. We standardize this:
 
-- Every scenario's first step (typically `compute-run-id` or `provision-snd`) creates the ConfigMap with the run's seed values.
-- Subsequent Tasks read via `envFrom: configMapRef: name: workflow-vars-${SEI_WORKFLOW_RUN_ID}` and write new entries with `kubectl apply` merges.
+- Every scenario's first step (`seitask-keygen` or `seitask-provision-snd`) creates the ConfigMap with the run's seed values.
+- Subsequent Tasks read via `envFrom: configMapRef:` and write new entries via typed `client.Patch(MergeFromWithOptimisticLock{})`.
 - Test pods (release-test mocha, seitask-runner) consume the same ConfigMap.
 - Sensitive values (admin mnemonic) live in a separate Secret per run; the ConfigMap holds the Secret name as a string and downstream pods reference it via `secretKeyRef`.
 
-This isn't typed end-to-end (it's strings), but the schema is small enough to document per Task. We accept the tradeoff for the v1 simplicity gain over a custom orchestrator.
+#### workflow-vars schema
+
+The key vocabulary is enumerated in a Go file (`internal/taskimg/vars.go`) as typed constants so producer/consumer drift is a compile error, not a runtime mystery. Initial schema:
+
+| Key | Type | Writer | Stability |
+|---|---|---|---|
+| `RUN_ID` | string | `seitask-keygen` (first) | additive — never renamed |
+| `CHAIN_ID` | string | `seitask-provision-snd` (validator) | one-way door |
+| `TM_RPC` | URL | `seitask-provision-snd` (rpc / validator) | one-way door |
+| `EVM_RPC` | URL | `seitask-provision-snd` (rpc, optional) | one-way door |
+| `REST` | URL | `seitask-provision-snd` (rpc / validator) | one-way door |
+| `ADMIN_ADDRESS` | bech32 | `seitask-keygen` | one-way door |
+| `ADMIN_SECRET_NAME` | string | `seitask-keygen` | one-way door |
+| `TARGET_HEIGHT` / `UPGRADE_HEIGHT` / `POST_UPGRADE_HEIGHT` | int | scenario-specific (major-upgrade) | scenario-private |
+| `PROPOSAL_ID` | int | scenario-specific (major-upgrade) | scenario-private |
+| `EXIT_REASON` | enum (`pass`/`test-fail`/`infra-fail`) | failing Task | one-way door — read by `seitask-upload-report` |
+
+Renames of one-way-door keys are not permitted. New keys are added freely; downstream Tasks must tolerate missing optional keys.
 
 ### Example: release-test scenario
 
@@ -95,65 +112,94 @@ This isn't typed end-to-end (it's strings), but the schema is small enough to do
 apiVersion: chaos-mesh.org/v1alpha1
 kind: Workflow
 metadata:
-  name: release-test-${RUN_ID}
+  generateName: release-test-       # workflow controller assigns name → RUN_ID downstream
 spec:
   entry: release-test
   templates:
     - name: release-test
       templateType: Serial
-      children:
-        - keygen
-        - provision-validator
-        - provision-rpc
-        - run-mocha
-        - upload-report
+      children: [keygen, provision-validator, provision-rpc, run-mocha, upload-report]
 
     - name: keygen
       templateType: Task
       task:
         container:
-          image: seitask-keygen:<sha>
-          env: [{ name: KEYNAME, value: admin }, { name: RUN_ID, value: ${RUN_ID} }]
+          image: <ECR>/seitask-keygen:<sha>
+          env:
+            - { name: KEYNAME, value: admin }
+            - name: SEI_WORKFLOW_NAME
+              valueFrom: { fieldRef: { fieldPath: "metadata.labels['chaos-mesh.org/workflow']" } }
+            - name: SEI_WORKFLOW_UID
+              valueFrom: { fieldRef: { fieldPath: "metadata.annotations['chaos-mesh.org/workflow-uid']" } }
 
     - name: provision-validator
       templateType: Task
       task:
         container:
-          image: seitask-provision-snd:<sha>
-          envFrom: [{ configMapRef: { name: workflow-vars-${RUN_ID} } }]
+          image: <ECR>/seitask-provision-snd:<sha>
+          envFrom: [{ configMapRef: { name: workflow-vars } }]   # name resolved from Workflow name
           volumeMounts: [{ name: scenario, mountPath: /etc/scenario }]
           # /etc/scenario/validator.yaml = typed SND subspec (preset, replicas, overrides…)
 
     - name: provision-rpc
-      templateType: Task
-      # same shape; /etc/scenario/rpc.yaml
+      templateType: Task                                          # same shape
 
     - name: run-mocha
       templateType: Task
       task:
         container:
-          image: release-test:<sha>
-          envFrom: [{ configMapRef: { name: workflow-vars-${RUN_ID} } }]
+          image: <ECR>/release-test:<sha>
+          envFrom: [{ configMapRef: { name: workflow-vars } }]
           env:
+            - { name: TEST_TARGET, value: chain-agnostic }
             - name: SEI_ADMIN_MNEMONIC
-              valueFrom: { secretKeyRef: { name: admin-${RUN_ID}, key: mnemonic } }
-            - name: TEST_TARGET
-              value: chain-agnostic
+              valueFrom: { secretKeyRef: { name: admin, key: mnemonic } }   # name resolved at run
 
     - name: upload-report
       templateType: Task
       task:
         container:
-          image: seitask-upload-report:<sha>
-          envFrom: [{ configMapRef: { name: workflow-vars-${RUN_ID} } }]
+          image: <ECR>/seitask-upload-report:<sha>
+          envFrom: [{ configMapRef: { name: workflow-vars } }]
           env: [{ name: S3_BUCKET, value: harbor-validation-results }]
 ```
 
-The current 230-line release-test bash collapses to ~60 lines of Workflow YAML. The four template references plus an envsubst run-ID substitution at apply time is the whole orchestration story.
+The current 230-line release-test bash collapses to ~70 lines of Workflow YAML. Per-run identifier is the Workflow name itself (`metadata.generateName` lets the controller assign it); Task pods read it via the downward API. **No `envsubst`, no shell-string templating** — the YAML is applied literally.
+
+#### Per-TEST_TARGET dispatch
+
+`TEST_TARGET` is part of the scenario YAML, not a Workflow parameter. One scenario file per target (`release-test-chain-agnostic.yaml`, `release-test-evm-precompiles.yaml`, …), each pinned by its own CronJob with its own schedule. This keeps the failure surface explicit per-target and avoids hiding matrix dispatch inside CronJob args.
 
 ### Example: major-upgrade scenario
 
 The existing `scenarios/major-upgrade.yaml` already has the shape. v1 migration: replace the three bash `compute-target-height` / `resolve-proposal-id` / `wait-for-proposal-to-pass` Task templates with calls to a new `seitask-runner` template that wraps an `AwaitGovProposalStatus` SeiNodeTask kind — OR keep them as bash for v1 and migrate them later as part of the SeiNodeTask kind expansion. The `provision-validator` step replaces the existing `seictl nd apply` bash that lives in the orchestrate.sh wrapper.
+
+### RBAC
+
+One shared `ServiceAccount: seitask-sa` per scenario namespace, bound to a `Role` generated from `// +kubebuilder:rbac:` markers on the Task-image source files — same generation pipeline the controller uses, same `make manifests` workflow, same audit trail. Initial verb set (union over all Task images):
+
+- `sei.io/seinodedeployments`: create/get/list/watch/delete/update
+- `sei.io/seinodetasks`: create/get/list/watch
+- `chaos-mesh.org/workflows`: get (Task images need the Workflow UID for ownerReferences)
+- `core/configmaps`: create/get/patch (workflow-vars)
+- `core/secrets`: create/get (keygen writes, mocha reads)
+- `core/pods`, `core/pods/log`: get/list/watch (upload-report tailing)
+
+We do **not** reuse the existing `workload-service-account`; that SA has a wider blast radius than what these Tasks need. Per-image SAs are deferred to v2.
+
+### Supply chain
+
+Task images get the same supply-chain treatment as the controller: cosign signing, SBOM attestation, and pinning by `@sha256:` digest in scenario YAML. RBAC-bearing images get no less rigor than the controller manager.
+
+### Scenario scaffold
+
+Adding a scenario in v1 follows a template. `scenarios/_template/` ships in the repo with:
+
+- `workflow.yaml.tmpl` — a minimal Workflow with `keygen → provision → <your test> → upload-report` skeleton
+- `validator.yaml` / `rpc.yaml` — example typed SND subspecs the provision Task consumes
+- `README.md` — the workflow-vars key vocabulary, the downward-API env-var convention, the one-way-door discipline
+
+New scenarios fork `_template/` and edit. This is the only way to keep scenario conventions consistent as the catalog grows; without it the harmonization regresses within ~2 scenarios.
 
 ### Repo / image layout
 
@@ -164,20 +210,21 @@ sei-k8s-controller/
     keygen/              # NEW — seitask-keygen entry
     provision-snd/       # NEW — seitask-provision-snd entry
     upload-report/       # NEW — seitask-upload-report entry
-    runner/              # existing seitask-runner — already at runner/
+    runner/              # NEW location for existing seitask-runner (moved from runner/)
   internal/
     taskimg/             # NEW — shared library for the small task images
-      cm.go              # workflow-vars CM read/write helpers
-      ownerref.go        # Workflow ownerReference helper
+      vars.go            # typed const keys for workflow-vars CM
+      cm.go              # typed client.Patch helpers (MergeFromWithOptimisticLock)
+      ownerref.go        # Workflow ownerReference helper (reads SEI_WORKFLOW_UID env)
       exit.go            # 0/1/2 exit code mapping
     ...                  # existing controller internals
   scenarios/
-    release-test.yaml    # NEW — the example above
+    _template/           # NEW — scenario scaffold (workflow.yaml.tmpl, validator.yaml, README.md)
+    release-test-chain-agnostic.yaml
     major-upgrade.yaml   # existing, migrated to new Task images in phase 2
-  runner/                # existing seitask-runner Dockerfile
 ```
 
-ECR builds remain in `.github/workflows/ecr.yml`. Add 3 new `docker/build-push-action` steps (one per new image), all SHA-tagged from the same commit. Coherent versioning is intrinsic — no SCENARIO_REF vs SEITASK_RUNNER_IMG drift.
+ECR builds extend `.github/workflows/ecr.yml` with 3 new `docker/build-push-action` steps (one per new Task image), all SHA-tagged from the same commit. Each image gets cosign signing + SBOM, matching the controller manager's pipeline. Coherent versioning is intrinsic — no SCENARIO_REF vs SEITASK_RUNNER_IMG drift across the four sei-side images.
 
 ### Migration plan
 
@@ -195,11 +242,17 @@ Each phase is independently deployable and reversible. Phase 1 ships without tou
 - **Tekton Pipelines**. Pipeline-resource-shaped, doesn't compose well with our SeiNodeTask CRs which are already operator-driven. Rejected.
 - **Single shared bash framework + symlinks**. Doesn't fix the type-safety failure modes. Rejected.
 
+## Resolved decisions
+
+- **`seitask-provision-snd` input shape**: mounted ConfigMap with YAML SND subspec, validated against a Go struct at Task startup. Operators edit YAML; the Task fails fast on schema drift.
+- **Report uploader**: in-process AWS SDK inside `seitask-upload-report`. The image is dedicated; no need for a separate sidecar.
+- **OwnerReference target**: parent Workflow CR (not the Task pod, not the WorkflowNode).
+
 ## Open questions
 
-- **Should `seitask-provision-snd` consume a typed Go struct or a YAML manifest of the SND spec?** Leaning Go struct (typed all the way) but YAML is closer to what operators write today. To resolve in the Phase 1 PR.
-- **Mocha report shape.** v1 ships mochawesome JSON to S3 unchanged. A unified result schema is a separate workstream; do we sketch the schema in this LLD or punt entirely? Currently punted.
-- **Sidecar uploader vs in-process upload in the last Task.** kubernetes-specialist argued for sidecar (no AWS SDK in the orchestrator binary). With our Task-image split, the upload image is dedicated — in-process AWS SDK is fine there, since it's the only thing that image does. Resolved in favor of in-process.
+- **Mocha report shape.** v1 ships mochawesome JSON to S3 unchanged. A typed framework-agnostic result schema is a separate workstream.
+- **`deploy-fixtures` as a SeiNodeTask kind.** Currently lives inside the release-test image. v1-acceptable; un-defer when a fixture-deploy flake costs a nightly.
+- **Promoting bash chain-state queries to SeiNodeTask kinds.** Phase 4 follow-up; some bash remains in `scenarios/major-upgrade.yaml` until that ships.
 
 ## References
 
