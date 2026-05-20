@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -72,16 +73,20 @@ func (e *updateNodeImageExecution) Execute(ctx context.Context) error {
 		return nil
 	}
 
-	// SSA apply: only set spec.image. We omit other spec fields so the
-	// seinode-controller field manager retains ownership of everything else.
-	patch := &seiv1alpha1.SeiNode{}
-	patch.APIVersion = seiv1alpha1.GroupVersion.String()
-	patch.Kind = "SeiNode"
-	patch.SetName(target.Name)
-	patch.SetNamespace(target.Namespace)
-	patch.Spec.Image = e.params.Image
+	// SSA apply: only set spec.image. Unstructured so we don't ship Go
+	// zero-value strings for required fields (e.g. spec.chainId MinLength=1).
+	patch := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": seiv1alpha1.GroupVersion.String(),
+		"kind":       "SeiNode",
+		"metadata": map[string]any{
+			"name":      target.Name,
+			"namespace": target.Namespace,
+		},
+		"spec": map[string]any{
+			"image": e.params.Image,
+		},
+	}}
 
-	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
 	if err := e.cfg.KubeClient.Patch(ctx, patch, client.Apply, updateNodeImageFieldOwner, client.ForceOwnership); err != nil {
 		return fmt.Errorf("patching target spec.image: %w", err)
 	}
