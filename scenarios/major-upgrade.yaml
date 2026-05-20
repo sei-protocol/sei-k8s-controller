@@ -101,10 +101,6 @@ spec:
         - wait-for-target-height-nodes-1-2-3
         - upgrade-nodes-1-2-3
         - await-post-upgrade-progress-nodes-1-2-3
-        - downgrade-node-0
-        - wait-for-target-height-node-0
-        - upgrade-node-0
-        - await-post-upgrade-progress-node-0
 
     # ----------------------------------------------------------------------
     # Step 1. compute-target-height
@@ -112,10 +108,9 @@ spec:
     # block time) to comfortably outlast the 60s gov voting_period plus
     # tally + plan-execution slack. Creates the workflow-vars ConfigMap and
     # populates it with:
-    #   TARGET_HEIGHT       -- upgrade height + downgrade-side panic boundary
+    #   TARGET_HEIGHT       -- upgrade height
     #   UPGRADE_HEIGHT      -- consumed by gov-software-upgrade.yaml.tmpl
     #   POST_UPGRADE_HEIGHT -- TARGET_HEIGHT + 10; liveness check threshold
-    #   PANIC_BOUNDARY      -- TARGET_HEIGHT - 1; downgrade-catchup target
     # Idempotent: --dry-run=client | apply -f - upserts the ConfigMap on
     # retries, so a re-run of this step recomputes the values cleanly.
     # ----------------------------------------------------------------------
@@ -163,8 +158,7 @@ spec:
               fi
               TARGET=$((CUR + 200))
               POST=$((TARGET + 10))
-              PANIC_BOUNDARY=$((TARGET - 1))
-              echo "current=${CUR} target=${TARGET} post=${POST} panic_boundary=${PANIC_BOUNDARY}"
+              echo "current=${CUR} target=${TARGET} post=${POST}"
               # Look up the parent Workflow's UID so we can stamp an
               # ownerReference on the ConfigMap. When the Workflow CR is
               # deleted, kube-controller-manager garbage-collects the
@@ -180,7 +174,6 @@ spec:
                 --from-literal=TARGET_HEIGHT="${TARGET}" \
                 --from-literal=UPGRADE_HEIGHT="${TARGET}" \
                 --from-literal=POST_UPGRADE_HEIGHT="${POST}" \
-                --from-literal=PANIC_BOUNDARY="${PANIC_BOUNDARY}" \
                 --dry-run=client -o yaml \
               | kubectl label -f - --local -o yaml \
                   sei.io/workflow-run="${SEI_WORKFLOW_RUN_ID}" \
@@ -570,91 +563,6 @@ spec:
           args:
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-3
-            - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
-            - --timeout=6m
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
-
-    # ----------------------------------------------------------------------
-    # Step 9. downgrade-node-0 (back to pre-upgrade image so it can catch up)
-    # ----------------------------------------------------------------------
-    - name: downgrade-node-0
-      templateType: Task
-      deadline: 10m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_RUNNER_IMG
-          args:
-            - --template=/templates/update-node-image.yaml.tmpl
-            - --var=NODE=$SEI_DEPLOYMENT-0
-            - --var=IMAGE=$SEI_PRE_UPGRADE_IMG
-            - --var=REQUIRE_PHASE=Running
-            - --timeout=8m
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
-
-    # ----------------------------------------------------------------------
-    # Step 10. wait-for-target-height-node-0 (catching up after downgrade)
-    # Waits for height = PANIC_BOUNDARY (= TARGET_HEIGHT - 1) because
-    # node-0 is on the pre-upgrade binary and will panic AT TARGET_HEIGHT;
-    # the highest height it ever reaches is PANIC_BOUNDARY. PANIC_BOUNDARY
-    # arrives via envFrom and is bound to TARGET_HEIGHT for this template.
-    # ----------------------------------------------------------------------
-    - name: wait-for-target-height-node-0
-      templateType: Task
-      deadline: 15m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_RUNNER_IMG
-          args:
-            - --template=/templates/await-nodes-at-height.yaml.tmpl
-            - --var=NODE=$SEI_DEPLOYMENT-0
-            - --var=TARGET_HEIGHT=$(PANIC_BOUNDARY)
-            - --timeout=12m
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
-
-    # ----------------------------------------------------------------------
-    # Step 11. upgrade-node-0 (final)
-    # ----------------------------------------------------------------------
-    - name: upgrade-node-0
-      templateType: Task
-      deadline: 10m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_RUNNER_IMG
-          args:
-            - --template=/templates/update-node-image.yaml.tmpl
-            - --var=NODE=$SEI_DEPLOYMENT-0
-            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
-            - --var=REQUIRE_PHASE=Running
-            - --timeout=8m
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
-
-    # ----------------------------------------------------------------------
-    # Step 12. await-post-upgrade-progress-node-0 (final liveness)
-    # AwaitCondition height >= POST_UPGRADE_HEIGHT. Same primitive as
-    # step 8; structured AwaitCondition task is the only liveness signal
-    # the scenario asserts on node-0.
-    # ----------------------------------------------------------------------
-    - name: await-post-upgrade-progress-node-0
-      templateType: Task
-      deadline: 8m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_RUNNER_IMG
-          args:
-            - --template=/templates/await-condition.yaml.tmpl
-            - --var=NODE=$SEI_DEPLOYMENT-0
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
             - --timeout=6m
           envFrom:
