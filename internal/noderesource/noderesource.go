@@ -657,8 +657,7 @@ func buildCosmosExporterContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) (
 }
 
 func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []string) {
-	// Canonical seid invocation; spec.Entrypoint is silently ignored as of
-	// HOME-based path resolution. "$HOME" (shell-expanded inside bash -c)
+	// Canonical seid invocation. "$HOME" (shell-expanded inside bash -c)
 	// resolves from the container env declared in buildNodeMainContainer.
 	cmd := "seid"
 	cmdArgs := []string{seidStartSubcommand, seidHomeFlag, "$HOME"}
@@ -702,9 +701,8 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 			{Name: "HOME", Value: dataDir},
 			{Name: "TMPDIR", Value: dataDir + "/tmp"},
 		},
-		// Canonical invocation; spec.Entrypoint is ignored as of this
-		// release. $(HOME) is K8s VariableReference syntax, substituted
-		// from container.Env before exec.
+		// Canonical invocation. $(HOME) is K8s VariableReference syntax,
+		// substituted from container.Env before exec.
 		Command:      []string{"seid"},
 		Args:         []string{seidStartSubcommand, seidHomeFlag, homeVarRef},
 		VolumeMounts: mounts,
