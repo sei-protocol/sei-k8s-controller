@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/sei-protocol/sei-k8s-controller/internal/taskimg"
+	"github.com/sei-protocol/sei-k8s-controller/internal/taskruntime"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -31,8 +31,8 @@ const (
 	testWorkflowVarsCM = "workflow-vars-wf-test"
 )
 
-func testWorkflow() taskimg.WorkflowIdentity {
-	return taskimg.WorkflowIdentity{Name: testWorkflowName, UID: "uid-test", Namespace: testNamespace}
+func testWorkflow() taskruntime.WorkflowIdentity {
+	return taskruntime.WorkflowIdentity{Name: testWorkflowName, UID: "uid-test", Namespace: testNamespace}
 }
 
 // Sanity check: keygen produces a Secret with the right shape + a
@@ -75,13 +75,13 @@ func TestRun_CreatesSecretAndWorkflowVars(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, cm); err != nil {
 		t.Fatalf("Get CM: %v", err)
 	}
-	if got := cm.Data[string(taskimg.KeyAdminAddress)]; got != res.Address {
+	if got := cm.Data[string(taskruntime.KeyAdminAddress)]; got != res.Address {
 		t.Fatalf("CM ADMIN_ADDRESS = %q, want %q", got, res.Address)
 	}
-	if got := cm.Data[string(taskimg.KeyAdminSecretName)]; got != testSecretName {
+	if got := cm.Data[string(taskruntime.KeyAdminSecretName)]; got != testSecretName {
 		t.Fatalf("CM ADMIN_SECRET_NAME = %q, want admin-wf-test", got)
 	}
-	if got := cm.Data[string(taskimg.KeyRunID)]; got != testWorkflowName {
+	if got := cm.Data[string(taskruntime.KeyRunID)]; got != testWorkflowName {
 		t.Fatalf("CM RUN_ID = %q, want wf-test", got)
 	}
 }
@@ -126,8 +126,8 @@ func TestRun_RejectsBadInputs(t *testing.T) {
 		p    Params
 	}{
 		{"empty key name", Params{KeyName: "", Workflow: testWorkflow()}},
-		{"missing workflow name", Params{KeyName: testKeyName, Workflow: taskimg.WorkflowIdentity{Namespace: "ns"}}},
-		{"missing workflow namespace", Params{KeyName: testKeyName, Workflow: taskimg.WorkflowIdentity{Name: "wf"}}},
+		{"missing workflow name", Params{KeyName: testKeyName, Workflow: taskruntime.WorkflowIdentity{Namespace: "ns"}}},
+		{"missing workflow namespace", Params{KeyName: testKeyName, Workflow: taskruntime.WorkflowIdentity{Name: "wf"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Run(context.Background(), c, tc.p)
