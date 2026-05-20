@@ -215,7 +215,7 @@ spec:
             - --var=UPGRADE_NAME=$SEI_UPGRADE_NAME
             - --var=UPGRADE_HEIGHT=$(UPGRADE_HEIGHT)
             - --var=INITIAL_DEPOSIT=20000000usei
-            - --var=FEES=2000usei
+            - --var=FEES=10000usei
             - --var=GAS=500000
             - --timeout=8m
           envFrom:
@@ -307,7 +307,7 @@ spec:
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
-            - --var=FEES=2000usei
+            - --var=FEES=10000usei
             - --var=GAS=200000
             - --timeout=5m
           envFrom:
@@ -327,7 +327,7 @@ spec:
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
-            - --var=FEES=2000usei
+            - --var=FEES=10000usei
             - --var=GAS=200000
             - --timeout=5m
           envFrom:
@@ -347,7 +347,7 @@ spec:
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
-            - --var=FEES=2000usei
+            - --var=FEES=10000usei
             - --var=GAS=200000
             - --timeout=5m
           envFrom:
@@ -367,7 +367,7 @@ spec:
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
-            - --var=FEES=2000usei
+            - --var=FEES=10000usei
             - --var=GAS=200000
             - --timeout=5m
           envFrom:
