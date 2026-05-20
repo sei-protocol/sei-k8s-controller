@@ -177,9 +177,14 @@ type GovSoftwareUpgradePayload struct {
 	// +kubebuilder:validation:MinLength=1
 	ChainID string `json:"chainId"`
 
-	// KeyName names the keyring entry that signs the proposal.
-	// +kubebuilder:validation:MinLength=1
-	KeyName string `json:"keyName"`
+	// KeyName names the keyring entry that signs the proposal. Omit to let
+	// the controller derive from the target SeiNode: spec.validator.
+	// operatorKeyring.secret.keyName when .secret is set (defaulting to
+	// "node_admin"), otherwise "validator" — the uid generate-gentx writes
+	// the genesis-ceremony validator key under.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9_-]+$`
+	KeyName string `json:"keyName,omitempty"`
 
 	// Title is the on-chain proposal title.
 	// +kubebuilder:validation:MinLength=1
@@ -228,9 +233,14 @@ type GovVotePayload struct {
 	// +kubebuilder:validation:MinLength=1
 	ChainID string `json:"chainId"`
 
-	// KeyName names the keyring entry that signs the vote.
-	// +kubebuilder:validation:MinLength=1
-	KeyName string `json:"keyName"`
+	// KeyName names the keyring entry that signs the vote. Omit to let
+	// the controller derive from the target SeiNode: spec.validator.
+	// operatorKeyring.secret.keyName when .secret is set (defaulting to
+	// "node_admin"), otherwise "validator" — the uid generate-gentx writes
+	// the genesis-ceremony validator key under.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9_-]+$`
+	KeyName string `json:"keyName,omitempty"`
 
 	// ProposalID is the on-chain proposal ID being voted on.
 	// +kubebuilder:validation:Minimum=1

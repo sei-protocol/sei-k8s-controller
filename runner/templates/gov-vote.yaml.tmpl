@@ -10,7 +10,9 @@ spec:
   timeoutSeconds: {{ with index . "TIMEOUT_SECONDS" }}{{ . }}{{ else }}300{{ end }}
   govVote:
     chainId: {{ .CHAIN_ID }}
-    keyName: {{ .KEY_NAME }}
+    {{- with index . "KEY_NAME" }}
+    keyName: {{ . }}
+    {{- end }}
     proposalId: {{ .PROPOSAL_ID }}
     option: {{ .OPTION }}
     fees: {{ .FEES }}

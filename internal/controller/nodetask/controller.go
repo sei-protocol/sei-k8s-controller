@@ -135,7 +135,7 @@ func (r *SeiNodeTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// kind/payload mapping first so we fail-fast on unsupported kinds
 	// before stamping anything.
 	if fatal == nil && cr.Status.Task == nil {
-		if _, _, err := taskParamsForKind(cr); err != nil {
+		if _, _, err := taskParamsForKind(cr, nil); err != nil {
 			r.markFailed(cr, now, "UnsupportedKind", err.Error())
 		} else {
 			cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{
@@ -222,7 +222,7 @@ func (r *SeiNodeTaskReconciler) resolveTarget(ctx context.Context, cr *seiv1alph
 // in-memory. Returns a transient error only when the task's Execute
 // returned a non-Terminal error (controller-runtime backs off).
 func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode, now time.Time) error {
-	taskType, params, err := taskParamsForKind(cr)
+	taskType, params, err := taskParamsForKind(cr, target)
 	if err != nil {
 		r.markFailed(cr, now, "UnsupportedKind", err.Error())
 		return nil
@@ -294,7 +294,11 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 // directly: the registry's sidecarTask[T] helper unmarshals back into the
 // same typed struct, then calls ToTaskRequest(). Field names on the
 // sidecar structs (PascalCase, no JSON tags) are the wire keys.
-func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask) (taskType string, params json.RawMessage, err error) {
+//
+// target is the resolved SeiNode the task runs against. Pass nil from the
+// early-validation path where target hasn't been fetched yet — KeyName
+// derivation is deferred to the driveTask call site, which has target.
+func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (taskType string, params json.RawMessage, err error) {
 	switch cr.Spec.Kind {
 	case seiv1alpha1.SeiNodeTaskKindUpdateNodeImage:
 		if cr.Spec.UpdateNodeImage == nil {
@@ -313,7 +317,7 @@ func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask) (taskType string, params jso
 		}
 		return marshalTaskParams(sidecar.TaskTypeGovVote, sidecar.GovVoteTask{
 			ChainID:    p.ChainID,
-			KeyName:    p.KeyName,
+			KeyName:    resolveSigningUID(p.KeyName, target),
 			ProposalID: p.ProposalID,
 			Option:     p.Option,
 			Memo:       p.Memo,
@@ -328,7 +332,7 @@ func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask) (taskType string, params jso
 		}
 		return marshalTaskParams(sidecar.TaskTypeGovSoftwareUpgrade, sidecar.GovSoftwareUpgradeTask{
 			ChainID:        p.ChainID,
-			KeyName:        p.KeyName,
+			KeyName:        resolveSigningUID(p.KeyName, target),
 			Title:          p.Title,
 			Description:    p.Description,
 			UpgradeName:    p.UpgradeName,
@@ -372,6 +376,20 @@ func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask) (taskType string, params jso
 	default:
 		return "", nil, fmt.Errorf("kind %q is not wired in this build", cr.Spec.Kind)
 	}
+}
+
+// resolveSigningUID returns explicit when set; otherwise derives from target
+// via seiv1alpha1.ResolveOperatorKeyringUID. With nil target (early-
+// validation path), returns the empty string — the final marshal happens
+// later from driveTask, which has target.
+func resolveSigningUID(explicit string, target *seiv1alpha1.SeiNode) string {
+	if explicit != "" {
+		return explicit
+	}
+	if target == nil {
+		return ""
+	}
+	return seiv1alpha1.ResolveOperatorKeyringUID(target)
 }
 
 func marshalTaskParams(taskType string, v any) (string, json.RawMessage, error) {

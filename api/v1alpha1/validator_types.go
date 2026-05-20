@@ -6,6 +6,31 @@ package v1alpha1
 // webhooks haven't run (e.g. in-memory specs in tests).
 const DefaultOperatorKeyName = "node_admin"
 
+// GentxOperatorKeyName is the keyring uid the seictl generate-gentx task
+// writes the validator key under during a genesis ceremony. Mirrored here
+// so consumers resolving signing identity for the test-backend (no .secret)
+// path stay in sync without importing seictl.
+const GentxOperatorKeyName = "validator"
+
+// ResolveOperatorKeyringUID returns the keyring uid the sidecar should use
+// for operator-account signing on the given SeiNode. With .secret set, the
+// explicit Secret.KeyName wins (defaulting to DefaultOperatorKeyName for
+// in-memory specs that bypassed admission). Otherwise the gentx convention
+// applies — generate-gentx writes the validator key under GentxOperatorKeyName.
+func ResolveOperatorKeyringUID(node *SeiNode) string {
+	if node == nil ||
+		node.Spec.Validator == nil ||
+		node.Spec.Validator.OperatorKeyring == nil ||
+		node.Spec.Validator.OperatorKeyring.Secret == nil {
+		return GentxOperatorKeyName
+	}
+	s := node.Spec.Validator.OperatorKeyring.Secret
+	if s.KeyName == "" {
+		return DefaultOperatorKeyName
+	}
+	return s.KeyName
+}
+
 // ValidatorSpec configures a consensus-participating validator node.
 // Validators bootstrap the same way as full nodes but participate in consensus.
 //
