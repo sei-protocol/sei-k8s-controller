@@ -1569,6 +1569,8 @@ github.com/sei-protocol/sei-chain v0.0.29-fix.0.20260326202429-c9b42951fef7 h1:k
 github.com/sei-protocol/sei-chain v0.0.29-fix.0.20260326202429-c9b42951fef7/go.mod h1:R1/EoOY+MKvwH0k5ivTtG9mLYOQvm0Ni/Trjxrep3t4=
 github.com/sei-protocol/sei-config v0.0.14 h1:1KS0EteCBEsjglNEPS/8VAOA7/NDLxEuPHPZg0MvSaM=
 github.com/sei-protocol/sei-config v0.0.14/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
+github.com/sei-protocol/sei-config v0.0.15 h1:kd9ZbDYq4eAJxpELI8oISVXFiPr3Jf1kTHL/V3gf5TU=
+github.com/sei-protocol/sei-config v0.0.15/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
 github.com/sei-protocol/sei-tm-db v0.0.5 h1:3WONKdSXEqdZZeLuWYfK5hP37TJpfaUa13vAyAlvaQY=
 github.com/sei-protocol/sei-tm-db v0.0.5/go.mod h1:Cpa6rGyczgthq7/0pI31jys2Fw0Nfrc+/jKdP1prVqY=
 github.com/sei-protocol/seictl v0.0.47 h1:crV++ft3/i3VVZ5ITyh5rZmQyQCos7t9g7FMGz4gb5s=
