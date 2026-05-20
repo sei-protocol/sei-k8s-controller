@@ -25,16 +25,6 @@ type SeiNodeSpec struct {
 	// +optional
 	Peers []PeerSource `json:"peers,omitempty"`
 
-	// Entrypoint is silently ignored. The controller injects a canonical
-	// `seid start --home $(HOME)` invocation; HOME is set on the container
-	// env so the data dir stays in lock-step across seid main, seid-init,
-	// and bootstrap containers. Slated for removal in v1alpha2.
-	//
-	// Deprecated: ignored as of the release that introduced HOME-based path
-	// resolution. Remove the field from manifests at your convenience.
-	// +optional
-	Entrypoint *EntrypointConfig `json:"entrypoint,omitempty"`
-
 	// Overrides is a flat map of dotted TOML key paths to string values.
 	// Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
 	// These are applied on top of mode defaults during config-apply.

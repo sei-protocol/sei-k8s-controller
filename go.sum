@@ -1756,6 +1756,8 @@ github.com/sei-protocol/sei-chain v0.0.29-fix.0.20260326202429-c9b42951fef7 h1:k
 github.com/sei-protocol/sei-chain v0.0.29-fix.0.20260326202429-c9b42951fef7/go.mod h1:R1/EoOY+MKvwH0k5ivTtG9mLYOQvm0Ni/Trjxrep3t4=
 github.com/sei-protocol/sei-config v0.0.14 h1:1KS0EteCBEsjglNEPS/8VAOA7/NDLxEuPHPZg0MvSaM=
 github.com/sei-protocol/sei-config v0.0.14/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
+github.com/sei-protocol/sei-config v0.0.15 h1:kd9ZbDYq4eAJxpELI8oISVXFiPr3Jf1kTHL/V3gf5TU=
+github.com/sei-protocol/sei-config v0.0.15/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
 github.com/sei-protocol/sei-load v0.0.0-20251007135253-78fbdc141082 h1:f2sY8OcN60UL1/6POx+HDMZ4w04FTZtSScnrFSnGZHg=
 github.com/sei-protocol/sei-load v0.0.0-20251007135253-78fbdc141082/go.mod h1:V0fNURAjS6A8+sA1VllegjNeSobay3oRUW5VFZd04bA=
 github.com/sei-protocol/sei-tm-db v0.0.5 h1:3WONKdSXEqdZZeLuWYfK5hP37TJpfaUa13vAyAlvaQY=

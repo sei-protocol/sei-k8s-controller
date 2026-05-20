@@ -13,10 +13,6 @@ func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unpa
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "sei-test",
 			Image:   "ghcr.io/sei-protocol/seid:latest",
-			Entrypoint: &seiv1alpha1.EntrypointConfig{
-				Command: []string{"seid"},
-				Args:    []string{"start"},
-			},
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
 		},

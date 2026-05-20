@@ -215,7 +215,7 @@ Per the skill brief: no launched product, no backward compat required. The exist
 - **Other snapshot flavors** (seidb, app-layer, … ). The wrapper is shaped to accept them as sibling sub-structs on `SnapshotGenerationConfig`; actual design for those modes ships when the use case appears.
 - **Per-node bucket / prefix overrides on `publish`**. Deferred; `TendermintSnapshotPublishConfig` is empty today precisely so these can land as field additions later.
 - **A sidecar-managed on-disk GC policy beyond `keepRecent`.** The sidecar currently relies on seid's `snapshot-keep-recent`; no separate retention policy is introduced here.
-- **Metrics / events for snapshot upload success & failure.** Covered separately in `.tide/observability.md` (`SnapshotScheduled`, `SnapshotComplete`, `SnapshotFailed`); this design does not alter those event names.
+- **Metrics / events for snapshot upload success & failure.** Existing snapshot-related events (`SnapshotScheduled`, `SnapshotComplete`, `SnapshotFailed`) are unchanged by this design.
 
 ## Related work
 
@@ -232,4 +232,3 @@ Per the skill brief: no launched product, no backward compat required. The exist
 - seictl `sidecar/client/tasks.go` — `TaskTypeSnapshotUpload` / `SnapshotUploadTask{}` (v0.0.30, already present; the controller side is what's missing)
 - Commit `358a216` (PR #89) — removed the monitor-task subsystem, including the old `SnapshotUploadMonitorTask` plumbing that this design reinstates as a plan task
 - `manifests/samples/seinode/pacific-1-snapshotter.yaml`, `pacific-1-state-syncer.yaml` — sample manifests updated alongside the type change
-- `.tide/observability.md` §Events — snapshot-related event names (unchanged by this design)

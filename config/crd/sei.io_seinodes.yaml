@@ -123,30 +123,6 @@ spec:
                 x-kubernetes-validations:
                 - message: import cannot be unset once configured
                   rule: (!has(oldSelf.import) || has(self.import))
-              entrypoint:
-                description: |-
-                  Entrypoint is silently ignored. The controller injects a canonical
-                  `seid start --home $(HOME)` invocation; HOME is set on the container
-                  env so the data dir stays in lock-step across seid main, seid-init,
-                  and bootstrap containers. Slated for removal in v1alpha2.
-
-                  Deprecated: ignored as of the release that introduced HOME-based path
-                  resolution. Remove the field from manifests at your convenience.
-                properties:
-                  args:
-                    items:
-                      type: string
-                    maxItems: 64
-                    type: array
-                  command:
-                    items:
-                      type: string
-                    maxItems: 16
-                    minItems: 1
-                    type: array
-                required:
-                - command
-                type: object
               fullNode:
                 description: FullNode configures a chain-following full node (absorbs
                   the "rpc" role).

@@ -26,8 +26,8 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.rollout.entrantRevision
-      name: Revision
+    - jsonPath: .status.rollout.targetHash
+      name: Target
       priority: 1
       type: string
     - jsonPath: .metadata.creationTimestamp
@@ -245,30 +245,6 @@ spec:
                         x-kubernetes-validations:
                         - message: import cannot be unset once configured
                           rule: (!has(oldSelf.import) || has(self.import))
-                      entrypoint:
-                        description: |-
-                          Entrypoint is silently ignored. The controller injects a canonical
-                          `seid start --home $(HOME)` invocation; HOME is set on the container
-                          env so the data dir stays in lock-step across seid main, seid-init,
-                          and bootstrap containers. Slated for removal in v1alpha2.
-
-                          Deprecated: ignored as of the release that introduced HOME-based path
-                          resolution. Remove the field from manifests at your convenience.
-                        properties:
-                          args:
-                            items:
-                              type: string
-                            maxItems: 64
-                            type: array
-                          command:
-                            items:
-                              type: string
-                            maxItems: 16
-                            minItems: 1
-                            type: array
-                        required:
-                        - command
-                        type: object
                       fullNode:
                         description: FullNode configures a chain-following full node
                           (absorbs the "rpc" role).
@@ -882,36 +858,14 @@ spec:
                   UpdateStrategy controls how changes to the template are rolled out
                   to child SeiNodes. Every deployment must declare an explicit strategy.
                 properties:
-                  hardFork:
-                    description: |-
-                      HardFork configures blue-green deployment at a specific block height.
-                      Required when type is HardFork.
-                    properties:
-                      haltHeight:
-                        description: |-
-                          HaltHeight is the block height at which the old binary is stopped
-                          via sidecar SIGTERM. The new binary must include an upgrade handler
-                          that continues from this height.
-                        format: int64
-                        minimum: 1
-                        type: integer
-                    required:
-                    - haltHeight
-                    type: object
                   type:
                     description: Type selects the deployment strategy.
                     enum:
                     - InPlace
-                    - BlueGreen
-                    - HardFork
                     type: string
                 required:
                 - type
                 type: object
-                x-kubernetes-validations:
-                - message: hardFork strategy requires haltHeight > 0
-                  rule: self.type != 'HardFork' || (has(self.hardFork) && self.hardFork.haltHeight
-                    > 0)
             required:
             - replicas
             - template
@@ -1324,47 +1278,15 @@ spec:
                   Rollout tracks an in-progress rollout across all strategy types.
                   Nil when no rollout is active.
                 properties:
-                  entrantNodes:
-                    description: |-
-                      EntrantNodes lists the names of the new SeiNode resources being
-                      created. Only populated for BlueGreen and HardFork strategies.
-                    items:
-                      type: string
-                    type: array
-                  entrantRevision:
-                    description: |-
-                      EntrantRevision identifies the generation of the new nodes.
-                      Only populated for BlueGreen and HardFork strategies.
-                    type: string
-                  incumbentNodes:
-                    description: |-
-                      IncumbentNodes lists the names of the currently active SeiNode
-                      resources. Only populated for BlueGreen and HardFork strategies.
-                    items:
-                      type: string
-                    type: array
-                  incumbentRevision:
-                    description: |-
-                      IncumbentRevision identifies the generation of the currently live nodes.
-                      Only populated for BlueGreen and HardFork strategies.
-                    type: string
                   startedAt:
                     description: StartedAt is when the rollout was first detected.
                     format: date-time
-                    type: string
-                  strategy:
-                    description: Strategy is the strategy type driving this rollout.
-                    enum:
-                    - InPlace
-                    - BlueGreen
-                    - HardFork
                     type: string
                   targetHash:
                     description: TargetHash is the templateHash being rolled out to.
                     type: string
                 required:
                 - startedAt
-                - strategy
                 - targetHash
                 type: object
               templateHash:

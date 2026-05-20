@@ -101,16 +101,17 @@ func TestGenerateInternalService_SelectorIgnoresRevision(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
 
-	// Active rollout — external service pins to revision, internal service must not.
+	// Active rollout — selector must not include the revision label so
+	// kube-proxy keeps routing to whichever pods are Ready during the rollout.
 	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
-		Strategy:          seiv1alpha1.UpdateStrategyBlueGreen,
-		TargetHash:        "newhash",
-		IncumbentRevision: "42",
+		TargetHash: "newhash",
 	}
 
 	svc := generateInternalService(group)
 	g.Expect(svc.Spec.Selector).To(Equal(map[string]string{groupLabel: "pacific-1-wave"}),
 		"internal Service must track ready pods across revisions during rollouts")
+	g.Expect(svc.Spec.Selector).NotTo(HaveKey(revisionLabel),
+		"selector must not pin traffic by generation during an InPlace rollout")
 }
 
 func TestGenerateInternalService_PublishNotReadyAddressesFalse(t *testing.T) {

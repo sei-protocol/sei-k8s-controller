@@ -14,7 +14,6 @@ const (
 	groupLabel          = "sei.io/nodedeployment"
 	groupOrdinalLabel   = "sei.io/nodedeployment-ordinal"
 	revisionLabel       = "sei.io/revision"
-	nodeLabel           = "sei.io/node"
 	managedByAnnotation = "sei.io/managed-by"
 )
 
@@ -24,13 +23,10 @@ func seiNodeName(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
 	return fmt.Sprintf("%s-%d", group.Name, ordinal)
 }
 
-// activeRevision returns the revision string for the currently active
-// node set. Used for traffic routing during deployments and for
-// observability labels on pods.
+// activeRevision returns the revision string stamped on child pods.
+// Used purely as an observability label (`kubectl get -l sei.io/revision=...`);
+// no Service selector filters on it.
 func activeRevision(group *seiv1alpha1.SeiNodeDeployment) string {
-	if group.Status.Rollout != nil && group.Status.Rollout.IncumbentRevision != "" {
-		return group.Status.Rollout.IncumbentRevision
-	}
 	return strconv.FormatInt(group.Generation, 10)
 }
 
@@ -38,24 +34,10 @@ func externalServiceName(group *seiv1alpha1.SeiNodeDeployment) string {
 	return fmt.Sprintf("%s-external", group.Name)
 }
 
-// groupSelector returns the label selector used by the shared external
-// Service and HTTPRoutes. During an active deployment, it includes the
-// revision label to pin traffic to the active set. At steady state, it
-// selects by group membership only.
+// groupSelector returns the label selector used by Services, HTTPRoutes,
+// and child-node listing. InPlace rollouts update pods in place, so traffic
+// must always reach every group member regardless of generation.
 func groupSelector(group *seiv1alpha1.SeiNodeDeployment) map[string]string {
-	if group.Status.Rollout != nil {
-		return map[string]string{
-			groupLabel:    group.Name,
-			revisionLabel: activeRevision(group),
-		}
-	}
-	return map[string]string{groupLabel: group.Name}
-}
-
-// groupOnlySelector returns a selector matching all nodes owned by the
-// group, regardless of revision. Used for listing and scale-down where
-// we need to see every child node.
-func groupOnlySelector(group *seiv1alpha1.SeiNodeDeployment) map[string]string {
 	return map[string]string{groupLabel: group.Name}
 }
 
@@ -99,21 +81,13 @@ func managedByAnnotations() map[string]string {
 }
 
 // templateHash computes a hash over spec fields that trigger a deployment
-// plan when changed. Currently tracked: chainId, image, entrypoint, and
-// sidecar image. Fields like overrides, peers, and replica count propagate
-// in-place via ensureSeiNode without requiring a deployment plan.
+// plan when changed. Currently tracked: chainId, image, and sidecar image.
+// Fields like overrides, peers, and replica count propagate in-place via
+// ensureSeiNode without requiring a deployment plan.
 func templateHash(spec *seiv1alpha1.SeiNodeSpec) string {
 	h := sha256.New()
 	h.Write([]byte(spec.ChainID))
 	h.Write([]byte(spec.Image))
-	if spec.Entrypoint != nil {
-		for _, c := range spec.Entrypoint.Command {
-			h.Write([]byte(c))
-		}
-		for _, a := range spec.Entrypoint.Args {
-			h.Write([]byte(a))
-		}
-	}
 	if spec.Sidecar != nil {
 		h.Write([]byte(spec.Sidecar.Image))
 	}

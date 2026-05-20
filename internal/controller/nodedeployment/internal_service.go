@@ -91,10 +91,11 @@ func generateInternalService(group *seiv1alpha1.SeiNodeDeployment) *corev1.Servi
 		},
 		Spec: corev1.ServiceSpec{
 			Type: corev1.ServiceTypeClusterIP,
-			// Select by deployment membership only (not revision): during a
-			// rollout, kube-proxy should keep routing to whichever pods are
-			// Ready, irrespective of which generation they belong to.
-			Selector: groupOnlySelector(group),
+			// Select by deployment membership: kube-proxy routes to whichever
+			// pods are Ready, regardless of generation. InPlace rollouts
+			// update pods in place, so pinning to a revision label would
+			// strand traffic between the old and new generations.
+			Selector: groupSelector(group),
 			// kube-proxy must exclude not-ready pods so clients never see
 			// partially-bootstrapped nodes.
 			PublishNotReadyAddresses: false,

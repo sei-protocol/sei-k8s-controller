@@ -3,11 +3,11 @@
 **Status:** Draft / LLD
 **Date:** 2026-04-27
 **Tracks:** validator migration from sei-infra (EC2) → sei-k8s-controller
-**Related:** [`.tide/validator-migration.md`](../.tide/validator-migration.md), [`docs/design-seinode-import-volume-lld.md`](design-seinode-import-volume-lld.md), [`docs/design/composable-genesis.md`](design/composable-genesis.md)
+**Related:** [`docs/design-seinode-import-volume-lld.md`](design-seinode-import-volume-lld.md), [`docs/design/composable-genesis.md`](design/composable-genesis.md)
 
 This LLD specifies how an existing external validator identity is mounted onto a `SeiNode` so the node, once synced to the chain tip, takes over signing from a previously-running validator instance with zero risk of double-signing.
 
-The companion direction doc (`.tide/validator-migration.md`) sets the threat model and migration phases. This LLD fixes the API shape, mount mechanics, validation lifecycle, and v1 scope. No new keystore variants, no remote-signer integration, no automated cutover orchestration — those are explicitly deferred (§11).
+This LLD fixes the API shape, mount mechanics, validation lifecycle, and v1 scope. No new keystore variants, no remote-signer integration, no automated cutover orchestration — those are explicitly deferred (§11).
 
 ## 0. Background: what is already in tree
 
@@ -385,7 +385,7 @@ Out of scope for this LLD — they live in `~/workspace/platform/clusters/prod/m
 
 - **Mid-life `SigningKey` patch on a Running validator (drift detection).** v1 supports SigningKey set from SeiNode creation. Patching SigningKey onto an already-Running validator is a no-op today because `buildRunningPlan` only checks image drift. Adding this would require: (a) tracking the currently-mounted secretName in `SeiNodeStatus`, (b) extending `buildRunningPlan` to detect SigningKey drift, (c) building a re-apply plan that includes `validate-signing-key` + `apply-statefulset` + `observe-image`-equivalent rollout-watch. The plumbing already exists; the gap is just the drift trigger.
 - **Variants beyond `Secret`.** TMKMS, Horcrux, remote signer (Web3Signer / Vault / AWS-KMS-fronted), Tendermint KMS protocol over a Unix socket. Add as sibling fields under `SigningKeySource` when in-house validators need them; the union is shaped to accept them additively.
-- **Automated cutover orchestration.** The cutover in §8 is operator-driven (manual stop of EC2, manual scrape of keys, manual `kubectl apply`). Automating this end-to-end is `.tide/validator-migration.md` Decision #2 — explicitly deferred until first manual cutover succeeds.
+- **Automated cutover orchestration.** The cutover in §8 is operator-driven (manual stop of EC2, manual scrape of keys, manual `kubectl apply`). Automating this end-to-end is explicitly deferred until first manual cutover succeeds.
 - **`priv_validator_state.json` injection.** This file is CometBFT's slashing-protection ledger. seid auto-creates it (height=0) on first start and owns it on the PVC thereafter; on pod restart it's read from the PVC, not from any external source. For the migration use case, transferring the old validator's state file is unnecessary because the cutover runbook already enforces a hard halt of the old validator and a wait for chain advance ≥ M blocks past `last_signed_height` before activating the new instance — at that point the new validator's first signing opportunity is far past anything the old validator signed. The file is also operational data, not secret material (height/round/step plus the most recent signature, all of which are public on-chain). If a future use case needs explicit state injection (e.g., automated chain-rollback tooling), add a separate ConfigMap-based source distinct from `SigningKey`.
 - **Double-sign detection.** Out-of-band monitoring (slashing-info polling, sentry comparisons) is the right venue. Not a controller responsibility.
 - **Sentry-node topology** (private validator behind public sentries). Architecture decision orthogonal to keying; deferred.
@@ -415,7 +415,6 @@ No CRD data migration. Applying the new CRD on a cluster with old SeiNode object
 
 ## Related work
 
-- `.tide/validator-migration.md` — direction doc; threat model, phased migration, runbook.
 - `docs/design-seinode-import-volume-lld.md` — adjacent LLD; sets in-house style for K8s API design (immutability, validation, condition lifecycle).
 - `docs/design/composable-genesis.md` — sketches `register-validator` for the *new-chain validator joining* case (deferred for migration use case).
 - `api/v1alpha1/validator_types.go` — new fields per §1.

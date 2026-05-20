@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,7 +14,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 // reconcileSeiNodes ensures the desired set of child SeiNodes exist,
@@ -66,15 +64,18 @@ func (r *SeiNodeDeploymentReconciler) detectGenesisCeremonyNeeded(group *seiv1al
 
 // detectDeploymentNeeded checks if deployment-worthy fields have changed
 // by comparing the current template hash against the stored hash. Only
-// fields that require new nodes (image, entrypoint, chainId) are hashed;
-// sidecar, overrides, and replica changes propagate in-place.
-// TODO: guard against empty incumbentNodes — if populateIncumbentNodes found
-// zero nodes (e.g. missing owner references), a rollout with empty node lists
-// creates a plan where all tasks complete as no-ops. Should return early here
-// when len(group.Status.IncumbentNodes) == 0.
+// fields that require new nodes (image, chainId) are hashed; sidecar,
+// overrides, and replica changes propagate in-place.
 func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeDeployment) {
 	if group.Status.TemplateHash == "" {
 		return // first reconcile, no baseline to compare against
+	}
+	if len(group.Status.IncumbentNodes) == 0 {
+		// No incumbent nodes (e.g. missing owner references after a manual
+		// edit); a rollout with empty node lists would create a plan whose
+		// tasks all complete as no-ops. Wait until populateIncumbentNodes
+		// finds the child set before declaring a rollout.
+		return
 	}
 
 	currentHash := templateHash(&group.Spec.Template.Spec)
@@ -102,27 +103,21 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 		return // non-deployment plan in progress (e.g. genesis)
 	}
 
-	strategyType := group.Spec.UpdateStrategy.Type
-	if strategyType == "" {
+	if group.Spec.UpdateStrategy.Type == "" {
 		log.Log.Info("updateStrategy.type is empty, treating as InPlace — update the manifest",
 			"group", group.Name, "namespace", group.Namespace)
-		strategyType = seiv1alpha1.UpdateStrategyInPlace
 	}
 
 	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
-		Strategy:          strategyType,
-		TargetHash:        currentHash,
-		StartedAt:         metav1.Now(),
-		IncumbentRevision: planner.IncumbentRevision(group),
-		EntrantRevision:   planner.EntrantRevision(group),
-		IncumbentNodes:    group.Status.IncumbentNodes,
+		TargetHash: currentHash,
+		StartedAt:  metav1.Now(),
 	}
 
 	setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
 		"TemplateChanged", fmt.Sprintf("templateHash changed from %s to %s", group.Status.TemplateHash, currentHash))
 
 	r.Recorder.Eventf(group, corev1.EventTypeNormal, "RolloutStarted",
-		"InPlace rollout started (strategy: %s, target: %s)", strategyType, currentHash[:8])
+		"InPlace rollout started (target: %s)", currentHash[:8])
 }
 
 // populateIncumbentNodes lists child SeiNodes and records their names
@@ -170,15 +165,6 @@ func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *
 	}
 	if existing.Spec.Image != desired.Spec.Image {
 		existing.Spec.Image = desired.Spec.Image
-		updated = true
-	}
-	if desired.Spec.Entrypoint == nil && existing.Spec.Entrypoint != nil {
-		existing.Spec.Entrypoint = nil
-		updated = true
-	} else if desired.Spec.Entrypoint != nil && (existing.Spec.Entrypoint == nil ||
-		!slices.Equal(existing.Spec.Entrypoint.Command, desired.Spec.Entrypoint.Command) ||
-		!slices.Equal(existing.Spec.Entrypoint.Args, desired.Spec.Entrypoint.Args)) {
-		existing.Spec.Entrypoint = desired.Spec.Entrypoint
 		updated = true
 	}
 	if desired.Spec.Sidecar == nil && existing.Spec.Sidecar != nil {
@@ -247,7 +233,7 @@ func (r *SeiNodeDeploymentReconciler) scaleDown(ctx context.Context, group *seiv
 	nodeList := &seiv1alpha1.SeiNodeList{}
 	if err := r.List(ctx, nodeList,
 		client.InNamespace(group.Namespace),
-		client.MatchingLabels(groupOnlySelector(group)),
+		client.MatchingLabels(groupSelector(group)),
 	); err != nil {
 		return fmt.Errorf("listing child SeiNodes: %w", err)
 	}
