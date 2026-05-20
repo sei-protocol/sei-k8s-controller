@@ -29,6 +29,7 @@ func main() {
 		Usage: "Workflow Task primitives for the sei-k8s-controller test harness",
 		Commands: []*cli.Command{
 			newKeygenCommand(),
+			newProvisionSNDCommand(),
 		},
 	}
 
