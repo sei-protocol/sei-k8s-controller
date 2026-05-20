@@ -51,6 +51,8 @@ const (
 	// seidStartSubcommand is the seid subcommand that boots the node.
 	seidStartSubcommand = "start"
 
+	shellBash = "/bin/bash"
+
 	// Pod-spec container names. Used as both the .Name on built containers
 	// and the lookup key for the operator-keyring containment guard.
 	containerNameSeid                 = "seid"
@@ -492,7 +494,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 		buildSidecarContainer(node, p),
 		buildRBACProxyContainer(node, p),
 	}
-	ceContainer, err := buildCosmosExporterContainer(node, p)
+	ceContainer, err := buildCosmosExporterContainer(p)
 	if err != nil {
 		return corev1.PodSpec{}, err
 	}
@@ -609,47 +611,75 @@ func defaultCosmosExporterResources() corev1.ResourceRequirements {
 	}
 }
 
-// cosmosExporterReadinessProbePort: validators probe Tendermint RPC (gRPC
-// is disabled), other modes probe seid's gRPC.
-func cosmosExporterReadinessProbePort(node *seiv1alpha1.SeiNode) int32 {
-	if node.Spec.Validator != nil {
-		return seiconfig.PortRPC
+// cosmosExporterWaitCommand renders bash that waits for seid's gRPC port,
+// then exec's cosmos-exporter. Container.Command overrides ENTRYPOINT, so
+// the binary path is spelled out.
+func cosmosExporterWaitCommand() (command []string, args []string) {
+	exporter := "/usr/local/bin/sei-cosmos-exporter"
+	exporterArgs := []string{
+		"--denom", "usei",
+		"--denom-coefficient", "1000000",
+		"--bech-prefix", "sei",
+		"--listen-address", fmt.Sprintf(":%d", defaultCosmosExporterPort),
 	}
-	return seiconfig.PortGRPC
+
+	var b strings.Builder
+	b.WriteString(exporter)
+	for _, a := range exporterArgs {
+		fmt.Fprintf(&b, " %q", a)
+	}
+
+	script := fmt.Sprintf(
+		`echo "waiting for gRPC :%d to be available..."; `+
+			`until (exec 3<>/dev/tcp/localhost/%d) 2>/dev/null; do `+
+			`sleep 5; done; `+
+			`echo "gRPC available, starting cosmos-exporter"; `+
+			`exec %s`,
+		seiconfig.PortGRPC, seiconfig.PortGRPC, b.String(),
+	)
+
+	return []string{shellBash, "-c"}, []string{script}
 }
 
 // buildCosmosExporterContainer renders the cosmos-exporter sidecar.
-func buildCosmosExporterContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.Container, error) {
+func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
 	if p.CosmosExporterImage == "" {
 		return corev1.Container{}, fmt.Errorf("SEI_COSMOS_EXPORTER_IMAGE is required on the operator Deployment")
 	}
+	command, args := cosmosExporterWaitCommand()
 	return corev1.Container{
-		Name:  containerNameCosmosExporter,
-		Image: p.CosmosExporterImage,
-		Args: []string{
-			"--denom", "usei",
-			"--denom-coefficient", "1000000",
-			"--bech-prefix", "sei",
-			"--listen-address", fmt.Sprintf(":%d", defaultCosmosExporterPort),
-			// --node and --tendermint-rpc default to localhost; the
-			// exporter shares the pod's net ns with seid.
-		},
+		Name:    containerNameCosmosExporter,
+		Image:   p.CosmosExporterImage,
+		Command: command,
+		Args:    args,
 		Ports: []corev1.ContainerPort{
 			{Name: "cosmos-metrics", ContainerPort: defaultCosmosExporterPort, Protocol: corev1.ProtocolTCP},
 		},
 		SecurityContext: sidecarSecurityContext(),
 		Resources:       defaultCosmosExporterResources(),
-		// /tmp: distroless + ReadOnlyRootFilesystem EROFS insurance.
+		// /tmp: ReadOnlyRootFilesystem EROFS insurance.
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
 		},
+		// Generous failureThreshold so Prometheus targets don't flap while
+		// the wait loop holds :9300 off during cold start.
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				TCPSocket: &corev1.TCPSocketAction{
-					Port: intstr.FromInt32(cosmosExporterReadinessProbePort(node)),
+					Port: intstr.FromInt32(defaultCosmosExporterPort),
 				},
 			},
-			InitialDelaySeconds: 5,
+			PeriodSeconds:    10,
+			FailureThreshold: 6,
+		},
+		// InitialDelaySeconds: 600 gives the wait loop room before kubelet probes.
+		LivenessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt32(defaultCosmosExporterPort),
+				},
+			},
+			InitialDelaySeconds: 600,
 			PeriodSeconds:       10,
 			FailureThreshold:    3,
 		},
@@ -680,7 +710,7 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 		SidecarPort(node), b.String(),
 	)
 
-	return []string{"/bin/bash", "-c"}, []string{script}
+	return []string{shellBash, "-c"}, []string{script}
 }
 
 func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
