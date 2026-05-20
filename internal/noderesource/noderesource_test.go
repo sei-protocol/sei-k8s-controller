@@ -1014,6 +1014,9 @@ func TestOperatorKeyring_SidecarContainerHasMountAndEnv(t *testing.T) {
 	g.Expect(mount.SubPath).To(BeEmpty(),
 		"operator-keyring is a directory mount, not subPath — sidecar needs the whole dir")
 
+	g.Expect(envValue(sidecar.Env, keyringBackendEnvVar)).To(Equal(keyringBackendFile),
+		"sidecar must have SEI_KEYRING_BACKEND=file so the SDK opens the projected Secret as a file-backend keyring; without this the SDK falls back to its compile-time default which has no distroless analogue")
+
 	var passphraseEnv *corev1.EnvVar
 	for i := range sidecar.Env {
 		if sidecar.Env[i].Name == keyringPassphraseEnvVar {
@@ -1025,6 +1028,50 @@ func TestOperatorKeyring_SidecarContainerHasMountAndEnv(t *testing.T) {
 	g.Expect(passphraseEnv.ValueFrom.SecretKeyRef).NotTo(BeNil())
 	g.Expect(passphraseEnv.ValueFrom.SecretKeyRef.Name).To(Equal("validator-0-opk-passphrase"))
 	g.Expect(passphraseEnv.ValueFrom.SecretKeyRef.Key).To(Equal("passphrase"))
+
+	g.Expect(envValue(sidecar.Env, keyringDirEnvVar)).To(BeEmpty(),
+		"file-backend path uses the SDK default keyring dir ($SEI_HOME/keyring-file/); SEI_KEYRING_DIR must NOT be set or the SDK skips the projected Secret volume")
+}
+
+// TestOperatorKeyring_EmptyBlock_TestBackend covers the gentx-fallback path:
+// validators that opt into sidecar signing but provide no Secret get a
+// test-backend keyring pointing at $SEI_HOME/keyring-test on the data PVC,
+// which is where the seictl gentx task writes the validator key.
+func TestOperatorKeyring_EmptyBlock_TestBackend(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
+	node.Spec.Validator.OperatorKeyring = &seiv1alpha1.OperatorKeyringSource{}
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+	g.Expect(sidecar).NotTo(BeNil(), "sei-sidecar init container must exist")
+
+	g.Expect(envValue(sidecar.Env, keyringBackendEnvVar)).To(Equal(keyringBackendTest),
+		"empty operatorKeyring block must select the test backend so the sidecar reads the gentx-written keyring")
+	g.Expect(envValue(sidecar.Env, keyringDirEnvVar)).To(Equal(dataDir+"/"+operatorKeyringTestDirName),
+		"SEI_KEYRING_DIR must point at the gentx-written keyring on the data PVC")
+	g.Expect(envValue(sidecar.Env, keyringPassphraseEnvVar)).To(BeEmpty(),
+		"test backend is unencrypted; no passphrase env should be set")
+
+	g.Expect(findVolume(sts.Spec.Template.Spec.Volumes, operatorKeyringVolumeName)).To(BeNil(),
+		"empty operatorKeyring block must NOT mount a projected Secret — the keyring lives on the data PVC already")
+}
+
+// TestOperatorKeyring_ValidatorWithoutOptIn_NoEnv guards the explicit opt-in
+// semantic: a validator without an OperatorKeyring block performs no sidecar
+// signing and must not receive any keyring env vars.
+func TestOperatorKeyring_ValidatorWithoutOptIn_NoEnv(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithSigningKey("validator-0", "default", "validator-0-key")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+	g.Expect(sidecar).NotTo(BeNil())
+
+	g.Expect(envValue(sidecar.Env, keyringBackendEnvVar)).To(BeEmpty(),
+		"validators without operatorKeyring opt-in must not have SEI_KEYRING_BACKEND set")
+	g.Expect(envValue(sidecar.Env, keyringDirEnvVar)).To(BeEmpty())
+	g.Expect(envValue(sidecar.Env, keyringPassphraseEnvVar)).To(BeEmpty())
 }
 
 func TestOperatorKeyring_SeidMainContainerHasNoMountOrEnv(t *testing.T) {

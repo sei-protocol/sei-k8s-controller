@@ -138,12 +138,25 @@ type SecretNodeKeySource struct {
 // OperatorKeyringSource declares where a validator's operator-account
 // keyring (used by the sidecar to sign governance, MsgEditValidator,
 // withdraw-rewards, and other operator-account transactions) comes from.
-// Exactly one variant must be set; variants are mutually exclusive.
+// Setting this field is the validator's opt-in to sidecar signing.
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.secret) ? 1 : 0) == 1",message="exactly one operator keyring source must be set"
+// Two shapes, distinguished by whether .secret is set:
+//
+//   - .secret set: load a Cosmos SDK file-backend keyring from the named
+//     Secret (production). Sidecar unlocks it with the referenced passphrase.
+//   - .secret unset (empty block): reuse the keyring written by the
+//     genesis-ceremony gentx task at $SEI_HOME/keyring-test/ on the data
+//     PVC (Cosmos SDK test backend, unencrypted). Intended for bench /
+//     ephemeral chains where the PVC is the natural trust boundary.
+//
+// Production chains should always set .secret. An empty block on a prod
+// chain means sign-tx tasks fail at execution with "key not found" — the
+// sidecar opens an empty keyring rather than silently falling back to an
+// unintended identity.
 type OperatorKeyringSource struct {
 	// Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
-	// in the SeiNode's namespace.
+	// in the SeiNode's namespace. When unset, the sidecar reads the keyring
+	// written by the gentx task on the shared data PVC instead.
 	// +optional
 	Secret *SecretOperatorKeyringSource `json:"secret,omitempty"`
 }
