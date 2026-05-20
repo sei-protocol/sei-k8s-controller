@@ -1,6 +1,6 @@
-// Package taskimg is the shared library for seitask subcommands: typed exit
-// codes, ownerReference stamping, and workflow-vars ConfigMap helpers.
-package taskimg
+// Package taskruntime is the shared library for seitask subcommands: typed
+// exit codes, ownerReference stamping, and workflow-vars ConfigMap helpers.
+package taskruntime
 
 import (
 	"errors"

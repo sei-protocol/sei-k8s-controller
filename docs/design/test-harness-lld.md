@@ -74,9 +74,9 @@ The four sei-side images are all small Go binaries using controller-runtime clie
 ### Task image contract
 
 - **Inputs**: env vars (rendered by Chaos Mesh from Workflow template) + optionally a mounted ConfigMap with a typed spec (for `seitask-provision-snd`, which needs a structured SND payload too large for env). **No `envsubst`-style placeholders** inside scenario YAML. Per-run substitution uses Chaos Mesh's native `{{ .Workflow.Name }}` / `inputs.parameters.*` (rendered by the workflow controller, not by the orchestrator). The CronJob applies the scenario YAML literally; the per-run identifier is injected as a Workflow parameter.
-- **Outputs**: typed read/write of the per-run ConfigMap (`workflow-vars-<workflow-name>`) via controller-runtime `client.Patch(obj, client.MergeFromWithOptimisticLock{})`. **No `kubectl` shell-out from inside the Task images** — same status-patch discipline the controller uses (see `CLAUDE.md`). The CM ops live in `internal/taskimg/cm.go`. Downstream Tasks consume the merged CM via `envFrom: configMapRef:`.
+- **Outputs**: typed read/write of the per-run ConfigMap (`workflow-vars-<workflow-name>`) via controller-runtime `client.Patch(obj, client.MergeFromWithOptimisticLock{})`. **No `kubectl` shell-out from inside the Task images** — same status-patch discipline the controller uses (see `CLAUDE.md`). The CM ops live in `internal/taskruntime/cm.go`. Downstream Tasks consume the merged CM via `envFrom: configMapRef:`.
 - **Exit codes**: 0 pass / 1 task-fail / 2 infra-fail. Matches release-test.ts. Chaos Mesh treats any non-zero as Failed identically; the 1-vs-2 split surfaces only in `seitask-upload-report` (reads a sentinel key the failing Task writes to the CM before exit).
-- **Cleanup**: every resource a Task image creates (SND, Secret, ConfigMap entry) carries an `ownerReference` to the parent Workflow CR. The Workflow's UID is injected into each Task pod via the downward API on a fixed env var (`SEI_WORKFLOW_NAME`, `SEI_WORKFLOW_UID`) so the helper in `internal/taskimg/ownerref.go` can stamp it without an extra API lookup. Workflow deletion cascades to everything; no trap-on-EXIT logic. ownerReferences point at the Workflow CR, never at the Task pod or WorkflowNode (both go away before SND lifecycle completes).
+- **Cleanup**: every resource a Task image creates (SND, Secret, ConfigMap entry) carries an `ownerReference` to the parent Workflow CR. The Workflow's UID is injected into each Task pod via the downward API on a fixed env var (`SEI_WORKFLOW_NAME`, `SEI_WORKFLOW_UID`) so the helper in `internal/taskruntime/ownerref.go` can stamp it without an extra API lookup. Workflow deletion cascades to everything; no trap-on-EXIT logic. ownerReferences point at the Workflow CR, never at the Task pod or WorkflowNode (both go away before SND lifecycle completes).
 
 ### Cross-step state
 
@@ -89,7 +89,7 @@ The major-upgrade workflow already uses a per-run ConfigMap with an `ownerRefere
 
 #### workflow-vars schema
 
-The key vocabulary is enumerated in a Go file (`internal/taskimg/vars.go`) as typed constants so producer/consumer drift is a compile error, not a runtime mystery. Initial schema:
+The key vocabulary is enumerated in a Go file (`internal/taskruntime/vars.go`) as typed constants so producer/consumer drift is a compile error, not a runtime mystery. Initial schema:
 
 | Key | Type | Writer | Stability |
 |---|---|---|---|
@@ -212,7 +212,7 @@ sei-k8s-controller/
     upload-report/       # NEW — seitask-upload-report entry
     runner/              # NEW location for existing seitask-runner (moved from runner/)
   internal/
-    taskimg/             # NEW — shared library for the small task images
+    taskruntime/             # NEW — shared library for the small task images
       vars.go            # typed const keys for workflow-vars CM
       cm.go              # typed client.Patch helpers (MergeFromWithOptimisticLock)
       ownerref.go        # Workflow ownerReference helper (reads SEI_WORKFLOW_UID env)

@@ -1,6 +1,6 @@
 // Command seitask is the monolithic Workflow-Task primitive binary: one
 // binary, multiple urfave/cli subcommands (keygen, provision-snd, …) that
-// share the internal/taskimg shared library. See
+// share the internal/taskruntime shared library. See
 // docs/design/test-harness-lld.md.
 package main
 
@@ -17,7 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/sei-protocol/sei-k8s-controller/internal/taskimg"
+	"github.com/sei-protocol/sei-k8s-controller/internal/taskruntime"
 )
 
 func main() {
@@ -33,10 +33,10 @@ func main() {
 	}
 
 	if err := app.Run(ctx, os.Args); err != nil {
-		// Subcommands wrap with taskimg.Infra / taskimg.Task so this
+		// Subcommands wrap with taskruntime.Infra / taskruntime.Task so this
 		// mapping reaches the right 0/1/2 exit code.
 		log.Printf("seitask: %v", err)
-		os.Exit(taskimg.ExitCodeFor(err))
+		os.Exit(taskruntime.ExitCodeFor(err))
 	}
 }
 
@@ -45,11 +45,11 @@ func main() {
 func kubeClientFromEnv() (client.Client, error) {
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
-		return nil, taskimg.Infra(fmt.Errorf("loading kubeconfig: %w", err))
+		return nil, taskruntime.Infra(fmt.Errorf("loading kubeconfig: %w", err))
 	}
 	c, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
-		return nil, taskimg.Infra(fmt.Errorf("building client: %w", err))
+		return nil, taskruntime.Infra(fmt.Errorf("building client: %w", err))
 	}
 	return c, nil
 }

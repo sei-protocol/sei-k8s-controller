@@ -7,7 +7,7 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/sei-protocol/sei-k8s-controller/internal/seitask/keygen"
-	"github.com/sei-protocol/sei-k8s-controller/internal/taskimg"
+	"github.com/sei-protocol/sei-k8s-controller/internal/taskruntime"
 )
 
 func newKeygenCommand() *cli.Command {
@@ -30,7 +30,7 @@ func newKeygenCommand() *cli.Command {
 }
 
 func runKeygen(ctx context.Context, cmd *cli.Command) error {
-	wf, err := taskimg.LoadWorkflowIdentity()
+	wf, err := taskruntime.LoadWorkflowIdentity()
 	if err != nil {
 		return err
 	}
@@ -45,10 +45,10 @@ func runKeygen(ctx context.Context, cmd *cli.Command) error {
 	})
 	if err != nil {
 		// Stamp EXIT_REASON so upload-report can recover the failure class.
-		taskimg.WriteExitReason(ctx, c, wf, err)
+		taskruntime.WriteExitReason(ctx, c, wf, err)
 		return err
 	}
-	taskimg.WriteExitReason(ctx, c, wf, nil)
+	taskruntime.WriteExitReason(ctx, c, wf, nil)
 	log.Printf("keygen: created Secret %q with address %s", res.SecretName, res.Address)
 	return nil
 }

@@ -1,4 +1,4 @@
-package taskimg
+package taskruntime
 
 // VarKey is a typed key for the workflow-vars ConfigMap. Producers and
 // consumers reference these constants so renames are compile errors. Schema +

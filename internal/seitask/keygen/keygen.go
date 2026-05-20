@@ -20,7 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/sei-protocol/sei-k8s-controller/internal/taskimg"
+	"github.com/sei-protocol/sei-k8s-controller/internal/taskruntime"
 )
 
 // cosmos BIP-44 path, coin type 118. Matches `seid keys add` so mnemonics
@@ -39,7 +39,7 @@ type Params struct {
 	// KeyName is the logical identity (e.g. "admin"). Secret name is
 	// "<KeyName>-<WorkflowName>" to disambiguate concurrent runs.
 	KeyName  string
-	Workflow taskimg.WorkflowIdentity
+	Workflow taskruntime.WorkflowIdentity
 }
 
 type Result struct {
@@ -69,19 +69,19 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 		// Re-stamp the workflow-vars CM in case it was cleared, then return.
 		addr, exists := existing.Data["address"]
 		if !exists {
-			return Result{}, taskimg.Infra(fmt.Errorf("existing Secret %q is missing address data", secretName))
+			return Result{}, taskruntime.Infra(fmt.Errorf("existing Secret %q is missing address data", secretName))
 		}
 		if err := writeWorkflowVars(ctx, c, p.Workflow, string(addr), secretName); err != nil {
 			return Result{}, err
 		}
 		return Result{SecretName: secretName, Address: string(addr)}, nil
 	case !apierrors.IsNotFound(err):
-		return Result{}, taskimg.Infra(fmt.Errorf("reading existing Secret %q: %w", secretName, err))
+		return Result{}, taskruntime.Infra(fmt.Errorf("reading existing Secret %q: %w", secretName, err))
 	}
 
 	mnemonic, address, err := deriveIdentity()
 	if err != nil {
-		return Result{}, taskimg.Infra(fmt.Errorf("deriving identity: %w", err))
+		return Result{}, taskruntime.Infra(fmt.Errorf("deriving identity: %w", err))
 	}
 
 	secret := &corev1.Secret{
@@ -105,7 +105,7 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 		if apierrors.IsAlreadyExists(err) {
 			return Run(ctx, c, p)
 		}
-		return Result{}, taskimg.Infra(fmt.Errorf("creating Secret %q: %w", secretName, err))
+		return Result{}, taskruntime.Infra(fmt.Errorf("creating Secret %q: %w", secretName, err))
 	}
 
 	if err := writeWorkflowVars(ctx, c, p.Workflow, address, secretName); err != nil {
@@ -114,15 +114,15 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 	return Result{SecretName: secretName, Address: address}, nil
 }
 
-func writeWorkflowVars(ctx context.Context, c client.Client, w taskimg.WorkflowIdentity, address, secretName string) error {
-	if err := taskimg.EnsureWorkflowVarsCM(ctx, c, w, map[taskimg.VarKey]string{
-		taskimg.KeyRunID: w.Name,
+func writeWorkflowVars(ctx context.Context, c client.Client, w taskruntime.WorkflowIdentity, address, secretName string) error {
+	if err := taskruntime.EnsureWorkflowVarsCM(ctx, c, w, map[taskruntime.VarKey]string{
+		taskruntime.KeyRunID: w.Name,
 	}); err != nil {
 		return err
 	}
-	return taskimg.SetVars(ctx, c, w, map[taskimg.VarKey]string{
-		taskimg.KeyAdminAddress:    address,
-		taskimg.KeyAdminSecretName: secretName,
+	return taskruntime.SetVars(ctx, c, w, map[taskruntime.VarKey]string{
+		taskruntime.KeyAdminAddress:    address,
+		taskruntime.KeyAdminSecretName: secretName,
 	})
 }
 
