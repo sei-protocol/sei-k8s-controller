@@ -35,7 +35,7 @@ func TestEnsureWorkflowVarsCM_CreatesWithOwnerRef(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).Build()
 	w := testIdentity()
 
-	if err := EnsureWorkflowVarsCM(context.Background(), c, w, map[VarKey]string{KeyRunID: "wf-test"}); err != nil {
+	if err := EnsureWorkflowVarsCM(context.Background(), c, w, map[VarKey]string{KeyRunID: testWorkflowName}); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
 
@@ -43,7 +43,7 @@ func TestEnsureWorkflowVarsCM_CreatesWithOwnerRef(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, got); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Data[string(KeyRunID)] != "wf-test" {
+	if got.Data[string(KeyRunID)] != testWorkflowName {
 		t.Fatalf("seed not written: %v", got.Data)
 	}
 	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].Kind != "Workflow" {
@@ -54,7 +54,7 @@ func TestEnsureWorkflowVarsCM_CreatesWithOwnerRef(t *testing.T) {
 func TestEnsureWorkflowVarsCM_AlreadyExistsIsNoError(t *testing.T) {
 	existing := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: testWorkflowVarsCM, Namespace: testNamespace},
-		Data:       map[string]string{string(KeyRunID): "wf-test"},
+		Data:       map[string]string{string(KeyRunID): testWorkflowName},
 	}
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(existing).Build()
 
@@ -66,14 +66,14 @@ func TestEnsureWorkflowVarsCM_AlreadyExistsIsNoError(t *testing.T) {
 func TestSetVars_MergesIntoExisting(t *testing.T) {
 	existing := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: testWorkflowVarsCM, Namespace: testNamespace},
-		Data:       map[string]string{string(KeyRunID): "wf-test"},
+		Data:       map[string]string{string(KeyRunID): testWorkflowName},
 	}
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(existing).Build()
 	w := testIdentity()
 
 	if err := SetVars(context.Background(), c, w, map[VarKey]string{
 		KeyAdminAddress:    "sei1abc",
-		KeyAdminSecretName: "admin-wf-test",
+		KeyAdminSecretName: "admin-" + testWorkflowName,
 	}); err != nil {
 		t.Fatalf("SetVars: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestSetVars_MergesIntoExisting(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, got); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Data[string(KeyRunID)] != "wf-test" {
+	if got.Data[string(KeyRunID)] != testWorkflowName {
 		t.Fatalf("existing key clobbered: %v", got.Data)
 	}
 	if got.Data[string(KeyAdminAddress)] != "sei1abc" || got.Data[string(KeyAdminSecretName)] != "admin-wf-test" {
