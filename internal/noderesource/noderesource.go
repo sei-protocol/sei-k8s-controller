@@ -554,6 +554,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 	keyringMounts := operatorKeyringMounts(node)
 	mounts := make([]corev1.VolumeMount, 0, 2+len(keyringMounts))
 	mounts = append(mounts,
+		// Mounted RW so generate-gentx can write the operator key the sidecar later reads.
 		corev1.VolumeMount{Name: "data", MountPath: dataDir},
 		corev1.VolumeMount{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
 	)

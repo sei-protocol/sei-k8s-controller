@@ -1053,6 +1053,13 @@ func TestOperatorKeyring_ValidatorWithoutSecret_TestBackend(t *testing.T) {
 
 	g.Expect(findVolume(sts.Spec.Template.Spec.Volumes, operatorKeyringVolumeName)).To(BeNil(),
 		"no .secret means no projected Secret volume — the keyring lives on the data PVC")
+
+	dataMount := findVolumeMount(sidecar.VolumeMounts, "data")
+	g.Expect(dataMount).NotTo(BeNil(),
+		"sidecar must mount the data PVC — generate-gentx writes the operator key there and sign-and-broadcast reads it back")
+	g.Expect(dataMount.MountPath).To(Equal(dataDir))
+	g.Expect(dataMount.ReadOnly).To(BeFalse(),
+		"data mount must be read-write so generate-gentx can write $SEI_HOME/keyring-test/")
 }
 
 // TestOperatorKeyring_NonValidator_NoEnv guards the non-validator branch:
