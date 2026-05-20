@@ -1,0 +1,50 @@
+package taskimg
+
+// VarKey is a typed key for the workflow-vars ConfigMap. Producers and
+// consumers reference these constants so renames are compile errors. Schema +
+// stability discipline: docs/design/test-harness-lld.md.
+type VarKey string
+
+const (
+	// KeyRunID — Workflow CR's metadata.name. Written by the initializing Task.
+	KeyRunID VarKey = "RUN_ID"
+
+	// KeyChainID — the SND's chainId. One-way door.
+	KeyChainID VarKey = "CHAIN_ID"
+
+	// Endpoints — written by provision-snd after SND is Ready.
+	KeyTendermintRPC  VarKey = "TM_RPC"
+	KeyTendermintREST VarKey = "REST"
+	KeyEVMJSONRPC     VarKey = "EVM_RPC"
+
+	// Admin identity — written by keygen. Mnemonic itself lives in the
+	// referenced Secret, not the ConfigMap.
+	KeyAdminAddress    VarKey = "ADMIN_ADDRESS"
+	KeyAdminSecretName VarKey = "ADMIN_SECRET_NAME"
+
+	// KeyExitReason — written by the failing Task pre-exit. upload-report
+	// reads this to recover the exit-code class Chaos Mesh collapses.
+	KeyExitReason VarKey = "EXIT_REASON"
+)
+
+// ExitReason is the string mirror of ExitCodeFor for the EXIT_REASON CM value.
+type ExitReason string
+
+const (
+	ExitReasonPass      ExitReason = "pass"
+	ExitReasonTaskFail  ExitReason = "task-fail"
+	ExitReasonInfraFail ExitReason = "infra-fail"
+)
+
+// ExitReasonFor mirrors ExitCodeFor: nil → pass, InfraError → infra-fail,
+// otherwise → task-fail.
+func ExitReasonFor(err error) ExitReason {
+	switch ExitCodeFor(err) {
+	case ExitPass:
+		return ExitReasonPass
+	case ExitInfraError:
+		return ExitReasonInfraFail
+	default:
+		return ExitReasonTaskFail
+	}
+}

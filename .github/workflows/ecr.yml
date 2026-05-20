@@ -55,3 +55,19 @@ jobs:
           tags: ${{ steps.ecr-login.outputs.registry }}/sei/seitask-runner:${{ inputs.tag || github.sha }}
           cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
+
+      # The seitask image is the new monolithic Workflow-Task primitive
+      # binary: one image, multiple urfave/cli subcommands (keygen,
+      # provision-snd, upload-report, ...) per docs/design/test-harness-lld.md.
+      # Co-built with the controller manager and seitask-runner so all three
+      # share the same commit SHA in scenario pins.
+      - name: Build and push seitask image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: cmd/seitask/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.ecr-login.outputs.registry }}/sei/seitask:${{ inputs.tag || github.sha }}
+          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
+          cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
