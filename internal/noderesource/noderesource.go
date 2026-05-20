@@ -74,11 +74,18 @@ const (
 	nodeKeyDataKey    = "node_key.json"
 
 	operatorKeyringVolumeName = "operator-keyring"
-	// operatorKeyringDirName is fixed by the Cosmos SDK file-backend keyring:
-	// keyring.New(name, BackendFile, homeDir, ...) opens homeDir/keyring-file/.
-	// Not a controller choice; this constant mirrors the SDK contract.
-	operatorKeyringDirName  = "keyring-file"
+	// keyring.New(BackendFile, rootDir) opens rootDir/keyring-file/.
+	// Used as the mount path for the projected .secret Secret.
+	operatorKeyringDirName = "keyring-file"
+
 	keyringPassphraseEnvVar = "SEI_KEYRING_PASSPHRASE"
+	// Required — the SDK's "os" compile-time default has no distroless analogue.
+	keyringBackendEnvVar = "SEI_KEYRING_BACKEND"
+	// SDK appends "keyring-<backend>"; passing $SEI_HOME resolves to
+	// $SEI_HOME/keyring-file/ or $SEI_HOME/keyring-test/.
+	keyringDirEnvVar   = "SEI_KEYRING_DIR"
+	keyringBackendFile = "file"
+	keyringBackendTest = "test"
 
 	// sidecarTmpVolumeName backs an emptyDir at /tmp — required because the
 	// sidecar runs with ReadOnlyRootFilesystem and Go stdlib defaults to /tmp.
@@ -263,7 +270,9 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 // to the passphrase Secret — either alone is enough for a compromised seid
 // container to recover the unlocked operator key.
 //
-// No-op when the node has no operator-keyring configured.
+// Scoped to the .secret path: the test-backend keyring shares the data PVC
+// seid already owns, so the guard has nothing to assert. Operators who need
+// keyring/seid isolation set .secret, which engages this check.
 func assertNoOperatorKeyringOnSeidContainers(node *seiv1alpha1.SeiNode, spec *corev1.PodSpec) error {
 	src := operatorKeyringSecretSource(node)
 	if src == nil {
@@ -532,6 +541,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 	keyringMounts := operatorKeyringMounts(node)
 	mounts := make([]corev1.VolumeMount, 0, 2+len(keyringMounts))
 	mounts = append(mounts,
+		// Mounted RW so generate-gentx can write the operator key the sidecar later reads.
 		corev1.VolumeMount{Name: "data", MountPath: dataDir},
 		corev1.VolumeMount{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
 	)
@@ -887,25 +897,46 @@ func operatorKeyringMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
 	}}
 }
 
-// operatorKeyringEnvVars injects the keyring unlock passphrase into the
-// sidecar process via a separate Secret reference. The passphrase lives in
-// its own Secret because the keyring data Secret is projected as a
-// directory — co-locating the passphrase as a data key would land it as a
-// file inside the keyring directory.
+// operatorKeyringEnvVars configures the sidecar's keyring. Branches:
+//
+//   - Non-validator: no env vars.
+//   - Validator with .secret: file backend; passphrase from the referenced
+//     Secret; keyring projected at $SEI_HOME/keyring-file/ by
+//     operatorKeyringVolumes.
+//   - Validator without .secret: test backend on the data PVC at
+//     $SEI_HOME/keyring-test/ — where generate-gentx writes the validator
+//     key during a genesis ceremony. Unencrypted.
+//
+// SEI_KEYRING_DIR is $SEI_HOME on both validator branches; the SDK appends
+// "keyring-<backend>" itself.
+//
+// The passphrase lives in its own Secret because the keyring data Secret is
+// projected as a directory — embedding the passphrase would land it inside
+// that directory, and the file backend would read it as keyring contents.
 func operatorKeyringEnvVars(node *seiv1alpha1.SeiNode) []corev1.EnvVar {
-	src := operatorKeyringSecretSource(node)
-	if src == nil {
+	if node.Spec.Validator == nil {
 		return nil
 	}
-	return []corev1.EnvVar{{
-		Name: keyringPassphraseEnvVar,
-		ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: src.PassphraseSecretRef.SecretName},
-				Key:                  src.PassphraseSecretRef.Key,
+	src := operatorKeyringSecretSource(node)
+	if src == nil {
+		return []corev1.EnvVar{
+			{Name: keyringBackendEnvVar, Value: keyringBackendTest},
+			{Name: keyringDirEnvVar, Value: dataDir},
+		}
+	}
+	return []corev1.EnvVar{
+		{Name: keyringBackendEnvVar, Value: keyringBackendFile},
+		{Name: keyringDirEnvVar, Value: dataDir},
+		{
+			Name: keyringPassphraseEnvVar,
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: src.PassphraseSecretRef.SecretName},
+					Key:                  src.PassphraseSecretRef.Key,
+				},
 			},
 		},
-	}}
+	}
 }
 
 func operatorKeyringSecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretOperatorKeyringSource {

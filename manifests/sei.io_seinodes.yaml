@@ -556,8 +556,8 @@ spec:
                     properties:
                       secret:
                         description: |-
-                          Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
-                          in the SeiNode's namespace.
+                          Secret sources the keyring from a file-backend Secret in the SeiNode's
+                          namespace, projected at $SEI_HOME/keyring-file/.
                         properties:
                           keyName:
                             default: node_admin
@@ -618,9 +618,6 @@ spec:
                         - secretName
                         type: object
                     type: object
-                    x-kubernetes-validations:
-                    - message: exactly one operator keyring source must be set
-                      rule: '(has(self.secret) ? 1 : 0) == 1'
                   signingKey:
                     description: |-
                       SigningKey declares the source of this validator's consensus signing

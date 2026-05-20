@@ -135,15 +135,20 @@ type SecretNodeKeySource struct {
 	SecretName string `json:"secretName"`
 }
 
-// OperatorKeyringSource declares where a validator's operator-account
-// keyring (used by the sidecar to sign governance, MsgEditValidator,
-// withdraw-rewards, and other operator-account transactions) comes from.
-// Exactly one variant must be set; variants are mutually exclusive.
+// OperatorKeyringSource configures the keyring the sidecar uses to sign
+// operator-account transactions (governance, MsgEditValidator, withdraw-
+// rewards, etc).
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.secret) ? 1 : 0) == 1",message="exactly one operator keyring source must be set"
+// Unset: sidecar reads a test-backend keyring at $SEI_HOME/keyring-test/
+// on the data PVC — the path generate-gentx writes the validator key to
+// during a genesis ceremony. Unencrypted.
+//
+// Set .secret: source the keyring from a passphrase-locked Secret (file
+// backend). Use when the operator key is rotated externally, sourced from
+// an HSM, or shared across infrastructure the controller doesn't own.
 type OperatorKeyringSource struct {
-	// Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
-	// in the SeiNode's namespace.
+	// Secret sources the keyring from a file-backend Secret in the SeiNode's
+	// namespace, projected at $SEI_HOME/keyring-file/.
 	// +optional
 	Secret *SecretOperatorKeyringSource `json:"secret,omitempty"`
 }
