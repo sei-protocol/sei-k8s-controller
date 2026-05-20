@@ -21,10 +21,6 @@ func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unpa
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "sei-test",
 			Image:   "ghcr.io/sei-protocol/seid:latest",
-			Entrypoint: &seiv1alpha1.EntrypointConfig{
-				Command: []string{"seid"},
-				Args:    []string{"start"},
-			},
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
@@ -311,26 +307,6 @@ func TestBuildNodeMainContainer_StartupProbe_Snapshot_HigherThreshold(t *testing
 	g.Expect(c.StartupProbe.FailureThreshold).To(Equal(int32(1800)))
 }
 
-func TestBuildNodeMainContainer_IgnoresEntrypoint(t *testing.T) {
-	g := NewWithT(t)
-	// snap-0 fixture has no spec.Entrypoint set; the controller still
-	// emits the canonical command — spec.Entrypoint is silently ignored
-	// as of HOME-based path resolution.
-	node := newSnapshotNode("snap-0", "default")
-	c := buildNodeMainContainer(node)
-	g.Expect(c.Command).To(Equal([]string{"seid"}))
-	g.Expect(c.Args).To(Equal([]string{seidStartSubcommand, seidHomeFlag, homeVarRef}))
-
-	// Setting spec.Entrypoint changes nothing — also ignored.
-	node.Spec.Entrypoint = &seiv1alpha1.EntrypointConfig{ //nolint:staticcheck // intentional: verifying the deprecated field is silently ignored
-		Command: []string{"some-other-binary"},
-		Args:    []string{"--ignored"},
-	}
-	c = buildNodeMainContainer(node)
-	g.Expect(c.Command).To(Equal([]string{"seid"}))
-	g.Expect(c.Args).To(Equal([]string{seidStartSubcommand, seidHomeFlag, homeVarRef}))
-}
-
 // --- Sidecar defaults ---
 
 func TestSidecarImage_DefaultWhenEmpty(t *testing.T) {
@@ -561,26 +537,7 @@ func TestSidecarMainContainer_WaitWrapper_PollsHealthzBeforeExec(t *testing.T) {
 	g.Expect(seid.Args[0]).To(ContainSubstring("exec seid"))
 }
 
-func TestSidecarMainContainer_WaitWrapper_IgnoresEntrypoint(t *testing.T) {
-	g := NewWithT(t)
-	node := newGenesisNode("gen-0", "default")
-	// Setting spec.Entrypoint must not change the emitted wait-then-exec
-	// script. The controller injects the canonical `seid start --home "$HOME"`
-	// invocation regardless; spec.Entrypoint is silently ignored.
-	node.Spec.Entrypoint = &seiv1alpha1.EntrypointConfig{ //nolint:staticcheck // intentional: verifying the deprecated field is silently ignored
-		Command: []string{"some-other-binary"},
-		Args:    []string{"--ignored"},
-	}
-
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
-
-	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "$HOME"`))
-	g.Expect(seid.Args[0]).NotTo(ContainSubstring("some-other-binary"))
-	g.Expect(seid.Args[0]).NotTo(ContainSubstring("--ignored"))
-}
-
-func TestSidecarMainContainer_WaitWrapper_NoEntrypoint_DefaultsSeidStart(t *testing.T) {
+func TestSidecarMainContainer_WaitWrapper_DefaultsSeidStart(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -65,8 +64,8 @@ func (r *SeiNodeDeploymentReconciler) detectGenesisCeremonyNeeded(group *seiv1al
 
 // detectDeploymentNeeded checks if deployment-worthy fields have changed
 // by comparing the current template hash against the stored hash. Only
-// fields that require new nodes (image, entrypoint, chainId) are hashed;
-// sidecar, overrides, and replica changes propagate in-place.
+// fields that require new nodes (image, chainId) are hashed; sidecar,
+// overrides, and replica changes propagate in-place.
 func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.SeiNodeDeployment) {
 	if group.Status.TemplateHash == "" {
 		return // first reconcile, no baseline to compare against
@@ -166,15 +165,6 @@ func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *
 	}
 	if existing.Spec.Image != desired.Spec.Image {
 		existing.Spec.Image = desired.Spec.Image
-		updated = true
-	}
-	if desired.Spec.Entrypoint == nil && existing.Spec.Entrypoint != nil {
-		existing.Spec.Entrypoint = nil
-		updated = true
-	} else if desired.Spec.Entrypoint != nil && (existing.Spec.Entrypoint == nil ||
-		!slices.Equal(existing.Spec.Entrypoint.Command, desired.Spec.Entrypoint.Command) ||
-		!slices.Equal(existing.Spec.Entrypoint.Args, desired.Spec.Entrypoint.Args)) {
-		existing.Spec.Entrypoint = desired.Spec.Entrypoint
 		updated = true
 	}
 	if desired.Spec.Sidecar == nil && existing.Spec.Sidecar != nil {

@@ -81,21 +81,13 @@ func managedByAnnotations() map[string]string {
 }
 
 // templateHash computes a hash over spec fields that trigger a deployment
-// plan when changed. Currently tracked: chainId, image, entrypoint, and
-// sidecar image. Fields like overrides, peers, and replica count propagate
-// in-place via ensureSeiNode without requiring a deployment plan.
+// plan when changed. Currently tracked: chainId, image, and sidecar image.
+// Fields like overrides, peers, and replica count propagate in-place via
+// ensureSeiNode without requiring a deployment plan.
 func templateHash(spec *seiv1alpha1.SeiNodeSpec) string {
 	h := sha256.New()
 	h.Write([]byte(spec.ChainID))
 	h.Write([]byte(spec.Image))
-	if spec.Entrypoint != nil {
-		for _, c := range spec.Entrypoint.Command {
-			h.Write([]byte(c))
-		}
-		for _, a := range spec.Entrypoint.Args {
-			h.Write([]byte(a))
-		}
-	}
 	if spec.Sidecar != nil {
 		h.Write([]byte(spec.Sidecar.Image))
 	}
