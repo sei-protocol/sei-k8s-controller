@@ -1,5 +1,7 @@
 package taskruntime
 
+import "strings"
+
 // VarKey is a typed key for the workflow-vars ConfigMap. Producers and
 // consumers reference these constants so renames are compile errors. Schema +
 // stability discipline: docs/design/test-harness-lld.md.
@@ -47,4 +49,11 @@ func ExitReasonFor(err error) ExitReason {
 	default:
 		return ExitReasonTaskFail
 	}
+}
+
+// RoleScoped prefixes a key with an upper-cased role tag so scenarios with
+// multiple SNDs (validator + rpc) write disjoint workflow-vars keys.
+// RoleScoped("validator", KeyTendermintRPC) → "VALIDATOR_TM_RPC".
+func RoleScoped(role string, key VarKey) VarKey {
+	return VarKey(strings.ToUpper(role) + "_" + string(key))
 }
