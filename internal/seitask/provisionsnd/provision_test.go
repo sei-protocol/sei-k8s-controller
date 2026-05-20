@@ -83,7 +83,7 @@ func TestLoadSpec_AppliesOverridesAndOwnerRef(t *testing.T) {
 
 	p := Params{
 		Role:     testRole,
-		Name:     "validator",
+		Name:     testRole,
 		SpecFile: specPath,
 		ChainID:  testChainID,
 		Image:    testImage,
@@ -105,7 +105,7 @@ func TestLoadSpec_AppliesOverridesAndOwnerRef(t *testing.T) {
 	if snd.Spec.Genesis == nil || snd.Spec.Genesis.ChainID != testChainID {
 		t.Fatalf("Genesis.ChainID not propagated: %+v", snd.Spec.Genesis)
 	}
-	if snd.Name != "validator" || snd.Namespace != testNamespace {
+	if snd.Name != testRole || snd.Namespace != testNamespace {
 		t.Fatalf("metadata wrong: %s/%s", snd.Namespace, snd.Name)
 	}
 	if len(snd.OwnerReferences) != 1 || snd.OwnerReferences[0].Kind != "Workflow" {
@@ -162,7 +162,7 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	prestaged := &seiv1alpha1.SeiNodeDeployment{}
 	if err := loadAndDecorate(specPath, &Params{
 		Role:     testRole,
-		Name:     "validator",
+		Name:     testRole,
 		ChainID:  testChainID,
 		Image:    testImage,
 		Workflow: w,
@@ -186,7 +186,7 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	defer srv.Close()
 	// Rewrite the prestaged SND's TM RPC to the fake server so the
 	// first-block poll points at something live.
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "validator"}, prestaged); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testRole}, prestaged); err != nil {
 		t.Fatal(err)
 	}
 	prestaged.Status.Endpoints.TendermintRpc = srv.URL
@@ -196,7 +196,7 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 
 	res, err := Run(context.Background(), c, Params{
 		Role:              testRole,
-		Name:              "validator",
+		Name:              testRole,
 		SpecFile:          specPath,
 		ChainID:           testChainID,
 		Image:             testImage,
@@ -209,7 +209,7 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Name != "validator" || res.ChainID != testChainID {
+	if res.Name != testRole || res.ChainID != testChainID {
 		t.Fatalf("Result: %+v", res)
 	}
 

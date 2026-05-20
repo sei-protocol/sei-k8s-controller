@@ -17,7 +17,6 @@ import (
 	"os"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -249,7 +248,7 @@ func waitForFirstBlock(ctx context.Context, hc *http.Client, tmRPC string, timeo
 		if err != nil {
 			return false, nil // transient connect failure during chain warmup; keep polling
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode/100 != 2 {
 			return false, nil
 		}
@@ -267,8 +266,8 @@ func waitForFirstBlock(ctx context.Context, hc *http.Client, tmRPC string, timeo
 
 func publishEndpoints(ctx context.Context, c client.Client, w taskruntime.WorkflowIdentity, role, chainID string, ep seiv1alpha1.Endpoints) error {
 	kv := map[taskruntime.VarKey]string{
-		taskruntime.RoleScoped(role, taskruntime.KeyChainID):       chainID,
-		taskruntime.RoleScoped(role, taskruntime.KeyTendermintRPC): ep.TendermintRpc,
+		taskruntime.RoleScoped(role, taskruntime.KeyChainID):        chainID,
+		taskruntime.RoleScoped(role, taskruntime.KeyTendermintRPC):  ep.TendermintRpc,
 		taskruntime.RoleScoped(role, taskruntime.KeyTendermintREST): ep.TendermintRest,
 	}
 	// EVM JSON-RPC is per-pod (stateful); publish the first node's URL when
@@ -281,8 +280,3 @@ func publishEndpoints(ctx context.Context, c client.Client, w taskruntime.Workfl
 	}
 	return taskruntime.SetVars(ctx, c, w, kv)
 }
-
-// EnsureKubernetesObjectShape is a no-op corev1 import-pinner; the package
-// needs corev1 in transitive test contexts (fake client scheme) and Go's
-// goimports otherwise drops it.
-var _ = corev1.NamespaceAll
