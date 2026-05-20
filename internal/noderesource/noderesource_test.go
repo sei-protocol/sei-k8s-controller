@@ -1352,34 +1352,47 @@ func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("SEI_COSMOS_EXPORTER_IMAGE is required"))
 }
 
-func TestCosmosExporter_ReadinessProbe_FullNodeTargetsGRPC(t *testing.T) {
-	g := NewWithT(t)
-	node := newSnapshotNode("ce-fn-0", "default")
+func TestCosmosExporter_ReadinessProbe_TargetsExporterListener(t *testing.T) {
+	for _, name := range []string{"full", roleValidator} {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			var node *seiv1alpha1.SeiNode
+			if name == roleValidator {
+				node = newGenesisNode("ce-val-0", "default")
+			} else {
+				node = newSnapshotNode("ce-fn-0", "default")
+			}
 
-	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
-	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+			sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+			ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
 
-	g.Expect(ce.StartupProbe).To(BeNil())
-	g.Expect(ce.ReadinessProbe).NotTo(BeNil())
-	g.Expect(ce.ReadinessProbe.TCPSocket).NotTo(BeNil())
-	g.Expect(ce.ReadinessProbe.TCPSocket.Port.IntVal).To(Equal(int32(9090)))
-	g.Expect(ce.ReadinessProbe.PeriodSeconds).To(Equal(int32(10)))
-	g.Expect(ce.ReadinessProbe.FailureThreshold).To(Equal(int32(3)))
+			g.Expect(ce.StartupProbe).To(BeNil())
+			g.Expect(ce.ReadinessProbe).NotTo(BeNil())
+			g.Expect(ce.ReadinessProbe.TCPSocket).NotTo(BeNil())
+			g.Expect(ce.ReadinessProbe.TCPSocket.Port.IntVal).To(Equal(int32(9300)))
+			g.Expect(ce.ReadinessProbe.PeriodSeconds).To(Equal(int32(10)))
+			g.Expect(ce.ReadinessProbe.FailureThreshold).To(Equal(int32(6)))
+
+			g.Expect(ce.LivenessProbe).NotTo(BeNil())
+			g.Expect(ce.LivenessProbe.TCPSocket).NotTo(BeNil())
+			g.Expect(ce.LivenessProbe.TCPSocket.Port.IntVal).To(Equal(int32(9300)))
+			g.Expect(ce.LivenessProbe.InitialDelaySeconds).To(Equal(int32(600)))
+			g.Expect(ce.LivenessProbe.FailureThreshold).To(Equal(int32(3)))
+		})
+	}
 }
 
-func TestCosmosExporter_ReadinessProbe_ValidatorTargetsTendermintRPC(t *testing.T) {
+func TestCosmosExporter_CommandIsBashWaitWrapper(t *testing.T) {
 	g := NewWithT(t)
-	node := newGenesisNode("ce-val-0", "default")
+	node := newSnapshotNode("ce-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
 
-	g.Expect(ce.StartupProbe).To(BeNil())
-	g.Expect(ce.ReadinessProbe).NotTo(BeNil())
-	g.Expect(ce.ReadinessProbe.TCPSocket).NotTo(BeNil())
-	g.Expect(ce.ReadinessProbe.TCPSocket.Port.IntVal).To(Equal(int32(26657)))
-	g.Expect(ce.ReadinessProbe.PeriodSeconds).To(Equal(int32(10)))
-	g.Expect(ce.ReadinessProbe.FailureThreshold).To(Equal(int32(3)))
+	g.Expect(ce.Command).To(Equal([]string{"/bin/bash", "-c"}))
+	g.Expect(ce.Args).To(HaveLen(1))
+	g.Expect(ce.Args[0]).To(ContainSubstring("/dev/tcp/localhost/9090"))
+	g.Expect(ce.Args[0]).To(ContainSubstring("exec /usr/local/bin/sei-cosmos-exporter"))
 }
 
 func TestCosmosExporter_MountsTmpEmptyDir(t *testing.T) {
@@ -1406,11 +1419,10 @@ func TestCosmosExporter_SeiArgs(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
 
-	g.Expect(ce.Args).To(ContainElements(
-		"--denom", "usei",
-		"--denom-coefficient", "1000000",
-		"--bech-prefix", "sei",
-	))
+	g.Expect(ce.Args).To(HaveLen(1))
+	g.Expect(ce.Args[0]).To(ContainSubstring(`"--denom" "usei"`))
+	g.Expect(ce.Args[0]).To(ContainSubstring(`"--denom-coefficient" "1000000"`))
+	g.Expect(ce.Args[0]).To(ContainSubstring(`"--bech-prefix" "sei"`))
 }
 
 func TestCosmosExporter_DefaultResources(t *testing.T) {
