@@ -12,6 +12,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -23,6 +24,9 @@ func newPlanTestScheme(t *testing.T) *k8sruntime.Scheme {
 		t.Fatal(err)
 	}
 	if err := seiv1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := gatewayv1.Install(s); err != nil {
 		t.Fatal(err)
 	}
 	return s
