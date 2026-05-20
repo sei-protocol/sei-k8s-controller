@@ -108,8 +108,9 @@ spec:
 
     # ----------------------------------------------------------------------
     # Step 1. compute-target-height
-    # Mirrors scripts/proposal_target_height.sh: current height + 100 blocks
-    # (30s at 300ms block time). Creates the workflow-vars ConfigMap and
+    # Sets upgrade height = current + 200 blocks (~120s at Sei's ~600ms
+    # block time) to comfortably outlast the 60s gov voting_period plus
+    # tally + plan-execution slack. Creates the workflow-vars ConfigMap and
     # populates it with:
     #   TARGET_HEIGHT       -- upgrade height + downgrade-side panic boundary
     #   UPGRADE_HEIGHT      -- consumed by gov-software-upgrade.yaml.tmpl
@@ -160,7 +161,7 @@ spec:
                 echo "failed to parse latest_block_height from ${RPC}/status after 30 attempts" >&2
                 exit 1
               fi
-              TARGET=$((CUR + 100))
+              TARGET=$((CUR + 200))
               POST=$((TARGET + 10))
               PANIC_BOUNDARY=$((TARGET - 1))
               echo "current=${CUR} target=${TARGET} post=${POST} panic_boundary=${PANIC_BOUNDARY}"
