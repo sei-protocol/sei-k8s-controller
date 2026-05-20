@@ -135,24 +135,26 @@ type SecretNodeKeySource struct {
 	SecretName string `json:"secretName"`
 }
 
-// OperatorKeyringSource overrides where a validator's operator-account
-// keyring (used by the sidecar to sign governance, MsgEditValidator,
-// withdraw-rewards, and other operator-account transactions) comes from.
+// OperatorKeyringSource configures the source of a validator's operator-
+// account keyring — the keyring the sidecar uses to sign governance,
+// MsgEditValidator, withdraw-rewards, and other operator-account
+// transactions.
 //
-// Validators sign by default: when this field is omitted, the controller
-// wires the sidecar's keyring to the data PVC's test-backend directory
-// ($SEI_HOME/keyring-test/) — the same path the generate-gentx task writes
-// the validator key to when the SeiNode is provisioned via a genesis
-// ceremony. No passphrase; the test backend is unencrypted.
+// With this field unset, the controller wires the sidecar to a test-
+// backend keyring at $SEI_HOME/keyring-test/ on the shared data PVC. This
+// is the same path the generate-gentx task writes the validator key to
+// during a genesis ceremony, so genesis-provisioned validators sign
+// without additional configuration. The test backend is unencrypted.
 //
-// Set .secret to override with a passphrase-locked, projected-Secret-backed
-// keyring (file backend). Use this when the operator key is rotated
-// externally, sourced from an HSM-export, or shared across infrastructure
-// the SeiNode controller doesn't own.
+// Set .secret to source the keyring from a passphrase-locked Secret
+// projected into the sidecar (file backend). This is the path for
+// operators whose operator key is rotated externally, sourced from an
+// HSM-export, or shared across infrastructure the SeiNode controller
+// doesn't own.
 type OperatorKeyringSource struct {
-	// Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
-	// in the SeiNode's namespace. Overrides the default test-backend keyring
-	// on the data PVC.
+	// Secret sources the keyring from a Cosmos SDK file-backend Kubernetes
+	// Secret in the SeiNode's namespace, projected into the sidecar at
+	// $SEI_HOME/keyring-file/.
 	// +optional
 	Secret *SecretOperatorKeyringSource `json:"secret,omitempty"`
 }

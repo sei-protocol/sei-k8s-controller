@@ -685,9 +685,9 @@ spec:
                             properties:
                               secret:
                                 description: |-
-                                  Secret loads a Cosmos SDK file-backend keyring from a Kubernetes Secret
-                                  in the SeiNode's namespace. Overrides the default test-backend keyring
-                                  on the data PVC.
+                                  Secret sources the keyring from a Cosmos SDK file-backend Kubernetes
+                                  Secret in the SeiNode's namespace, projected into the sidecar at
+                                  $SEI_HOME/keyring-file/.
                                 properties:
                                   keyName:
                                     default: node_admin

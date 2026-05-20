@@ -910,26 +910,26 @@ func operatorKeyringMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
 }
 
 // operatorKeyringEnvVars configures the sidecar's keyring backend for
-// operator-account signing. Two branches, keyed on whether the validator
-// declares a Secret-backed keyring source:
+// operator-account signing. The branch fires on validator role and whether
+// the validator declares a Secret-backed keyring source:
 //
-//   - Non-validator: no env vars (sidecar has nothing to sign for).
+//   - Non-validator: no env vars. The sidecar has nothing to sign for.
 //   - Validator with .secret: file backend. SEI_KEYRING_BACKEND=file plus
 //     SEI_KEYRING_PASSPHRASE sourced from the referenced passphrase Secret.
 //     operatorKeyringVolumes projects the keyring data Secret as a directory
-//     at $SEI_HOME/keyring-file/; the SDK's file-backend resolves there.
-//   - Validator without .secret: test backend pointing at $SEI_HOME. The SDK
-//     appends "keyring-test" so the sidecar reads $SEI_HOME/keyring-test/ on
-//     the shared data PVC — the same path the generate-gentx task writes the
-//     validator key to during the genesis ceremony. No passphrase; the test
-//     backend is unencrypted. Operators who want passphrase-locked, projected-
-//     Secret semantics on the same node set .secret instead.
+//     at $SEI_HOME/keyring-file/; the SDK's file backend resolves there.
+//   - Validator without .secret: test backend rooted at $SEI_HOME. The SDK
+//     appends "keyring-test" and the sidecar reads $SEI_HOME/keyring-test/
+//     on the shared data PVC — the same path the generate-gentx task writes
+//     the validator key to during a genesis ceremony. No passphrase; the
+//     test backend is unencrypted. Operators who want passphrase-locked,
+//     projected-Secret semantics on the same node set .secret.
 //
-// Both branches emit SEI_KEYRING_DIR explicitly. The SDK appends the
-// "keyring-<backend>" suffix itself, so we pass the root ($SEI_HOME) and let
-// the SDK resolve. This avoids embedding SDK directory-layout knowledge in
-// the controller and keeps the resolution behavior symmetric between the
-// two backends.
+// Both validator branches emit SEI_KEYRING_DIR explicitly. The SDK appends
+// the "keyring-<backend>" suffix itself, so the controller passes the root
+// ($SEI_HOME) and lets the SDK resolve. This keeps SDK directory-layout
+// knowledge out of the controller and the resolution behavior symmetric
+// between the two backends.
 //
 // The passphrase Secret is separate from the keyring data Secret because
 // the keyring data Secret is projected as a directory — co-locating the
