@@ -12,7 +12,9 @@ spec:
   timeoutSeconds: {{ with index . "TIMEOUT_SECONDS" }}{{ . }}{{ else }}600{{ end }}
   govSoftwareUpgrade:
     chainId: {{ .CHAIN_ID }}
-    keyName: {{ .KEY_NAME }}
+    {{- with index . "KEY_NAME" }}
+    keyName: {{ . }}
+    {{- end }}
     title: {{ .TITLE | printf "%q" }}
     description: {{ .DESCRIPTION | printf "%q" }}
     upgradeName: {{ .UPGRADE_NAME }}

@@ -210,7 +210,6 @@ spec:
             - --template=/templates/gov-software-upgrade.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-0
             - --var=CHAIN_ID=$SEI_CHAIN_ID
-            - --var=KEY_NAME=node_admin
             - --var=TITLE=major-upgrade scenario
             - --var=DESCRIPTION=software-upgrade to $SEI_UPGRADE_NAME
             - --var=UPGRADE_NAME=$SEI_UPGRADE_NAME
@@ -306,7 +305,6 @@ spec:
             - --template=/templates/gov-vote.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-0
             - --var=CHAIN_ID=$SEI_CHAIN_ID
-            - --var=KEY_NAME=node_admin
             - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
             - --var=FEES=2000usei
@@ -327,7 +325,6 @@ spec:
             - --template=/templates/gov-vote.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-1
             - --var=CHAIN_ID=$SEI_CHAIN_ID
-            - --var=KEY_NAME=node_admin
             - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
             - --var=FEES=2000usei
@@ -348,7 +345,6 @@ spec:
             - --template=/templates/gov-vote.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-2
             - --var=CHAIN_ID=$SEI_CHAIN_ID
-            - --var=KEY_NAME=node_admin
             - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
             - --var=FEES=2000usei
@@ -369,7 +365,6 @@ spec:
             - --template=/templates/gov-vote.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-3
             - --var=CHAIN_ID=$SEI_CHAIN_ID
-            - --var=KEY_NAME=node_admin
             - --var=PROPOSAL_ID=$(PROPOSAL_ID)
             - --var=OPTION=yes
             - --var=FEES=2000usei

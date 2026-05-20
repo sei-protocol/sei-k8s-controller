@@ -137,8 +137,13 @@ spec:
                     minLength: 1
                     type: string
                   keyName:
-                    description: KeyName names the keyring entry that signs the proposal.
-                    minLength: 1
+                    description: |-
+                      KeyName names the keyring entry that signs the proposal. Omit to let
+                      the controller derive from the target SeiNode: spec.validator.
+                      operatorKeyring.secret.keyName when .secret is set (defaulting to
+                      "node_admin"), otherwise "validator" — the uid generate-gentx writes
+                      the genesis-ceremony validator key under.
+                    pattern: ^[a-zA-Z0-9_-]+$
                     type: string
                   memo:
                     description: |-
@@ -171,7 +176,6 @@ spec:
                 - fees
                 - gas
                 - initialDeposit
-                - keyName
                 - title
                 - upgradeHeight
                 - upgradeName
@@ -194,8 +198,13 @@ spec:
                     minimum: 1
                     type: integer
                   keyName:
-                    description: KeyName names the keyring entry that signs the vote.
-                    minLength: 1
+                    description: |-
+                      KeyName names the keyring entry that signs the vote. Omit to let
+                      the controller derive from the target SeiNode: spec.validator.
+                      operatorKeyring.secret.keyName when .secret is set (defaulting to
+                      "node_admin"), otherwise "validator" — the uid generate-gentx writes
+                      the genesis-ceremony validator key under.
+                    pattern: ^[a-zA-Z0-9_-]+$
                     type: string
                   memo:
                     description: |-
@@ -222,7 +231,6 @@ spec:
                 - chainId
                 - fees
                 - gas
-                - keyName
                 - option
                 - proposalId
                 type: object

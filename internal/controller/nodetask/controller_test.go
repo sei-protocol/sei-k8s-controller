@@ -325,7 +325,7 @@ func newGovVoteTask() *seiv1alpha1.SeiNodeTask {
 func TestTaskParamsForKind_GovVote(t *testing.T) {
 	g := NewWithT(t)
 	cr := newGovVoteTask()
-	taskType, raw, err := taskParamsForKind(cr)
+	taskType, raw, err := taskParamsForKind(cr, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(taskType).To(Equal(sidecar.TaskTypeGovVote))
 
@@ -364,7 +364,7 @@ func TestTaskParamsForKind_GovSoftwareUpgrade(t *testing.T) {
 		},
 	}
 
-	taskType, raw, err := taskParamsForKind(cr)
+	taskType, raw, err := taskParamsForKind(cr, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(taskType).To(Equal(sidecar.TaskTypeGovSoftwareUpgrade))
 
@@ -374,6 +374,78 @@ func TestTaskParamsForKind_GovSoftwareUpgrade(t *testing.T) {
 	g.Expect(got.UpgradeHeight).To(Equal(int64(1_000_000)))
 	g.Expect(got.UpgradeName).To(Equal("v2"))
 	g.Expect(got.Fees).To(Equal(testFees))
+}
+
+// Empty keyName on the CR + .secret unset on the target → controller resolves
+// to the gentx convention uid "validator".
+func TestTaskParamsForKind_GovVote_DerivesKeyNameFromGentxDefault(t *testing.T) {
+	g := NewWithT(t)
+	cr := newGovVoteTask()
+	cr.Spec.GovVote.KeyName = ""
+	target := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testNodeName, Namespace: testNS},
+		Spec:       seiv1alpha1.SeiNodeSpec{Validator: &seiv1alpha1.ValidatorSpec{}},
+	}
+
+	_, raw, err := taskParamsForKind(cr, target)
+	g.Expect(err).NotTo(HaveOccurred())
+	var got sidecar.GovVoteTask
+	g.Expect(json.Unmarshal(raw, &got)).To(Succeed())
+	g.Expect(got.KeyName).To(Equal(seiv1alpha1.GentxOperatorKeyName),
+		"empty CR keyName + no .secret resolves to the gentx-written uid")
+}
+
+// Empty keyName on the CR + .secret set → controller resolves to the Secret's
+// declared KeyName (default node_admin).
+func TestTaskParamsForKind_GovVote_DerivesKeyNameFromSecret(t *testing.T) {
+	g := NewWithT(t)
+	cr := newGovVoteTask()
+	cr.Spec.GovVote.KeyName = ""
+	target := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testNodeName, Namespace: testNS},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			Validator: &seiv1alpha1.ValidatorSpec{
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName: "validator-0-opk",
+						KeyName:    "custom_operator",
+					},
+				},
+			},
+		},
+	}
+
+	_, raw, err := taskParamsForKind(cr, target)
+	g.Expect(err).NotTo(HaveOccurred())
+	var got sidecar.GovVoteTask
+	g.Expect(json.Unmarshal(raw, &got)).To(Succeed())
+	g.Expect(got.KeyName).To(Equal("custom_operator"))
+}
+
+// Explicit keyName on the CR wins over derivation from target.
+func TestTaskParamsForKind_GovVote_ExplicitKeyNameOverrides(t *testing.T) {
+	g := NewWithT(t)
+	cr := newGovVoteTask()
+	cr.Spec.GovVote.KeyName = "explicit_override"
+	target := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testNodeName, Namespace: testNS},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			Validator: &seiv1alpha1.ValidatorSpec{
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+						SecretName: "validator-0-opk",
+						KeyName:    "would_be_picked_if_empty",
+					},
+				},
+			},
+		},
+	}
+
+	_, raw, err := taskParamsForKind(cr, target)
+	g.Expect(err).NotTo(HaveOccurred())
+	var got sidecar.GovVoteTask
+	g.Expect(json.Unmarshal(raw, &got)).To(Succeed())
+	g.Expect(got.KeyName).To(Equal("explicit_override"))
 }
 
 func TestTaskParamsForKind_AwaitCondition_Height(t *testing.T) {
@@ -392,7 +464,7 @@ func TestTaskParamsForKind_AwaitCondition_Height(t *testing.T) {
 		},
 	}
 
-	taskType, raw, err := taskParamsForKind(cr)
+	taskType, raw, err := taskParamsForKind(cr, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(taskType).To(Equal(sidecar.TaskTypeAwaitCondition))
 
@@ -418,7 +490,7 @@ func TestTaskParamsForKind_AwaitCondition_MissingHeight(t *testing.T) {
 		},
 	}
 
-	_, _, err := taskParamsForKind(cr)
+	_, _, err := taskParamsForKind(cr, nil)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("height is required"))
 }
@@ -440,7 +512,7 @@ func TestTaskParamsForKind_AwaitNodesAtHeight_MapsToAwaitCondition(t *testing.T)
 		},
 	}
 
-	taskType, raw, err := taskParamsForKind(cr)
+	taskType, raw, err := taskParamsForKind(cr, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(taskType).To(Equal(sidecar.TaskTypeAwaitCondition))
 
@@ -473,7 +545,7 @@ func TestTaskParamsForKind_MissingPayloads(t *testing.T) {
 					},
 				},
 			}
-			_, _, err := taskParamsForKind(cr)
+			_, _, err := taskParamsForKind(cr, nil)
 			g.Expect(err).To(HaveOccurred(), "kind %s with nil payload must error", tc.kind)
 		})
 	}
