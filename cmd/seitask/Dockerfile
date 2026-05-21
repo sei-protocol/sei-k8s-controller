@@ -22,6 +22,7 @@ COPY --from=builder /workspace/runner/templates /templates
 # /scenarios/<scenario>/.
 COPY --from=builder /workspace/scenarios/release-test /scenarios/release-test
 COPY --from=builder /workspace/scenarios/load-test /scenarios/load-test
+COPY --from=builder /workspace/scenarios/major-upgrade /scenarios/major-upgrade
 USER 65532:65532
 
 ENTRYPOINT ["/seitask"]
