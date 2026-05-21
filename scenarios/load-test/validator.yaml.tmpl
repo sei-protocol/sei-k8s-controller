@@ -1,0 +1,15 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: PLACEHOLDER
+spec:
+  replicas: 4
+  template:
+    spec:
+      chainId: "{{ .CHAIN_ID }}"
+      image: "{{ .IMAGE }}"
+      validator: {}
+  genesis:
+    chainId: "{{ .CHAIN_ID }}"
+  updateStrategy:
+    type: InPlace

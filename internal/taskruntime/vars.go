@@ -15,9 +15,14 @@ const (
 	KeyChainID VarKey = "CHAIN_ID"
 
 	// Endpoints — written by provision-snd after SND is Ready.
+	// KeyEVMJSONRPC is pod-0 only (release-test pins stateful EVM
+	// sequences to one pod). KeyEVMJSONRPCList is comma-separated
+	// per-pod URLs for seiload, whose stateful EVM workload needs to
+	// hit all RPC pods.
 	KeyTendermintRPC  VarKey = "TM_RPC"
 	KeyTendermintREST VarKey = "REST"
 	KeyEVMJSONRPC     VarKey = "EVM_RPC"
+	KeyEVMJSONRPCList VarKey = "EVM_RPC_LIST"
 
 	// Admin identity — written by keygen. Mnemonic itself lives in the
 	// referenced Secret, not the ConfigMap.
