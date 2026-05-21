@@ -74,7 +74,7 @@ spec:
                   Genesis configures genesis ceremony orchestration for this group.
                   When set, the controller generates GenesisCeremonyNodeConfig for each
                   child SeiNode and coordinates assembly of the final genesis.json.
-                  Immutable once set (enforced at the spec level via CEL).
+                  Immutable once set; enforced by spec-level CEL.
                 properties:
                   accountBalance:
                     default: 1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom
