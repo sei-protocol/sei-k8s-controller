@@ -138,6 +138,28 @@ func setNodesReadyCondition(group *seiv1alpha1.SeiNodeDeployment, ready, desired
 	setCondition(group, seiv1alpha1.ConditionNodesReady, status, reason, message)
 }
 
+// seedAlwaysPresentConditions stamps every condition the doctrine
+// requires to be visible on every reconciled SND (see CLAUDE.md
+// `### Conditions`). The seed fires only when the condition is absent,
+// so transition paths (startPlan, completePlan, etc.) own the reason
+// vocabulary once an SND has lifecycle state.
+func (r *SeiNodeDeploymentReconciler) seedAlwaysPresentConditions(group *seiv1alpha1.SeiNodeDeployment) {
+	r.setGenesisCeremonyCondition(group)
+	seedConditionIfAbsent(group, seiv1alpha1.ConditionPlanInProgress,
+		"NotStarted", "no plan has run yet")
+	seedConditionIfAbsent(group, seiv1alpha1.ConditionRolloutInProgress,
+		"NotStarted", "no rollout has run yet")
+}
+
+// seedConditionIfAbsent writes False/<reason>/<message> only when the
+// condition is absent from the SND.
+func seedConditionIfAbsent(group *seiv1alpha1.SeiNodeDeployment, condType, reason, message string) {
+	if apimeta.FindStatusCondition(group.Status.Conditions, condType) != nil {
+		return
+	}
+	setCondition(group, condType, metav1.ConditionFalse, reason, message)
+}
+
 func hasConditionTrue(group *seiv1alpha1.SeiNodeDeployment, condType string) bool { //nolint:unparam // general-purpose utility
 	c := apimeta.FindStatusCondition(group.Status.Conditions, condType)
 	return c != nil && c.Status == metav1.ConditionTrue

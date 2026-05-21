@@ -82,7 +82,7 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Seed always-present conditions before any early-return path so they
 	// are visible on every reconcile (see CLAUDE.md `### Conditions`).
-	r.setGenesisCeremonyCondition(group)
+	r.seedAlwaysPresentConditions(group)
 
 	if err := r.reconcileInternalService(ctx, group); err != nil {
 		logger.Error(err, "reconciling internal RPC service")
