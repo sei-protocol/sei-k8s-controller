@@ -5,6 +5,7 @@ import (
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -158,11 +159,9 @@ func TestGenerateHTTPRoute_HostnamePattern(t *testing.T) {
 
 	for _, er := range routes {
 		route := generateHTTPRoute(group, er, "sei-gateway", "istio-system")
-		spec := route.Object["spec"].(map[string]any)
-		hostnames := spec["hostnames"].([]any)
-		g.Expect(hostnames).To(HaveLen(2))
-		g.Expect(hostnames[0]).To(MatchRegexp(`^pacific-1-wave-\w+\.prod\.platform\.sei\.io$`))
-		g.Expect(hostnames[1]).To(MatchRegexp(`^pacific-1-wave-\w+\.pacific-1\.platform\.sei\.io$`))
+		g.Expect(route.Spec.Hostnames).To(HaveLen(2))
+		g.Expect(string(route.Spec.Hostnames[0])).To(MatchRegexp(`^pacific-1-wave-\w+\.prod\.platform\.sei\.io$`))
+		g.Expect(string(route.Spec.Hostnames[1])).To(MatchRegexp(`^pacific-1-wave-\w+\.pacific-1\.platform\.sei\.io$`))
 	}
 }
 
@@ -175,15 +174,13 @@ func TestGenerateHTTPRoute_BasicFields(t *testing.T) {
 	g.Expect(routes).NotTo(BeEmpty())
 	route := generateHTTPRoute(group, routes[0], "sei-gateway", "gateway")
 
-	g.Expect(route.GetNamespace()).To(Equal("pacific-1"))
+	g.Expect(route.Namespace).To(Equal("pacific-1"))
+	g.Expect(route.Spec.ParentRefs).To(HaveLen(1))
 
-	spec := route.Object["spec"].(map[string]any)
-	parentRefs := spec["parentRefs"].([]any)
-	g.Expect(parentRefs).To(HaveLen(1))
-
-	ref := parentRefs[0].(map[string]any)
-	g.Expect(ref["name"]).To(Equal("sei-gateway"))
-	g.Expect(ref["namespace"]).To(Equal("gateway"))
+	ref := route.Spec.ParentRefs[0]
+	g.Expect(string(ref.Name)).To(Equal("sei-gateway"))
+	g.Expect(ref.Namespace).NotTo(BeNil())
+	g.Expect(string(*ref.Namespace)).To(Equal("gateway"))
 }
 
 func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
@@ -193,7 +190,7 @@ func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
 
 	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
 	route := generateHTTPRoute(group, routes[0], "sei-gateway", "gateway")
-	g.Expect(route.GetAnnotations()).To(HaveKeyWithValue("sei.io/managed-by", "seinodedeployment"))
+	g.Expect(route.Annotations).To(HaveKeyWithValue("sei.io/managed-by", "seinodedeployment"))
 }
 
 func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
@@ -211,12 +208,9 @@ func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	}
 	route := generateHTTPRoute(group, rpcRoute, "sei-gateway", "gateway")
 
-	spec := route.Object["spec"].(map[string]any)
-	rules := spec["rules"].([]any)
-	g.Expect(rules).To(HaveLen(1))
-
-	backend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
-	g.Expect(backend["name"]).To(Equal("pacific-1-wave-external"))
+	g.Expect(route.Spec.Rules).To(HaveLen(1))
+	g.Expect(route.Spec.Rules[0].BackendRefs).To(HaveLen(1))
+	g.Expect(string(route.Spec.Rules[0].BackendRefs[0].Name)).To(Equal("pacific-1-wave-external"))
 }
 
 func TestGenerateHTTPRoute_GRPCRoutePort(t *testing.T) {
@@ -236,14 +230,16 @@ func TestGenerateHTTPRoute_GRPCRoutePort(t *testing.T) {
 	g.Expect(grpcRoute.Name).NotTo(BeEmpty())
 
 	httpRoute := generateHTTPRoute(group, grpcRoute, "sei-gateway", "gateway")
-	spec := httpRoute.Object["spec"].(map[string]any)
-	hostnames := spec["hostnames"].([]any)
-	g.Expect(hostnames).To(ConsistOf("pacific-1-wave-grpc.prod.platform.sei.io", "pacific-1-wave-grpc.pacific-1.platform.sei.io"))
+	g.Expect(httpRoute.Spec.Hostnames).To(ConsistOf(
+		gatewayv1.Hostname("pacific-1-wave-grpc.prod.platform.sei.io"),
+		gatewayv1.Hostname("pacific-1-wave-grpc.pacific-1.platform.sei.io"),
+	))
 
-	rules := spec["rules"].([]any)
-	backend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
-	g.Expect(backend["port"]).To(Equal(int64(9090)))
-	g.Expect(backend["name"]).To(Equal("pacific-1-wave-external"))
+	g.Expect(httpRoute.Spec.Rules).To(HaveLen(1))
+	backend := httpRoute.Spec.Rules[0].BackendRefs[0]
+	g.Expect(backend.Port).NotTo(BeNil())
+	g.Expect(*backend.Port).To(Equal(gatewayv1.PortNumber(9090)))
+	g.Expect(string(backend.Name)).To(Equal("pacific-1-wave-external"))
 }
 
 func TestGenerateHTTPRoute_EVMMerged(t *testing.T) {
@@ -281,18 +277,24 @@ func TestGenerateHTTPRoute_EVMWebSocketRule(t *testing.T) {
 	}
 
 	httpRoute := generateHTTPRoute(group, evmRoute, "sei-gateway", "gateway")
-	spec := httpRoute.Object["spec"].(map[string]any)
-	rules := spec["rules"].([]any)
-	g.Expect(rules).To(HaveLen(2))
+	g.Expect(httpRoute.Spec.Rules).To(HaveLen(2))
 
-	httpBackend := rules[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)
-	g.Expect(httpBackend["port"]).To(Equal(int64(8545)))
+	httpBackend := httpRoute.Spec.Rules[0].BackendRefs[0]
+	g.Expect(httpBackend.Port).NotTo(BeNil())
+	g.Expect(*httpBackend.Port).To(Equal(gatewayv1.PortNumber(8545)))
 
-	wsRule := rules[1].(map[string]any)
-	wsHeader := wsRule["matches"].([]any)[0].(map[string]any)["headers"].([]any)[0].(map[string]any)
-	g.Expect(wsHeader["name"]).To(Equal("Upgrade"))
-	g.Expect(wsHeader["value"]).To(Equal("websocket"))
-	g.Expect(wsRule["backendRefs"].([]any)[0].(map[string]any)["port"]).To(Equal(int64(8546)))
+	wsRule := httpRoute.Spec.Rules[1]
+	g.Expect(wsRule.Matches).To(HaveLen(1))
+	g.Expect(wsRule.Matches[0].Headers).To(HaveLen(1))
+	wsHeader := wsRule.Matches[0].Headers[0]
+	g.Expect(string(wsHeader.Name)).To(Equal("Upgrade"))
+	g.Expect(wsHeader.Value).To(Equal("websocket"))
+	g.Expect(wsHeader.Type).NotTo(BeNil())
+	g.Expect(*wsHeader.Type).To(Equal(gatewayv1.HeaderMatchExact))
+
+	wsBackend := wsRule.BackendRefs[0]
+	g.Expect(wsBackend.Port).NotTo(BeNil())
+	g.Expect(*wsBackend.Port).To(Equal(gatewayv1.PortNumber(8546)))
 }
 
 func TestGenerateHTTPRoute_NonEVMRoute_SingleRule(t *testing.T) {
@@ -304,9 +306,7 @@ func TestGenerateHTTPRoute_NonEVMRoute_SingleRule(t *testing.T) {
 	for _, r := range routes {
 		if r.Name == "pacific-1-wave-rpc" {
 			httpRoute := generateHTTPRoute(group, r, "sei-gateway", "gateway")
-			spec := httpRoute.Object["spec"].(map[string]any)
-			rules := spec["rules"].([]any)
-			g.Expect(rules).To(HaveLen(1))
+			g.Expect(httpRoute.Spec.Rules).To(HaveLen(1))
 			g.Expect(r.WSPort).To(Equal(int32(0)))
 			return
 		}
