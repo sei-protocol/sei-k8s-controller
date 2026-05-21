@@ -69,9 +69,12 @@ type SeiNodeSpec struct {
 	Validator *ValidatorSpec `json:"validator,omitempty"`
 
 	// Paused freezes reconciliation. While true, the controller does not
-	// advance the lifecycle, start plans, or mutate derived resources.
-	// In-flight tasks on the cluster run to completion but their results
-	// are not polled until the field is cleared.
+	// advance the lifecycle, start plans, or mutate derived resources
+	// except the owned StatefulSet — which scales to Replicas=0 so pods
+	// terminate. In-flight tasks on the cluster run to completion but
+	// their results are not polled until the field is cleared.
+	// Has no effect on nodes in PhaseFailed; delete and recreate to
+	// recover from a failed node.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
 }
@@ -370,6 +373,7 @@ type StatefulSetRef struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=snode
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="StatefulSet",type=string,JSONPath=`.status.statefulSet.name`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SeiNode is the Schema for the seinodes API.

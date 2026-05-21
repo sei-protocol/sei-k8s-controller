@@ -39,13 +39,27 @@ func deserializeApplyStatefulSet(id string, params json.RawMessage, cfg Executio
 	}, nil
 }
 
+// Execute writes the SeiNode's StatefulSet via the shared SSA helper.
+// The SeiNode controller continuously calls the same helper from its
+// own reconcile loop; both paths Apply the same rendered content under
+// the same fieldManager, so they are idempotent against each other.
+// The task remains in the plan as a sync gate for replace-pod.
+//
+// A nil StatefulSet with no error means SyncStatefulSet detected a
+// UID-mismatch impostor and deleted it without applying. Leave the
+// task in Running so the executor re-invokes on the next reconcile,
+// at which point the impostor is gone and Apply creates fresh.
 func (e *applyStatefulSetExecution) Execute(ctx context.Context) error {
 	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
 		return err
 	}
-	if _, err := noderesource.SyncStatefulSet(ctx, e.cfg.KubeClient, e.cfg.Scheme, node, e.cfg.Platform); err != nil {
-		return fmt.Errorf("syncing statefulset: %w", err)
+	sts, err := noderesource.SyncStatefulSet(ctx, e.cfg.KubeClient, e.cfg.Scheme, node, e.cfg.Platform)
+	if err != nil {
+		return fmt.Errorf("applying statefulset: %w", err)
+	}
+	if sts == nil {
+		return nil
 	}
 	e.complete()
 	return nil
