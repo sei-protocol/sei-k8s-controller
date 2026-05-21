@@ -100,6 +100,18 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	observedPhase := node.Status.Phase
 	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 
+	setNodePausedCondition(node)
+	if node.Spec.Paused {
+		// Patch the paused condition so kubectl describe shows the state;
+		// nothing else runs while paused.
+		if !apiequality.Semantic.DeepEqual(before.Status, node.Status) {
+			if err := r.Status().Patch(ctx, node, statusBase); err != nil {
+				return ctrl.Result{}, fmt.Errorf("flushing paused status: %w", err)
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
 	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
@@ -236,6 +248,24 @@ func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1al
 		return err
 	}
 	return r.Delete(ctx, pvc)
+}
+
+// setNodePausedCondition mirrors spec.paused into ConditionSeiNodePaused.
+func setNodePausedCondition(node *seiv1alpha1.SeiNode) {
+	cond := metav1.Condition{
+		Type:               seiv1alpha1.ConditionSeiNodePaused,
+		ObservedGeneration: node.Generation,
+	}
+	if node.Spec.Paused {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "Paused"
+		cond.Message = "spec.paused is true; reconciliation is frozen"
+	} else {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "NotPaused"
+		cond.Message = "spec.paused is unset or false"
+	}
+	apimeta.SetStatusCondition(&node.Status.Conditions, cond)
 }
 
 func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {

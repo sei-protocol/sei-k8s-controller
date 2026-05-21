@@ -45,6 +45,13 @@ type SeiNodeDeploymentSpec struct {
 	// UpdateStrategy controls how changes to the template are rolled out
 	// to child SeiNodes. Every deployment must declare an explicit strategy.
 	UpdateStrategy UpdateStrategy `json:"updateStrategy"`
+
+	// Paused freezes plan-driven orchestration. While true, no new plans
+	// start, no rollouts trigger, no template changes propagate to
+	// children, and any active plan freezes in place. Networking and
+	// Service reconciliation continue. Children inherit the paused state.
+	// +optional
+	Paused bool `json:"paused,omitempty"`
 }
 
 // UpdateStrategyType identifies the deployment strategy.
@@ -136,7 +143,7 @@ type SeiNodeTemplateMeta struct {
 // ---------------------------------------------------------------------------
 
 // SeiNodeDeploymentPhase represents the high-level lifecycle state.
-// +kubebuilder:validation:Enum=Pending;Initializing;Ready;Upgrading;Degraded;Failed;Terminating
+// +kubebuilder:validation:Enum=Pending;Initializing;Ready;Upgrading;Paused;Degraded;Failed;Terminating
 type SeiNodeDeploymentPhase string
 
 const (
@@ -144,6 +151,7 @@ const (
 	GroupPhaseInitializing SeiNodeDeploymentPhase = "Initializing"
 	GroupPhaseReady        SeiNodeDeploymentPhase = "Ready"
 	GroupPhaseUpgrading    SeiNodeDeploymentPhase = "Upgrading"
+	GroupPhasePaused       SeiNodeDeploymentPhase = "Paused"
 	GroupPhaseDegraded     SeiNodeDeploymentPhase = "Degraded"
 	GroupPhaseFailed       SeiNodeDeploymentPhase = "Failed"
 	GroupPhaseTerminating  SeiNodeDeploymentPhase = "Terminating"
@@ -366,6 +374,7 @@ const (
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
 	ConditionPlanInProgress          = "PlanInProgress"
 	ConditionRolloutInProgress       = "RolloutInProgress"
+	ConditionPaused                  = "Paused"
 )
 
 // +kubebuilder:object:root=true
@@ -374,6 +383,7 @@ const (
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.spec.paused`,priority=1
 // +kubebuilder:printcolumn:name="Target",type=string,JSONPath=`.status.rollout.targetHash`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

@@ -215,6 +215,16 @@ spec:
                   Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
                   These are applied on top of mode defaults during config-apply.
                 type: object
+              paused:
+                description: |-
+                  Paused freezes reconciliation on this SeiNode. While true, the
+                  controller does not advance the lifecycle, does not start new plans,
+                  and does not mutate derived resources (StatefulSet, Services, PVCs).
+                  In-flight tasks already running on the cluster (e.g., sidecar Jobs)
+                  run to their natural conclusion but the controller does not poll or
+                  transition state machines based on their results. Operators clear
+                  the field to resume.
+                type: boolean
               peers:
                 description: |-
                   Peers configures how this node discovers and connects to network peers.

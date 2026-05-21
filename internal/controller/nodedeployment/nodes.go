@@ -16,11 +16,18 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// reconcileSeiNodes ensures the desired set of child SeiNodes exist,
-// populates IncumbentNodes on the group status, and detects spec changes
-// that require deployment orchestration. When a plan is in progress,
-// mutations are skipped to avoid interfering with active orchestration.
+// reconcileSeiNodes ensures the desired child SeiNodes exist, populates
+// IncumbentNodes, and detects spec changes that require orchestration.
+// Mutations are skipped while a plan is in progress. While paused, the
+// only action taken is propagating the paused state to children.
 func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
+	if group.Spec.Paused {
+		if err := r.syncPausedToChildren(ctx, group, true); err != nil {
+			return err
+		}
+		return r.populateIncumbentNodes(ctx, group)
+	}
+
 	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
 		for i := range int(group.Spec.Replicas) {
 			if err := r.ensureSeiNode(ctx, group, i); err != nil {
@@ -28,6 +35,11 @@ func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, gro
 			}
 		}
 		if err := r.scaleDown(ctx, group); err != nil {
+			return err
+		}
+		// Clear any stale Paused=true on children so each SeiNode
+		// resumes reconciling once spec.paused goes false.
+		if err := r.syncPausedToChildren(ctx, group, false); err != nil {
 			return err
 		}
 	} else {
@@ -39,6 +51,33 @@ func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, gro
 	}
 
 	r.detectDeploymentNeeded(group)
+	return nil
+}
+
+// syncPausedToChildren brings every owned child SeiNode's Spec.Paused
+// in line with desired. Children already in sync are left untouched.
+func (r *SeiNodeDeploymentReconciler) syncPausedToChildren(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, desired bool) error {
+	children, err := r.listChildSeiNodes(ctx, group)
+	if err != nil {
+		return fmt.Errorf("listing child SeiNodes: %w", err)
+	}
+	for i := range children {
+		child := &children[i]
+		if child.Spec.Paused == desired {
+			continue
+		}
+		child.Spec.Paused = desired
+		if err := r.Update(ctx, child); err != nil {
+			return fmt.Errorf("syncing paused=%t to %s: %w", desired, child.Name, err)
+		}
+		action := "ChildPaused"
+		message := fmt.Sprintf("Paused SeiNode %s", child.Name)
+		if !desired {
+			action = "ChildResumed"
+			message = fmt.Sprintf("Resumed SeiNode %s", child.Name)
+		}
+		r.Recorder.Event(group, corev1.EventTypeNormal, action, message)
+	}
 	return nil
 }
 
