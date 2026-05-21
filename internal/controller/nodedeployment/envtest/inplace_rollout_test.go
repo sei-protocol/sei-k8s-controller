@@ -3,6 +3,7 @@
 package envtest_test
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -83,9 +84,29 @@ func TestInPlaceRollout_EndToEnd(t *testing.T) {
 			if refs[0].Controller == nil || !*refs[0].Controller {
 				return false
 			}
+			want := map[string]string{
+				"sei.io/nodedeployment":         "rollout-test",
+				"sei.io/nodedeployment-ordinal": strconv.Itoa(i),
+				"sei.io/chain":                  "pacific-1",
+			}
+			labels := kids[i].GetLabels()
+			ok := true
+			for k, v := range want {
+				if labels[k] != v {
+					t.Logf("child %s: label %s = %q, want %q", kids[i].GetName(), k, labels[k], v)
+					ok = false
+				}
+			}
+			if labels["sei.io/revision"] == "" {
+				t.Logf("child %s: sei.io/revision empty", kids[i].GetName())
+				ok = false
+			}
+			if !ok {
+				return false
+			}
 		}
 		return true
-	}, "3 child SeiNodes owned by the SND")
+	}, "3 child SeiNodes owned by the SND with sei.io/chain stamped")
 
 	// 2. Status converges: templateHash populated, replicas reported,
 	//    no rollout in flight on the steady-state spec.

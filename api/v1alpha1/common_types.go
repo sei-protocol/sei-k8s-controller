@@ -29,6 +29,15 @@ type PeerSource struct {
 // Kubernetes labels. The controller resolves matching nodes to their
 // headless Service DNS names ({name}-0.{name}.{namespace}.svc.cluster.local)
 // and writes them to status.resolvedPeers on every reconcile.
+//
+// Controller-managed labels available on every SeiNode owned by an SND:
+//   - sei.io/chain — from .spec.template.spec.chainId
+//   - sei.io/nodedeployment — owning SND name
+//   - sei.io/nodedeployment-ordinal — replica index
+//   - sei.io/revision — SND generation
+//
+// User-set keys on .spec.template.metadata.labels merge in; the four
+// reserved keys above are always controller-stamped.
 type LabelPeerSource struct {
 	// Selector is a set of key-value label pairs. SeiNode resources
 	// matching ALL labels are included as peers.

@@ -14,6 +14,7 @@ const (
 	groupLabel          = "sei.io/nodedeployment"
 	groupOrdinalLabel   = "sei.io/nodedeployment-ordinal"
 	revisionLabel       = "sei.io/revision"
+	chainLabel          = "sei.io/chain"
 	managedByAnnotation = "sei.io/managed-by"
 )
 
@@ -52,6 +53,7 @@ func seiNodeLabels(group *seiv1alpha1.SeiNodeDeployment, ordinal int) map[string
 	labels[groupLabel] = group.Name
 	labels[groupOrdinalLabel] = strconv.Itoa(ordinal)
 	labels[revisionLabel] = activeRevision(group)
+	labels[chainLabel] = group.Spec.Template.Spec.ChainID
 	return labels
 }
 

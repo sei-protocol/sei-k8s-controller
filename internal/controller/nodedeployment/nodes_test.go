@@ -49,11 +49,14 @@ func TestGenerateSeiNode_NameAndNamespace(t *testing.T) {
 func TestGenerateSeiNode_SystemLabels(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
+	group.Generation = 7
 
 	node := generateSeiNode(group, 1)
 
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupOrdinalLabel, "1"))
+	g.Expect(node.Labels).To(HaveKeyWithValue(revisionLabel, "7"))
+	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, group.Spec.Template.Spec.ChainID))
 }
 
 func TestGenerateSeiNode_UserLabelsAreMerged(t *testing.T) {
@@ -76,14 +79,22 @@ func TestGenerateSeiNode_UserLabelsAreMerged(t *testing.T) {
 func TestGenerateSeiNode_SystemLabelsOverrideUser(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")
+	group.Generation = 3
 	group.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{
 		Labels: map[string]string{
-			groupLabel: "should-be-overridden",
+			groupLabel:        "user-spoof-group",
+			groupOrdinalLabel: "99",
+			revisionLabel:     "user-spoof-revision",
+			chainLabel:        "user-spoof-chain",
 		},
 	}
 
 	node := generateSeiNode(group, 0)
+
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupLabel, "archive-rpc"))
+	g.Expect(node.Labels).To(HaveKeyWithValue(groupOrdinalLabel, "0"))
+	g.Expect(node.Labels).To(HaveKeyWithValue(revisionLabel, "3"))
+	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, group.Spec.Template.Spec.ChainID))
 }
 
 func TestGenerateSeiNode_InjectsPodLabels(t *testing.T) {
