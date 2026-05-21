@@ -14,6 +14,12 @@ const (
 	groupLabel          = "sei.io/nodedeployment"
 	groupOrdinalLabel   = "sei.io/nodedeployment-ordinal"
 	revisionLabel       = "sei.io/revision"
+	// chainLabel is stamped on every SeiNode the controller owns,
+	// derived from the SND's authoritative chainId (genesis ceremony
+	// resolution included). LabelPeerSource consumers rely on this
+	// being controller-managed so peer discovery works without scenarios
+	// having to mirror the value into template.metadata.labels.
+	chainLabel          = "sei.io/chain"
 	managedByAnnotation = "sei.io/managed-by"
 )
 
@@ -52,6 +58,7 @@ func seiNodeLabels(group *seiv1alpha1.SeiNodeDeployment, ordinal int) map[string
 	labels[groupLabel] = group.Name
 	labels[groupOrdinalLabel] = strconv.Itoa(ordinal)
 	labels[revisionLabel] = activeRevision(group)
+	labels[chainLabel] = group.Spec.Template.Spec.ChainID
 	return labels
 }
 

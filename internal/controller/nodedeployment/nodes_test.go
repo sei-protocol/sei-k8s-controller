@@ -56,6 +56,34 @@ func TestGenerateSeiNode_SystemLabels(t *testing.T) {
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupOrdinalLabel, "1"))
 }
 
+// TestGenerateSeiNode_StampsChainLabel guards the contract surfaced by
+// the load-test fire: LabelPeerSource consumers select on sei.io/chain
+// to discover peers across SNDs of the same chain. The label must be
+// derived from SND.spec.template.spec.chainId (authoritative) so
+// scenario YAMLs don't have to mirror the value manually.
+func TestGenerateSeiNode_StampsChainLabel(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+
+	node := generateSeiNode(group, 0)
+
+	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, group.Spec.Template.Spec.ChainID))
+}
+
+func TestGenerateSeiNode_ChainLabelOverridesUserAttempt(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("archive-rpc", "sei")
+	group.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{
+		Labels: map[string]string{
+			chainLabel: "user-spoofed-chain",
+		},
+	}
+
+	node := generateSeiNode(group, 0)
+
+	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, group.Spec.Template.Spec.ChainID))
+}
+
 func TestGenerateSeiNode_UserLabelsAreMerged(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("archive-rpc", "sei")

@@ -83,9 +83,17 @@ func TestInPlaceRollout_EndToEnd(t *testing.T) {
 			if refs[0].Controller == nil || !*refs[0].Controller {
 				return false
 			}
+			// sei.io/chain stamped by the controller from
+			// spec.template.spec.chainId. LabelPeerSource consumers
+			// rely on this to discover peers across SNDs of the same
+			// chain — peer discovery silently breaks without it.
+			if got := kids[i].GetLabels()["sei.io/chain"]; got != "pacific-1" {
+				t.Logf("child %s missing sei.io/chain label (got %q)", kids[i].GetName(), got)
+				return false
+			}
 		}
 		return true
-	}, "3 child SeiNodes owned by the SND")
+	}, "3 child SeiNodes owned by the SND with sei.io/chain stamped")
 
 	// 2. Status converges: templateHash populated, replicas reported,
 	//    no rollout in flight on the steady-state spec.
