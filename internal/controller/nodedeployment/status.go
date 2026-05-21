@@ -166,7 +166,10 @@ func (r *SeiNodeDeploymentReconciler) setPausedCondition(group *seiv1alpha1.SeiN
 	if group.Spec.Paused {
 		setCondition(group, seiv1alpha1.ConditionPaused, metav1.ConditionTrue,
 			"Paused", "spec.paused is true; plan-driven orchestration is frozen")
-		if !wasPaused && r.Recorder != nil {
+		// Emit on the False→True transition only. An SND created
+		// already paused has prev=nil and doesn't need an event — its
+		// condition already tells the story.
+		if r.Recorder != nil && prev != nil && !wasPaused {
 			msg := "operator set spec.paused; controller will not advance plans, rollouts, or template changes until unpaused"
 			if group.Status.Plan != nil {
 				msg = fmt.Sprintf("operator set spec.paused with active plan %s; plan freezes in place until unpaused", group.Status.Plan.ID)

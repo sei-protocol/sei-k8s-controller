@@ -217,13 +217,10 @@ spec:
                 type: object
               paused:
                 description: |-
-                  Paused freezes reconciliation on this SeiNode. While true, the
-                  controller does not advance the lifecycle, does not start new plans,
-                  and does not mutate derived resources (StatefulSet, Services, PVCs).
-                  In-flight tasks already running on the cluster (e.g., sidecar Jobs)
-                  run to their natural conclusion but the controller does not poll or
-                  transition state machines based on their results. Operators clear
-                  the field to resume.
+                  Paused freezes reconciliation. While true, the controller does not
+                  advance the lifecycle, start plans, or mutate derived resources.
+                  In-flight tasks on the cluster run to completion but their results
+                  are not polled until the field is cleared.
                 type: boolean
               peers:
                 description: |-

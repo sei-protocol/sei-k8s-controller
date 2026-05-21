@@ -383,7 +383,7 @@ const (
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.spec.paused`,priority=1
+// +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.spec.paused`
 // +kubebuilder:printcolumn:name="Target",type=string,JSONPath=`.status.rollout.targetHash`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

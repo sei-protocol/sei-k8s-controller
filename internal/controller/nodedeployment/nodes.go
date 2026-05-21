@@ -28,6 +28,13 @@ func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, gro
 		return r.populateIncumbentNodes(ctx, group)
 	}
 
+	// Spec.Paused propagates to children on every reconcile, including
+	// while a plan is in progress. Children that remain paused stall
+	// await-nodes-running and prevent the plan from advancing.
+	if err := r.syncPausedToChildren(ctx, group, false); err != nil {
+		return err
+	}
+
 	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
 		for i := range int(group.Spec.Replicas) {
 			if err := r.ensureSeiNode(ctx, group, i); err != nil {
@@ -35,11 +42,6 @@ func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, gro
 			}
 		}
 		if err := r.scaleDown(ctx, group); err != nil {
-			return err
-		}
-		// Clear any stale Paused=true on children so each SeiNode
-		// resumes reconciling once spec.paused goes false.
-		if err := r.syncPausedToChildren(ctx, group, false); err != nil {
 			return err
 		}
 	} else {
