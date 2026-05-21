@@ -42,9 +42,10 @@ import (
 // Package-level handles populated by TestMain and consumed by individual
 // _test.go files via the helpers in helpers_test.go.
 var (
-	testCli  client.Client
-	testCtx  context.Context
-	testCncl context.CancelFunc
+	testCli   client.Client
+	testCtx   context.Context
+	testCncl  context.CancelFunc
+	testFaker *envtestpkg.StatusFaker
 )
 
 func TestMain(m *testing.M) {
@@ -136,7 +137,7 @@ func run(m *testing.M) (int, error) {
 	// controller's perspective. The test asserts on terminal state, so
 	// this is indistinguishable from a real (already-completed)
 	// rollout.
-	envtestpkg.StartStatefulSetStatusFaker(testCtx, kc)
+	testFaker = envtestpkg.StartStatefulSetStatusFaker(testCtx, kc)
 
 	// SeiNode reconciler — wired with the stub sidecar so init plans
 	// (genesis mode: ensure-data-pvc, apply-statefulset, apply-service,

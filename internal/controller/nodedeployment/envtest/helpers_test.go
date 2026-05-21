@@ -151,3 +151,27 @@ func condTrue(snd *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 	c := apimeta.FindStatusCondition(snd.Status.Conditions, condType)
 	return c != nil && c.Status == metav1.ConditionTrue
 }
+
+// listEventsForSND returns events whose InvolvedObject UID matches the SND
+// and (optionally) whose Reason matches the filter. Empty reason returns
+// every event for the SND.
+func listEventsForSND(t *testing.T, snd *seiv1alpha1.SeiNodeDeployment, reason string) []corev1.Event {
+	t.Helper()
+	list := &corev1.EventList{}
+	if err := testCli.List(testCtx, list, client.InNamespace(snd.Namespace)); err != nil {
+		t.Logf("listEventsForSND list error: %v", err)
+		return nil
+	}
+	out := make([]corev1.Event, 0, len(list.Items))
+	for i := range list.Items {
+		e := list.Items[i]
+		if e.InvolvedObject.UID != snd.UID {
+			continue
+		}
+		if reason != "" && e.Reason != reason {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}

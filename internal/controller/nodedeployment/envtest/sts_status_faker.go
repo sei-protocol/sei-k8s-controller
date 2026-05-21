@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -11,15 +12,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// StartStatefulSetStatusFaker spawns a goroutine that periodically reconciles
-// the .Status of every StatefulSet in the cluster so envtest can drive
-// rollouts to completion. envtest's apiserver has no StatefulSet
-// controller — Pods never get created, .Status stays empty, and the
-// SeiNode rollout plan (ReplacePod + ObserveImage) gates on
-// status.observedGeneration / status.updatedReplicas which never advance.
-//
-// The faker patches every observed StatefulSet to look "fully rolled
-// out at the current spec generation":
+// StatusFaker drives StatefulSet .Status toward a "fully rolled out at
+// current generation" state on a 50ms tick, since envtest's apiserver
+// runs no StatefulSet controller of its own. Tests that need to observe
+// transient (in-flight) rollout state can Pause() the faker, drive the
+// scenario, then Resume() — see TestInPlaceRollout_Supersession.
+type StatusFaker struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	kc     client.Client
+
+	mu     sync.Mutex
+	paused bool
+}
+
+// StartStatefulSetStatusFaker spawns the faker goroutine and returns a
+// handle. The fake patches every observed StatefulSet to look "fully
+// rolled out at the current spec generation":
 //
 //   - status.observedGeneration = .Generation
 //   - status.currentRevision  = "stub-rev"
@@ -29,30 +38,57 @@ import (
 //   - status.readyReplicas    = *spec.replicas
 //   - status.replicas         = *spec.replicas
 //
-// This is intentionally indistinguishable from "rollout already done".
-// The InPlace test does not assert on transient rollout state — it
-// asserts on terminal state — so collapsing the rollout to
-// instantaneous is fine.
+// This is intentionally indistinguishable from "rollout already done."
+// envtest tests assert on terminal state, so collapsing the rollout to
+// instantaneous is fine for the common case.
 //
-// The returned cancel func stops the goroutine. Callers should defer it.
-// Poll interval is short (50ms) because the InPlace test's poll loop
-// runs at 200ms; the faker needs to win the race for every reconcile
-// trigger.
-func StartStatefulSetStatusFaker(ctx context.Context, kc client.Client) context.CancelFunc {
+// Poll interval is 50ms because test poll loops run at 200ms; the faker
+// needs to win the race for every reconcile trigger.
+func StartStatefulSetStatusFaker(ctx context.Context, kc client.Client) *StatusFaker {
 	innerCtx, cancel := context.WithCancel(ctx)
-	go runFaker(innerCtx, kc)
-	return cancel
+	f := &StatusFaker{ctx: innerCtx, cancel: cancel, kc: kc}
+	go f.run()
+	return f
 }
 
-func runFaker(ctx context.Context, kc client.Client) {
+// Stop cancels the faker goroutine.
+func (f *StatusFaker) Stop() { f.cancel() }
+
+// Pause halts status writes. StatefulSets observed while paused stay in
+// whatever .Status state the apiserver last persisted, which lets a test
+// stall a rollout mid-flight without modifying production controller code.
+func (f *StatusFaker) Pause() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paused = true
+}
+
+// Resume re-enables status writes. The next tick will reconcile any
+// StatefulSets that diverged from the desired faked state while paused.
+func (f *StatusFaker) Resume() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paused = false
+}
+
+func (f *StatusFaker) isPaused() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.paused
+}
+
+func (f *StatusFaker) run() {
 	t := time.NewTicker(50 * time.Millisecond)
 	defer t.Stop()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-f.ctx.Done():
 			return
 		case <-t.C:
-			if err := fakeStatuses(ctx, kc); err != nil && !errors.Is(err, context.Canceled) {
+			if f.isPaused() {
+				continue
+			}
+			if err := fakeStatuses(f.ctx, f.kc); err != nil && !errors.Is(err, context.Canceled) {
 				// Best-effort; the next tick will retry. Swallow rather
 				// than spam logs — envtest teardown races are noisy
 				// enough already.
