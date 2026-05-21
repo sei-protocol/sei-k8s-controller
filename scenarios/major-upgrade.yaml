@@ -201,6 +201,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/gov-software-upgrade.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-0
             - --var=CHAIN_ID=$SEI_CHAIN_ID
@@ -296,6 +297,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/gov-vote.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-0
             - --var=CHAIN_ID=$SEI_CHAIN_ID
@@ -316,6 +318,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/gov-vote.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-1
             - --var=CHAIN_ID=$SEI_CHAIN_ID
@@ -336,6 +339,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/gov-vote.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-2
             - --var=CHAIN_ID=$SEI_CHAIN_ID
@@ -356,6 +360,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/gov-vote.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-3
             - --var=CHAIN_ID=$SEI_CHAIN_ID
@@ -416,6 +421,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/update-node-image.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-0
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
@@ -463,6 +469,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/update-node-image.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-1
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
@@ -480,6 +487,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/update-node-image.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-2
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
@@ -497,6 +505,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/update-node-image.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-3
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
@@ -529,6 +538,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-1
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
@@ -545,6 +555,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-2
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
@@ -561,6 +572,7 @@ spec:
           name: runner
           image: $SEITASK_RUNNER_IMG
           args:
+            - runner
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_DEPLOYMENT-3
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
