@@ -60,7 +60,8 @@ func (r *SeiNodeDeploymentReconciler) routeHostnameResolvable(ctx context.Contex
 
 func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking == nil {
-		removeCondition(group, seiv1alpha1.ConditionRouteReady)
+		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
+			"NetworkingDisabled", "spec.networking is unset")
 		return r.deleteNetworkingResources(ctx, group)
 	}
 
@@ -151,7 +152,8 @@ func portsForMode(mode seiconfig.NodeMode) []corev1.ServicePort {
 func (r *SeiNodeDeploymentReconciler) reconcileRoute(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
 	if len(routes) == 0 {
-		removeCondition(group, seiv1alpha1.ConditionRouteReady)
+		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
+			"NoEffectiveRoutes", "node mode declares no externally-routable protocols")
 		return r.deleteHTTPRoutesByLabel(ctx, group)
 	}
 	return r.reconcileHTTPRoutes(ctx, group, routes)
@@ -232,10 +234,10 @@ func (r *SeiNodeDeploymentReconciler) reconcileHTTPRoutes(ctx context.Context, g
 		//nolint:staticcheck // typed ApplyConfiguration migration is a separate effort
 		err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership)
 		if meta.IsNoMatchError(err) {
-			if !hasConditionReason(group, seiv1alpha1.ConditionRouteReady, "CRDNotInstalled") {
+			if !hasConditionReason(group, seiv1alpha1.ConditionNetworkingReady, "CRDNotInstalled") {
 				r.Recorder.Event(group, corev1.EventTypeWarning, "CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed; HTTPRoute will not be created")
 			}
-			setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionFalse,
+			setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
 				"CRDNotInstalled", "Gateway API CRD (HTTPRoute) is not installed")
 			return nil
 		}
@@ -248,11 +250,11 @@ func (r *SeiNodeDeploymentReconciler) reconcileHTTPRoutes(ctx context.Context, g
 		return fmt.Errorf("cleaning up orphaned HTTPRoutes: %w", err)
 	}
 
-	if !hasConditionReason(group, seiv1alpha1.ConditionRouteReady, "HTTPRouteReady") {
-		r.Recorder.Event(group, corev1.EventTypeNormal, "HTTPRouteReady", "HTTPRoute reconciled successfully")
+	if !hasConditionReason(group, seiv1alpha1.ConditionNetworkingReady, "HTTPRoutesPublished") {
+		r.Recorder.Event(group, corev1.EventTypeNormal, "HTTPRoutesPublished", "HTTPRoutes reconciled successfully")
 	}
-	setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionTrue,
-		"HTTPRouteReady", fmt.Sprintf("%d HTTPRoute(s) reconciled successfully", len(routes)))
+	setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionTrue,
+		"HTTPRoutesPublished", fmt.Sprintf("%d HTTPRoute(s) reconciled successfully", len(routes)))
 	return nil
 }
 

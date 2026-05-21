@@ -384,7 +384,7 @@ type ServiceMonitorConfig struct {
 const (
     ConditionNodesReady            = "NodesReady"
     ConditionExternalServiceReady  = "ExternalServiceReady"
-    ConditionRouteReady            = "RouteReady"          // HTTPRoute
+    ConditionNetworkingReady       = "NetworkingReady"     // HTTPRoute
     ConditionIsolationReady        = "IsolationReady"      // AuthorizationPolicy
     ConditionServiceMonitorReady   = "ServiceMonitorReady"
 )
@@ -568,7 +568,7 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx, group) error {
 **HTTPRoute:**
 - Generated as `unstructured.Unstructured` (avoids importing Gateway API Go modules)
 - Backend targets `{group}-external` Service
-- If CRD not installed (no Gateway API), sets `RouteReady` condition to False
+- If CRD not installed (no Gateway API), sets `NetworkingReady` condition to False/CRDNotInstalled
 
 **AuthorizationPolicy:**
 - Generated as `unstructured.Unstructured` (avoids importing Istio Go modules)
