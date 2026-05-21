@@ -29,3 +29,34 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make test
+
+  test-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Cache envtest binaries
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: envtest-${{ runner.os }}-k8s-1.34.0-cr-0.23
+      - run: make test-integration
+
+  verify-generated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install controller-gen
+        run: go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.1
+      - run: make verify-generated
