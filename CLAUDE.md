@@ -45,6 +45,43 @@ if err := r.Status().Patch(ctx, obj, patch); err != nil { ... }
 
 The single-patch reconcile model means each reconcile snapshots `obj.DeepCopy()` once, accumulates mutations in-memory, and flushes one optimistic-lock-protected `Status().Patch` at the end. Code-review checklist item: every `r.Status().Patch` call site must use a base built with `MergeFromWithOptimisticLock{}`.
 
+### Conditions
+
+Every `metav1.Condition` on `SeiNodeDeployment`, `SeiNode`, or `SeiNodeTask` follows the Kubernetes upstream pattern: **once a controller sets a condition, it stays present on the reconciled object**, transitioning between `True` / `False` / `Unknown` with a stable `Reason` and a `lastTransitionTime`. This is the default — "School 1." It matches Pod (`Ready`, `Initialized`, `ContainersReady`, `PodScheduled` — stably present once the kubelet has begun processing the pod), Deployment (`Available`, `Progressing` — stably present once the Deployment reconciles), Gateway-API HTTPRoute (`Accepted`, `ResolvedRefs` — stably present per ParentRef once the implementation reconciles it), and CAPI Cluster/Machine (`Ready`, `InfrastructureReady` — stably present after first reconcile). Even "feature off" or "feature broken" states are expressed as `Status=False, Reason=<stable enum value>` — never as absence.
+
+**Use:**
+
+```go
+setCondition(obj, ConditionNetworkingReady, metav1.ConditionFalse,
+    "NetworkingDisabled", "spec.networking is unset; no HTTPRoutes published")
+```
+
+**Do not use** for steady-state transitions:
+
+- `removeCondition(obj, ...)` to express "feature is off." Use `setCondition(False, <reason>)` instead. Removal is indistinguishable in `kubectl describe` from "controller never reached this code path" and forces PromQL consumers into brittle `absent()` queries.
+
+The narrow exceptions to the always-present rule are **School 2**:
+
+- **`*Needed`-style conditions** where `True` is the exception and `False` would be tautological. `GenesisCeremonyNeeded` is the canonical sei example — its `False` value is redundant with the absence of the feature.
+- **`kubectl wait` consumer conditions** where present-vs-absent semantics are explicitly load-bearing. `SeiNodeTask.Status.Conditions[Ready|Failed]` is documented as latch-on-terminal-state because the seitask-runner depends on `kubectl wait --for=condition=Ready=true` (which matches `True` only) and `--for=condition=Failed=true` as the dual exit signal. The Ready+Failed pair is the documented exception to the "no mixed polarities for the same subject" rule below — both latch independently on terminal state.
+
+Any new condition that doesn't fit one of these exceptions defaults to School 1.
+
+**Naming:**
+
+- **`<Subject>Ready`** — `True` is the desired steady state. School 1. Use `False/<reason>` for both "not yet ready" and "not configured."
+- **`<Subject>InProgress`** — `True` is the exception, `False` is steady state. School 1. Always seed `False` on first reconcile.
+- **`<Subject>Complete`** — latch-True. School 1. Seed `False/NotStarted` for discoverability.
+- **`<Subject>Needed`** — School 2 acceptable.
+
+Don't mix polarities for the same subject (no `RouteReady` + `RouteFailed` — pick one and use reasons). The SeiNodeTask `Ready`/`Failed` pair is the documented exception, justified by the `kubectl wait` consumer contract.
+
+**Spec-shape changes don't remove conditions.** If a SeiNode transitions from validator to non-validator (or any condition's preconditions become structurally inapplicable), set the condition to `False/NotApplicable` rather than removing it. Removal forces consumers to treat absence as ambiguous; an explicit `NotApplicable` reason carries the intent.
+
+**Reasons are a stable enum.** Treat `Reason` as the public API for runbooks and alerting. Use `CamelCase` value strings. Don't put dynamic data in the reason — that goes in the message. PromQL keyed on `kube_..._status_condition{type="X", reason="Y", status="..."}` should yield a small, finite set of label combinations.
+
+**`ObservedGeneration` discipline.** Every `setCondition` call site must populate `condition.ObservedGeneration = obj.Generation` so consumers can tell whether a condition reflects the current spec. The `setCondition` helpers in each controller's `status.go` do this automatically; direct `apimeta.SetStatusCondition` calls must set it explicitly. The four direct calls in `internal/controller/nodetask/controller.go` are a known divergence; harmonize on first edit through that file.
+
 ### Testing
 - Tests use `testing` + `gomega` for assertions.
 - Test fixtures for platform config live in `internal/platform/platformtest/`.
