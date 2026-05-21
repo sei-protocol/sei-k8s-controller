@@ -31,6 +31,7 @@ func main() {
 			newKeygenCommand(),
 			newProvisionSNDCommand(),
 			newRunnerCommand(),
+			newUploadReportCommand(),
 		},
 	}
 
