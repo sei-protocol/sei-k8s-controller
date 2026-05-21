@@ -3,6 +3,7 @@
 package envtest_test
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -83,12 +84,24 @@ func TestInPlaceRollout_EndToEnd(t *testing.T) {
 			if refs[0].Controller == nil || !*refs[0].Controller {
 				return false
 			}
-			// sei.io/chain stamped by the controller from
-			// spec.template.spec.chainId. LabelPeerSource consumers
-			// rely on this to discover peers across SNDs of the same
-			// chain — peer discovery silently breaks without it.
-			if got := kids[i].GetLabels()["sei.io/chain"]; got != "pacific-1" {
-				t.Logf("child %s missing sei.io/chain label (got %q)", kids[i].GetName(), got)
+			want := map[string]string{
+				"sei.io/nodedeployment":         "rollout-test",
+				"sei.io/nodedeployment-ordinal": strconv.Itoa(i),
+				"sei.io/chain":                  "pacific-1",
+			}
+			labels := kids[i].GetLabels()
+			ok := true
+			for k, v := range want {
+				if labels[k] != v {
+					t.Logf("child %s: label %s = %q, want %q", kids[i].GetName(), k, labels[k], v)
+					ok = false
+				}
+			}
+			if labels["sei.io/revision"] == "" {
+				t.Logf("child %s: sei.io/revision empty", kids[i].GetName())
+				ok = false
+			}
+			if !ok {
 				return false
 			}
 		}

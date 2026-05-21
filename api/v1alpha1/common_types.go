@@ -30,16 +30,14 @@ type PeerSource struct {
 // headless Service DNS names ({name}-0.{name}.{namespace}.svc.cluster.local)
 // and writes them to status.resolvedPeers on every reconcile.
 //
-// Controller-managed labels available on every SeiNode owned by an SND
-// (use these in Selector for reliable cross-SND peer discovery):
-//   - sei.io/chain  — derived from SND .spec.template.spec.chainId
-//   - sei.io/nodedeployment — the owning SND's metadata.name
-//   - sei.io/nodedeployment-ordinal — string-encoded replica index
-//   - sei.io/revision — string-encoded SND generation
+// Controller-managed labels available on every SeiNode owned by an SND:
+//   - sei.io/chain — from .spec.template.spec.chainId
+//   - sei.io/nodedeployment — owning SND name
+//   - sei.io/nodedeployment-ordinal — replica index
+//   - sei.io/revision — SND generation
 //
-// User-set keys on SND .spec.template.metadata.labels are merged in,
-// but the four reserved keys above are always controller-stamped from
-// authoritative spec — user attempts to override them are ignored.
+// User-set keys on .spec.template.metadata.labels merge in; the four
+// reserved keys above are always controller-stamped.
 type LabelPeerSource struct {
 	// Selector is a set of key-value label pairs. SeiNode resources
 	// matching ALL labels are included as peers.
