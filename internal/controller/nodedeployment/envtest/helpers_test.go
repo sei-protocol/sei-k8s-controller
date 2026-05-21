@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -172,6 +173,22 @@ func listEventsForSND(t *testing.T, snd *seiv1alpha1.SeiNodeDeployment, reason s
 			continue
 		}
 		out = append(out, e)
+	}
+	return out
+}
+
+// listHTTPRoutes returns gateway-api HTTPRoutes whose controller owner-ref
+// points at the given SND, sorted by Name for stable assertions.
+func listHTTPRoutes(t *testing.T, snd *seiv1alpha1.SeiNodeDeployment) []gatewayv1.HTTPRoute {
+	t.Helper()
+	g := NewWithT(t)
+	list := &gatewayv1.HTTPRouteList{}
+	g.Expect(testCli.List(testCtx, list, client.InNamespace(snd.Namespace))).To(Succeed())
+	out := make([]gatewayv1.HTTPRoute, 0, len(list.Items))
+	for i := range list.Items {
+		if metav1.IsControlledBy(&list.Items[i], snd) {
+			out = append(out, list.Items[i])
+		}
 	}
 	return out
 }
