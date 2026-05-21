@@ -1,0 +1,15 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+spec:
+  replicas: 2
+  template:
+    spec:
+      fullNode: {}
+      peers:
+        - label:
+            selector:
+              # provision-snd overwrites this value with --chain-id at apply
+              # time; the literal is documentation, not enforcement.
+              sei.io/chain: __injected__
+  updateStrategy:
+    type: InPlace

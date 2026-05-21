@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -25,22 +23,11 @@ const (
 	testWorkflowName   = "wf-test"
 	testWorkflowVarsCM = "workflow-vars-wf-test"
 	testRole           = "validator"
+	testPresetFullNode = "full-node"
 	testChainID        = "bench-1"
 	testImage          = "ghcr.io/sei/sei-chain:abc123"
+	testAccountAddr    = "sei1abc"
 )
-
-const baseSpecYAML = `
-apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
-spec:
-  replicas: 4
-  template:
-    spec:
-      validator: {}
-  genesis: {}
-  updateStrategy:
-    type: InPlace
-`
 
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -56,74 +43,142 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func writeSpec(t *testing.T, content string) string {
-	t.Helper()
-	dir := t.TempDir()
-	p := filepath.Join(dir, "snd.yaml")
-	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
 func testWorkflow() taskruntime.WorkflowIdentity {
 	return taskruntime.WorkflowIdentity{Name: testWorkflowName, UID: "uid-test", Namespace: testNamespace}
 }
 
-func TestLoadSpec_AppliesOverridesAndOwnerRef(t *testing.T) {
-	specPath := writeSpec(t, baseSpecYAML)
-
-	snd, err := loadSpec(specPath)
-	if err != nil {
-		t.Fatalf("loadSpec: %v", err)
-	}
-	if snd.Spec.Replicas != 4 {
-		t.Fatalf("base replicas: %d", snd.Spec.Replicas)
-	}
-
-	p := Params{
-		Role:     testRole,
-		Name:     testRole,
-		SpecFile: specPath,
-		ChainID:  testChainID,
-		Image:    testImage,
-		Replicas: 7,
-		Workflow: testWorkflow(),
-	}
-	applyOverrides(snd, p)
-	stampMetadata(snd, p)
-
-	if snd.Spec.Template.Spec.ChainID != testChainID {
-		t.Fatalf("ChainID not propagated: %q", snd.Spec.Template.Spec.ChainID)
-	}
-	if snd.Spec.Template.Spec.Image != testImage {
-		t.Fatalf("Image not propagated: %q", snd.Spec.Template.Spec.Image)
-	}
-	if snd.Spec.Replicas != 7 {
-		t.Fatalf("Replicas override not applied: %d", snd.Spec.Replicas)
-	}
-	if snd.Spec.Genesis == nil || snd.Spec.Genesis.ChainID != testChainID {
-		t.Fatalf("Genesis.ChainID not propagated: %+v", snd.Spec.Genesis)
-	}
-	if snd.Name != testRole || snd.Namespace != testNamespace {
-		t.Fatalf("metadata wrong: %s/%s", snd.Namespace, snd.Name)
-	}
-	if len(snd.OwnerReferences) != 1 || snd.OwnerReferences[0].Kind != "Workflow" {
-		t.Fatalf("ownerRef not stamped: %+v", snd.OwnerReferences)
+func TestLoadPreset_KnownPresets(t *testing.T) {
+	for _, name := range []string{testRole, testPresetFullNode} {
+		t.Run(name, func(t *testing.T) {
+			snd, err := loadPreset(name)
+			if err != nil {
+				t.Fatalf("loadPreset(%q): %v", name, err)
+			}
+			if snd.Spec.Replicas < 1 {
+				t.Fatalf("preset %q replicas < 1: %d", name, snd.Spec.Replicas)
+			}
+		})
 	}
 }
 
-func TestLoadSpec_RejectsMalformed(t *testing.T) {
-	specPath := writeSpec(t, "not: valid: yaml: ::")
-	if _, err := loadSpec(specPath); err == nil {
-		t.Fatalf("expected unmarshal error")
+func TestLoadPreset_UnknownNameErrors(t *testing.T) {
+	if _, err := loadPreset("does-not-exist"); err == nil {
+		t.Fatalf("expected error for unknown preset")
+	}
+}
+
+func TestApplyOverrides_StampsChainImageReplicas(t *testing.T) {
+	snd, err := loadPreset(testRole)
+	if err != nil {
+		t.Fatalf("loadPreset: %v", err)
+	}
+	if err := applyOverrides(snd, Params{
+		Role: testRole, Name: testRole, ChainID: testChainID, Image: testImage, Replicas: 7, Workflow: testWorkflow(),
+	}); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+	if snd.Spec.Template.Spec.ChainID != testChainID {
+		t.Errorf("ChainID: %q", snd.Spec.Template.Spec.ChainID)
+	}
+	if snd.Spec.Template.Spec.Image != testImage {
+		t.Errorf("Image: %q", snd.Spec.Template.Spec.Image)
+	}
+	if snd.Spec.Replicas != 7 {
+		t.Errorf("Replicas: %d", snd.Spec.Replicas)
+	}
+	if snd.Spec.Genesis.ChainID != testChainID {
+		t.Errorf("Genesis.ChainID: %q", snd.Spec.Genesis.ChainID)
+	}
+}
+
+func TestApplyOverrides_MergesSeidOverrides(t *testing.T) {
+	snd, err := loadPreset(testRole)
+	if err != nil {
+		t.Fatalf("loadPreset: %v", err)
+	}
+	if err := applyOverrides(snd, Params{
+		Role: testRole, ChainID: testChainID, Image: testImage, Workflow: testWorkflow(),
+		Overrides: map[string]string{
+			"tx_index.indexer":     "kv",
+			"mempool.ttl_duration": "60s",
+		},
+	}); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+	got := snd.Spec.Template.Spec.Overrides
+	if got["tx_index.indexer"] != "kv" || got["mempool.ttl_duration"] != "60s" {
+		t.Fatalf("overrides not merged: %v", got)
+	}
+}
+
+func TestApplyOverrides_AppendsGenesisAccountsOnValidatorPreset(t *testing.T) {
+	snd, err := loadPreset(testRole)
+	if err != nil {
+		t.Fatalf("loadPreset: %v", err)
+	}
+	if err := applyOverrides(snd, Params{
+		Role: testRole, ChainID: testChainID, Image: testImage, Workflow: testWorkflow(),
+		GenesisAccounts: []seiv1alpha1.GenesisAccount{{Address: testAccountAddr, Balance: "1000usei"}},
+	}); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+	if len(snd.Spec.Genesis.Accounts) != 1 || snd.Spec.Genesis.Accounts[0].Address != testAccountAddr {
+		t.Fatalf("genesis accounts: %+v", snd.Spec.Genesis.Accounts)
+	}
+}
+
+func TestApplyOverrides_RejectsGenesisAccountsOnFullNodePreset(t *testing.T) {
+	snd, err := loadPreset(testPresetFullNode)
+	if err != nil {
+		t.Fatalf("loadPreset: %v", err)
+	}
+	err = applyOverrides(snd, Params{
+		Role: "rpc", ChainID: testChainID, Image: testImage, Workflow: testWorkflow(), Preset: testPresetFullNode,
+		GenesisAccounts: []seiv1alpha1.GenesisAccount{{Address: testAccountAddr, Balance: "1usei"}},
+	})
+	if err == nil {
+		t.Fatalf("expected error: --genesis-account on a preset without genesis block")
+	}
+}
+
+func TestApplyOverrides_SubstitutesChainIntoFullNodePeerSelector(t *testing.T) {
+	snd, err := loadPreset(testPresetFullNode)
+	if err != nil {
+		t.Fatalf("loadPreset: %v", err)
+	}
+	if err := applyOverrides(snd, Params{
+		Role: "rpc", ChainID: testChainID, Image: testImage, Workflow: testWorkflow(),
+	}); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+	peers := snd.Spec.Template.Spec.Peers
+	if len(peers) != 1 || peers[0].Label == nil {
+		t.Fatalf("full-node preset's peer block: %+v", peers)
+	}
+	if got := peers[0].Label.Selector["sei.io/chain"]; got != testChainID {
+		t.Fatalf("peers[0].label.selector[sei.io/chain] = %q; want %q", got, testChainID)
+	}
+}
+
+func TestApplyOverrides_ValidatorPreset_NoPeers(t *testing.T) {
+	snd, err := loadPreset(testRole)
+	if err != nil {
+		t.Fatalf("loadPreset: %v", err)
+	}
+	if err := applyOverrides(snd, Params{
+		Role: testRole, ChainID: testChainID, Image: testImage, Workflow: testWorkflow(),
+	}); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+	if len(snd.Spec.Template.Spec.Peers) != 0 {
+		t.Fatalf("peers materialized from nothing: %+v", snd.Spec.Template.Spec.Peers)
 	}
 }
 
 func TestValidateParams(t *testing.T) {
 	full := Params{
 		Role:     testRole,
-		SpecFile: "x.yaml",
+		Preset:   testRole,
 		ChainID:  testChainID,
 		Image:    testImage,
 		Workflow: testWorkflow(),
@@ -131,11 +186,11 @@ func TestValidateParams(t *testing.T) {
 	cases := []struct {
 		name string
 		mut  func(*Params)
-		want bool // wantErr
+		want bool
 	}{
 		{"complete", func(*Params) {}, false},
 		{"missing role", func(p *Params) { p.Role = "" }, true},
-		{"missing spec-file", func(p *Params) { p.SpecFile = "" }, true},
+		{"missing preset", func(p *Params) { p.Preset = "" }, true},
 		{"missing chain-id", func(p *Params) { p.ChainID = "" }, true},
 		{"missing image", func(p *Params) { p.Image = "" }, true},
 		{"missing workflow.Name", func(p *Params) { p.Workflow.Name = "" }, true},
@@ -153,22 +208,21 @@ func TestValidateParams(t *testing.T) {
 }
 
 func TestRun_EndToEnd_FakeClient(t *testing.T) {
-	specPath := writeSpec(t, baseSpecYAML)
 	w := testWorkflow()
 
-	// Pre-stage a Ready SND with endpoints so waitForReady's polling sees
-	// the terminal state on the first tick. Mirrors how the controller
-	// would have promoted the CR after a Create.
-	prestaged := &seiv1alpha1.SeiNodeDeployment{}
-	if err := loadAndDecorate(specPath, &Params{
-		Role:     testRole,
-		Name:     testRole,
-		ChainID:  testChainID,
-		Image:    testImage,
-		Workflow: w,
-	}, prestaged); err != nil {
+	// Pre-stage a Ready SND that the controller would have produced from a
+	// Create. We re-use the production preset+overlay pipeline so the
+	// pre-staged shape stays in sync with the path Run exercises.
+	prestaged, err := loadPreset(testRole)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if err := applyOverrides(prestaged, Params{
+		Role: testRole, Name: testRole, Preset: "validator", ChainID: testChainID, Image: testImage, Workflow: w,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stampMetadata(prestaged, Params{Role: testRole, Name: testRole, Workflow: w})
 	prestaged.Status.Phase = seiv1alpha1.GroupPhaseReady
 	prestaged.Status.Endpoints = &seiv1alpha1.Endpoints{
 		TendermintRpc:  "http://tm.svc:26657",
@@ -184,8 +238,6 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 
 	srv := fakeStatusServer(t, "42")
 	defer srv.Close()
-	// Rewrite the prestaged SND's TM RPC to the fake server so the
-	// first-block poll points at something live.
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testRole}, prestaged); err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +249,7 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	res, err := Run(context.Background(), c, Params{
 		Role:              testRole,
 		Name:              testRole,
-		SpecFile:          specPath,
+		Preset:            "validator",
 		ChainID:           testChainID,
 		Image:             testImage,
 		ReadyTimeout:      2 * time.Second,
@@ -217,8 +269,8 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, cm); err != nil {
 		t.Fatalf("get CM: %v", err)
 	}
-	if got := cm.Data["VALIDATOR_CHAIN_ID"]; got != testChainID {
-		t.Fatalf("VALIDATOR_CHAIN_ID = %q", got)
+	if got := cm.Data["CHAIN_ID"]; got != testChainID {
+		t.Fatalf("CHAIN_ID = %q", got)
 	}
 	if cm.Data["VALIDATOR_TM_RPC"] == "" {
 		t.Fatalf("VALIDATOR_TM_RPC empty")
@@ -249,20 +301,6 @@ func fakeStatusServer(t *testing.T, height string) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
-}
-
-// loadAndDecorate is the test-side mirror of the production loadSpec +
-// applyOverrides + stampMetadata pipeline. Used to materialize the
-// pre-staged SND the fake client serves.
-func loadAndDecorate(specPath string, p *Params, into *seiv1alpha1.SeiNodeDeployment) error {
-	parsed, err := loadSpec(specPath)
-	if err != nil {
-		return err
-	}
-	applyOverrides(parsed, *p)
-	stampMetadata(parsed, *p)
-	*into = *parsed
-	return nil
 }
 
 func TestTendermintStatusResponse_LatestHeight(t *testing.T) {

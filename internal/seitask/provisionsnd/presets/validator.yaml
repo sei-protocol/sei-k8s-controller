@@ -1,0 +1,10 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+spec:
+  replicas: 4
+  template:
+    spec:
+      validator: {}
+  genesis: {}
+  updateStrategy:
+    type: InPlace

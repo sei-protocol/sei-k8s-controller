@@ -1,20 +1,23 @@
-// Package provisionsnd implements `seitask provision-snd`: read a typed
-// SeiNodeDeployment YAML from a mounted ConfigMap, apply CLI overrides,
-// stamp an ownerRef to the parent Workflow, Create it, await Ready, poll
-// the chain RPC for first block, then publish endpoints to workflow-vars
-// under role-scoped keys (VALIDATOR_TM_RPC, RPC_EVM_RPC, etc.).
+// Package provisionsnd implements `seitask provision-snd`: pick a bundled
+// SeiNodeDeployment preset, apply CLI-supplied overrides, stamp an ownerRef
+// to the parent Workflow, Create it, await Ready, poll the chain RPC for
+// first block, then publish endpoints to workflow-vars under role-scoped
+// keys (VALIDATOR_TM_RPC, RPC_EVM_RPC, etc.).
 //
-// The YAML is the source of truth for SND shape (preset, overrides, genesis
-// config). CLI flags carry the per-run values (chain-id, image, replicas,
-// name) so the same YAML is reusable across nightly runs.
+// Presets bundle the minimal mode-specific shape (validator vs full-node).
+// Per-run shape lives in --override / --genesis-account flags so a scenario
+// fully declares its SND shape in the Workflow YAML, no per-scenario asset
+// files.
 package provisionsnd
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
-	"os"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -29,6 +32,9 @@ import (
 
 const fieldOwner client.FieldOwner = "seitask-provision-snd"
 
+//go:embed presets/*.yaml
+var presetFS embed.FS
+
 // Params carries the typed inputs to Run.
 type Params struct {
 	// Role tags the workflow-vars keys this Task writes (e.g. "validator",
@@ -40,9 +46,9 @@ type Params struct {
 	// "<Workflow.Name>-<Role>" when empty.
 	Name string
 
-	// SpecFile is the YAML path to read the SeiNodeDeployment spec from.
-	// Operator-authored; lives in the scenario ConfigMap mounted at /etc/scenario.
-	SpecFile string
+	// Preset selects the bundled base SND template by short name (e.g.
+	// "validator", "full-node"). Required.
+	Preset string
 
 	// ChainID overrides spec.template.spec.chainId + spec.genesis.chainId.
 	// Required.
@@ -51,8 +57,16 @@ type Params struct {
 	// Image overrides spec.template.spec.image. Required.
 	Image string
 
-	// Replicas overrides spec.replicas. 0 means "use what's in the YAML".
+	// Replicas overrides spec.replicas. 0 means "use the preset's value".
 	Replicas int32
+
+	// Overrides are seid config-toml overrides merged into
+	// spec.template.spec.overrides on top of whatever the preset carries.
+	Overrides map[string]string
+
+	// GenesisAccounts append to spec.genesis.accounts. Rejected when the
+	// preset does not embed a genesis block (e.g. full-node).
+	GenesisAccounts []seiv1alpha1.GenesisAccount
 
 	// ReadyTimeout bounds the wait for status.phase=Ready.
 	ReadyTimeout time.Duration
@@ -81,20 +95,24 @@ type Result struct {
 	Endpoints seiv1alpha1.Endpoints
 }
 
-// Run reads the spec YAML, applies overrides, creates the SND with an
-// ownerRef to the parent Workflow, waits for Ready, polls the chain RPC for
-// first block, and writes role-scoped endpoints to workflow-vars.
+// Run loads the preset, applies overrides, creates the SND with an ownerRef
+// to the parent Workflow, waits for Ready, polls the chain RPC for first
+// block, and writes role-scoped endpoints to workflow-vars.
 func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 	if err := validateParams(p); err != nil {
 		return Result{}, err
 	}
 	p = withDefaults(p)
 
-	snd, err := loadSpec(p.SpecFile)
+	snd, err := loadPreset(p.Preset)
 	if err != nil {
-		return Result{}, taskruntime.Infra(fmt.Errorf("loading spec %s: %w", p.SpecFile, err))
+		// Unknown preset is a scenario-config error (task-fail), not an
+		// infra-fail — the binary's working, the input is wrong.
+		return Result{}, taskruntime.Task(fmt.Errorf("loading preset %q: %w", p.Preset, err))
 	}
-	applyOverrides(snd, p)
+	if err := applyOverrides(snd, p); err != nil {
+		return Result{}, err
+	}
 	stampMetadata(snd, p)
 
 	if err := c.Create(ctx, snd, fieldOwner); err != nil {
@@ -136,8 +154,8 @@ func validateParams(p Params) error {
 	switch {
 	case p.Role == "":
 		return fmt.Errorf("provision-snd: --role is required")
-	case p.SpecFile == "":
-		return fmt.Errorf("provision-snd: --spec-file is required")
+	case p.Preset == "":
+		return fmt.Errorf("provision-snd: --preset is required")
 	case p.ChainID == "":
 		return fmt.Errorf("provision-snd: --chain-id is required")
 	case p.Image == "":
@@ -164,10 +182,10 @@ func withDefaults(p Params) Params {
 	return p
 }
 
-func loadSpec(path string) (*seiv1alpha1.SeiNodeDeployment, error) {
-	data, err := os.ReadFile(path)
+func loadPreset(name string) (*seiv1alpha1.SeiNodeDeployment, error) {
+	data, err := presetFS.ReadFile("presets/" + name + ".yaml")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unknown preset (available: %s): %w", availablePresets(), err)
 	}
 	out := &seiv1alpha1.SeiNodeDeployment{}
 	if err := yaml.UnmarshalStrict(data, out); err != nil {
@@ -176,7 +194,16 @@ func loadSpec(path string) (*seiv1alpha1.SeiNodeDeployment, error) {
 	return out, nil
 }
 
-func applyOverrides(snd *seiv1alpha1.SeiNodeDeployment, p Params) {
+func availablePresets() string {
+	entries, _ := presetFS.ReadDir("presets")
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, strings.TrimSuffix(e.Name(), ".yaml"))
+	}
+	return strings.Join(names, ", ")
+}
+
+func applyOverrides(snd *seiv1alpha1.SeiNodeDeployment, p Params) error {
 	snd.Spec.Template.Spec.ChainID = p.ChainID
 	snd.Spec.Template.Spec.Image = p.Image
 	if p.Replicas > 0 {
@@ -184,8 +211,32 @@ func applyOverrides(snd *seiv1alpha1.SeiNodeDeployment, p Params) {
 	}
 	if snd.Spec.Genesis != nil {
 		snd.Spec.Genesis.ChainID = p.ChainID
+		snd.Spec.Genesis.Accounts = append(snd.Spec.Genesis.Accounts, p.GenesisAccounts...)
+	} else if len(p.GenesisAccounts) > 0 {
+		return fmt.Errorf("provision-snd: --genesis-account given but preset %q has no genesis block", p.Preset)
 	}
+	if len(p.Overrides) > 0 {
+		if snd.Spec.Template.Spec.Overrides == nil {
+			snd.Spec.Template.Spec.Overrides = map[string]string{}
+		}
+		maps.Copy(snd.Spec.Template.Spec.Overrides, p.Overrides)
+	}
+	// A preset that selects peers by sei.io/chain wants the per-run value,
+	// not the placeholder. Lets full-node presets join any per-run validator
+	// chain without per-run YAML templating.
+	for i := range snd.Spec.Template.Spec.Peers {
+		label := snd.Spec.Template.Spec.Peers[i].Label
+		if label == nil {
+			continue
+		}
+		if _, present := label.Selector[chainSelectorLabel]; present {
+			label.Selector[chainSelectorLabel] = p.ChainID
+		}
+	}
+	return nil
 }
+
+const chainSelectorLabel = "sei.io/chain"
 
 func stampMetadata(snd *seiv1alpha1.SeiNodeDeployment, p Params) {
 	snd.APIVersion = seiv1alpha1.GroupVersion.String()
@@ -223,38 +274,35 @@ type tendermintStatusResponse struct {
 			LatestBlockHeight string `json:"latest_block_height"`
 		} `json:"sync_info"`
 	} `json:"result,omitempty"`
-	SyncInfo *struct {
+	SyncInfo struct {
 		LatestBlockHeight string `json:"latest_block_height"`
-	} `json:"sync_info,omitempty"`
+	} `json:"sync_info"`
 }
 
 func (r *tendermintStatusResponse) latestHeight() string {
-	if r.Result != nil {
+	if r.Result != nil && r.Result.SyncInfo.LatestBlockHeight != "" {
 		return r.Result.SyncInfo.LatestBlockHeight
 	}
-	if r.SyncInfo != nil {
-		return r.SyncInfo.LatestBlockHeight
-	}
-	return ""
+	return r.SyncInfo.LatestBlockHeight
 }
 
 func waitForFirstBlock(ctx context.Context, hc *http.Client, tmRPC string, timeout, interval time.Duration) error {
 	return wait.PollUntilContextTimeout(ctx, interval, timeout, true, func(ctx context.Context) (bool, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, tmRPC+"/status", nil)
 		if err != nil {
-			return false, taskruntime.Infra(fmt.Errorf("building /status request: %w", err))
+			return false, taskruntime.Infra(fmt.Errorf("status req: %w", err))
 		}
 		resp, err := hc.Do(req)
 		if err != nil {
-			return false, nil // transient connect failure during chain warmup; keep polling
+			return false, nil
 		}
 		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode/100 != 2 {
+		if resp.StatusCode != http.StatusOK {
 			return false, nil
 		}
 		var parsed tendermintStatusResponse
 		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-			return false, nil // mid-warmup the body can be empty/incomplete
+			return false, nil
 		}
 		h := parsed.latestHeight()
 		if h == "" || h == "0" {
@@ -264,19 +312,24 @@ func waitForFirstBlock(ctx context.Context, hc *http.Client, tmRPC string, timeo
 	})
 }
 
+// publishEndpoints assumes a single chain-id per Workflow: CHAIN_ID is
+// seeded on first create and silently retained on subsequent calls
+// (EnsureWorkflowVarsCM is AlreadyExists-tolerant). A future scenario that
+// runs provision-snd against two distinct chains will need an explicit
+// chain-id conflict check here.
 func publishEndpoints(ctx context.Context, c client.Client, w taskruntime.WorkflowIdentity, role, chainID string, ep seiv1alpha1.Endpoints) error {
-	kv := map[taskruntime.VarKey]string{
-		taskruntime.RoleScoped(role, taskruntime.KeyChainID):        chainID,
+	if err := taskruntime.EnsureWorkflowVarsCM(ctx, c, w, map[taskruntime.VarKey]string{
+		taskruntime.KeyRunID:   w.Name,
+		taskruntime.KeyChainID: chainID,
+	}); err != nil {
+		return err
+	}
+	vars := map[taskruntime.VarKey]string{
 		taskruntime.RoleScoped(role, taskruntime.KeyTendermintRPC):  ep.TendermintRpc,
 		taskruntime.RoleScoped(role, taskruntime.KeyTendermintREST): ep.TendermintRest,
 	}
-	// EVM JSON-RPC is per-pod (stateful); publish the first node's URL when
-	// present. Multi-pod EVM consumers should pin to a specific node anyway.
-	if len(ep.Nodes) > 0 && ep.Nodes[0].EvmJsonRpc != "" {
-		kv[taskruntime.RoleScoped(role, taskruntime.KeyEVMJSONRPC)] = ep.Nodes[0].EvmJsonRpc
+	if len(ep.Nodes) > 0 {
+		vars[taskruntime.RoleScoped(role, taskruntime.KeyEVMJSONRPC)] = ep.Nodes[0].EvmJsonRpc
 	}
-	if err := taskruntime.EnsureWorkflowVarsCM(ctx, c, w, nil); err != nil {
-		return err
-	}
-	return taskruntime.SetVars(ctx, c, w, kv)
+	return taskruntime.SetVars(ctx, c, w, vars)
 }
