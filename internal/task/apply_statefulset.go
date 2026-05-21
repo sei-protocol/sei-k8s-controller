@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	appsv1 "k8s.io/api/apps/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 )
@@ -48,21 +44,9 @@ func (e *applyStatefulSetExecution) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
-	desired, err := noderesource.GenerateStatefulSet(node, e.cfg.Platform)
-	if err != nil {
-		return Terminal(fmt.Errorf("generating statefulset: %w", err))
+	if _, err := noderesource.SyncStatefulSet(ctx, e.cfg.KubeClient, e.cfg.Scheme, node, e.cfg.Platform); err != nil {
+		return fmt.Errorf("syncing statefulset: %w", err)
 	}
-	desired.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
-	if err := ctrl.SetControllerReference(node, desired, e.cfg.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on statefulset: %w", err)
-	}
-
-	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
-	if err := e.cfg.KubeClient.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
-		return fmt.Errorf("applying statefulset: %w", err)
-	}
-
 	e.complete()
 	return nil
 }

@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // SeiNodeSpec defines the desired state of a standalone Sei node.
@@ -343,6 +344,26 @@ type SeiNodeStatus struct {
 	// config so the node advertises a reachable address for gossip discovery.
 	// +optional
 	ExternalAddress string `json:"externalAddress,omitempty"`
+
+	// StatefulSet references the StatefulSet the controller created for
+	// this SeiNode. UID is the identity check: an STS with the expected
+	// name but a different UID is not the one this controller created
+	// (e.g., manual recreation out-of-band) and triggers replacement.
+	// +optional
+	StatefulSet *StatefulSetRef `json:"statefulSet,omitempty"`
+}
+
+// StatefulSetRef identifies a StatefulSet owned and managed by a
+// SeiNode. Stored on Status so the controller can fetch and mutate the
+// owned object directly rather than blindly server-side-applying.
+type StatefulSetRef struct {
+	// Name of the StatefulSet (always equals the SeiNode name).
+	Name string `json:"name"`
+
+	// UID of the StatefulSet. Used to detect out-of-band recreation:
+	// if a new StatefulSet appears with the same name but a different
+	// UID, the controller knows it is not the one it created.
+	UID types.UID `json:"uid"`
 }
 
 // +kubebuilder:object:root=true
