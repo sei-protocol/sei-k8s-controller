@@ -71,3 +71,14 @@ func WithNetworking() Option {
 		snd.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
 	}
 }
+
+// WithValidator swaps the default full-node spec for a validator-mode
+// spec. Validator mode has no externally-routable protocols, so the
+// controller publishes zero HTTPRoutes even when WithNetworking is set —
+// the negative case the networking test exercises.
+func WithValidator() Option {
+	return func(snd *seiv1alpha1.SeiNodeDeployment) {
+		snd.Spec.Template.Spec.FullNode = nil
+		snd.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+	}
+}
