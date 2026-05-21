@@ -97,7 +97,7 @@ func needsGenesisPlan(group *seiv1alpha1.SeiNodeDeployment) bool {
 	if group.Status.Plan != nil {
 		return false
 	}
-	if hasCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
+	if isConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
 		return false
 	}
 	return allReplicasCreated(group)
@@ -107,7 +107,11 @@ func allReplicasCreated(group *seiv1alpha1.SeiNodeDeployment) bool {
 	return int32(len(group.Status.IncumbentNodes)) >= group.Spec.Replicas
 }
 
-func hasCondition(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
+// isConditionTrue returns whether the named condition is present with
+// Status=True. The name distinguishes this from a presence check —
+// always-present conditions (per CLAUDE.md `### Conditions`) require
+// callers to assert on Status, not on presence.
+func isConditionTrue(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
 	for _, c := range group.Status.Conditions {
 		if c.Type == condType && c.Status == metav1.ConditionTrue {
 			return true
