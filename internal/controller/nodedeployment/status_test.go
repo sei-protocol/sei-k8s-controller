@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -186,4 +188,130 @@ func TestBuildNetworkingStatus_ProtocolValues(t *testing.T) {
 		protocols[i] = rs.Protocol
 	}
 	g.Expect(protocols).To(ConsistOf("evm", "rpc", "rest", "grpc"))
+}
+
+func TestSetPausedCondition(t *testing.T) {
+	cases := []struct {
+		name       string
+		paused     bool
+		seedExist  *metav1.Condition
+		wantStatus metav1.ConditionStatus
+		wantReason string
+	}{
+		{
+			name:       "spec.paused=true writes True/Paused",
+			paused:     true,
+			wantStatus: metav1.ConditionTrue,
+			wantReason: "Paused",
+		},
+		{
+			name:       "spec.paused=false writes False/NotPaused",
+			paused:     false,
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "NotPaused",
+		},
+		{
+			// setPausedCondition is fully derived from spec — a stale
+			// True flips back to False once spec.paused clears.
+			name:   "stale True flips to False when spec clears",
+			paused: false,
+			seedExist: &metav1.Condition{
+				Type:   seiv1alpha1.ConditionPaused,
+				Status: metav1.ConditionTrue,
+				Reason: "Paused",
+			},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "NotPaused",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			group := newTestGroup("archive-rpc", "sei")
+			group.Spec.Paused = tc.paused
+			if tc.seedExist != nil {
+				group.Status.Conditions = append(group.Status.Conditions, *tc.seedExist)
+			}
+
+			r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
+			r.setPausedCondition(group)
+
+			cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionPaused)
+			g.Expect(cond).NotTo(BeNil(), "ConditionPaused must be present after setPausedCondition")
+			g.Expect(cond.Status).To(Equal(tc.wantStatus))
+			g.Expect(cond.Reason).To(Equal(tc.wantReason))
+		})
+	}
+}
+
+func TestSeedAlwaysPresentConditions(t *testing.T) {
+	cases := []struct {
+		name       string
+		mutate     func(*seiv1alpha1.SeiNodeDeployment)
+		condType   string
+		wantStatus metav1.ConditionStatus
+		wantReason string
+	}{
+		{
+			name:       "PlanInProgress seeds False/NotStarted on a fresh SND",
+			mutate:     func(g *seiv1alpha1.SeiNodeDeployment) {},
+			condType:   seiv1alpha1.ConditionPlanInProgress,
+			wantStatus: metav1.ConditionFalse,
+			wantReason: ReasonNotStarted,
+		},
+		{
+			name:       "RolloutInProgress seeds False/NotStarted on a fresh SND",
+			mutate:     func(g *seiv1alpha1.SeiNodeDeployment) {},
+			condType:   seiv1alpha1.ConditionRolloutInProgress,
+			wantStatus: metav1.ConditionFalse,
+			wantReason: ReasonNotStarted,
+		},
+		{
+			// The seed runs before transition paths in the same
+			// reconcile, so a True write from startPlan must not be
+			// re-seeded on the next pass.
+			name: "PlanInProgress=True is preserved",
+			mutate: func(g *seiv1alpha1.SeiNodeDeployment) {
+				setCondition(g, seiv1alpha1.ConditionPlanInProgress, metav1.ConditionTrue, "PlanStarted", "")
+			},
+			condType:   seiv1alpha1.ConditionPlanInProgress,
+			wantStatus: metav1.ConditionTrue,
+			wantReason: "PlanStarted",
+		},
+		{
+			// The seed only fires on absence, so the transition reason
+			// from completePlan (False/PlanComplete) stays put.
+			name: "PlanInProgress=False/PlanComplete is preserved",
+			mutate: func(g *seiv1alpha1.SeiNodeDeployment) {
+				setCondition(g, seiv1alpha1.ConditionPlanInProgress, metav1.ConditionFalse, "PlanComplete", "")
+			},
+			condType:   seiv1alpha1.ConditionPlanInProgress,
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "PlanComplete",
+		},
+		{
+			name: "RolloutInProgress=False/RolloutComplete is preserved",
+			mutate: func(g *seiv1alpha1.SeiNodeDeployment) {
+				setCondition(g, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse, "RolloutComplete", "")
+			},
+			condType:   seiv1alpha1.ConditionRolloutInProgress,
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "RolloutComplete",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			group := newTestGroup("archive-rpc", "sei")
+			tc.mutate(group)
+
+			r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
+			r.seedAlwaysPresentConditions(group)
+
+			cond := apimeta.FindStatusCondition(group.Status.Conditions, tc.condType)
+			g.Expect(cond).NotTo(BeNil(), "%s must be present after seeding", tc.condType)
+			g.Expect(cond.Status).To(Equal(tc.wantStatus))
+			g.Expect(cond.Reason).To(Equal(tc.wantReason))
+		})
+	}
 }

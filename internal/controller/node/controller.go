@@ -88,17 +88,36 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// Failed is terminal — nothing to do.
+	before := node.DeepCopy()
+	statusBase := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
+	observedPhase := node.Status.Phase
+	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+
+	setNodePausedCondition(node)
+
+	flushStatus := func() error {
+		if apiequality.Semantic.DeepEqual(before.Status, node.Status) {
+			return nil
+		}
+		return r.Status().Patch(ctx, node, statusBase)
+	}
+
+	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
+		if err := flushStatus(); err != nil {
+			return ctrl.Result{}, fmt.Errorf("flushing status on Failed: %w", err)
+		}
 		r.Recorder.Eventf(node, corev1.EventTypeWarning, "NodeFailed",
 			"SeiNode is in Failed state. Delete and recreate the resource to retry.")
 		return ctrl.Result{}, nil
 	}
 
-	before := node.DeepCopy()
-	statusBase := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
-	observedPhase := node.Status.Phase
-	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	if node.Spec.Paused {
+		if err := flushStatus(); err != nil {
+			return ctrl.Result{}, fmt.Errorf("flushing paused status: %w", err)
+		}
+		return ctrl.Result{}, nil
+	}
 
 	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
@@ -236,6 +255,24 @@ func (r *SeiNodeReconciler) deleteNodeDataPVC(ctx context.Context, node *seiv1al
 		return err
 	}
 	return r.Delete(ctx, pvc)
+}
+
+// setNodePausedCondition mirrors spec.paused into ConditionSeiNodePaused.
+func setNodePausedCondition(node *seiv1alpha1.SeiNode) {
+	cond := metav1.Condition{
+		Type:               seiv1alpha1.ConditionSeiNodePaused,
+		ObservedGeneration: node.Generation,
+	}
+	if node.Spec.Paused {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "Paused"
+		cond.Message = "spec.paused is true; reconciliation is frozen"
+	} else {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "NotPaused"
+		cond.Message = "spec.paused is unset or false"
+	}
+	apimeta.SetStatusCondition(&node.Status.Conditions, cond)
 }
 
 func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {

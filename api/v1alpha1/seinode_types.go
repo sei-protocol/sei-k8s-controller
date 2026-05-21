@@ -66,6 +66,13 @@ type SeiNodeSpec struct {
 	// Validator configures a consensus-participating validator node.
 	// +optional
 	Validator *ValidatorSpec `json:"validator,omitempty"`
+
+	// Paused freezes reconciliation. While true, the controller does not
+	// advance the lifecycle, start plans, or mutate derived resources.
+	// In-flight tasks on the cluster run to completion but their results
+	// are not polled until the field is cleared.
+	// +optional
+	Paused bool `json:"paused,omitempty"`
 }
 
 // DataVolumeSpec configures how the data PVC is sourced.
@@ -264,6 +271,8 @@ const (
 	// spec.validator.operatorKeyring.
 	ConditionOperatorKeyringReady = "OperatorKeyringReady"
 
+	// ConditionSeiNodePaused mirrors spec.paused: True when paused.
+	ConditionSeiNodePaused = "Paused"
 )
 
 // Reasons for the ImportPVCReady condition.

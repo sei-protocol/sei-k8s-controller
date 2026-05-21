@@ -26,6 +26,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .spec.paused
+      name: Paused
+      type: boolean
     - jsonPath: .status.rollout.targetHash
       name: Target
       priority: 1
@@ -138,6 +141,13 @@ spec:
                   HTTPRoutes on the platform Gateway. When absent, the deployment
                   is private with only per-node headless Services.
                 type: object
+              paused:
+                description: |-
+                  Paused freezes plan-driven orchestration. While true, no new plans
+                  start, no rollouts trigger, no template changes propagate to
+                  children, and any active plan freezes in place. Networking and
+                  Service reconciliation continue. Children inherit the paused state.
+                type: boolean
               replicas:
                 default: 1
                 description: Replicas is the number of SeiNode instances to create.
@@ -336,6 +346,13 @@ spec:
                           Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
                           These are applied on top of mode defaults during config-apply.
                         type: object
+                      paused:
+                        description: |-
+                          Paused freezes reconciliation. While true, the controller does not
+                          advance the lifecycle, start plans, or mutate derived resources.
+                          In-flight tasks on the cluster run to completion but their results
+                          are not polled until the field is cleared.
+                        type: boolean
                       peers:
                         description: |-
                           Peers configures how this node discovers and connects to network peers.
@@ -1137,6 +1154,7 @@ spec:
                 - Initializing
                 - Ready
                 - Upgrading
+                - Paused
                 - Degraded
                 - Failed
                 - Terminating
