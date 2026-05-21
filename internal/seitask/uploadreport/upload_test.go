@@ -69,7 +69,7 @@ func workflowVarsCM(data map[string]string) *corev1.ConfigMap {
 
 func workflowCR() *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "chaos-mesh.org", Version: "v1alpha1", Kind: "Workflow"})
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: chaosMeshGroup, Version: chaosMeshVersion, Kind: "Workflow"})
 	u.SetName(testWorkflowName)
 	u.SetNamespace(testNamespace)
 	u.Object["status"] = map[string]any{"phase": "Succeed"}
@@ -78,10 +78,10 @@ func workflowCR() *unstructured.Unstructured {
 
 func workflowNode(name string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "chaos-mesh.org", Version: "v1alpha1", Kind: "WorkflowNode"})
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: chaosMeshGroup, Version: chaosMeshVersion, Kind: "WorkflowNode"})
 	u.SetName(name)
 	u.SetNamespace(testNamespace)
-	u.SetLabels(map[string]string{"chaos-mesh.org/workflow": testWorkflowName})
+	u.SetLabels(map[string]string{chaosMeshWFLabel: testWorkflowName})
 	return u
 }
 

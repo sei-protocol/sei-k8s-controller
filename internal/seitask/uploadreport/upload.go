@@ -44,9 +44,15 @@ type S3Uploader interface {
 // Workflow + WorkflowNode are chaos-mesh.org/v1alpha1 CRs. unstructured so
 // the binary doesn't depend on the chaos-mesh Go types for read-only
 // artifact collection.
+const (
+	chaosMeshGroup   = "chaos-mesh.org"
+	chaosMeshVersion = "v1alpha1"
+	chaosMeshWFLabel = chaosMeshGroup + "/workflow"
+)
+
 var (
-	workflowGVK     = schema.GroupVersionKind{Group: "chaos-mesh.org", Version: "v1alpha1", Kind: "Workflow"}
-	workflowNodeGVK = schema.GroupVersionKind{Group: "chaos-mesh.org", Version: "v1alpha1", Kind: "WorkflowNode"}
+	workflowGVK     = schema.GroupVersionKind{Group: chaosMeshGroup, Version: chaosMeshVersion, Kind: "Workflow"}
+	workflowNodeGVK = schema.GroupVersionKind{Group: chaosMeshGroup, Version: chaosMeshVersion, Kind: "WorkflowNode"}
 )
 
 // Params carries the typed inputs to Run.
@@ -141,7 +147,7 @@ func uploadWorkflowResources(ctx context.Context, c client.Client, p Params, pre
 	nodes.SetGroupVersionKind(workflowNodeGVK)
 	if err := c.List(ctx, nodes,
 		client.InNamespace(p.Workflow.Namespace),
-		client.MatchingLabels{"chaos-mesh.org/workflow": p.Workflow.Name},
+		client.MatchingLabels{chaosMeshWFLabel: p.Workflow.Name},
 	); err != nil {
 		return taskruntime.Infra(fmt.Errorf("listing WorkflowNodes: %w", err))
 	}
@@ -161,8 +167,8 @@ func putAt(ctx context.Context, p Params, key string, body []byte, res *Result) 
 }
 
 // NewS3Uploader wraps an *s3.Client as an S3Uploader.
-func NewS3Uploader(client *s3.Client) S3Uploader {
-	return &s3Uploader{client: client}
+func NewS3Uploader(s3c *s3.Client) S3Uploader {
+	return &s3Uploader{client: s3c}
 }
 
 type s3Uploader struct{ client *s3.Client }
