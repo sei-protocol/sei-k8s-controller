@@ -19,12 +19,11 @@ import (
 )
 
 // updateSNDWithRetry re-fetches and re-applies mutate on resourceVersion
-// conflict — necessary because the controller patches status concurrently
-// (now that GenesisCeremonyComplete is hoisted to fire on every reconcile),
-// and the test's Get→mutate→Update would otherwise lose the 409 race
-// before CEL validation can fire. Returns the first non-conflict error
-// (or nil on success), so assertions see the CEL rejection itself rather
-// than the optimistic-concurrency conflict.
+// conflict. The controller patches status concurrently, so a single
+// Get → mutate → Update can lose the 409 race before CEL validation
+// fires. Returns the first non-conflict error (or nil on success) so
+// assertions land on the CEL rejection itself, not on the optimistic-
+// concurrency conflict.
 func updateSNDWithRetry(t *testing.T, key client.ObjectKey, mutate func(*seiv1alpha1.SeiNodeDeployment)) error {
 	t.Helper()
 	var lastErr error
@@ -135,7 +134,7 @@ func TestGenesis_ImmutabilityGate(t *testing.T) {
 
 // TestGenesis_CreationWithoutGenesisAllowsLaterAddition guards the
 // `!has(oldSelf.genesis)` short-circuit: nil → set is permitted; only
-// mutation of a previously-set genesis block is forbidden.
+// mutation of an existing genesis block is forbidden.
 func TestGenesis_CreationWithoutGenesisAllowsLaterAddition(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
