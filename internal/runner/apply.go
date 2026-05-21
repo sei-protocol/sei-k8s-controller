@@ -33,8 +33,15 @@ const (
 // DefaultRenderer renders Go text/template files. The resulting manifest is
 // parsed back to assert it is a SeiNodeTask, and metadata.name is
 // rewritten to a deterministic value derived from (kind, vars, NODE) so
-// re-applies hit the same CR.
-type DefaultRenderer struct{}
+// re-applies hit the same CR. When OwnerRef is non-nil, it replaces (not
+// merges) ownerReferences so the rendered SeiNodeTask cascades on parent
+// Workflow deletion.
+type DefaultRenderer struct {
+	// OwnerRef, when non-nil, is stamped onto the rendered manifest as
+	// the sole entry of metadata.ownerReferences. The runner subcommand
+	// populates it from taskruntime.LoadWorkflowIdentity at startup.
+	OwnerRef *metav1.OwnerReference
+}
 
 // Render parses templatePath as a Go text/template and executes it against
 // vars. The template author can use {{ .NODE }}, {{ .PROPOSAL_ID }}, etc.
@@ -44,16 +51,18 @@ type DefaultRenderer struct{}
 // "<kind-kebab>-<NODE>-<short-hash>" (NODE omitted if empty), where the hash
 // covers the template content + sorted vars. This guarantees re-applies
 // with identical inputs target the same CR (Workflow restart idempotency).
-func (DefaultRenderer) Render(templatePath string, vars map[string]string) ([]byte, string, error) {
+func (r DefaultRenderer) Render(templatePath string, vars map[string]string) ([]byte, string, error) {
 	raw, err := os.ReadFile(templatePath) //nolint:gosec // path is operator-controlled CLI arg
 	if err != nil {
 		return nil, "", fmt.Errorf("read template: %w", err)
 	}
-	return RenderBytes(templatePath, raw, vars)
+	return RenderBytes(templatePath, raw, vars, r.OwnerRef)
 }
 
 // RenderBytes is the byte-input variant of Render, exposed for tests.
-func RenderBytes(name string, raw []byte, vars map[string]string) ([]byte, string, error) {
+// When ownerRef is non-nil, it replaces (not merges) ownerReferences on
+// the rendered manifest.
+func RenderBytes(name string, raw []byte, vars map[string]string, ownerRef *metav1.OwnerReference) ([]byte, string, error) {
 	tmpl, err := template.New(name).
 		Option("missingkey=error").
 		Parse(string(raw))
@@ -82,6 +91,12 @@ func RenderBytes(name string, raw []byte, vars map[string]string) ([]byte, strin
 
 	deterministic := DeterministicName(specKind, vars, raw)
 	obj.SetName(deterministic)
+
+	// Replace (not merge) ownerReferences so a template that smuggles a
+	// bogus ref can't leak through. Mirrors provisionsnd.stampMetadata.
+	if ownerRef != nil {
+		obj.SetOwnerReferences([]metav1.OwnerReference{*ownerRef})
+	}
 
 	out, err := yaml.Marshal(obj.Object)
 	if err != nil {

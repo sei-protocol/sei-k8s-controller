@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/sei-protocol/sei-k8s-controller/internal/runner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/taskruntime"
 )
 
 // newRunnerCommand wires the legacy seitask-runner CLI as a subcommand of
@@ -101,6 +102,19 @@ func runRunner(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("create dynamic client: %w", err)
 	}
 
+	// Load the parent Workflow's identity so applied SeiNodeTask CRs
+	// carry an ownerRef to it — deleting the Workflow then cascades the
+	// per-step SeiNodeTasks. Matches the keygen / provision-snd pattern.
+	cliClient, err := kubeClientFromEnv()
+	if err != nil {
+		return err
+	}
+	wf, err := taskruntime.LoadWorkflowIdentity(ctx, cliClient)
+	if err != nil {
+		return err
+	}
+	ownerRef := wf.OwnerRef()
+
 	r := &runner.Run{
 		Opts: runner.Options{
 			TemplatePath:    cmd.String("template"),
@@ -116,7 +130,7 @@ func runRunner(ctx context.Context, cmd *cli.Command) error {
 		},
 		Stdout:   os.Stdout,
 		Stderr:   os.Stderr,
-		Renderer: runner.DefaultRenderer{},
+		Renderer: runner.DefaultRenderer{OwnerRef: &ownerRef},
 		Applier:  runner.DynamicApplier{Client: dyn},
 		Poller:   runner.DynamicPoller{Client: dyn},
 		Lister:   runner.DynamicNodeLister{Client: dyn},

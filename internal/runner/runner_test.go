@@ -13,6 +13,9 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 
 	"github.com/sei-protocol/sei-k8s-controller/internal/runner"
@@ -63,9 +66,9 @@ spec:
 `)
 	vars := map[string]string{tNodeKey: tValidator0, tChainIDKey: tChainID, tPropIDKey: "47"}
 
-	manifest1, name1, err := runner.RenderBytes("t.tmpl", tmpl, vars)
+	manifest1, name1, err := runner.RenderBytes("t.tmpl", tmpl, vars, nil)
 	g.Expect(err).NotTo(HaveOccurred())
-	manifest2, name2, err := runner.RenderBytes("t.tmpl", tmpl, vars)
+	manifest2, name2, err := runner.RenderBytes("t.tmpl", tmpl, vars, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(name1).To(Equal(name2), "name must be deterministic for identical inputs")
@@ -75,7 +78,7 @@ spec:
 
 	// Re-render with a different var should change the hash.
 	vars[tPropIDKey] = "48"
-	_, name3, err := runner.RenderBytes("t.tmpl", tmpl, vars)
+	_, name3, err := runner.RenderBytes("t.tmpl", tmpl, vars, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(name3).NotTo(Equal(name1))
 }
@@ -83,14 +86,69 @@ spec:
 func TestRenderBytes_RejectsNonSeiNodeTask(t *testing.T) {
 	g := NewWithT(t)
 	tmpl := []byte("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: PLACEHOLDER}\n")
-	_, _, err := runner.RenderBytes("t.tmpl", tmpl, nil)
+	_, _, err := runner.RenderBytes("t.tmpl", tmpl, nil, nil)
 	g.Expect(err).To(MatchError(ContainSubstring("rendered manifest is ConfigMap")))
+}
+
+func TestRenderBytes_StampsOwnerRef(t *testing.T) {
+	g := NewWithT(t)
+	tmpl := []byte(`apiVersion: sei.io/v1alpha1
+kind: SeiNodeTask
+metadata:
+  name: PLACEHOLDER
+  ownerReferences:
+    - apiVersion: rogue.example.com/v1
+      kind: Impostor
+      name: smuggled
+      uid: 00000000-0000-0000-0000-000000000000
+spec:
+  kind: GovVote
+  target:
+    nodeRef:
+      name: {{ .NODE }}
+  govVote:
+    chainId: c
+    keyName: k
+    proposalId: "1"
+    option: yes
+    fees: 0usei
+    gas: 0
+`)
+	ctrlF := false
+	blockF := false
+	ownerRef := &metav1.OwnerReference{
+		APIVersion:         "chaos-mesh.org/v1alpha1",
+		Kind:               "Workflow",
+		Name:               "release-test-20260521",
+		UID:                types.UID("abcd-uid"),
+		Controller:         &ctrlF,
+		BlockOwnerDeletion: &blockF,
+	}
+
+	manifest, _, err := runner.RenderBytes("t.tmpl", tmpl, map[string]string{tNodeKey: tValidator0}, ownerRef)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	obj := &unstructured.Unstructured{}
+	g.Expect(yaml.Unmarshal(manifest, &obj.Object)).To(Succeed())
+	refs := obj.GetOwnerReferences()
+	g.Expect(refs).To(HaveLen(1), "render must REPLACE ownerReferences so a template-smuggled ref can't leak through")
+	g.Expect(refs[0].Kind).To(Equal("Workflow"))
+	g.Expect(refs[0].Name).To(Equal("release-test-20260521"))
+	g.Expect(refs[0].UID).To(Equal(types.UID("abcd-uid")))
+
+	// Nil ownerRef leaves template-declared refs alone (no-stamp path).
+	manifestNil, _, err := runner.RenderBytes("t.tmpl", tmpl, map[string]string{tNodeKey: tValidator0}, nil)
+	g.Expect(err).NotTo(HaveOccurred())
+	objNil := &unstructured.Unstructured{}
+	g.Expect(yaml.Unmarshal(manifestNil, &objNil.Object)).To(Succeed())
+	g.Expect(objNil.GetOwnerReferences()).To(HaveLen(1))
+	g.Expect(objNil.GetOwnerReferences()[0].Kind).To(Equal("Impostor"))
 }
 
 func TestRenderBytes_MissingKeyIsError(t *testing.T) {
 	g := NewWithT(t)
 	tmpl := []byte("apiVersion: sei.io/v1alpha1\nkind: SeiNodeTask\nmetadata: {name: PLACEHOLDER}\nspec:\n  kind: GovVote\n  target: {nodeRef: {name: {{ .NODE }}}}\n")
-	_, _, err := runner.RenderBytes("t.tmpl", tmpl, map[string]string{})
+	_, _, err := runner.RenderBytes("t.tmpl", tmpl, map[string]string{}, nil)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("execute template"))
 }
@@ -459,7 +517,7 @@ func TestEmbeddedTemplates_Render(t *testing.T) {
 			g := NewWithT(t)
 			raw, err := os.ReadFile(filepath.Join(dir, c.file))
 			g.Expect(err).NotTo(HaveOccurred(), "read template")
-			manifest, name, err := runner.RenderBytes(c.file, raw, c.vars)
+			manifest, name, err := runner.RenderBytes(c.file, raw, c.vars, nil)
 			g.Expect(err).NotTo(HaveOccurred(), "render template")
 			g.Expect(name).NotTo(BeEmpty())
 
