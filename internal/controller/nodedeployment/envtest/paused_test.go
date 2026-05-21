@@ -131,6 +131,78 @@ func pausedCond(s *seiv1alpha1.SeiNodeDeployment) *metav1.Condition {
 	return apimeta.FindStatusCondition(s.Status.Conditions, seiv1alpha1.ConditionPaused)
 }
 
+// TestSND_Unpause_DuringActivePlan_PropagatesToChildren guards the
+// deadlock case: pause flips on with a plan in progress, then operator
+// unpauses. The unpause must clear Spec.Paused on every child or
+// await-nodes-running spins forever because the SeiNode controller
+// short-circuits on the still-paused children.
+func TestSND_Unpause_DuringActivePlan_PropagatesToChildren(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	snd := fixtures.NewSND(ns, "pause-during-plan", fixtures.WithReplicas(2))
+	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
+	key := client.ObjectKeyFromObject(snd)
+
+	// Initial settle — both children exist, no plan, paused condition seeded False.
+	waitForStatus(t, key, func(s *seiv1alpha1.SeiNodeDeployment) bool {
+		return len(listChildren(t, s)) == 2 &&
+			pausedCond(s) != nil && pausedCond(s).Status == metav1.ConditionFalse
+	}, "two children exist and ConditionPaused=False is seeded")
+
+	// Stall the faker so the v2 rollout's plan parks in flight.
+	testFaker.Pause()
+	t.Cleanup(testFaker.Resume)
+
+	patchSNDImage(t, getSND(t, key), "ghcr.io/sei-protocol/seid:v2.0.0")
+
+	// Wait for ConditionPlanInProgress=True — the SND has an active
+	// stalled plan, which is the precondition the deadlock-on-unpause
+	// case requires.
+	waitForStatus(t, key, func(s *seiv1alpha1.SeiNodeDeployment) bool {
+		return condTrue(s, seiv1alpha1.ConditionPlanInProgress)
+	}, "plan must be in progress before pause flips on")
+
+	// Pause with the plan active. Children pick up Paused=true.
+	cur := getSND(t, key)
+	patch := client.MergeFrom(cur.DeepCopy())
+	cur.Spec.Paused = true
+	g.Expect(testCli.Patch(testCtx, cur, patch)).To(Succeed())
+
+	waitFor(t, func() bool {
+		for _, c := range listChildren(t, getSND(t, key)) {
+			if !c.Spec.Paused {
+				return false
+			}
+		}
+		return true
+	}, "every child must reach Spec.Paused=true after SND pause")
+
+	// Unpause while ConditionPlanInProgress is still True. The
+	// controller propagates Spec.Paused=false to every child on this
+	// reconcile path so resume is not gated on plan completion.
+	cur = getSND(t, key)
+	patch = client.MergeFrom(cur.DeepCopy())
+	cur.Spec.Paused = false
+	g.Expect(testCli.Patch(testCtx, cur, patch)).To(Succeed())
+
+	waitFor(t, func() bool {
+		s := getSND(t, key)
+		if !condTrue(s, seiv1alpha1.ConditionPlanInProgress) {
+			// Test precondition lost — fail loudly so the test isn't
+			// silently passing on a non-deadlock path.
+			t.Fatalf("ConditionPlanInProgress must remain True throughout the test; got %+v",
+				apimeta.FindStatusCondition(s.Status.Conditions, seiv1alpha1.ConditionPlanInProgress))
+		}
+		for _, c := range listChildren(t, s) {
+			if c.Spec.Paused {
+				return false
+			}
+		}
+		return true
+	}, "every child must clear Spec.Paused=false on unpause even while ConditionPlanInProgress=True")
+}
+
 // TestSeiNode_Paused_FreezesReconcile asserts a paused SeiNode reports
 // ConditionSeiNodePaused=True and does not advance through its lifecycle.
 func TestSeiNode_Paused_FreezesReconcile(t *testing.T) {
