@@ -80,8 +80,8 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
-	// Seed always-present conditions before any early-return path so they
-	// are visible on every reconcile (see CLAUDE.md `### Conditions`).
+	// Seed always-present conditions before any early-return path so
+	// they are visible on every reconcile.
 	r.seedAlwaysPresentConditions(group)
 
 	if err := r.reconcileInternalService(ctx, group); err != nil {

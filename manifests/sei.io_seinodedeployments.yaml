@@ -26,6 +26,10 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .spec.paused
+      name: Paused
+      priority: 1
+      type: boolean
     - jsonPath: .status.rollout.targetHash
       name: Target
       priority: 1
@@ -138,6 +142,15 @@ spec:
                   HTTPRoutes on the platform Gateway. When absent, the deployment
                   is private with only per-node headless Services.
                 type: object
+              paused:
+                description: |-
+                  Paused freezes plan-driven orchestration on this SeiNodeDeployment.
+                  While true, the controller does not build new plans, does not start
+                  new rollouts, and does not propagate spec.template changes to child
+                  SeiNodes. In-flight plans drain to their natural conclusion.
+                  Networking and Service reconciliation continue normally so existing
+                  traffic is not disrupted. Operators clear the field to resume.
+                type: boolean
               replicas:
                 default: 1
                 description: Replicas is the number of SeiNode instances to create.
@@ -336,6 +349,16 @@ spec:
                           Keys use the sei-config unified schema (e.g. "evm.http_port", "storage.pruning").
                           These are applied on top of mode defaults during config-apply.
                         type: object
+                      paused:
+                        description: |-
+                          Paused freezes reconciliation on this SeiNode. While true, the
+                          controller does not advance the lifecycle, does not start new plans,
+                          and does not mutate derived resources (StatefulSet, Services, PVCs).
+                          In-flight tasks already running on the cluster (e.g., sidecar Jobs)
+                          run to their natural conclusion but the controller does not poll or
+                          transition state machines based on their results. Operators clear
+                          the field to resume.
+                        type: boolean
                       peers:
                         description: |-
                           Peers configures how this node discovers and connects to network peers.
@@ -1137,6 +1160,7 @@ spec:
                 - Initializing
                 - Ready
                 - Upgrading
+                - Paused
                 - Degraded
                 - Failed
                 - Terminating

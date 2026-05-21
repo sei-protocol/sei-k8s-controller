@@ -14,6 +14,7 @@ var allGroupPhases = []string{
 	string(seiv1alpha1.GroupPhaseInitializing),
 	string(seiv1alpha1.GroupPhaseReady),
 	string(seiv1alpha1.GroupPhaseUpgrading),
+	string(seiv1alpha1.GroupPhasePaused),
 	string(seiv1alpha1.GroupPhaseDegraded),
 	string(seiv1alpha1.GroupPhaseFailed),
 	string(seiv1alpha1.GroupPhaseTerminating),
