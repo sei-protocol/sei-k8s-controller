@@ -97,7 +97,7 @@ spec:
                   fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
+                name: workflow-vars-release-test-$SEI_WORKFLOW_RUN_ID
 
     - name: provision-rpc-fleet
       templateType: Task
@@ -125,7 +125,7 @@ spec:
                   fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
+                name: workflow-vars-release-test-$SEI_WORKFLOW_RUN_ID
 
     # TM RPC + REST go through the aggregate ClusterIP (stateless, safe
     # to load-balance). EVM RPC pins to rpc pod-0 via provision-snd's
@@ -141,7 +141,7 @@ spec:
           image: $RELEASE_TEST_IMAGE
           envFrom:
             - configMapRef:
-                name: workflow-vars-$SEI_WORKFLOW_RUN_ID
+                name: workflow-vars-release-test-$SEI_WORKFLOW_RUN_ID
           env:
             - {name: TEST_TARGET,        value: chain-agnostic}
             - {name: SEI_CHAIN_ID,       value: $(CHAIN_ID)}
