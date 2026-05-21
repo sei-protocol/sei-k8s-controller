@@ -13,12 +13,26 @@ import (
 	"syscall"
 
 	"github.com/urfave/cli/v3"
-	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/taskruntime"
 )
+
+// taskScheme is the controller-runtime client scheme for every seitask
+// subcommand: builtin K8s types + sei.io/v1alpha1 (SeiNodeDeployment,
+// SeiNodeTask, SeiNode) so typed Create/Get round-trips work. Chaos Mesh
+// CRs are read via unstructured so they're not registered here.
+var taskScheme = func() *runtime.Scheme {
+	s := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(seiv1alpha1.AddToScheme(s))
+	return s
+}()
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -50,7 +64,7 @@ func kubeClientFromEnv() (client.Client, error) {
 	if err != nil {
 		return nil, taskruntime.Infra(fmt.Errorf("loading kubeconfig: %w", err))
 	}
-	c, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
+	c, err := client.New(cfg, client.Options{Scheme: taskScheme})
 	if err != nil {
 		return nil, taskruntime.Infra(fmt.Errorf("building client: %w", err))
 	}

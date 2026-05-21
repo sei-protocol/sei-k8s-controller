@@ -60,13 +60,14 @@ rules:
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list", "watch", "create", "patch", "update"]
-# Chaos Mesh Workflow: read-only. compute-target-height looks up the
-# parent Workflow CR's UID so it can stamp the workflow-vars ConfigMap
-# with an ownerReference. Deletion of the Workflow then cascades
-# garbage-collection of the ConfigMap automatically.
+# Chaos Mesh Workflow + WorkflowNode: read-only.
+# workflows.get: LoadWorkflowIdentity fetches the Workflow CR's UID for
+# ownerRef stamping (Chaos Mesh doesn't project UID via downward API).
+# workflownodes.{get,list}: upload-report enumerates the per-step
+# WorkflowNode tree as part of the S3 snapshot.
 - apiGroups: ["chaos-mesh.org"]
-  resources: ["workflows"]
-  verbs: ["get"]
+  resources: ["workflows", "workflownodes"]
+  verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
