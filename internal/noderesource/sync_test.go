@@ -18,6 +18,14 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
 
+const (
+	testNamespace    = "default"
+	impostorName     = "impostor-swap"
+	steadyStateName  = "steady-state"
+	originalTestUID  = "uid-A"
+	impostorTestUID  = "uid-B"
+)
+
 // newSyncTestScheme builds a scheme with both core and sei.io types.
 // SyncStatefulSet writes appsv1.StatefulSet and reads seiv1alpha1.SeiNode,
 // so both must be registered for the fake client to encode/decode.
@@ -41,7 +49,7 @@ func TestSyncStatefulSet_FirstCreate(t *testing.T) {
 	g := NewWithT(t)
 	s := newSyncTestScheme(t)
 
-	node := newGenesisNode("first-create", "default")
+	node := newGenesisNode("first-create", testNamespace)
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(node).
@@ -52,10 +60,10 @@ func TestSyncStatefulSet_FirstCreate(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).NotTo(BeNil(), "first-create must return the applied StatefulSet")
 	g.Expect(sts.Name).To(Equal("first-create"))
-	g.Expect(sts.Namespace).To(Equal("default"))
+	g.Expect(sts.Namespace).To(Equal(testNamespace))
 
 	live := &appsv1.StatefulSet{}
-	g.Expect(c.Get(context.Background(), types.NamespacedName{Name: "first-create", Namespace: "default"}, live)).To(Succeed())
+	g.Expect(c.Get(context.Background(), types.NamespacedName{Name: "first-create", Namespace: testNamespace}, live)).To(Succeed())
 }
 
 // TestSyncStatefulSet_ImpostorDeletes covers the UID-mismatch branch.
@@ -69,17 +77,17 @@ func TestSyncStatefulSet_ImpostorDeletes(t *testing.T) {
 	g := NewWithT(t)
 	s := newSyncTestScheme(t)
 
-	node := newGenesisNode("impostor-swap", "default")
+	node := newGenesisNode(impostorName, testNamespace)
 	node.Status.StatefulSet = &seiv1alpha1.StatefulSetRef{
-		Name: "impostor-swap",
-		UID:  "uid-A",
+		Name: impostorName,
+		UID:  originalTestUID,
 	}
 
 	impostor := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "impostor-swap",
-			Namespace: "default",
-			UID:       "uid-B",
+			Name:      impostorName,
+			Namespace: testNamespace,
+			UID:       impostorTestUID,
 		},
 	}
 
@@ -96,7 +104,7 @@ func TestSyncStatefulSet_ImpostorDeletes(t *testing.T) {
 	// The impostor must be gone from the apiserver (fake client honors
 	// Background-propagation Delete on objects with no finalizers).
 	live := &appsv1.StatefulSet{}
-	err = c.Get(context.Background(), types.NamespacedName{Name: "impostor-swap", Namespace: "default"}, live)
+	err = c.Get(context.Background(), types.NamespacedName{Name: impostorName, Namespace: testNamespace}, live)
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "impostor must be deleted; got err=%v", err)
 }
 
@@ -109,17 +117,17 @@ func TestSyncStatefulSet_ImpostorThenApply(t *testing.T) {
 	g := NewWithT(t)
 	s := newSyncTestScheme(t)
 
-	node := newGenesisNode("impostor-2reconcile", "default")
+	node := newGenesisNode("impostor-2reconcile", testNamespace)
 	node.Status.StatefulSet = &seiv1alpha1.StatefulSetRef{
 		Name: "impostor-2reconcile",
-		UID:  "uid-A",
+		UID:  originalTestUID,
 	}
 
 	impostor := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "impostor-2reconcile",
-			Namespace: "default",
-			UID:       "uid-B",
+			Namespace: testNamespace,
+			UID:       impostorTestUID,
 		},
 	}
 
@@ -138,8 +146,8 @@ func TestSyncStatefulSet_ImpostorThenApply(t *testing.T) {
 	sts, err = SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).NotTo(BeNil(), "second reconcile must Apply fresh")
-	g.Expect(sts.UID).NotTo(Equal(types.UID("uid-A")))
-	g.Expect(sts.UID).NotTo(Equal(types.UID("uid-B")))
+	g.Expect(sts.UID).NotTo(Equal(types.UID(originalTestUID)))
+	g.Expect(sts.UID).NotTo(Equal(types.UID(impostorTestUID)))
 }
 
 // TestSyncStatefulSet_MatchingUID is the steady-state path. A live
@@ -149,17 +157,17 @@ func TestSyncStatefulSet_MatchingUID(t *testing.T) {
 	g := NewWithT(t)
 	s := newSyncTestScheme(t)
 
-	node := newGenesisNode("steady-state", "default")
+	node := newGenesisNode(steadyStateName, testNamespace)
 	node.Status.StatefulSet = &seiv1alpha1.StatefulSetRef{
-		Name: "steady-state",
-		UID:  "uid-A",
+		Name: steadyStateName,
+		UID:  originalTestUID,
 	}
 
 	existing := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "steady-state",
-			Namespace: "default",
-			UID:       "uid-A",
+			Name:      steadyStateName,
+			Namespace: testNamespace,
+			UID:       originalTestUID,
 		},
 	}
 
@@ -176,8 +184,8 @@ func TestSyncStatefulSet_MatchingUID(t *testing.T) {
 	// The original object must still be present (UID preserved means
 	// no delete occurred).
 	live := &appsv1.StatefulSet{}
-	g.Expect(c.Get(context.Background(), types.NamespacedName{Name: "steady-state", Namespace: "default"}, live)).To(Succeed())
-	g.Expect(live.UID).To(Equal(types.UID("uid-A")))
+	g.Expect(c.Get(context.Background(), types.NamespacedName{Name: steadyStateName, Namespace: testNamespace}, live)).To(Succeed())
+	g.Expect(live.UID).To(Equal(types.UID(originalTestUID)))
 }
 
 // TestSyncStatefulSet_TrackedButMissing covers the "controller restarts
@@ -187,10 +195,10 @@ func TestSyncStatefulSet_TrackedButMissing(t *testing.T) {
 	g := NewWithT(t)
 	s := newSyncTestScheme(t)
 
-	node := newGenesisNode("tracked-missing", "default")
+	node := newGenesisNode("tracked-missing", testNamespace)
 	node.Status.StatefulSet = &seiv1alpha1.StatefulSetRef{
 		Name: "tracked-missing",
-		UID:  "uid-A",
+		UID:  originalTestUID,
 	}
 
 	c := fake.NewClientBuilder().
@@ -211,7 +219,7 @@ func TestSyncStatefulSet_PausedReplicasZero(t *testing.T) {
 	g := NewWithT(t)
 	s := newSyncTestScheme(t)
 
-	node := newGenesisNode("paused-zero", "default")
+	node := newGenesisNode("paused-zero", testNamespace)
 	node.Spec.Paused = true
 
 	c := fake.NewClientBuilder().

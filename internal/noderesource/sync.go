@@ -7,7 +7,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -74,7 +73,7 @@ func SyncStatefulSet(
 		return nil, fmt.Errorf("setting owner reference: %w", err)
 	}
 	if node.Spec.Paused {
-		desired.Spec.Replicas = ptr.To(int32(0))
+		desired.Spec.Replicas = new(int32)
 	}
 
 	key := client.ObjectKeyFromObject(desired)
@@ -108,6 +107,7 @@ func SyncStatefulSet(
 	// call returns. No re-Get is needed (and a re-Get against the cache
 	// can race with watch propagation, returning NotFound on the very
 	// first Apply).
+	//nolint:staticcheck // migrating to typed ApplyConfiguration builders is a separate effort
 	if err := c.Patch(ctx, desired, client.Apply, statefulSetFieldOwner, client.ForceOwnership); err != nil {
 		return nil, fmt.Errorf("applying statefulset: %w", err)
 	}
