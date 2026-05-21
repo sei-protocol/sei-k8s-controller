@@ -46,7 +46,7 @@ func TestEnsureWorkflowVarsCM_CreatesWithOwnerRef(t *testing.T) {
 	if got.Data[string(KeyRunID)] != testWorkflowName {
 		t.Fatalf("seed not written: %v", got.Data)
 	}
-	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].Kind != "Workflow" {
+	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].Kind != workflowKind {
 		t.Fatalf("ownerRef not stamped: %v", got.OwnerReferences)
 	}
 }

@@ -56,11 +56,11 @@ func newProvisionSNDCommand() *cli.Command {
 }
 
 func runProvisionSND(ctx context.Context, cmd *cli.Command) error {
-	wf, err := taskruntime.LoadWorkflowIdentity()
+	c, err := kubeClientFromEnv()
 	if err != nil {
 		return err
 	}
-	c, err := kubeClientFromEnv()
+	wf, err := taskruntime.LoadWorkflowIdentity(ctx, c)
 	if err != nil {
 		return err
 	}
