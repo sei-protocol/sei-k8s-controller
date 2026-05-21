@@ -23,9 +23,9 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"node-0", "node-1", "node-2"},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// The planner triggers a genesis plan whenever
+			// ConditionGenesisCeremonyComplete is not True.
+
 		},
 	}
 
@@ -116,9 +116,9 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"node-0"},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// The planner triggers a genesis plan whenever
+			// ConditionGenesisCeremonyComplete is not True.
+
 		},
 	}
 
@@ -163,9 +163,9 @@ func TestBuildGroupAssemblyPlan_PropagatesOverrides(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{testNodeName},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// The planner triggers a genesis plan whenever
+			// ConditionGenesisCeremonyComplete is not True.
+
 		},
 	}
 
@@ -220,9 +220,9 @@ func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{testNodeName},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// The planner triggers a genesis plan whenever
+			// ConditionGenesisCeremonyComplete is not True.
+
 		},
 	}
 
@@ -262,9 +262,9 @@ func TestBuildGroupAssemblyPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"node-0", "node-1"},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// The planner triggers a genesis plan whenever
+			// ConditionGenesisCeremonyComplete is not True.
+
 		},
 	}
 

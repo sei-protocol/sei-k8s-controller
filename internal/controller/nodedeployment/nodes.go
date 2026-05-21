@@ -39,27 +39,35 @@ func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, gro
 	}
 
 	r.detectDeploymentNeeded(group)
-	r.detectGenesisCeremonyNeeded(group)
 	return nil
 }
 
-// detectGenesisCeremonyNeeded sets GenesisCeremonyNeeded when a genesis
-// ceremony is required.
-func (r *SeiNodeDeploymentReconciler) detectGenesisCeremonyNeeded(group *seiv1alpha1.SeiNodeDeployment) {
-	if group.Spec.Genesis == nil {
-		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
+// setGenesisCeremonyCondition stamps ConditionGenesisCeremonyComplete
+// with the SND's current genesis lifecycle state:
+//
+//   - True / Complete         — ceremony finished (latched)
+//   - False / NotApplicable   — spec.genesis is unset
+//   - False / NotStarted      — spec.genesis set, ceremony not yet started
+//   - False / InProgress      — ceremony executing under an active plan
+//
+// The latch check runs first. Reordering it would let a completed
+// ceremony be downgraded to NotApplicable if spec.genesis is cleared.
+func (r *SeiNodeDeploymentReconciler) setGenesisCeremonyCondition(group *seiv1alpha1.SeiNodeDeployment) {
+	if hasConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
 		return
 	}
-	if hasConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
-		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
+	if group.Spec.Genesis == nil {
+		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+			"NotApplicable", "spec.genesis is unset")
 		return
 	}
 	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+			"InProgress", "genesis ceremony is executing under an active plan")
 		return
 	}
-
-	setCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded, metav1.ConditionTrue,
-		"GenesisConfigured", "Genesis ceremony configured")
+	setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+		"NotStarted", "genesis ceremony has not yet started")
 }
 
 // detectDeploymentNeeded checks if deployment-worthy fields have changed

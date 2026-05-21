@@ -86,7 +86,7 @@ func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *s
 
 	if group.Spec.Genesis != nil && !isDeploymentPlan {
 		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue,
-			"CeremonyComplete", "Genesis ceremony completed")
+			"Complete", "genesis ceremony completed")
 	}
 
 	group.Status.Plan = nil

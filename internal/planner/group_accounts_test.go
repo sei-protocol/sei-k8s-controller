@@ -35,9 +35,6 @@ func groupWithAccounts(accounts []seiv1alpha1.GenesisAccount) *seiv1alpha1.SeiNo
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{testNodeName},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
 		},
 	}
 }
