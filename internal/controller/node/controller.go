@@ -112,6 +112,10 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	if err := r.reconcileStatefulSet(ctx, node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
+	}
+
 	if node.Spec.Paused {
 		if err := flushStatus(); err != nil {
 			return ctrl.Result{}, fmt.Errorf("flushing paused status: %w", err)

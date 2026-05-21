@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	appsv1 "k8s.io/api/apps/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 )
@@ -43,26 +39,28 @@ func deserializeApplyStatefulSet(id string, params json.RawMessage, cfg Executio
 	}, nil
 }
 
+// Execute writes the SeiNode's StatefulSet via the shared SSA helper.
+// The SeiNode controller continuously calls the same helper from its
+// own reconcile loop; both paths Apply the same rendered content under
+// the same fieldManager, so they are idempotent against each other.
+// The task remains in the plan as a sync gate for replace-pod.
+//
+// A nil StatefulSet with no error means SyncStatefulSet detected a
+// UID-mismatch impostor and deleted it without applying. Leave the
+// task in Running so the executor re-invokes on the next reconcile,
+// at which point the impostor is gone and Apply creates fresh.
 func (e *applyStatefulSetExecution) Execute(ctx context.Context) error {
 	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
 		return err
 	}
-
-	desired, err := noderesource.GenerateStatefulSet(node, e.cfg.Platform)
+	sts, err := noderesource.SyncStatefulSet(ctx, e.cfg.KubeClient, e.cfg.Scheme, node, e.cfg.Platform)
 	if err != nil {
-		return Terminal(fmt.Errorf("generating statefulset: %w", err))
-	}
-	desired.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
-	if err := ctrl.SetControllerReference(node, desired, e.cfg.Scheme); err != nil {
-		return fmt.Errorf("setting owner reference on statefulset: %w", err)
-	}
-
-	//nolint:staticcheck // migrating to typed ApplyConfiguration is a separate effort
-	if err := e.cfg.KubeClient.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
 		return fmt.Errorf("applying statefulset: %w", err)
 	}
-
+	if sts == nil {
+		return nil
+	}
 	e.complete()
 	return nil
 }
