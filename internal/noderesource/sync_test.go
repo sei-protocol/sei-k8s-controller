@@ -19,11 +19,11 @@ import (
 )
 
 const (
-	testNamespace    = "default"
-	impostorName     = "impostor-swap"
-	steadyStateName  = "steady-state"
-	originalTestUID  = "uid-A"
-	impostorTestUID  = "uid-B"
+	testNamespace   = "default"
+	impostorName    = "impostor-swap"
+	steadyStateName = "steady-state"
+	originalTestUID = "uid-A"
+	impostorTestUID = "uid-B"
 )
 
 // newSyncTestScheme builds a scheme with both core and sei.io types.
