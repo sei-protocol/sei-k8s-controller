@@ -30,6 +30,7 @@ func main() {
 		Commands: []*cli.Command{
 			newKeygenCommand(),
 			newProvisionSNDCommand(),
+			newRunnerCommand(),
 		},
 	}
 

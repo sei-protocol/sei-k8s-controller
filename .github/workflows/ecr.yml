@@ -40,27 +40,10 @@ jobs:
           cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
 
-      # The runner image is the orchestration container used by Chaos Mesh
-      # Workflows in scenarios/ — it ships its own per-kind Go text templates
-      # and applies SeiNodeTask CRs via the dynamic client. Built from the
-      # same repo context as the controller; the only difference is the
-      # Dockerfile path.
-      - name: Build and push seitask-runner image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: runner/Dockerfile
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.ecr-login.outputs.registry }}/sei/seitask-runner:${{ inputs.tag || github.sha }}
-          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
-          cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
-
-      # The seitask image is the new monolithic Workflow-Task primitive
-      # binary: one image, multiple urfave/cli subcommands (keygen,
-      # provision-snd, upload-report, ...) per docs/design/test-harness-lld.md.
-      # Co-built with the controller manager and seitask-runner so all three
-      # share the same commit SHA in scenario pins.
+      # Monolithic Workflow-Task primitive binary (keygen, provision-snd,
+      # runner, ...) per docs/design/test-harness-lld.md. Published to
+      # sei/seitask-runner so scenarios keep the image-name muscle memory;
+      # the runner capability moves to args: ["runner", ...].
       - name: Build and push seitask image
         uses: docker/build-push-action@v6
         with:
@@ -68,6 +51,6 @@ jobs:
           file: cmd/seitask/Dockerfile
           push: true
           platforms: linux/amd64
-          tags: ${{ steps.ecr-login.outputs.registry }}/sei/seitask:${{ inputs.tag || github.sha }}
+          tags: ${{ steps.ecr-login.outputs.registry }}/sei/seitask-runner:${{ inputs.tag || github.sha }}
           cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max

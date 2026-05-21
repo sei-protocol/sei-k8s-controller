@@ -15,6 +15,10 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /
 COPY --from=builder /workspace/seitask /seitask
+# Bundle the runner subcommand's default templates at the conventional
+# mount path. Scenario authors override by mounting a different ConfigMap
+# at /templates/ — same contract as the legacy seitask-runner image.
+COPY --from=builder /workspace/runner/templates /templates
 USER 65532:65532
 
 ENTRYPOINT ["/seitask"]
