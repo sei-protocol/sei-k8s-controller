@@ -22,6 +22,8 @@
 #   $SEID_IMAGE             seid container image
 #   $SEITASK_IMAGE          seitask monolith image (SND templates baked in)
 #   $SEILOAD_IMAGE          sei-load benchmark image (ghcr.io/sei-protocol/sei-load:…)
+#   $SEILOAD_COMMIT_ID      sei-chain commit SHA (parsed by wrapper from $SEID_IMAGE
+#                           tag); flows into SEILOAD_COMMIT_ID metric/report label
 #   $SEILOAD_PROFILE        profile name in the source CM (e.g., "nightly_evm_transfer")
 #   $DURATION_MINUTES       seiload run length
 ---
@@ -151,6 +153,10 @@ spec:
           args:
             - |
               set -eu
+              # Fast-fail on missing source CM rather than letting the
+              # pod hang in ContainerCreating against a missing mount.
+              kubectl -n "${SEI_NAMESPACE}" get configmap seiload-profiles >/dev/null
+
               QUOTED=$(printf '%s' "${RPC_EVM_RPC_LIST}" | sed 's|\([^,][^,]*\)|"\1"|g')
               sed \
                 -e "s|__SEI_CHAIN_ID__|${CHAIN_ID}|g" \
@@ -174,7 +180,6 @@ spec:
               | kubectl apply -f -
           env:
             - {name: SEI_NAMESPACE,        valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}
-            - {name: SEI_WORKFLOW_RUN_ID,  value: "$SEI_WORKFLOW_RUN_ID"}
             - {name: SEILOAD_PROFILE,      value: "$SEILOAD_PROFILE"}
             - {name: PROFILE_CM,           value: "seiload-profile-$SEI_WORKFLOW_RUN_ID"}
           envFrom:
@@ -197,15 +202,17 @@ spec:
           args:
             - --config
             - /etc/seiload/profile.json
-            - --duration=${DURATION_MINUTES}m
+            - --duration=$(DURATION_MINUTES)m
             - --post-summary-flush-delay=45s
             - --track-receipts=true
           ports:
             - {name: metrics, containerPort: 9090, protocol: TCP}
           env:
-            - {name: SEILOAD_RUN_ID,   value: "$SEI_WORKFLOW_RUN_ID"}
-            - {name: SEILOAD_CHAIN_ID, value: "$SEI_CHAIN_ID"}
-            - {name: SEILOAD_WORKLOAD, value: nightly}
+            - {name: DURATION_MINUTES,   value: "$DURATION_MINUTES"}
+            - {name: SEILOAD_RUN_ID,     value: "$SEI_WORKFLOW_RUN_ID"}
+            - {name: SEILOAD_CHAIN_ID,   value: "$SEI_CHAIN_ID"}
+            - {name: SEILOAD_COMMIT_ID,  value: "$SEILOAD_COMMIT_ID"}
+            - {name: SEILOAD_WORKLOAD,   value: nightly}
           volumeMounts:
             - {name: profile, mountPath: /etc/seiload, readOnly: true}
           resources:

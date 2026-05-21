@@ -52,6 +52,15 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "create"]
+# pods/exec: load-test's wait-rpc-caught-up Task execs `seid status` on
+# the RPC pod to poll catching_up=false. Chaos Mesh Task.container has
+# no serviceAccountName field (v2.8 limitation), so this Role is bound
+# to the namespace `default` SA via platform#626 — adding pods/exec
+# here requires a coordinated platform-repo update to that vendored
+# Role for the verb to reach the actual Task pod.
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]
 # ConfigMaps: workflow-vars-<run-id> upsert by producer bash steps.
 # `create`+`patch` are the apply-path verbs; `get`+`list`+`watch` support
 # read-modify-write (resolve-proposal-id merges PROPOSAL_ID into the
