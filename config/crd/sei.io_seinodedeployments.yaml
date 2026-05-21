@@ -74,6 +74,7 @@ spec:
                   Genesis configures genesis ceremony orchestration for this group.
                   When set, the controller generates GenesisCeremonyNodeConfig for each
                   child SeiNode and coordinates assembly of the final genesis.json.
+                  Immutable once set (enforced at the spec level via CEL).
                 properties:
                   accountBalance:
                     default: 1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom
@@ -130,9 +131,6 @@ spec:
                 required:
                 - chainId
                 type: object
-                x-kubernetes-validations:
-                - message: spec.genesis is immutable after creation
-                  rule: self == oldSelf
               networking:
                 description: |-
                   Networking enables public networking for the deployment.
@@ -876,6 +874,11 @@ spec:
                 (full nodes inherit genesis from the validator ceremony''s S3 artifact);
                 remove spec.genesis or set template.spec.validator: {}'
               rule: '!has(self.genesis) || has(self.template.spec.validator)'
+            - message: spec.genesis is immutable once set; the ceremony's outputs
+                (chain ID, validator gentxs, account balances) are baked into chain
+                state and cannot be retroactively rewritten by editing the spec
+              rule: '!has(oldSelf.genesis) || (has(self.genesis) && self.genesis ==
+                oldSelf.genesis)'
           status:
             description: SeiNodeDeploymentStatus defines the observed state of a SeiNodeDeployment.
             properties:

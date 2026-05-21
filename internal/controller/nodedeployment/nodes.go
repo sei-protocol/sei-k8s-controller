@@ -39,27 +39,41 @@ func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, gro
 	}
 
 	r.detectDeploymentNeeded(group)
-	r.detectGenesisCeremonyNeeded(group)
+	r.setGenesisCeremonyCondition(group)
 	return nil
 }
 
-// detectGenesisCeremonyNeeded sets GenesisCeremonyNeeded when a genesis
-// ceremony is required.
-func (r *SeiNodeDeploymentReconciler) detectGenesisCeremonyNeeded(group *seiv1alpha1.SeiNodeDeployment) {
-	if group.Spec.Genesis == nil {
-		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
+// setGenesisCeremonyCondition keeps ConditionGenesisCeremonyComplete in
+// sync with the SND's genesis lifecycle. The condition stays present on
+// every reconciled SND and carries the current state via Reason:
+//
+//   - True / Complete         — ceremony finished (latched)
+//   - False / NotApplicable   — spec.genesis is unset
+//   - False / NotStarted      — spec.genesis set, ceremony not yet started
+//   - False / InProgress      — ceremony executing under an active plan
+//
+// The True/Complete state is latched: once a ceremony completes, the
+// condition stays True even if an operator later clears spec.genesis.
+// Clearing the spec doesn't unmake history.
+//
+// The latch check must come first; reordering would cause a completed
+// ceremony to be downgraded to NotApplicable when spec.genesis is cleared.
+func (r *SeiNodeDeploymentReconciler) setGenesisCeremonyCondition(group *seiv1alpha1.SeiNodeDeployment) {
+	if hasConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
 		return
 	}
-	if hasConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
-		removeCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded)
+	if group.Spec.Genesis == nil {
+		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+			"NotApplicable", "spec.genesis is unset")
 		return
 	}
 	if hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {
+		setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+			"InProgress", "genesis ceremony is executing under an active plan")
 		return
 	}
-
-	setCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded, metav1.ConditionTrue,
-		"GenesisConfigured", "Genesis ceremony configured")
+	setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+		"NotStarted", "genesis ceremony has not yet started")
 }
 
 // detectDeploymentNeeded checks if deployment-worthy fields have changed

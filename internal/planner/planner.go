@@ -86,8 +86,10 @@ func ForGroup(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
 	return nil, nil
 }
 
-// needsGenesisPlan returns true when GenesisCeremonyNeeded is set with
-// sufficient nodes.
+// needsGenesisPlan returns true when a genesis ceremony has not yet
+// completed for an SND that requires one. Reads
+// ConditionGenesisCeremonyComplete: any value other than True/Complete
+// means "ceremony still needs to run."
 func needsGenesisPlan(group *seiv1alpha1.SeiNodeDeployment) bool {
 	if group.Spec.Genesis == nil {
 		return false
@@ -95,7 +97,7 @@ func needsGenesisPlan(group *seiv1alpha1.SeiNodeDeployment) bool {
 	if group.Status.Plan != nil {
 		return false
 	}
-	if !hasCondition(group, seiv1alpha1.ConditionGenesisCeremonyNeeded) {
+	if hasCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
 		return false
 	}
 	return allReplicasCreated(group)

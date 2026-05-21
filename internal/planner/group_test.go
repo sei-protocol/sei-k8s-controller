@@ -23,9 +23,10 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"node-0", "node-1", "node-2"},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// Absence of ConditionGenesisCeremonyComplete=True (the new
+			// signal) means the planner treats the SND as needing a
+			// genesis plan.
+
 		},
 	}
 
@@ -116,9 +117,10 @@ func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"node-0"},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// Absence of ConditionGenesisCeremonyComplete=True (the new
+			// signal) means the planner treats the SND as needing a
+			// genesis plan.
+
 		},
 	}
 
@@ -163,9 +165,10 @@ func TestBuildGroupAssemblyPlan_PropagatesOverrides(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{testNodeName},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// Absence of ConditionGenesisCeremonyComplete=True (the new
+			// signal) means the planner treats the SND as needing a
+			// genesis plan.
+
 		},
 	}
 
@@ -220,9 +223,10 @@ func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{testNodeName},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// Absence of ConditionGenesisCeremonyComplete=True (the new
+			// signal) means the planner treats the SND as needing a
+			// genesis plan.
+
 		},
 	}
 
@@ -262,9 +266,10 @@ func TestBuildGroupAssemblyPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"node-0", "node-1"},
-			Conditions: []metav1.Condition{
-				{Type: seiv1alpha1.ConditionGenesisCeremonyNeeded, Status: metav1.ConditionTrue},
-			},
+			// Absence of ConditionGenesisCeremonyComplete=True (the new
+			// signal) means the planner treats the SND as needing a
+			// genesis plan.
+
 		},
 	}
 

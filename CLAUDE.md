@@ -62,7 +62,7 @@ setCondition(obj, ConditionNetworkingReady, metav1.ConditionFalse,
 
 The narrow exceptions to the always-present rule are **School 2**:
 
-- **`*Needed`-style conditions** where `True` is the exception and `False` would be tautological. `GenesisCeremonyNeeded` is the canonical sei example — its `False` value is redundant with the absence of the feature.
+- **`*Needed`-style conditions** where `True` is the exception and `False` would be tautological — its `False` value would be redundant with the absence of the feature. There are no current instances in this codebase; the exception is retained in the doctrine for future conditions where it genuinely fits.
 - **`kubectl wait` consumer conditions** where present-vs-absent semantics are explicitly load-bearing. `SeiNodeTask.Status.Conditions[Ready|Failed]` is documented as latch-on-terminal-state because the seitask-runner depends on `kubectl wait --for=condition=Ready=true` (which matches `True` only) and `--for=condition=Failed=true` as the dual exit signal. The Ready+Failed pair is the documented exception to the "no mixed polarities for the same subject" rule below — both latch independently on terminal state.
 
 Any new condition that doesn't fit one of these exceptions defaults to School 1.

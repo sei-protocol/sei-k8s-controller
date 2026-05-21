@@ -8,6 +8,7 @@ import (
 // SeiNodeDeploymentSpec defines the desired state of a SeiNodeDeployment.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.genesis) || has(self.template.spec.validator)",message="genesis is meaningful only for validator-role deployments (full nodes inherit genesis from the validator ceremony's S3 artifact); remove spec.genesis or set template.spec.validator: {}"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.genesis) || (has(self.genesis) && self.genesis == oldSelf.genesis)",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
 type SeiNodeDeploymentSpec struct {
 	// Replicas is the number of SeiNode instances to create.
 	// +kubebuilder:validation:Minimum=1
@@ -30,8 +31,8 @@ type SeiNodeDeploymentSpec struct {
 	// Genesis configures genesis ceremony orchestration for this group.
 	// When set, the controller generates GenesisCeremonyNodeConfig for each
 	// child SeiNode and coordinates assembly of the final genesis.json.
+	// Immutable once set (enforced at the spec level via CEL).
 	// +optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec.genesis is immutable after creation"
 	Genesis *GenesisCeremonyConfig `json:"genesis,omitempty"`
 
 	// Networking enables public networking for the deployment.
@@ -364,7 +365,6 @@ const (
 	ConditionRouteReady              = "RouteReady"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
 	ConditionPlanInProgress          = "PlanInProgress"
-	ConditionGenesisCeremonyNeeded   = "GenesisCeremonyNeeded"
 	ConditionRolloutInProgress       = "RolloutInProgress"
 )
 

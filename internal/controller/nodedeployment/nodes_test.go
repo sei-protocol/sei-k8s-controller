@@ -314,38 +314,49 @@ func TestGenerateSeiNode_DeepCopiesTemplate(t *testing.T) {
 		"modification to generated SeiNode should not mutate the group template")
 }
 
-func TestDetectGenesisCeremonyNeeded(t *testing.T) {
+func TestSetGenesisCeremonyCondition(t *testing.T) {
 	cases := []struct {
-		name        string
-		mutate      func(*seiv1alpha1.SeiNodeDeployment)
-		wantPresent bool
-		wantStatus  metav1.ConditionStatus
+		name       string
+		mutate     func(*seiv1alpha1.SeiNodeDeployment)
+		wantStatus metav1.ConditionStatus
+		wantReason string
 	}{
 		{
-			name:        "no genesis spec clears condition",
-			mutate:      func(g *seiv1alpha1.SeiNodeDeployment) { g.Spec.Genesis = nil },
-			wantPresent: false,
+			name:       "no genesis spec sets False/NotApplicable",
+			mutate:     func(g *seiv1alpha1.SeiNodeDeployment) { g.Spec.Genesis = nil },
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "NotApplicable",
 		},
 		{
-			name: "ceremony complete clears condition",
+			name: "already complete stays True/Complete (latched)",
 			mutate: func(g *seiv1alpha1.SeiNodeDeployment) {
-				setCondition(g, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue, "Done", "")
-				setCondition(g, seiv1alpha1.ConditionGenesisCeremonyNeeded, metav1.ConditionTrue, "Stale", "")
+				setCondition(g, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue, "Complete", "ceremony already done")
 			},
-			wantPresent: false,
+			wantStatus: metav1.ConditionTrue,
+			wantReason: "Complete",
 		},
 		{
-			name: "plan in progress leaves condition untouched",
+			name: "latched True survives operator clearing spec.genesis",
+			mutate: func(g *seiv1alpha1.SeiNodeDeployment) {
+				setCondition(g, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue, "Complete", "ceremony already done")
+				g.Spec.Genesis = nil
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: "Complete",
+		},
+		{
+			name: "plan in progress sets False/InProgress",
 			mutate: func(g *seiv1alpha1.SeiNodeDeployment) {
 				setCondition(g, seiv1alpha1.ConditionPlanInProgress, metav1.ConditionTrue, "Running", "")
 			},
-			wantPresent: false,
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "InProgress",
 		},
 		{
-			name:        "genesis configured sets condition true",
-			mutate:      func(g *seiv1alpha1.SeiNodeDeployment) {},
-			wantPresent: true,
-			wantStatus:  metav1.ConditionTrue,
+			name:       "genesis configured but not started sets False/NotStarted",
+			mutate:     func(g *seiv1alpha1.SeiNodeDeployment) {},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "NotStarted",
 		},
 	}
 	for _, tc := range cases {
@@ -356,15 +367,12 @@ func TestDetectGenesisCeremonyNeeded(t *testing.T) {
 			tc.mutate(group)
 
 			r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
-			r.detectGenesisCeremonyNeeded(group)
+			r.setGenesisCeremonyCondition(group)
 
-			cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyNeeded)
-			if !tc.wantPresent {
-				g.Expect(cond).To(BeNil())
-				return
-			}
-			g.Expect(cond).NotTo(BeNil())
+			cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete)
+			g.Expect(cond).NotTo(BeNil(), "ConditionGenesisCeremonyComplete must be set on every reconciled SND")
 			g.Expect(cond.Status).To(Equal(tc.wantStatus))
+			g.Expect(cond.Reason).To(Equal(tc.wantReason))
 		})
 	}
 }
