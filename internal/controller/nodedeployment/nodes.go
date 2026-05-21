@@ -97,7 +97,7 @@ func (r *SeiNodeDeploymentReconciler) setGenesisCeremonyCondition(group *seiv1al
 		return
 	}
 	setCondition(group, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
-		"NotStarted", "genesis ceremony has not yet started")
+		ReasonNotStarted, "genesis ceremony has not yet started")
 }
 
 // detectDeploymentNeeded checks if deployment-worthy fields have changed

@@ -356,7 +356,7 @@ func TestSetGenesisCeremonyCondition(t *testing.T) {
 			name:       "genesis configured but not started sets False/NotStarted",
 			mutate:     func(g *seiv1alpha1.SeiNodeDeployment) {},
 			wantStatus: metav1.ConditionFalse,
-			wantReason: "NotStarted",
+			wantReason: ReasonNotStarted,
 		},
 		{
 			// Post-failPlan: PlanInProgress=False, no latched Complete.
@@ -367,7 +367,7 @@ func TestSetGenesisCeremonyCondition(t *testing.T) {
 				setCondition(g, seiv1alpha1.ConditionPlanInProgress, metav1.ConditionFalse, "PlanFailed", "previous attempt failed")
 			},
 			wantStatus: metav1.ConditionFalse,
-			wantReason: "NotStarted",
+			wantReason: ReasonNotStarted,
 		},
 	}
 	for _, tc := range cases {

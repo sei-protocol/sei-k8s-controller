@@ -257,14 +257,14 @@ func TestSeedAlwaysPresentConditions(t *testing.T) {
 			mutate:     func(g *seiv1alpha1.SeiNodeDeployment) {},
 			condType:   seiv1alpha1.ConditionPlanInProgress,
 			wantStatus: metav1.ConditionFalse,
-			wantReason: "NotStarted",
+			wantReason: ReasonNotStarted,
 		},
 		{
 			name:       "RolloutInProgress seeds False/NotStarted on a fresh SND",
 			mutate:     func(g *seiv1alpha1.SeiNodeDeployment) {},
 			condType:   seiv1alpha1.ConditionRolloutInProgress,
 			wantStatus: metav1.ConditionFalse,
-			wantReason: "NotStarted",
+			wantReason: ReasonNotStarted,
 		},
 		{
 			// The seed runs before transition paths in the same

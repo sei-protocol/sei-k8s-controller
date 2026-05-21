@@ -148,6 +148,11 @@ func setNodesReadyCondition(group *seiv1alpha1.SeiNodeDeployment, ready, desired
 	setCondition(group, seiv1alpha1.ConditionNodesReady, status, reason, message)
 }
 
+// ReasonNotStarted is the seed reason for always-present lifecycle
+// conditions before any transition has occurred. Shared across
+// PlanInProgress, RolloutInProgress, and GenesisCeremonyComplete.
+const ReasonNotStarted = "NotStarted"
+
 // seedAlwaysPresentConditions stamps every always-present condition.
 // The InProgress seeds fire only when absent so transition paths
 // (startPlan, completePlan, etc.) own the reason vocabulary once an
@@ -156,9 +161,9 @@ func (r *SeiNodeDeploymentReconciler) seedAlwaysPresentConditions(group *seiv1al
 	r.setGenesisCeremonyCondition(group)
 	r.setPausedCondition(group)
 	seedConditionIfAbsent(group, seiv1alpha1.ConditionPlanInProgress,
-		"NotStarted", "no plan has run yet")
+		ReasonNotStarted, "no plan has run yet")
 	seedConditionIfAbsent(group, seiv1alpha1.ConditionRolloutInProgress,
-		"NotStarted", "no rollout has run yet")
+		ReasonNotStarted, "no rollout has run yet")
 }
 
 // setPausedCondition mirrors spec.paused and emits an event on each
