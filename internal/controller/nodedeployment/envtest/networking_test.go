@@ -147,17 +147,17 @@ func TestNetworking_FullNode_PublishesHTTPRoutes(t *testing.T) {
 	g.Expect(*wsHeader.Type).To(Equal(gatewayv1.HeaderMatchExact), "EVM WS match type=Exact")
 	g.Expect(*wsRule.BackendRefs[0].Port).To(Equal(gatewayv1.PortNumber(8546)), "EVM WS rule routes to 8546")
 
-	// 5. ConditionRouteReady lands at False with reason DNSPending: the
-	//    controller publishes HTTPRoutes via SSA, then gates the
+	// 5. ConditionNetworkingReady lands at False with reason DNSPending:
+	//    the controller publishes HTTPRoutes via SSA, then gates the
 	//    operator-visible "ready" signal on the external-DNS pipeline
-	//    having resolved the route's hostname. envtest has no DNS
-	//    publisher, so test.local never resolves and the gate stays
-	//    pending — that's the signal an operator sees when external-DNS
-	//    is lagging in a real cluster.
+	//    resolving the route's hostname. envtest has no DNS publisher,
+	//    so test.local never resolves and the gate stays pending —
+	//    the same signal an operator sees when external-DNS is lagging
+	//    in a real cluster.
 	waitForStatus(t, client.ObjectKeyFromObject(snd), func(latest *seiv1alpha1.SeiNodeDeployment) bool {
-		c := apimeta.FindStatusCondition(latest.Status.Conditions, seiv1alpha1.ConditionRouteReady)
+		c := apimeta.FindStatusCondition(latest.Status.Conditions, seiv1alpha1.ConditionNetworkingReady)
 		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "DNSPending"
-	}, "ConditionRouteReady=False/DNSPending after HTTPRoute publication")
+	}, "ConditionNetworkingReady=False/DNSPending after HTTPRoute publication")
 }
 
 // TestNetworking_Validator_NoHTTPRoutes asserts the negative case: when
@@ -196,13 +196,16 @@ func TestNetworking_Validator_NoHTTPRoutes(t *testing.T) {
 	}, "2s", "200ms").Should(Equal(0),
 		"validator-mode SND with networking must publish zero HTTPRoutes")
 
-	// Belt-and-suspenders: the controller should NOT have set
-	// ConditionRouteReady=True. With zero effective routes the
-	// controller's reconcileRoute calls removeCondition explicitly, so
-	// either the condition is absent or it's anything-but-True.
+	// The controller surfaces a False condition with a stable reason
+	// rather than removing it. Validator mode declares no
+	// externally-routable protocols, so the reason is NoEffectiveRoutes.
 	latest := getSND(t, client.ObjectKeyFromObject(snd))
-	g.Expect(condTrue(latest, seiv1alpha1.ConditionRouteReady)).To(BeFalse(),
-		"ConditionRouteReady must not be True for validator-mode SND")
+	cond := apimeta.FindStatusCondition(latest.Status.Conditions, seiv1alpha1.ConditionNetworkingReady)
+	g.Expect(cond).NotTo(BeNil(), "ConditionNetworkingReady must be set for validator-mode SND")
+	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse),
+		"ConditionNetworkingReady must be False for validator-mode SND")
+	g.Expect(cond.Reason).To(Equal("NoEffectiveRoutes"),
+		"reason surfaces the no-routable-protocols intent")
 
 	// Sanity: deleting the SND cleans up the external Service so the
 	// next test on a fresh namespace doesn't see a leak across the

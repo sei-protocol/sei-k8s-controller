@@ -47,34 +47,34 @@ The single-patch reconcile model means each reconcile snapshots `obj.DeepCopy()`
 
 ### Conditions
 
-Every `metav1.Condition` on `SeiNodeDeployment`, `SeiNode`, or `SeiNodeTask` follows the Kubernetes upstream pattern: **once a controller sets a condition, it stays present on the reconciled object**, transitioning between `True` / `False` / `Unknown` with a stable `Reason` and a `lastTransitionTime`. This is the default — "School 1." It matches Pod (`Ready`, `Initialized`, `ContainersReady`, `PodScheduled` — stably present once the kubelet has begun processing the pod), Deployment (`Available`, `Progressing` — stably present once the Deployment reconciles), Gateway-API HTTPRoute (`Accepted`, `ResolvedRefs` — stably present per ParentRef once the implementation reconciles it), and CAPI Cluster/Machine (`Ready`, `InfrastructureReady` — stably present after first reconcile). Even "feature off" or "feature broken" states are expressed as `Status=False, Reason=<stable enum value>` — never as absence.
+Every `metav1.Condition` on `SeiNodeDeployment`, `SeiNode`, or `SeiNodeTask` follows the Kubernetes upstream pattern: **once a controller sets a condition, it stays present on the reconciled object**, transitioning between `True` / `False` / `Unknown` with a stable `Reason` and a `lastTransitionTime`. This is the default. It matches Pod (`Ready`, `Initialized`, `ContainersReady`, `PodScheduled` — stably present once the kubelet has begun processing the pod), Deployment (`Available`, `Progressing` — stably present once the Deployment reconciles), Gateway-API HTTPRoute (`Accepted`, `ResolvedRefs` — stably present per ParentRef once the implementation reconciles it), and CAPI Cluster/Machine (`Ready`, `InfrastructureReady` — stably present after first reconcile). Even "feature off" or "feature broken" states are expressed as `Status=False, Reason=<stable enum value>` — never as absence.
 
 **Use:**
 
 ```go
 setCondition(obj, ConditionNetworkingReady, metav1.ConditionFalse,
-    "NetworkingDisabled", "spec.networking is unset; no HTTPRoutes published")
+    "NetworkingDisabled", "spec.networking is unset")
 ```
 
 **Do not use** for steady-state transitions:
 
 - `removeCondition(obj, ...)` to express "feature is off." Use `setCondition(False, <reason>)` instead. Removal is indistinguishable in `kubectl describe` from "controller never reached this code path" and forces PromQL consumers into brittle `absent()` queries.
 
-The narrow exceptions to the always-present rule are **School 2**:
+The narrow exceptions to the always-present rule:
 
 - **`*Needed`-style conditions** where `True` is the exception and `False` would be tautological. `GenesisCeremonyNeeded` is the canonical sei example — its `False` value is redundant with the absence of the feature.
 - **`kubectl wait` consumer conditions** where present-vs-absent semantics are explicitly load-bearing. `SeiNodeTask.Status.Conditions[Ready|Failed]` is documented as latch-on-terminal-state because the seitask-runner depends on `kubectl wait --for=condition=Ready=true` (which matches `True` only) and `--for=condition=Failed=true` as the dual exit signal. The Ready+Failed pair is the documented exception to the "no mixed polarities for the same subject" rule below — both latch independently on terminal state.
 
-Any new condition that doesn't fit one of these exceptions defaults to School 1.
+Any new condition that doesn't fit one of these exceptions defaults to always-present.
 
 **Naming:**
 
-- **`<Subject>Ready`** — `True` is the desired steady state. School 1. Use `False/<reason>` for both "not yet ready" and "not configured."
-- **`<Subject>InProgress`** — `True` is the exception, `False` is steady state. School 1. Always seed `False` on first reconcile.
-- **`<Subject>Complete`** — latch-True. School 1. Seed `False/NotStarted` for discoverability.
-- **`<Subject>Needed`** — School 2 acceptable.
+- **`<Subject>Ready`** — `True` is the desired steady state. Always-present. Use `False/<reason>` for both "not yet ready" and "not configured."
+- **`<Subject>InProgress`** — `True` is the exception, `False` is steady state. Always-present. Seed `False` on first reconcile.
+- **`<Subject>Complete`** — latch-True. Always-present. Seed `False/NotStarted` for discoverability.
+- **`<Subject>Needed`** — absent-when-not-applicable acceptable.
 
-Don't mix polarities for the same subject (no `RouteReady` + `RouteFailed` — pick one and use reasons). The SeiNodeTask `Ready`/`Failed` pair is the documented exception, justified by the `kubectl wait` consumer contract.
+Don't mix polarities for the same subject (no `XReady` + `XFailed` — pick one and use reasons). The SeiNodeTask `Ready`/`Failed` pair is the documented exception, justified by the `kubectl wait` consumer contract.
 
 **Spec-shape changes don't remove conditions.** If a SeiNode transitions from validator to non-validator (or any condition's preconditions become structurally inapplicable), set the condition to `False/NotApplicable` rather than removing it. Removal forces consumers to treat absence as ambiguous; an explicit `NotApplicable` reason carries the intent.
 

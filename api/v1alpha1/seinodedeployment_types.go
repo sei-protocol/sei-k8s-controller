@@ -361,7 +361,7 @@ type RolloutStatus struct {
 // Status condition types for SeiNodeDeployment.
 const (
 	ConditionNodesReady              = "NodesReady"
-	ConditionRouteReady              = "RouteReady"
+	ConditionNetworkingReady         = "NetworkingReady"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
 	ConditionPlanInProgress          = "PlanInProgress"
 	ConditionGenesisCeremonyNeeded   = "GenesisCeremonyNeeded"

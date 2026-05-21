@@ -91,8 +91,8 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if !r.routeHostnameResolvable(ctx, group) {
-		setCondition(group, seiv1alpha1.ConditionRouteReady, metav1.ConditionFalse,
-			"DNSPending", "Waiting for route hostname to resolve in DNS")
+		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
+			"DNSPending", "waiting for route hostname to resolve in DNS")
 		if err := r.updateStatus(ctx, group, statusBase); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
 		}

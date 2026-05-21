@@ -100,7 +100,7 @@ Mirroring write endpoints would double-broadcast transactions. Mempool dedup han
 | Performance | RPC latency p99 | Within 20% of EC2 |
 | Operations | Automated pod recovery | Recovers in < 5 min |
 | Operations | Blue-green deployment | Works without manual steps |
-| Data plane | Gateway healthy | ConditionRouteReady == True |
+| Data plane | Gateway healthy | ConditionNetworkingReady == True |
 
 ## Prerequisites Checklist
 
