@@ -68,6 +68,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - chaos-mesh.org
+  resources:
+  - workflownodes
+  - workflows
+  verbs:
+  - get
+  - list
+- apiGroups:
   - gateway.networking.k8s.io
   resources:
   - httproutes
