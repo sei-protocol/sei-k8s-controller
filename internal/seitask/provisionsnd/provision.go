@@ -22,6 +22,7 @@ import (
 	"text/template"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -277,15 +278,22 @@ func waitForFirstBlock(ctx context.Context, hc *http.Client, tmRPC string, timeo
 	})
 }
 
-// publishEndpoints assumes one chain-id per Workflow. CHAIN_ID is written via
-// SetVars (a merge patch) — running provision-snd twice with the same
-// --var=CHAIN_ID is idempotent; running it against two distinct chains
-// silently overwrites and needs an explicit conflict check here.
+// publishEndpoints enforces one chain-id per Workflow: if the workflow-vars
+// CM already carries a CHAIN_ID different from this call's, fail-task so
+// the operator hears about the misconfiguration loudly instead of
+// silently corrupting downstream consumers via merge-patch overwrite.
 func publishEndpoints(ctx context.Context, c client.Client, w taskruntime.WorkflowIdentity, role, chainID string, ep seiv1alpha1.Endpoints) error {
 	if err := taskruntime.EnsureWorkflowVarsCM(ctx, c, w, map[taskruntime.VarKey]string{
 		taskruntime.KeyRunID: w.Name,
 	}); err != nil {
 		return err
+	}
+	existing := &corev1.ConfigMap{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: w.Namespace, Name: taskruntime.WorkflowVarsName(w.Name)}, existing); err != nil {
+		return taskruntime.Infra(fmt.Errorf("reading workflow-vars to check chain-id: %w", err))
+	}
+	if prior, ok := existing.Data[string(taskruntime.KeyChainID)]; ok && prior != "" && prior != chainID {
+		return taskruntime.Task(fmt.Errorf("workflow-vars CHAIN_ID=%q conflicts with this provision-snd call's %q; one chain-id per Workflow", prior, chainID))
 	}
 	vars := map[taskruntime.VarKey]string{
 		// CHAIN_ID lives in SetVars (merge), not the EnsureWorkflowVarsCM seed

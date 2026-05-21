@@ -3,6 +3,7 @@ package provisionsnd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -336,6 +337,30 @@ func fakeStatusServer(t *testing.T, height string) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func TestPublishEndpoints_RejectsConflictingChainID(t *testing.T) {
+	w := testWorkflow()
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      taskruntime.WorkflowVarsName(w.Name),
+				Namespace: testNamespace,
+			},
+			Data: map[string]string{string(taskruntime.KeyChainID): "chain-A"},
+		},
+	).Build()
+
+	err := publishEndpoints(context.Background(), c, w, "rpc", "chain-B", seiv1alpha1.Endpoints{
+		TendermintRpc: "http://tm.svc:26657",
+	})
+	if err == nil {
+		t.Fatalf("expected error: chain-A vs chain-B conflict")
+	}
+	var taskErr *taskruntime.TaskError
+	if !errors.As(err, &taskErr) {
+		t.Fatalf("expected TaskError (config-fail), got %T: %v", err, err)
+	}
 }
 
 func TestTendermintStatusResponse_LatestHeight(t *testing.T) {

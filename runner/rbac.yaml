@@ -46,12 +46,13 @@ rules:
 - apiGroups: ["sei.io"]
   resources: ["seinodedeployments/status"]
   verbs: ["get"]
-# Secrets: get + create for keygen, which writes the per-run admin
-# mnemonic Secret. Downstream Tasks consume it via secretKeyRef on the
-# Pod's env, which the kubelet handles under its own credentials.
+# Secrets: get + create + patch for keygen. Patch covers Task-retry
+# within the same Workflow CR — a re-run of keygen-admin after a partial
+# failure would otherwise 409 on Create. Downstream Tasks consume the
+# Secret via secretKeyRef under kubelet credentials, no RBAC needed.
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: ["get", "create"]
+  verbs: ["get", "create", "patch"]
 # ConfigMaps: workflow-vars-<run-id> upsert by producer bash steps.
 # `create`+`patch` are the apply-path verbs; `get`+`list`+`watch` support
 # read-modify-write (resolve-proposal-id merges PROPOSAL_ID into the
