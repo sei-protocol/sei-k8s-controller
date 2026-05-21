@@ -14,11 +14,15 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
-// reconcilePlan is the single entry point for plan-driven orchestration.
-// It drives an active plan to completion, or builds a new plan if the
-// planner determines one is needed. All status mutations are in-memory;
-// the caller flushes via a single status patch.
+// reconcilePlan drives an active plan to completion or builds a new
+// plan if the planner determines one is needed. All status mutations
+// are in-memory; the caller flushes via a single status patch.
+// Paused short-circuits entirely; an active plan freezes in place.
 func (r *SeiNodeDeploymentReconciler) reconcilePlan(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) (ctrl.Result, error) {
+	if group.Spec.Paused {
+		return ctrl.Result{}, nil
+	}
+
 	// Drive active plan.
 	if group.Status.Plan != nil && group.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		return r.drivePlan(ctx, group)

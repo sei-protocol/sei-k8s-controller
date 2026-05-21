@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -31,12 +32,18 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 		})
 	}
 
-	// Update ObservedGeneration and TemplateHash when no rollout or plan is active.
-	// During rollout/plan execution, these are updated by completePlan.
+	// ObservedGeneration tracks "controller has processed this spec" and
+	// must advance on every reconcile that runs to completion, including
+	// paused ones — generation-drift consumers (kubectl wait, ArgoCD,
+	// Flux) depend on it. TemplateHash is what defers template edits, so
+	// pause holds only that. Both still defer to completePlan during
+	// rollout/plan execution.
 	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) &&
 		!hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
 		group.Status.ObservedGeneration = group.Generation
-		group.Status.TemplateHash = templateHash(&group.Spec.Template.Spec)
+		if !group.Spec.Paused {
+			group.Status.TemplateHash = templateHash(&group.Spec.Template.Spec)
+		}
 	}
 	group.Status.Replicas = group.Spec.Replicas
 	group.Status.ReadyReplicas = readyReplicas
@@ -54,6 +61,9 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 }
 
 func computeGroupPhase(group *seiv1alpha1.SeiNodeDeployment, ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1alpha1.SeiNodeDeploymentPhase {
+	if group.Spec.Paused {
+		return seiv1alpha1.GroupPhasePaused
+	}
 	if hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
 		return seiv1alpha1.GroupPhaseUpgrading
 	}
@@ -138,17 +148,46 @@ func setNodesReadyCondition(group *seiv1alpha1.SeiNodeDeployment, ready, desired
 	setCondition(group, seiv1alpha1.ConditionNodesReady, status, reason, message)
 }
 
-// seedAlwaysPresentConditions stamps every condition the doctrine
-// requires to be visible on every reconciled SND (see CLAUDE.md
-// `### Conditions`). The seed fires only when the condition is absent,
-// so transition paths (startPlan, completePlan, etc.) own the reason
-// vocabulary once an SND has lifecycle state.
+// seedAlwaysPresentConditions stamps every always-present condition.
+// The InProgress seeds fire only when absent so transition paths
+// (startPlan, completePlan, etc.) own the reason vocabulary once an
+// SND has lifecycle state.
 func (r *SeiNodeDeploymentReconciler) seedAlwaysPresentConditions(group *seiv1alpha1.SeiNodeDeployment) {
 	r.setGenesisCeremonyCondition(group)
+	r.setPausedCondition(group)
 	seedConditionIfAbsent(group, seiv1alpha1.ConditionPlanInProgress,
 		"NotStarted", "no plan has run yet")
 	seedConditionIfAbsent(group, seiv1alpha1.ConditionRolloutInProgress,
 		"NotStarted", "no rollout has run yet")
+}
+
+// setPausedCondition mirrors spec.paused and emits an event on each
+// Paused↔Unpaused transition.
+func (r *SeiNodeDeploymentReconciler) setPausedCondition(group *seiv1alpha1.SeiNodeDeployment) {
+	prev := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionPaused)
+	wasPaused := prev != nil && prev.Status == metav1.ConditionTrue
+
+	if group.Spec.Paused {
+		setCondition(group, seiv1alpha1.ConditionPaused, metav1.ConditionTrue,
+			"Paused", "spec.paused is true; plan-driven orchestration is frozen")
+		// Emit on the False→True transition only. An SND created
+		// already paused has prev=nil and doesn't need an event — its
+		// condition already tells the story.
+		if r.Recorder != nil && prev != nil && !wasPaused {
+			msg := "operator set spec.paused; controller will not advance plans, rollouts, or template changes until unpaused"
+			if group.Status.Plan != nil {
+				msg = fmt.Sprintf("operator set spec.paused with active plan %s; plan freezes in place until unpaused", group.Status.Plan.ID)
+			}
+			r.Recorder.Event(group, corev1.EventTypeNormal, "Paused", msg)
+		}
+		return
+	}
+	setCondition(group, seiv1alpha1.ConditionPaused, metav1.ConditionFalse,
+		"NotPaused", "spec.paused is unset or false")
+	if wasPaused && r.Recorder != nil {
+		r.Recorder.Event(group, corev1.EventTypeNormal, "Unpaused",
+			"operator cleared spec.paused; controller resumes plan-driven orchestration")
+	}
 }
 
 // seedConditionIfAbsent writes False/<reason>/<message> only when the

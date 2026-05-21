@@ -190,6 +190,60 @@ func TestBuildNetworkingStatus_ProtocolValues(t *testing.T) {
 	g.Expect(protocols).To(ConsistOf("evm", "rpc", "rest", "grpc"))
 }
 
+func TestSetPausedCondition(t *testing.T) {
+	cases := []struct {
+		name       string
+		paused     bool
+		seedExist  *metav1.Condition
+		wantStatus metav1.ConditionStatus
+		wantReason string
+	}{
+		{
+			name:       "spec.paused=true writes True/Paused",
+			paused:     true,
+			wantStatus: metav1.ConditionTrue,
+			wantReason: "Paused",
+		},
+		{
+			name:       "spec.paused=false writes False/NotPaused",
+			paused:     false,
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "NotPaused",
+		},
+		{
+			// setPausedCondition is fully derived from spec — a stale
+			// True flips back to False once spec.paused clears.
+			name:   "stale True flips to False when spec clears",
+			paused: false,
+			seedExist: &metav1.Condition{
+				Type:   seiv1alpha1.ConditionPaused,
+				Status: metav1.ConditionTrue,
+				Reason: "Paused",
+			},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "NotPaused",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			group := newTestGroup("archive-rpc", "sei")
+			group.Spec.Paused = tc.paused
+			if tc.seedExist != nil {
+				group.Status.Conditions = append(group.Status.Conditions, *tc.seedExist)
+			}
+
+			r := &SeiNodeDeploymentReconciler{Recorder: record.NewFakeRecorder(10)}
+			r.setPausedCondition(group)
+
+			cond := apimeta.FindStatusCondition(group.Status.Conditions, seiv1alpha1.ConditionPaused)
+			g.Expect(cond).NotTo(BeNil(), "ConditionPaused must be present after setPausedCondition")
+			g.Expect(cond.Status).To(Equal(tc.wantStatus))
+			g.Expect(cond.Reason).To(Equal(tc.wantReason))
+		})
+	}
+}
+
 func TestSeedAlwaysPresentConditions(t *testing.T) {
 	cases := []struct {
 		name       string
