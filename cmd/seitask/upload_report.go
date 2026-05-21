@@ -36,7 +36,7 @@ func newUploadReportCommand() *cli.Command {
 				Name:    "region",
 				Usage:   "AWS region",
 				Sources: cli.EnvVars("AWS_REGION"),
-				Value:   "us-east-2",
+				Value:   "eu-central-1",
 			},
 		},
 		Action: runUploadReport,
