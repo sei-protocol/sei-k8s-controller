@@ -31,7 +31,7 @@ type SeiNodeDeploymentSpec struct {
 	// Genesis configures genesis ceremony orchestration for this group.
 	// When set, the controller generates GenesisCeremonyNodeConfig for each
 	// child SeiNode and coordinates assembly of the final genesis.json.
-	// Immutable once set (enforced at the spec level via CEL).
+	// Immutable once set; enforced by spec-level CEL.
 	// +optional
 	Genesis *GenesisCeremonyConfig `json:"genesis,omitempty"`
 

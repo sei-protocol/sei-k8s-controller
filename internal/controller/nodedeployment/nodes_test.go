@@ -358,6 +358,17 @@ func TestSetGenesisCeremonyCondition(t *testing.T) {
 			wantStatus: metav1.ConditionFalse,
 			wantReason: "NotStarted",
 		},
+		{
+			// Post-failPlan: PlanInProgress=False, no latched Complete.
+			// The next reconcile must drop back to NotStarted so retries
+			// can proceed.
+			name: "plan failed returns to False/NotStarted",
+			mutate: func(g *seiv1alpha1.SeiNodeDeployment) {
+				setCondition(g, seiv1alpha1.ConditionPlanInProgress, metav1.ConditionFalse, "PlanFailed", "previous attempt failed")
+			},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "NotStarted",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

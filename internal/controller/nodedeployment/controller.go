@@ -80,6 +80,10 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	statusBase := client.MergeFromWithOptions(group.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	ns, name := group.Namespace, group.Name
 
+	// Seed always-present conditions before any early-return path so they
+	// are visible on every reconcile (see CLAUDE.md `### Conditions`).
+	r.setGenesisCeremonyCondition(group)
+
 	if err := r.reconcileInternalService(ctx, group); err != nil {
 		logger.Error(err, "reconciling internal RPC service")
 		return ctrl.Result{}, fmt.Errorf("reconciling internal RPC service: %w", err)

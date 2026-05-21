@@ -39,25 +39,19 @@ func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, gro
 	}
 
 	r.detectDeploymentNeeded(group)
-	r.setGenesisCeremonyCondition(group)
 	return nil
 }
 
-// setGenesisCeremonyCondition keeps ConditionGenesisCeremonyComplete in
-// sync with the SND's genesis lifecycle. The condition stays present on
-// every reconciled SND and carries the current state via Reason:
+// setGenesisCeremonyCondition stamps ConditionGenesisCeremonyComplete
+// with the SND's current genesis lifecycle state:
 //
 //   - True / Complete         — ceremony finished (latched)
 //   - False / NotApplicable   — spec.genesis is unset
 //   - False / NotStarted      — spec.genesis set, ceremony not yet started
 //   - False / InProgress      — ceremony executing under an active plan
 //
-// The True/Complete state is latched: once a ceremony completes, the
-// condition stays True even if an operator later clears spec.genesis.
-// Clearing the spec doesn't unmake history.
-//
-// The latch check must come first; reordering would cause a completed
-// ceremony to be downgraded to NotApplicable when spec.genesis is cleared.
+// The latch check runs first. Reordering it would let a completed
+// ceremony be downgraded to NotApplicable if spec.genesis is cleared.
 func (r *SeiNodeDeploymentReconciler) setGenesisCeremonyCondition(group *seiv1alpha1.SeiNodeDeployment) {
 	if hasConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
 		return

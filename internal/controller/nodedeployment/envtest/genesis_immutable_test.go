@@ -8,22 +8,18 @@ import (
 
 	. "github.com/onsi/gomega"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment/envtest/fixtures"
 )
 
-// TestGenesis_ImmutabilityGate asserts the CRD-level CEL rule rejects
-// post-creation mutation of spec.genesis. The ceremony's outputs (chain
-// ID, validator gentxs, account balances) are baked into chain state at
-// bootstrap; later spec edits would silently diverge from on-chain truth.
-// The gate also keeps the GenesisCeremonyComplete condition's latched-
-// True semantics honest — clearing spec.genesis mid-flight would let a
-// completed ceremony be downgraded to False/NotApplicable.
-//
-// The test runs without the controller reconciling because CEL validation
-// fires at admission time before any controller sees the object.
+// TestGenesis_ImmutabilityGate asserts the spec-level CEL rule rejects
+// post-creation mutation of spec.genesis. The ceremony's outputs are
+// baked into chain state; later edits would diverge from on-chain truth
+// and could defeat the GenesisCeremonyComplete latch.
 func TestGenesis_ImmutabilityGate(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -69,6 +65,34 @@ func TestGenesis_ImmutabilityGate(t *testing.T) {
 		g.Expect(err.Error()).To(ContainSubstring("spec.genesis is immutable"))
 	})
 
+	t.Run("appending to accounts list is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		cur := &seiv1alpha1.SeiNodeDeployment{}
+		g.Expect(testCli.Get(testCtx, client.ObjectKeyFromObject(snd), cur)).To(Succeed())
+		cur.Spec.Genesis.Accounts = append(cur.Spec.Genesis.Accounts, seiv1alpha1.GenesisAccount{
+			Address: "sei1example0000000000000000000000000000000",
+			Balance: "1000usei",
+		})
+		err := testCli.Update(testCtx, cur)
+		g.Expect(err).To(HaveOccurred(), "appending to spec.genesis.accounts must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("spec.genesis is immutable"))
+	})
+
+	t.Run("adding an overrides entry is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		cur := &seiv1alpha1.SeiNodeDeployment{}
+		g.Expect(testCli.Get(testCtx, client.ObjectKeyFromObject(snd), cur)).To(Succeed())
+		if cur.Spec.Genesis.Overrides == nil {
+			cur.Spec.Genesis.Overrides = map[string]apiextensionsv1.JSON{}
+		}
+		cur.Spec.Genesis.Overrides["staking.params.unbonding_time"] = apiextensionsv1.JSON{
+			Raw: []byte(`"1814400s"`),
+		}
+		err := testCli.Update(testCtx, cur)
+		g.Expect(err).To(HaveOccurred(), "adding spec.genesis.overrides entry must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("spec.genesis is immutable"))
+	})
+
 	t.Run("same-content update is allowed", func(t *testing.T) {
 		g := NewWithT(t)
 		cur := &seiv1alpha1.SeiNodeDeployment{}
@@ -80,10 +104,9 @@ func TestGenesis_ImmutabilityGate(t *testing.T) {
 	})
 }
 
-// TestGenesis_CreationWithoutGenesisAllowsLaterAddition guards the CEL
-// rule's `!has(oldSelf.genesis)` short-circuit: an SND created without
-// genesis can have it added later. Only mutation of a previously-set
-// genesis block is forbidden.
+// TestGenesis_CreationWithoutGenesisAllowsLaterAddition guards the
+// `!has(oldSelf.genesis)` short-circuit: nil → set is permitted; only
+// mutation of a previously-set genesis block is forbidden.
 func TestGenesis_CreationWithoutGenesisAllowsLaterAddition(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -107,4 +130,23 @@ func errString(err error) string {
 		return "<nil>"
 	}
 	return strings.TrimSpace(err.Error())
+}
+
+// TestGenesis_ConditionSeededOnEveryReconcile guards the hoist in
+// controller.go: setGenesisCeremonyCondition runs before any path
+// that may early-return, so the condition is visible immediately
+// once the controller has reconciled the SND.
+func TestGenesis_ConditionSeededOnEveryReconcile(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	snd := fixtures.NewSND(ns, "genesis-seeded",
+		fixtures.WithValidator(),
+	)
+	snd.Spec.Genesis = &seiv1alpha1.GenesisCeremonyConfig{ChainID: "pacific-1"}
+	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
+
+	waitForStatus(t, client.ObjectKeyFromObject(snd), func(s *seiv1alpha1.SeiNodeDeployment) bool {
+		return apimeta.FindStatusCondition(s.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete) != nil
+	}, "GenesisCeremonyComplete must be present after first reconcile")
 }
