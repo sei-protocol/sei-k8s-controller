@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/urfave/cli/v3"
@@ -14,8 +16,8 @@ import (
 func newProvisionSNDCommand() *cli.Command {
 	return &cli.Command{
 		Name: "provision-snd",
-		Usage: "Apply a SeiNodeDeployment from a YAML spec, wait for Ready + first block, " +
-			"and publish role-scoped endpoints to workflow-vars",
+		Usage: "Render a SeiNodeDeployment template, apply it, wait for Ready + " +
+			"first block, and publish role-scoped endpoints to workflow-vars",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "role",
@@ -29,27 +31,14 @@ func newProvisionSNDCommand() *cli.Command {
 				Sources: cli.EnvVars("SND_NAME"),
 			},
 			&cli.StringFlag{
-				Name:    "spec-file",
-				Usage:   "Path to the SeiNodeDeployment YAML",
-				Sources: cli.EnvVars("SND_SPEC_FILE"),
-				Value:   "/etc/scenario/snd.yaml",
-			},
-			&cli.StringFlag{
-				Name:     "chain-id",
-				Usage:    "Chain ID (overrides spec.template.spec.chainId + spec.genesis.chainId)",
-				Sources:  cli.EnvVars("CHAIN_ID"),
+				Name:     "template",
+				Usage:    "Path to the Go text/template producing a SeiNodeDeployment YAML",
+				Sources:  cli.EnvVars("SND_TEMPLATE"),
 				Required: true,
 			},
-			&cli.StringFlag{
-				Name:     "image",
-				Usage:    "seid container image (overrides spec.template.spec.image)",
-				Sources:  cli.EnvVars("SEID_IMAGE"),
-				Required: true,
-			},
-			&cli.IntFlag{
-				Name:    "replicas",
-				Usage:   "Replica count override (0 = use YAML)",
-				Sources: cli.EnvVars("REPLICAS"),
+			&cli.StringSliceFlag{
+				Name:  "var",
+				Usage: "KEY=VALUE substitution exposed to the template as .KEY (repeatable)",
 			},
 			&cli.DurationFlag{
 				Name:  "ready-timeout",
@@ -76,13 +65,16 @@ func runProvisionSND(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
+	vars, err := parseKVPairs(cmd.StringSlice("var"))
+	if err != nil {
+		return err
+	}
+
 	p := provisionsnd.Params{
 		Role:              cmd.String("role"),
 		Name:              cmd.String("name"),
-		SpecFile:          cmd.String("spec-file"),
-		ChainID:           cmd.String("chain-id"),
-		Image:             cmd.String("image"),
-		Replicas:          int32(cmd.Int("replicas")),
+		TemplatePath:      cmd.String("template"),
+		Vars:              vars,
 		ReadyTimeout:      cmd.Duration("ready-timeout"),
 		FirstBlockTimeout: cmd.Duration("first-block-timeout"),
 		Workflow:          wf,
@@ -95,4 +87,19 @@ func runProvisionSND(ctx context.Context, cmd *cli.Command) error {
 	taskruntime.WriteExitReason(ctx, c, wf, nil)
 	log.Printf("provision-snd: SND %q Ready, chainID=%s, TM=%s", res.Name, res.ChainID, res.Endpoints.TendermintRpc)
 	return nil
+}
+
+func parseKVPairs(pairs []string) (map[string]string, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(pairs))
+	for _, kv := range pairs {
+		idx := strings.IndexByte(kv, '=')
+		if idx <= 0 {
+			return nil, fmt.Errorf("--var %q must be KEY=VALUE", kv)
+		}
+		out[kv[:idx]] = kv[idx+1:]
+	}
+	return out, nil
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -27,17 +28,47 @@ const (
 	testRole           = "validator"
 	testChainID        = "bench-1"
 	testImage          = "ghcr.io/sei/sei-chain:abc123"
+	testAdminAddress   = "sei1admin"
+	varKeyChainID      = "CHAIN_ID"
+	varKeyImage        = "IMAGE"
+	varKeyAdminAddress = "ADMIN_ADDRESS"
 )
 
-const baseSpecYAML = `
-apiVersion: sei.io/v1alpha1
+const validatorTmpl = `apiVersion: sei.io/v1alpha1
 kind: SeiNodeDeployment
+metadata:
+  name: PLACEHOLDER
 spec:
   replicas: 4
   template:
     spec:
+      chainId: {{ .CHAIN_ID }}
+      image: {{ .IMAGE }}
       validator: {}
-  genesis: {}
+  genesis:
+    chainId: {{ .CHAIN_ID }}
+    accounts:
+      - address: {{ .ADMIN_ADDRESS }}
+        balance: 1000000000000usei
+  updateStrategy:
+    type: InPlace
+`
+
+const rpcTmpl = `apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: PLACEHOLDER
+spec:
+  replicas: 2
+  template:
+    spec:
+      chainId: {{ .CHAIN_ID }}
+      image: {{ .IMAGE }}
+      fullNode: {}
+      peers:
+        - label:
+            selector:
+              sei.io/chain: {{ .CHAIN_ID }}
   updateStrategy:
     type: InPlace
 `
@@ -56,11 +87,11 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func writeSpec(t *testing.T, content string) string {
+func writeTmpl(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
-	p := filepath.Join(dir, "snd.yaml")
-	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+	p := filepath.Join(dir, "snd.yaml.tmpl")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -70,74 +101,143 @@ func testWorkflow() taskruntime.WorkflowIdentity {
 	return taskruntime.WorkflowIdentity{Name: testWorkflowName, UID: "uid-test", Namespace: testNamespace}
 }
 
-func TestLoadSpec_AppliesOverridesAndOwnerRef(t *testing.T) {
-	specPath := writeSpec(t, baseSpecYAML)
-
-	snd, err := loadSpec(specPath)
+func TestRenderTemplate_SubstitutesVars(t *testing.T) {
+	path := writeTmpl(t, validatorTmpl)
+	snd, err := renderTemplate(path, map[string]string{
+		varKeyChainID:      testChainID,
+		varKeyImage:        testImage,
+		varKeyAdminAddress: testAdminAddress,
+	})
 	if err != nil {
-		t.Fatalf("loadSpec: %v", err)
+		t.Fatalf("renderTemplate: %v", err)
 	}
-	if snd.Spec.Replicas != 4 {
-		t.Fatalf("base replicas: %d", snd.Spec.Replicas)
-	}
-
-	p := Params{
-		Role:     testRole,
-		Name:     testRole,
-		SpecFile: specPath,
-		ChainID:  testChainID,
-		Image:    testImage,
-		Replicas: 7,
-		Workflow: testWorkflow(),
-	}
-	applyOverrides(snd, p)
-	stampMetadata(snd, p)
-
 	if snd.Spec.Template.Spec.ChainID != testChainID {
-		t.Fatalf("ChainID not propagated: %q", snd.Spec.Template.Spec.ChainID)
+		t.Errorf("ChainID: %q", snd.Spec.Template.Spec.ChainID)
 	}
 	if snd.Spec.Template.Spec.Image != testImage {
-		t.Fatalf("Image not propagated: %q", snd.Spec.Template.Spec.Image)
+		t.Errorf("Image: %q", snd.Spec.Template.Spec.Image)
 	}
-	if snd.Spec.Replicas != 7 {
-		t.Fatalf("Replicas override not applied: %d", snd.Spec.Replicas)
+	if snd.Spec.Genesis.ChainID != testChainID {
+		t.Errorf("Genesis.ChainID: %q", snd.Spec.Genesis.ChainID)
 	}
-	if snd.Spec.Genesis == nil || snd.Spec.Genesis.ChainID != testChainID {
-		t.Fatalf("Genesis.ChainID not propagated: %+v", snd.Spec.Genesis)
-	}
-	if snd.Name != testRole || snd.Namespace != testNamespace {
-		t.Fatalf("metadata wrong: %s/%s", snd.Namespace, snd.Name)
-	}
-	if len(snd.OwnerReferences) != 1 || snd.OwnerReferences[0].Kind != "Workflow" {
-		t.Fatalf("ownerRef not stamped: %+v", snd.OwnerReferences)
+	if len(snd.Spec.Genesis.Accounts) != 1 || snd.Spec.Genesis.Accounts[0].Address != testAdminAddress {
+		t.Errorf("Genesis.Accounts: %+v", snd.Spec.Genesis.Accounts)
 	}
 }
 
-func TestLoadSpec_RejectsMalformed(t *testing.T) {
-	specPath := writeSpec(t, "not: valid: yaml: ::")
-	if _, err := loadSpec(specPath); err == nil {
-		t.Fatalf("expected unmarshal error")
+func TestRenderTemplate_MissingVarFailsRender(t *testing.T) {
+	path := writeTmpl(t, validatorTmpl)
+	if _, err := renderTemplate(path, map[string]string{varKeyChainID: testChainID}); err == nil {
+		t.Fatalf("expected error: IMAGE and ADMIN_ADDRESS not provided")
+	}
+}
+
+func TestRenderTemplate_StrictUnmarshalCatchesTypos(t *testing.T) {
+	tmpl := `apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: PLACEHOLDER
+spec:
+  replcas: 4
+  template:
+    spec:
+      chainId: {{ .CHAIN_ID }}
+      image: {{ .IMAGE }}
+      validator: {}
+  updateStrategy:
+    type: InPlace
+`
+	path := writeTmpl(t, tmpl)
+	if _, err := renderTemplate(path, map[string]string{varKeyChainID: testChainID, varKeyImage: testImage}); err == nil {
+		t.Fatalf("expected strict-unmarshal error on `replcas` typo")
+	}
+}
+
+func TestRenderTemplate_FullNodePeerSelectorSubstitution(t *testing.T) {
+	path := writeTmpl(t, rpcTmpl)
+	snd, err := renderTemplate(path, map[string]string{
+		varKeyChainID: testChainID,
+		varKeyImage:   testImage,
+	})
+	if err != nil {
+		t.Fatalf("renderTemplate: %v", err)
+	}
+	peers := snd.Spec.Template.Spec.Peers
+	if len(peers) != 1 || peers[0].Label == nil {
+		t.Fatalf("peers: %+v", peers)
+	}
+	if got := peers[0].Label.Selector["sei.io/chain"]; got != testChainID {
+		t.Errorf("peers[0].label.selector[sei.io/chain] = %q; want %q", got, testChainID)
+	}
+}
+
+// TestBundledTemplates_RenderClean ensures every bundled scenario template
+// renders + strict-unmarshals against a representative --var set. Guards
+// against template-vs-schema drift after a CRD field rename.
+func TestBundledTemplates_RenderClean(t *testing.T) {
+	repoRoot, err := filepath.Abs("../../../")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		path string
+		vars map[string]string
+	}{
+		{
+			path: filepath.Join(repoRoot, "scenarios", "release-test", "validator.yaml.tmpl"),
+			vars: map[string]string{varKeyChainID: "rel-test", varKeyImage: "img:1", varKeyAdminAddress: testAdminAddress},
+		},
+		{
+			path: filepath.Join(repoRoot, "scenarios", "release-test", "rpc.yaml.tmpl"),
+			vars: map[string]string{varKeyChainID: "rel-test", varKeyImage: "img:1"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(filepath.Base(tc.path), func(t *testing.T) {
+			snd, err := renderTemplate(tc.path, tc.vars)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if snd.Spec.Template.Spec.ChainID == "" {
+				t.Fatalf("ChainID empty after render: %+v", snd.Spec.Template.Spec)
+			}
+		})
+	}
+}
+
+func TestStampMetadata_AssignsOwnerRefsNotAppend(t *testing.T) {
+	snd := &seiv1alpha1.SeiNodeDeployment{
+		// Template author smuggling a bogus ownerRef: stampMetadata MUST
+		// overwrite, not append.
+		ObjectMeta: metav1.ObjectMeta{
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "evil/v1", Kind: "Bogus", Name: "smuggled", UID: "bad",
+			}},
+		},
+	}
+	stampMetadata(snd, Params{Role: testRole, Name: testRole, Workflow: testWorkflow()})
+	if len(snd.OwnerReferences) != 1 {
+		t.Fatalf("ownerReferences: want 1, got %d (%+v)", len(snd.OwnerReferences), snd.OwnerReferences)
+	}
+	if snd.OwnerReferences[0].Kind != "Workflow" {
+		t.Fatalf("ownerRef not replaced: %+v", snd.OwnerReferences[0])
 	}
 }
 
 func TestValidateParams(t *testing.T) {
 	full := Params{
-		Role:     testRole,
-		SpecFile: "x.yaml",
-		ChainID:  testChainID,
-		Image:    testImage,
-		Workflow: testWorkflow(),
+		Role:         testRole,
+		TemplatePath: "x.yaml.tmpl",
+		Workflow:     testWorkflow(),
 	}
 	cases := []struct {
 		name string
 		mut  func(*Params)
-		want bool // wantErr
+		want bool
 	}{
 		{"complete", func(*Params) {}, false},
 		{"missing role", func(p *Params) { p.Role = "" }, true},
-		{"missing spec-file", func(p *Params) { p.SpecFile = "" }, true},
-		{"missing chain-id", func(p *Params) { p.ChainID = "" }, true},
-		{"missing image", func(p *Params) { p.Image = "" }, true},
+		{"missing template", func(p *Params) { p.TemplatePath = "" }, true},
 		{"missing workflow.Name", func(p *Params) { p.Workflow.Name = "" }, true},
 	}
 	for _, tc := range cases {
@@ -153,22 +253,15 @@ func TestValidateParams(t *testing.T) {
 }
 
 func TestRun_EndToEnd_FakeClient(t *testing.T) {
-	specPath := writeSpec(t, baseSpecYAML)
 	w := testWorkflow()
+	tmplPath := writeTmpl(t, validatorTmpl)
+	vars := map[string]string{varKeyChainID: testChainID, varKeyImage: testImage, varKeyAdminAddress: testAdminAddress}
 
-	// Pre-stage a Ready SND with endpoints so waitForReady's polling sees
-	// the terminal state on the first tick. Mirrors how the controller
-	// would have promoted the CR after a Create.
-	prestaged := &seiv1alpha1.SeiNodeDeployment{}
-	if err := loadAndDecorate(specPath, &Params{
-		Role:     testRole,
-		Name:     testRole,
-		ChainID:  testChainID,
-		Image:    testImage,
-		Workflow: w,
-	}, prestaged); err != nil {
+	prestaged, err := renderTemplate(tmplPath, vars)
+	if err != nil {
 		t.Fatal(err)
 	}
+	stampMetadata(prestaged, Params{Role: testRole, Name: testRole, Workflow: w})
 	prestaged.Status.Phase = seiv1alpha1.GroupPhaseReady
 	prestaged.Status.Endpoints = &seiv1alpha1.Endpoints{
 		TendermintRpc:  "http://tm.svc:26657",
@@ -184,8 +277,6 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 
 	srv := fakeStatusServer(t, "42")
 	defer srv.Close()
-	// Rewrite the prestaged SND's TM RPC to the fake server so the
-	// first-block poll points at something live.
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testRole}, prestaged); err != nil {
 		t.Fatal(err)
 	}
@@ -197,9 +288,8 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	res, err := Run(context.Background(), c, Params{
 		Role:              testRole,
 		Name:              testRole,
-		SpecFile:          specPath,
-		ChainID:           testChainID,
-		Image:             testImage,
+		TemplatePath:      tmplPath,
+		Vars:              vars,
 		ReadyTimeout:      2 * time.Second,
 		FirstBlockTimeout: 2 * time.Second,
 		PollInterval:      10 * time.Millisecond,
@@ -217,8 +307,8 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testWorkflowVarsCM}, cm); err != nil {
 		t.Fatalf("get CM: %v", err)
 	}
-	if got := cm.Data["VALIDATOR_CHAIN_ID"]; got != testChainID {
-		t.Fatalf("VALIDATOR_CHAIN_ID = %q", got)
+	if got := cm.Data["CHAIN_ID"]; got != testChainID {
+		t.Fatalf("CHAIN_ID = %q", got)
 	}
 	if cm.Data["VALIDATOR_TM_RPC"] == "" {
 		t.Fatalf("VALIDATOR_TM_RPC empty")
@@ -228,9 +318,6 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	}
 }
 
-// fakeStatusServer returns a /status endpoint that reports the given height.
-// Tests the JSON-RPC-envelope-or-bare tolerance: server emits the bare
-// `{"sync_info": ...}` shape (Sei CometBFT's default).
 func fakeStatusServer(t *testing.T, height string) *httptest.Server {
 	t.Helper()
 	var (
@@ -249,20 +336,6 @@ func fakeStatusServer(t *testing.T, height string) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
-}
-
-// loadAndDecorate is the test-side mirror of the production loadSpec +
-// applyOverrides + stampMetadata pipeline. Used to materialize the
-// pre-staged SND the fake client serves.
-func loadAndDecorate(specPath string, p *Params, into *seiv1alpha1.SeiNodeDeployment) error {
-	parsed, err := loadSpec(specPath)
-	if err != nil {
-		return err
-	}
-	applyOverrides(parsed, *p)
-	stampMetadata(parsed, *p)
-	*into = *parsed
-	return nil
 }
 
 func TestTendermintStatusResponse_LatestHeight(t *testing.T) {
