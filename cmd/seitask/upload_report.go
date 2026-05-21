@@ -8,8 +8,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/urfave/cli/v3"
-	"k8s.io/client-go/kubernetes"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/sei-protocol/sei-k8s-controller/internal/seitask/uploadreport"
 	"github.com/sei-protocol/sei-k8s-controller/internal/taskruntime"
@@ -18,8 +16,9 @@ import (
 func newUploadReportCommand() *cli.Command {
 	return &cli.Command{
 		Name: "upload-report",
-		Usage: "Collect Workflow artifacts (workflow-vars, Task pod logs) and upload to S3; " +
-			"exit code mirrors the EXIT_REASON workflow-vars key",
+		Usage: "Upload Workflow resource snapshot (workflow-vars, Workflow CR, WorkflowNode tree) " +
+			"to S3; exit code mirrors the EXIT_REASON workflow-vars key. Pod logs are not uploaded; " +
+			"Loki already ingests them.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "bucket",
@@ -54,18 +53,6 @@ func runUploadReport(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	// Separate clientset for pods/log streaming — controller-runtime's
-	// typed client doesn't expose subresources like /log directly, so we
-	// build a vanilla clientset alongside.
-	restCfg, err := ctrl.GetConfig()
-	if err != nil {
-		return taskruntime.Infra(fmt.Errorf("loading kubeconfig for clientset: %w", err))
-	}
-	cs, err := kubernetes.NewForConfig(restCfg)
-	if err != nil {
-		return taskruntime.Infra(fmt.Errorf("building clientset: %w", err))
-	}
-
 	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(cmd.String("region")))
 	if err != nil {
 		return taskruntime.Infra(fmt.Errorf("loading AWS config: %w", err))
@@ -79,14 +66,13 @@ func runUploadReport(ctx context.Context, cmd *cli.Command) error {
 		Bucket:   cmd.String("bucket"),
 		Prefix:   cmd.String("prefix"),
 		Workflow: wf,
-		Pods:     uploadreport.NewClientsetPodLister(cs),
 		S3:       uploadreport.NewS3Uploader(s3client),
 	})
 	if err != nil {
 		return err
 	}
-	log.Printf("upload-report: uploaded %d artifacts (%d pods skipped); upstream exit-reason=%s",
-		len(res.UploadedKeys), len(res.SkippedPods), res.ExitReason)
+	log.Printf("upload-report: uploaded %d artifacts; upstream exit-reason=%s",
+		len(res.UploadedKeys), res.ExitReason)
 
 	// Mirror upstream verdict so the Workflow's terminal phase reflects
 	// scenario outcome rather than upload-step success.
