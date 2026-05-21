@@ -72,6 +72,9 @@ func runUploadReport(ctx context.Context, cmd *cli.Command) error {
 	}
 	s3client := s3.NewFromConfig(awsCfg)
 
+	// upload-report is the terminal observer — never writes EXIT_REASON
+	// itself. An infra-fail in the upload would otherwise overwrite a
+	// genuine upstream task-fail and lose the underlying classification.
 	res, err := uploadreport.Run(ctx, c, uploadreport.Params{
 		Bucket:   cmd.String("bucket"),
 		Prefix:   cmd.String("prefix"),
@@ -80,15 +83,13 @@ func runUploadReport(ctx context.Context, cmd *cli.Command) error {
 		S3:       uploadreport.NewS3Uploader(s3client),
 	})
 	if err != nil {
-		taskruntime.WriteExitReason(ctx, c, wf, err)
 		return err
 	}
-	log.Printf("upload-report: uploaded %d artifacts; upstream exit-reason=%s", len(res.UploadedKeys), res.ExitReason)
+	log.Printf("upload-report: uploaded %d artifacts (%d pods skipped); upstream exit-reason=%s",
+		len(res.UploadedKeys), len(res.SkippedPods), res.ExitReason)
 
-	// Mirror upstream verdict: if a prior Task wrote EXIT_REASON=infra-fail
-	// or task-fail to workflow-vars, surface that as this subcommand's exit
-	// code so the Workflow's terminal phase reflects scenario outcome
-	// rather than upload-step success.
+	// Mirror upstream verdict so the Workflow's terminal phase reflects
+	// scenario outcome rather than upload-step success.
 	switch res.ExitReason {
 	case taskruntime.ExitReasonInfraFail:
 		return taskruntime.Infra(fmt.Errorf("upstream task reported infra-fail"))
