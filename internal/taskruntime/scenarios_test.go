@@ -26,7 +26,7 @@ func TestScenarioYAMLs_CMNameMatchesWorkflowVarsName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scenariosToCheck := []string{"release-test.yaml"}
+	scenariosToCheck := []string{"release-test.yaml", "load-test.yaml"}
 
 	for _, name := range scenariosToCheck {
 		t.Run(name, func(t *testing.T) {

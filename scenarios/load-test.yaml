@@ -1,0 +1,238 @@
+# Chaos Mesh Workflow: load-test scenario.
+#
+# Provisions a 4-validator chain + 2-RPC fleet, renders the seiload
+# profile JSON with per-run chain id + per-pod EVM endpoints, runs
+# seiload against the fleet for DURATION_MINUTES, uploads the report.
+# Replaces the bash orchestrate.sh at
+# clusters/harbor/nightly/load/orchestrate.sh.
+#
+# Second scenario authored on the seitask primitives (release-test is
+# N=1). Follows the same shape: thin wrapper CronJob fires this
+# Workflow; ownerRefs cascade-clean SNDs / profile CM on Workflow
+# deletion; trap-side state capture lives in the wrapper.
+#
+# Open prereq for first fire: pods/exec verb on the seitask-runner
+# Role (wait-rpc-caught-up Task uses kubectl exec on the RPC pod to
+# poll seid status). Track in the platform-repo wrapper PR.
+#
+# Placeholders (the wrapper envsubst's at apply time):
+#   $SEI_NAMESPACE          namespace of workflow + provisioned SNDs
+#   $SEI_CHAIN_ID           chain id (e.g. "bench-$SEI_WORKFLOW_RUN_ID")
+#   $SEI_WORKFLOW_RUN_ID    unique per-run id
+#   $SEID_IMAGE             seid container image
+#   $SEITASK_IMAGE          seitask monolith image (SND templates baked in)
+#   $SEILOAD_IMAGE          sei-load benchmark image (ghcr.io/sei-protocol/sei-load:…)
+#   $SEILOAD_PROFILE        profile name in the source CM (e.g., "nightly_evm_transfer")
+#   $DURATION_MINUTES       seiload run length
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: load-test-$SEI_WORKFLOW_RUN_ID
+  labels:
+    sei.io/scenario: load-test
+    sei.io/workflow-run: "$SEI_WORKFLOW_RUN_ID"
+spec:
+  entry: load-test
+  templates:
+    - name: load-test
+      templateType: Serial
+      deadline: 90m
+      children:
+        - provision-validator-chain
+        - provision-rpc-fleet
+        - wait-rpc-caught-up
+        - render-seiload-profile
+        - run-seiload
+        - upload-report
+
+    # Every seitask container projects Workflow identity via downward API:
+    # NAME from chaos-mesh.org/workflow label, NAMESPACE from pod metadata.
+    # UID is fetched at runtime via taskruntime.LoadWorkflowIdentity.
+    - name: provision-validator-chain
+      templateType: Task
+      deadline: 25m
+      task:
+        container:
+          name: seitask
+          image: $SEITASK_IMAGE
+          args:
+            - provision-snd
+            - --role=validator
+            - --name=$SEI_CHAIN_ID
+            - --template=/scenarios/load-test/validator.yaml.tmpl
+            - --var=CHAIN_ID=$SEI_CHAIN_ID
+            - --var=IMAGE=$SEID_IMAGE
+            - --ready-timeout=18m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+    - name: provision-rpc-fleet
+      templateType: Task
+      deadline: 25m
+      task:
+        container:
+          name: seitask
+          image: $SEITASK_IMAGE
+          args:
+            - provision-snd
+            - --role=rpc
+            - --name=$SEI_CHAIN_ID-rpc
+            - --template=/scenarios/load-test/rpc.yaml.tmpl
+            - --var=CHAIN_ID=$SEI_CHAIN_ID
+            - --var=IMAGE=$SEID_IMAGE
+            - --ready-timeout=18m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+    # PodReady != caught up. SND phase=Ready means the controller's
+    # reconciliation finished; seid may still be applying historical
+    # blocks behind a Ready RPC pod. Block until seid status reports
+    # `catching_up=false` before pointing seiload at the fleet.
+    # Mirrors the catch-up probe at
+    # clusters/harbor/nightly/load/orchestrate.sh lines 60-72.
+    - name: wait-rpc-caught-up
+      templateType: Task
+      deadline: 10m
+      task:
+        container:
+          name: wait-rpc
+          image: alpine/k8s:1.31.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              POD="$SEI_CHAIN_ID-rpc-0-0"
+              for i in $(seq 1 120); do
+                state=$(kubectl -n "${SEI_NAMESPACE}" exec "${POD}" -c seid -- \
+                  seid status 2>/dev/null | grep -o '"catching_up":[^,}]*' || true)
+                if printf '%s' "${state}" | grep -q 'false'; then
+                  echo "catching_up=false on ${POD}"
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "timed out waiting for catching_up=false" >&2
+              exit 1
+          env:
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+    # Sed-substitute the source profile (mounted via volume from the
+    # seiload-profiles CM in this namespace) and create the per-run
+    # rendered ConfigMap with an ownerRef to the parent Workflow.
+    # $RPC_EVM_RPC_LIST is published by provision-snd as comma-
+    # separated bare URLs; the profile expects `[...]` with JSON-quoted
+    # entries, so we quote+join here.
+    - name: render-seiload-profile
+      templateType: Task
+      deadline: 5m
+      task:
+        container:
+          name: render
+          image: alpine/k8s:1.31.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              QUOTED=$(printf '%s' "${RPC_EVM_RPC_LIST}" | sed 's|\([^,][^,]*\)|"\1"|g')
+              sed \
+                -e "s|__SEI_CHAIN_ID__|${CHAIN_ID}|g" \
+                -e "s|__RPC_ENDPOINTS__|${QUOTED}|g" \
+                "/profiles/${SEILOAD_PROFILE}.json" > /tmp/profile.json
+
+              WORKFLOW_UID=$(kubectl -n "${SEI_NAMESPACE}" get \
+                "workflow.chaos-mesh.org/load-test-${SEI_WORKFLOW_RUN_ID}" \
+                -o jsonpath='{.metadata.uid}')
+              [ -n "${WORKFLOW_UID}" ] || { echo "no Workflow UID"; exit 1; }
+
+              kubectl -n "${SEI_NAMESPACE}" create configmap "${PROFILE_CM}" \
+                --from-file=profile.json=/tmp/profile.json \
+                --dry-run=client -o yaml \
+              | kubectl label -f - --local -o yaml \
+                  "sei.io/chain-id=${CHAIN_ID}" \
+                  "sei.io/workflow-run=${SEI_WORKFLOW_RUN_ID}" \
+              | kubectl patch -f - --local --type=merge --patch \
+                  "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"chaos-mesh.org/v1alpha1\",\"kind\":\"Workflow\",\"name\":\"load-test-${SEI_WORKFLOW_RUN_ID}\",\"uid\":\"${WORKFLOW_UID}\",\"controller\":false,\"blockOwnerDeletion\":false}]}}" \
+                  -o yaml \
+              | kubectl apply -f -
+          env:
+            - {name: SEI_NAMESPACE,        valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}
+            - {name: SEI_WORKFLOW_RUN_ID,  value: "$SEI_WORKFLOW_RUN_ID"}
+            - {name: SEILOAD_PROFILE,      value: "$SEILOAD_PROFILE"}
+            - {name: PROFILE_CM,           value: "seiload-profile-$SEI_WORKFLOW_RUN_ID"}
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-load-test-$SEI_WORKFLOW_RUN_ID
+          volumeMounts:
+            - {name: profiles, mountPath: /profiles, readOnly: true}
+        volumes:
+          - name: profiles
+            configMap:
+              name: seiload-profiles
+
+    - name: run-seiload
+      templateType: Task
+      deadline: 30m
+      task:
+        container:
+          name: seiload
+          image: $SEILOAD_IMAGE
+          args:
+            - --config
+            - /etc/seiload/profile.json
+            - --duration=${DURATION_MINUTES}m
+            - --post-summary-flush-delay=45s
+            - --track-receipts=true
+          ports:
+            - {name: metrics, containerPort: 9090, protocol: TCP}
+          env:
+            - {name: SEILOAD_RUN_ID,   value: "$SEI_WORKFLOW_RUN_ID"}
+            - {name: SEILOAD_CHAIN_ID, value: "$SEI_CHAIN_ID"}
+            - {name: SEILOAD_WORKLOAD, value: nightly}
+          volumeMounts:
+            - {name: profile, mountPath: /etc/seiload, readOnly: true}
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits: {cpu: "4", memory: "8Gi"}
+        volumes:
+          - name: profile
+            configMap:
+              name: seiload-profile-$SEI_WORKFLOW_RUN_ID
+
+    - name: upload-report
+      templateType: Task
+      deadline: 5m
+      task:
+        container:
+          name: seitask
+          image: $SEITASK_IMAGE
+          args:
+            - upload-report
+            - --bucket=harbor-validation-results
+            - --prefix=nightly/load-test/$SEI_WORKFLOW_RUN_ID
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace

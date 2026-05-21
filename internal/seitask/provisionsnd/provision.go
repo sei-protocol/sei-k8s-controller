@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"strings"
 	"text/template"
 	"time"
 
@@ -297,6 +298,11 @@ func publishEndpoints(ctx context.Context, c client.Client, w taskruntime.Workfl
 	}
 	if len(ep.Nodes) > 0 {
 		vars[taskruntime.RoleScoped(role, taskruntime.KeyEVMJSONRPC)] = ep.Nodes[0].EvmJsonRpc
+		urls := make([]string, 0, len(ep.Nodes))
+		for _, n := range ep.Nodes {
+			urls = append(urls, n.EvmJsonRpc)
+		}
+		vars[taskruntime.RoleScoped(role, taskruntime.KeyEVMJSONRPCList)] = strings.Join(urls, ",")
 	}
 	return taskruntime.SetVars(ctx, c, w, vars)
 }

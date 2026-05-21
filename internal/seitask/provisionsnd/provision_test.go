@@ -266,7 +266,10 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	prestaged.Status.Endpoints = &seiv1alpha1.Endpoints{
 		TendermintRpc:  "http://tm.svc:26657",
 		TendermintRest: "http://rest.svc:1317",
-		Nodes:          []seiv1alpha1.NodeEndpoint{{Name: "validator-0", EvmJsonRpc: "http://evm.svc:8545"}},
+		Nodes: []seiv1alpha1.NodeEndpoint{
+			{Name: "validator-0", EvmJsonRpc: "http://evm-0.svc:8545"},
+			{Name: "validator-1", EvmJsonRpc: "http://evm-1.svc:8545"},
+		},
 	}
 
 	c := fake.NewClientBuilder().
@@ -313,8 +316,11 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	if cm.Data["VALIDATOR_TM_RPC"] == "" {
 		t.Fatalf("VALIDATOR_TM_RPC empty")
 	}
-	if cm.Data["VALIDATOR_EVM_RPC"] != "http://evm.svc:8545" {
-		t.Fatalf("VALIDATOR_EVM_RPC = %q", cm.Data["VALIDATOR_EVM_RPC"])
+	if cm.Data["VALIDATOR_EVM_RPC"] != "http://evm-0.svc:8545" {
+		t.Fatalf("VALIDATOR_EVM_RPC = %q (want pod-0 only)", cm.Data["VALIDATOR_EVM_RPC"])
+	}
+	if cm.Data["VALIDATOR_EVM_RPC_LIST"] != "http://evm-0.svc:8545,http://evm-1.svc:8545" {
+		t.Fatalf("VALIDATOR_EVM_RPC_LIST = %q (want comma-separated all-pod URLs)", cm.Data["VALIDATOR_EVM_RPC_LIST"])
 	}
 }
 
