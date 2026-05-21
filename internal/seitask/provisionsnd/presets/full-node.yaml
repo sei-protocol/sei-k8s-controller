@@ -8,8 +8,7 @@ spec:
       peers:
         - label:
             selector:
-              # provision-snd overwrites this value with --chain-id at apply
-              # time; the literal is documentation, not enforcement.
-              sei.io/chain: __injected__
+              # provision-snd substitutes --chain-id here at apply time.
+              sei.io/chain: ""
   updateStrategy:
     type: InPlace

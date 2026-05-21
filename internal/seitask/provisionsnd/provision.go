@@ -106,8 +106,7 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 
 	snd, err := loadPreset(p.Preset)
 	if err != nil {
-		// Unknown preset is a scenario-config error (task-fail), not an
-		// infra-fail — the binary's working, the input is wrong.
+		// Unknown preset is scenario-config error, not infra-fail.
 		return Result{}, taskruntime.Task(fmt.Errorf("loading preset %q: %w", p.Preset, err))
 	}
 	if err := applyOverrides(snd, p); err != nil {
@@ -221,9 +220,9 @@ func applyOverrides(snd *seiv1alpha1.SeiNodeDeployment, p Params) error {
 		}
 		maps.Copy(snd.Spec.Template.Spec.Overrides, p.Overrides)
 	}
-	// A preset that selects peers by sei.io/chain wants the per-run value,
-	// not the placeholder. Lets full-node presets join any per-run validator
-	// chain without per-run YAML templating.
+	// Peers that declare a sei.io/chain label selector get the per-run
+	// chain-id substituted here. Lets full-node presets join any per-run
+	// validator chain without per-run YAML templating.
 	for i := range snd.Spec.Template.Spec.Peers {
 		label := snd.Spec.Template.Spec.Peers[i].Label
 		if label == nil {
@@ -312,11 +311,9 @@ func waitForFirstBlock(ctx context.Context, hc *http.Client, tmRPC string, timeo
 	})
 }
 
-// publishEndpoints assumes a single chain-id per Workflow: CHAIN_ID is
-// seeded on first create and silently retained on subsequent calls
-// (EnsureWorkflowVarsCM is AlreadyExists-tolerant). A future scenario that
-// runs provision-snd against two distinct chains will need an explicit
-// chain-id conflict check here.
+// publishEndpoints assumes one chain-id per Workflow. CHAIN_ID is seeded on
+// first create and silently retained on AlreadyExists; a scenario that
+// provisions two distinct chains needs an explicit conflict check here.
 func publishEndpoints(ctx context.Context, c client.Client, w taskruntime.WorkflowIdentity, role, chainID string, ep seiv1alpha1.Endpoints) error {
 	if err := taskruntime.EnsureWorkflowVarsCM(ctx, c, w, map[taskruntime.VarKey]string{
 		taskruntime.KeyRunID:   w.Name,

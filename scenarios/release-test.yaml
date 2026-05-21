@@ -1,30 +1,25 @@
-# Chaos Mesh Workflow: release-test scenario
+# Chaos Mesh Workflow: release-test scenario.
 #
-# Provisions a fresh 4-validator chain + 2-RPC fleet, runs the release-test
-# image against the RPC endpoints, and uploads the run snapshot to S3.
-# First scenario authored end-to-end on the seitask primitives (keygen,
-# provision-snd, upload-report) — see scenarios/README.md for placeholder
-# semantics and scenarios/major-upgrade.yaml for the workflow-vars
-# ConfigMap bridge pattern.
+# Provisions a 4-validator chain + 2-RPC fleet, runs the release-test image
+# against the RPC endpoints, uploads the run snapshot to S3. First scenario
+# composed end-to-end from seitask primitives (keygen, provision-snd,
+# upload-report). Workflow-vars CM bridges per-step values; see
+# scenarios/major-upgrade.yaml for the pattern.
 #
-# Lifecycle / cleanup
-# -------------------
-# Every per-run resource the Workflow creates (SNDs, admin Secret) is
-# stamped with ownerReferences to this Workflow CR via the Phase 1
-# primitives. The wrapper CronJob's only cleanup responsibility is
-# `kubectl delete workflow ...` — kube-controller-manager cascades.
+# Cleanup: every per-run resource (SNDs, admin Secret, workflow-vars CM)
+# carries ownerRef to this Workflow CR. The wrapper's only cleanup duty is
+# `kubectl delete workflow` — kube-controller-manager cascades.
 #
-# Always-fire upload-report is Phase 2b: if the run-release-test step
-# fails, the Serial bails and upload-report doesn't fire. Wrapper-side
-# state capture covers the gap until a Parallel-wrap pattern lands.
+# Upload-report is the last Serial child: a failed earlier step bails the
+# Serial before upload fires. Phase 2b lifts upload-report into an
+# always-fire Parallel branch.
 #
-# Placeholders (envsubst'd by the wrapper at apply time)
-# ------------------------------------------------------
+# Placeholders (the wrapper envsubst's at apply time):
 #   $SEI_NAMESPACE          namespace of workflow + provisioned SNDs
 #   $SEI_CHAIN_ID           chain id (e.g. "rel-$SEI_WORKFLOW_RUN_ID")
 #   $SEI_WORKFLOW_RUN_ID    unique per-run id; suffixes Workflow + Secret names
 #   $SEID_IMAGE             seid container image
-#   $SEITASK_IMAGE          seitask monolith image (presets are embedded)
+#   $SEITASK_IMAGE          seitask monolith image (presets embedded)
 #   $RELEASE_TEST_IMAGE     release-test harness image
 ---
 apiVersion: chaos-mesh.org/v1alpha1
@@ -58,9 +53,9 @@ spec:
             - keygen
             - --key-name=admin
 
-    # Inner --ready-timeout/--first-block-timeout sum sits ~2m below the
-    # Task deadline so provision-snd's typed exit reaches the parent
-    # before chaos-mesh hard-kills the pod on deadline exceeded.
+    # Inner --ready-timeout + default first-block-timeout sit 2m below the
+    # Task deadline so provision-snd's typed exit reaches the parent before
+    # chaos-mesh kills the pod on deadline exceeded.
     - name: provision-validator-chain
       templateType: Task
       deadline: 25m
@@ -101,11 +96,10 @@ spec:
             - --replicas=2
             - --override=tx_index.indexer=kv
             - --override=mempool.ttl_duration=60s
-            # /lag_status readiness threshold: tighten to 2 blocks so SND
-            # phase=Ready means lag<=2 across the fleet. The release-test
-            # harness opens fresh HTTP connections per call; pods at
-            # meaningfully different heights break write-then-read
-            # sequences (fund → getSequence, tx.send → receipt).
+            # Tighten /lag_status readiness to 2 blocks so SND phase=Ready
+            # means lag<=2 across the fleet. The release-test harness opens
+            # fresh HTTP connections per call; pods at meaningfully
+            # different heights break write-then-read sequences.
             - --override=network.rpc.lag_threshold=2
             - --override=evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber,sei_getBlockByHash,sei_getSeiAddress,sei_getEVMAddress,sei_getCosmosTx,sei_getEvmTx,sei_newFilter,sei_getFilterLogs
             - --ready-timeout=18m
@@ -113,11 +107,11 @@ spec:
             - configMapRef:
                 name: workflow-vars-$SEI_WORKFLOW_RUN_ID
 
-    # SEI_TENDERMINT_RPC + SEI_REST_ENDPOINT use the aggregate ClusterIP
-    # (stateless, safe to load-balance). SEI_EVM_JSON_RPC is bound to
-    # rpc pod-0 by provision-snd's RoleScoped(rpc, EVM_RPC) publishing —
-    # required for cross-pod state coherence on stateful sequences
-    # (sei_newFilter+sei_getFilterLogs, eth_sendRawTransaction+tx.wait).
+    # TM RPC + REST go through the aggregate ClusterIP (stateless, safe
+    # to load-balance). EVM RPC pins to rpc pod-0 via provision-snd's
+    # RoleScoped(rpc, EVM_RPC) — stateful sequences (sei_newFilter +
+    # sei_getFilterLogs, eth_sendRawTransaction + tx.wait) need a single
+    # mempool + filter-store view.
     - name: run-release-test
       templateType: Task
       deadline: 30m
