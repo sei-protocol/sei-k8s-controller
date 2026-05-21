@@ -19,7 +19,7 @@
 #   $SEI_CHAIN_ID           chain id (e.g. "rel-$SEI_WORKFLOW_RUN_ID")
 #   $SEI_WORKFLOW_RUN_ID    unique per-run id; suffixes Workflow + Secret names
 #   $SEID_IMAGE             seid container image
-#   $SEITASK_IMAGE          seitask monolith image (presets embedded)
+#   $SEITASK_IMAGE          seitask monolith image (SND templates baked in)
 #   $RELEASE_TEST_IMAGE     release-test harness image
 ---
 apiVersion: chaos-mesh.org/v1alpha1
@@ -67,13 +67,10 @@ spec:
             - provision-snd
             - --role=validator
             - --name=$SEI_CHAIN_ID
-            - --preset=validator
-            - --chain-id=$SEI_CHAIN_ID
-            - --image=$SEID_IMAGE
-            - --replicas=4
-            - --override=tx_index.indexer=kv
-            - --override=mempool.ttl_duration=60s
-            - --genesis-account=$(ADMIN_ADDRESS):1000000000000usei
+            - --template=/scenarios/release-test/validator.yaml.tmpl
+            - --var=CHAIN_ID=$SEI_CHAIN_ID
+            - --var=IMAGE=$SEID_IMAGE
+            - --var=ADMIN_ADDRESS=$(ADMIN_ADDRESS)
             - --ready-timeout=18m
           envFrom:
             - configMapRef:
@@ -90,18 +87,9 @@ spec:
             - provision-snd
             - --role=rpc
             - --name=$SEI_CHAIN_ID-rpc
-            - --preset=full-node
-            - --chain-id=$SEI_CHAIN_ID
-            - --image=$SEID_IMAGE
-            - --replicas=2
-            - --override=tx_index.indexer=kv
-            - --override=mempool.ttl_duration=60s
-            # Tighten /lag_status readiness to 2 blocks so SND phase=Ready
-            # means lag<=2 across the fleet. The release-test harness opens
-            # fresh HTTP connections per call; pods at meaningfully
-            # different heights break write-then-read sequences.
-            - --override=network.rpc.lag_threshold=2
-            - --override=evm.enabled_legacy_sei_apis=sei_getLogs,sei_getBlockByNumber,sei_getBlockByHash,sei_getSeiAddress,sei_getEVMAddress,sei_getCosmosTx,sei_getEvmTx,sei_newFilter,sei_getFilterLogs
+            - --template=/scenarios/release-test/rpc.yaml.tmpl
+            - --var=CHAIN_ID=$SEI_CHAIN_ID
+            - --var=IMAGE=$SEID_IMAGE
             - --ready-timeout=18m
           envFrom:
             - configMapRef:

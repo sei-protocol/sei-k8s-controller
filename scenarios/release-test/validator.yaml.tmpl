@@ -1,0 +1,21 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: PLACEHOLDER
+spec:
+  replicas: 4
+  template:
+    spec:
+      chainId: {{ .CHAIN_ID }}
+      image: {{ .IMAGE }}
+      validator: {}
+      overrides:
+        tx_index.indexer: kv
+        mempool.ttl_duration: 60s
+  genesis:
+    chainId: {{ .CHAIN_ID }}
+    accounts:
+      - address: {{ .ADMIN_ADDRESS }}
+        balance: 1000000000000usei
+  updateStrategy:
+    type: InPlace

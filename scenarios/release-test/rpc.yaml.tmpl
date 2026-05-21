@@ -1,0 +1,26 @@
+apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: PLACEHOLDER
+spec:
+  replicas: 2
+  template:
+    spec:
+      chainId: {{ .CHAIN_ID }}
+      image: {{ .IMAGE }}
+      fullNode: {}
+      peers:
+        - label:
+            selector:
+              sei.io/chain: {{ .CHAIN_ID }}
+      overrides:
+        tx_index.indexer: kv
+        mempool.ttl_duration: 60s
+        # Tighten /lag_status readiness to 2 blocks so SND phase=Ready
+        # means lag<=2 across the fleet. The release-test harness opens
+        # fresh HTTP connections per call; pods at meaningfully different
+        # heights break write-then-read sequences.
+        network.rpc.lag_threshold: "2"
+        evm.enabled_legacy_sei_apis: sei_getLogs,sei_getBlockByNumber,sei_getBlockByHash,sei_getSeiAddress,sei_getEVMAddress,sei_getCosmosTx,sei_getEvmTx,sei_newFilter,sei_getFilterLogs
+  updateStrategy:
+    type: InPlace

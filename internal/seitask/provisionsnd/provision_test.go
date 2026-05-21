@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -23,11 +26,52 @@ const (
 	testWorkflowName   = "wf-test"
 	testWorkflowVarsCM = "workflow-vars-wf-test"
 	testRole           = "validator"
-	testPresetFullNode = "full-node"
 	testChainID        = "bench-1"
 	testImage          = "ghcr.io/sei/sei-chain:abc123"
-	testAccountAddr    = "sei1abc"
+	testAdminAddress   = "sei1admin"
+	varKeyChainID      = "CHAIN_ID"
+	varKeyImage        = "IMAGE"
+	varKeyAdminAddress = "ADMIN_ADDRESS"
 )
+
+const validatorTmpl = `apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: PLACEHOLDER
+spec:
+  replicas: 4
+  template:
+    spec:
+      chainId: {{ .CHAIN_ID }}
+      image: {{ .IMAGE }}
+      validator: {}
+  genesis:
+    chainId: {{ .CHAIN_ID }}
+    accounts:
+      - address: {{ .ADMIN_ADDRESS }}
+        balance: 1000000000000usei
+  updateStrategy:
+    type: InPlace
+`
+
+const rpcTmpl = `apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: PLACEHOLDER
+spec:
+  replicas: 2
+  template:
+    spec:
+      chainId: {{ .CHAIN_ID }}
+      image: {{ .IMAGE }}
+      fullNode: {}
+      peers:
+        - label:
+            selector:
+              sei.io/chain: {{ .CHAIN_ID }}
+  updateStrategy:
+    type: InPlace
+`
 
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -43,39 +87,29 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+func writeTmpl(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "snd.yaml.tmpl")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func testWorkflow() taskruntime.WorkflowIdentity {
 	return taskruntime.WorkflowIdentity{Name: testWorkflowName, UID: "uid-test", Namespace: testNamespace}
 }
 
-func TestLoadPreset_KnownPresets(t *testing.T) {
-	for _, name := range []string{testRole, testPresetFullNode} {
-		t.Run(name, func(t *testing.T) {
-			snd, err := loadPreset(name)
-			if err != nil {
-				t.Fatalf("loadPreset(%q): %v", name, err)
-			}
-			if snd.Spec.Replicas < 1 {
-				t.Fatalf("preset %q replicas < 1: %d", name, snd.Spec.Replicas)
-			}
-		})
-	}
-}
-
-func TestLoadPreset_UnknownNameErrors(t *testing.T) {
-	if _, err := loadPreset("does-not-exist"); err == nil {
-		t.Fatalf("expected error for unknown preset")
-	}
-}
-
-func TestApplyOverrides_StampsChainImageReplicas(t *testing.T) {
-	snd, err := loadPreset(testRole)
+func TestRenderTemplate_SubstitutesVars(t *testing.T) {
+	path := writeTmpl(t, validatorTmpl)
+	snd, err := renderTemplate(path, map[string]string{
+		varKeyChainID:      testChainID,
+		varKeyImage:        testImage,
+		varKeyAdminAddress: testAdminAddress,
+	})
 	if err != nil {
-		t.Fatalf("loadPreset: %v", err)
-	}
-	if err := applyOverrides(snd, Params{
-		Role: testRole, Name: testRole, ChainID: testChainID, Image: testImage, Replicas: 7, Workflow: testWorkflow(),
-	}); err != nil {
-		t.Fatalf("applyOverrides: %v", err)
+		t.Fatalf("renderTemplate: %v", err)
 	}
 	if snd.Spec.Template.Spec.ChainID != testChainID {
 		t.Errorf("ChainID: %q", snd.Spec.Template.Spec.ChainID)
@@ -83,105 +117,118 @@ func TestApplyOverrides_StampsChainImageReplicas(t *testing.T) {
 	if snd.Spec.Template.Spec.Image != testImage {
 		t.Errorf("Image: %q", snd.Spec.Template.Spec.Image)
 	}
-	if snd.Spec.Replicas != 7 {
-		t.Errorf("Replicas: %d", snd.Spec.Replicas)
-	}
 	if snd.Spec.Genesis.ChainID != testChainID {
 		t.Errorf("Genesis.ChainID: %q", snd.Spec.Genesis.ChainID)
 	}
-}
-
-func TestApplyOverrides_MergesSeidOverrides(t *testing.T) {
-	snd, err := loadPreset(testRole)
-	if err != nil {
-		t.Fatalf("loadPreset: %v", err)
-	}
-	if err := applyOverrides(snd, Params{
-		Role: testRole, ChainID: testChainID, Image: testImage, Workflow: testWorkflow(),
-		Overrides: map[string]string{
-			"tx_index.indexer":     "kv",
-			"mempool.ttl_duration": "60s",
-		},
-	}); err != nil {
-		t.Fatalf("applyOverrides: %v", err)
-	}
-	got := snd.Spec.Template.Spec.Overrides
-	if got["tx_index.indexer"] != "kv" || got["mempool.ttl_duration"] != "60s" {
-		t.Fatalf("overrides not merged: %v", got)
+	if len(snd.Spec.Genesis.Accounts) != 1 || snd.Spec.Genesis.Accounts[0].Address != testAdminAddress {
+		t.Errorf("Genesis.Accounts: %+v", snd.Spec.Genesis.Accounts)
 	}
 }
 
-func TestApplyOverrides_AppendsGenesisAccountsOnValidatorPreset(t *testing.T) {
-	snd, err := loadPreset(testRole)
-	if err != nil {
-		t.Fatalf("loadPreset: %v", err)
-	}
-	if err := applyOverrides(snd, Params{
-		Role: testRole, ChainID: testChainID, Image: testImage, Workflow: testWorkflow(),
-		GenesisAccounts: []seiv1alpha1.GenesisAccount{{Address: testAccountAddr, Balance: "1000usei"}},
-	}); err != nil {
-		t.Fatalf("applyOverrides: %v", err)
-	}
-	if len(snd.Spec.Genesis.Accounts) != 1 || snd.Spec.Genesis.Accounts[0].Address != testAccountAddr {
-		t.Fatalf("genesis accounts: %+v", snd.Spec.Genesis.Accounts)
+func TestRenderTemplate_MissingVarFailsRender(t *testing.T) {
+	path := writeTmpl(t, validatorTmpl)
+	if _, err := renderTemplate(path, map[string]string{varKeyChainID: testChainID}); err == nil {
+		t.Fatalf("expected error: IMAGE and ADMIN_ADDRESS not provided")
 	}
 }
 
-func TestApplyOverrides_RejectsGenesisAccountsOnFullNodePreset(t *testing.T) {
-	snd, err := loadPreset(testPresetFullNode)
-	if err != nil {
-		t.Fatalf("loadPreset: %v", err)
+func TestRenderTemplate_StrictUnmarshalCatchesTypos(t *testing.T) {
+	tmpl := `apiVersion: sei.io/v1alpha1
+kind: SeiNodeDeployment
+metadata:
+  name: PLACEHOLDER
+spec:
+  replcas: 4
+  template:
+    spec:
+      chainId: {{ .CHAIN_ID }}
+      image: {{ .IMAGE }}
+      validator: {}
+  updateStrategy:
+    type: InPlace
+`
+	path := writeTmpl(t, tmpl)
+	if _, err := renderTemplate(path, map[string]string{varKeyChainID: testChainID, varKeyImage: testImage}); err == nil {
+		t.Fatalf("expected strict-unmarshal error on `replcas` typo")
 	}
-	err = applyOverrides(snd, Params{
-		Role: "rpc", ChainID: testChainID, Image: testImage, Workflow: testWorkflow(), Preset: testPresetFullNode,
-		GenesisAccounts: []seiv1alpha1.GenesisAccount{{Address: testAccountAddr, Balance: "1usei"}},
+}
+
+func TestRenderTemplate_FullNodePeerSelectorSubstitution(t *testing.T) {
+	path := writeTmpl(t, rpcTmpl)
+	snd, err := renderTemplate(path, map[string]string{
+		varKeyChainID: testChainID,
+		varKeyImage:   testImage,
 	})
-	if err == nil {
-		t.Fatalf("expected error: --genesis-account on a preset without genesis block")
-	}
-}
-
-func TestApplyOverrides_SubstitutesChainIntoFullNodePeerSelector(t *testing.T) {
-	snd, err := loadPreset(testPresetFullNode)
 	if err != nil {
-		t.Fatalf("loadPreset: %v", err)
-	}
-	if err := applyOverrides(snd, Params{
-		Role: "rpc", ChainID: testChainID, Image: testImage, Workflow: testWorkflow(),
-	}); err != nil {
-		t.Fatalf("applyOverrides: %v", err)
+		t.Fatalf("renderTemplate: %v", err)
 	}
 	peers := snd.Spec.Template.Spec.Peers
 	if len(peers) != 1 || peers[0].Label == nil {
-		t.Fatalf("full-node preset's peer block: %+v", peers)
+		t.Fatalf("peers: %+v", peers)
 	}
 	if got := peers[0].Label.Selector["sei.io/chain"]; got != testChainID {
-		t.Fatalf("peers[0].label.selector[sei.io/chain] = %q; want %q", got, testChainID)
+		t.Errorf("peers[0].label.selector[sei.io/chain] = %q; want %q", got, testChainID)
 	}
 }
 
-func TestApplyOverrides_ValidatorPreset_NoPeers(t *testing.T) {
-	snd, err := loadPreset(testRole)
+// TestBundledTemplates_RenderClean ensures every bundled scenario template
+// renders + strict-unmarshals against a representative --var set. Guards
+// against template-vs-schema drift after a CRD field rename.
+func TestBundledTemplates_RenderClean(t *testing.T) {
+	repoRoot, err := filepath.Abs("../../../")
 	if err != nil {
-		t.Fatalf("loadPreset: %v", err)
+		t.Fatal(err)
 	}
-	if err := applyOverrides(snd, Params{
-		Role: testRole, ChainID: testChainID, Image: testImage, Workflow: testWorkflow(),
-	}); err != nil {
-		t.Fatalf("applyOverrides: %v", err)
+	cases := []struct {
+		path string
+		vars map[string]string
+	}{
+		{
+			path: filepath.Join(repoRoot, "scenarios", "release-test", "validator.yaml.tmpl"),
+			vars: map[string]string{varKeyChainID: "rel-test", varKeyImage: "img:1", varKeyAdminAddress: testAdminAddress},
+		},
+		{
+			path: filepath.Join(repoRoot, "scenarios", "release-test", "rpc.yaml.tmpl"),
+			vars: map[string]string{varKeyChainID: "rel-test", varKeyImage: "img:1"},
+		},
 	}
-	if len(snd.Spec.Template.Spec.Peers) != 0 {
-		t.Fatalf("peers materialized from nothing: %+v", snd.Spec.Template.Spec.Peers)
+	for _, tc := range cases {
+		t.Run(filepath.Base(tc.path), func(t *testing.T) {
+			snd, err := renderTemplate(tc.path, tc.vars)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if snd.Spec.Template.Spec.ChainID == "" {
+				t.Fatalf("ChainID empty after render: %+v", snd.Spec.Template.Spec)
+			}
+		})
+	}
+}
+
+func TestStampMetadata_AssignsOwnerRefsNotAppend(t *testing.T) {
+	snd := &seiv1alpha1.SeiNodeDeployment{
+		// Template author smuggling a bogus ownerRef: stampMetadata MUST
+		// overwrite, not append.
+		ObjectMeta: metav1.ObjectMeta{
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "evil/v1", Kind: "Bogus", Name: "smuggled", UID: "bad",
+			}},
+		},
+	}
+	stampMetadata(snd, Params{Role: testRole, Name: testRole, Workflow: testWorkflow()})
+	if len(snd.OwnerReferences) != 1 {
+		t.Fatalf("ownerReferences: want 1, got %d (%+v)", len(snd.OwnerReferences), snd.OwnerReferences)
+	}
+	if snd.OwnerReferences[0].Kind != "Workflow" {
+		t.Fatalf("ownerRef not replaced: %+v", snd.OwnerReferences[0])
 	}
 }
 
 func TestValidateParams(t *testing.T) {
 	full := Params{
-		Role:     testRole,
-		Preset:   testRole,
-		ChainID:  testChainID,
-		Image:    testImage,
-		Workflow: testWorkflow(),
+		Role:         testRole,
+		TemplatePath: "x.yaml.tmpl",
+		Workflow:     testWorkflow(),
 	}
 	cases := []struct {
 		name string
@@ -190,9 +237,7 @@ func TestValidateParams(t *testing.T) {
 	}{
 		{"complete", func(*Params) {}, false},
 		{"missing role", func(p *Params) { p.Role = "" }, true},
-		{"missing preset", func(p *Params) { p.Preset = "" }, true},
-		{"missing chain-id", func(p *Params) { p.ChainID = "" }, true},
-		{"missing image", func(p *Params) { p.Image = "" }, true},
+		{"missing template", func(p *Params) { p.TemplatePath = "" }, true},
 		{"missing workflow.Name", func(p *Params) { p.Workflow.Name = "" }, true},
 	}
 	for _, tc := range cases {
@@ -209,17 +254,11 @@ func TestValidateParams(t *testing.T) {
 
 func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	w := testWorkflow()
+	tmplPath := writeTmpl(t, validatorTmpl)
+	vars := map[string]string{varKeyChainID: testChainID, varKeyImage: testImage, varKeyAdminAddress: testAdminAddress}
 
-	// Pre-stage a Ready SND that the controller would have produced from a
-	// Create. We re-use the production preset+overlay pipeline so the
-	// pre-staged shape stays in sync with the path Run exercises.
-	prestaged, err := loadPreset(testRole)
+	prestaged, err := renderTemplate(tmplPath, vars)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := applyOverrides(prestaged, Params{
-		Role: testRole, Name: testRole, Preset: "validator", ChainID: testChainID, Image: testImage, Workflow: w,
-	}); err != nil {
 		t.Fatal(err)
 	}
 	stampMetadata(prestaged, Params{Role: testRole, Name: testRole, Workflow: w})
@@ -249,9 +288,8 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	res, err := Run(context.Background(), c, Params{
 		Role:              testRole,
 		Name:              testRole,
-		Preset:            "validator",
-		ChainID:           testChainID,
-		Image:             testImage,
+		TemplatePath:      tmplPath,
+		Vars:              vars,
 		ReadyTimeout:      2 * time.Second,
 		FirstBlockTimeout: 2 * time.Second,
 		PollInterval:      10 * time.Millisecond,
@@ -280,9 +318,6 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	}
 }
 
-// fakeStatusServer returns a /status endpoint that reports the given height.
-// Tests the JSON-RPC-envelope-or-bare tolerance: server emits the bare
-// `{"sync_info": ...}` shape (Sei CometBFT's default).
 func fakeStatusServer(t *testing.T, height string) *httptest.Server {
 	t.Helper()
 	var (

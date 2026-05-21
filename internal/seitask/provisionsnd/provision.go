@@ -1,26 +1,29 @@
-// Package provisionsnd implements `seitask provision-snd`: pick a bundled
-// SeiNodeDeployment preset, apply CLI-supplied overrides, stamp an ownerRef
-// to the parent Workflow, Create it, await Ready, poll the chain RPC for
-// first block, then publish endpoints to workflow-vars under role-scoped
-// keys (VALIDATOR_TM_RPC, RPC_EVM_RPC, etc.).
+// Package provisionsnd implements `seitask provision-snd`: render a Go
+// template to a SeiNodeDeployment YAML, stamp an ownerRef to the parent
+// Workflow, Create it, await Ready, poll the chain RPC for first block,
+// then publish endpoints to workflow-vars under role-scoped keys
+// (VALIDATOR_TM_RPC, RPC_EVM_RPC, etc.).
 //
-// Presets bundle the minimal mode-specific shape (validator vs full-node).
-// Per-run shape lives in --override / --genesis-account flags so a scenario
-// fully declares its SND shape in the Workflow YAML, no per-scenario asset
-// files.
+// Templates are scenario-intrinsic: the full SND shape (mode, overrides,
+// peers, genesis ceremony) lives in the template body as proper YAML.
+// Per-run scalars (CHAIN_ID, IMAGE, ADMIN_ADDRESS, ...) flow in via --var
+// and resolve at render time. Same `--template + --var` contract as the
+// runner subcommand.
 package provisionsnd
 
 import (
+	"bytes"
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
-	"strings"
+	"os"
+	"reflect"
+	"text/template"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,41 +35,25 @@ import (
 
 const fieldOwner client.FieldOwner = "seitask-provision-snd"
 
-//go:embed presets/*.yaml
-var presetFS embed.FS
-
 // Params carries the typed inputs to Run.
 type Params struct {
 	// Role tags the workflow-vars keys this Task writes (e.g. "validator",
-	// "rpc"). Required when running multiple provision-snd Tasks in one
-	// scenario; values get uppercased to compose VALIDATOR_TM_RPC etc.
+	// "rpc"). Required for scenarios with multiple provision-snd Tasks;
+	// values get uppercased to compose VALIDATOR_TM_RPC etc.
 	Role string
 
 	// Name is the SeiNodeDeployment metadata.name. Defaults to
 	// "<Workflow.Name>-<Role>" when empty.
 	Name string
 
-	// Preset selects the bundled base SND template by short name (e.g.
-	// "validator", "full-node"). Required.
-	Preset string
+	// TemplatePath is the on-disk path to the Go text/template producing
+	// a SeiNodeDeployment YAML. Required.
+	TemplatePath string
 
-	// ChainID overrides spec.template.spec.chainId + spec.genesis.chainId.
-	// Required.
-	ChainID string
-
-	// Image overrides spec.template.spec.image. Required.
-	Image string
-
-	// Replicas overrides spec.replicas. 0 means "use the preset's value".
-	Replicas int32
-
-	// Overrides are seid config-toml overrides merged into
-	// spec.template.spec.overrides on top of whatever the preset carries.
-	Overrides map[string]string
-
-	// GenesisAccounts append to spec.genesis.accounts. Rejected when the
-	// preset does not embed a genesis block (e.g. full-node).
-	GenesisAccounts []seiv1alpha1.GenesisAccount
+	// Vars are the template's substitution context (the .KEY map in
+	// template syntax). Missing keys referenced by the template fail
+	// rendering rather than silently expanding to empty strings.
+	Vars map[string]string
 
 	// ReadyTimeout bounds the wait for status.phase=Ready.
 	ReadyTimeout time.Duration
@@ -75,9 +62,7 @@ type Params struct {
 	// its first block.
 	FirstBlockTimeout time.Duration
 
-	// PollInterval is the interval between status reads (Ready) and chain
-	// RPC reads (first block). Same value used for both — tightly tunable
-	// from tests.
+	// PollInterval is the interval between status reads and chain RPC reads.
 	PollInterval time.Duration
 
 	// HTTPClient overrides the chain-RPC client; nil means http.DefaultClient.
@@ -95,22 +80,18 @@ type Result struct {
 	Endpoints seiv1alpha1.Endpoints
 }
 
-// Run loads the preset, applies overrides, creates the SND with an ownerRef
-// to the parent Workflow, waits for Ready, polls the chain RPC for first
-// block, and writes role-scoped endpoints to workflow-vars.
+// Run renders the template, creates the SND with an ownerRef to the parent
+// Workflow, waits for Ready, polls the chain RPC for first block, and
+// writes role-scoped endpoints to workflow-vars.
 func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 	if err := validateParams(p); err != nil {
 		return Result{}, err
 	}
 	p = withDefaults(p)
 
-	snd, err := loadPreset(p.Preset)
+	snd, err := renderTemplate(p.TemplatePath, p.Vars)
 	if err != nil {
-		// Unknown preset is scenario-config error, not infra-fail.
-		return Result{}, taskruntime.Task(fmt.Errorf("loading preset %q: %w", p.Preset, err))
-	}
-	if err := applyOverrides(snd, p); err != nil {
-		return Result{}, err
+		return Result{}, taskruntime.Task(fmt.Errorf("rendering template %s: %w", p.TemplatePath, err))
 	}
 	stampMetadata(snd, p)
 
@@ -118,8 +99,11 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 		if !apierrors.IsAlreadyExists(err) {
 			return Result{}, taskruntime.Infra(fmt.Errorf("creating SeiNodeDeployment %s/%s: %w", snd.Namespace, snd.Name, err))
 		}
-		// Re-runs of provision-snd land here on the existing SND — that's
-		// idempotent for our purposes (the controller is reconciling it).
+		// Re-runs land here. Surface drift loudly so an operator who edited
+		// the template since the original Create knows the cluster is still
+		// at the original spec — we don't force-apply to avoid clobbering
+		// hand-edits or in-flight reconciliation.
+		warnIfDrift(ctx, c, snd)
 	}
 
 	if err := waitForReady(ctx, c, types.NamespacedName{Namespace: snd.Namespace, Name: snd.Name}, p.ReadyTimeout, p.PollInterval); err != nil {
@@ -134,6 +118,7 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 		return Result{}, taskruntime.Infra(fmt.Errorf("SND %s reached Ready but .status.endpoints.tendermintRpc is empty", current.Name))
 	}
 	endpoints := *current.Status.Endpoints
+	chainID := current.Spec.Template.Spec.ChainID
 
 	httpClient := p.HTTPClient
 	if httpClient == nil {
@@ -143,22 +128,18 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 		return Result{}, err
 	}
 
-	if err := publishEndpoints(ctx, c, p.Workflow, p.Role, p.ChainID, endpoints); err != nil {
+	if err := publishEndpoints(ctx, c, p.Workflow, p.Role, chainID, endpoints); err != nil {
 		return Result{}, err
 	}
-	return Result{Name: snd.Name, ChainID: p.ChainID, Endpoints: endpoints}, nil
+	return Result{Name: snd.Name, ChainID: chainID, Endpoints: endpoints}, nil
 }
 
 func validateParams(p Params) error {
 	switch {
 	case p.Role == "":
 		return fmt.Errorf("provision-snd: --role is required")
-	case p.Preset == "":
-		return fmt.Errorf("provision-snd: --preset is required")
-	case p.ChainID == "":
-		return fmt.Errorf("provision-snd: --chain-id is required")
-	case p.Image == "":
-		return fmt.Errorf("provision-snd: --image is required")
+	case p.TemplatePath == "":
+		return fmt.Errorf("provision-snd: --template is required")
 	case p.Workflow.Name == "" || p.Workflow.Namespace == "":
 		return fmt.Errorf("provision-snd: workflow identity not loaded")
 	}
@@ -181,68 +162,53 @@ func withDefaults(p Params) Params {
 	return p
 }
 
-func loadPreset(name string) (*seiv1alpha1.SeiNodeDeployment, error) {
-	data, err := presetFS.ReadFile("presets/" + name + ".yaml")
+// renderTemplate parses the file at path as a Go text/template, executes it
+// against vars (missing keys fail the render — `missingkey=error` option),
+// then strict-unmarshals the rendered bytes into a SeiNodeDeployment so
+// typos in field names fail here, not at apiserver-Create time.
+func renderTemplate(path string, vars map[string]string) (*seiv1alpha1.SeiNodeDeployment, error) {
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("unknown preset (available: %s): %w", availablePresets(), err)
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	tmpl, err := template.New(path).Option("missingkey=error").Parse(string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, vars); err != nil {
+		return nil, fmt.Errorf("execute: %w", err)
 	}
 	out := &seiv1alpha1.SeiNodeDeployment{}
-	if err := yaml.UnmarshalStrict(data, out); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
+	if err := yaml.UnmarshalStrict(buf.Bytes(), out); err != nil {
+		return nil, fmt.Errorf("unmarshal rendered yaml: %w", err)
 	}
 	return out, nil
 }
 
-func availablePresets() string {
-	entries, _ := presetFS.ReadDir("presets")
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, strings.TrimSuffix(e.Name(), ".yaml"))
-	}
-	return strings.Join(names, ", ")
-}
-
-func applyOverrides(snd *seiv1alpha1.SeiNodeDeployment, p Params) error {
-	snd.Spec.Template.Spec.ChainID = p.ChainID
-	snd.Spec.Template.Spec.Image = p.Image
-	if p.Replicas > 0 {
-		snd.Spec.Replicas = p.Replicas
-	}
-	if snd.Spec.Genesis != nil {
-		snd.Spec.Genesis.ChainID = p.ChainID
-		snd.Spec.Genesis.Accounts = append(snd.Spec.Genesis.Accounts, p.GenesisAccounts...)
-	} else if len(p.GenesisAccounts) > 0 {
-		return fmt.Errorf("provision-snd: --genesis-account given but preset %q has no genesis block", p.Preset)
-	}
-	if len(p.Overrides) > 0 {
-		if snd.Spec.Template.Spec.Overrides == nil {
-			snd.Spec.Template.Spec.Overrides = map[string]string{}
-		}
-		maps.Copy(snd.Spec.Template.Spec.Overrides, p.Overrides)
-	}
-	// Peers that declare a sei.io/chain label selector get the per-run
-	// chain-id substituted here. Lets full-node presets join any per-run
-	// validator chain without per-run YAML templating.
-	for i := range snd.Spec.Template.Spec.Peers {
-		label := snd.Spec.Template.Spec.Peers[i].Label
-		if label == nil {
-			continue
-		}
-		if _, present := label.Selector[chainSelectorLabel]; present {
-			label.Selector[chainSelectorLabel] = p.ChainID
-		}
-	}
-	return nil
-}
-
-const chainSelectorLabel = "sei.io/chain"
-
+// stampMetadata overwrites metadata fields the template MUST NOT control.
+// OwnerReferences are assigned (not appended) so a template that smuggles
+// a bogus ref can't leak through.
 func stampMetadata(snd *seiv1alpha1.SeiNodeDeployment, p Params) {
 	snd.APIVersion = seiv1alpha1.GroupVersion.String()
 	snd.Kind = "SeiNodeDeployment"
 	snd.Name = p.Name
 	snd.Namespace = p.Workflow.Namespace
-	snd.OwnerReferences = append(snd.OwnerReferences, p.Workflow.OwnerRef())
+	snd.OwnerReferences = []metav1.OwnerReference{p.Workflow.OwnerRef()}
+}
+
+// warnIfDrift logs when a re-run finds the on-cluster SND.Spec different
+// from the freshly-rendered one. Operators who edited the template since
+// the original Create need to know the cluster still has the old spec.
+func warnIfDrift(ctx context.Context, c client.Client, fresh *seiv1alpha1.SeiNodeDeployment) {
+	existing := &seiv1alpha1.SeiNodeDeployment{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: fresh.Namespace, Name: fresh.Name}, existing); err != nil {
+		return
+	}
+	if reflect.DeepEqual(existing.Spec, fresh.Spec) {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "WARN: SND %s/%s exists with spec different from rendered template; reusing on-cluster spec\n", fresh.Namespace, fresh.Name)
 }
 
 func waitForReady(ctx context.Context, c client.Client, key types.NamespacedName, timeout, interval time.Duration) error {
@@ -250,7 +216,7 @@ func waitForReady(ctx context.Context, c client.Client, key types.NamespacedName
 		snd := &seiv1alpha1.SeiNodeDeployment{}
 		if err := c.Get(ctx, key, snd); err != nil {
 			if apierrors.IsNotFound(err) {
-				return false, nil // newly-created, kube-apiserver hasn't observed our Create yet
+				return false, nil
 			}
 			return false, taskruntime.Infra(fmt.Errorf("reading SND %s: %w", key, err))
 		}
