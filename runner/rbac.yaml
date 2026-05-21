@@ -37,6 +37,21 @@ rules:
 - apiGroups: ["sei.io"]
   resources: ["seinodes"]
   verbs: ["get", "list", "watch"]
+# SeiNodeDeployment: create + read for provision-snd. Polls .status.phase
+# until Ready and reads .status.endpoints to publish role-scoped TM/REST/
+# EVM URLs into workflow-vars.
+- apiGroups: ["sei.io"]
+  resources: ["seinodedeployments"]
+  verbs: ["create", "get", "list", "watch"]
+- apiGroups: ["sei.io"]
+  resources: ["seinodedeployments/status"]
+  verbs: ["get"]
+# Secrets: get + create for keygen, which writes the per-run admin
+# mnemonic Secret. Downstream Tasks consume it via secretKeyRef on the
+# Pod's env, which the kubelet handles under its own credentials.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "create"]
 # ConfigMaps: workflow-vars-<run-id> upsert by producer bash steps.
 # `create`+`patch` are the apply-path verbs; `get`+`list`+`watch` support
 # read-modify-write (resolve-proposal-id merges PROPOSAL_ID into the

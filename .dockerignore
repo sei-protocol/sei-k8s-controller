@@ -19,3 +19,8 @@
 # at `COPY --from=builder /workspace/runner/templates /templates` with
 # "not found".
 !runner/templates/**
+
+# Per-scenario SND templates consumed by provision-snd's --template. Same
+# lesson as runner/templates/**: the seitask Dockerfile COPYs each
+# scenario asset dir; without the re-include, builds fail with "not found".
+!scenarios/*/**

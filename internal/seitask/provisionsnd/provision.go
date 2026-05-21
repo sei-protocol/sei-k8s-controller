@@ -277,17 +277,21 @@ func waitForFirstBlock(ctx context.Context, hc *http.Client, tmRPC string, timeo
 	})
 }
 
-// publishEndpoints assumes one chain-id per Workflow. CHAIN_ID is seeded on
-// first create and silently retained on AlreadyExists; a scenario that
-// provisions two distinct chains needs an explicit conflict check here.
+// publishEndpoints assumes one chain-id per Workflow. CHAIN_ID is written via
+// SetVars (a merge patch) — running provision-snd twice with the same
+// --var=CHAIN_ID is idempotent; running it against two distinct chains
+// silently overwrites and needs an explicit conflict check here.
 func publishEndpoints(ctx context.Context, c client.Client, w taskruntime.WorkflowIdentity, role, chainID string, ep seiv1alpha1.Endpoints) error {
 	if err := taskruntime.EnsureWorkflowVarsCM(ctx, c, w, map[taskruntime.VarKey]string{
-		taskruntime.KeyRunID:   w.Name,
-		taskruntime.KeyChainID: chainID,
+		taskruntime.KeyRunID: w.Name,
 	}); err != nil {
 		return err
 	}
 	vars := map[taskruntime.VarKey]string{
+		// CHAIN_ID lives in SetVars (merge), not the EnsureWorkflowVarsCM seed
+		// (no-op on AlreadyExists): keygen-admin runs first and creates the
+		// CM, so a CHAIN_ID seed here would be silently dropped.
+		taskruntime.KeyChainID: chainID,
 		taskruntime.RoleScoped(role, taskruntime.KeyTendermintRPC):  ep.TendermintRpc,
 		taskruntime.RoleScoped(role, taskruntime.KeyTendermintREST): ep.TendermintRest,
 	}
