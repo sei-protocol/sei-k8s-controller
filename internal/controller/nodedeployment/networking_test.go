@@ -193,6 +193,53 @@ func TestGenerateHTTPRoute_ManagedByAnnotation(t *testing.T) {
 	g.Expect(route.Annotations).To(HaveKeyWithValue("sei.io/managed-by", "seinodedeployment"))
 }
 
+// TestGenerateHTTPRoute_TypeMeta locks down the apiVersion/kind on the
+// constructed object. The typed builder must populate TypeMeta so the SSA
+// apply path serializes the same top-level keys the unstructured builder
+// did pre-#316; an empty TypeMeta would silently break server-side apply.
+func TestGenerateHTTPRoute_TypeMeta(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
+	route := generateHTTPRoute(group, routes[0], "sei-gateway", "gateway")
+
+	g.Expect(route.APIVersion).To(Equal("gateway.networking.k8s.io/v1"))
+	g.Expect(route.Kind).To(Equal("HTTPRoute"))
+}
+
+// TestGenerateHTTPRoute_BackendRefDefaultsServerSide is the load-bearing
+// guard against accidental SSA field-ownership creep. The controller must
+// leave BackendObjectReference.{Group,Kind} unset (nil) so the apiserver
+// applies the documented defaults (core/Service) on its side. Setting
+// them explicitly would cause field-manager "seinode-controller" to claim
+// those paths, fighting any future operator who tries to retarget a
+// backend via kubectl edit.
+func TestGenerateHTTPRoute_BackendRefDefaultsServerSide(t *testing.T) {
+	g := NewWithT(t)
+	group := newTestGroup("pacific-1-wave", "pacific-1")
+	group.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
+
+	routes := resolveEffectiveRoutes(group, "prod.platform.sei.io", "platform.sei.io")
+	g.Expect(routes).NotTo(BeEmpty())
+
+	for _, er := range routes {
+		route := generateHTTPRoute(group, er, "sei-gateway", "gateway")
+		g.Expect(route.Spec.Rules).NotTo(BeEmpty())
+		for ri, rule := range route.Spec.Rules {
+			for bi, b := range rule.BackendRefs {
+				g.Expect(b.Group).To(BeNil(),
+					"route %s rule[%d] backend[%d]: BackendRef.Group must be nil (server-defaulted to core)",
+					er.Name, ri, bi)
+				g.Expect(b.Kind).To(BeNil(),
+					"route %s rule[%d] backend[%d]: BackendRef.Kind must be nil (server-defaulted to Service)",
+					er.Name, ri, bi)
+			}
+		}
+	}
+}
+
 func TestGenerateHTTPRoute_BackendRef(t *testing.T) {
 	g := NewWithT(t)
 	group := newTestGroup("pacific-1-wave", "pacific-1")
