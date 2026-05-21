@@ -137,17 +137,74 @@ func TestSyncStatefulSet_ImpostorThenApply(t *testing.T) {
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 
-	// Reconcile 1: detect mismatch, Delete, return nil.
+	// Reconcile 1: detect mismatch, Delete, clear stale tracking,
+	// return nil.
 	sts, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).To(BeNil())
+	g.Expect(node.Status.StatefulSet).To(BeNil(),
+		"impostor delete must clear Status.StatefulSet so a subsequent Apply is not misclassified")
 
-	// Reconcile 2: Get sees NotFound, Apply creates fresh.
+	// Reconcile 2: Status was cleared, falls into adopt-on-observe.
+	// Get sees NotFound (impostor deleted), Apply creates fresh.
 	sts, err = SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).NotTo(BeNil(), "second reconcile must Apply fresh")
 	g.Expect(sts.UID).NotTo(Equal(types.UID(originalTestUID)))
 	g.Expect(sts.UID).NotTo(Equal(types.UID(impostorTestUID)))
+}
+
+// TestSyncStatefulSet_ImpostorClearPreventsChurn pins the cross-
+// reconcile invariant: when the controller deletes an impostor and
+// the plan executor Applies fresh in the same pass, the next reconcile
+// must adopt that fresh StatefulSet rather than delete it as another
+// impostor. Clearing Status.StatefulSet on impostor delete is what
+// routes the next reconcile through adopt-on-observe.
+func TestSyncStatefulSet_ImpostorClearPreventsChurn(t *testing.T) {
+	g := NewWithT(t)
+	s := newSyncTestScheme(t)
+
+	node := newGenesisNode(impostorName, testNamespace)
+	node.Status.StatefulSet = &seiv1alpha1.StatefulSetRef{
+		Name: impostorName,
+		UID:  originalTestUID,
+	}
+	impostor := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      impostorName,
+			Namespace: testNamespace,
+			UID:       impostorTestUID,
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(node, impostor).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
+		Build()
+
+	// Reconcile N (controller wrapper): impostor detected, Deleted,
+	// Status.StatefulSet cleared.
+	_, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(node.Status.StatefulSet).To(BeNil())
+
+	// Still inside reconcile N (plan task): SyncStatefulSet again.
+	// Status is nil, impostor check skipped, Get NotFound, Apply lands.
+	taskSTS, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(taskSTS).NotTo(BeNil(), "task call after impostor clear must Apply a fresh StatefulSet")
+	newUID := taskSTS.UID
+
+	// Reconcile N+1 (controller wrapper): would-be-bug scenario.
+	// Status.StatefulSet still nil (controller wrapper does not stamp
+	// when SyncStatefulSet returned nil in reconcile N). With the
+	// clear, this call adopts the freshly Applied STS rather than
+	// deleting it as another impostor.
+	adopted, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(adopted).NotTo(BeNil())
+	g.Expect(adopted.UID).To(Equal(newUID),
+		"reconcile N+1 must adopt the task-Applied StatefulSet, not delete it as another impostor")
 }
 
 // TestSyncStatefulSet_MatchingUID is the steady-state path. A live
