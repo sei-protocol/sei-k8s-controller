@@ -93,6 +93,13 @@ func SyncStatefulSet(
 				if err := c.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 					return nil, fmt.Errorf("deleting impostor statefulset: %w", err)
 				}
+				// Forget the stale identity so any subsequent
+				// SyncStatefulSet call this reconcile (or the next)
+				// routes through the adopt-on-observe path. Leaving
+				// the stale UID would cause a freshly Applied STS to
+				// be misclassified as another impostor on the very
+				// next reconcile, producing a churn loop.
+				node.Status.StatefulSet = nil
 				return nil, nil
 			}
 		case apierrors.IsNotFound(err):
