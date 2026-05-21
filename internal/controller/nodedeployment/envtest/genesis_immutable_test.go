@@ -159,11 +159,12 @@ func errString(err error) string {
 	return strings.TrimSpace(err.Error())
 }
 
-// TestGenesis_ConditionSeededOnEveryReconcile guards the hoist in
-// controller.go: setGenesisCeremonyCondition runs before any path
-// that may early-return, so the condition is visible immediately
-// once the controller has reconciled the SND.
-func TestGenesis_ConditionSeededOnEveryReconcile(t *testing.T) {
+// TestGenesis_ConditionSeededWithGenesisSpec asserts the condition is
+// present on a genesis-bearing SND after first reconcile. Asserting
+// only presence (not reason) avoids a race: the planner schedules a
+// ceremony plan immediately, which advances the reason from
+// NotStarted to InProgress. Reason coverage lives in unit tests.
+func TestGenesis_ConditionSeededWithGenesisSpec(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
