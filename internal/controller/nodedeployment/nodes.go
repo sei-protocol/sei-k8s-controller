@@ -18,21 +18,10 @@ import (
 
 // reconcileSeiNodes ensures the desired child SeiNodes exist, populates
 // IncumbentNodes, and detects spec changes that require orchestration.
-// Mutations are skipped while a plan is in progress. While paused, the
-// only action taken is propagating the paused state to children.
+// Mutations are skipped while a plan is in progress or while paused.
 func (r *SeiNodeDeploymentReconciler) reconcileSeiNodes(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Paused {
-		if err := r.syncPausedToChildren(ctx, group, true); err != nil {
-			return err
-		}
 		return r.populateIncumbentNodes(ctx, group)
-	}
-
-	// Spec.Paused propagates to children on every reconcile, including
-	// while a plan is in progress. Children that remain paused stall
-	// await-nodes-running and prevent the plan from advancing.
-	if err := r.syncPausedToChildren(ctx, group, false); err != nil {
-		return err
 	}
 
 	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) {

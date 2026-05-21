@@ -32,14 +32,18 @@ func (r *SeiNodeDeploymentReconciler) updateStatus(ctx context.Context, group *s
 		})
 	}
 
-	// TemplateHash advances only while the controller is free to act on
-	// template changes. Pause must hold the hash so a deferred edit
-	// converges on unpause; rollout/plan execution defers to completePlan.
-	if !group.Spec.Paused &&
-		!hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) &&
+	// ObservedGeneration tracks "controller has processed this spec" and
+	// must advance on every reconcile that runs to completion, including
+	// paused ones — generation-drift consumers (kubectl wait, ArgoCD,
+	// Flux) depend on it. TemplateHash is what defers template edits, so
+	// pause holds only that. Both still defer to completePlan during
+	// rollout/plan execution.
+	if !hasConditionTrue(group, seiv1alpha1.ConditionPlanInProgress) &&
 		!hasConditionTrue(group, seiv1alpha1.ConditionRolloutInProgress) {
 		group.Status.ObservedGeneration = group.Generation
-		group.Status.TemplateHash = templateHash(&group.Spec.Template.Spec)
+		if !group.Spec.Paused {
+			group.Status.TemplateHash = templateHash(&group.Spec.Template.Spec)
+		}
 	}
 	group.Status.Replicas = group.Spec.Replicas
 	group.Status.ReadyReplicas = readyReplicas
