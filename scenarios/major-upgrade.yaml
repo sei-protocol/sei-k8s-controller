@@ -156,6 +156,15 @@ spec:
             - --var=FEES=10000usei
             - --var=GAS=500000
             - --timeout=8m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -232,6 +241,15 @@ spec:
             - --var=FEES=10000usei
             - --var=GAS=200000
             - --timeout=5m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -253,6 +271,15 @@ spec:
             - --var=FEES=10000usei
             - --var=GAS=200000
             - --timeout=5m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -274,6 +301,15 @@ spec:
             - --var=FEES=10000usei
             - --var=GAS=200000
             - --timeout=5m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -295,6 +331,15 @@ spec:
             - --var=FEES=10000usei
             - --var=GAS=200000
             - --timeout=5m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -341,6 +386,15 @@ spec:
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -382,6 +436,15 @@ spec:
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -400,6 +463,15 @@ spec:
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -418,6 +490,15 @@ spec:
             - --var=IMAGE=$SEI_POST_UPGRADE_IMG
             - --var=REQUIRE_PHASE=Running
             - --timeout=8m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -445,6 +526,15 @@ spec:
             - --var=NODE=$SEI_CHAIN_ID-1
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
             - --timeout=6m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -462,6 +552,15 @@ spec:
             - --var=NODE=$SEI_CHAIN_ID-2
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
             - --timeout=6m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
@@ -479,6 +578,15 @@ spec:
             - --var=NODE=$SEI_CHAIN_ID-3
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
             - --timeout=6m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
