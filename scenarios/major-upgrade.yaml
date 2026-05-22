@@ -358,7 +358,7 @@ spec:
               set -eu
               for i in $(seq 1 300); do
                 STATUS=$(curl -fsS "${VALIDATOR_REST}/cosmos/gov/v1beta1/proposals/${PROPOSAL_ID}" \
-                          | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p' | head -1)
+                          | sed -n 's/.*"status":[[:space:]]*"\([A-Z_]*\)".*/\1/p' | head -1)
                 echo "attempt=${i} proposal=${PROPOSAL_ID} status=${STATUS:-unknown}"
                 [ "${STATUS}" = "PROPOSAL_STATUS_PASSED" ] && exit 0
                 sleep 1
