@@ -127,6 +127,22 @@ func TestSeiNode_StatefulSetRecreatedAfterDelete(t *testing.T) {
 	g.Expect(testCli.Get(testCtx, stsKey, sts)).To(Succeed())
 	g.Expect(testCli.Delete(testCtx, sts)).To(Succeed())
 
+	// Wait for the Owns(StatefulSet) watch to fire the deletion-observation
+	// reconcile before issuing the spec patch below. Without this barrier,
+	// the spec patch can land between the in-flight reconcile's Get and
+	// its optimistic-locked Status.Patch (see controller/node/controller.go's
+	// MergeFromWithOptimisticLock at the reconcile entry), producing a 409
+	// "the object has been modified". Controller-runtime re-queues on 409,
+	// but the exponential backoff can stretch convergence past the test's
+	// pollTimeout — surfacing as a flake. The condition is satisfied when
+	// the StatefulSet is briefly NotFound or has already been recreated
+	// with a new UID; both signal the deletion has been observed.
+	waitFor(t, func() bool {
+		s := &appsv1.StatefulSet{}
+		err := testCli.Get(testCtx, stsKey, s)
+		return apierrors.IsNotFound(err) || (err == nil && s.UID != originalUID)
+	}, "controller must observe the StatefulSet deletion before next mutation")
+
 	// Bump the spec so the controller reconciles again (the SeiNode
 	// reconciler watches StatefulSet via Owns, but envtest sometimes
 	// races; a Spec edit triggers the predicate deterministically).
@@ -200,6 +216,25 @@ func TestSeiNode_StatefulSetImpostorReplaced(t *testing.T) {
 	// the full object and avoids that pitfall.
 	cur.Status.StatefulSet.UID = "00000000-0000-0000-0000-000000000000"
 	g.Expect(testCli.Status().Update(testCtx, cur)).To(Succeed())
+
+	// Confirm the forged status is durable on the apiserver before
+	// issuing the spec patch below. This collapses the window where the
+	// two writes land back-to-back and an in-flight reconcile (if the
+	// controller's predicate doesn't filter the Status.Update) sees
+	// them at conflicting resource versions, triggering a 409 on
+	// optimistic-locked Status.Patch (see controller/node/controller.go's
+	// MergeFromWithOptimisticLock). The re-Get round-trip also serves
+	// as a synchronization barrier against any reconcile woken by the
+	// Status.Update, letting it drain before the spec patch fires a
+	// second predicate.
+	waitFor(t, func() bool {
+		latest := &seiv1alpha1.SeiNode{}
+		if err := testCli.Get(testCtx, key, latest); err != nil {
+			return false
+		}
+		return latest.Status.StatefulSet != nil &&
+			latest.Status.StatefulSet.UID == "00000000-0000-0000-0000-000000000000"
+	}, "Status.Update forging UID must be durable before next mutation")
 
 	// Trigger a spec-bumped reconcile so the controller picks up the
 	// forged mismatch. The Owns(StatefulSet) watch would fire on the
