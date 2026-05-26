@@ -127,6 +127,15 @@ func TestSeiNode_StatefulSetRecreatedAfterDelete(t *testing.T) {
 	g.Expect(testCli.Get(testCtx, stsKey, sts)).To(Succeed())
 	g.Expect(testCli.Delete(testCtx, sts)).To(Succeed())
 
+	// Barrier: let the Owns watch fire its deletion reconcile before the
+	// spec patch below. Without it, the spec patch races the in-flight
+	// reconcile's optimistic-locked status flush → 409 → flake.
+	waitFor(t, func() bool {
+		s := &appsv1.StatefulSet{}
+		err := testCli.Get(testCtx, stsKey, s)
+		return apierrors.IsNotFound(err) || (err == nil && s.UID != originalUID)
+	}, "controller must observe the StatefulSet deletion before next mutation")
+
 	// Bump the spec so the controller reconciles again (the SeiNode
 	// reconciler watches StatefulSet via Owns, but envtest sometimes
 	// races; a Spec edit triggers the predicate deterministically).
@@ -200,6 +209,19 @@ func TestSeiNode_StatefulSetImpostorReplaced(t *testing.T) {
 	// the full object and avoids that pitfall.
 	cur.Status.StatefulSet.UID = "00000000-0000-0000-0000-000000000000"
 	g.Expect(testCli.Status().Update(testCtx, cur)).To(Succeed())
+
+	// Barrier: confirm the forged status is durable and any reconcile
+	// woken by Status.Update has drained before the spec patch below.
+	// Without it, back-to-back writes race the in-flight reconcile's
+	// optimistic-locked status flush → 409 → flake.
+	waitFor(t, func() bool {
+		latest := &seiv1alpha1.SeiNode{}
+		if err := testCli.Get(testCtx, key, latest); err != nil {
+			return false
+		}
+		return latest.Status.StatefulSet != nil &&
+			latest.Status.StatefulSet.UID == "00000000-0000-0000-0000-000000000000"
+	}, "Status.Update forging UID must be durable before next mutation")
 
 	// Trigger a spec-bumped reconcile so the controller picks up the
 	// forged mismatch. The Owns(StatefulSet) watch would fire on the
