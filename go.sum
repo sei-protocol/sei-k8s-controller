@@ -1446,6 +1446,7 @@ github.com/lib/pq v1.10.9 h1:YXG7RB+JIjhP29X+OtkiDnYaXQwpS4JEWq7dtCCRUEw=
 github.com/lib/pq v1.10.9/go.mod h1:AlVN5x4E4T544tWzH6hKfbfQvm3HdbOxrmggDNAPY9o=
 github.com/libp2p/go-buffer-pool v0.1.0 h1:oK4mSFcQz7cTQIfqbe4MIj9gLW+mnanjyFtc6cdF0Y8=
 github.com/libp2p/go-buffer-pool v0.1.0/go.mod h1:N+vh8gMqimBzdKkSMVuydVDq+UV5QTWy5HSiZacSbPg=
+github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de/go.mod h1:zAbeS9B/r2mtpb6U+EI2rYA5OAXxsYw6wTamcNW+zcE=
 github.com/lightstep/lightstep-tracer-common/golang/gogo v0.0.0-20190605223551-bc2310a04743/go.mod h1:qklhhLq1aX+mtWk9cPHPzaBjWImj5ULL6C7HFJtXQMM=
 github.com/lightstep/lightstep-tracer-go v0.18.1/go.mod h1:jlF1pusYV4pidLvZ+XD0UBX0ZE6WURAspgAczcDHrL4=
 github.com/linxGnu/grocksdb v1.8.11 h1:BGol9e5gB1BrsTvOxloC88pe70TCqgrfLNwkyWW0kD8=
@@ -1770,6 +1771,8 @@ github.com/sei-protocol/sei-config v0.0.14 h1:1KS0EteCBEsjglNEPS/8VAOA7/NDLxEuPH
 github.com/sei-protocol/sei-config v0.0.14/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
 github.com/sei-protocol/sei-config v0.0.15 h1:kd9ZbDYq4eAJxpELI8oISVXFiPr3Jf1kTHL/V3gf5TU=
 github.com/sei-protocol/sei-config v0.0.15/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
+github.com/sei-protocol/sei-config v0.0.16 h1:2wBHVmCaHnGeqRNrdpUSJByehYTLOSEkk+IP/rwJJBE=
+github.com/sei-protocol/sei-config v0.0.16/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
 github.com/sei-protocol/sei-load v0.0.0-20251007135253-78fbdc141082 h1:f2sY8OcN60UL1/6POx+HDMZ4w04FTZtSScnrFSnGZHg=
 github.com/sei-protocol/sei-load v0.0.0-20251007135253-78fbdc141082/go.mod h1:V0fNURAjS6A8+sA1VllegjNeSobay3oRUW5VFZd04bA=
 github.com/sei-protocol/sei-tm-db v0.0.5 h1:3WONKdSXEqdZZeLuWYfK5hP37TJpfaUa13vAyAlvaQY=
