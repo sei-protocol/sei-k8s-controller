@@ -11,6 +11,8 @@ spec:
       validator: {}
       overrides:
         tx_index.indexer: kv
+        storage.state_commit.write_mode: memiavl_only
+        storage.state_store.write_mode: memiavl_only
         mempool.ttl_duration: 60s
   genesis:
     chainId: "{{ .CHAIN_ID }}"
