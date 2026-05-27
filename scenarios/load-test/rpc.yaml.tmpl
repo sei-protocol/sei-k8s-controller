@@ -16,6 +16,8 @@ spec:
       overrides:
         tx_index.indexer: kv
         mempool.ttl_duration: 60s
+        storage.state_commit.write_mode: memiavl_only
+        storage.state_store.write_mode: memiavl_only
         # Tighten /lag_status readiness to 2 blocks so SND phase=Ready
         # means lag<=2 across the fleet. The release-test harness opens
         # fresh HTTP connections per call; pods at meaningfully different

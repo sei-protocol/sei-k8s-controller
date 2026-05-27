@@ -12,6 +12,8 @@ spec:
       overrides:
         tx_index.indexer: kv
         mempool.ttl_duration: 60s
+        storage.state_commit.write_mode: memiavl_only
+        storage.state_store.write_mode: memiavl_only
   genesis:
     chainId: "{{ .CHAIN_ID }}"
     accounts:
