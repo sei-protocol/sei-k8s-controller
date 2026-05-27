@@ -13,5 +13,8 @@ spec:
         - label:
             selector:
               sei.io/chain: "{{ .CHAIN_ID }}"
+      overrides:
+        storage.state_commit.write_mode: memiavl_only
+        storage.state_store.write_mode: memiavl_only
   updateStrategy:
     type: InPlace

@@ -9,6 +9,9 @@ spec:
       chainId: "{{ .CHAIN_ID }}"
       image: "{{ .IMAGE }}"
       validator: {}
+      overrides:
+        storage.state_commit.write_mode: memiavl_only
+        storage.state_store.write_mode: memiavl_only
   genesis:
     chainId: "{{ .CHAIN_ID }}"
   updateStrategy:

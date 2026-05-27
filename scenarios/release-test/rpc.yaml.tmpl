@@ -15,6 +15,8 @@ spec:
               sei.io/chain: "{{ .CHAIN_ID }}"
       overrides:
         tx_index.indexer: kv
+        storage.state_commit.write_mode: memiavl_only
+        storage.state_store.write_mode: memiavl_only
         mempool.ttl_duration: 60s
         # Tighten /lag_status readiness to 2 blocks so SND phase=Ready
         # means lag<=2 across the fleet. The release-test harness opens
