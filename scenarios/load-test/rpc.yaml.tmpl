@@ -24,7 +24,7 @@ spec:
         evm.max_tx_pool_txs: "10000"
         {{- with (index . "MEMPOOL_SIZE") }}
         mempool.size: "{{ . }}"
-        mempool.pending-size: "{{ . }}"
+        mempool.pending_size: "{{ . }}"
         {{- end }}
   updateStrategy:
     type: InPlace
