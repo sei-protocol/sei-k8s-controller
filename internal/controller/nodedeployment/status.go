@@ -100,7 +100,9 @@ func computeGroupPhase(group *seiv1alpha1.SeiNodeDeployment, ready, desired int3
 }
 
 func (r *SeiNodeDeploymentReconciler) buildNetworkingStatus(group *seiv1alpha1.SeiNodeDeployment) *seiv1alpha1.NetworkingStatus {
-	if group.Spec.Networking == nil {
+	// NetworkingStatus tracks HTTP route hostnames only — when only TCP
+	// is enabled, no HTTP routes exist and the status block stays nil.
+	if !group.Spec.Networking.HTTPEnabled() {
 		return nil
 	}
 	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)

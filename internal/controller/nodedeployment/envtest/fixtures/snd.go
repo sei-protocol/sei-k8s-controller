@@ -82,3 +82,16 @@ func WithValidator() Option {
 		snd.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
 	}
 }
+
+// WithPublishableP2P enables the per-pod L4 NLB (Networking.TCP) on the
+// SND. Used by tests that exercise the SeiNode controller's
+// reconcileExternalAddress path. Composable with WithNetworking when an
+// SND wants both HTTP routes and per-pod NLB exposure.
+func WithPublishableP2P() Option {
+	return func(snd *seiv1alpha1.SeiNodeDeployment) {
+		if snd.Spec.Networking == nil {
+			snd.Spec.Networking = &seiv1alpha1.NetworkingConfig{}
+		}
+		snd.Spec.Networking.TCP = &seiv1alpha1.TCPConfig{}
+	}
+}

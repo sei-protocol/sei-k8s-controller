@@ -20,8 +20,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
@@ -53,6 +55,7 @@ type SeiNodeReconciler struct {
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=sei.io,resources=seinodedeployments,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -110,6 +113,14 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		r.Recorder.Eventf(node, corev1.EventTypeWarning, "NodeFailed",
 			"SeiNode is in Failed state. Delete and recreate the resource to retry.")
 		return ctrl.Result{}, nil
+	}
+
+	// Publishable P2P gate — hold STS creation when the parent SND has
+	// Networking.TCP set until the NLB hostname populates, so the first
+	// pod's config carries the correct p2p.external_address. Re-reconcile
+	// fires from the existing Owns(&Service{}) watch on hostname update.
+	if done, err := r.runExternalAddressGate(ctx, node, flushStatus); done {
+		return ctrl.Result{}, err
 	}
 
 	if err := r.reconcileStatefulSet(ctx, node); err != nil {
@@ -203,8 +214,42 @@ func (r *SeiNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Watches(&seiv1alpha1.SeiNodeDeployment{},
+			handler.EnqueueRequestsFromMapFunc(r.mapSNDToChildSeiNodes),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named(seiNodeControllerName).
 		Complete(r)
+}
+
+// mapSNDToChildSeiNodes enqueues every SeiNode whose controller
+// owner-ref points at the changed SND. Wakes child reconciles when
+// the parent toggles Spec.Networking.TCP without waiting for the
+// steady-state requeue. O(SeiNodes in namespace) per event.
+func (r *SeiNodeReconciler) mapSNDToChildSeiNodes(ctx context.Context, obj client.Object) []reconcile.Request {
+	snd, ok := obj.(*seiv1alpha1.SeiNodeDeployment)
+	if !ok {
+		return nil
+	}
+	list := &seiv1alpha1.SeiNodeList{}
+	if err := r.List(ctx, list, client.InNamespace(snd.Namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "listing child SeiNodes for SND watch",
+			"snd", snd.Name, "namespace", snd.Namespace)
+		return nil
+	}
+	out := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		ctrlRef := metav1.GetControllerOf(&list.Items[i])
+		if ctrlRef == nil || ctrlRef.UID != snd.UID {
+			continue
+		}
+		out = append(out, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      list.Items[i].Name,
+				Namespace: list.Items[i].Namespace,
+			},
+		})
+	}
+	return out
 }
 
 func (r *SeiNodeReconciler) ensureNodeFinalizer(ctx context.Context, node *seiv1alpha1.SeiNode) error {
@@ -295,4 +340,3 @@ func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode,
 			"sidecar Healthz returned 200; mark-ready gate is open")
 	}
 }
-

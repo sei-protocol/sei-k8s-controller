@@ -277,6 +277,31 @@ const (
 
 	// ConditionSeiNodePaused mirrors spec.paused: True when paused.
 	ConditionSeiNodePaused = "Paused"
+
+	// ConditionPublishableReady reports the per-pod L4 NLB state.
+	// True when Status.ExternalAddress is populated; False with reason
+	// carries the off-or-not-yet state.
+	ConditionPublishableReady = "PublishableReady"
+)
+
+// Reasons for the PublishableReady condition.
+const (
+	// ReasonPublishableDisabled — parent SND has no Networking.TCP.
+	ReasonPublishableDisabled = "PublishableDisabled"
+
+	// ReasonVPCCIDRNotConfigured — fail-closed: SEI_VPC_CIDR is unset.
+	ReasonVPCCIDRNotConfigured = "VPCCIDRNotConfigured"
+
+	// ReasonPodOutsideVPCCIDR — fail-closed: pod IP outside the CIDR
+	// (harbor's Cilium CGNAT). NLB target-type=ip needs routable IPs.
+	ReasonPodOutsideVPCCIDR = "PodOutsideVPCCIDR"
+
+	// ReasonServiceProvisioning — Service exists, NLB hostname not yet
+	// populated (~2 min on AWS).
+	ReasonServiceProvisioning = "ServiceProvisioning"
+
+	// ReasonExternalAddressReady — Status.ExternalAddress is set.
+	ReasonExternalAddressReady = "ExternalAddressReady"
 )
 
 // Reasons for the ImportPVCReady condition.

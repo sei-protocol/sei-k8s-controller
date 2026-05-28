@@ -43,7 +43,7 @@ type effectiveRoute struct {
 // is ready. Returns true when no routes are expected (private deployments,
 // validator mode).
 func (r *SeiNodeDeploymentReconciler) routeHostnameResolvable(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) bool {
-	if group.Spec.Networking == nil {
+	if !group.Spec.Networking.HTTPEnabled() {
 		return true
 	}
 	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
@@ -59,9 +59,13 @@ func (r *SeiNodeDeploymentReconciler) routeHostnameResolvable(ctx context.Contex
 }
 
 func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	if group.Spec.Networking == nil {
+	// HTTPEnabled treats nil-Networking and TCP-only (networking.tcp:{}
+	// without http) as HTTP disabled — both tear down HTTPRoutes + the
+	// internal ClusterIP Service. Legacy networking:{} preserves the
+	// implicit-HTTP-enabled behavior via the same accessor.
+	if !group.Spec.Networking.HTTPEnabled() {
 		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
-			"NetworkingDisabled", "spec.networking is unset")
+			"NetworkingDisabled", "spec.networking does not enable HTTP exposure")
 		return r.deleteNetworkingResources(ctx, group)
 	}
 
