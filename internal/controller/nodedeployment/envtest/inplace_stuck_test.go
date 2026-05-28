@@ -67,10 +67,28 @@ func TestInPlaceRollout_StuckUntilUnstuck(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
 	key := client.ObjectKeyFromObject(snd)
 
-	// Initial v1 deployment reaches steady state.
-	waitForStatus(t, key, func(latest *seiv1alpha1.SeiNodeDeployment) bool {
-		return latest.Status.TemplateHash != "" && latest.Status.Rollout == nil
-	}, "initial v1 deployment reached steady state")
+	// Initial v1 deployment reaches steady state. The SND-level gate
+	// (TemplateHash set, no in-flight Rollout) fires as soon as the
+	// init plan ends at mark-ready — which does NOT include observe-image.
+	// For a fresh InPlace SND with no Genesis, Status.CurrentImage on each
+	// child is stamped only later, via the steady-state drift NodeUpdate
+	// that runs observe-image. If we Pause the faker before that drift
+	// pass observes the StatefulSet, observe-image stalls forever on
+	// ObservedGeneration < Generation and Status.CurrentImage stays "".
+	// Wait at the child level: every child must have Status.CurrentImage
+	// == v1 before the v2 patch lands.
+	waitFor(t, func() bool {
+		kids := listChildren(t, getSND(t, key))
+		if len(kids) != replicas {
+			return false
+		}
+		for i := range kids {
+			if kids[i].Status.CurrentImage != v1 {
+				return false
+			}
+		}
+		return true
+	}, "all children Status.CurrentImage stamped at v1 before pausing faker")
 
 	// Pause the faker. StatefulSet .Status freezes, ObserveImage stalls,
 	// AwaitSpecUpdate stalls behind it. The Cleanup ensures other tests
@@ -143,8 +161,10 @@ func TestInPlaceRollout_StuckUntilUnstuck(t *testing.T) {
 		// Status.CurrentImage is stamped by the SeiNode-side ObserveImage
 		// task; with the faker paused, that task never observes the new
 		// StatefulSet revision and never stamps the field. It stays at v1
-		// (the value the first rollout's ObserveImage stamped) — not
-		// empty, not v2.
+		// — the value stamped earlier by the steady-state drift NodeUpdate
+		// (init plan ends at mark-ready and never runs observe-image, so
+		// the v1 stamp comes from drift, gated on by the pre-pause barrier
+		// above). Not empty, not v2.
 		g.Expect(kids[i].Status.CurrentImage).To(Equal(v1),
 			"child %s status.currentImage stays at v1 (stuck signal)", kids[i].Name)
 	}
