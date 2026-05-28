@@ -14,6 +14,7 @@ spec:
             selector:
               sei.io/chain: "{{ .CHAIN_ID }}"
       overrides:
+        tx_index.indexer: kv
         storage.state_commit.write_mode: memiavl_only
         storage.state_store.write_mode: memiavl_only
   updateStrategy:
