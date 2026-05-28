@@ -10,19 +10,36 @@ const (
 	DeletionPolicyRetain DeletionPolicy = "Retain"
 )
 
-// NetworkingConfig is a presence-signal struct: its presence on a
-// SeiNodeDeployment opts the deployment into public networking.
+// NetworkingConfig opts a SeiNodeDeployment into public networking.
+// HTTP presence enables L7 Gateway exposure; TCP presence enables a
+// per-pod L4 NLB for P2P/26656. Either is settable independently.
 //
-// Present: the controller provisions a ClusterIP Service plus HTTPRoute
-// resources on the platform Gateway for each protocol the node mode
-// supports, with hostnames derived from the deployment name, namespace,
-// and platform domain env vars.
-//
-// Absent (nil): the deployment is in-cluster only — the unconditional
-// internal ClusterIP Service and per-node headless Services exist, but
-// no Gateway-attached routes are created.
-//
-// The empty-struct shape is intentional. Concrete knobs (TLS, hostname
-// override, gateway-class selection) will be added here when real needs
-// emerge; the type exists today only to carry presence.
-type NetworkingConfig struct{}
+// Backcompat: a legacy `networking: {}` (no sub-struct set) means HTTP
+// enabled — evaluate via HTTPEnabled() rather than nil-checking HTTP.
+type NetworkingConfig struct {
+	// HTTP enables L7 application exposure via the platform Gateway.
+	// +optional
+	HTTP *HTTPConfig `json:"http,omitempty"`
+
+	// TCP enables a per-pod L4 NLB for raw P2P/26656 publishability.
+	// +optional
+	TCP *TCPConfig `json:"tcp,omitempty"`
+}
+
+// HTTPConfig is a presence-signal placeholder for L7 exposure.
+type HTTPConfig struct{}
+
+// TCPConfig is a presence-signal placeholder for L4 NLB exposure.
+type TCPConfig struct{}
+
+// HTTPEnabled reports whether L7 exposure is requested. Treats legacy
+// `networking: {}` (no sub-struct set) as enabled for backcompat.
+func (n *NetworkingConfig) HTTPEnabled() bool {
+	if n == nil {
+		return false
+	}
+	if n.HTTP != nil {
+		return true
+	}
+	return n.TCP == nil
+}
