@@ -39,11 +39,16 @@ type effectiveRoute struct {
 }
 
 // routeHostnameResolvable returns true when the deployment's first public
-// hostname resolves in DNS, indicating the HTTPRoute + External-DNS pipeline
-// is ready. Returns true when no routes are expected (private deployments,
-// validator mode).
+// HTTP hostname resolves in DNS, indicating the HTTPRoute + External-DNS
+// pipeline is ready. Returns true when no HTTP routes are expected
+// (TCP-only deployments, validator mode, private deployments).
+//
+// The publishable-P2P hostname has no parallel resolvability gate. CometBFT
+// peers retry; the controller does not block STS creation on external-dns
+// catching up — that would re-introduce the layering inversion the original
+// PR #362 design suffered from.
 func (r *SeiNodeDeploymentReconciler) routeHostnameResolvable(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) bool {
-	if group.Spec.Networking == nil {
+	if !group.Spec.Networking.HTTPEnabled() {
 		return true
 	}
 	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
@@ -58,6 +63,18 @@ func (r *SeiNodeDeploymentReconciler) routeHostnameResolvable(ctx context.Contex
 	return true
 }
 
+// reconcileNetworking dispatches to two independent sub-reconcilers gated
+// on independent presence checks. HTTP (L7 Gateway exposure) and TCP
+// (per-pod L4 NLB for P2P) share only the group-level resource labels,
+// the `fieldOwner` constant, and the `ConditionNetworkingReady` condition
+// vocabulary; they do not nest.
+//
+// Condition contract: each branch sets `ConditionNetworkingReady` to
+// reflect *its* terminal state. When both are enabled, the TCP branch
+// runs second and its outcome wins; that's deliberate — TCP is the
+// load-bearing path for publishable validators, and the operator wants
+// to know its readiness first. When neither is enabled,
+// `NetworkingDisabled/false` describes the steady state.
 func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking == nil {
 		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
@@ -65,12 +82,44 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, g
 		return r.deleteNetworkingResources(ctx, group)
 	}
 
-	if err := r.reconcileExternalService(ctx, group); err != nil {
-		return fmt.Errorf("reconciling external service: %w", err)
+	if group.Spec.Networking.HTTPEnabled() {
+		if err := r.reconcileExternalService(ctx, group); err != nil {
+			return fmt.Errorf("reconciling external service: %w", err)
+		}
+		if err := r.reconcileRoute(ctx, group); err != nil {
+			return fmt.Errorf("reconciling route: %w", err)
+		}
+	} else {
+		if err := r.deleteExternalService(ctx, group); err != nil {
+			return fmt.Errorf("deleting external service: %w", err)
+		}
+		if err := r.deleteHTTPRoutesByLabel(ctx, group); err != nil {
+			return fmt.Errorf("deleting HTTPRoutes: %w", err)
+		}
 	}
-	if err := r.reconcileRoute(ctx, group); err != nil {
-		return fmt.Errorf("reconciling route: %w", err)
+
+	if group.Spec.Networking.TCPEnabled() {
+		if !r.PublishabilityAvailable {
+			setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
+				"VPCCIDRNotConfigured",
+				"spec.networking.tcp requires SEI_VPC_CIDR to be set on the controller; publishable Services are not created")
+			// Defensive: clear any stale Services left from a prior boot
+			// where the env was set. Cheap list-and-delete; no-op when
+			// nothing is there.
+			if err := r.deletePublishableServices(ctx, group); err != nil {
+				return fmt.Errorf("deleting publishable services after capability loss: %w", err)
+			}
+			return nil
+		}
+		if err := r.reconcilePublishableServices(ctx, group); err != nil {
+			return fmt.Errorf("reconciling publishable services: %w", err)
+		}
+	} else {
+		if err := r.deletePublishableServices(ctx, group); err != nil {
+			return fmt.Errorf("deleting publishable services: %w", err)
+		}
 	}
+
 	return nil
 }
 
@@ -365,6 +414,9 @@ func (r *SeiNodeDeploymentReconciler) deleteNetworkingResources(ctx context.Cont
 	}
 	if err := r.deleteHTTPRoutesByLabel(ctx, group); err != nil {
 		return fmt.Errorf("deleting HTTPRoutes: %w", err)
+	}
+	if err := r.deletePublishableServices(ctx, group); err != nil {
+		return fmt.Errorf("deleting publishable Services: %w", err)
 	}
 	return nil
 }

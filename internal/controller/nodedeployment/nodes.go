@@ -175,6 +175,13 @@ func (r *SeiNodeDeploymentReconciler) populateIncumbentNodes(ctx context.Context
 
 func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, ordinal int) error {
 	desired := generateSeiNode(group, ordinal)
+	// Inject the SND-managed external address after the pure-template
+	// portion is built. Kept out of `generateSeiNode` so the rest of
+	// the package (and the existing test surface) treats the function
+	// as data-only.
+	if addr := r.publishableExternalAddressForChild(group, ordinal); addr != "" {
+		desired.Spec.ExternalAddress = &addr
+	}
 	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
@@ -218,17 +225,60 @@ func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *
 		existing.Spec.PodLabels = desired.Spec.PodLabels
 		updated = true
 	}
+	// ExternalAddress is SND-managed when TCP is on, cleared when TCP is
+	// off, and untouched when the parent does not opt into networking. The
+	// diff here is the single write site that propagates the field —
+	// generateSeiNode handles creation, this handles updates and external
+	// stomps (kubectl edit, manual patches).
+	if !externalAddressEqual(existing.Spec.ExternalAddress, desired.Spec.ExternalAddress) {
+		existing.Spec.ExternalAddress = desired.Spec.ExternalAddress
+		updated = true
+	}
 	if updated {
 		return r.Update(ctx, existing)
 	}
 	return nil
 }
 
+// externalAddressEqual treats nil and a pointer to the empty string as
+// equivalent — both represent "no override." Without this normalization
+// the diff in ensureSeiNode would oscillate between nil and *"" each
+// reconcile when a child is created via generateSeiNode (which sets nil)
+// and then read back from the API (which may also store nil).
+func externalAddressEqual(a, b *string) bool {
+	av, bv := "", ""
+	if a != nil {
+		av = *a
+	}
+	if b != nil {
+		bv = *b
+	}
+	return av == bv
+}
+
+// generateSeiNode produces the desired child SeiNode for a given ordinal.
+// Pure: depends only on the SND spec and ordinal. The publishable
+// external-address injection happens in `ensureSeiNode` via the
+// reconciler-bound helper because it needs `r.GatewayPublicDomain` and
+// `r.PublishabilityAvailable` — controller-state, not template-data.
+//
+// Template-aliasing guard: the deep-copied template's
+// `Spec.ExternalAddress` is zeroed before any per-ordinal stamping. If
+// we did not, a user who set `spec.template.spec.externalAddress: foo`
+// on the SND would cause every child to be created with the same
+// literal value, which would either silently break peer routing or —
+// worse — succeed long enough to pollute peer caches before the
+// SND-side reconciler corrected it. Standalone SeiNodes (no SND parent)
+// still control the field directly; this guard only runs on the SND
+// code path.
 func generateSeiNode(group *seiv1alpha1.SeiNodeDeployment, ordinal int) *seiv1alpha1.SeiNode {
 	labels := seiNodeLabels(group, ordinal)
 	annotations := seiNodeAnnotations(group)
 
 	spec := group.Spec.Template.Spec.DeepCopy()
+	// Template-aliasing guard — see function doc.
+	spec.ExternalAddress = nil
+
 	podLabels := make(map[string]string)
 	if group.Spec.Template.Metadata != nil {
 		maps.Copy(podLabels, group.Spec.Template.Metadata.Labels)
@@ -261,6 +311,21 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeDeployment, ordinal int) *seiv1al
 	}
 }
 
+// publishableExternalAddressForChild returns the deterministic vanity
+// address (host:port) when the SND opts into TCP networking and the
+// controller has the capability flag. Returns "" otherwise. ensureSeiNode
+// uses this to inject `Spec.ExternalAddress` on create and to drive the
+// diff on update — single write site for the SND-managed value.
+func (r *SeiNodeDeploymentReconciler) publishableExternalAddressForChild(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
+	if !group.Spec.Networking.TCPEnabled() {
+		return ""
+	}
+	if !r.PublishabilityAvailable {
+		return ""
+	}
+	return r.publishableExternalAddress(group, ordinal)
+}
+
 // scaleDown deletes SeiNodes with ordinals >= the desired replica count.
 func (r *SeiNodeDeploymentReconciler) scaleDown(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Replicas <= 0 {
@@ -289,6 +354,15 @@ func (r *SeiNodeDeploymentReconciler) scaleDown(ctx context.Context, group *seiv
 			continue
 		}
 		if ord >= int(group.Spec.Replicas) {
+			// Delete the per-ordinal publishable Service before the child
+			// SeiNode. Both are SND-owned, so owner-ref cascade would
+			// only fire on SND deletion — leaving the NLB stranded with
+			// no targets between scale-down and SND delete is the failure
+			// we explicitly avoid. Idempotent: no-op when publishability
+			// isn't in use.
+			if err := r.deletePublishableServiceForOrdinal(ctx, group, ord); err != nil {
+				return fmt.Errorf("deleting publishable Service for scaled-down ordinal %d: %w", ord, err)
+			}
 			if err := r.Delete(ctx, node); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("deleting excess SeiNode %s: %w", node.Name, err)
 			}

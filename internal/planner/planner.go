@@ -694,8 +694,8 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	out := map[string]string{
 		"logging.level": "error",
 	}
-	if node.Status.ExternalAddress != "" {
-		out[seiconfig.KeyP2PExternalAddress] = node.Status.ExternalAddress
+	if node.Spec.ExternalAddress != nil && *node.Spec.ExternalAddress != "" {
+		out[seiconfig.KeyP2PExternalAddress] = *node.Spec.ExternalAddress
 	}
 	return out
 }

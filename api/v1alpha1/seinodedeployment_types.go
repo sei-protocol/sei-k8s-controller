@@ -71,9 +71,13 @@ type UpdateStrategy struct {
 // GenesisCeremonyConfig configures genesis ceremony orchestration for a node group.
 type GenesisCeremonyConfig struct {
 	// ChainID for the new network.
+	// Constrained to DNS-1123 label characters because child SeiNodes
+	// compose it into publishable hostnames when the SND has
+	// `spec.networking.tcp` set; the address is a one-way door once peers
+	// cache it.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=64
-	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*[a-z0-9]$`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	ChainID string `json:"chainId"`
 
 	// StakingAmount is the amount each validator self-delegates in its gentx.
@@ -343,6 +347,17 @@ type NetworkingStatus struct {
 	// Routes lists the HTTPRoute hostnames managed by this deployment.
 	// +optional
 	Routes []RouteStatus `json:"routes,omitempty"`
+
+	// PublishableEndpoints lists the per-ordinal publishable P2P
+	// hostnames stamped by the SND when `spec.networking.tcp` is set.
+	// Each entry mirrors the value injected into the child SeiNode's
+	// `spec.externalAddress` (hostname:port). Hostnames are deterministic
+	// from the SND identity, so this slice is populated without reading
+	// Service status back.
+	// +listType=map
+	// +listMapKey=ordinal
+	// +optional
+	PublishableEndpoints []PublishableEndpoint `json:"publishableEndpoints,omitempty"`
 }
 
 // RouteStatus is the observed state of a single HTTPRoute hostname.
@@ -353,6 +368,23 @@ type RouteStatus struct {
 	// Protocol identifies the route type (e.g. "rpc", "evm", "grpc", "rest", "evm-ws").
 	// +optional
 	Protocol string `json:"protocol,omitempty"`
+}
+
+// PublishableEndpoint is the observed state of one child's publishable
+// P2P endpoint. Stamped by the SND networking reconciler.
+type PublishableEndpoint struct {
+	// Ordinal is the child's replica index within the SND
+	// (matches `sei.io/nodedeployment-ordinal`).
+	Ordinal int32 `json:"ordinal"`
+
+	// SeiNodeName is the child SeiNode resource name (also the
+	// per-pod headless Service name).
+	SeiNodeName string `json:"seiNodeName"`
+
+	// Hostname is the vanity host:port advertised to peers via
+	// `p2p.external_address`. Equals the value injected into the
+	// child SeiNode's `spec.externalAddress`.
+	Hostname string `json:"hostname"`
 }
 
 // RolloutStatus tracks an in-progress rollout. Presence on the parent

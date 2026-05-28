@@ -13,7 +13,12 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
+	// Constrained to DNS-1123 label characters because the controller composes
+	// it into publishable hostnames (e.g. `<node>-p2p.<chainID>.<domain>`) when
+	// the parent SND opts into TCP networking; the address is a one-way door
+	// once peers cache it.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	ChainID string `json:"chainId"`
 
 	// Image is the seid container image.
@@ -67,6 +72,21 @@ type SeiNodeSpec struct {
 	// Validator configures a consensus-participating validator node.
 	// +optional
 	Validator *ValidatorSpec `json:"validator,omitempty"`
+
+	// ExternalAddress is the routable P2P address — bare host:port, no
+	// nodeId@ prefix — written into seid's `p2p.external_address`. Two
+	// ownership models share this field:
+	//
+	//   - SND-managed: when the parent SeiNodeDeployment has
+	//     `Spec.Networking.TCP` set, the SND reconciler injects this
+	//     value at child Create time (deterministic vanity hostname) and
+	//     re-syncs it via the diff in `ensureSeiNode`. Clearing TCP on
+	//     the parent clears this field on every child.
+	//   - Standalone: a SeiNode created without an SND parent may set
+	//     this directly; the planner emits it verbatim. The controller
+	//     never overwrites a standalone SeiNode's value.
+	// +optional
+	ExternalAddress *string `json:"externalAddress,omitempty"`
 
 	// Paused freezes reconciliation. While true, the controller does not
 	// advance the lifecycle, start plans, or mutate derived resources
@@ -340,14 +360,6 @@ type SeiNodeStatus struct {
 	// future peer-update plans can detect drift.
 	// +optional
 	ResolvedPeers []string `json:"resolvedPeers,omitempty"`
-
-	// ExternalAddress is the routable P2P address for this node — bare
-	// host:port, no nodeId@ prefix. Populated by the SeiNode controller
-	// from the per-pod LoadBalancer Service when the parent SND has
-	// Spec.Networking.TCP set; consumed by the planner to set
-	// p2p.external_address in CometBFT config.
-	// +optional
-	ExternalAddress string `json:"externalAddress,omitempty"`
 
 	// StatefulSet references the StatefulSet the controller created for
 	// this SeiNode. UID is the identity check: an STS with the expected

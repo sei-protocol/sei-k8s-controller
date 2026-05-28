@@ -43,3 +43,10 @@ func (n *NetworkingConfig) HTTPEnabled() bool {
 	}
 	return n.TCP == nil
 }
+
+// TCPEnabled reports whether L4 NLB per-pod P2P exposure is requested.
+// Mirrors HTTPEnabled but does not carry the legacy `networking: {}`
+// back-compat — TCP must be explicitly opted into.
+func (n *NetworkingConfig) TCPEnabled() bool {
+	return n != nil && n.TCP != nil
+}

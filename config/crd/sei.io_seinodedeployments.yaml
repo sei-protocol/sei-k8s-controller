@@ -106,10 +106,15 @@ spec:
                       type: object
                     type: array
                   chainId:
-                    description: ChainID for the new network.
+                    description: |-
+                      ChainID for the new network.
+                      Constrained to DNS-1123 label characters because child SeiNodes
+                      compose it into publishable hostnames when the SND has
+                      `spec.networking.tcp` set; the address is a one-way door once peers
+                      cache it.
                     maxLength: 64
                     minLength: 1
-                    pattern: ^[a-z0-9][a-z0-9-]*[a-z0-9]$
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
                   maxCeremonyDuration:
                     description: |-
@@ -222,8 +227,14 @@ spec:
                             type: object
                         type: object
                       chainId:
-                        description: ChainID of the chain this node belongs to.
+                        description: |-
+                          ChainID of the chain this node belongs to.
+                          Constrained to DNS-1123 label characters because the controller composes
+                          it into publishable hostnames (e.g. `<node>-p2p.<chainID>.<domain>`) when
+                          the parent SND opts into TCP networking; the address is a one-way door
+                          once peers cache it.
                         minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                         type: string
                       dataVolume:
                         description: |-
@@ -261,6 +272,21 @@ spec:
                         x-kubernetes-validations:
                         - message: import cannot be unset once configured
                           rule: (!has(oldSelf.import) || has(self.import))
+                      externalAddress:
+                        description: |-
+                          ExternalAddress is the routable P2P address — bare host:port, no
+                          nodeId@ prefix — written into seid's `p2p.external_address`. Two
+                          ownership models share this field:
+
+                            - SND-managed: when the parent SeiNodeDeployment has
+                              `Spec.Networking.TCP` set, the SND reconciler injects this
+                              value at child Create time (deterministic vanity hostname) and
+                              re-syncs it via the diff in `ensureSeiNode`. Clearing TCP on
+                              the parent clears this field on every child.
+                            - Standalone: a SeiNode created without an SND parent may set
+                              this directly; the planner emits it verbatim. The controller
+                              never overwrites a standalone SeiNode's value.
+                        type: string
                       fullNode:
                         description: FullNode configures a chain-following full node
                           (absorbs the "rpc" role).
@@ -1072,6 +1098,45 @@ spec:
                 description: NetworkingStatus reports the observed state of networking
                   resources.
                 properties:
+                  publishableEndpoints:
+                    description: |-
+                      PublishableEndpoints lists the per-ordinal publishable P2P
+                      hostnames stamped by the SND when `spec.networking.tcp` is set.
+                      Each entry mirrors the value injected into the child SeiNode's
+                      `spec.externalAddress` (hostname:port). Hostnames are deterministic
+                      from the SND identity, so this slice is populated without reading
+                      Service status back.
+                    items:
+                      description: |-
+                        PublishableEndpoint is the observed state of one child's publishable
+                        P2P endpoint. Stamped by the SND networking reconciler.
+                      properties:
+                        hostname:
+                          description: |-
+                            Hostname is the vanity host:port advertised to peers via
+                            `p2p.external_address`. Equals the value injected into the
+                            child SeiNode's `spec.externalAddress`.
+                          type: string
+                        ordinal:
+                          description: |-
+                            Ordinal is the child's replica index within the SND
+                            (matches `sei.io/nodedeployment-ordinal`).
+                          format: int32
+                          type: integer
+                        seiNodeName:
+                          description: |-
+                            SeiNodeName is the child SeiNode resource name (also the
+                            per-pod headless Service name).
+                          type: string
+                      required:
+                      - hostname
+                      - ordinal
+                      - seiNodeName
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - ordinal
+                    x-kubernetes-list-type: map
                   routes:
                     description: Routes lists the HTTPRoute hostnames managed by this
                       deployment.
