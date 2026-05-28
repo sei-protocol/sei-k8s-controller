@@ -12,6 +12,10 @@ spec:
       overrides:
         storage.state_commit.write_mode: memiavl_only
         storage.state_store.write_mode: memiavl_only
+        {{- with (index . "MEMPOOL_SIZE") }}
+        mempool.size: "{{ . }}"
+        mempool.pending_size: "{{ . }}"
+        {{- end }}
   genesis:
     chainId: "{{ .CHAIN_ID }}"
   updateStrategy:

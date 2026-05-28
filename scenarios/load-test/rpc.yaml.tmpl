@@ -16,14 +16,15 @@ spec:
       overrides:
         storage.state_commit.write_mode: memiavl_only
         storage.state_store.write_mode: memiavl_only
-        # EVM RPC worker pool tuning — defaults are min(64, NumCPU*2) workers
-        # and a 1000-deep queue, which saturates at seiload's 2-4k tps
-        # (send + receipt-poll fan-out) on a 4-vCPU pod. Receipt fetches
-        # then time out at the HTTP layer. See platform-engineer deep dive
-        # 2026-05-28: receipts ARE being written to sei-db receipt.db; the
-        # bottleneck is the EVM JSON-RPC dispatch layer, not storage.
+        # EVM RPC worker pool tuning — defaults saturate at seiload's
+        # 2-4k tps on a 4-vCPU pod, causing eth_getTransactionReceipt
+        # to time out at the HTTP layer.
         evm.worker_pool_size: "32"
         evm.worker_queue_size: "4000"
         evm.max_tx_pool_txs: "10000"
+        {{- with (index . "MEMPOOL_SIZE") }}
+        mempool.size: "{{ . }}"
+        mempool.pending_size: "{{ . }}"
+        {{- end }}
   updateStrategy:
     type: InPlace
