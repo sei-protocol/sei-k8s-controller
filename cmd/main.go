@@ -218,14 +218,14 @@ func main() {
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller")
 	if err := (&nodedeploymentcontroller.SeiNodeDeploymentReconciler{
-		Client:                  kc,
-		Scheme:                  mgr.GetScheme(),
-		Recorder:                recorder,
-		GatewayName:             platformCfg.GatewayName,
-		GatewayNamespace:        platformCfg.GatewayNamespace,
-		GatewayDomain:           platformCfg.GatewayDomain,
-		GatewayPublicDomain:     platformCfg.GatewayPublicDomain,
-		PublishableDomain:       publishableDomain,
+		Client:              kc,
+		Scheme:              mgr.GetScheme(),
+		Recorder:            recorder,
+		GatewayName:         platformCfg.GatewayName,
+		GatewayNamespace:    platformCfg.GatewayNamespace,
+		GatewayDomain:       platformCfg.GatewayDomain,
+		GatewayPublicDomain: platformCfg.GatewayPublicDomain,
+		PublishableDomain:   publishableDomain,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 				var assemblerNode *seiv1alpha1.SeiNode

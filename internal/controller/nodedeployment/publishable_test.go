@@ -12,6 +12,11 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 )
 
+const (
+	testChainAtlantic   = "atlantic-2"
+	testPublishableProd = "prod.platform.sei.io"
+)
+
 func TestPublishableHostname_Table(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -25,19 +30,19 @@ func TestPublishableHostname_Table(t *testing.T) {
 	}{
 		{
 			name:              "atlantic-2 ordinal 0",
-			sndName:           "atlantic-2",
-			templateChainID:   "atlantic-2",
+			sndName:           testChainAtlantic,
+			templateChainID:   testChainAtlantic,
 			ordinal:           0,
-			publishableDomain: "prod.platform.sei.io",
+			publishableDomain: testPublishableProd,
 			want:              "atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io",
 		},
 		{
 			name:              "ordinal 5 of multi-replica fleet",
-			sndName:           "rpc",
-			templateChainID:   "pacific-1",
+			sndName:           "validators",
+			templateChainID:   testNamespace,
 			ordinal:           5,
-			publishableDomain: "prod.platform.sei.io",
-			want:              "rpc-5-p2p.pacific-1.prod.platform.sei.io",
+			publishableDomain: testPublishableProd,
+			want:              "validators-5-p2p.pacific-1.prod.platform.sei.io",
 		},
 		{
 			name:              "genesis-only chainID (validator SND)",
@@ -49,17 +54,17 @@ func TestPublishableHostname_Table(t *testing.T) {
 		},
 		{
 			name:              "empty publishable domain returns empty",
-			sndName:           "atlantic-2",
-			templateChainID:   "atlantic-2",
+			sndName:           testChainAtlantic,
+			templateChainID:   testChainAtlantic,
 			ordinal:           0,
 			publishableDomain: "",
 			want:              "",
 		},
 		{
 			name:              "empty chain ID returns empty",
-			sndName:           "atlantic-2",
+			sndName:           testChainAtlantic,
 			ordinal:           0,
-			publishableDomain: "prod.platform.sei.io",
+			publishableDomain: testPublishableProd,
 			want:              "",
 		},
 	}
@@ -87,30 +92,30 @@ func TestPublishableHostname_Table(t *testing.T) {
 func TestPublishableExternalAddress_AppendsP2PPort(t *testing.T) {
 	g := NewWithT(t)
 	snd := &seiv1alpha1.SeiNodeDeployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "atlantic-2"},
+		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic},
 		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Template: seiv1alpha1.SeiNodeTemplate{
-				Spec: seiv1alpha1.SeiNodeSpec{ChainID: "atlantic-2"},
+				Spec: seiv1alpha1.SeiNodeSpec{ChainID: testChainAtlantic},
 			},
 		},
 	}
-	r := &SeiNodeDeploymentReconciler{PublishableDomain: "prod.platform.sei.io"}
+	r := &SeiNodeDeploymentReconciler{PublishableDomain: testPublishableProd}
 	g.Expect(r.publishableExternalAddress(snd, 0)).To(Equal("atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io:26656"))
 }
 
 func TestPublishableExternalAddress_EmptyWhenHostnameRejected(t *testing.T) {
 	g := NewWithT(t)
 	snd := &seiv1alpha1.SeiNodeDeployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "atlantic-2"},
+		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic},
 	}
-	r := &SeiNodeDeploymentReconciler{PublishableDomain: "prod.platform.sei.io"}
+	r := &SeiNodeDeploymentReconciler{PublishableDomain: testPublishableProd}
 	g.Expect(r.publishableExternalAddress(snd, 0)).To(BeEmpty())
 }
 
 func TestPublishableServiceName(t *testing.T) {
 	g := NewWithT(t)
 	snd := &seiv1alpha1.SeiNodeDeployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "atlantic-2"},
+		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic},
 	}
 	g.Expect(publishableServiceName(snd, 0)).To(Equal("atlantic-2-0-p2p"))
 	g.Expect(publishableServiceName(snd, 7)).To(Equal("atlantic-2-7-p2p"))
@@ -119,7 +124,7 @@ func TestPublishableServiceName(t *testing.T) {
 func TestGeneratePublishableService_Annotations(t *testing.T) {
 	g := NewWithT(t)
 	snd := &seiv1alpha1.SeiNodeDeployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "atlantic-2", Namespace: "sei-test-1"},
+		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic, Namespace: "sei-test-1"},
 	}
 	svc := generatePublishableService(snd, 0, "atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io")
 
