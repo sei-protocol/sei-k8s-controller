@@ -5,7 +5,7 @@ import (
 )
 
 // PeerSource is a union type — exactly one field must be set.
-// +kubebuilder:validation:XValidation:rule="(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1 : 0) + (has(self.label) ? 1 : 0) + (has(self.seinodeDeployment) ? 1 : 0) == 1",message="exactly one of ec2Tags, static, label, or seinodeDeployment must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.ec2Tags) ? 1 : 0) + (has(self.static) ? 1 : 0) + (has(self.label) ? 1 : 0) == 1",message="exactly one of ec2Tags, static, or label must be set"
 type PeerSource struct {
 	// EC2Tags discovers peers by querying EC2 for running instances
 	// matching the specified tags.
@@ -23,15 +23,6 @@ type PeerSource struct {
 	// Tendermint node ID at task execution time.
 	// +optional
 	Label *LabelPeerSource `json:"label,omitempty"`
-
-	// SeiNodeDeployment discovers peers by selecting sibling
-	// SeiNodeDeployments via labels, then resolves each child
-	// SeiNode's Status.ExternalAddress into a routable host:port.
-	// Use this to peer with publishable nodes that advertise a
-	// per-pod L4 NLB (Spec.Networking.TCP); peers without
-	// ExternalAddress are skipped.
-	// +optional
-	SeiNodeDeployment *SeiNodeDeploymentPeerSource `json:"seinodeDeployment,omitempty"`
 }
 
 // LabelPeerSource discovers peers by selecting SeiNode resources via
@@ -50,30 +41,6 @@ type PeerSource struct {
 type LabelPeerSource struct {
 	// Selector is a set of key-value label pairs. SeiNode resources
 	// matching ALL labels are included as peers.
-	// +kubebuilder:validation:MinProperties=1
-	Selector map[string]string `json:"selector"`
-
-	// Namespace restricts discovery to a specific namespace.
-	// When empty, defaults to the namespace of the discovering node.
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
-}
-
-// SeiNodeDeploymentPeerSource discovers peers by selecting sibling
-// SeiNodeDeployments via labels. The controller lists matching SNDs,
-// walks each one's child SeiNodes, and emits each child's
-// Status.ExternalAddress (bare host:port) as a peer entry. Children
-// whose ExternalAddress is empty (no publishable Service yet) are
-// skipped this reconcile and revisited when the parent SND's status
-// updates.
-//
-// The sidecar's CollectAndSetPeers task queries each peer's :26657/status
-// at task-build time to discover its node_id and produces final
-// "<node_id>@<host>:<port>" entries for persistent_peers — the same
-// path the Label variant uses.
-type SeiNodeDeploymentPeerSource struct {
-	// Selector is a set of key-value label pairs. SeiNodeDeployment
-	// resources matching ALL labels are included as peer sources.
 	// +kubebuilder:validation:MinProperties=1
 	Selector map[string]string `json:"selector"`
 
