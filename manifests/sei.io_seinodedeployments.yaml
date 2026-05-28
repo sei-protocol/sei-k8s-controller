@@ -140,6 +140,17 @@ spec:
                   When present, the controller creates a ClusterIP Service and
                   HTTPRoutes on the platform Gateway. When absent, the deployment
                   is private with only per-node headless Services.
+                properties:
+                  http:
+                    description: |-
+                      HTTP enables L7 application exposure via the platform Gateway.
+                      Presence-signal: an empty struct is sufficient to enable.
+                    type: object
+                  tcp:
+                    description: |-
+                      TCP enables a per-pod L4 NLB for raw P2P/26656 publishability.
+                      Presence-signal: an empty struct is sufficient to enable.
+                    type: object
                 type: object
               paused:
                 description: |-
@@ -338,6 +349,27 @@ spec:
                         maxLength: 512
                         minLength: 1
                         type: string
+                      networking:
+                        description: |-
+                          Networking opts this node into public networking. HTTP (L7 via
+                          platform Gateway) and TCP (per-pod L4 NLB for P2P/26656) are
+                          independently selectable sub-structs.
+
+                          SeiNodes that are children of a SeiNodeDeployment inherit this
+                          from `spec.template.spec.networking` at child-creation time.
+                          Standalone SeiNodes set it directly.
+                        properties:
+                          http:
+                            description: |-
+                              HTTP enables L7 application exposure via the platform Gateway.
+                              Presence-signal: an empty struct is sufficient to enable.
+                            type: object
+                          tcp:
+                            description: |-
+                              TCP enables a per-pod L4 NLB for raw P2P/26656 publishability.
+                              Presence-signal: an empty struct is sufficient to enable.
+                            type: object
+                        type: object
                       overrides:
                         additionalProperties:
                           type: string
@@ -409,6 +441,31 @@ spec:
                               required:
                               - selector
                               type: object
+                            seinodeDeployment:
+                              description: |-
+                                SeiNodeDeployment discovers peers by selecting sibling
+                                SeiNodeDeployments via labels, then resolves each child
+                                SeiNode's Status.ExternalAddress into a routable host:port.
+                                Use this to peer with publishable nodes that advertise a
+                                per-pod L4 NLB (Spec.Networking.TCP); peers without
+                                ExternalAddress are skipped.
+                              properties:
+                                namespace:
+                                  description: |-
+                                    Namespace restricts discovery to a specific namespace.
+                                    When empty, defaults to the namespace of the discovering node.
+                                  type: string
+                                selector:
+                                  additionalProperties:
+                                    type: string
+                                  description: |-
+                                    Selector is a set of key-value label pairs. SeiNodeDeployment
+                                    resources matching ALL labels are included as peer sources.
+                                  minProperties: 1
+                                  type: object
+                              required:
+                              - selector
+                              type: object
                             static:
                               description: Static provides a fixed list of peer addresses.
                               properties:
@@ -424,10 +481,11 @@ spec:
                               type: object
                           type: object
                           x-kubernetes-validations:
-                          - message: exactly one of ec2Tags, static, or label must
-                              be set
+                          - message: exactly one of ec2Tags, static, label, or seinodeDeployment
+                              must be set
                             rule: '(has(self.ec2Tags) ? 1 : 0) + (has(self.static)
-                              ? 1 : 0) + (has(self.label) ? 1 : 0) == 1'
+                              ? 1 : 0) + (has(self.label) ? 1 : 0) + (has(self.seinodeDeployment)
+                              ? 1 : 0) == 1'
                         type: array
                       podLabels:
                         additionalProperties:

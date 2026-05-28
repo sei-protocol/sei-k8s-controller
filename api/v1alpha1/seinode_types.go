@@ -36,6 +36,16 @@ type SeiNodeSpec struct {
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
 
+	// Networking opts this node into public networking. HTTP (L7 via
+	// platform Gateway) and TCP (per-pod L4 NLB for P2P/26656) are
+	// independently selectable sub-structs.
+	//
+	// SeiNodes that are children of a SeiNodeDeployment inherit this
+	// from `spec.template.spec.networking` at child-creation time.
+	// Standalone SeiNodes set it directly.
+	// +optional
+	Networking *NetworkingConfig `json:"networking,omitempty"`
+
 	// PodLabels are additional labels merged into the StatefulSet pod template.
 	// The controller always sets sei.io/node; these are additive and applied
 	// first so that system labels take precedence.
@@ -342,9 +352,13 @@ type SeiNodeStatus struct {
 	ResolvedPeers []string `json:"resolvedPeers,omitempty"`
 
 	// ExternalAddress is the routable P2P address (host:port) for this node,
-	// populated by the SeiNodeDeployment controller from the LoadBalancer
-	// ingress. Used by the planner to set p2p.external_address in CometBFT
-	// config so the node advertises a reachable address for gossip discovery.
+	// populated by the SeiNode controller from the per-pod LoadBalancer
+	// Service's ingress hostname when Spec.Networking.TCP is set. Used by
+	// the planner to set p2p.external_address in CometBFT config so the
+	// node advertises a reachable address for gossip discovery.
+	//
+	// Format is bare host:port (no nodeId@ prefix, no scheme); CometBFT
+	// gossips the node_id alongside via NodeInfo at peering time.
 	// +optional
 	ExternalAddress string `json:"externalAddress,omitempty"`
 
