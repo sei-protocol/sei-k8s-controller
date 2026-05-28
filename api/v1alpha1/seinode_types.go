@@ -73,20 +73,12 @@ type SeiNodeSpec struct {
 	// +optional
 	Validator *ValidatorSpec `json:"validator,omitempty"`
 
-	// ExternalAddress is the routable P2P address — bare host:port, no
-	// nodeId@ prefix — written into seid's `p2p.external_address`. Two
-	// ownership models share this field:
-	//
-	//   - SND-managed: when the parent SeiNodeDeployment has
-	//     `Spec.Networking.TCP` set, the SND reconciler injects this
-	//     value at child Create time (deterministic vanity hostname) and
-	//     re-syncs it via the diff in `ensureSeiNode`. Clearing TCP on
-	//     the parent clears this field on every child.
-	//   - Standalone: a SeiNode created without an SND parent may set
-	//     this directly; the planner emits it verbatim. The controller
-	//     never overwrites a standalone SeiNode's value.
+	// ExternalAddress is the routable P2P host:port written into seid's
+	// `p2p.external_address`. SND-managed nodes get this stamped by the
+	// SND reconciler when TCP networking is enabled. Standalone SeiNodes
+	// can set it directly.
 	// +optional
-	ExternalAddress *string `json:"externalAddress,omitempty"`
+	ExternalAddress string `json:"externalAddress,omitempty"`
 
 	// Paused freezes reconciliation. While true, the controller does not
 	// advance the lifecycle, start plans, or mutate derived resources

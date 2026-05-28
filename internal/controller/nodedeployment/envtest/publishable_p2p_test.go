@@ -10,7 +10,6 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -19,19 +18,8 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment/envtest/fixtures"
 )
 
-const (
-	// publishableTestDomain is the value the publishable tests pin onto
-	// `testSNDReconciler.PublishableDomain` for the duration of each
-	// test. The HTTP-route tests rely on the default empty value;
-	// `withPublishabilityEnabled` restores both fields in t.Cleanup so
-	// later tests see the unmodified suite state.
-	publishableTestDomain = "test.platform.sei.io"
-)
+const publishableTestDomain = "test.platform.sei.io"
 
-// expectedPublishableHost composes the deterministic vanity host the
-// SND should stamp for a given SND name + child ordinal. Mirrors the
-// production template (`<seinode>-p2p.<chainID>.<gatewayPublicDomain>`)
-// so the tests fail loudly if either side drifts.
 func expectedPublishableHost(sndName, chainID string, ordinal int) string {
 	return fmt.Sprintf("%s-%d-p2p.%s.%s", sndName, ordinal, chainID, publishableTestDomain)
 }
@@ -40,20 +28,13 @@ func expectedPublishableAddr(sndName, chainID string, ordinal int) string {
 	return expectedPublishableHost(sndName, chainID, ordinal) + ":26656"
 }
 
-// withPublishabilityEnabled stamps the publishable test fixtures onto
-// the shared SND reconciler and restores the original values when the
-// test finishes. Tests that need a different capability state (e.g.
-// VPCCIDRNotConfigured) call this with available=false.
-func withPublishabilityEnabled(t *testing.T, available bool) {
+// withPublishableDomain sets the test domain on the shared reconciler and
+// restores it after the test.
+func withPublishableDomain(t *testing.T, domain string) {
 	t.Helper()
-	prevAvail := testSNDReconciler.PublishabilityAvailable
-	prevDomain := testSNDReconciler.PublishableDomain
-	testSNDReconciler.PublishabilityAvailable = available
-	testSNDReconciler.PublishableDomain = publishableTestDomain
-	t.Cleanup(func() {
-		testSNDReconciler.PublishabilityAvailable = prevAvail
-		testSNDReconciler.PublishableDomain = prevDomain
-	})
+	prev := testSNDReconciler.PublishableDomain
+	testSNDReconciler.PublishableDomain = domain
+	t.Cleanup(func() { testSNDReconciler.PublishableDomain = prev })
 }
 
 // withTCP enables `spec.networking.tcp` on a fixtures-built SND. Goes
@@ -68,14 +49,11 @@ func withTCP() fixtures.Option {
 	}
 }
 
-// TestPublishableP2P_CreateWithTCP_ChildHasAddressAndServiceExists is
-// the happy path. An SND with `networking.tcp` set should produce: a
-// child SeiNode whose `Spec.ExternalAddress` matches the deterministic
-// vanity host, a per-pod LB Service with the right annotations, and an
-// entry in `Status.NetworkingStatus.PublishableEndpoints`.
+// Happy path: TCP-enabled SND produces a child with Spec.ExternalAddress,
+// a per-pod LB Service, and a PublishableEndpoints entry.
 func TestPublishableP2P_CreateWithTCP_ChildHasAddressAndServiceExists(t *testing.T) {
 	g := NewWithT(t)
-	withPublishabilityEnabled(t, true)
+	withPublishableDomain(t, publishableTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-create",
@@ -97,7 +75,7 @@ func TestPublishableP2P_CreateWithTCP_ChildHasAddressAndServiceExists(t *testing
 		if err := testCli.Get(testCtx, childKey, child); err != nil {
 			return false
 		}
-		return child.Spec.ExternalAddress != nil && *child.Spec.ExternalAddress == wantAddr
+		return child.Spec.ExternalAddress == wantAddr
 	}, "child SeiNode "+childKey.Name+" populated with publishable ExternalAddress")
 
 	// 2. Per-pod LB Service exists with the expected annotations.
@@ -142,14 +120,10 @@ func TestPublishableP2P_CreateWithTCP_ChildHasAddressAndServiceExists(t *testing
 	}, "PublishableEndpoints stamped with deterministic vanity host")
 }
 
-// TestPublishableP2P_OptOut_ClearsAddressAndDeletesService asserts the
-// opt-out lifecycle: removing TCP from `spec.networking` clears the
-// child's `Spec.ExternalAddress` and deletes the per-pod LB Service.
-// ensureSeiNode is the single write site for the child field, so this
-// validates the diff propagation path end-to-end.
+// Opt-out: removing TCP clears Spec.ExternalAddress and deletes the Service.
 func TestPublishableP2P_OptOut_ClearsAddressAndDeletesService(t *testing.T) {
 	g := NewWithT(t)
-	withPublishabilityEnabled(t, true)
+	withPublishableDomain(t, publishableTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-optout",
@@ -169,7 +143,7 @@ func TestPublishableP2P_OptOut_ClearsAddressAndDeletesService(t *testing.T) {
 		if err := testCli.Get(testCtx, childKey, child); err != nil {
 			return false
 		}
-		return child.Spec.ExternalAddress != nil && *child.Spec.ExternalAddress == wantAddr
+		return child.Spec.ExternalAddress == wantAddr
 	}, "child has publishable address before opt-out")
 	waitFor(t, func() bool {
 		return testCli.Get(testCtx, svcKey, &corev1.Service{}) == nil
@@ -191,7 +165,7 @@ func TestPublishableP2P_OptOut_ClearsAddressAndDeletesService(t *testing.T) {
 		if err := testCli.Get(testCtx, childKey, child); err != nil {
 			return false
 		}
-		return child.Spec.ExternalAddress == nil || *child.Spec.ExternalAddress == ""
+		return child.Spec.ExternalAddress == ""
 	}, "child ExternalAddress cleared after opt-out")
 
 	// Per-pod LB Service is deleted.
@@ -207,13 +181,10 @@ func TestPublishableP2P_OptOut_ClearsAddressAndDeletesService(t *testing.T) {
 	}, "PublishableEndpoints cleared after opt-out")
 }
 
-// TestPublishableP2P_ReOptIn_RestoresAddressAndService is the dual of
-// the opt-out test: re-adding TCP after a clear should bring the child
-// back to the same vanity hostname (deterministic) and recreate the
-// per-pod LB Service.
+// Re-opt-in: TCP restored brings the address back and recreates the Service.
 func TestPublishableP2P_ReOptIn_RestoresAddressAndService(t *testing.T) {
 	g := NewWithT(t)
-	withPublishabilityEnabled(t, true)
+	withPublishableDomain(t, publishableTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-reoptin",
@@ -232,7 +203,7 @@ func TestPublishableP2P_ReOptIn_RestoresAddressAndService(t *testing.T) {
 		if err := testCli.Get(testCtx, childKey, child); err != nil {
 			return false
 		}
-		return child.Spec.ExternalAddress != nil && *child.Spec.ExternalAddress == wantAddr
+		return child.Spec.ExternalAddress == wantAddr
 	}, "initial converge")
 
 	// Opt out.
@@ -257,7 +228,7 @@ func TestPublishableP2P_ReOptIn_RestoresAddressAndService(t *testing.T) {
 		if err := testCli.Get(testCtx, childKey, child); err != nil {
 			return false
 		}
-		return child.Spec.ExternalAddress != nil && *child.Spec.ExternalAddress == wantAddr
+		return child.Spec.ExternalAddress == wantAddr
 	}, "child re-stamped with same vanity address after re-opt-in")
 
 	// Service is recreated.
@@ -266,17 +237,10 @@ func TestPublishableP2P_ReOptIn_RestoresAddressAndService(t *testing.T) {
 	}, "publishable Service recreated after re-opt-in")
 }
 
-// TestPublishableP2P_ScaleDown_DeletesOrdinalServiceBeforeChild guards
-// the invariant called out in the brief: on scale-down the ordinal's
-// publishable Service must be deleted before the child SeiNode so the
-// NLB never sits in the no-healthy-targets-but-still-allocated state.
-//
-// envtest is happy-path here — both deletions are issued by the same
-// reconcile pass, so we mainly assert both objects converge to gone.
-// The ordering predicate runs inside `scaleDown`.
+// Scale-down deletes the ordinal's Service before the child SeiNode.
 func TestPublishableP2P_ScaleDown_DeletesOrdinalServiceBeforeChild(t *testing.T) {
 	g := NewWithT(t)
-	withPublishabilityEnabled(t, true)
+	withPublishableDomain(t, publishableTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-scale",
@@ -313,16 +277,10 @@ func TestPublishableP2P_ScaleDown_DeletesOrdinalServiceBeforeChild(t *testing.T)
 	}, 2*time.Second, 200*time.Millisecond).Should(Succeed())
 }
 
-// TestPublishableP2P_StandaloneSeiNode_PreservesUserAddress asserts the
-// brief's "no SND involvement" contract. A SeiNode created directly by
-// a user with `Spec.ExternalAddress` set should keep that value through
-// reconcile — no SND-side code path should clear it, because no SND
-// owns it. The planner emits it verbatim. The check is interface-only
-// (we read back the spec); the planner emit-side is covered by the
-// unit test in `internal/planner/common_overrides_test.go`.
+// Standalone SeiNodes own Spec.ExternalAddress directly; no SND touches it.
 func TestPublishableP2P_StandaloneSeiNode_PreservesUserAddress(t *testing.T) {
 	g := NewWithT(t)
-	withPublishabilityEnabled(t, true)
+	withPublishableDomain(t, publishableTestDomain)
 	ns := makeNamespace(t)
 
 	addr := "custom.example.com:26656"
@@ -334,34 +292,25 @@ func TestPublishableP2P_StandaloneSeiNode_PreservesUserAddress(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID:         "pacific-1",
 			Image:           fixtures.DefaultImage,
-			ExternalAddress: &addr,
+			ExternalAddress: addr,
 			FullNode:        &seiv1alpha1.FullNodeSpec{},
 		},
 	}
 	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
 
-	// Read back: the spec persists. No SND code path should touch this.
-	g.Consistently(func() *string {
+	g.Consistently(func() string {
 		fetched := &seiv1alpha1.SeiNode{}
 		if err := testCli.Get(testCtx, client.ObjectKeyFromObject(node), fetched); err != nil {
-			return nil
+			return ""
 		}
 		return fetched.Spec.ExternalAddress
-	}, 2*time.Second, 200*time.Millisecond).Should(And(
-		Not(BeNil()),
-		HaveValue(Equal(addr)),
-	))
+	}, 2*time.Second, 200*time.Millisecond).Should(Equal(addr))
 }
 
-// TestPublishableP2P_KubectlEditStomp_ReconverresViaEnsureSeiNode
-// exercises the brief's stomp scenario: an external write clears the
-// child's `Spec.ExternalAddress` mid-flight. ensureSeiNode must detect
-// the diff on next reconcile and restore the SND-managed value. This
-// is the load-bearing claim that the field truly converges through
-// the single write site.
+// kubectl-edit stomp: external clear of Spec.ExternalAddress reconverges via ensureSeiNode.
 func TestPublishableP2P_KubectlEditStomp_ReconverresViaEnsureSeiNode(t *testing.T) {
 	g := NewWithT(t)
-	withPublishabilityEnabled(t, true)
+	withPublishableDomain(t, publishableTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-stomp",
@@ -379,7 +328,7 @@ func TestPublishableP2P_KubectlEditStomp_ReconverresViaEnsureSeiNode(t *testing.
 		if err := testCli.Get(testCtx, childKey, child); err != nil {
 			return false
 		}
-		return child.Spec.ExternalAddress != nil && *child.Spec.ExternalAddress == wantAddr
+		return child.Spec.ExternalAddress == wantAddr
 	}, "initial converge before stomp")
 
 	// Simulate `kubectl edit seinode` clearing the field. The SND
@@ -393,7 +342,7 @@ func TestPublishableP2P_KubectlEditStomp_ReconverresViaEnsureSeiNode(t *testing.
 			return err
 		}
 		patch := client.MergeFrom(child.DeepCopy())
-		child.Spec.ExternalAddress = nil
+		child.Spec.ExternalAddress = ""
 		return testCli.Patch(testCtx, child, patch)
 	}, 5*time.Second, 200*time.Millisecond).Should(Succeed())
 
@@ -416,94 +365,36 @@ func TestPublishableP2P_KubectlEditStomp_ReconverresViaEnsureSeiNode(t *testing.
 		if err := testCli.Get(testCtx, childKey, child); err != nil {
 			return false
 		}
-		return child.Spec.ExternalAddress != nil && *child.Spec.ExternalAddress == wantAddr
+		return child.Spec.ExternalAddress == wantAddr
 	}, "child reconverged via ensureSeiNode after external stomp")
 }
 
-// TestPublishableP2P_VPCCIDRNotConfigured_SurfacesConditionAndSkipsService
-// is the capability-disabled branch. With `PublishabilityAvailable=false`
-// and a TCP-enabled SND, the reconciler must:
-//   - set ConditionNetworkingReady=False/VPCCIDRNotConfigured
-//   - not create a publishable Service
-//   - leave the child's Spec.ExternalAddress nil/empty
-//
-// This is the equivalent of an operator misconfigured the controller
-// (SEI_VPC_CIDR missing). The condition is the operator's debugging
-// signal.
-func TestPublishableP2P_VPCCIDRNotConfigured_SurfacesConditionAndSkipsService(t *testing.T) {
+// TestPublishableP2P_NoDomainConfigured_SkipsServices verifies the silent
+// no-op path: when PublishableDomain is unset, TCP-enabled SNDs get no
+// publishable Service and no child ExternalAddress.
+func TestPublishableP2P_NoDomainConfigured_SkipsServices(t *testing.T) {
 	g := NewWithT(t)
-	withPublishabilityEnabled(t, false) // capability OFF for this test
+	withPublishableDomain(t, "")
 	ns := makeNamespace(t)
 
-	snd := fixtures.NewSND(ns, "pub-no-cidr",
-		fixtures.WithReplicas(1),
-		withTCP(),
-	)
-	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
-
-	// Condition surfaces the misconfiguration.
-	waitForStatus(t, client.ObjectKeyFromObject(snd), func(latest *seiv1alpha1.SeiNodeDeployment) bool {
-		c := apimeta.FindStatusCondition(latest.Status.Conditions, seiv1alpha1.ConditionNetworkingReady)
-		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "VPCCIDRNotConfigured"
-	}, "ConditionNetworkingReady=False/VPCCIDRNotConfigured")
-
-	// No publishable Service.
-	svcKey := types.NamespacedName{Name: snd.Name + "-0-p2p", Namespace: ns}
-	g.Consistently(func() bool {
-		err := testCli.Get(testCtx, svcKey, &corev1.Service{})
-		return apierrors.IsNotFound(err)
-	}, 2*time.Second, 200*time.Millisecond).Should(BeTrue(),
-		"no publishable Service created when capability is unavailable")
-
-	// Child SeiNode has no ExternalAddress.
-	childKey := types.NamespacedName{Name: snd.Name + "-0", Namespace: ns}
-	g.Eventually(func() error {
-		child := &seiv1alpha1.SeiNode{}
-		return testCli.Get(testCtx, childKey, child)
-	}, 5*time.Second, 200*time.Millisecond).Should(Succeed())
-	child := &seiv1alpha1.SeiNode{}
-	g.Expect(testCli.Get(testCtx, childKey, child)).To(Succeed())
-	if child.Spec.ExternalAddress != nil {
-		g.Expect(*child.Spec.ExternalAddress).To(BeEmpty(),
-			"child ExternalAddress must be empty without capability")
-	}
-}
-
-// TestPublishableP2P_PublishableDomainNotConfigured_SurfacesCondition is the
-// L4-zone-not-configured branch. With `PublishabilityAvailable=true` (VPC
-// CIDR set) but `PublishableDomain=""` (no SEI_PUBLISHABLE_DOMAIN), a
-// TCP-enabled SND must surface `PublishableDomainNotConfigured` rather
-// than getting silently misclassified as a VPC-CIDR or chain-ID problem.
-// Real-world trigger: dev cluster, where SEI_PUBLISHABLE_DOMAIN is unset.
-func TestPublishableP2P_PublishableDomainNotConfigured_SurfacesCondition(t *testing.T) {
-	g := NewWithT(t)
-	// Cap available, domain absent: pin both fields explicitly.
-	prevAvail := testSNDReconciler.PublishabilityAvailable
-	prevDomain := testSNDReconciler.PublishableDomain
-	testSNDReconciler.PublishabilityAvailable = true
-	testSNDReconciler.PublishableDomain = ""
-	t.Cleanup(func() {
-		testSNDReconciler.PublishabilityAvailable = prevAvail
-		testSNDReconciler.PublishableDomain = prevDomain
-	})
-
-	ns := makeNamespace(t)
 	snd := fixtures.NewSND(ns, "pub-no-domain",
 		fixtures.WithReplicas(1),
 		withTCP(),
 	)
 	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
 
-	waitForStatus(t, client.ObjectKeyFromObject(snd), func(latest *seiv1alpha1.SeiNodeDeployment) bool {
-		c := apimeta.FindStatusCondition(latest.Status.Conditions, seiv1alpha1.ConditionNetworkingReady)
-		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "PublishableDomainNotConfigured"
-	}, "ConditionNetworkingReady=False/PublishableDomainNotConfigured")
-
-	// No publishable Service.
 	svcKey := types.NamespacedName{Name: snd.Name + "-0-p2p", Namespace: ns}
 	g.Consistently(func() bool {
 		err := testCli.Get(testCtx, svcKey, &corev1.Service{})
 		return apierrors.IsNotFound(err)
-	}, 2*time.Second, 200*time.Millisecond).Should(BeTrue(),
-		"no publishable Service created when domain is unconfigured")
+	}, 2*time.Second, 200*time.Millisecond).Should(BeTrue())
+
+	childKey := types.NamespacedName{Name: snd.Name + "-0", Namespace: ns}
+	g.Eventually(func() string {
+		child := &seiv1alpha1.SeiNode{}
+		if err := testCli.Get(testCtx, childKey, child); err != nil {
+			return "ERR"
+		}
+		return child.Spec.ExternalAddress
+	}, 5*time.Second, 200*time.Millisecond).Should(BeEmpty())
 }

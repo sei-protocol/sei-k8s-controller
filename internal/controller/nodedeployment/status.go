@@ -118,12 +118,10 @@ func (r *SeiNodeDeploymentReconciler) buildNetworkingStatus(group *seiv1alpha1.S
 		}
 	}
 
-	if group.Spec.Networking.TCPEnabled() && r.PublishabilityAvailable {
+	if group.Spec.Networking.TCPEnabled() && r.PublishableDomain != "" {
 		for i := range int(group.Spec.Replicas) {
 			host := r.publishableExternalAddress(group, i)
 			if host == "" {
-				// publishableHostname rejected this ordinal (invalid
-				// chainID); skip the entry rather than stamp a bad one.
 				continue
 			}
 			out.PublishableEndpoints = append(out.PublishableEndpoints, seiv1alpha1.PublishableEndpoint{

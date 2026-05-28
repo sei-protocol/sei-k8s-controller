@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -214,39 +213,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Publishable-P2P capability: SEI_VPC_CIDR is a deployment-time
-	// constant (a VPC CIDR rarely changes within a cluster's life).
-	// Parse once at startup. When unset or unparseable, the SND
-	// reconciler still runs — TCP-enabled SNDs surface
-	// `ConditionNetworkingReady=False/VPCCIDRNotConfigured` on each
-	// reconcile and no LB Services are created. This is fail-closed at
-	// the apply boundary, not at admission; an admission webhook is
-	// deferred until we accumulate more SND-side validation needs.
-	vpcCIDRRaw := os.Getenv("SEI_VPC_CIDR")
-	publishabilityAvailable := false
-	var publishableVPCCIDR *net.IPNet
-	if vpcCIDRRaw == "" {
-		setupLog.Info("Publishable-P2P capability disabled: SEI_VPC_CIDR not set")
-	} else if _, cidr, err := net.ParseCIDR(vpcCIDRRaw); err != nil {
-		setupLog.Error(err, "Publishable-P2P capability disabled: SEI_VPC_CIDR is unparseable", "value", vpcCIDRRaw)
-	} else {
-		publishabilityAvailable = true
-		publishableVPCCIDR = cidr
-		setupLog.Info("Publishable-P2P capability enabled", "cidr", cidr.String())
-	}
-
-	// SEI_PUBLISHABLE_DOMAIN is the DNS zone for per-pod vanity hostnames.
-	// Distinct from SEI_GATEWAY_PUBLIC_DOMAIN because L7 and L4 zones may
-	// diverge per cluster: harbor's external-dns watches
-	// `harbor.platform.sei.io` while the gateway uses `platform.sei.io`.
-	// When unset, TCP-enabled SNDs surface
-	// `ConditionNetworkingReady=False/PublishableDomainNotConfigured`.
 	publishableDomain := os.Getenv("SEI_PUBLISHABLE_DOMAIN")
-	if publishableDomain == "" {
-		setupLog.Info("Publishable-P2P domain not configured: SEI_PUBLISHABLE_DOMAIN not set; TCP-enabled SNDs will surface PublishableDomainNotConfigured")
-	} else {
-		setupLog.Info("Publishable-P2P domain configured", "domain", publishableDomain)
-	}
 
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller")
@@ -258,8 +225,6 @@ func main() {
 		GatewayNamespace:        platformCfg.GatewayNamespace,
 		GatewayDomain:           platformCfg.GatewayDomain,
 		GatewayPublicDomain:     platformCfg.GatewayPublicDomain,
-		PublishabilityAvailable: publishabilityAvailable,
-		PublishableVPCCIDR:      publishableVPCCIDR,
 		PublishableDomain:       publishableDomain,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {

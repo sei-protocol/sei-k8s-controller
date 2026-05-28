@@ -5,7 +5,6 @@ import (
 
 	seiconfig "github.com/sei-protocol/sei-config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -14,7 +13,7 @@ func TestCommonOverrides_WithExternalAddress(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node"},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ExternalAddress: ptr.To("p2p.atlantic-2.seinetwork.io:26656"),
+			ExternalAddress: "p2p.atlantic-2.seinetwork.io:26656",
 		},
 	}
 	overrides := commonOverrides(node)
@@ -49,7 +48,7 @@ func TestCommonOverrides_UserOverrideTakesPrecedence(t *testing.T) {
 			ChainID:         "test-1",
 			Image:           "seid:v1",
 			FullNode:        &seiv1alpha1.FullNodeSpec{},
-			ExternalAddress: ptr.To("lb.address:26656"),
+			ExternalAddress: "lb.address:26656",
 			Overrides: map[string]string{
 				seiconfig.KeyP2PExternalAddress: "custom.address:26656",
 			},

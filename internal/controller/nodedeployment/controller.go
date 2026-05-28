@@ -3,7 +3,6 @@ package nodedeployment
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -43,28 +42,8 @@ type SeiNodeDeploymentReconciler struct {
 	GatewayDomain       string
 	GatewayPublicDomain string
 
-	// PublishabilityAvailable is the cluster-level capability flag for the
-	// publishable-P2P path. Set to true at startup only when SEI_VPC_CIDR
-	// parses cleanly; gates Service apply in the TCP networking branch.
-	// When false, an SND with `Spec.Networking.TCP` set surfaces
-	// `ConditionNetworkingReady=False/VPCCIDRNotConfigured` and no LB
-	// Services are created.
-	PublishabilityAvailable bool
-
-	// PublishableVPCCIDR is the cluster's VPC CIDR, parsed from
-	// SEI_VPC_CIDR at startup. Held for future hooks; the reconcile path
-	// does not check Pod IPs against it — AWS LBC surfaces target
-	// registration failures via Service events if the cluster's Pod IP
-	// range is outside this CIDR.
-	PublishableVPCCIDR *net.IPNet
-
-	// PublishableDomain is the DNS zone for per-pod vanity hostnames,
-	// parsed from SEI_PUBLISHABLE_DOMAIN at startup. Distinct from
-	// GatewayPublicDomain because the L7 gateway zone and the L4
-	// publishable zone may diverge per cluster (harbor's external-dns
-	// watches `harbor.platform.sei.io` while the gateway uses
-	// `platform.sei.io`). When empty, the publishable path is
-	// fail-closed with reason PublishableDomainNotConfigured.
+	// PublishableDomain is the DNS zone for per-pod publishable hostnames,
+	// from SEI_PUBLISHABLE_DOMAIN. Empty disables the publishable path.
 	PublishableDomain string
 
 	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
