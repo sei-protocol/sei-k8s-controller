@@ -21,7 +21,7 @@ import (
 
 const (
 	// publishableTestDomain is the value the publishable tests pin onto
-	// `testSNDReconciler.GatewayPublicDomain` for the duration of each
+	// `testSNDReconciler.PublishableDomain` for the duration of each
 	// test. The HTTP-route tests rely on the default empty value;
 	// `withPublishabilityEnabled` restores both fields in t.Cleanup so
 	// later tests see the unmodified suite state.
@@ -47,12 +47,12 @@ func expectedPublishableAddr(sndName, chainID string, ordinal int) string {
 func withPublishabilityEnabled(t *testing.T, available bool) {
 	t.Helper()
 	prevAvail := testSNDReconciler.PublishabilityAvailable
-	prevDomain := testSNDReconciler.GatewayPublicDomain
+	prevDomain := testSNDReconciler.PublishableDomain
 	testSNDReconciler.PublishabilityAvailable = available
-	testSNDReconciler.GatewayPublicDomain = publishableTestDomain
+	testSNDReconciler.PublishableDomain = publishableTestDomain
 	t.Cleanup(func() {
 		testSNDReconciler.PublishabilityAvailable = prevAvail
-		testSNDReconciler.GatewayPublicDomain = prevDomain
+		testSNDReconciler.PublishableDomain = prevDomain
 	})
 }
 
@@ -467,4 +467,43 @@ func TestPublishableP2P_VPCCIDRNotConfigured_SurfacesConditionAndSkipsService(t 
 		g.Expect(*child.Spec.ExternalAddress).To(BeEmpty(),
 			"child ExternalAddress must be empty without capability")
 	}
+}
+
+// TestPublishableP2P_PublishableDomainNotConfigured_SurfacesCondition is the
+// L4-zone-not-configured branch. With `PublishabilityAvailable=true` (VPC
+// CIDR set) but `PublishableDomain=""` (no SEI_PUBLISHABLE_DOMAIN), a
+// TCP-enabled SND must surface `PublishableDomainNotConfigured` rather
+// than getting silently misclassified as a VPC-CIDR or chain-ID problem.
+// Real-world trigger: dev cluster, where SEI_PUBLISHABLE_DOMAIN is unset.
+func TestPublishableP2P_PublishableDomainNotConfigured_SurfacesCondition(t *testing.T) {
+	g := NewWithT(t)
+	// Cap available, domain absent: pin both fields explicitly.
+	prevAvail := testSNDReconciler.PublishabilityAvailable
+	prevDomain := testSNDReconciler.PublishableDomain
+	testSNDReconciler.PublishabilityAvailable = true
+	testSNDReconciler.PublishableDomain = ""
+	t.Cleanup(func() {
+		testSNDReconciler.PublishabilityAvailable = prevAvail
+		testSNDReconciler.PublishableDomain = prevDomain
+	})
+
+	ns := makeNamespace(t)
+	snd := fixtures.NewSND(ns, "pub-no-domain",
+		fixtures.WithReplicas(1),
+		withTCP(),
+	)
+	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
+
+	waitForStatus(t, client.ObjectKeyFromObject(snd), func(latest *seiv1alpha1.SeiNodeDeployment) bool {
+		c := apimeta.FindStatusCondition(latest.Status.Conditions, seiv1alpha1.ConditionNetworkingReady)
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "PublishableDomainNotConfigured"
+	}, "ConditionNetworkingReady=False/PublishableDomainNotConfigured")
+
+	// No publishable Service.
+	svcKey := types.NamespacedName{Name: snd.Name + "-0-p2p", Namespace: ns}
+	g.Consistently(func() bool {
+		err := testCli.Get(testCtx, svcKey, &corev1.Service{})
+		return apierrors.IsNotFound(err)
+	}, 2*time.Second, 200*time.Millisecond).Should(BeTrue(),
+		"no publishable Service created when domain is unconfigured")
 }

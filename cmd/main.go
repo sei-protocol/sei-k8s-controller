@@ -235,6 +235,19 @@ func main() {
 		setupLog.Info("Publishable-P2P capability enabled", "cidr", cidr.String())
 	}
 
+	// SEI_PUBLISHABLE_DOMAIN is the DNS zone for per-pod vanity hostnames.
+	// Distinct from SEI_GATEWAY_PUBLIC_DOMAIN because L7 and L4 zones may
+	// diverge per cluster: harbor's external-dns watches
+	// `harbor.platform.sei.io` while the gateway uses `platform.sei.io`.
+	// When unset, TCP-enabled SNDs surface
+	// `ConditionNetworkingReady=False/PublishableDomainNotConfigured`.
+	publishableDomain := os.Getenv("SEI_PUBLISHABLE_DOMAIN")
+	if publishableDomain == "" {
+		setupLog.Info("Publishable-P2P domain not configured: SEI_PUBLISHABLE_DOMAIN not set; TCP-enabled SNDs will surface PublishableDomainNotConfigured")
+	} else {
+		setupLog.Info("Publishable-P2P domain configured", "domain", publishableDomain)
+	}
+
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller")
 	if err := (&nodedeploymentcontroller.SeiNodeDeploymentReconciler{
@@ -247,6 +260,7 @@ func main() {
 		GatewayPublicDomain:     platformCfg.GatewayPublicDomain,
 		PublishabilityAvailable: publishabilityAvailable,
 		PublishableVPCCIDR:      publishableVPCCIDR,
+		PublishableDomain:       publishableDomain,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 				var assemblerNode *seiv1alpha1.SeiNode

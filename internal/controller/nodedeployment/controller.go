@@ -58,6 +58,15 @@ type SeiNodeDeploymentReconciler struct {
 	// range is outside this CIDR.
 	PublishableVPCCIDR *net.IPNet
 
+	// PublishableDomain is the DNS zone for per-pod vanity hostnames,
+	// parsed from SEI_PUBLISHABLE_DOMAIN at startup. Distinct from
+	// GatewayPublicDomain because the L7 gateway zone and the L4
+	// publishable zone may diverge per cluster (harbor's external-dns
+	// watches `harbor.platform.sei.io` while the gateway uses
+	// `platform.sei.io`). When empty, the publishable path is
+	// fail-closed with reason PublishableDomainNotConfigured.
+	PublishableDomain string
+
 	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeDeployment]
 }

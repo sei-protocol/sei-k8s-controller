@@ -111,6 +111,15 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, g
 			}
 			return nil
 		}
+		if r.PublishableDomain == "" {
+			setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
+				"PublishableDomainNotConfigured",
+				"spec.networking.tcp requires SEI_PUBLISHABLE_DOMAIN to be set on the controller; publishable Services are not created")
+			if err := r.deletePublishableServices(ctx, group); err != nil {
+				return fmt.Errorf("deleting publishable services after capability loss: %w", err)
+			}
+			return nil
+		}
 		if err := r.reconcilePublishableServices(ctx, group); err != nil {
 			return fmt.Errorf("reconciling publishable services: %w", err)
 		}

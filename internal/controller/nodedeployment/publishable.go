@@ -100,7 +100,7 @@ func effectiveChainID(group *seiv1alpha1.SeiNodeDeployment) string {
 // DNS-illegal characters that slipped past admission). Callers must
 // treat the empty string as "skip" — the apply boundary fails closed.
 func (r *SeiNodeDeploymentReconciler) publishableHostname(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
-	if r.GatewayPublicDomain == "" {
+	if r.PublishableDomain == "" {
 		return ""
 	}
 	chainID := effectiveChainID(group)
@@ -117,7 +117,7 @@ func (r *SeiNodeDeploymentReconciler) publishableHostname(group *seiv1alpha1.Sei
 	host := fmt.Sprintf("%s-p2p.%s.%s",
 		seiNodeName(group, ordinal),
 		chainID,
-		r.GatewayPublicDomain,
+		r.PublishableDomain,
 	)
 	return host
 }

@@ -21,7 +21,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 		templateChainID  string
 		genesisChainID   string
 		ordinal          int
-		gatewayPubDomain string
+		publishableDomain string
 		want             string
 	}{
 		{
@@ -30,7 +30,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			namespace:        "sei-test-1",
 			templateChainID:  "atlantic-2",
 			ordinal:          0,
-			gatewayPubDomain: "prod.platform.sei.io",
+			publishableDomain: "prod.platform.sei.io",
 			want:             "atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io",
 		},
 		{
@@ -39,7 +39,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			namespace:        "pacific-1",
 			templateChainID:  "pacific-1",
 			ordinal:          5,
-			gatewayPubDomain: "prod.platform.sei.io",
+			publishableDomain: "prod.platform.sei.io",
 			want:             "rpc-5-p2p.pacific-1.prod.platform.sei.io",
 		},
 		{
@@ -49,7 +49,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			templateChainID:  "",
 			genesisChainID:   "newchain-1",
 			ordinal:          1,
-			gatewayPubDomain: "test.platform.sei.io",
+			publishableDomain: "test.platform.sei.io",
 			want:             "newchain-validators-1-p2p.newchain-1.test.platform.sei.io",
 		},
 		{
@@ -58,7 +58,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			namespace:        "sei-test-1",
 			templateChainID:  "atlantic-2",
 			ordinal:          0,
-			gatewayPubDomain: "",
+			publishableDomain: "",
 			want:             "",
 		},
 		{
@@ -67,7 +67,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			namespace:        "sei-test-1",
 			templateChainID:  "",
 			ordinal:          0,
-			gatewayPubDomain: "prod.platform.sei.io",
+			publishableDomain: "prod.platform.sei.io",
 			want:             "",
 		},
 		{
@@ -76,7 +76,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			namespace:        "sei-test-1",
 			templateChainID:  "Atlantic-2",
 			ordinal:          0,
-			gatewayPubDomain: "prod.platform.sei.io",
+			publishableDomain: "prod.platform.sei.io",
 			want:             "",
 		},
 		{
@@ -85,7 +85,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			namespace:        "sei-test-1",
 			templateChainID:  "atlantic.2",
 			ordinal:          0,
-			gatewayPubDomain: "prod.platform.sei.io",
+			publishableDomain: "prod.platform.sei.io",
 			want:             "",
 		},
 	}
@@ -104,7 +104,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			if tc.genesisChainID != "" {
 				snd.Spec.Genesis = &seiv1alpha1.GenesisCeremonyConfig{ChainID: tc.genesisChainID}
 			}
-			r := &SeiNodeDeploymentReconciler{GatewayPublicDomain: tc.gatewayPubDomain}
+			r := &SeiNodeDeploymentReconciler{PublishableDomain:tc.publishableDomain}
 			g.Expect(r.publishableHostname(snd, tc.ordinal)).To(Equal(tc.want))
 		})
 	}
@@ -120,7 +120,7 @@ func TestPublishableExternalAddress_AppendsP2PPort(t *testing.T) {
 			},
 		},
 	}
-	r := &SeiNodeDeploymentReconciler{GatewayPublicDomain: "prod.platform.sei.io"}
+	r := &SeiNodeDeploymentReconciler{PublishableDomain:"prod.platform.sei.io"}
 	got := r.publishableExternalAddress(snd, 0)
 	g.Expect(got).To(Equal("atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io:26656"))
 }
@@ -130,7 +130,7 @@ func TestPublishableExternalAddress_EmptyWhenHostnameRejected(t *testing.T) {
 	snd := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "atlantic-2", Namespace: "sei-test-1"},
 	}
-	r := &SeiNodeDeploymentReconciler{GatewayPublicDomain: "prod.platform.sei.io"}
+	r := &SeiNodeDeploymentReconciler{PublishableDomain:"prod.platform.sei.io"}
 	g.Expect(r.publishableExternalAddress(snd, 0)).To(BeEmpty())
 }
 
