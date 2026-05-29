@@ -35,16 +35,10 @@ func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha
 	return nil
 }
 
-// resolveLabelPeers lists SeiNodes matching the selector and returns
-// fully-composed `<node_id>@<host>:<port>` strings. Host is each peer's
-// Spec.ExternalAddress when set, otherwise the headless Service DNS.
-// node_id is fetched from each peer's sidecar via gRPC.
-//
-// Per-peer transient failures (sidecar restarting, gRPC timeout) do
-// not fail the whole resolve. The peer's prior entry from
-// Status.ResolvedPeers is preserved if available; otherwise the peer
-// is skipped for this cycle with a structured log line. This keeps
-// fleet-wide reconciles from wedging on a single peer's sidecar churn.
+// resolveLabelPeers returns fully-composed `<node_id>@<host>:<port>`
+// strings for SeiNodes matching the selector. Per-peer sidecar failures
+// preserve the prior entry from Status.ResolvedPeers (so transients
+// don't wedge fleet-wide reconciles) or skip with a log line.
 func (r *SeiNodeReconciler) resolveLabelPeers(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
@@ -82,8 +76,6 @@ func (r *SeiNodeReconciler) resolveLabelPeers(
 				continue
 			}
 		}
-		// Per-peer failure: preserve the prior entry if we have one,
-		// otherwise skip until the peer's sidecar is reachable.
 		if existing, ok := prior[address]; ok {
 			logger.Info("preserving prior peer entry; node_id fetch failed", "peer", peer.Name, "err", err)
 			endpoints = append(endpoints, existing)
@@ -94,9 +86,8 @@ func (r *SeiNodeReconciler) resolveLabelPeers(
 	return endpoints, nil
 }
 
-// indexResolvedPeersByHost maps the host:port portion of each composed
-// peer entry back to the full string, so a transient sidecar failure
-// can be papered over by reusing the prior entry.
+// indexResolvedPeersByHost maps `host:port` → `<node_id>@host:port` for
+// O(1) lookup of the prior composed entry on transient failure.
 func indexResolvedPeersByHost(peers []string) map[string]string {
 	out := make(map[string]string, len(peers))
 	for _, p := range peers {
@@ -109,9 +100,8 @@ func indexResolvedPeersByHost(peers []string) map[string]string {
 	return out
 }
 
-// peerAddress is the dial address for a peer: Spec.ExternalAddress (already
-// host:port from the SND publishable path) when set, otherwise the headless
-// Service DNS at the standard P2P port.
+// peerAddress returns Spec.ExternalAddress (already host:port) when set,
+// otherwise the headless Service DNS at the standard P2P port.
 func peerAddress(peer *seiv1alpha1.SeiNode) string {
 	if peer.Spec.ExternalAddress != "" {
 		return peer.Spec.ExternalAddress

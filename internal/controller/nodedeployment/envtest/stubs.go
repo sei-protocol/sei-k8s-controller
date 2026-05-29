@@ -118,8 +118,8 @@ func (s *StubSidecarClient) Healthz(_ context.Context) (bool, error) {
 	return true, nil
 }
 
-// GetNodeID returns a deterministic stub identity. Real CometBFT node IDs
-// are 40-char hex; this satisfies callers that only need a non-empty value.
+// GetNodeID returns a deterministic stub identity (non-empty is all
+// callers check for in envtest).
 func (s *StubSidecarClient) GetNodeID(_ context.Context) (string, error) {
 	return "stub-node-id", nil
 }

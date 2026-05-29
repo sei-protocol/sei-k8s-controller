@@ -16,8 +16,6 @@ const (
 	testPeer1ResolvedID = "mock-node-id@peer-1-0.peer-1.default.svc.cluster.local:26656"
 )
 
-// errStub is a minimal error type for test scaffolding (avoids dragging
-// errors.New into a metadata import position).
 type errStub string
 
 func (e errStub) Error() string { return string(e) }
@@ -242,8 +240,7 @@ func TestReconcilePeers_NoLabelSources_NoPatch(t *testing.T) {
 	// No label sources means no resolved peers, no patch — just verifying no error
 }
 
-// Per-peer transient failure: prior entry is preserved so a single
-// peer's sidecar churn doesn't drop it from ResolvedPeers.
+// Transient sidecar failure: prior entry is preserved.
 func TestReconcilePeers_PreservesPriorEntryOnTransientFailure(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: testConsumerName, Namespace: "default"},
@@ -287,8 +284,7 @@ func TestReconcilePeers_PreservesPriorEntryOnTransientFailure(t *testing.T) {
 	}
 }
 
-// New peer with no prior entry + sidecar failure: skip the peer this
-// cycle instead of wedging the whole reconcile.
+// New peer with no prior entry + sidecar failure: skip, don't wedge.
 func TestReconcilePeers_SkipsNewPeerOnSidecarFailure(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: testConsumerName, Namespace: "default"},

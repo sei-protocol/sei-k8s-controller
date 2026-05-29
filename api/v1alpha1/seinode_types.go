@@ -347,10 +347,8 @@ type SeiNodeStatus struct {
 	// +optional
 	Plan *TaskPlan `json:"plan,omitempty"`
 
-	// ResolvedPeers is the current set of `<node_id>@<host>:<port>` peer
-	// strings discovered from label-based peer sources, ready to write
-	// into CometBFT's persistent_peers verbatim. Host is the peer's
-	// Spec.ExternalAddress when set, otherwise the headless Service DNS.
+	// ResolvedPeers carries `<node_id>@<host>:<port>` entries resolved
+	// from label-based peer sources, ready for CometBFT's persistent_peers.
 	// +optional
 	ResolvedPeers []string `json:"resolvedPeers,omitempty"`
 
