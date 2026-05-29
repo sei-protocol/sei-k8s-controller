@@ -6,6 +6,7 @@ import (
 	"maps"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -217,6 +218,14 @@ func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *
 	}
 	if !maps.Equal(existing.Spec.PodLabels, desired.Spec.PodLabels) {
 		existing.Spec.PodLabels = desired.Spec.PodLabels
+		updated = true
+	}
+	// Peers are intentionally in-place propagatable (templateHash godoc
+	// in labels.go). Semantic.DeepEqual treats nil and empty maps/slices
+	// as equal — etcd round-trips normalize empties to nil, so reflect
+	// would spuriously diff after the first reconcile post-restart.
+	if !equality.Semantic.DeepEqual(existing.Spec.Peers, desired.Spec.Peers) {
+		existing.Spec.Peers = desired.Spec.Peers
 		updated = true
 	}
 	if existing.Spec.ExternalAddress != desired.Spec.ExternalAddress {

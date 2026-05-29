@@ -1,15 +1,19 @@
 package nodedeployment
 
 import (
+	"context"
 	"testing"
 
 	. "github.com/onsi/gomega"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
+
+const testSyncerOrd0 = "syncer-0"
 
 func newTestGroup(name, namespace string) *seiv1alpha1.SeiNodeDeployment {
 	return &seiv1alpha1.SeiNodeDeployment{
@@ -397,4 +401,97 @@ func TestSetGenesisCeremonyCondition(t *testing.T) {
 			g.Expect(cond.Reason).To(Equal(tc.wantReason))
 		})
 	}
+}
+
+// Adding a peer source to an existing SND must reach the child.
+func TestEnsureSeiNode_PropagatesPeersOnUpdate(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	group := newTestGroup("syncer", "pacific-1")
+	group.Spec.Template.Spec.Peers = []seiv1alpha1.PeerSource{
+		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
+			Region: "eu-central-1",
+			Tags:   map[string]string{"ChainIdentifier": "pacific-1", "Component": "state-syncer"},
+		}},
+	}
+
+	r := newPlanTestReconciler(t, group)
+
+	// First reconcile: child created with the EC2Tags-only spec.
+	g.Expect(r.ensureSeiNode(ctx, group, 0)).To(Succeed())
+
+	child := &seiv1alpha1.SeiNode{}
+	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: "pacific-1"}
+	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
+	g.Expect(child.Spec.Peers).To(HaveLen(1))
+
+	// SND template gains a LabelPeerSource (the platform#759 shape).
+	group.Spec.Template.Spec.Peers = append(group.Spec.Template.Spec.Peers,
+		seiv1alpha1.PeerSource{Label: &seiv1alpha1.LabelPeerSource{
+			Namespace: "pacific-1",
+			Selector:  map[string]string{"sei.io/chain": "pacific-1"},
+		}})
+
+	// Second reconcile: the new peer source must propagate to the
+	// already-existing child.
+	g.Expect(r.ensureSeiNode(ctx, group, 0)).To(Succeed())
+
+	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
+	g.Expect(child.Spec.Peers).To(HaveLen(2),
+		"existing child Spec.Peers must reflect SND template additions")
+	g.Expect(child.Spec.Peers[1].Label).NotTo(BeNil(),
+		"second entry must be the newly-added LabelPeerSource")
+	g.Expect(child.Spec.Peers[1].Label.Selector).To(Equal(map[string]string{"sei.io/chain": "pacific-1"}))
+}
+
+// Removing a peer source from the SND must also propagate (proves the
+// diff captures shrink, not just grow).
+func TestEnsureSeiNode_PropagatesPeerRemoval(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	group := newTestGroup("syncer", "pacific-1")
+	group.Spec.Template.Spec.Peers = []seiv1alpha1.PeerSource{
+		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"k": "v"}}},
+		{Label: &seiv1alpha1.LabelPeerSource{Namespace: "pacific-1", Selector: map[string]string{"k": "v"}}},
+	}
+
+	r := newPlanTestReconciler(t, group)
+	g.Expect(r.ensureSeiNode(ctx, group, 0)).To(Succeed())
+
+	// Drop the label entry from the SND template.
+	group.Spec.Template.Spec.Peers = group.Spec.Template.Spec.Peers[:1]
+	g.Expect(r.ensureSeiNode(ctx, group, 0)).To(Succeed())
+
+	child := &seiv1alpha1.SeiNode{}
+	g.Expect(r.Get(ctx, types.NamespacedName{Name: testSyncerOrd0, Namespace: "pacific-1"}, child)).To(Succeed())
+	g.Expect(child.Spec.Peers).To(HaveLen(1))
+	g.Expect(child.Spec.Peers[0].EC2Tags).NotTo(BeNil())
+	g.Expect(child.Spec.Peers[0].Label).To(BeNil())
+}
+
+// No-op reconcile path: identical SND template across two reconciles
+// should not trigger a child Update (no resourceVersion bump).
+func TestEnsureSeiNode_PeersNoOpWhenUnchanged(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	group := newTestGroup("syncer", "pacific-1")
+	group.Spec.Template.Spec.Peers = []seiv1alpha1.PeerSource{
+		{Label: &seiv1alpha1.LabelPeerSource{Namespace: "pacific-1", Selector: map[string]string{"k": "v"}}},
+	}
+
+	r := newPlanTestReconciler(t, group)
+	g.Expect(r.ensureSeiNode(ctx, group, 0)).To(Succeed())
+
+	child := &seiv1alpha1.SeiNode{}
+	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: "pacific-1"}
+	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
+	rvBefore := child.ResourceVersion
+
+	g.Expect(r.ensureSeiNode(ctx, group, 0)).To(Succeed())
+	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
+	g.Expect(child.ResourceVersion).To(Equal(rvBefore),
+		"no-op reconcile must not bump resourceVersion")
 }
