@@ -53,6 +53,9 @@ type mockSidecarClient struct {
 	// Healthz returns (healthz, healthzErr) when non-nil; defaults to (true, nil).
 	healthz    *bool
 	healthzErr error
+
+	nodeID    string
+	nodeIDErr error
 }
 
 func (m *mockSidecarClient) SubmitTask(_ context.Context, req sidecar.TaskRequest) (uuid.UUID, error) {
@@ -84,6 +87,10 @@ func (m *mockSidecarClient) Healthz(_ context.Context) (bool, error) {
 		return *m.healthz, m.healthzErr
 	}
 	return true, m.healthzErr
+}
+
+func (m *mockSidecarClient) GetNodeID(_ context.Context) (string, error) {
+	return m.nodeID, m.nodeIDErr
 }
 
 func strPtr(s string) *string { return &s }

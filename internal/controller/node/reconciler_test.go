@@ -43,13 +43,15 @@ func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler,
 		WithObjects(objs...).
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
-	mock := &mockSidecarClient{}
+	mock := &mockSidecarClient{nodeID: "mock-node-id"}
 	r := &SeiNodeReconciler{
 		Client:   c,
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
-		Planner:  &planner.NodeResolver{},
+		Planner: &planner.NodeResolver{
+			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil },
+		},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{

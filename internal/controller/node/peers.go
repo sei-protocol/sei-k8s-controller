@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -32,8 +33,11 @@ func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha
 	return nil
 }
 
-// resolveLabelPeers lists SeiNode resources matching the label selector
-// and returns their stable headless Service DNS hostnames.
+// resolveLabelPeers lists SeiNodes matching the selector and returns
+// fully-composed `<node_id>@<host>:<port>` strings. The host is each
+// peer's Spec.ExternalAddress when set, otherwise the headless Service
+// DNS. node_id is fetched from each peer's sidecar via gRPC — the same
+// in-cluster path the genesis CollectAndSetPeers task uses.
 func (r *SeiNodeReconciler) resolveLabelPeers(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
@@ -58,9 +62,28 @@ func (r *SeiNodeReconciler) resolveLabelPeers(
 		if peer.Name == node.Name && peer.Namespace == node.Namespace {
 			continue
 		}
-		dns := fmt.Sprintf("%s-0.%s.%s.svc.cluster.local",
-			peer.Name, peer.Name, peer.Namespace)
-		endpoints = append(endpoints, dns)
+
+		sc, err := r.Planner.BuildSidecarClient(peer)
+		if err != nil {
+			return nil, fmt.Errorf("building sidecar client for peer %s: %w", peer.Name, err)
+		}
+		nodeID, err := sc.GetNodeID(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("fetching node_id for peer %s: %w", peer.Name, err)
+		}
+
+		endpoints = append(endpoints, fmt.Sprintf("%s@%s", nodeID, peerAddress(peer)))
 	}
 	return endpoints, nil
+}
+
+// peerAddress is the dial address for a peer: Spec.ExternalAddress (already
+// host:port from the SND publishable path) when set, otherwise the headless
+// Service DNS at the standard P2P port.
+func peerAddress(peer *seiv1alpha1.SeiNode) string {
+	if peer.Spec.ExternalAddress != "" {
+		return peer.Spec.ExternalAddress
+	}
+	return fmt.Sprintf("%s-0.%s.%s.svc.cluster.local:%d",
+		peer.Name, peer.Name, peer.Namespace, seiconfig.PortP2P)
 }

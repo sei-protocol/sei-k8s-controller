@@ -137,13 +137,14 @@ func DeterministicTaskID(planID, taskType string, planIndex int) string {
 	return uuid.NewSHA1(taskIDNamespace, []byte(seed)).String()
 }
 
-// SidecarClient abstracts the sidecar HTTP API for task submission and
-// status polling. Narrowed from the full seictl client to the two methods
-// needed by task execution. Implementations must be safe for concurrent use.
+// SidecarClient abstracts the sidecar HTTP API for the operations the
+// controller invokes per-peer: task submission/polling, health, and
+// peer-identity lookup. Safe for concurrent use.
 type SidecarClient interface {
 	SubmitTask(ctx context.Context, req sidecar.TaskRequest) (uuid.UUID, error)
 	GetTask(ctx context.Context, id uuid.UUID) (*sidecar.TaskResult, error)
 	Healthz(ctx context.Context) (bool, error)
+	GetNodeID(ctx context.Context) (string, error)
 }
 
 // ExecutionConfig bundles all dependencies needed by task executions:

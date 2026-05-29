@@ -249,7 +249,8 @@ func (f *fakeSidecarClient) GetTask(_ context.Context, id uuid.UUID) (*sidecar.T
 	return nil, sidecar.ErrNotFound
 }
 
-func (f *fakeSidecarClient) Healthz(_ context.Context) (bool, error) { return true, nil }
+func (f *fakeSidecarClient) Healthz(_ context.Context) (bool, error)     { return true, nil }
+func (f *fakeSidecarClient) GetNodeID(_ context.Context) (string, error) { return "", nil }
 
 func (f *fakeSidecarClient) setResult(id uuid.UUID, status sidecar.TaskResultStatus, errMsg string) {
 	f.mu.Lock()

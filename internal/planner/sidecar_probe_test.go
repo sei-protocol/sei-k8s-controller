@@ -26,7 +26,8 @@ func (f *fakeSidecarClient) SubmitTask(context.Context, sidecar.TaskRequest) (uu
 func (f *fakeSidecarClient) GetTask(context.Context, uuid.UUID) (*sidecar.TaskResult, error) {
 	return nil, sidecar.ErrNotFound
 }
-func (f *fakeSidecarClient) Healthz(context.Context) (bool, error) { return f.healthy, f.err }
+func (f *fakeSidecarClient) Healthz(context.Context) (bool, error)     { return f.healthy, f.err }
+func (f *fakeSidecarClient) GetNodeID(context.Context) (string, error) { return "", nil }
 
 func findSidecarReady(node *seiv1alpha1.SeiNode) *metav1.Condition {
 	return apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)

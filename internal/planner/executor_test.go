@@ -66,6 +66,10 @@ func (m *mockSidecarClient) Healthz(_ context.Context) (bool, error) {
 	return true, nil
 }
 
+func (m *mockSidecarClient) GetNodeID(_ context.Context) (string, error) {
+	return "", nil
+}
+
 func testScheme(t *testing.T) *k8sruntime.Scheme {
 	t.Helper()
 	s := k8sruntime.NewScheme()
