@@ -319,8 +319,8 @@ func TestReconcilePeers_SkipsNewPeerOnSidecarFailure(t *testing.T) {
 }
 
 // Nil BuildSidecarClient factory (planner contract: "Nil factory skips
-// the sidecar probe; used by tests") must not panic — treat as transient.
-func TestReconcilePeers_NilSidecarFactoryDoesNotPanic(t *testing.T) {
+// the sidecar probe; used by tests") routes to skip — no panic, no entry.
+func TestReconcilePeers_NilSidecarFactorySkipsNewPeer(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: testConsumerName, Namespace: "default"},
 		Spec: seiv1alpha1.SeiNodeSpec{
@@ -350,6 +350,44 @@ func TestReconcilePeers_NilSidecarFactoryDoesNotPanic(t *testing.T) {
 	}
 	if len(node.Status.ResolvedPeers) != 0 {
 		t.Fatalf("expected unresolvable peer to be skipped, got %d: %v", len(node.Status.ResolvedPeers), node.Status.ResolvedPeers)
+	}
+}
+
+// Nil factory with a prior entry: the preserve-prior branch fires (same
+// recovery path as a runtime-transient sidecar error).
+func TestReconcilePeers_NilSidecarFactoryPreservesPriorEntry(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testConsumerName, Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "test-1",
+			Image:   "sei:latest",
+			Peers: []seiv1alpha1.PeerSource{
+				{Label: &seiv1alpha1.LabelPeerSource{
+					Selector: map[string]string{testRoleLabel: testRoleValue},
+				}},
+			},
+			FullNode: &seiv1alpha1.FullNodeSpec{},
+		},
+		Status: seiv1alpha1.SeiNodeStatus{
+			ResolvedPeers: []string{testPeer1ResolvedID},
+		},
+	}
+	peer := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "peer-1", Namespace: "default",
+			Labels: map[string]string{testRoleLabel: testRoleValue},
+		},
+		Spec: seiv1alpha1.SeiNodeSpec{ChainID: "test-1", Image: "sei:latest", FullNode: &seiv1alpha1.FullNodeSpec{}},
+	}
+
+	r, _ := newNodeReconciler(t, node, peer)
+	r.Planner.BuildSidecarClient = nil
+
+	if err := r.reconcilePeers(context.Background(), node); err != nil {
+		t.Fatalf("reconcilePeers errored on nil factory: %v", err)
+	}
+	if len(node.Status.ResolvedPeers) != 1 || node.Status.ResolvedPeers[0] != testPeer1ResolvedID {
+		t.Fatalf("expected prior entry preserved, got %v", node.Status.ResolvedPeers)
 	}
 }
 

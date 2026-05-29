@@ -74,13 +74,9 @@ func (r *SeiNodeReconciler) resolveLabelPeers(
 		}
 
 		address := peerAddress(peer)
-		var (
-			sc  task.SidecarClient
-			err error
-		)
-		if r.Planner.BuildSidecarClient == nil {
-			err = errNoSidecarFactory
-		} else {
+		var sc task.SidecarClient
+		err := errNoSidecarFactory
+		if r.Planner.BuildSidecarClient != nil {
 			sc, err = r.Planner.BuildSidecarClient(peer)
 		}
 		if err == nil {
