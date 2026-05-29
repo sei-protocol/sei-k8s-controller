@@ -318,8 +318,7 @@ func TestReconcilePeers_SkipsNewPeerOnSidecarFailure(t *testing.T) {
 	}
 }
 
-// Nil BuildSidecarClient factory (planner contract: "Nil factory skips
-// the sidecar probe; used by tests") routes to skip — no panic, no entry.
+// Nil factory + new peer: skip without panic.
 func TestReconcilePeers_NilSidecarFactorySkipsNewPeer(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: testConsumerName, Namespace: "default"},
@@ -353,8 +352,7 @@ func TestReconcilePeers_NilSidecarFactorySkipsNewPeer(t *testing.T) {
 	}
 }
 
-// Nil factory with a prior entry: the preserve-prior branch fires (same
-// recovery path as a runtime-transient sidecar error).
+// Nil factory + prior entry: preserve-prior branch fires.
 func TestReconcilePeers_NilSidecarFactoryPreservesPriorEntry(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: testConsumerName, Namespace: "default"},

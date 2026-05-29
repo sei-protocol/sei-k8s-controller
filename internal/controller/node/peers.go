@@ -15,9 +15,8 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// errNoSidecarFactory matches the planner's documented "nil factory" contract
-// (see planner.NodeResolver). resolveLabelPeers treats it as a transient
-// per-peer failure rather than panicking.
+// errNoSidecarFactory honors planner.NodeResolver's nilable-factory
+// contract: resolveLabelPeers treats nil as a transient peer failure.
 var errNoSidecarFactory = errors.New("sidecar client factory is nil")
 
 func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha1.SeiNode) error {
