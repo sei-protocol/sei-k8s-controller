@@ -9,7 +9,18 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-const testRoleLabel = "role"
+const (
+	testRoleLabel       = "role"
+	testRoleValue       = "validator"
+	testConsumerName    = "consumer"
+	testPeer1ResolvedID = "mock-node-id@peer-1-0.peer-1.default.svc.cluster.local:26656"
+)
+
+// errStub is a minimal error type for test scaffolding (avoids dragging
+// errors.New into a metadata import position).
+type errStub string
+
+func (e errStub) Error() string { return string(e) }
 
 func TestReconcilePeers_ResolvesLabelSource(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
@@ -51,7 +62,7 @@ func TestReconcilePeers_ResolvesLabelSource(t *testing.T) {
 		t.Fatalf("expected 2 resolved peers, got %d: %v", len(node.Status.ResolvedPeers), node.Status.ResolvedPeers)
 	}
 	want := []string{
-		"mock-node-id@peer-1-0.peer-1.default.svc.cluster.local:26656",
+		testPeer1ResolvedID,
 		"mock-node-id@peer-2-0.peer-2.default.svc.cluster.local:26656",
 	}
 	for i, w := range want {
@@ -63,7 +74,7 @@ func TestReconcilePeers_ResolvesLabelSource(t *testing.T) {
 
 func TestReconcilePeers_PrefersExternalAddress(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "consumer", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: testConsumerName, Namespace: "default"},
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: "test-1",
 			Image:   "sei:latest",
@@ -191,7 +202,7 @@ func TestReconcilePeers_NoPatchWhenUnchanged(t *testing.T) {
 			FullNode: &seiv1alpha1.FullNodeSpec{},
 		},
 		Status: seiv1alpha1.SeiNodeStatus{
-			ResolvedPeers: []string{"mock-node-id@peer-1-0.peer-1.default.svc.cluster.local:26656"},
+			ResolvedPeers: []string{testPeer1ResolvedID},
 		},
 	}
 	peer := &seiv1alpha1.SeiNode{
@@ -229,6 +240,86 @@ func TestReconcilePeers_NoLabelSources_NoPatch(t *testing.T) {
 		t.Fatalf("reconcilePeers: %v", err)
 	}
 	// No label sources means no resolved peers, no patch — just verifying no error
+}
+
+// Per-peer transient failure: prior entry is preserved so a single
+// peer's sidecar churn doesn't drop it from ResolvedPeers.
+func TestReconcilePeers_PreservesPriorEntryOnTransientFailure(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testConsumerName, Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "test-1",
+			Image:   "sei:latest",
+			Peers: []seiv1alpha1.PeerSource{
+				{Label: &seiv1alpha1.LabelPeerSource{
+					Selector: map[string]string{testRoleLabel: testRoleValue},
+				}},
+			},
+			FullNode: &seiv1alpha1.FullNodeSpec{},
+		},
+		Status: seiv1alpha1.SeiNodeStatus{
+			ResolvedPeers: []string{
+				testPeer1ResolvedID,
+			},
+		},
+	}
+	peer := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "peer-1", Namespace: "default",
+			Labels: map[string]string{testRoleLabel: testRoleValue},
+		},
+		Spec: seiv1alpha1.SeiNodeSpec{ChainID: "test-1", Image: "sei:latest", FullNode: &seiv1alpha1.FullNodeSpec{}},
+	}
+
+	// Sidecar returns an error — simulates a peer mid-restart.
+	mock := &mockSidecarClient{nodeIDErr: errStub("sidecar unreachable")}
+	r, _ := newNodeReconcilerWithSidecar(t, mock, node, peer)
+
+	if err := r.reconcilePeers(context.Background(), node); err != nil {
+		t.Fatalf("reconcilePeers errored on transient peer failure: %v", err)
+	}
+	if len(node.Status.ResolvedPeers) != 1 {
+		t.Fatalf("expected prior entry preserved, got %d: %v", len(node.Status.ResolvedPeers), node.Status.ResolvedPeers)
+	}
+	want := testPeer1ResolvedID
+	if node.Status.ResolvedPeers[0] != want {
+		t.Errorf("resolvedPeers[0] = %q, want preserved %q", node.Status.ResolvedPeers[0], want)
+	}
+}
+
+// New peer with no prior entry + sidecar failure: skip the peer this
+// cycle instead of wedging the whole reconcile.
+func TestReconcilePeers_SkipsNewPeerOnSidecarFailure(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testConsumerName, Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "test-1",
+			Image:   "sei:latest",
+			Peers: []seiv1alpha1.PeerSource{
+				{Label: &seiv1alpha1.LabelPeerSource{
+					Selector: map[string]string{testRoleLabel: testRoleValue},
+				}},
+			},
+			FullNode: &seiv1alpha1.FullNodeSpec{},
+		},
+	}
+	peer := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "peer-1", Namespace: "default",
+			Labels: map[string]string{testRoleLabel: testRoleValue},
+		},
+		Spec: seiv1alpha1.SeiNodeSpec{ChainID: "test-1", Image: "sei:latest", FullNode: &seiv1alpha1.FullNodeSpec{}},
+	}
+
+	mock := &mockSidecarClient{nodeIDErr: errStub("sidecar unreachable")}
+	r, _ := newNodeReconcilerWithSidecar(t, mock, node, peer)
+
+	if err := r.reconcilePeers(context.Background(), node); err != nil {
+		t.Fatalf("reconcilePeers errored on new-peer sidecar failure: %v", err)
+	}
+	if len(node.Status.ResolvedPeers) != 0 {
+		t.Fatalf("expected new unresolvable peer to be skipped, got %d: %v", len(node.Status.ResolvedPeers), node.Status.ResolvedPeers)
+	}
 }
 
 func TestReconcilePeers_DeduplicatesOverlappingSources(t *testing.T) {

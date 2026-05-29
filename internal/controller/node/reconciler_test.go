@@ -37,13 +37,17 @@ func newNodeTestScheme(t *testing.T) *k8sruntime.Scheme {
 
 func newNodeReconciler(t *testing.T, objs ...client.Object) (*SeiNodeReconciler, client.Client) {
 	t.Helper()
+	return newNodeReconcilerWithSidecar(t, &mockSidecarClient{nodeID: "mock-node-id"}, objs...)
+}
+
+func newNodeReconcilerWithSidecar(t *testing.T, mock *mockSidecarClient, objs ...client.Object) (*SeiNodeReconciler, client.Client) {
+	t.Helper()
 	s := newNodeTestScheme(t)
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
-	mock := &mockSidecarClient{nodeID: "mock-node-id"}
 	r := &SeiNodeReconciler{
 		Client:   c,
 		Scheme:   s,
