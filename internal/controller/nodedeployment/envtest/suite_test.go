@@ -46,6 +46,14 @@ var (
 	testCtx   context.Context
 	testCncl  context.CancelFunc
 	testFaker *envtestpkg.StatusFaker
+
+	// testSNDReconciler is the live SND reconciler the manager runs.
+	// Exposed so tests that need to flip controller-level state (e.g.
+	// the publishable-P2P capability toggle) can do so without rebuilding
+	// the manager. Mutation must happen before the test creates the SND
+	// under test; controller-runtime serializes reconciles per-key, so
+	// reads during reconcile are safe.
+	testSNDReconciler *nodedeploymentcontroller.SeiNodeDeploymentReconciler
 )
 
 func TestMain(m *testing.M) {
@@ -187,14 +195,19 @@ func run(m *testing.M) (int, error) {
 	// pure kube-client tasks and never call the sidecar. Genesis
 	// ceremony tasks would; the InPlace fixtures don't trigger those.
 	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller") //nolint:staticcheck // new events API migration is a separate effort
-	if err := (&nodedeploymentcontroller.SeiNodeDeploymentReconciler{
-		Client:              kc,
-		Scheme:              mgr.GetScheme(),
-		Recorder:            recorder,
-		GatewayName:         "sei-gateway",
-		GatewayNamespace:    "gateway",
-		GatewayDomain:       "test.local",
-		GatewayPublicDomain: "",
+	// Default capability state: publishability enabled, but the public
+	// domain stays empty — the publishable-P2P tests flip both fields
+	// themselves before creating their SND so they don't perturb the
+	// HTTP-route tests' single-hostname expectations.
+	testSNDReconciler = &nodedeploymentcontroller.SeiNodeDeploymentReconciler{
+		Client:                  kc,
+		Scheme:                  mgr.GetScheme(),
+		Recorder:                recorder,
+		GatewayName:             "sei-gateway",
+		GatewayNamespace:        "gateway",
+		GatewayDomain:           "test.local",
+		GatewayPublicDomain:     "",
+		P2PEndpointDomain:       "",
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			ConfigFor: func(_ context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 				return task.ExecutionConfig{
@@ -207,7 +220,8 @@ func run(m *testing.M) (int, error) {
 				}
 			},
 		},
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if err := testSNDReconciler.SetupWithManager(mgr); err != nil {
 		return 1, fmt.Errorf("setting up SeiNodeDeployment controller: %w", err)
 	}
 

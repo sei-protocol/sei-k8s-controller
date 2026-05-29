@@ -38,12 +38,10 @@ type effectiveRoute struct {
 	WSPort    int32
 }
 
-// routeHostnameResolvable returns true when the deployment's first public
-// hostname resolves in DNS, indicating the HTTPRoute + External-DNS pipeline
-// is ready. Returns true when no routes are expected (private deployments,
-// validator mode).
+// routeHostnameResolvable reports whether the first HTTP route hostname
+// resolves in DNS. Returns true when no HTTP routes are expected.
 func (r *SeiNodeDeploymentReconciler) routeHostnameResolvable(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) bool {
-	if group.Spec.Networking == nil {
+	if !group.Spec.Networking.HTTPEnabled() {
 		return true
 	}
 	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
@@ -58,6 +56,9 @@ func (r *SeiNodeDeploymentReconciler) routeHostnameResolvable(ctx context.Contex
 	return true
 }
 
+// reconcileNetworking runs the HTTP (L7 Gateway) and TCP (per-pod L4 NLB)
+// sub-reconcilers independently. Both write ConditionNetworkingReady; when
+// both are enabled the TCP branch runs second and its outcome wins.
 func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Networking == nil {
 		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
@@ -65,12 +66,40 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, g
 		return r.deleteNetworkingResources(ctx, group)
 	}
 
-	if err := r.reconcileExternalService(ctx, group); err != nil {
-		return fmt.Errorf("reconciling external service: %w", err)
+	httpActive := group.Spec.Networking.HTTPEnabled()
+	tcpActive := group.Spec.Networking.TCPEnabled() && r.P2PEndpointDomain != ""
+
+	if httpActive {
+		if err := r.reconcileExternalService(ctx, group); err != nil {
+			return fmt.Errorf("reconciling external service: %w", err)
+		}
+		if err := r.reconcileRoute(ctx, group); err != nil {
+			return fmt.Errorf("reconciling route: %w", err)
+		}
+	} else {
+		if err := r.deleteExternalService(ctx, group); err != nil {
+			return fmt.Errorf("deleting external service: %w", err)
+		}
+		if err := r.deleteHTTPRoutesByLabel(ctx, group); err != nil {
+			return fmt.Errorf("deleting HTTPRoutes: %w", err)
+		}
 	}
-	if err := r.reconcileRoute(ctx, group); err != nil {
-		return fmt.Errorf("reconciling route: %w", err)
+
+	if tcpActive {
+		if err := r.reconcileP2PEndpoints(ctx, group); err != nil {
+			return fmt.Errorf("reconciling P2P endpoints: %w", err)
+		}
+	} else {
+		if err := r.deleteP2PEndpoints(ctx, group); err != nil {
+			return fmt.Errorf("deleting P2P endpoints: %w", err)
+		}
 	}
+
+	if !httpActive && !tcpActive {
+		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
+			"NetworkingDisabled", "spec.networking has no active tier (no HTTP, and TCP requires SEI_P2P_ENDPOINT_DOMAIN)")
+	}
+
 	return nil
 }
 
@@ -366,6 +395,9 @@ func (r *SeiNodeDeploymentReconciler) deleteNetworkingResources(ctx context.Cont
 	if err := r.deleteHTTPRoutesByLabel(ctx, group); err != nil {
 		return fmt.Errorf("deleting HTTPRoutes: %w", err)
 	}
+	if err := r.deleteP2PEndpoints(ctx, group); err != nil {
+		return fmt.Errorf("deleting P2P endpoint Services: %w", err)
+	}
 	return nil
 }
 
@@ -391,6 +423,10 @@ func (r *SeiNodeDeploymentReconciler) orphanNetworkingResources(ctx context.Cont
 				return fmt.Errorf("orphaning HTTPRoute %s: %w", list.Items[i].Name, err)
 			}
 		}
+	}
+
+	if err := r.orphanP2PEndpoints(ctx, group); err != nil {
+		return err
 	}
 
 	return nil

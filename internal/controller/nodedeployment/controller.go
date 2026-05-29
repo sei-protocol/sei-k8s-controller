@@ -42,6 +42,10 @@ type SeiNodeDeploymentReconciler struct {
 	GatewayDomain       string
 	GatewayPublicDomain string
 
+	// P2PEndpointDomain is the DNS zone for per-pod P2P endpoint hostnames,
+	// from SEI_P2P_ENDPOINT_DOMAIN. Empty disables the P2P endpoint path.
+	P2PEndpointDomain string
+
 	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeDeployment]
 }

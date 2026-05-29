@@ -103,20 +103,39 @@ func (r *SeiNodeDeploymentReconciler) buildNetworkingStatus(group *seiv1alpha1.S
 	if group.Spec.Networking == nil {
 		return nil
 	}
-	routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
-	if len(routes) == 0 {
-		return nil
+
+	out := &seiv1alpha1.NetworkingStatus{}
+
+	if group.Spec.Networking.HTTPEnabled() {
+		routes := resolveEffectiveRoutes(group, r.GatewayDomain, r.GatewayPublicDomain)
+		for _, er := range routes {
+			for _, h := range er.Hostnames {
+				out.Routes = append(out.Routes, seiv1alpha1.RouteStatus{
+					Hostname: h,
+					Protocol: er.Protocol,
+				})
+			}
+		}
 	}
-	var rs []seiv1alpha1.RouteStatus
-	for _, er := range routes {
-		for _, h := range er.Hostnames {
-			rs = append(rs, seiv1alpha1.RouteStatus{
-				Hostname: h,
-				Protocol: er.Protocol,
+
+	if group.Spec.Networking.TCPEnabled() && r.P2PEndpointDomain != "" {
+		for i := range int(group.Spec.Replicas) {
+			host := r.p2pEndpointAddress(group, i)
+			if host == "" {
+				continue
+			}
+			out.P2PEndpoints = append(out.P2PEndpoints, seiv1alpha1.P2PEndpoint{
+				Ordinal:     int32(i),
+				SeiNodeName: seiNodeName(group, i),
+				Hostname:    host,
 			})
 		}
 	}
-	return &seiv1alpha1.NetworkingStatus{Routes: rs}
+
+	if len(out.Routes) == 0 && len(out.P2PEndpoints) == 0 {
+		return nil
+	}
+	return out
 }
 
 func setNodesReadyCondition(group *seiv1alpha1.SeiNodeDeployment, ready, desired int32, nodes []seiv1alpha1.SeiNode) {

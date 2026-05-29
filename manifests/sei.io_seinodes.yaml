@@ -88,8 +88,14 @@ spec:
                     type: object
                 type: object
               chainId:
-                description: ChainID of the chain this node belongs to.
+                description: |-
+                  ChainID of the chain this node belongs to.
+                  Constrained to DNS-1123 label characters because the controller composes
+                  it into P2P endpoint hostnames (e.g. `<node>-p2p.<chainID>.<domain>`) when
+                  the parent SND opts into TCP networking; the address is a one-way door
+                  once peers cache it.
                 minLength: 1
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
               dataVolume:
                 description: |-
@@ -127,6 +133,13 @@ spec:
                 x-kubernetes-validations:
                 - message: import cannot be unset once configured
                   rule: (!has(oldSelf.import) || has(self.import))
+              externalAddress:
+                description: |-
+                  ExternalAddress is the routable P2P host:port written into seid's
+                  `p2p.external_address`. SND-managed nodes get this stamped by the
+                  SND reconciler when TCP networking is enabled. Standalone SeiNodes
+                  can set it directly.
+                type: string
               fullNode:
                 description: FullNode configures a chain-following full node (absorbs
                   the "rpc" role).
@@ -799,14 +812,6 @@ spec:
                   StatefulSet rollout completes (currentRevision == updateRevision).
                   Parent controllers compare this against spec.image to determine
                   whether a spec change has been fully actuated.
-                type: string
-              externalAddress:
-                description: |-
-                  ExternalAddress is the routable P2P address for this node — bare
-                  host:port, no nodeId@ prefix. Populated by the SeiNode controller
-                  from the per-pod LoadBalancer Service when the parent SND has
-                  Spec.Networking.TCP set; consumed by the planner to set
-                  p2p.external_address in CometBFT config.
                 type: string
               phase:
                 description: Phase is the high-level lifecycle state.

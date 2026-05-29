@@ -175,6 +175,7 @@ func (r *SeiNodeDeploymentReconciler) populateIncumbentNodes(ctx context.Context
 
 func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, ordinal int) error {
 	desired := generateSeiNode(group, ordinal)
+	desired.Spec.ExternalAddress = r.p2pEndpointAddressForChild(group, ordinal)
 	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
@@ -218,17 +219,28 @@ func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *
 		existing.Spec.PodLabels = desired.Spec.PodLabels
 		updated = true
 	}
+	if existing.Spec.ExternalAddress != desired.Spec.ExternalAddress {
+		existing.Spec.ExternalAddress = desired.Spec.ExternalAddress
+		updated = true
+	}
 	if updated {
 		return r.Update(ctx, existing)
 	}
 	return nil
 }
 
+// generateSeiNode produces the desired child SeiNode for a given ordinal.
+// Pure: depends only on the SND spec and ordinal. The publishable
+// external address is injected by ensureSeiNode, which needs reconciler
+// state. The template's ExternalAddress is dropped to prevent every
+// child from sharing the same value if a user set it on the template.
 func generateSeiNode(group *seiv1alpha1.SeiNodeDeployment, ordinal int) *seiv1alpha1.SeiNode {
 	labels := seiNodeLabels(group, ordinal)
 	annotations := seiNodeAnnotations(group)
 
 	spec := group.Spec.Template.Spec.DeepCopy()
+	spec.ExternalAddress = ""
+
 	podLabels := make(map[string]string)
 	if group.Spec.Template.Metadata != nil {
 		maps.Copy(podLabels, group.Spec.Template.Metadata.Labels)
@@ -261,6 +273,15 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeDeployment, ordinal int) *seiv1al
 	}
 }
 
+// p2pEndpointAddressForChild returns the vanity host:port when the
+// SND opts into TCP networking, "" otherwise.
+func (r *SeiNodeDeploymentReconciler) p2pEndpointAddressForChild(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
+	if !group.Spec.Networking.TCPEnabled() {
+		return ""
+	}
+	return r.p2pEndpointAddress(group, ordinal)
+}
+
 // scaleDown deletes SeiNodes with ordinals >= the desired replica count.
 func (r *SeiNodeDeploymentReconciler) scaleDown(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	if group.Spec.Replicas <= 0 {
@@ -289,6 +310,12 @@ func (r *SeiNodeDeploymentReconciler) scaleDown(ctx context.Context, group *seiv
 			continue
 		}
 		if ord >= int(group.Spec.Replicas) {
+			// Delete the per-ordinal P2P endpoint Service before the
+			// child so the NLB is not stranded between scale-down and
+			// SND delete. Idempotent.
+			if err := r.deleteP2PEndpointForOrdinal(ctx, group, ord); err != nil {
+				return fmt.Errorf("deleting P2P endpoint Service for scaled-down ordinal %d: %w", ord, err)
+			}
 			if err := r.Delete(ctx, node); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("deleting excess SeiNode %s: %w", node.Name, err)
 			}
