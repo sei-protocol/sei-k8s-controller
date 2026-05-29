@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,7 +12,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
+
+// errNoSidecarFactory matches the planner's documented "nil factory" contract
+// (see planner.NodeResolver). resolveLabelPeers treats it as a transient
+// per-peer failure rather than panicking.
+var errNoSidecarFactory = errors.New("sidecar client factory is nil")
 
 func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	var resolved []string
@@ -67,7 +74,15 @@ func (r *SeiNodeReconciler) resolveLabelPeers(
 		}
 
 		address := peerAddress(peer)
-		sc, err := r.Planner.BuildSidecarClient(peer)
+		var (
+			sc  task.SidecarClient
+			err error
+		)
+		if r.Planner.BuildSidecarClient == nil {
+			err = errNoSidecarFactory
+		} else {
+			sc, err = r.Planner.BuildSidecarClient(peer)
+		}
 		if err == nil {
 			var nodeID string
 			nodeID, err = sc.GetNodeID(ctx)
