@@ -207,7 +207,7 @@ func run(m *testing.M) (int, error) {
 		GatewayNamespace:        "gateway",
 		GatewayDomain:           "test.local",
 		GatewayPublicDomain:     "",
-		PublishableDomain:       "",
+		P2PEndpointDomain:       "",
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			ConfigFor: func(_ context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 				return task.ExecutionConfig{

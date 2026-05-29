@@ -1,7 +1,6 @@
-// Package nodedeployment — publishable.go is the SND-side sub-reconciler
-// for per-pod P2P LoadBalancer Services. Hostnames are derived from SND
-// identity; external-dns creates the CNAME to the NLB. The child SeiNode
-// reconciler is unaware and just reads Spec.ExternalAddress.
+// p2p_endpoint.go provisions per-pod P2P endpoint Services (LoadBalancer)
+// and the deterministic vanity hostname for each. external-dns CNAMEs the
+// hostname to the NLB; the child SeiNode reads Spec.ExternalAddress.
 package nodedeployment
 
 import (
@@ -23,10 +22,10 @@ import (
 )
 
 const (
-	publishableFieldOwner = client.FieldOwner("nodedeployment-controller-publishable")
+	p2pEndpointFieldOwner = client.FieldOwner("nodedeployment-controller-p2p-endpoint")
 
-	publishableComponentLabel = "sei.io/component"
-	publishableComponentValue = "p2p-lb"
+	p2pEndpointComponentLabel = "sei.io/component"
+	p2pEndpointComponentValue = "p2p-endpoint"
 
 	externalDNSHostnameAnnotation = "external-dns.alpha.kubernetes.io/hostname"
 
@@ -39,7 +38,7 @@ const (
 	awsLBTargetTypeValue       = "ip"
 	awsLBCrossZoneAttributeStr = "load_balancing.cross_zone.enabled=true"
 
-	publishableServiceSuffix = "-p2p"
+	p2pEndpointServiceSuffix = "-p2p"
 )
 
 // effectiveChainID returns the chain ID for child SeiNodes, mirroring
@@ -54,72 +53,72 @@ func effectiveChainID(group *seiv1alpha1.SeiNodeDeployment) string {
 	return ""
 }
 
-// publishableHostname returns "<seinode>-p2p.<chainID>.<domain>" or "" when
-// the publishable path is not configured.
-func (r *SeiNodeDeploymentReconciler) publishableHostname(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
-	if r.PublishableDomain == "" {
+// p2pEndpointHostname returns "<seinode>-p2p.<chainID>.<domain>" or "" when
+// the P2P endpoint path is not configured.
+func (r *SeiNodeDeploymentReconciler) p2pEndpointHostname(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
+	if r.P2PEndpointDomain == "" {
 		return ""
 	}
 	chainID := effectiveChainID(group)
 	if chainID == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s-p2p.%s.%s", seiNodeName(group, ordinal), chainID, r.PublishableDomain)
+	return fmt.Sprintf("%s-p2p.%s.%s", seiNodeName(group, ordinal), chainID, r.P2PEndpointDomain)
 }
 
-// publishableExternalAddress returns "<hostname>:<port>" or "" when the
+// p2pEndpointAddress returns "<hostname>:<port>" or "" when the
 // hostname is unavailable.
-func (r *SeiNodeDeploymentReconciler) publishableExternalAddress(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
-	host := r.publishableHostname(group, ordinal)
+func (r *SeiNodeDeploymentReconciler) p2pEndpointAddress(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
+	host := r.p2pEndpointHostname(group, ordinal)
 	if host == "" {
 		return ""
 	}
 	return fmt.Sprintf("%s:%d", host, seiconfig.PortP2P)
 }
 
-func publishableServiceName(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
-	return seiNodeName(group, ordinal) + publishableServiceSuffix
+func p2pEndpointServiceName(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
+	return seiNodeName(group, ordinal) + p2pEndpointServiceSuffix
 }
 
-// reconcilePublishableServices server-side-applies one LoadBalancer Service
+// reconcileP2PEndpoints server-side-applies one LoadBalancer Service
 // per desired ordinal and trims orphans.
-func (r *SeiNodeDeploymentReconciler) reconcilePublishableServices(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
+func (r *SeiNodeDeploymentReconciler) reconcileP2PEndpoints(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	desiredNames := make(map[string]struct{}, group.Spec.Replicas)
 	for i := range int(group.Spec.Replicas) {
-		desired := generatePublishableService(group, i, r.publishableHostname(group, i))
+		desired := generateP2PEndpointService(group, i, r.p2pEndpointHostname(group, i))
 		desired.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
 		if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
-			return fmt.Errorf("setting owner reference on publishable Service %s: %w", desired.Name, err)
+			return fmt.Errorf("setting owner reference on P2P endpoint Service %s: %w", desired.Name, err)
 		}
 		//nolint:staticcheck // SSA apply via untyped object mirrors the rest of this controller
-		if err := r.Patch(ctx, desired, client.Apply, publishableFieldOwner, client.ForceOwnership); err != nil {
-			return fmt.Errorf("applying publishable Service %s: %w", desired.Name, err)
+		if err := r.Patch(ctx, desired, client.Apply, p2pEndpointFieldOwner, client.ForceOwnership); err != nil {
+			return fmt.Errorf("applying P2P endpoint Service %s: %w", desired.Name, err)
 		}
 		desiredNames[desired.Name] = struct{}{}
 	}
 
-	if err := r.deleteOrphanPublishableServices(ctx, group, desiredNames); err != nil {
-		return fmt.Errorf("trimming orphan publishable Services: %w", err)
+	if err := r.deleteOrphanP2PEndpoints(ctx, group, desiredNames); err != nil {
+		return fmt.Errorf("trimming orphan P2P endpoint Services: %w", err)
 	}
 
 	setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionTrue,
-		"PublishableServicesApplied",
-		fmt.Sprintf("%d publishable Service(s) reconciled", len(desiredNames)))
+		"P2PEndpointsApplied",
+		fmt.Sprintf("%d P2P endpoint Service(s) reconciled", len(desiredNames)))
 	return nil
 }
 
-// deleteOrphanPublishableServices removes publishable Services owned by the
+// deleteOrphanP2PEndpoints removes P2P endpoint Services owned by the
 // SND whose names are not in desiredNames. Pass nil to delete all.
-func (r *SeiNodeDeploymentReconciler) deleteOrphanPublishableServices(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, desiredNames map[string]struct{}) error {
+func (r *SeiNodeDeploymentReconciler) deleteOrphanP2PEndpoints(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, desiredNames map[string]struct{}) error {
 	list := &corev1.ServiceList{}
 	if err := r.List(ctx, list,
 		client.InNamespace(group.Namespace),
 		client.MatchingLabels{
 			groupLabel:                group.Name,
-			publishableComponentLabel: publishableComponentValue,
+			p2pEndpointComponentLabel: p2pEndpointComponentValue,
 		},
 	); err != nil {
-		return fmt.Errorf("listing publishable Services: %w", err)
+		return fmt.Errorf("listing P2P endpoint Services: %w", err)
 	}
 	for i := range list.Items {
 		svc := &list.Items[i]
@@ -130,66 +129,66 @@ func (r *SeiNodeDeploymentReconciler) deleteOrphanPublishableServices(ctx contex
 			continue
 		}
 		if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("deleting orphan publishable Service %s: %w", svc.Name, err)
+			return fmt.Errorf("deleting orphan P2P endpoint Service %s: %w", svc.Name, err)
 		}
 	}
 	return nil
 }
 
-func (r *SeiNodeDeploymentReconciler) deletePublishableServices(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
-	return r.deleteOrphanPublishableServices(ctx, group, nil)
+func (r *SeiNodeDeploymentReconciler) deleteP2PEndpoints(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
+	return r.deleteOrphanP2PEndpoints(ctx, group, nil)
 }
 
-// orphanPublishableServices drops the SND owner ref so the Services survive
+// orphanP2PEndpoints drops the SND owner ref so the Services survive
 // SND deletion under DeletionPolicyRetain.
-func (r *SeiNodeDeploymentReconciler) orphanPublishableServices(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
+func (r *SeiNodeDeploymentReconciler) orphanP2PEndpoints(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	list := &corev1.ServiceList{}
 	if err := r.List(ctx, list,
 		client.InNamespace(group.Namespace),
 		client.MatchingLabels{
 			groupLabel:                group.Name,
-			publishableComponentLabel: publishableComponentValue,
+			p2pEndpointComponentLabel: p2pEndpointComponentValue,
 		},
 	); err != nil {
-		return fmt.Errorf("listing publishable Services for orphan: %w", err)
+		return fmt.Errorf("listing P2P endpoint Services for orphan: %w", err)
 	}
 	for i := range list.Items {
 		if err := r.removeOwnerRef(ctx, &list.Items[i], group); err != nil {
-			return fmt.Errorf("orphaning publishable Service %s: %w", list.Items[i].Name, err)
+			return fmt.Errorf("orphaning P2P endpoint Service %s: %w", list.Items[i].Name, err)
 		}
 	}
 	return nil
 }
 
-// deletePublishableServiceForOrdinal removes the per-ordinal Service before
+// deleteP2PEndpointForOrdinal removes the per-ordinal Service before
 // scaleDown deletes the child. Idempotent.
-func (r *SeiNodeDeploymentReconciler) deletePublishableServiceForOrdinal(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, ordinal int) error {
-	name := publishableServiceName(group, ordinal)
+func (r *SeiNodeDeploymentReconciler) deleteP2PEndpointForOrdinal(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, ordinal int) error {
+	name := p2pEndpointServiceName(group, ordinal)
 	svc := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: group.Namespace}, svc)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("fetching publishable Service %s for delete: %w", name, err)
+		return fmt.Errorf("fetching P2P endpoint Service %s for delete: %w", name, err)
 	}
 	if !metav1.IsControlledBy(svc, group) {
 		return nil
 	}
 	if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("deleting publishable Service %s: %w", name, err)
+		return fmt.Errorf("deleting P2P endpoint Service %s: %w", name, err)
 	}
 	return nil
 }
 
-func generatePublishableService(group *seiv1alpha1.SeiNodeDeployment, ordinal int, hostname string) *corev1.Service {
-	name := publishableServiceName(group, ordinal)
+func generateP2PEndpointService(group *seiv1alpha1.SeiNodeDeployment, ordinal int, hostname string) *corev1.Service {
+	name := p2pEndpointServiceName(group, ordinal)
 	childName := seiNodeName(group, ordinal)
 
 	labels := map[string]string{
 		groupLabel:                group.Name,
 		groupOrdinalLabel:         strconv.Itoa(ordinal),
-		publishableComponentLabel: publishableComponentValue,
+		p2pEndpointComponentLabel: p2pEndpointComponentValue,
 	}
 
 	annotations := map[string]string{

@@ -109,7 +109,7 @@ spec:
                     description: |-
                       ChainID for the new network.
                       Constrained to DNS-1123 label characters because child SeiNodes
-                      compose it into publishable hostnames when the SND has
+                      compose it into P2P endpoint hostnames when the SND has
                       `spec.networking.tcp` set; the address is a one-way door once peers
                       cache it.
                     maxLength: 64
@@ -230,7 +230,7 @@ spec:
                         description: |-
                           ChainID of the chain this node belongs to.
                           Constrained to DNS-1123 label characters because the controller composes
-                          it into publishable hostnames (e.g. `<node>-p2p.<chainID>.<domain>`) when
+                          it into P2P endpoint hostnames (e.g. `<node>-p2p.<chainID>.<domain>`) when
                           the parent SND opts into TCP networking; the address is a one-way door
                           once peers cache it.
                         minLength: 1
@@ -1090,9 +1090,9 @@ spec:
                 description: NetworkingStatus reports the observed state of networking
                   resources.
                 properties:
-                  publishableEndpoints:
+                  p2pEndpoints:
                     description: |-
-                      PublishableEndpoints lists the per-ordinal publishable P2P
+                      P2PEndpoints lists the per-ordinal P2P endpoint
                       hostnames stamped by the SND when `spec.networking.tcp` is set.
                       Each entry mirrors the value injected into the child SeiNode's
                       `spec.externalAddress` (hostname:port). Hostnames are deterministic
@@ -1100,7 +1100,7 @@ spec:
                       Service status back.
                     items:
                       description: |-
-                        PublishableEndpoint is the observed state of one child's publishable
+                        P2PEndpoint is the observed state of one child's publishable
                         P2P endpoint. Stamped by the SND networking reconciler.
                       properties:
                         hostname:

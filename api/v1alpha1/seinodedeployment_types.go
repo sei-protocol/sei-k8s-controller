@@ -72,7 +72,7 @@ type UpdateStrategy struct {
 type GenesisCeremonyConfig struct {
 	// ChainID for the new network.
 	// Constrained to DNS-1123 label characters because child SeiNodes
-	// compose it into publishable hostnames when the SND has
+	// compose it into P2P endpoint hostnames when the SND has
 	// `spec.networking.tcp` set; the address is a one-way door once peers
 	// cache it.
 	// +kubebuilder:validation:MinLength=1
@@ -348,7 +348,7 @@ type NetworkingStatus struct {
 	// +optional
 	Routes []RouteStatus `json:"routes,omitempty"`
 
-	// PublishableEndpoints lists the per-ordinal publishable P2P
+	// P2PEndpoints lists the per-ordinal P2P endpoint
 	// hostnames stamped by the SND when `spec.networking.tcp` is set.
 	// Each entry mirrors the value injected into the child SeiNode's
 	// `spec.externalAddress` (hostname:port). Hostnames are deterministic
@@ -357,7 +357,7 @@ type NetworkingStatus struct {
 	// +listType=map
 	// +listMapKey=ordinal
 	// +optional
-	PublishableEndpoints []PublishableEndpoint `json:"publishableEndpoints,omitempty"`
+	P2PEndpoints []P2PEndpoint `json:"p2pEndpoints,omitempty"`
 }
 
 // RouteStatus is the observed state of a single HTTPRoute hostname.
@@ -370,9 +370,9 @@ type RouteStatus struct {
 	Protocol string `json:"protocol,omitempty"`
 }
 
-// PublishableEndpoint is the observed state of one child's publishable
+// P2PEndpoint is the observed state of one child's publishable
 // P2P endpoint. Stamped by the SND networking reconciler.
-type PublishableEndpoint struct {
+type P2PEndpoint struct {
 	// Ordinal is the child's replica index within the SND
 	// (matches `sei.io/nodedeployment-ordinal`).
 	Ordinal int32 `json:"ordinal"`

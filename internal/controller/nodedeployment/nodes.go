@@ -175,7 +175,7 @@ func (r *SeiNodeDeploymentReconciler) populateIncumbentNodes(ctx context.Context
 
 func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment, ordinal int) error {
 	desired := generateSeiNode(group, ordinal)
-	desired.Spec.ExternalAddress = r.publishableExternalAddressForChild(group, ordinal)
+	desired.Spec.ExternalAddress = r.p2pEndpointAddressForChild(group, ordinal)
 	if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
@@ -273,13 +273,13 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeDeployment, ordinal int) *seiv1al
 	}
 }
 
-// publishableExternalAddressForChild returns the vanity host:port when the
+// p2pEndpointAddressForChild returns the vanity host:port when the
 // SND opts into TCP networking, "" otherwise.
-func (r *SeiNodeDeploymentReconciler) publishableExternalAddressForChild(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
+func (r *SeiNodeDeploymentReconciler) p2pEndpointAddressForChild(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
 	if !group.Spec.Networking.TCPEnabled() {
 		return ""
 	}
-	return r.publishableExternalAddress(group, ordinal)
+	return r.p2pEndpointAddress(group, ordinal)
 }
 
 // scaleDown deletes SeiNodes with ordinals >= the desired replica count.
@@ -310,14 +310,11 @@ func (r *SeiNodeDeploymentReconciler) scaleDown(ctx context.Context, group *seiv
 			continue
 		}
 		if ord >= int(group.Spec.Replicas) {
-			// Delete the per-ordinal publishable Service before the child
-			// SeiNode. Both are SND-owned, so owner-ref cascade would
-			// only fire on SND deletion — leaving the NLB stranded with
-			// no targets between scale-down and SND delete is the failure
-			// we explicitly avoid. Idempotent: no-op when publishability
-			// isn't in use.
-			if err := r.deletePublishableServiceForOrdinal(ctx, group, ord); err != nil {
-				return fmt.Errorf("deleting publishable Service for scaled-down ordinal %d: %w", ord, err)
+			// Delete the per-ordinal P2P endpoint Service before the
+			// child so the NLB is not stranded between scale-down and
+			// SND delete. Idempotent.
+			if err := r.deleteP2PEndpointForOrdinal(ctx, group, ord); err != nil {
+				return fmt.Errorf("deleting P2P endpoint Service for scaled-down ordinal %d: %w", ord, err)
 			}
 			if err := r.Delete(ctx, node); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("deleting excess SeiNode %s: %w", node.Name, err)

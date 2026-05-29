@@ -14,10 +14,10 @@ import (
 
 const (
 	testChainAtlantic   = "atlantic-2"
-	testPublishableProd = "prod.platform.sei.io"
+	testP2PEndpointProd = "prod.platform.sei.io"
 )
 
-func TestPublishableHostname_Table(t *testing.T) {
+func TestP2PEndpointHostname_Table(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name              string
@@ -25,7 +25,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 		templateChainID   string
 		genesisChainID    string
 		ordinal           int
-		publishableDomain string
+		p2pEndpointDomain string
 		want              string
 	}{
 		{
@@ -33,7 +33,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			sndName:           testChainAtlantic,
 			templateChainID:   testChainAtlantic,
 			ordinal:           0,
-			publishableDomain: testPublishableProd,
+			p2pEndpointDomain: testP2PEndpointProd,
 			want:              "atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io",
 		},
 		{
@@ -41,7 +41,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			sndName:           "validators",
 			templateChainID:   testNamespace,
 			ordinal:           5,
-			publishableDomain: testPublishableProd,
+			p2pEndpointDomain: testP2PEndpointProd,
 			want:              "validators-5-p2p.pacific-1.prod.platform.sei.io",
 		},
 		{
@@ -49,7 +49,7 @@ func TestPublishableHostname_Table(t *testing.T) {
 			sndName:           "newchain-validators",
 			genesisChainID:    "newchain-1",
 			ordinal:           1,
-			publishableDomain: "test.platform.sei.io",
+			p2pEndpointDomain: "test.platform.sei.io",
 			want:              "newchain-validators-1-p2p.newchain-1.test.platform.sei.io",
 		},
 		{
@@ -57,14 +57,14 @@ func TestPublishableHostname_Table(t *testing.T) {
 			sndName:           testChainAtlantic,
 			templateChainID:   testChainAtlantic,
 			ordinal:           0,
-			publishableDomain: "",
+			p2pEndpointDomain: "",
 			want:              "",
 		},
 		{
 			name:              "empty chain ID returns empty",
 			sndName:           testChainAtlantic,
 			ordinal:           0,
-			publishableDomain: testPublishableProd,
+			p2pEndpointDomain: testP2PEndpointProd,
 			want:              "",
 		},
 	}
@@ -83,13 +83,13 @@ func TestPublishableHostname_Table(t *testing.T) {
 			if tc.genesisChainID != "" {
 				snd.Spec.Genesis = &seiv1alpha1.GenesisCeremonyConfig{ChainID: tc.genesisChainID}
 			}
-			r := &SeiNodeDeploymentReconciler{PublishableDomain: tc.publishableDomain}
-			g.Expect(r.publishableHostname(snd, tc.ordinal)).To(Equal(tc.want))
+			r := &SeiNodeDeploymentReconciler{P2PEndpointDomain: tc.p2pEndpointDomain}
+			g.Expect(r.p2pEndpointHostname(snd, tc.ordinal)).To(Equal(tc.want))
 		})
 	}
 }
 
-func TestPublishableExternalAddress_AppendsP2PPort(t *testing.T) {
+func TestP2PEndpointExternalAddress_AppendsP2PPort(t *testing.T) {
 	g := NewWithT(t)
 	snd := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic},
@@ -99,26 +99,26 @@ func TestPublishableExternalAddress_AppendsP2PPort(t *testing.T) {
 			},
 		},
 	}
-	r := &SeiNodeDeploymentReconciler{PublishableDomain: testPublishableProd}
-	g.Expect(r.publishableExternalAddress(snd, 0)).To(Equal("atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io:26656"))
+	r := &SeiNodeDeploymentReconciler{P2PEndpointDomain: testP2PEndpointProd}
+	g.Expect(r.p2pEndpointAddress(snd, 0)).To(Equal("atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io:26656"))
 }
 
-func TestPublishableExternalAddress_EmptyWhenHostnameRejected(t *testing.T) {
+func TestP2PEndpointExternalAddress_EmptyWhenHostnameRejected(t *testing.T) {
 	g := NewWithT(t)
 	snd := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic},
 	}
-	r := &SeiNodeDeploymentReconciler{PublishableDomain: testPublishableProd}
-	g.Expect(r.publishableExternalAddress(snd, 0)).To(BeEmpty())
+	r := &SeiNodeDeploymentReconciler{P2PEndpointDomain: testP2PEndpointProd}
+	g.Expect(r.p2pEndpointAddress(snd, 0)).To(BeEmpty())
 }
 
-func TestPublishableServiceName(t *testing.T) {
+func TestP2PEndpointServiceName(t *testing.T) {
 	g := NewWithT(t)
 	snd := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic},
 	}
-	g.Expect(publishableServiceName(snd, 0)).To(Equal("atlantic-2-0-p2p"))
-	g.Expect(publishableServiceName(snd, 7)).To(Equal("atlantic-2-7-p2p"))
+	g.Expect(p2pEndpointServiceName(snd, 0)).To(Equal("atlantic-2-0-p2p"))
+	g.Expect(p2pEndpointServiceName(snd, 7)).To(Equal("atlantic-2-7-p2p"))
 }
 
 func TestGeneratePublishableService_Annotations(t *testing.T) {
@@ -126,7 +126,7 @@ func TestGeneratePublishableService_Annotations(t *testing.T) {
 	snd := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic, Namespace: "sei-test-1"},
 	}
-	svc := generatePublishableService(snd, 0, "atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io")
+	svc := generateP2PEndpointService(snd, 0, "atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io")
 
 	g.Expect(svc.Annotations).To(HaveKeyWithValue(
 		"external-dns.alpha.kubernetes.io/hostname",

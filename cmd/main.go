@@ -213,7 +213,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	publishableDomain := os.Getenv("SEI_PUBLISHABLE_DOMAIN")
+	p2pEndpointDomain := os.Getenv("SEI_P2P_ENDPOINT_DOMAIN")
 
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller")
@@ -225,7 +225,7 @@ func main() {
 		GatewayNamespace:    platformCfg.GatewayNamespace,
 		GatewayDomain:       platformCfg.GatewayDomain,
 		GatewayPublicDomain: platformCfg.GatewayPublicDomain,
-		PublishableDomain:   publishableDomain,
+		P2PEndpointDomain:   p2pEndpointDomain,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 				var assemblerNode *seiv1alpha1.SeiNode

@@ -118,13 +118,13 @@ func (r *SeiNodeDeploymentReconciler) buildNetworkingStatus(group *seiv1alpha1.S
 		}
 	}
 
-	if group.Spec.Networking.TCPEnabled() && r.PublishableDomain != "" {
+	if group.Spec.Networking.TCPEnabled() && r.P2PEndpointDomain != "" {
 		for i := range int(group.Spec.Replicas) {
-			host := r.publishableExternalAddress(group, i)
+			host := r.p2pEndpointAddress(group, i)
 			if host == "" {
 				continue
 			}
-			out.PublishableEndpoints = append(out.PublishableEndpoints, seiv1alpha1.PublishableEndpoint{
+			out.P2PEndpoints = append(out.P2PEndpoints, seiv1alpha1.P2PEndpoint{
 				Ordinal:     int32(i),
 				SeiNodeName: seiNodeName(group, i),
 				Hostname:    host,
@@ -132,7 +132,7 @@ func (r *SeiNodeDeploymentReconciler) buildNetworkingStatus(group *seiv1alpha1.S
 		}
 	}
 
-	if len(out.Routes) == 0 && len(out.PublishableEndpoints) == 0 {
+	if len(out.Routes) == 0 && len(out.P2PEndpoints) == 0 {
 		return nil
 	}
 	return out

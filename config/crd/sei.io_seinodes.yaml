@@ -91,7 +91,7 @@ spec:
                 description: |-
                   ChainID of the chain this node belongs to.
                   Constrained to DNS-1123 label characters because the controller composes
-                  it into publishable hostnames (e.g. `<node>-p2p.<chainID>.<domain>`) when
+                  it into P2P endpoint hostnames (e.g. `<node>-p2p.<chainID>.<domain>`) when
                   the parent SND opts into TCP networking; the address is a one-way door
                   once peers cache it.
                 minLength: 1

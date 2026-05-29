@@ -18,23 +18,23 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment/envtest/fixtures"
 )
 
-const publishableTestDomain = "test.platform.sei.io"
+const p2pEndpointTestDomain = "test.platform.sei.io"
 
-func expectedPublishableHost(sndName, chainID string, ordinal int) string {
-	return fmt.Sprintf("%s-%d-p2p.%s.%s", sndName, ordinal, chainID, publishableTestDomain)
+func expectedP2PEndpointHost(sndName, chainID string, ordinal int) string {
+	return fmt.Sprintf("%s-%d-p2p.%s.%s", sndName, ordinal, chainID, p2pEndpointTestDomain)
 }
 
-func expectedPublishableAddr(sndName, chainID string, ordinal int) string {
-	return expectedPublishableHost(sndName, chainID, ordinal) + ":26656"
+func expectedP2PEndpointAddr(sndName, chainID string, ordinal int) string {
+	return expectedP2PEndpointHost(sndName, chainID, ordinal) + ":26656"
 }
 
-// withPublishableDomain sets the test domain on the shared reconciler and
+// withP2PEndpointDomain sets the test domain on the shared reconciler and
 // restores it after the test.
-func withPublishableDomain(t *testing.T, domain string) {
+func withP2PEndpointDomain(t *testing.T, domain string) {
 	t.Helper()
-	prev := testSNDReconciler.PublishableDomain
-	testSNDReconciler.PublishableDomain = domain
-	t.Cleanup(func() { testSNDReconciler.PublishableDomain = prev })
+	prev := testSNDReconciler.P2PEndpointDomain
+	testSNDReconciler.P2PEndpointDomain = domain
+	t.Cleanup(func() { testSNDReconciler.P2PEndpointDomain = prev })
 }
 
 // withTCP enables `spec.networking.tcp` on a fixtures-built SND. Goes
@@ -50,10 +50,10 @@ func withTCP() fixtures.Option {
 }
 
 // Happy path: TCP-enabled SND produces a child with Spec.ExternalAddress,
-// a per-pod LB Service, and a PublishableEndpoints entry.
-func TestPublishableP2P_CreateWithTCP_ChildHasAddressAndServiceExists(t *testing.T) {
+// a per-pod LB Service, and a P2PEndpoints entry.
+func TestP2PEndpointP2P_CreateWithTCP_ChildHasAddressAndServiceExists(t *testing.T) {
 	g := NewWithT(t)
-	withPublishableDomain(t, publishableTestDomain)
+	withP2PEndpointDomain(t, p2pEndpointTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-create",
@@ -63,8 +63,8 @@ func TestPublishableP2P_CreateWithTCP_ChildHasAddressAndServiceExists(t *testing
 	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
 
 	const chainID = "pacific-1" // fixtures default
-	wantHost := expectedPublishableHost(snd.Name, chainID, 0)
-	wantAddr := expectedPublishableAddr(snd.Name, chainID, 0)
+	wantHost := expectedP2PEndpointHost(snd.Name, chainID, 0)
+	wantAddr := expectedP2PEndpointAddr(snd.Name, chainID, 0)
 
 	// 1. Child SeiNode is created with Spec.ExternalAddress already set.
 	//    The brief calls out "child appears in the API with the value
@@ -83,7 +83,7 @@ func TestPublishableP2P_CreateWithTCP_ChildHasAddressAndServiceExists(t *testing
 	waitFor(t, func() bool {
 		svc := &corev1.Service{}
 		return testCli.Get(testCtx, svcKey, svc) == nil
-	}, "publishable Service "+svcKey.Name+" created")
+	}, "P2P endpoint Service "+svcKey.Name+" created")
 
 	svc := &corev1.Service{}
 	g.Expect(testCli.Get(testCtx, svcKey, svc)).To(Succeed())
@@ -107,23 +107,23 @@ func TestPublishableP2P_CreateWithTCP_ChildHasAddressAndServiceExists(t *testing
 	g.Expect(refs[0].Controller).NotTo(BeNil())
 	g.Expect(*refs[0].Controller).To(BeTrue())
 
-	// 4. PublishableEndpoints surfaces the same hostname the child got.
+	// 4. P2PEndpoints surfaces the same hostname the child got.
 	waitForStatus(t, client.ObjectKeyFromObject(snd), func(latest *seiv1alpha1.SeiNodeDeployment) bool {
 		ns := latest.Status.NetworkingStatus
-		if ns == nil || len(ns.PublishableEndpoints) != 1 {
+		if ns == nil || len(ns.P2PEndpoints) != 1 {
 			return false
 		}
-		ep := ns.PublishableEndpoints[0]
+		ep := ns.P2PEndpoints[0]
 		return ep.Ordinal == 0 &&
 			ep.SeiNodeName == snd.Name+"-0" &&
 			ep.Hostname == wantAddr
-	}, "PublishableEndpoints stamped with deterministic vanity host")
+	}, "P2PEndpoints stamped with deterministic vanity host")
 }
 
 // Opt-out: removing TCP clears Spec.ExternalAddress and deletes the Service.
-func TestPublishableP2P_OptOut_ClearsAddressAndDeletesService(t *testing.T) {
+func TestP2PEndpointP2P_OptOut_ClearsAddressAndDeletesService(t *testing.T) {
 	g := NewWithT(t)
-	withPublishableDomain(t, publishableTestDomain)
+	withP2PEndpointDomain(t, p2pEndpointTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-optout",
@@ -133,7 +133,7 @@ func TestPublishableP2P_OptOut_ClearsAddressAndDeletesService(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
 
 	const chainID = "pacific-1"
-	wantAddr := expectedPublishableAddr(snd.Name, chainID, 0)
+	wantAddr := expectedP2PEndpointAddr(snd.Name, chainID, 0)
 	childKey := types.NamespacedName{Name: snd.Name + "-0", Namespace: ns}
 	svcKey := types.NamespacedName{Name: snd.Name + "-0-p2p", Namespace: ns}
 
@@ -147,7 +147,7 @@ func TestPublishableP2P_OptOut_ClearsAddressAndDeletesService(t *testing.T) {
 	}, "child has publishable address before opt-out")
 	waitFor(t, func() bool {
 		return testCli.Get(testCtx, svcKey, &corev1.Service{}) == nil
-	}, "publishable Service exists before opt-out")
+	}, "P2P endpoint Service exists before opt-out")
 
 	// Opt out: clear TCP. The SND retains an empty `networking` block
 	// (HTTPEnabled() back-compat will treat it as HTTP-enabled, but the
@@ -172,19 +172,19 @@ func TestPublishableP2P_OptOut_ClearsAddressAndDeletesService(t *testing.T) {
 	waitFor(t, func() bool {
 		err := testCli.Get(testCtx, svcKey, &corev1.Service{})
 		return apierrors.IsNotFound(err)
-	}, "publishable Service deleted after opt-out")
+	}, "P2P endpoint Service deleted after opt-out")
 
-	// PublishableEndpoints is cleared (or NetworkingStatus is nil).
+	// P2PEndpoints is cleared (or NetworkingStatus is nil).
 	waitForStatus(t, client.ObjectKeyFromObject(snd), func(latest *seiv1alpha1.SeiNodeDeployment) bool {
 		return latest.Status.NetworkingStatus == nil ||
-			len(latest.Status.NetworkingStatus.PublishableEndpoints) == 0
-	}, "PublishableEndpoints cleared after opt-out")
+			len(latest.Status.NetworkingStatus.P2PEndpoints) == 0
+	}, "P2PEndpoints cleared after opt-out")
 }
 
 // Re-opt-in: TCP restored brings the address back and recreates the Service.
-func TestPublishableP2P_ReOptIn_RestoresAddressAndService(t *testing.T) {
+func TestP2PEndpointP2P_ReOptIn_RestoresAddressAndService(t *testing.T) {
 	g := NewWithT(t)
-	withPublishableDomain(t, publishableTestDomain)
+	withP2PEndpointDomain(t, p2pEndpointTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-reoptin",
@@ -194,7 +194,7 @@ func TestPublishableP2P_ReOptIn_RestoresAddressAndService(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
 
 	const chainID = "pacific-1"
-	wantAddr := expectedPublishableAddr(snd.Name, chainID, 0)
+	wantAddr := expectedP2PEndpointAddr(snd.Name, chainID, 0)
 	childKey := types.NamespacedName{Name: snd.Name + "-0", Namespace: ns}
 	svcKey := types.NamespacedName{Name: snd.Name + "-0-p2p", Namespace: ns}
 
@@ -234,13 +234,13 @@ func TestPublishableP2P_ReOptIn_RestoresAddressAndService(t *testing.T) {
 	// Service is recreated.
 	waitFor(t, func() bool {
 		return testCli.Get(testCtx, svcKey, &corev1.Service{}) == nil
-	}, "publishable Service recreated after re-opt-in")
+	}, "P2P endpoint Service recreated after re-opt-in")
 }
 
 // Scale-down deletes the ordinal's Service before the child SeiNode.
-func TestPublishableP2P_ScaleDown_DeletesOrdinalServiceBeforeChild(t *testing.T) {
+func TestP2PEndpointP2P_ScaleDown_DeletesOrdinalServiceBeforeChild(t *testing.T) {
 	g := NewWithT(t)
-	withPublishableDomain(t, publishableTestDomain)
+	withP2PEndpointDomain(t, p2pEndpointTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-scale",
@@ -249,12 +249,12 @@ func TestPublishableP2P_ScaleDown_DeletesOrdinalServiceBeforeChild(t *testing.T)
 	)
 	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
 
-	// Wait for both replicas to converge with their publishable Services.
+	// Wait for both replicas to converge with their P2P endpoint Services.
 	for i := 0; i < 2; i++ {
 		svcKey := types.NamespacedName{Name: fmt.Sprintf("%s-%d-p2p", snd.Name, i), Namespace: ns}
 		waitFor(t, func() bool {
 			return testCli.Get(testCtx, svcKey, &corev1.Service{}) == nil
-		}, fmt.Sprintf("publishable Service %s created", svcKey.Name))
+		}, fmt.Sprintf("P2P endpoint Service %s created", svcKey.Name))
 	}
 
 	// Scale down to 1 replica.
@@ -268,7 +268,7 @@ func TestPublishableP2P_ScaleDown_DeletesOrdinalServiceBeforeChild(t *testing.T)
 	waitFor(t, func() bool {
 		err := testCli.Get(testCtx, scaledOutKey, &corev1.Service{})
 		return apierrors.IsNotFound(err)
-	}, "ordinal-1 publishable Service deleted on scale-down")
+	}, "ordinal-1 P2P endpoint Service deleted on scale-down")
 
 	// ordinal-0 Service survives.
 	survivingKey := types.NamespacedName{Name: snd.Name + "-0-p2p", Namespace: ns}
@@ -278,9 +278,9 @@ func TestPublishableP2P_ScaleDown_DeletesOrdinalServiceBeforeChild(t *testing.T)
 }
 
 // Standalone SeiNodes own Spec.ExternalAddress directly; no SND touches it.
-func TestPublishableP2P_StandaloneSeiNode_PreservesUserAddress(t *testing.T) {
+func TestP2PEndpointP2P_StandaloneSeiNode_PreservesUserAddress(t *testing.T) {
 	g := NewWithT(t)
-	withPublishableDomain(t, publishableTestDomain)
+	withP2PEndpointDomain(t, p2pEndpointTestDomain)
 	ns := makeNamespace(t)
 
 	addr := "custom.example.com:26656"
@@ -308,9 +308,9 @@ func TestPublishableP2P_StandaloneSeiNode_PreservesUserAddress(t *testing.T) {
 }
 
 // kubectl-edit stomp: external clear of Spec.ExternalAddress reconverges via ensureSeiNode.
-func TestPublishableP2P_KubectlEditStomp_ReconverresViaEnsureSeiNode(t *testing.T) {
+func TestP2PEndpointP2P_KubectlEditStomp_ReconverresViaEnsureSeiNode(t *testing.T) {
 	g := NewWithT(t)
-	withPublishableDomain(t, publishableTestDomain)
+	withP2PEndpointDomain(t, p2pEndpointTestDomain)
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-stomp",
@@ -320,7 +320,7 @@ func TestPublishableP2P_KubectlEditStomp_ReconverresViaEnsureSeiNode(t *testing.
 	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
 
 	const chainID = "pacific-1"
-	wantAddr := expectedPublishableAddr(snd.Name, chainID, 0)
+	wantAddr := expectedP2PEndpointAddr(snd.Name, chainID, 0)
 	childKey := types.NamespacedName{Name: snd.Name + "-0", Namespace: ns}
 
 	waitFor(t, func() bool {
@@ -369,12 +369,12 @@ func TestPublishableP2P_KubectlEditStomp_ReconverresViaEnsureSeiNode(t *testing.
 	}, "child reconverged via ensureSeiNode after external stomp")
 }
 
-// TestPublishableP2P_NoDomainConfigured_SkipsServices verifies the silent
-// no-op path: when PublishableDomain is unset, TCP-enabled SNDs get no
-// publishable Service and no child ExternalAddress.
-func TestPublishableP2P_NoDomainConfigured_SkipsServices(t *testing.T) {
+// TestP2PEndpointP2P_NoDomainConfigured_SkipsServices verifies the silent
+// no-op path: when P2PEndpointDomain is unset, TCP-enabled SNDs get no
+// P2P endpoint Service and no child ExternalAddress.
+func TestP2PEndpointP2P_NoDomainConfigured_SkipsServices(t *testing.T) {
 	g := NewWithT(t)
-	withPublishableDomain(t, "")
+	withP2PEndpointDomain(t, "")
 	ns := makeNamespace(t)
 
 	snd := fixtures.NewSND(ns, "pub-no-domain",
