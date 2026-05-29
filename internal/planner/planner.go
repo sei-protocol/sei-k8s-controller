@@ -665,9 +665,11 @@ func discoverPeersTask(node *seiv1alpha1.SeiNode) sidecar.DiscoverPeersTask {
 				Addresses: s.Static.Addresses,
 			})
 		case s.Label != nil:
+			// ResolvedPeers is pre-composed `<node_id>@<host>:<port>`;
+			// route as static so the sidecar writes them verbatim.
 			sources = append(sources, sidecar.PeerSource{
-				Type:      sidecar.PeerSourceDNSEndpoints,
-				Endpoints: node.Status.ResolvedPeers,
+				Type:      sidecar.PeerSourceStatic,
+				Addresses: node.Status.ResolvedPeers,
 			})
 		}
 	}
