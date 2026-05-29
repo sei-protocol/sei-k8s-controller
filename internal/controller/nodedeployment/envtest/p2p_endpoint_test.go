@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -397,4 +398,9 @@ func TestP2PEndpointP2P_NoDomainConfigured_SkipsServices(t *testing.T) {
 		}
 		return child.Spec.ExternalAddress
 	}, 5*time.Second, 200*time.Millisecond).Should(BeEmpty())
+
+	waitForStatus(t, client.ObjectKeyFromObject(snd), func(latest *seiv1alpha1.SeiNodeDeployment) bool {
+		c := apimeta.FindStatusCondition(latest.Status.Conditions, seiv1alpha1.ConditionNetworkingReady)
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "NetworkingDisabled"
+	}, "ConditionNetworkingReady=False/NetworkingDisabled when neither tier active")
 }

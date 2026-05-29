@@ -66,7 +66,10 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, g
 		return r.deleteNetworkingResources(ctx, group)
 	}
 
-	if group.Spec.Networking.HTTPEnabled() {
+	httpActive := group.Spec.Networking.HTTPEnabled()
+	tcpActive := group.Spec.Networking.TCPEnabled() && r.P2PEndpointDomain != ""
+
+	if httpActive {
 		if err := r.reconcileExternalService(ctx, group); err != nil {
 			return fmt.Errorf("reconciling external service: %w", err)
 		}
@@ -82,7 +85,7 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, g
 		}
 	}
 
-	if group.Spec.Networking.TCPEnabled() && r.P2PEndpointDomain != "" {
+	if tcpActive {
 		if err := r.reconcileP2PEndpoints(ctx, group); err != nil {
 			return fmt.Errorf("reconciling P2P endpoints: %w", err)
 		}
@@ -90,6 +93,11 @@ func (r *SeiNodeDeploymentReconciler) reconcileNetworking(ctx context.Context, g
 		if err := r.deleteP2PEndpoints(ctx, group); err != nil {
 			return fmt.Errorf("deleting P2P endpoints: %w", err)
 		}
+	}
+
+	if !httpActive && !tcpActive {
+		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
+			"NetworkingDisabled", "spec.networking has no active tier (no HTTP, and TCP requires SEI_P2P_ENDPOINT_DOMAIN)")
 	}
 
 	return nil
