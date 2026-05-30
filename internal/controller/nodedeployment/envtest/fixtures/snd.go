@@ -82,3 +82,10 @@ func WithValidator() Option {
 		snd.Spec.Template.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
 	}
 }
+
+// WithPeers sets spec.template.spec.peers.
+func WithPeers(peers ...seiv1alpha1.PeerSource) Option {
+	return func(snd *seiv1alpha1.SeiNodeDeployment) {
+		snd.Spec.Template.Spec.Peers = peers
+	}
+}
