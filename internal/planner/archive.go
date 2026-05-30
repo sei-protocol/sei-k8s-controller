@@ -36,6 +36,9 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.
 }
 
 func (p *archiveNodePlanner) BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error) {
+	if node.Spec.Archive == nil {
+		return nil, fmt.Errorf("archive sub-spec is nil")
+	}
 	return &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeArchive,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),

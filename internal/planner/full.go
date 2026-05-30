@@ -44,6 +44,9 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 }
 
 func (p *fullNodePlanner) BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error) {
+	if node.Spec.FullNode == nil {
+		return nil, fmt.Errorf("fullNode sub-spec is nil")
+	}
 	return &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeFull,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),

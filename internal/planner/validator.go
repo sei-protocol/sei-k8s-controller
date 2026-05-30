@@ -111,6 +111,9 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Ta
 }
 
 func (p *validatorPlanner) BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error) {
+	if node.Spec.Validator == nil {
+		return nil, fmt.Errorf("validator sub-spec is nil")
+	}
 	return &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeValidator,
 		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),

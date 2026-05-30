@@ -48,6 +48,9 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 }
 
 func (p *replayerPlanner) BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error) {
+	if node.Spec.Replayer == nil {
+		return nil, fmt.Errorf("replayer sub-spec is nil")
+	}
 	return &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeFull,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides()), node.Spec.Overrides),

@@ -145,6 +145,30 @@ func TestBuildNodeUpdatePlan_ConfigApplyIsIncremental(t *testing.T) {
 		"day-2 ConfigIntent must be incremental to avoid clobbering on-disk state")
 }
 
+// Init plans must NOT set Incremental — the init path uses applyFull
+// (regenerate config from mode defaults + overrides). Pinning this here
+// makes accidental flips during future refactors a loud failure.
+func TestBuildPlan_InitPlanConfigIntentNotIncremental(t *testing.T) {
+	g := NewWithT(t)
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "full-init", Namespace: "default", Generation: 1},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID:  "atlantic-2",
+			Image:    "sei:v1.0.0",
+			FullNode: &seiv1alpha1.FullNodeSpec{},
+		},
+		// No phase — defaults to "" (init path).
+	}
+
+	plan, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+
+	intent := configIntentFromPlan(t, plan)
+	g.Expect(intent.Incremental).To(BeFalse(),
+		"init ConfigIntent must NOT be incremental — applyFull regenerates from mode defaults")
+}
+
 // Per-mode coverage: the day-2 intent should match the mode planner's
 // Mode value. Catches future drift if a new mode lands and isn't wired
 // into BuildConfigIntent.
