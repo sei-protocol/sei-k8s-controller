@@ -208,6 +208,7 @@ func run(m *testing.M) (int, error) {
 		GatewayDomain:           "test.local",
 		GatewayPublicDomain:     "",
 		P2PEndpointDomain:       "",
+		NLBTargetType:           nodedeploymentcontroller.DefaultNLBTargetType,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			ConfigFor: func(_ context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 				return task.ExecutionConfig{
