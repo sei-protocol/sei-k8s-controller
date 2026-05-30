@@ -126,7 +126,7 @@ func TestGeneratePublishableService_Annotations(t *testing.T) {
 	snd := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic, Namespace: "sei-test-1"},
 	}
-	svc := generateP2PEndpointService(snd, 0, "atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io")
+	svc := generateP2PEndpointService(snd, 0, "atlantic-2-0-p2p.atlantic-2.prod.platform.sei.io", NLBTargetTypeIP)
 
 	g.Expect(svc.Annotations).To(HaveKeyWithValue(
 		"external-dns.alpha.kubernetes.io/hostname",
@@ -147,4 +147,24 @@ func TestGeneratePublishableService_Annotations(t *testing.T) {
 	g.Expect(svc.Spec.Ports).To(HaveLen(1))
 	g.Expect(svc.Spec.Ports[0].Port).To(Equal(seiconfig.PortP2P))
 	g.Expect(svc.Spec.Selector).To(HaveKeyWithValue(noderesource.NodeLabel, "atlantic-2-0"))
+
+	// target-type=ip → NodePort allocation explicitly disabled (preserve
+	// the 30000-32767 range; pod IP is the NLB target, no NodePort hop).
+	g.Expect(svc.Spec.AllocateLoadBalancerNodePorts).NotTo(BeNil())
+	g.Expect(*svc.Spec.AllocateLoadBalancerNodePorts).To(BeFalse())
+}
+
+func TestGeneratePublishableService_InstanceTargetType(t *testing.T) {
+	g := NewWithT(t)
+	snd := &seiv1alpha1.SeiNodeDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: testChainAtlantic, Namespace: "sei-test-1"},
+	}
+	svc := generateP2PEndpointService(snd, 0, "atlantic-2-0-p2p.atlantic-2.harbor.platform.sei.io", NLBTargetTypeInstance)
+
+	g.Expect(svc.Annotations).To(HaveKeyWithValue(
+		"service.beta.kubernetes.io/aws-load-balancer-nlb-target-type", "instance"))
+
+	// target-type=instance needs a NodePort for the NLB→node→pod hop.
+	// Leaving the field nil lets kube default to true.
+	g.Expect(svc.Spec.AllocateLoadBalancerNodePorts).To(BeNil())
 }

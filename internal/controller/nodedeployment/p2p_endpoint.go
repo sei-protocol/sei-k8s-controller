@@ -35,8 +35,17 @@ const (
 	awsLBCrossZoneAnnotation   = "service.beta.kubernetes.io/aws-load-balancer-attributes"
 	awsLBTypeValue             = "external"
 	awsLBSchemeValue           = "internet-facing"
-	awsLBTargetTypeValue       = "ip"
 	awsLBCrossZoneAttributeStr = "load_balancing.cross_zone.enabled=true"
+
+	// NLBTargetTypeIP registers pod IPs directly with the NLB target group.
+	// Correct on VPC-CNI clusters where pod IPs are VPC-routable.
+	NLBTargetTypeIP = "ip"
+	// NLBTargetTypeInstance routes NLB traffic via the node's NodePort and
+	// relies on kube-proxy / Cilium socket-LB to forward to the pod.
+	// Required on clusters where pod IPs aren't VPC-routable.
+	NLBTargetTypeInstance = "instance"
+	// DefaultNLBTargetType matches the prior hardcoded behaviour.
+	DefaultNLBTargetType = NLBTargetTypeIP
 
 	p2pEndpointServiceSuffix = "-p2p"
 )
@@ -85,7 +94,7 @@ func p2pEndpointServiceName(group *seiv1alpha1.SeiNodeDeployment, ordinal int) s
 func (r *SeiNodeDeploymentReconciler) reconcileP2PEndpoints(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) error {
 	desiredNames := make(map[string]struct{}, group.Spec.Replicas)
 	for i := range int(group.Spec.Replicas) {
-		desired := generateP2PEndpointService(group, i, r.p2pEndpointHostname(group, i))
+		desired := generateP2PEndpointService(group, i, r.p2pEndpointHostname(group, i), r.NLBTargetType)
 		desired.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
 		if err := ctrl.SetControllerReference(group, desired, r.Scheme); err != nil {
 			return fmt.Errorf("setting owner reference on P2P endpoint Service %s: %w", desired.Name, err)
@@ -181,7 +190,7 @@ func (r *SeiNodeDeploymentReconciler) deleteP2PEndpointForOrdinal(ctx context.Co
 	return nil
 }
 
-func generateP2PEndpointService(group *seiv1alpha1.SeiNodeDeployment, ordinal int, hostname string) *corev1.Service {
+func generateP2PEndpointService(group *seiv1alpha1.SeiNodeDeployment, ordinal int, hostname, targetType string) *corev1.Service {
 	name := p2pEndpointServiceName(group, ordinal)
 	childName := seiNodeName(group, ordinal)
 
@@ -195,9 +204,20 @@ func generateP2PEndpointService(group *seiv1alpha1.SeiNodeDeployment, ordinal in
 		externalDNSHostnameAnnotation: hostname,
 		awsLBTypeAnnotation:           awsLBTypeValue,
 		awsLBSchemeAnnotation:         awsLBSchemeValue,
-		awsLBTargetTypeAnnotation:     awsLBTargetTypeValue,
+		awsLBTargetTypeAnnotation:     targetType,
 		awsLBCrossZoneAnnotation:      awsLBCrossZoneAttributeStr,
 		managedByAnnotation:           controllerName,
+	}
+
+	// target-type=ip registers pod IPs directly; NodePort is not used so
+	// we explicitly disable allocation to preserve the limited 30000-32767
+	// range. target-type=instance requires a NodePort for the NLB→node→pod
+	// hop (kube-proxy / Cilium socket-LB), so leave allocation at the
+	// kube default (true) by passing nil.
+	var allocateNodePorts *bool
+	if targetType == NLBTargetTypeIP {
+		f := false
+		allocateNodePorts = &f
 	}
 
 	return &corev1.Service{
@@ -210,7 +230,7 @@ func generateP2PEndpointService(group *seiv1alpha1.SeiNodeDeployment, ordinal in
 		Spec: corev1.ServiceSpec{
 			Type:                          corev1.ServiceTypeLoadBalancer,
 			ExternalTrafficPolicy:         corev1.ServiceExternalTrafficPolicyTypeLocal,
-			AllocateLoadBalancerNodePorts: new(bool),
+			AllocateLoadBalancerNodePorts: allocateNodePorts,
 			Selector: map[string]string{
 				noderesource.NodeLabel: childName,
 			},
