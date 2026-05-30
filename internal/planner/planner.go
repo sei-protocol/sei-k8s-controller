@@ -63,6 +63,13 @@ type NodePlanner interface {
 	Validate(node *seiv1alpha1.SeiNode) error
 	BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
 	Mode() string
+
+	// BuildConfigIntent returns the ConfigIntent the mode's plan would feed
+	// to TaskConfigApply (mode + merged controller / spec overrides). Shared
+	// by BuildPlan (init) and buildNodeUpdatePlan (day-2) so they emit
+	// identical config payloads for the same spec. Day-2 callers set
+	// Incremental on the returned value before passing it through.
+	BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error)
 }
 
 // GroupPlanner encapsulates logic for building a group-level task plan.
@@ -735,18 +742,44 @@ func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error
 }
 
 // buildNodeUpdatePlan constructs a plan to roll out an image update on a
-// Running node. The plan applies the new StatefulSet spec, waits for the
-// rollout to complete, then re-initializes the sidecar.
+// Running node. The plan applies the new StatefulSet spec, re-applies
+// config.toml (incremental — only the keys the controller owns), then
+// cycles the pod and re-initializes the sidecar.
 //
 // FailedPhase is deliberately empty: a failure retries on the next reconcile
 // rather than transitioning the node out of Running.
+//
+// TaskConfigApply is placed before ReplacePod so the old pod's sidecar
+// writes the new config.toml to the PVC; the new pod then mounts the
+// PVC and reads the fresh file at seid start. external_address has no
+// hot-reload path in seid today (see seictl config_reload.go), so the
+// pod restart is the trigger that makes new values take effect.
+//
+// Incremental=true is mandatory on the day-2 intent. The init path uses
+// the non-incremental applyFull, which regenerates config from mode
+// defaults + overrides; running that on day 2 would wipe persistent-peers,
+// state-sync trust point, and any operator-managed TOML keys that the
+// controller doesn't track in overrides. applyIncremental reads on-disk
+// config and patches only the overrides we own.
 func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted",
 		fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage))
 
+	mode, err := plannerForMode(node)
+	if err != nil {
+		return nil, fmt.Errorf("resolving mode planner: %w", err)
+	}
+	intent, err := mode.BuildConfigIntent(node)
+	if err != nil {
+		return nil, fmt.Errorf("building config intent: %w", err)
+	}
+	intent.Incremental = true
+
 	prog := []string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
+		TaskConfigApply,
+		TaskConfigValidate,
 		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
 		sidecar.TaskTypeMarkReady,
@@ -755,7 +788,7 @@ func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, erro
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, nil))
+		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, intent))
 		if err != nil {
 			return nil, err
 		}

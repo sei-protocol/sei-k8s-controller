@@ -100,12 +100,19 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Ta
 		return buildGenesisPlan(node)
 	}
 	v := node.Spec.Validator
-	params := &seiconfig.ConfigIntent{
-		Mode:      seiconfig.ModeValidator,
-		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
+	params, err := p.BuildConfigIntent(node)
+	if err != nil {
+		return nil, err
 	}
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, v.Snapshot, params)
 	}
 	return buildBasePlan(node, node.Spec.Peers, v.Snapshot, params)
+}
+
+func (p *validatorPlanner) BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error) {
+	return &seiconfig.ConfigIntent{
+		Mode:      seiconfig.ModeValidator,
+		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
+	}, nil
 }

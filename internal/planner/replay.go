@@ -37,14 +37,21 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return buildRunningPlan(node)
 	}
-	params := &seiconfig.ConfigIntent{
-		Mode:      seiconfig.ModeFull,
-		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides()), node.Spec.Overrides),
+	params, err := p.BuildConfigIntent(node)
+	if err != nil {
+		return nil, err
 	}
 	if NeedsBootstrap(node) {
 		return buildBootstrapPlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, params)
 	}
 	return buildBasePlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, params)
+}
+
+func (p *replayerPlanner) BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error) {
+	return &seiconfig.ConfigIntent{
+		Mode:      seiconfig.ModeFull,
+		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides()), node.Spec.Overrides),
+	}, nil
 }
 
 func (p *replayerPlanner) controllerOverrides() map[string]string {

@@ -28,10 +28,18 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return buildRunningPlan(node)
 	}
-	return buildBasePlan(node, node.Spec.Peers, nil, &seiconfig.ConfigIntent{
+	params, err := p.BuildConfigIntent(node)
+	if err != nil {
+		return nil, err
+	}
+	return buildBasePlan(node, node.Spec.Peers, nil, params)
+}
+
+func (p *archiveNodePlanner) BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error) {
+	return &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeArchive,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
-	})
+	}, nil
 }
 
 func (p *archiveNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {

@@ -1,10 +1,12 @@
 package planner
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
 	. "github.com/onsi/gomega"
+	seiconfig "github.com/sei-protocol/sei-config"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -68,6 +70,8 @@ func TestBuildRunningPlan_ImageDrift_ReturnsNodeUpdatePlan(t *testing.T) {
 	want := []string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
+		TaskConfigApply,
+		TaskConfigValidate,
 		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
 		TaskMarkReady,
@@ -79,6 +83,114 @@ func TestBuildRunningPlan_ImageDrift_ReturnsNodeUpdatePlan(t *testing.T) {
 		g.Expect(pt.Status).To(Equal(seiv1alpha1.TaskPending), "task %s should start Pending", pt.Type)
 		g.Expect(pt.ID).NotTo(BeEmpty(), "task %s should have an ID", pt.Type)
 		g.Expect(pt.Params).NotTo(BeNil(), "task %s should have params", pt.Type)
+	}
+}
+
+// configIntentFromPlan finds the config-apply task and unmarshals its
+// params back into a ConfigIntent for inspection.
+func configIntentFromPlan(t *testing.T, plan *seiv1alpha1.TaskPlan) *seiconfig.ConfigIntent {
+	t.Helper()
+	g := NewWithT(t)
+	for _, pt := range plan.Tasks {
+		if pt.Type != TaskConfigApply {
+			continue
+		}
+		g.Expect(pt.Params).NotTo(BeNil())
+		var intent seiconfig.ConfigIntent
+		g.Expect(json.Unmarshal(pt.Params.Raw, &intent)).To(Succeed())
+		return &intent
+	}
+	t.Fatal("plan has no config-apply task")
+	return nil
+}
+
+// The day-2 config-apply must carry the mode planner's full ConfigIntent —
+// non-empty Mode, Overrides containing the controller-managed keys —
+// otherwise sei-config's ResolveIntent rejects the empty-Mode and
+// TaskConfigApply fails at runtime.
+func TestBuildNodeUpdatePlan_ConfigApplyHasIntentWithMode(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.ExternalAddress = "syncer-0-0-p2p.atlantic-2.harbor.platform.sei.io:26656"
+	node.Spec.Image = testImageV2
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+
+	intent := configIntentFromPlan(t, plan)
+	g.Expect(intent.Mode).To(Equal(seiconfig.ModeFull), "Mode must be set so ResolveIntent accepts the intent")
+	g.Expect(intent.Overrides).To(HaveKeyWithValue(
+		seiconfig.KeyP2PExternalAddress,
+		"syncer-0-0-p2p.atlantic-2.harbor.platform.sei.io:26656",
+	), "commonOverrides should propagate Spec.ExternalAddress")
+}
+
+// Day-2 must set Incremental=true. The init path uses applyFull which
+// regenerates config from mode defaults — running that on a running node
+// would wipe persistent-peers, state-sync trust point, and operator-managed
+// TOML keys outside the controller's overrides set. Incremental reads
+// on-disk config and patches only the keys we own.
+func TestBuildNodeUpdatePlan_ConfigApplyIsIncremental(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.Image = testImageV2
+
+	plan, err := buildRunningPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+
+	intent := configIntentFromPlan(t, plan)
+	g.Expect(intent.Incremental).To(BeTrue(),
+		"day-2 ConfigIntent must be incremental to avoid clobbering on-disk state")
+}
+
+// Per-mode coverage: the day-2 intent should match the mode planner's
+// Mode value. Catches future drift if a new mode lands and isn't wired
+// into BuildConfigIntent.
+func TestBuildNodeUpdatePlan_ConfigApplyIntentMatchesModePlanner(t *testing.T) {
+	cases := []struct {
+		name     string
+		mutate   func(*seiv1alpha1.SeiNode)
+		wantMode seiconfig.NodeMode
+	}{
+		{
+			name:     "full",
+			mutate:   func(_ *seiv1alpha1.SeiNode) {},
+			wantMode: seiconfig.ModeFull,
+		},
+		{
+			name: "archive",
+			mutate: func(n *seiv1alpha1.SeiNode) {
+				n.Spec.FullNode = nil
+				n.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
+			},
+			wantMode: seiconfig.ModeArchive,
+		},
+		{
+			name: "validator",
+			mutate: func(n *seiv1alpha1.SeiNode) {
+				n.Spec.FullNode = nil
+				n.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+			},
+			wantMode: seiconfig.ModeValidator,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := runningFullNode()
+			tc.mutate(node)
+			node.Spec.Image = testImageV2
+
+			plan, err := buildRunningPlan(node)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(plan).NotTo(BeNil())
+
+			intent := configIntentFromPlan(t, plan)
+			g.Expect(intent.Mode).To(Equal(tc.wantMode))
+			g.Expect(intent.Incremental).To(BeTrue())
+		})
 	}
 }
 
@@ -381,10 +493,12 @@ func TestBuildRunningPlan_ImageDriftWinsOverSidecar(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan).NotTo(BeNil())
 	// Image update plan ends with MarkReady, which also resolves the sidecar.
-	g.Expect(plan.Tasks).To(HaveLen(5), "should be full node-update plan, not one-task mark-ready")
+	g.Expect(plan.Tasks).To(HaveLen(7), "should be full node-update plan, not one-task mark-ready")
 	g.Expect(planTaskTypes(plan)).To(Equal([]string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
+		TaskConfigApply,
+		TaskConfigValidate,
 		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
 		TaskMarkReady,
