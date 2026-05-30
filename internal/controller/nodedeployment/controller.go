@@ -46,6 +46,15 @@ type SeiNodeDeploymentReconciler struct {
 	// from SEI_P2P_ENDPOINT_DOMAIN. Empty disables the P2P endpoint path.
 	P2PEndpointDomain string
 
+	// NLBTargetType picks the AWS NLB target mode for per-pod P2P endpoint
+	// Services. "ip" registers pod IPs directly — correct on VPC-CNI
+	// clusters (prod, dev). "instance" routes via NodePort — required on
+	// clusters where pod IPs aren't VPC-routable (e.g. harbor, where
+	// Cilium cluster-pool uses 100.64.0.0/14). Wired from SEI_NLB_TARGET_TYPE
+	// in cmd/main.go, which defaults the field to DefaultNLBTargetType
+	// when the env var is unset — the reconciler reads this field as-is.
+	NLBTargetType string
+
 	// PlanExecutor drives group-level task plans (e.g. genesis assembly).
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNodeDeployment]
 }

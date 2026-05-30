@@ -215,6 +215,16 @@ func main() {
 
 	p2pEndpointDomain := os.Getenv("SEI_P2P_ENDPOINT_DOMAIN")
 
+	nlbTargetType := os.Getenv("SEI_NLB_TARGET_TYPE")
+	switch nlbTargetType {
+	case "":
+		nlbTargetType = nodedeploymentcontroller.DefaultNLBTargetType
+	case nodedeploymentcontroller.NLBTargetTypeIP, nodedeploymentcontroller.NLBTargetTypeInstance:
+	default:
+		setupLog.Error(nil, "Invalid SEI_NLB_TARGET_TYPE — expected \"ip\" or \"instance\"", "value", nlbTargetType)
+		os.Exit(1)
+	}
+
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
 	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller")
 	if err := (&nodedeploymentcontroller.SeiNodeDeploymentReconciler{
@@ -226,6 +236,7 @@ func main() {
 		GatewayDomain:       platformCfg.GatewayDomain,
 		GatewayPublicDomain: platformCfg.GatewayPublicDomain,
 		P2PEndpointDomain:   p2pEndpointDomain,
+		NLBTargetType:       nlbTargetType,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
 			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
 				var assemblerNode *seiv1alpha1.SeiNode
