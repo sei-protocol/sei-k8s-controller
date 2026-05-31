@@ -165,6 +165,59 @@ func TestArchivePlanner_ImageDrift_UpdateProgression(t *testing.T) {
 	}))
 }
 
+// Replayer shares the full/archive update shape — symmetry test.
+func TestReplayerPlanner_ImageDrift_UpdateProgression(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.FullNode = nil
+	node.Spec.Replayer = &seiv1alpha1.ReplayerSpec{}
+	node.Spec.Image = testImageV2
+
+	plan, err := (&replayerPlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		TaskConfigPatch,
+		TaskConfigValidate,
+		task.TaskTypeReplacePod,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+}
+
+// Convention: init writes the whole config via TaskConfigApply; a Running
+// node's update plan patches via TaskConfigPatch. Never both in one plan.
+// Stated as a doc rule on NodePlanner; this test enforces it.
+func TestPlannerConvention_InitUsesApply_UpdateUsesPatch(t *testing.T) {
+	g := NewWithT(t)
+
+	// Init: empty phase, empty currentImage.
+	initNode := runningFullNode()
+	initNode.Status.Phase = ""
+	initNode.Status.CurrentImage = ""
+
+	initPlan, err := (&fullNodePlanner{}).BuildPlan(initNode)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(initPlan).NotTo(BeNil())
+	initTypes := planTaskTypes(initPlan)
+	g.Expect(initTypes).To(ContainElement(TaskConfigApply), "init must include config-apply")
+	g.Expect(initTypes).NotTo(ContainElement(TaskConfigPatch), "init must NOT include config-patch")
+
+	// Running update: spec.image diverges from status.currentImage.
+	updateNode := runningFullNode()
+	updateNode.Spec.Image = testImageV2
+
+	updatePlan, err := (&fullNodePlanner{}).BuildPlan(updateNode)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(updatePlan).NotTo(BeNil())
+	updateTypes := planTaskTypes(updatePlan)
+	g.Expect(updateTypes).To(ContainElement(TaskConfigPatch), "update must include config-patch")
+	g.Expect(updateTypes).NotTo(ContainElement(TaskConfigApply), "update must NOT include config-apply")
+}
+
 // Validator's update progression prepends the three key-validation gates
 // so a missing/malformed secret aborts before any STS mutation.
 func TestValidatorPlanner_ImageDrift_PrependsValidationGates(t *testing.T) {
