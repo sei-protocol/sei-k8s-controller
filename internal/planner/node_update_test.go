@@ -71,7 +71,7 @@ func TestFullPlanner_NoDrift_ReturnsNil(t *testing.T) {
 	g.Expect(plan).To(BeNil(), "no plan should be built when there is no image drift")
 }
 
-func TestFullPlanner_ImageDrift_Day2Progression(t *testing.T) {
+func TestFullPlanner_ImageDrift_UpdateProgression(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
 	node.Spec.Image = testImageV2
@@ -104,8 +104,8 @@ func TestFullPlanner_ImageDrift_Day2Progression(t *testing.T) {
 	}
 }
 
-// The day-2 config-patch must carry the external-address from
-// Spec.ExternalAddress. This is the publishable-P2P propagation contract.
+// The update plan's config-patch must carry the external-address from
+// Spec.ExternalAddress — the publishable-P2P propagation contract.
 func TestFullPlanner_ConfigPatchCarriesExternalAddress(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
@@ -143,7 +143,7 @@ func TestFullPlanner_ConfigPatchIsDeterministic(t *testing.T) {
 
 // --- archive and replay planners share the full progression ---
 
-func TestArchivePlanner_ImageDrift_Day2Progression(t *testing.T) {
+func TestArchivePlanner_ImageDrift_UpdateProgression(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
 	node.Spec.FullNode = nil
@@ -165,7 +165,7 @@ func TestArchivePlanner_ImageDrift_Day2Progression(t *testing.T) {
 	}))
 }
 
-// Validator's day-2 progression prepends the three key-validation gates
+// Validator's update progression prepends the three key-validation gates
 // so a missing/malformed secret aborts before any STS mutation.
 func TestValidatorPlanner_ImageDrift_PrependsValidationGates(t *testing.T) {
 	g := NewWithT(t)
@@ -246,7 +246,7 @@ func TestFullPlanner_ImageDriftWinsOverSidecar(t *testing.T) {
 	plan, err := (&fullNodePlanner{}).BuildPlan(node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan).NotTo(BeNil())
-	g.Expect(plan.Tasks).To(HaveLen(7), "should be full day-2 plan, not one-task mark-ready")
+	g.Expect(plan.Tasks).To(HaveLen(7), "should be full update plan, not one-task mark-ready")
 	g.Expect(planTaskTypes(plan)).To(Equal([]string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,

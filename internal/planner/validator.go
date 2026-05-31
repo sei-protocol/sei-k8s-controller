@@ -111,13 +111,10 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Ta
 	return buildBasePlan(node, node.Spec.Peers, v.Snapshot, intent)
 }
 
-// buildRunningPlan returns the day-2 plan for a Running validator. The
-// progression prepends ValidateSigningKey / ValidateNodeKey /
-// ValidateOperatorKeyring before any STS or pod mutation: a missing or
-// malformed key secret must abort *before* we touch the StatefulSet
-// (which would otherwise schedule a pod that fails its kubelet volume
-// mount with no controller-side error context). Mirrors the same
-// readiness gates the validator's init plan applies in buildBasePlan.
+// buildRunningPlan returns the update plan for a Running validator. The
+// key-validation gates run before any STS mutation so a missing or
+// malformed secret aborts with a clear controller-side error rather than
+// a kubelet volume-mount failure on the recreated pod.
 func (p *validatorPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if imageDrifted(node) {
 		prog := []string{
@@ -132,7 +129,7 @@ func (p *validatorPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1al
 			task.TaskTypeObserveImage,
 			TaskMarkReady,
 		}
-		return assembleDay2Plan(node, prog, externalAddressPatch(node))
+		return assembleUpdatePlan(node, prog, externalAddressPatch(node))
 	}
 	if sidecarNeedsReapproval(node) {
 		return buildMarkReadyPlan(node)

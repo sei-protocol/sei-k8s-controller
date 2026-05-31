@@ -29,9 +29,6 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	return nil
 }
 
-// BuildPlan dispatches between startup (init/bootstrap) and existing-resource
-// (day-2) shapes. Reconciler/executor just call this and get a plan; the
-// startup-vs-day-2 distinction stays inside the planner.
 func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return p.buildRunningPlan(node)
@@ -47,18 +44,9 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 	return buildBasePlan(node, node.Spec.Peers, fn.Snapshot, intent)
 }
 
-// buildRunningPlan returns the day-2 plan for a Running full node, or
-// nil if no drift. Image drift queues a config-patch + pod-cycle plan;
-// sidecar reapproval queues a one-task mark-ready plan.
-//
-// The day-2 patch stamps only the keys the controller directly owns
-// (currently p2p.external-address for publishable P2P). TaskConfigPatch
-// is a generic TOML merge — no sei-config involvement, no forced overrides,
-// no mode-defaulted backfill. TaskConfigValidate after the patch is the
-// parser-level gate.
-//
-// Note: pelletier/go-toml/v2 does not preserve comments or key ordering
-// on re-encode, so the first day-2 patch erases operator-added comments.
+// buildRunningPlan returns the update plan for a Running full node, or
+// nil if no drift. pelletier/go-toml/v2 does not preserve comments on
+// re-encode — the first config-patch erases operator-added comments.
 func (p *fullNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if imageDrifted(node) {
 		prog := []string{
@@ -70,7 +58,7 @@ func (p *fullNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alp
 			task.TaskTypeObserveImage,
 			TaskMarkReady,
 		}
-		return assembleDay2Plan(node, prog, externalAddressPatch(node))
+		return assembleUpdatePlan(node, prog, externalAddressPatch(node))
 	}
 	if sidecarNeedsReapproval(node) {
 		return buildMarkReadyPlan(node)

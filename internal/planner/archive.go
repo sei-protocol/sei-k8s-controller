@@ -36,9 +36,8 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.
 	return buildBasePlan(node, node.Spec.Peers, nil, intent)
 }
 
-// buildRunningPlan returns the day-2 plan for a Running archive node.
-// Same shape as full nodes (no extra validation gates) — see full.go's
-// buildRunningPlan for the rationale.
+// buildRunningPlan returns the update plan for a Running archive node.
+// Same shape as full nodes (no extra validation gates).
 func (p *archiveNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if imageDrifted(node) {
 		prog := []string{
@@ -50,7 +49,7 @@ func (p *archiveNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1
 			task.TaskTypeObserveImage,
 			TaskMarkReady,
 		}
-		return assembleDay2Plan(node, prog, externalAddressPatch(node))
+		return assembleUpdatePlan(node, prog, externalAddressPatch(node))
 	}
 	if sidecarNeedsReapproval(node) {
 		return buildMarkReadyPlan(node)

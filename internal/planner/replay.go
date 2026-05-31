@@ -48,8 +48,8 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 	return buildBasePlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, intent)
 }
 
-// buildRunningPlan returns the day-2 plan for a Running replayer node.
-// Same shape as full/archive — see full.go's buildRunningPlan.
+// buildRunningPlan returns the update plan for a Running replayer node.
+// Same shape as full and archive.
 func (p *replayerPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if imageDrifted(node) {
 		prog := []string{
@@ -61,7 +61,7 @@ func (p *replayerPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alp
 			task.TaskTypeObserveImage,
 			TaskMarkReady,
 		}
-		return assembleDay2Plan(node, prog, externalAddressPatch(node))
+		return assembleUpdatePlan(node, prog, externalAddressPatch(node))
 	}
 	if sidecarNeedsReapproval(node) {
 		return buildMarkReadyPlan(node)
