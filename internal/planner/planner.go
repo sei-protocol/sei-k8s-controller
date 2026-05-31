@@ -733,6 +733,13 @@ func imageDrifted(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Image != node.Status.CurrentImage
 }
 
+// imageDriftMessage formats the standard NodeUpdateInProgress message
+// for image-drift-triggered plans, used by every mode planner's
+// buildRunningPlan before calling assembleUpdatePlan.
+func imageDriftMessage(node *seiv1alpha1.SeiNode) string {
+	return fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage)
+}
+
 // externalAddressPatch is the config.toml patch that stamps the
 // publishable-P2P external address. An empty Spec.ExternalAddress
 // stamps an empty value so opt-out reaches the pod symmetrically.
@@ -747,16 +754,14 @@ func externalAddressPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 }
 
 // assembleUpdatePlan composes a task progression for a Running node into
-// a TaskPlan. The progression slice is the per-mode authorship — each
-// planner decides which tasks it needs (e.g. validator prepends
-// key-validation gates).
+// a TaskPlan. Pure boilerplate (planID, task ordering, param marshaling,
+// phase fields) — the progression slice is the per-mode authorship.
+// Callers own the NodeUpdateInProgress condition: stamp it before calling
+// so the reason/message reflects the actual trigger.
 //
 // FailedPhase is deliberately empty: a failure retries on the next reconcile
 // rather than transitioning the node out of Running.
 func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
-	setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted",
-		fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage))
-
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {

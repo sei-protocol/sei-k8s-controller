@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	seiconfig "github.com/sei-protocol/sei-config"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -52,6 +53,7 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 // Same shape as full and archive.
 func (p *replayerPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if imageDrifted(node) {
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node))
 		prog := []string{
 			task.TaskTypeApplyStatefulSet,
 			task.TaskTypeApplyService,
