@@ -6,6 +6,7 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type replayerPlanner struct {
@@ -35,26 +36,37 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 
 func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
-		return buildRunningPlan(node)
+		return p.buildRunningPlan(node)
 	}
-	params, err := p.BuildConfigIntent(node)
-	if err != nil {
-		return nil, err
-	}
-	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, params)
-	}
-	return buildBasePlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, params)
-}
-
-func (p *replayerPlanner) BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error) {
-	if node.Spec.Replayer == nil {
-		return nil, fmt.Errorf("replayer sub-spec is nil")
-	}
-	return &seiconfig.ConfigIntent{
+	intent := &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeFull,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides()), node.Spec.Overrides),
-	}, nil
+	}
+	if NeedsBootstrap(node) {
+		return buildBootstrapPlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, intent)
+	}
+	return buildBasePlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, intent)
+}
+
+// buildRunningPlan returns the day-2 plan for a Running replayer node.
+// Same shape as full/archive — see full.go's buildRunningPlan.
+func (p *replayerPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if imageDrifted(node) {
+		prog := []string{
+			task.TaskTypeApplyStatefulSet,
+			task.TaskTypeApplyService,
+			TaskConfigPatch,
+			TaskConfigValidate,
+			task.TaskTypeReplacePod,
+			task.TaskTypeObserveImage,
+			TaskMarkReady,
+		}
+		return assembleDay2Plan(node, prog, externalAddressPatch(node))
+	}
+	if sidecarNeedsReapproval(node) {
+		return buildMarkReadyPlan(node)
+	}
+	return nil, nil
 }
 
 func (p *replayerPlanner) controllerOverrides() map[string]string {

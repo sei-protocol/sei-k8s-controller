@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
-	seiconfig "github.com/sei-protocol/sei-config"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -14,7 +13,10 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-const testImageV2 = "sei:v2.0.0"
+const (
+	testImageV2         = "sei:v2.0.0"
+	testExternalAddrAtl = "syncer-0-0-p2p.atlantic-2.harbor.platform.sei.io:26656"
+)
 
 // runningFullNode returns a SeiNode in the Running phase with currentImage matching spec.image.
 func runningFullNode() *seiv1alpha1.SeiNode {
@@ -41,44 +43,60 @@ func planTaskTypes(plan *seiv1alpha1.TaskPlan) []string {
 	return types
 }
 
-// --- buildRunningPlan tests ---
+// configPatchFromPlan finds the config-patch task in a plan and unmarshals
+// its params back into a ConfigPatchTask for inspection.
+func configPatchFromPlan(t *testing.T, plan *seiv1alpha1.TaskPlan) task.ConfigPatchTask {
+	t.Helper()
+	g := NewWithT(t)
+	for _, pt := range plan.Tasks {
+		if pt.Type != TaskConfigPatch {
+			continue
+		}
+		g.Expect(pt.Params).NotTo(BeNil())
+		var p task.ConfigPatchTask
+		g.Expect(json.Unmarshal(pt.Params.Raw, &p)).To(Succeed())
+		return p
+	}
+	t.Fatal("plan has no config-patch task")
+	return task.ConfigPatchTask{}
+}
 
-func TestBuildRunningPlan_NoDrift_ReturnsNil(t *testing.T) {
+// --- fullNodePlanner running-plan tests ---
+
+func TestFullPlanner_NoDrift_ReturnsNil(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
-	// spec.image == status.currentImage — no drift
-	plan, err := buildRunningPlan(node)
+	plan, err := (&fullNodePlanner{}).BuildPlan(node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan).To(BeNil(), "no plan should be built when there is no image drift")
 }
 
-func TestBuildRunningPlan_ImageDrift_ReturnsNodeUpdatePlan(t *testing.T) {
+func TestFullPlanner_ImageDrift_Day2Progression(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
-	node.Spec.Image = testImageV2 // drift: spec != status.currentImage
+	node.Spec.Image = testImageV2
 
-	plan, err := buildRunningPlan(node)
+	plan, err := (&fullNodePlanner{}).BuildPlan(node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan).NotTo(BeNil(), "plan should be built for image drift")
 
 	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
 	g.Expect(plan.TargetPhase).To(Equal(seiv1alpha1.PhaseRunning))
-	// FailedPhase should be empty — failure retries rather than transitioning out of Running.
+	// FailedPhase deliberately empty — failure retries on next reconcile.
 	g.Expect(string(plan.FailedPhase)).To(BeEmpty())
 
-	got := planTaskTypes(plan)
 	want := []string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
-		TaskConfigApply,
+		TaskConfigPatch,
 		TaskConfigValidate,
 		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
 		TaskMarkReady,
 	}
-	g.Expect(got).To(Equal(want), "NodeUpdate plan should have exactly these tasks in order")
+	g.Expect(planTaskTypes(plan)).To(Equal(want))
 
-	// All tasks should start Pending with non-empty IDs and params.
+	// Tasks start Pending with non-empty IDs and params.
 	for _, pt := range plan.Tasks {
 		g.Expect(pt.Status).To(Equal(seiv1alpha1.TaskPending), "task %s should start Pending", pt.Type)
 		g.Expect(pt.ID).NotTo(BeEmpty(), "task %s should have an ID", pt.Type)
@@ -86,135 +104,208 @@ func TestBuildRunningPlan_ImageDrift_ReturnsNodeUpdatePlan(t *testing.T) {
 	}
 }
 
-// configIntentFromPlan finds the config-apply task and unmarshals its
-// params back into a ConfigIntent for inspection.
-func configIntentFromPlan(t *testing.T, plan *seiv1alpha1.TaskPlan) *seiconfig.ConfigIntent {
-	t.Helper()
-	g := NewWithT(t)
-	for _, pt := range plan.Tasks {
-		if pt.Type != TaskConfigApply {
-			continue
-		}
-		g.Expect(pt.Params).NotTo(BeNil())
-		var intent seiconfig.ConfigIntent
-		g.Expect(json.Unmarshal(pt.Params.Raw, &intent)).To(Succeed())
-		return &intent
-	}
-	t.Fatal("plan has no config-apply task")
-	return nil
-}
-
-// The day-2 config-apply must carry the mode planner's full ConfigIntent —
-// non-empty Mode, Overrides containing the controller-managed keys —
-// otherwise sei-config's ResolveIntent rejects the empty-Mode and
-// TaskConfigApply fails at runtime.
-func TestBuildNodeUpdatePlan_ConfigApplyHasIntentWithMode(t *testing.T) {
+// The day-2 config-patch must carry the external-address from
+// Spec.ExternalAddress. This is the publishable-P2P propagation contract.
+func TestFullPlanner_ConfigPatchCarriesExternalAddress(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
-	node.Spec.ExternalAddress = "syncer-0-0-p2p.atlantic-2.harbor.platform.sei.io:26656"
+	node.Spec.ExternalAddress = testExternalAddrAtl
 	node.Spec.Image = testImageV2
-
-	plan, err := buildRunningPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(plan).NotTo(BeNil())
-
-	intent := configIntentFromPlan(t, plan)
-	g.Expect(intent.Mode).To(Equal(seiconfig.ModeFull), "Mode must be set so ResolveIntent accepts the intent")
-	g.Expect(intent.Overrides).To(HaveKeyWithValue(
-		seiconfig.KeyP2PExternalAddress,
-		"syncer-0-0-p2p.atlantic-2.harbor.platform.sei.io:26656",
-	), "commonOverrides should propagate Spec.ExternalAddress")
-}
-
-// Day-2 must set Incremental=true. The init path uses applyFull which
-// regenerates config from mode defaults — running that on a running node
-// would wipe persistent-peers, state-sync trust point, and operator-managed
-// TOML keys outside the controller's overrides set. Incremental reads
-// on-disk config and patches only the keys we own.
-func TestBuildNodeUpdatePlan_ConfigApplyIsIncremental(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-	node.Spec.Image = testImageV2
-
-	plan, err := buildRunningPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(plan).NotTo(BeNil())
-
-	intent := configIntentFromPlan(t, plan)
-	g.Expect(intent.Incremental).To(BeTrue(),
-		"day-2 ConfigIntent must be incremental to avoid clobbering on-disk state")
-}
-
-// Init plans must NOT set Incremental — the init path uses applyFull
-// (regenerate config from mode defaults + overrides). Pinning this here
-// makes accidental flips during future refactors a loud failure.
-func TestBuildPlan_InitPlanConfigIntentNotIncremental(t *testing.T) {
-	g := NewWithT(t)
-	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "full-init", Namespace: "default", Generation: 1},
-		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID:  "atlantic-2",
-			Image:    "sei:v1.0.0",
-			FullNode: &seiv1alpha1.FullNodeSpec{},
-		},
-		// No phase — defaults to "" (init path).
-	}
 
 	plan, err := (&fullNodePlanner{}).BuildPlan(node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan).NotTo(BeNil())
 
-	intent := configIntentFromPlan(t, plan)
-	g.Expect(intent.Incremental).To(BeFalse(),
-		"init ConfigIntent must NOT be incremental — applyFull regenerates from mode defaults")
+	patch := configPatchFromPlan(t, plan)
+	g.Expect(patch.Files).To(HaveKey("config.toml"))
+	p2p, ok := patch.Files["config.toml"]["p2p"].(map[string]any)
+	g.Expect(ok).To(BeTrue(), "config.toml.p2p should be a nested map")
+	g.Expect(p2p).To(HaveKeyWithValue("external-address", testExternalAddrAtl))
 }
 
-// Per-mode coverage: the day-2 intent should match the mode planner's
-// Mode value. Catches future drift if a new mode lands and isn't wired
-// into BuildConfigIntent.
-func TestBuildNodeUpdatePlan_ConfigApplyIntentMatchesModePlanner(t *testing.T) {
-	cases := []struct {
-		name     string
-		mutate   func(*seiv1alpha1.SeiNode)
-		wantMode seiconfig.NodeMode
-	}{
-		{
-			name:     "full",
-			mutate:   func(_ *seiv1alpha1.SeiNode) {},
-			wantMode: seiconfig.ModeFull,
-		},
-		{
-			name: "archive",
-			mutate: func(n *seiv1alpha1.SeiNode) {
-				n.Spec.FullNode = nil
-				n.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
-			},
-			wantMode: seiconfig.ModeArchive,
-		},
-		{
-			name: "validator",
-			mutate: func(n *seiv1alpha1.SeiNode) {
-				n.Spec.FullNode = nil
-				n.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
-			},
-			wantMode: seiconfig.ModeValidator,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			g := NewWithT(t)
-			node := runningFullNode()
-			tc.mutate(node)
-			node.Spec.Image = testImageV2
+// Two builds of the same spec must produce identical patch payloads
+// (plan-construction is deterministic w.r.t. spec).
+func TestFullPlanner_ConfigPatchIsDeterministic(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.ExternalAddress = testExternalAddrAtl
+	node.Spec.Image = testImageV2
 
-			plan, err := buildRunningPlan(node)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(plan).NotTo(BeNil())
+	plan1, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	plan2, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
 
-			intent := configIntentFromPlan(t, plan)
-			g.Expect(intent.Mode).To(Equal(tc.wantMode))
-			g.Expect(intent.Incremental).To(BeTrue())
-		})
+	p1 := configPatchFromPlan(t, plan1)
+	p2 := configPatchFromPlan(t, plan2)
+	g.Expect(p1.Files).To(Equal(p2.Files), "same spec must produce same patch payload")
+}
+
+// --- archive and replay planners share the full progression ---
+
+func TestArchivePlanner_ImageDrift_Day2Progression(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.FullNode = nil
+	node.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
+	node.Spec.Image = testImageV2
+
+	plan, err := (&archiveNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		TaskConfigPatch,
+		TaskConfigValidate,
+		task.TaskTypeReplacePod,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+}
+
+// Validator's day-2 progression prepends the three key-validation gates
+// so a missing/malformed secret aborts before any STS mutation.
+func TestValidatorPlanner_ImageDrift_PrependsValidationGates(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.FullNode = nil
+	node.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+	node.Spec.Image = testImageV2
+
+	plan, err := (&validatorPlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
+		task.TaskTypeValidateSigningKey,
+		task.TaskTypeValidateNodeKey,
+		task.TaskTypeValidateOperatorKeyring,
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		TaskConfigPatch,
+		TaskConfigValidate,
+		task.TaskTypeReplacePod,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+}
+
+// --- sidecar mark-ready re-apply ---
+
+func setSidecarReady(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason string) {
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:    seiv1alpha1.ConditionSidecarReady,
+		Status:  status,
+		Reason:  reason,
+		Message: "test",
+	})
+}
+
+func TestFullPlanner_SidecarReady_NoPlan(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	setSidecarReady(node, metav1.ConditionTrue, "Ready")
+
+	plan, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).To(BeNil())
+}
+
+func TestFullPlanner_SidecarNotReady_ReturnsMarkReadyPlan(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
+
+	plan, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
+	g.Expect(plan.TargetPhase).To(Equal(seiv1alpha1.PhaseRunning))
+	g.Expect(string(plan.FailedPhase)).To(BeEmpty())
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{TaskMarkReady}))
+}
+
+func TestFullPlanner_SidecarUnknown_NoPlan(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	setSidecarReady(node, metav1.ConditionUnknown, "Unreachable")
+
+	plan, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).To(BeNil(), "Unknown should not trigger a plan — re-probe next tick")
+}
+
+func TestFullPlanner_ImageDriftWinsOverSidecar(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.Image = testImageV2
+	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
+
+	plan, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+	g.Expect(plan.Tasks).To(HaveLen(7), "should be full day-2 plan, not one-task mark-ready")
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		TaskConfigPatch,
+		TaskConfigValidate,
+		task.TaskTypeReplacePod,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+}
+
+func TestBuildMarkReadyPlan_FreshIDEveryCall(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+
+	p1, err := buildMarkReadyPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	p2, err := buildMarkReadyPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(p1.ID).NotTo(Equal(p2.ID))
+	g.Expect(p1.Tasks[0].ID).NotTo(Equal(p2.Tasks[0].ID))
+}
+
+func TestSidecarNeedsReapproval(t *testing.T) {
+	g := NewWithT(t)
+
+	node := runningFullNode()
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	setSidecarReady(node, metav1.ConditionTrue, "Ready")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	setSidecarReady(node, metav1.ConditionUnknown, "Unreachable")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	setSidecarReady(node, metav1.ConditionFalse, "SomethingElse")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
+
+	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
+	g.Expect(sidecarNeedsReapproval(node)).To(BeTrue())
+}
+
+func TestBuildRunningPlan_UniqueIDs(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.Image = testImageV2
+
+	plan1, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	plan2, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(plan1.ID).NotTo(Equal(plan2.ID), "separate plan builds should have unique IDs")
+
+	seen := map[string]bool{}
+	for _, tsk := range plan1.Tasks {
+		g.Expect(seen[tsk.ID]).To(BeFalse(), "duplicate task ID: %s", tsk.ID)
+		seen[tsk.ID] = true
 	}
 }
 
@@ -223,7 +314,7 @@ func TestBuildNodeUpdatePlan_ConfigApplyIntentMatchesModePlanner(t *testing.T) {
 func TestResolvePlan_NodeUpdate_SetsCondition(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
-	node.Spec.Image = testImageV2 // drift triggers NodeUpdate plan
+	node.Spec.Image = testImageV2
 
 	err := (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -241,22 +332,17 @@ func TestResolvePlan_CompletedPlan_ClearsCondition(t *testing.T) {
 	node := runningFullNode()
 	node.Spec.Image = testImageV2
 
-	// Build a NodeUpdate plan and simulate completion.
 	err := (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
-	// Verify the condition was set.
 	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
 	g.Expect(cond).NotTo(BeNil())
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 
-	// Mark the plan completed.
 	node.Status.Plan.Phase = seiv1alpha1.TaskPlanComplete
-	// Also converge currentImage so a new plan is not built.
 	node.Status.CurrentImage = testImageV2
 
-	// ResolvePlan should clear the completed plan and the condition.
 	err = (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -272,7 +358,6 @@ func TestResolvePlan_FailedPlan_ClearsCondition(t *testing.T) {
 	node := runningFullNode()
 	node.Spec.Image = testImageV2
 
-	// Build a NodeUpdate plan and simulate failure.
 	err := (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.Plan).NotTo(BeNil())
@@ -286,13 +371,9 @@ func TestResolvePlan_FailedPlan_ClearsCondition(t *testing.T) {
 		Error: "apply error",
 	}
 
-	// ResolvePlan should clear the failed plan. Since drift still exists,
-	// it immediately builds a new NodeUpdate plan and sets the condition
-	// back to True. This is correct — automatic retry on failure.
 	err = (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	// A new plan was built because drift still exists.
 	g.Expect(node.Status.Plan).NotTo(BeNil(), "new plan should be built because drift persists")
 	g.Expect(node.Status.Plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
 
@@ -304,7 +385,7 @@ func TestResolvePlan_FailedPlan_ClearsCondition(t *testing.T) {
 func TestResolvePlan_ResumesActivePlan(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
-	node.Spec.Image = testImageV2 // drift exists
+	node.Spec.Image = testImageV2
 
 	existingPlan := &seiv1alpha1.TaskPlan{
 		ID:    "existing-plan-123",
@@ -321,19 +402,15 @@ func TestResolvePlan_ResumesActivePlan(t *testing.T) {
 		"active plan should be resumed, not replaced")
 }
 
-// --- Additional edge cases ---
-
 func TestResolvePlan_CompletedNonUpdatePlan_DoesNotClearCondition(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
-	// Manually set the condition (as if a previous NodeUpdate plan set it).
 	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
 		Type:   seiv1alpha1.ConditionNodeUpdateInProgress,
 		Status: metav1.ConditionFalse,
 		Reason: "UpdateComplete",
 	})
 
-	// Create a completed plan without observe-image (not a NodeUpdate plan).
 	node.Status.Plan = &seiv1alpha1.TaskPlan{
 		ID:    "non-update-plan",
 		Phase: seiv1alpha1.TaskPlanComplete,
@@ -345,7 +422,6 @@ func TestResolvePlan_CompletedNonUpdatePlan_DoesNotClearCondition(t *testing.T) 
 	err := (&NodeResolver{}).ResolvePlan(t.Context(), node)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	// The condition should remain unchanged (already False from before).
 	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
 	g.Expect(cond).NotTo(BeNil())
 	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
@@ -353,26 +429,7 @@ func TestResolvePlan_CompletedNonUpdatePlan_DoesNotClearCondition(t *testing.T) 
 		"reason should not be overwritten by a non-update plan completion")
 }
 
-func TestBuildRunningPlan_UniqueIDs(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-	node.Spec.Image = testImageV2
-
-	plan1, err := buildRunningPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	plan2, err := buildRunningPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	g.Expect(plan1.ID).NotTo(Equal(plan2.ID), "separate plan builds should have unique IDs")
-
-	// Task IDs within a single plan should all be unique.
-	seen := map[string]bool{}
-	for _, tsk := range plan1.Tasks {
-		g.Expect(seen[tsk.ID]).To(BeFalse(), "duplicate task ID: %s", tsk.ID)
-		seen[tsk.ID] = true
-	}
-}
+// --- handleTerminalPlan tests (unchanged) ---
 
 func TestHandleTerminalPlan_CompletedWithUpdateCondition(t *testing.T) {
 	g := NewWithT(t)
@@ -427,7 +484,6 @@ func TestHandleTerminalPlan_NilPlan(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
 	node.Status.Plan = nil
-	// Should be a no-op — no panic.
 	handleTerminalPlan(t.Context(), node)
 	g.Expect(node.Status.Plan).To(BeNil())
 }
@@ -460,108 +516,4 @@ func TestPlanFailureMessage_NoDetail(t *testing.T) {
 	g := NewWithT(t)
 	plan := &seiv1alpha1.TaskPlan{}
 	g.Expect(planFailureMessage(plan)).To(Equal("unknown"))
-}
-
-// --- sidecar mark-ready re-apply tests ---
-
-func setSidecarReady(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason string) {
-	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
-		Type:    seiv1alpha1.ConditionSidecarReady,
-		Status:  status,
-		Reason:  reason,
-		Message: "test",
-	})
-}
-
-func TestBuildRunningPlan_SidecarReady_NoPlan(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-	setSidecarReady(node, metav1.ConditionTrue, "Ready")
-
-	plan, err := buildRunningPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(plan).To(BeNil())
-}
-
-func TestBuildRunningPlan_SidecarNotReady_ReturnsMarkReadyPlan(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
-
-	plan, err := buildRunningPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(plan).NotTo(BeNil())
-	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
-	g.Expect(plan.TargetPhase).To(Equal(seiv1alpha1.PhaseRunning))
-	g.Expect(string(plan.FailedPhase)).To(BeEmpty())
-	g.Expect(planTaskTypes(plan)).To(Equal([]string{TaskMarkReady}))
-}
-
-func TestBuildRunningPlan_SidecarUnknown_NoPlan(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-	setSidecarReady(node, metav1.ConditionUnknown, "Unreachable")
-
-	plan, err := buildRunningPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(plan).To(BeNil(), "Unknown should not trigger a plan — re-probe next tick")
-}
-
-func TestBuildRunningPlan_ImageDriftWinsOverSidecar(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-	node.Spec.Image = testImageV2 // image drift
-	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
-
-	plan, err := buildRunningPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(plan).NotTo(BeNil())
-	// Image update plan ends with MarkReady, which also resolves the sidecar.
-	g.Expect(plan.Tasks).To(HaveLen(7), "should be full node-update plan, not one-task mark-ready")
-	g.Expect(planTaskTypes(plan)).To(Equal([]string{
-		task.TaskTypeApplyStatefulSet,
-		task.TaskTypeApplyService,
-		TaskConfigApply,
-		TaskConfigValidate,
-		task.TaskTypeReplacePod,
-		task.TaskTypeObserveImage,
-		TaskMarkReady,
-	}))
-}
-
-func TestBuildMarkReadyPlan_FreshIDEveryCall(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-
-	p1, err := buildMarkReadyPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-	p2, err := buildMarkReadyPlan(node)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	g.Expect(p1.ID).NotTo(Equal(p2.ID))
-	g.Expect(p1.Tasks[0].ID).NotTo(Equal(p2.Tasks[0].ID))
-}
-
-func TestSidecarNeedsReapproval(t *testing.T) {
-	g := NewWithT(t)
-
-	// missing condition
-	node := runningFullNode()
-	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
-
-	// True
-	setSidecarReady(node, metav1.ConditionTrue, "Ready")
-	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
-
-	// Unknown
-	setSidecarReady(node, metav1.ConditionUnknown, "Unreachable")
-	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
-
-	// False + wrong reason
-	setSidecarReady(node, metav1.ConditionFalse, "SomethingElse")
-	g.Expect(sidecarNeedsReapproval(node)).To(BeFalse())
-
-	// False + NotReady
-	setSidecarReady(node, metav1.ConditionFalse, "NotReady")
-	g.Expect(sidecarNeedsReapproval(node)).To(BeTrue())
 }

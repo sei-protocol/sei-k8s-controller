@@ -6,6 +6,7 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type validatorPlanner struct {
@@ -94,28 +95,47 @@ func validateOperatorKeyringDistinctness(v *seiv1alpha1.ValidatorSpec) error {
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
-		return buildRunningPlan(node)
+		return p.buildRunningPlan(node)
 	}
 	if isGenesisCeremonyNode(node) {
 		return buildGenesisPlan(node)
 	}
 	v := node.Spec.Validator
-	params, err := p.BuildConfigIntent(node)
-	if err != nil {
-		return nil, err
-	}
-	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, node.Spec.Peers, v.Snapshot, params)
-	}
-	return buildBasePlan(node, node.Spec.Peers, v.Snapshot, params)
-}
-
-func (p *validatorPlanner) BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error) {
-	if node.Spec.Validator == nil {
-		return nil, fmt.Errorf("validator sub-spec is nil")
-	}
-	return &seiconfig.ConfigIntent{
+	intent := &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeValidator,
 		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
-	}, nil
+	}
+	if NeedsBootstrap(node) {
+		return buildBootstrapPlan(node, node.Spec.Peers, v.Snapshot, intent)
+	}
+	return buildBasePlan(node, node.Spec.Peers, v.Snapshot, intent)
+}
+
+// buildRunningPlan returns the day-2 plan for a Running validator. The
+// progression prepends ValidateSigningKey / ValidateNodeKey /
+// ValidateOperatorKeyring before any STS or pod mutation: a missing or
+// malformed key secret must abort *before* we touch the StatefulSet
+// (which would otherwise schedule a pod that fails its kubelet volume
+// mount with no controller-side error context). Mirrors the same
+// readiness gates the validator's init plan applies in buildBasePlan.
+func (p *validatorPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if imageDrifted(node) {
+		prog := []string{
+			task.TaskTypeValidateSigningKey,
+			task.TaskTypeValidateNodeKey,
+			task.TaskTypeValidateOperatorKeyring,
+			task.TaskTypeApplyStatefulSet,
+			task.TaskTypeApplyService,
+			TaskConfigPatch,
+			TaskConfigValidate,
+			task.TaskTypeReplacePod,
+			task.TaskTypeObserveImage,
+			TaskMarkReady,
+		}
+		return assembleDay2Plan(node, prog, externalAddressPatch(node))
+	}
+	if sidecarNeedsReapproval(node) {
+		return buildMarkReadyPlan(node)
+	}
+	return nil, nil
 }

@@ -32,6 +32,7 @@ const (
 	TaskConfigureGenesis   = sidecar.TaskTypeConfigureGenesis
 	TaskConfigureStateSync = sidecar.TaskTypeConfigureStateSync
 	TaskConfigApply        = sidecar.TaskTypeConfigApply
+	TaskConfigPatch        = sidecar.TaskTypeConfigPatch
 	TaskConfigValidate     = sidecar.TaskTypeConfigValidate
 	TaskMarkReady          = sidecar.TaskTypeMarkReady
 	TaskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
@@ -58,18 +59,19 @@ var baseProgression = map[string][]string{
 }
 
 // NodePlanner encapsulates mode-specific logic for validating a SeiNode
-// and building its initialization task plan with fully embedded params.
+// and building its task plan. BuildPlan dispatches internally between
+// startup (init) and existing-resource (day-2) shapes — callers don't
+// see the distinction and the interface stays narrow.
+//
+// Rule of thumb for implementations: init plans write the whole config
+// file via TaskConfigApply (sei-config mode-defaulted resolution).
+// Day-2 plans patch only the keys the controller directly owns via
+// TaskConfigPatch (generic TOML merge, no sei-config involvement).
+// Never mix the two in one plan.
 type NodePlanner interface {
 	Validate(node *seiv1alpha1.SeiNode) error
 	BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
 	Mode() string
-
-	// BuildConfigIntent returns the ConfigIntent the mode's plan would feed
-	// to TaskConfigApply (mode + merged controller / spec overrides). Shared
-	// by BuildPlan (init) and buildNodeUpdatePlan (day-2) so they emit
-	// identical config payloads for the same spec. Day-2 callers set
-	// Incremental on the returned value before passing it through.
-	BuildConfigIntent(node *seiv1alpha1.SeiNode) (*seiconfig.ConfigIntent, error)
 }
 
 // GroupPlanner encapsulates logic for building a group-level task plan.
@@ -709,24 +711,17 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	return out
 }
 
-// buildRunningPlan returns a steady-state drift plan, or nil if no drift.
-// Image drift is checked first — its plan ends with MarkReady, so it also
-// resolves any stale sidecar.
-func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if node.Spec.Image != node.Status.CurrentImage {
-		return buildNodeUpdatePlan(node)
-	}
-	if sidecarNeedsReapproval(node) {
-		return buildMarkReadyPlan(node)
-	}
-	return nil, nil
-}
-
+// sidecarNeedsReapproval reports whether the sidecar has been observed
+// to have lost readiness. Mode-agnostic — any mode planner that's in
+// the running phase checks this and routes to buildMarkReadyPlan.
 func sidecarNeedsReapproval(node *seiv1alpha1.SeiNode) bool {
 	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 	return cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == "NotReady"
 }
 
+// buildMarkReadyPlan is the single-task plan used to re-mark sidecar
+// readiness. Mode-agnostic — kept as a free helper so each mode planner
+// can call it directly from its running-phase branch.
 func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	t, err := buildPlannedTask(planID, sidecar.TaskTypeMarkReady, 0, paramsForTaskType(node, sidecar.TaskTypeMarkReady, nil, nil))
@@ -741,54 +736,48 @@ func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error
 	}, nil
 }
 
-// buildNodeUpdatePlan constructs a plan to roll out an image update on a
-// Running node. The plan applies the new StatefulSet spec, re-applies
-// config.toml (incremental — only the keys the controller owns), then
-// cycles the pod and re-initializes the sidecar.
+// imageDrifted reports whether the running pod's currently-observed
+// image diverges from the spec'd image. Mode-agnostic check; the
+// returned task list is mode-specific (each planner assembles its own).
+func imageDrifted(node *seiv1alpha1.SeiNode) bool {
+	return node.Spec.Image != node.Status.CurrentImage
+}
+
+// externalAddressPatch returns the day-2 config.toml patch that stamps
+// the publishable P2P external address. Empty Spec.ExternalAddress means
+// the SND is not opted into publishable P2P; emit an empty-string patch
+// so opt-out reaches the pod symmetrically with opt-in.
+func externalAddressPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
+	return map[string]map[string]any{
+		"config.toml": {
+			"p2p": map[string]any{
+				"external-address": node.Spec.ExternalAddress,
+			},
+		},
+	}
+}
+
+// assembleDay2Plan composes a day-2 task progression into a TaskPlan,
+// shared by every mode planner so the boilerplate (planID, ordering,
+// param marshaling, phase fields) lives in one place. The progression
+// slice IS the per-mode authorship — each planner decides which tasks
+// it needs (e.g. validator prepends key-validation gates).
+//
+// patch carries the TOML fragments the controller wants stamped into
+// named files for TaskConfigPatch; pass nil if the planner's progression
+// doesn't include a config-patch step (none today).
 //
 // FailedPhase is deliberately empty: a failure retries on the next reconcile
 // rather than transitioning the node out of Running.
-//
-// TaskConfigApply is placed before ReplacePod so the old pod's sidecar
-// writes the new config.toml to the PVC; the new pod then mounts the
-// PVC and reads the fresh file at seid start. external_address has no
-// hot-reload path in seid today (see seictl config_reload.go), so the
-// pod restart is the trigger that makes new values take effect.
-//
-// Incremental=true is mandatory on the day-2 intent. The init path uses
-// the non-incremental applyFull, which regenerates config from mode
-// defaults + overrides; running that on day 2 would wipe persistent-peers,
-// state-sync trust point, and any operator-managed TOML keys that the
-// controller doesn't track in overrides. applyIncremental reads on-disk
-// config and patches only the overrides we own.
-func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+func assembleDay2Plan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
 	setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted",
 		fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage))
-
-	mode, err := plannerForMode(node)
-	if err != nil {
-		return nil, fmt.Errorf("resolving mode planner: %w", err)
-	}
-	intent, err := mode.BuildConfigIntent(node)
-	if err != nil {
-		return nil, fmt.Errorf("building config intent: %w", err)
-	}
-	intent.Incremental = true
-
-	prog := []string{
-		task.TaskTypeApplyStatefulSet,
-		task.TaskTypeApplyService,
-		TaskConfigApply,
-		TaskConfigValidate,
-		task.TaskTypeReplacePod,
-		task.TaskTypeObserveImage,
-		sidecar.TaskTypeMarkReady,
-	}
 
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, intent))
+		params := paramsForDay2Task(node, taskType, patch)
+		t, err := buildPlannedTask(planID, taskType, i, params)
 		if err != nil {
 			return nil, err
 		}
@@ -800,6 +789,17 @@ func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, erro
 		Tasks:       tasks,
 		TargetPhase: seiv1alpha1.PhaseRunning,
 	}, nil
+}
+
+// paramsForDay2Task is a thin wrapper around paramsForTaskType that
+// returns the config-patch params when the task type is TaskConfigPatch.
+// All other task types delegate to paramsForTaskType with nil intent —
+// day-2 plans never carry a ConfigIntent.
+func paramsForDay2Task(node *seiv1alpha1.SeiNode, taskType string, patch map[string]map[string]any) any {
+	if taskType == TaskConfigPatch {
+		return task.ConfigPatchTask{Files: patch}
+	}
+	return paramsForTaskType(node, taskType, nil, nil)
 }
 
 // mergeOverrides combines controller-generated overrides with user-specified
