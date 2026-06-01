@@ -733,9 +733,8 @@ func imageDrifted(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Image != node.Status.CurrentImage
 }
 
-// imageDriftMessage formats the standard NodeUpdateInProgress message
-// for image-drift-triggered plans, used by every mode planner's
-// buildRunningPlan before calling assembleUpdatePlan.
+// imageDriftMessage formats the NodeUpdateInProgress message every mode
+// planner stamps before an image-drift-triggered assembleUpdatePlan call.
 func imageDriftMessage(node *seiv1alpha1.SeiNode) string {
 	return fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage)
 }
@@ -753,14 +752,10 @@ func externalAddressPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 	}
 }
 
-// assembleUpdatePlan composes a task progression for a Running node into
-// a TaskPlan. Pure boilerplate (planID, task ordering, param marshaling,
-// phase fields) — the progression slice is the per-mode authorship.
-// Callers own the NodeUpdateInProgress condition: stamp it before calling
-// so the reason/message reflects the actual trigger.
-//
-// FailedPhase is deliberately empty: a failure retries on the next reconcile
-// rather than transitioning the node out of Running.
+// assembleUpdatePlan composes a per-mode task progression into a TaskPlan.
+// Callers own the NodeUpdateInProgress condition — stamp it before calling
+// so the reason/message reflects the actual trigger. FailedPhase stays
+// empty so a failure retries on next reconcile.
 func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
@@ -780,9 +775,9 @@ func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[stri
 	}, nil
 }
 
-// paramsForUpdateTask returns the config-patch params for TaskConfigPatch
-// and delegates everything else to paramsForTaskType with nil intent —
-// update plans on a Running node never carry a ConfigIntent.
+// paramsForUpdateTask returns ConfigPatchTask params for TaskConfigPatch
+// and delegates everything else to paramsForTaskType. Update plans never
+// carry a ConfigIntent — those are init-path only.
 func paramsForUpdateTask(node *seiv1alpha1.SeiNode, taskType string, patch map[string]map[string]any) any {
 	if taskType == TaskConfigPatch {
 		return task.ConfigPatchTask{Files: patch}

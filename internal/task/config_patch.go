@@ -5,9 +5,8 @@ import (
 )
 
 // ConfigPatchTask stamps controller-owned TOML keys into named seid
-// config files via a generic merge-and-write on the sidecar — no
-// sei-config involvement. JSON tag matches the wire format
-// sidecar.ConfigPatchTask emits.
+// config files via the sidecar's generic merge-and-write. The json tag
+// matches the wire format the sidecar deserializes.
 type ConfigPatchTask struct {
 	Files map[string]map[string]any `json:"files"`
 }
