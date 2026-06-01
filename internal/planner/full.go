@@ -4,8 +4,10 @@ import (
 	"fmt"
 
 	seiconfig "github.com/sei-protocol/sei-config"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type fullNodePlanner struct {
@@ -30,17 +32,40 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 
 func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
-		return buildRunningPlan(node)
+		return p.buildRunningPlan(node)
 	}
 	fn := node.Spec.FullNode
-	params := &seiconfig.ConfigIntent{
+	intent := &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeFull,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, node.Spec.Peers, fn.Snapshot, params)
+		return buildBootstrapPlan(node, node.Spec.Peers, fn.Snapshot, intent)
 	}
-	return buildBasePlan(node, node.Spec.Peers, fn.Snapshot, params)
+	return buildBasePlan(node, node.Spec.Peers, fn.Snapshot, intent)
+}
+
+// buildRunningPlan returns the update plan for a Running full node, or
+// nil if no drift. pelletier/go-toml/v2 does not preserve comments on
+// re-encode — the first config-patch erases operator-added comments.
+func (p *fullNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if imageDrifted(node) {
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node))
+		prog := []string{
+			task.TaskTypeApplyStatefulSet,
+			task.TaskTypeApplyService,
+			TaskConfigPatch,
+			TaskConfigValidate,
+			task.TaskTypeReplacePod,
+			task.TaskTypeObserveImage,
+			TaskMarkReady,
+		}
+		return assembleUpdatePlan(node, prog, externalAddressPatch(node))
+	}
+	if sidecarNeedsReapproval(node) {
+		return buildMarkReadyPlan(node)
+	}
+	return nil, nil
 }
 
 func (p *fullNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {

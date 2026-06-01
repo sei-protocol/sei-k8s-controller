@@ -4,8 +4,10 @@ import (
 	"fmt"
 
 	seiconfig "github.com/sei-protocol/sei-config"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type validatorPlanner struct {
@@ -94,18 +96,45 @@ func validateOperatorKeyringDistinctness(v *seiv1alpha1.ValidatorSpec) error {
 
 func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
-		return buildRunningPlan(node)
+		return p.buildRunningPlan(node)
 	}
 	if isGenesisCeremonyNode(node) {
 		return buildGenesisPlan(node)
 	}
 	v := node.Spec.Validator
-	params := &seiconfig.ConfigIntent{
+	intent := &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeValidator,
 		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, node.Spec.Peers, v.Snapshot, params)
+		return buildBootstrapPlan(node, node.Spec.Peers, v.Snapshot, intent)
 	}
-	return buildBasePlan(node, node.Spec.Peers, v.Snapshot, params)
+	return buildBasePlan(node, node.Spec.Peers, v.Snapshot, intent)
+}
+
+// buildRunningPlan returns the update plan for a Running validator. The
+// key-validation gates run before any STS mutation so a missing or
+// malformed secret aborts with a clear controller-side error rather than
+// a kubelet volume-mount failure on the recreated pod.
+func (p *validatorPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if imageDrifted(node) {
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node))
+		prog := []string{
+			task.TaskTypeValidateSigningKey,
+			task.TaskTypeValidateNodeKey,
+			task.TaskTypeValidateOperatorKeyring,
+			task.TaskTypeApplyStatefulSet,
+			task.TaskTypeApplyService,
+			TaskConfigPatch,
+			TaskConfigValidate,
+			task.TaskTypeReplacePod,
+			task.TaskTypeObserveImage,
+			TaskMarkReady,
+		}
+		return assembleUpdatePlan(node, prog, externalAddressPatch(node))
+	}
+	if sidecarNeedsReapproval(node) {
+		return buildMarkReadyPlan(node)
+	}
+	return nil, nil
 }

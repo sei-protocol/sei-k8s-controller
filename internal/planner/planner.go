@@ -32,6 +32,7 @@ const (
 	TaskConfigureGenesis   = sidecar.TaskTypeConfigureGenesis
 	TaskConfigureStateSync = sidecar.TaskTypeConfigureStateSync
 	TaskConfigApply        = sidecar.TaskTypeConfigApply
+	TaskConfigPatch        = sidecar.TaskTypeConfigPatch
 	TaskConfigValidate     = sidecar.TaskTypeConfigValidate
 	TaskMarkReady          = sidecar.TaskTypeMarkReady
 	TaskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
@@ -57,8 +58,12 @@ var baseProgression = map[string][]string{
 	"genesis":    {TaskConfigApply, TaskConfigValidate, TaskMarkReady},
 }
 
-// NodePlanner encapsulates mode-specific logic for validating a SeiNode
-// and building its initialization task plan with fully embedded params.
+// NodePlanner encapsulates mode-specific plan construction. BuildPlan
+// dispatches internally between startup (init) and an existing
+// running resource — callers don't see the distinction.
+//
+// Convention: init writes the whole config via TaskConfigApply; an
+// existing resource patches only controller-owned keys via TaskConfigPatch.
 type NodePlanner interface {
 	Validate(node *seiv1alpha1.SeiNode) error
 	BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
@@ -702,24 +707,14 @@ func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	return out
 }
 
-// buildRunningPlan returns a steady-state drift plan, or nil if no drift.
-// Image drift is checked first — its plan ends with MarkReady, so it also
-// resolves any stale sidecar.
-func buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if node.Spec.Image != node.Status.CurrentImage {
-		return buildNodeUpdatePlan(node)
-	}
-	if sidecarNeedsReapproval(node) {
-		return buildMarkReadyPlan(node)
-	}
-	return nil, nil
-}
-
+// sidecarNeedsReapproval reports whether the sidecar has been observed
+// to have lost readiness. Mode-agnostic.
 func sidecarNeedsReapproval(node *seiv1alpha1.SeiNode) bool {
 	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 	return cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == "NotReady"
 }
 
+// buildMarkReadyPlan is the single-task plan that re-marks sidecar readiness.
 func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	t, err := buildPlannedTask(planID, sidecar.TaskTypeMarkReady, 0, paramsForTaskType(node, sidecar.TaskTypeMarkReady, nil, nil))
@@ -734,28 +729,39 @@ func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error
 	}, nil
 }
 
-// buildNodeUpdatePlan constructs a plan to roll out an image update on a
-// Running node. The plan applies the new StatefulSet spec, waits for the
-// rollout to complete, then re-initializes the sidecar.
-//
-// FailedPhase is deliberately empty: a failure retries on the next reconcile
-// rather than transitioning the node out of Running.
-func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted",
-		fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage))
+func imageDrifted(node *seiv1alpha1.SeiNode) bool {
+	return node.Spec.Image != node.Status.CurrentImage
+}
 
-	prog := []string{
-		task.TaskTypeApplyStatefulSet,
-		task.TaskTypeApplyService,
-		task.TaskTypeReplacePod,
-		task.TaskTypeObserveImage,
-		sidecar.TaskTypeMarkReady,
+// imageDriftMessage formats the NodeUpdateInProgress message every mode
+// planner stamps before an image-drift-triggered assembleUpdatePlan call.
+func imageDriftMessage(node *seiv1alpha1.SeiNode) string {
+	return fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage)
+}
+
+// externalAddressPatch is the config.toml patch that stamps the
+// publishable-P2P external address. An empty Spec.ExternalAddress
+// stamps an empty value so opt-out reaches the pod symmetrically.
+func externalAddressPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
+	return map[string]map[string]any{
+		"config.toml": {
+			"p2p": map[string]any{
+				"external-address": node.Spec.ExternalAddress,
+			},
+		},
 	}
+}
 
+// assembleUpdatePlan composes a per-mode task progression into a TaskPlan.
+// Callers own the NodeUpdateInProgress condition — stamp it before calling
+// so the reason/message reflects the actual trigger. FailedPhase stays
+// empty so a failure retries on next reconcile.
+func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
-		t, err := buildPlannedTask(planID, taskType, i, paramsForTaskType(node, taskType, nil, nil))
+		params := paramsForUpdateTask(node, taskType, patch)
+		t, err := buildPlannedTask(planID, taskType, i, params)
 		if err != nil {
 			return nil, err
 		}
@@ -767,6 +773,16 @@ func buildNodeUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, erro
 		Tasks:       tasks,
 		TargetPhase: seiv1alpha1.PhaseRunning,
 	}, nil
+}
+
+// paramsForUpdateTask returns ConfigPatchTask params for TaskConfigPatch
+// and delegates everything else to paramsForTaskType. Update plans never
+// carry a ConfigIntent — those are init-path only.
+func paramsForUpdateTask(node *seiv1alpha1.SeiNode, taskType string, patch map[string]map[string]any) any {
+	if taskType == TaskConfigPatch {
+		return task.ConfigPatchTask{Files: patch}
+	}
+	return paramsForTaskType(node, taskType, nil, nil)
 }
 
 // mergeOverrides combines controller-generated overrides with user-specified
