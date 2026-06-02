@@ -743,7 +743,9 @@ func imageDrifted(node *seiv1alpha1.SeiNode) bool {
 // override or controller-wide default) diverges from what was last observed.
 // Empty Status.CurrentSidecarImage means "not yet observed" and is treated
 // as no-drift so a controller upgrade doesn't fleet-roll every node before
-// ObserveImage has had a chance to backfill the field.
+// ObserveImage has had a chance to backfill the field. The early return
+// also keeps planner tests that construct zero-value planners (empty
+// Platform.SidecarImage) from accidentally tripping drift.
 func sidecarImageDrifted(node *seiv1alpha1.SeiNode, p platform.Config) bool {
 	if node.Status.CurrentSidecarImage == "" {
 		return false
