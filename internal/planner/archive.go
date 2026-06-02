@@ -8,10 +8,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type archiveNodePlanner struct {
+	platform platform.Config
 }
 
 func (p *archiveNodePlanner) Mode() string { return string(seiconfig.ModeArchive) }
@@ -40,8 +42,8 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.
 // buildRunningPlan returns the update plan for a Running archive node.
 // Same shape as full nodes (no extra validation gates).
 func (p *archiveNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if imageDrifted(node) {
-		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node))
+	if imageDrifted(node) || sidecarImageDrifted(node, p.platform) {
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node, p.platform))
 		prog := []string{
 			task.TaskTypeApplyStatefulSet,
 			task.TaskTypeApplyService,

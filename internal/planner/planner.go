@@ -21,6 +21,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -128,6 +129,9 @@ func isConditionTrue(group *seiv1alpha1.SeiNodeDeployment, condType string) bool
 type NodeResolver struct {
 	// Nil factory skips the sidecar probe; used by tests.
 	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
+	// Platform supplies the controller-wide sidecar image fallback used
+	// by sidecarImageDrifted when Spec.Sidecar.Image is unset.
+	Platform platform.Config
 }
 
 func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode) error {
@@ -145,7 +149,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 	handleTerminalPlan(ctx, node)
 
-	mode, err := plannerForMode(node)
+	mode, err := p.plannerForMode(node)
 	if err != nil {
 		return err
 	}
@@ -261,18 +265,19 @@ func planFailureMessage(plan *seiv1alpha1.TaskPlan) string {
 	return unknownValue
 }
 
-// plannerForMode returns the appropriate NodePlanner based on which mode
-// sub-spec is populated on the SeiNode.
-func plannerForMode(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
+// plannerForMode returns the appropriate NodePlanner for the SeiNode's
+// mode sub-spec, threaded with the resolver's Platform config so each
+// planner can resolve the effective sidecar image for drift detection.
+func (r *NodeResolver) plannerForMode(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
 	switch {
 	case node.Spec.FullNode != nil:
-		return &fullNodePlanner{}, nil
+		return &fullNodePlanner{platform: r.Platform}, nil
 	case node.Spec.Archive != nil:
-		return &archiveNodePlanner{}, nil
+		return &archiveNodePlanner{platform: r.Platform}, nil
 	case node.Spec.Replayer != nil:
-		return &replayerPlanner{}, nil
+		return &replayerPlanner{platform: r.Platform}, nil
 	case node.Spec.Validator != nil:
-		return &validatorPlanner{}, nil
+		return &validatorPlanner{platform: r.Platform}, nil
 	default:
 		return nil, fmt.Errorf("no mode sub-spec set on SeiNode %s/%s", node.Namespace, node.Name)
 	}
@@ -733,10 +738,35 @@ func imageDrifted(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Image != node.Status.CurrentImage
 }
 
+// sidecarImageDrifted reports whether the effective sidecar image diverges
+// from what was last observed. Empty Status.CurrentSidecarImage means
+// "not yet observed" and is treated as no-drift so a controller upgrade
+// doesn't fleet-roll every node before ObserveImage backfills the field.
+func sidecarImageDrifted(node *seiv1alpha1.SeiNode, p platform.Config) bool {
+	if node.Status.CurrentSidecarImage == "" {
+		return false
+	}
+	return task.EffectiveSidecarImage(node, p) != node.Status.CurrentSidecarImage
+}
+
 // imageDriftMessage formats the NodeUpdateInProgress message every mode
-// planner stamps before an image-drift-triggered assembleUpdatePlan call.
-func imageDriftMessage(node *seiv1alpha1.SeiNode) string {
-	return fmt.Sprintf("image drift detected: spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage)
+// planner stamps before an update plan. Names which image(s) drifted so an
+// operator reading the condition can tell seid bumps from sidecar bumps.
+func imageDriftMessage(node *seiv1alpha1.SeiNode, p platform.Config) string {
+	seid := imageDrifted(node)
+	sc := sidecarImageDrifted(node, p)
+	switch {
+	case seid && sc:
+		return fmt.Sprintf("image drift detected: seid spec=%s current=%s; sidecar spec=%s current=%s",
+			node.Spec.Image, node.Status.CurrentImage,
+			task.EffectiveSidecarImage(node, p), node.Status.CurrentSidecarImage)
+	case sc:
+		return fmt.Sprintf("sidecar image drift detected: spec=%s current=%s",
+			task.EffectiveSidecarImage(node, p), node.Status.CurrentSidecarImage)
+	default:
+		return fmt.Sprintf("image drift detected: spec=%s current=%s",
+			node.Spec.Image, node.Status.CurrentImage)
+	}
 }
 
 // externalAddressPatch is the config.toml patch that stamps the

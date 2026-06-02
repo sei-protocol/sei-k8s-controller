@@ -7,10 +7,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 type validatorPlanner struct {
+	platform platform.Config
 }
 
 func (p *validatorPlanner) Mode() string { return string(seiconfig.ModeValidator) }
@@ -117,8 +119,8 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Ta
 // malformed secret aborts with a clear controller-side error rather than
 // a kubelet volume-mount failure on the recreated pod.
 func (p *validatorPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if imageDrifted(node) {
-		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node))
+	if imageDrifted(node) || sidecarImageDrifted(node, p.platform) {
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node, p.platform))
 		prog := []string{
 			task.TaskTypeValidateSigningKey,
 			task.TaskTypeValidateNodeKey,

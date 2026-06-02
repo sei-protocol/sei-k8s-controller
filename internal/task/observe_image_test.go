@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
 func observeImageNode() *seiv1alpha1.SeiNode {
@@ -79,6 +80,43 @@ func TestObserveImage_RolloutComplete_SetsCurrentImage(t *testing.T) {
 	g.Expect(exec.Execute(context.Background())).To(Succeed())
 	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
 	g.Expect(node.Status.CurrentImage).To(Equal("sei:v2.0.0"))
+}
+
+// Rollout completion stamps both currentImage and currentSidecarImage.
+// Sidecar value falls back to the platform default when Spec.Sidecar is unset.
+func TestObserveImage_RolloutComplete_StampsSidecarFromPlatformDefault(t *testing.T) {
+	g := NewWithT(t)
+	node := observeImageNode()
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: node.Namespace, Generation: 2},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
+		Status:     appsv1.StatefulSetStatus{ObservedGeneration: 2, UpdatedReplicas: 1, Replicas: 1},
+	}
+	cfg := observeImageCfg(t, node, sts)
+	cfg.Platform = platform.Config{SidecarImage: "seictl@sha256:default"}
+
+	exec := newObserveImageExec(t, cfg)
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(node.Status.CurrentImage).To(Equal("sei:v2.0.0"))
+	g.Expect(node.Status.CurrentSidecarImage).To(Equal("seictl@sha256:default"))
+}
+
+// Spec.Sidecar.Image override beats the platform default.
+func TestObserveImage_RolloutComplete_StampsSidecarFromOverride(t *testing.T) {
+	g := NewWithT(t)
+	node := observeImageNode()
+	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Image: "seictl@sha256:override"}
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: node.Namespace, Generation: 2},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
+		Status:     appsv1.StatefulSetStatus{ObservedGeneration: 2, UpdatedReplicas: 1, Replicas: 1},
+	}
+	cfg := observeImageCfg(t, node, sts)
+	cfg.Platform = platform.Config{SidecarImage: "seictl@sha256:default"}
+
+	exec := newObserveImageExec(t, cfg)
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(node.Status.CurrentSidecarImage).To(Equal("seictl@sha256:override"))
 }
 
 func TestObserveImage_RollingUpdate_ReturnsRunning(t *testing.T) {

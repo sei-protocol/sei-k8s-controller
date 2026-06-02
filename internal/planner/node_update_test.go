@@ -10,13 +10,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 const (
-	testImageV2         = "sei:v2.0.0"
-	testExternalAddrAtl = "syncer-0-0-p2p.atlantic-2.harbor.platform.sei.io:26656"
+	testImageV2          = "sei:v2.0.0"
+	testExternalAddrAtl  = "syncer-0-0-p2p.atlantic-2.harbor.platform.sei.io:26656"
+	testSidecarImageV1   = "ghcr.io/sei-protocol/seictl@sha256:1111"
+	testSidecarImageV2   = "ghcr.io/sei-protocol/seictl@sha256:2222"
+	testSidecarOverrideV = "ghcr.io/sei-protocol/seictl@sha256:3333"
 )
+
+func platformWithSidecar(image string) platform.Config {
+	return platform.Config{SidecarImage: image}
+}
 
 // runningFullNode returns a SeiNode in the Running phase with currentImage matching spec.image.
 func runningFullNode() *seiv1alpha1.SeiNode {
@@ -163,6 +171,100 @@ func TestArchivePlanner_ImageDrift_UpdateProgression(t *testing.T) {
 		task.TaskTypeObserveImage,
 		TaskMarkReady,
 	}))
+}
+
+// --- sidecar image drift tests ---
+
+// sidecarDriftedNode primes CurrentSidecarImage so the backfill guard
+// doesn't fire; the test then drives drift via Spec.Sidecar or platform.
+func sidecarDriftedNode() *seiv1alpha1.SeiNode {
+	node := runningFullNode()
+	node.Status.CurrentSidecarImage = testSidecarImageV1
+	return node
+}
+
+// Platform default drift (Spec.Sidecar nil) triggers an update plan.
+func TestFullPlanner_SidecarDriftFromPlatformDefault_UpdateProgression(t *testing.T) {
+	g := NewWithT(t)
+	node := sidecarDriftedNode()
+	p := platformWithSidecar(testSidecarImageV2)
+
+	plan, err := (&fullNodePlanner{platform: p}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil(), "sidecar drift should trigger update plan")
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		TaskConfigPatch,
+		TaskConfigValidate,
+		task.TaskTypeReplacePod,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+}
+
+// Spec.Sidecar.Image override takes precedence over the platform default.
+func TestFullPlanner_SidecarDriftFromOverride_UpdateProgression(t *testing.T) {
+	g := NewWithT(t)
+	node := sidecarDriftedNode()
+	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Image: testSidecarOverrideV}
+	p := platformWithSidecar(testSidecarImageV1)
+
+	plan, err := (&fullNodePlanner{platform: p}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil(), "sidecar override drift should trigger update plan")
+	g.Expect(plan.Tasks).To(HaveLen(7))
+}
+
+// Combined drift — single update plan covers both.
+func TestFullPlanner_CombinedDrift_SingleUpdatePlan(t *testing.T) {
+	g := NewWithT(t)
+	node := sidecarDriftedNode()
+	node.Spec.Image = testImageV2
+	p := platformWithSidecar(testSidecarImageV2)
+
+	plan, err := (&fullNodePlanner{platform: p}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+	g.Expect(plan.Tasks).To(HaveLen(7), "one plan covers both drifts")
+
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Message).To(ContainSubstring("seid spec="))
+	g.Expect(cond.Message).To(ContainSubstring("sidecar spec="))
+}
+
+// Backfill guard: empty CurrentSidecarImage must not fire drift, else a
+// controller upgrade fleet-rolls every node before ObserveImage backfills.
+func TestFullPlanner_NoCurrentSidecarImage_NoDrift(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	p := platformWithSidecar(testSidecarImageV2)
+
+	plan, err := (&fullNodePlanner{platform: p}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).To(BeNil(), "empty CurrentSidecarImage must NOT trigger drift")
+}
+
+// Diagnostic message names which image drifted.
+func TestImageDriftMessage_NamesWhichDrifted(t *testing.T) {
+	g := NewWithT(t)
+	p := platformWithSidecar(testSidecarImageV2)
+
+	seidOnly := sidecarDriftedNode()
+	seidOnly.Spec.Image = testImageV2
+	g.Expect(imageDriftMessage(seidOnly, platformWithSidecar(testSidecarImageV1))).To(And(
+		ContainSubstring("image drift detected"),
+		Not(ContainSubstring("sidecar"))))
+
+	sidecarOnly := sidecarDriftedNode()
+	g.Expect(imageDriftMessage(sidecarOnly, p)).To(ContainSubstring("sidecar image drift detected"))
+
+	both := sidecarDriftedNode()
+	both.Spec.Image = testImageV2
+	g.Expect(imageDriftMessage(both, p)).To(And(
+		ContainSubstring("seid spec="),
+		ContainSubstring("sidecar spec=")))
 }
 
 // Replayer shares the full/archive update shape — symmetry test.

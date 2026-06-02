@@ -332,6 +332,14 @@ type SeiNodeStatus struct {
 	// +optional
 	CurrentImage string `json:"currentImage,omitempty"`
 
+	// CurrentSidecarImage is the sidecar container image observed running
+	// on the owned StatefulSet. Stamped jointly with CurrentImage on
+	// rollout completion. Empty means "not yet observed" and is treated
+	// as no-drift so a controller upgrade doesn't fleet-roll every node
+	// on first reconcile.
+	// +optional
+	CurrentSidecarImage string `json:"currentSidecarImage,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional

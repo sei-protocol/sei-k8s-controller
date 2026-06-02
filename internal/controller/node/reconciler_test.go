@@ -55,6 +55,7 @@ func newNodeReconcilerWithSidecar(t *testing.T, mock *mockSidecarClient, objs ..
 		Platform: platformtest.Config(),
 		Planner: &planner.NodeResolver{
 			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil },
+			Platform:           platformtest.Config(),
 		},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
