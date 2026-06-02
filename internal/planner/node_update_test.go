@@ -20,6 +20,8 @@ const (
 	testSidecarImageV1   = "ghcr.io/sei-protocol/seictl@sha256:1111"
 	testSidecarImageV2   = "ghcr.io/sei-protocol/seictl@sha256:2222"
 	testSidecarOverrideV = "ghcr.io/sei-protocol/seictl@sha256:3333"
+	testSigningKeySecret = "validator-0-key"
+	testNodeKeySecret    = "validator-0-nodekey"
 )
 
 func platformWithSidecar(image string) platform.Config {
@@ -333,10 +335,10 @@ func TestValidatorPlanner_ImageDrift_GatesOnDeclaredKeysOnly(t *testing.T) {
 	node.Spec.FullNode = nil
 	node.Spec.Validator = &seiv1alpha1.ValidatorSpec{
 		SigningKey: &seiv1alpha1.SigningKeySource{
-			Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+			Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: testSigningKeySecret},
 		},
 		NodeKey: &seiv1alpha1.NodeKeySource{
-			Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+			Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: testNodeKeySecret},
 		},
 	}
 	node.Spec.Image = testImageV2
@@ -370,10 +372,10 @@ func TestValidatorPlanner_ImageDrift_IncludesOperatorKeyringGateWhenSet(t *testi
 	node.Spec.FullNode = nil
 	node.Spec.Validator = &seiv1alpha1.ValidatorSpec{
 		SigningKey: &seiv1alpha1.SigningKeySource{
-			Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+			Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: testSigningKeySecret},
 		},
 		NodeKey: &seiv1alpha1.NodeKeySource{
-			Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+			Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: testNodeKeySecret},
 		},
 		OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
 			Secret: &seiv1alpha1.SecretOperatorKeyringSource{
@@ -419,7 +421,7 @@ func TestValidatorPlanner_ImageDrift_GenesisCeremonyRunning_NoGates(t *testing.T
 		GenesisCeremony: &seiv1alpha1.GenesisCeremonyNodeConfig{
 			ChainID:        "atlantic-2",
 			StakingAmount:  "10000000usei",
-			AccountBalance: "1000000usei",
+			AccountBalance: testAccountBalance,
 		},
 	}
 	node.Spec.Image = testImageV2
