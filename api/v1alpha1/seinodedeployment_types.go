@@ -9,6 +9,7 @@ import (
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.genesis) || has(self.template.spec.validator)",message="genesis is meaningful only for validator-role deployments (full nodes inherit genesis from the validator ceremony's S3 artifact); remove spec.genesis or set template.spec.validator: {}"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.genesis) || (has(self.genesis) && self.genesis == oldSelf.genesis)",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
+// +kubebuilder:validation:XValidation:rule="!has(self.template.spec.validator) || !has(self.template.spec.validator.signingKey) || self.replicas == 1",message="a validator with a signingKey must have replicas: 1 — every replica mounts the same priv_validator_key.json, so >1 replica double-signs (equivocation) and tombstones/slashes the validator"
 type SeiNodeDeploymentSpec struct {
 	// Replicas is the number of SeiNode instances to create.
 	// +kubebuilder:validation:Minimum=1
