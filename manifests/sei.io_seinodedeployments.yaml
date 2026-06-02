@@ -925,6 +925,11 @@ spec:
                 state and cannot be retroactively rewritten by editing the spec
               rule: '!has(oldSelf.genesis) || (has(self.genesis) && self.genesis ==
                 oldSelf.genesis)'
+            - message: 'a validator with a signingKey must have replicas: 1 — every
+                replica mounts the same priv_validator_key.json, so >1 replica double-signs
+                (equivocation) and tombstones/slashes the validator'
+              rule: '!has(self.template.spec.validator) || !has(self.template.spec.validator.signingKey)
+                || self.replicas == 1'
           status:
             description: SeiNodeDeploymentStatus defines the observed state of a SeiNodeDeployment.
             properties:
