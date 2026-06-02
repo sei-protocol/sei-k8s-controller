@@ -132,6 +132,7 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 		Platform: platformtest.Config(),
 		Planner: &planner.NodeResolver{
 			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil },
+			Platform:           platformtest.Config(),
 		},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
@@ -796,7 +797,7 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 		Scheme:   s,
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
-		Planner:  &planner.NodeResolver{},
+		Planner:  &planner.NodeResolver{Platform: platformtest.Config()},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, n *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{

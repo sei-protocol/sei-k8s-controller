@@ -265,10 +265,9 @@ func planFailureMessage(plan *seiv1alpha1.TaskPlan) string {
 	return unknownValue
 }
 
-// plannerForMode returns the appropriate NodePlanner based on which mode
-// sub-spec is populated on the SeiNode. Constructor — passes the resolver's
-// Platform config into each planner so they can resolve the effective
-// sidecar image for drift detection without taking a cluster dependency.
+// plannerForMode returns the appropriate NodePlanner for the SeiNode's
+// mode sub-spec, threaded with the resolver's Platform config so each
+// planner can resolve the effective sidecar image for drift detection.
 func (r *NodeResolver) plannerForMode(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
 	switch {
 	case node.Spec.FullNode != nil:
@@ -739,13 +738,10 @@ func imageDrifted(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Image != node.Status.CurrentImage
 }
 
-// sidecarImageDrifted reports whether the effective sidecar image (per-node
-// override or controller-wide default) diverges from what was last observed.
-// Empty Status.CurrentSidecarImage means "not yet observed" and is treated
-// as no-drift so a controller upgrade doesn't fleet-roll every node before
-// ObserveImage has had a chance to backfill the field. The early return
-// also keeps planner tests that construct zero-value planners (empty
-// Platform.SidecarImage) from accidentally tripping drift.
+// sidecarImageDrifted reports whether the effective sidecar image diverges
+// from what was last observed. Empty Status.CurrentSidecarImage means
+// "not yet observed" and is treated as no-drift so a controller upgrade
+// doesn't fleet-roll every node before ObserveImage backfills the field.
 func sidecarImageDrifted(node *seiv1alpha1.SeiNode, p platform.Config) bool {
 	if node.Status.CurrentSidecarImage == "" {
 		return false

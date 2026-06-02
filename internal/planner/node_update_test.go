@@ -175,18 +175,15 @@ func TestArchivePlanner_ImageDrift_UpdateProgression(t *testing.T) {
 
 // --- sidecar image drift tests ---
 
-// sidecarDriftedNode returns a runningFullNode with CurrentSidecarImage
-// populated so the empty-no-drift backfill guard doesn't fire; the test
-// then mutates Spec.Sidecar / platform to drive drift.
+// sidecarDriftedNode primes CurrentSidecarImage so the backfill guard
+// doesn't fire; the test then drives drift via Spec.Sidecar or platform.
 func sidecarDriftedNode() *seiv1alpha1.SeiNode {
 	node := runningFullNode()
 	node.Status.CurrentSidecarImage = testSidecarImageV1
 	return node
 }
 
-// Effective sidecar image = platform default when Spec.Sidecar is nil.
-// Bumping the platform default while CurrentSidecarImage stays at v1
-// must trigger a drift-routed update plan.
+// Platform default drift (Spec.Sidecar nil) triggers an update plan.
 func TestFullPlanner_SidecarDriftFromPlatformDefault_UpdateProgression(t *testing.T) {
 	g := NewWithT(t)
 	node := sidecarDriftedNode()
@@ -237,9 +234,8 @@ func TestFullPlanner_CombinedDrift_SingleUpdatePlan(t *testing.T) {
 	g.Expect(cond.Message).To(ContainSubstring("sidecar spec="))
 }
 
-// Backfill guard: empty CurrentSidecarImage = "not yet observed, no drift."
-// Without this, a controller upgrade fleet-rolls every existing SeiNode on
-// first reconcile before ObserveImage backfills the field.
+// Backfill guard: empty CurrentSidecarImage must not fire drift, else a
+// controller upgrade fleet-rolls every node before ObserveImage backfills.
 func TestFullPlanner_NoCurrentSidecarImage_NoDrift(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
