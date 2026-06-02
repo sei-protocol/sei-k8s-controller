@@ -37,6 +37,10 @@ const (
     "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACrHa8J7XPiLun7WZjdXyY7RZfWJT5n5NDnPq8T5Vtf9g=="
   }
 }`
+
+	// reasonRolloutComplete is the RolloutInProgress condition reason the SND
+	// controller stamps on a finished rollout (see nodedeployment/plan.go).
+	reasonRolloutComplete = "RolloutComplete"
 )
 
 // TestInPlaceRollout_BYOValidator_NoOperatorKeyring drives an image bump on
@@ -140,6 +144,6 @@ func TestInPlaceRollout_BYOValidator_NoOperatorKeyring(t *testing.T) {
 			latest.Status.Rollout == nil &&
 			cond != nil &&
 			cond.Status == metav1.ConditionFalse &&
-			cond.Reason == "RolloutComplete"
+			cond.Reason == reasonRolloutComplete
 	}, "SND rollout completes for the BYO validator (no operatorKeyring)")
 }
