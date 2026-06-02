@@ -165,6 +165,11 @@ func run(m *testing.M) (int, error) {
 			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) {
 				return stubSC, nil
 			},
+			// Must match ExecutionConfig.Platform below: ObserveImage stamps
+			// CurrentSidecarImage from ExecutionConfig.Platform, then the
+			// planner re-resolves the effective image from NodeResolver.Platform.
+			// Asymmetric values would loop sidecarImageDrifted on every reconcile.
+			Platform: platformCfg,
 		},
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
