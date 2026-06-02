@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
 const TaskTypeObserveImage = "observe-image"
@@ -43,9 +44,10 @@ func deserializeObserveImage(id string, params json.RawMessage, cfg ExecutionCon
 }
 
 // Execute polls the StatefulSet rollout. If the rollout is complete, stamps
-// status.currentImage on the owning SeiNode and marks the task complete.
-// If the rollout is still in progress, returns nil — the executor will
-// re-invoke on the next reconcile since the task remains Pending.
+// status.currentImage and status.currentSidecarImage on the owning SeiNode
+// and marks the task complete. If the rollout is still in progress, returns
+// nil — the executor will re-invoke on the next reconcile since the task
+// remains Pending.
 func (e *observeImageExecution) Execute(ctx context.Context) error {
 	node, err := ResourceAs[*seiv1alpha1.SeiNode](e.cfg)
 	if err != nil {
@@ -69,10 +71,24 @@ func (e *observeImageExecution) Execute(ctx context.Context) error {
 		return nil
 	}
 
-	// Rollout complete — stamp currentImage in-memory.
+	// Rollout complete — stamp both currentImage fields in-memory. STS
+	// rollout-completion is container-agnostic (UpdatedReplicas covers the
+	// whole pod spec), so seid and sidecar containers roll together.
 	node.Status.CurrentImage = node.Spec.Image
+	node.Status.CurrentSidecarImage = EffectiveSidecarImage(node, e.cfg.Platform)
 	e.complete()
 	return nil
+}
+
+// EffectiveSidecarImage returns the sidecar container image actually
+// rendered onto the StatefulSet: the per-SeiNode override if set, else
+// the controller-wide default from SEI_SIDECAR_IMAGE. Mirrors the
+// resolution at noderesource.go and bootstrap_resources.go.
+func EffectiveSidecarImage(node *seiv1alpha1.SeiNode, p platform.Config) string {
+	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Image != "" {
+		return node.Spec.Sidecar.Image
+	}
+	return p.SidecarImage
 }
 
 // Status returns the cached execution status.
