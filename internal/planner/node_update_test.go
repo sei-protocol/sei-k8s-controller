@@ -320,13 +320,71 @@ func TestPlannerConvention_InitUsesApply_UpdateUsesPatch(t *testing.T) {
 	g.Expect(updateTypes).NotTo(ContainElement(TaskConfigApply), "update must NOT include config-apply")
 }
 
-// Validator's update progression prepends the three key-validation gates
-// so a missing/malformed secret aborts before any STS mutation.
-func TestValidatorPlanner_ImageDrift_PrependsValidationGates(t *testing.T) {
+// Validator's update progression prepends a key-validation gate per
+// declared key source so a missing/malformed secret aborts before any STS
+// mutation. Each gate is guarded by its needs* predicate: a BYO validator
+// with signingKey+nodeKey but no operatorKeyring (the arctic-1 migration
+// shape) gates on signing + node keys only. operatorKeyring is
+// independently optional and must not be validated when unset — otherwise
+// the very first image/sidecar update fails with "secretName is empty".
+func TestValidatorPlanner_ImageDrift_GatesOnDeclaredKeysOnly(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
 	node.Spec.FullNode = nil
-	node.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+	node.Spec.Validator = &seiv1alpha1.ValidatorSpec{
+		SigningKey: &seiv1alpha1.SigningKeySource{
+			Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+		},
+		NodeKey: &seiv1alpha1.NodeKeySource{
+			Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+		},
+	}
+	node.Spec.Image = testImageV2
+
+	plan, err := (&validatorPlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
+		task.TaskTypeValidateSigningKey,
+		task.TaskTypeValidateNodeKey,
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		TaskConfigPatch,
+		TaskConfigValidate,
+		task.TaskTypeReplacePod,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+	g.Expect(planTaskTypes(plan)).NotTo(
+		ContainElement(task.TaskTypeValidateOperatorKeyring),
+		"unset operatorKeyring must not produce a validation gate",
+	)
+}
+
+// When operatorKeyring IS declared, its validation gate is included
+// alongside the signing and node key gates.
+func TestValidatorPlanner_ImageDrift_IncludesOperatorKeyringGateWhenSet(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.FullNode = nil
+	node.Spec.Validator = &seiv1alpha1.ValidatorSpec{
+		SigningKey: &seiv1alpha1.SigningKeySource{
+			Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
+		},
+		NodeKey: &seiv1alpha1.NodeKeySource{
+			Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
+		},
+		OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+			Secret: &seiv1alpha1.SecretOperatorKeyringSource{
+				SecretName: "validator-0-operator",
+				PassphraseSecretRef: seiv1alpha1.PassphraseSecretRef{
+					SecretName: "validator-0-operator-pass",
+					Key:        "passphrase",
+				},
+			},
+		},
+	}
 	node.Spec.Image = testImageV2
 
 	plan, err := (&validatorPlanner{}).BuildPlan(node)
@@ -337,6 +395,40 @@ func TestValidatorPlanner_ImageDrift_PrependsValidationGates(t *testing.T) {
 		task.TaskTypeValidateSigningKey,
 		task.TaskTypeValidateNodeKey,
 		task.TaskTypeValidateOperatorKeyring,
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		TaskConfigPatch,
+		TaskConfigValidate,
+		task.TaskTypeReplacePod,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+}
+
+// A genesis-ceremony validator that has reached Running routes through
+// buildRunningPlan (the Phase==Running check precedes the ceremony check),
+// and carries none of signingKey/nodeKey/operatorKeyring — so its update
+// plan must emit no validation gates. The old hardcoded slice would have
+// failed these nodes on the empty signing-key gate; the needs* guards fix
+// that latent path too.
+func TestValidatorPlanner_ImageDrift_GenesisCeremonyRunning_NoGates(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Spec.FullNode = nil
+	node.Spec.Validator = &seiv1alpha1.ValidatorSpec{
+		GenesisCeremony: &seiv1alpha1.GenesisCeremonyNodeConfig{
+			ChainID:        "atlantic-2",
+			StakingAmount:  "10000000usei",
+			AccountBalance: "1000000usei",
+		},
+	}
+	node.Spec.Image = testImageV2
+
+	plan, err := (&validatorPlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan).NotTo(BeNil())
+
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
 		TaskConfigPatch,
