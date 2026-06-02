@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
@@ -76,7 +77,41 @@ func (e *observeImageExecution) Execute(ctx context.Context) error {
 	// whole pod spec), so seid and sidecar containers roll together.
 	node.Status.CurrentImage = node.Spec.Image
 	node.Status.CurrentSidecarImage = EffectiveSidecarImage(node, e.cfg.Platform)
+
+	// Advance the StatefulSet's status.currentRevision to match
+	// updateRevision. Our StatefulSets use updateStrategy: OnDelete (see
+	// noderesource.GenerateNodeStatefulSet) because pod replacement is
+	// driven by the replace-pod task, not the StatefulSet controller's
+	// rolling-update loop. As a side effect, the StatefulSet controller
+	// never advances currentRevision after a successful rollout, which
+	// causes the kube-prometheus-mixin alert KubeStatefulSetUpdateNotRolledOut
+	// to latch indefinitely. We close that gap here, after rollout is
+	// confirmed complete by UpdatedReplicas.
+	if err := advanceStatefulSetCurrentRevision(ctx, e.cfg.KubeClient, sts); err != nil {
+		return fmt.Errorf("advancing statefulset currentRevision: %w", err)
+	}
+
 	e.complete()
+	return nil
+}
+
+// advanceStatefulSetCurrentRevision patches sts.Status.CurrentRevision to
+// match UpdateRevision when the rollout is observed complete. No-op when
+// already equal or when UpdateRevision is empty (controller hasn't
+// observed the spec yet).
+func advanceStatefulSetCurrentRevision(ctx context.Context, kc client.Client, sts *appsv1.StatefulSet) error {
+	if sts.Status.UpdateRevision == "" {
+		return nil
+	}
+	if sts.Status.CurrentRevision == sts.Status.UpdateRevision {
+		return nil
+	}
+	patch := client.MergeFrom(sts.DeepCopy())
+	sts.Status.CurrentRevision = sts.Status.UpdateRevision
+	sts.Status.CurrentReplicas = sts.Status.UpdatedReplicas
+	if err := kc.Status().Patch(ctx, sts, patch); err != nil {
+		return err
+	}
 	return nil
 }
 

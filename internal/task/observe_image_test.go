@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -40,7 +41,8 @@ func observeImageCfg(t *testing.T, node *seiv1alpha1.SeiNode, sts *appsv1.Statef
 	if err := seiv1alpha1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
-	builder := fake.NewClientBuilder().WithScheme(s)
+	builder := fake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&appsv1.StatefulSet{})
 	if sts != nil {
 		builder = builder.WithObjects(sts)
 	}
@@ -186,4 +188,100 @@ func TestObserveImage_DeserializeEmptyParams(t *testing.T) {
 	exec, err := deserializeObserveImage("obs-empty", nil, cfg)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(exec).NotTo(BeNil())
+}
+
+// On rollout completion under OnDelete strategy, the StatefulSet controller
+// does not advance status.currentRevision. ObserveImage patches it to
+// match updateRevision so the kube-prometheus-mixin alert
+// KubeStatefulSetUpdateNotRolledOut clears.
+func TestObserveImage_RolloutComplete_AdvancesStatefulSetCurrentRevision(t *testing.T) {
+	g := NewWithT(t)
+	node := observeImageNode()
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: node.Namespace, Generation: 2},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
+		Status: appsv1.StatefulSetStatus{
+			ObservedGeneration: 2,
+			UpdatedReplicas:    1,
+			Replicas:           1,
+			CurrentRevision:    "node-1-abc123",
+			UpdateRevision:     "node-1-def456",
+			CurrentReplicas:    0,
+		},
+	}
+
+	cfg := observeImageCfg(t, node, sts)
+	exec := newObserveImageExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	// Verify the on-cluster STS was patched. The fake client returns the
+	// persisted object.
+	got := &appsv1.StatefulSet{}
+	g.Expect(cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, got)).To(Succeed())
+	g.Expect(got.Status.CurrentRevision).To(Equal("node-1-def456"))
+	g.Expect(got.Status.CurrentReplicas).To(Equal(int32(1)))
+}
+
+// When CurrentRevision already matches UpdateRevision, ObserveImage skips
+// the patch (no-op). Verified by leaving the revision strings equal and
+// confirming the task still completes without error.
+func TestObserveImage_RolloutComplete_RevisionsAlreadyMatch_NoOp(t *testing.T) {
+	g := NewWithT(t)
+	node := observeImageNode()
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: node.Namespace, Generation: 2},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
+		Status: appsv1.StatefulSetStatus{
+			ObservedGeneration: 2,
+			UpdatedReplicas:    1,
+			Replicas:           1,
+			CurrentRevision:    "node-1-same",
+			UpdateRevision:     "node-1-same",
+			CurrentReplicas:    1,
+		},
+	}
+
+	cfg := observeImageCfg(t, node, sts)
+	exec := newObserveImageExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	got := &appsv1.StatefulSet{}
+	g.Expect(cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, got)).To(Succeed())
+	g.Expect(got.Status.CurrentRevision).To(Equal("node-1-same"))
+}
+
+// UpdateRevision can be empty briefly when the StatefulSet controller has
+// not yet observed the new spec (despite ObservedGeneration catching up).
+// In that race window we must not blank CurrentRevision.
+func TestObserveImage_RolloutComplete_EmptyUpdateRevision_NoOp(t *testing.T) {
+	g := NewWithT(t)
+	node := observeImageNode()
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: node.Namespace, Generation: 2},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
+		Status: appsv1.StatefulSetStatus{
+			ObservedGeneration: 2,
+			UpdatedReplicas:    1,
+			Replicas:           1,
+			CurrentRevision:    "node-1-prior",
+			UpdateRevision:     "",
+		},
+	}
+
+	cfg := observeImageCfg(t, node, sts)
+	exec := newObserveImageExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	got := &appsv1.StatefulSet{}
+	g.Expect(cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, got)).To(Succeed())
+	g.Expect(got.Status.CurrentRevision).To(Equal("node-1-prior"))
 }

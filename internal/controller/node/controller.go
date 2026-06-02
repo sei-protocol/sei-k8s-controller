@@ -54,6 +54,7 @@ type SeiNodeReconciler struct {
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets/status,verbs=get;patch;update
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
