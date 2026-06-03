@@ -970,6 +970,17 @@ spec:
                 items:
                   type: string
                 type: array
+              resolvedRPCWitnesses:
+                description: |-
+                  ResolvedRPCWitnesses carries the in-cluster RPC endpoints
+                  (`<peer>-0.<peer>.<ns>.svc.cluster.local:26657`) of the label-resolved
+                  peers, used as CometBFT state-sync light-client witnesses. Unlike
+                  ResolvedPeers these never carry an external P2P address — RPC is
+                  internal-only. When empty the sidecar derives witnesses from
+                  persistent_peers instead.
+                items:
+                  type: string
+                type: array
               statefulSet:
                 description: |-
                   StatefulSet references the StatefulSet the controller created for

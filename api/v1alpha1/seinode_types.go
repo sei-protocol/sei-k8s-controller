@@ -360,6 +360,15 @@ type SeiNodeStatus struct {
 	// +optional
 	ResolvedPeers []string `json:"resolvedPeers,omitempty"`
 
+	// ResolvedRPCWitnesses carries the in-cluster RPC endpoints
+	// (`<peer>-0.<peer>.<ns>.svc.cluster.local:26657`) of the label-resolved
+	// peers, used as CometBFT state-sync light-client witnesses. Unlike
+	// ResolvedPeers these never carry an external P2P address — RPC is
+	// internal-only. When empty the sidecar derives witnesses from
+	// persistent_peers instead.
+	// +optional
+	ResolvedRPCWitnesses []string `json:"resolvedRPCWitnesses,omitempty"`
+
 	// StatefulSet references the StatefulSet the controller created for
 	// this SeiNode. UID is the identity check: an STS with the expected
 	// name but a different UID is not the one this controller created
