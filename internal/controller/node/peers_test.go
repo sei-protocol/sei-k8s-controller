@@ -399,6 +399,14 @@ func TestReconcilePeers_NilSidecarFactorySkipsNewPeer(t *testing.T) {
 	if len(node.Status.ResolvedPeers) != 0 {
 		t.Fatalf("expected unresolvable peer to be skipped, got %d: %v", len(node.Status.ResolvedPeers), node.Status.ResolvedPeers)
 	}
+	// Intentional asymmetry: the witness needs no node_id, so it is emitted
+	// even though the peer was skipped from persistent_peers. seid can dial a
+	// state-sync RPC witness it has no P2P peering with; do not "symmetrize"
+	// this with ResolvedPeers.
+	wantWitness := "peer-1-0.peer-1.default.svc.cluster.local:26657"
+	if len(node.Status.ResolvedRPCWitnesses) != 1 || node.Status.ResolvedRPCWitnesses[0] != wantWitness {
+		t.Errorf("expected witness despite skipped peer, got %v", node.Status.ResolvedRPCWitnesses)
+	}
 }
 
 // Nil factory + prior entry: preserve-prior branch fires.
