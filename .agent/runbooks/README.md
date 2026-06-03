@@ -30,6 +30,7 @@ Agents fetch this `README.md` to discover what's available, then `WebFetch` the 
 | File | Summary | When to load |
 |---|---|---|
 | [`operating-archive-node-byov.md`](operating-archive-node-byov.md) | Required volume contents, PV/PVC spec, SeiNode/SeiNodeDeployment spec, controller validation surface, and EBS-swap cutover sequence for archive nodes using the bring-your-own-volume (`dataVolume.import`) path. | Bringing up an archive node from a pre-populated EBS; swapping the underlying volume of an existing archive PV; debugging `ImportPVCReady=False`; receipt-store pruning concerns. |
+| [`migrating-validator-to-byo-secrets.md`](migrating-validator-to-byo-secrets.md) | Cutting a live validator from a legacy host onto the platform carrying its consensus identity via Secrets (`signingKey`/`nodeKey`): what migrates, SND spec, controller validation surface, the stop-before-start double-sign discipline + layered equivocation defenses, cutover/rollback sequence, and dry-run gotchas. | Migrating an existing validator (e.g. arctic-1 node-19) off EC2 onto K8s; any cutover where a consensus key changes hosts; understanding the `replicas:1` CEL guard or the double-sign alerts. |
 
 ## Adding a new runbook
 
