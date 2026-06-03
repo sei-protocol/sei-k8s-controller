@@ -49,10 +49,9 @@ The KMS key is chosen by **which cluster directory the secret lives in**, not by
 | Secret lands under | `.sops.yaml` | KMS key | Region |
 |---|---|---|---|
 | `clusters/prod/...` | `clusters/prod/.sops.yaml` | `alias/prod` | eu-central-1 |
-| `clusters/harbor/...` | `clusters/harbor/.sops.yaml` | `alias/harbor` | eu-central-1 |
 | `clusters/dev/...` | `clusters/dev/.sops.yaml` | `alias/dev` | **us-east-2** |
 
-All three use `path_regex: .*` (every file under the dir) and `encrypted_regex: ^(data|stringData|.+=)$`. The arctic-1 prod migration lands under `clusters/prod/arctic-1/` → `alias/prod`. (The harbor *engineering-workspace* repo is the exception — it uses a `*.enc.yaml` path_regex + `alias/harbor`; that's where the dry-run ran, not the platform repo.)
+Both use `path_regex: .*` (every file under the dir) and `encrypted_regex: ^(data|stringData|.+=)$`. The arctic-1 prod migration lands under `clusters/prod/arctic-1/` → `alias/prod`. (Two notes: the platform repo has **no** `clusters/harbor/.sops.yaml` — in-repo harbor secrets are encrypted with an explicit `--kms alias/harbor`, not an auto-discovered rule; and the separate harbor *engineering-workspace* repo is its own world, using a `*.enc.yaml` path_regex + `alias/harbor` — that's where the dry-run ran, not the platform repo.)
 
 ```bash
 # From the legacy host (or its backup of the config dir):
@@ -209,9 +208,11 @@ Ordered. Do not reorder steps 3 and 4.
    - Flux decrypts the Secrets and the SeiNode's bootstrap plan runs (no-snapshot
      validator): ensure-data-pvc -> validate-signing-key -> validate-node-key ->
      apply-rbac-proxy-config -> apply-statefulset -> apply-service ->
-     configure-genesis -> discover-peers -> config-apply -> config-validate ->
-     mark-ready. seid then block-syncs once the pod is up (there is no "block-sync"
-     task — it's seid catching up, observed via catching_up/height, not the plan).
+     configure-genesis -> config-apply -> discover-peers -> config-validate ->
+     mark-ready (config-apply writes the base config; discover-peers then writes
+     persistent-peers; config-validate checks the assembled result last). seid then
+     block-syncs once the pod is up (there is no "block-sync" task — it's seid
+     catching up, observed via catching_up/height, not the plan).
    - Expect the networking.tcp DNS race on cold start (§6 finding 1): ~6-8 min of
      seid CrashLoopBackOff until external-DNS publishes the P2P record and CoreDNS's
      negative cache expires. This SELF-HEALS. Do not "fix" it by dropping tcp.
