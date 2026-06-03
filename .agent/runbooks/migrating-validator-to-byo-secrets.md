@@ -38,7 +38,7 @@ A validator's on-chain identity is **two files**, nothing else:
 |---|---|---|---|
 | `priv_validator_key.json` | `priv_validator_key.json` | the **consensus signing key** — the thing slashing protects | **Yes — this IS the identity** |
 | `node_key.json` | `node_key.json` | libp2p/Tendermint **node (P2P) identity** | Yes (keeps the NodeID stable; a fresh one also works) |
-| operator/account keyring | (`operatorKeyring.secret`, optional) | signs `MsgEditValidator`, withdraw-rewards, gov | Only if the operator key is mounted on-host; usually **absent** for a pure consensus validator |
+| operator/account keyring | (`operatorKeyring.secret`, optional) | signs `MsgEditValidator`, withdraw-commission, gov votes | Optional — only if the node should sign operator txs itself (see [Operator account keyring](#operator-account-keyring-optional--on-node-governance-signing)). Absent for a pure consensus validator |
 
 Chain state (the data PVC) does **not** migrate — the platform node re-syncs. Identity lives entirely in the two Secrets, so losing/rebuilding the PVC is recoverable; losing key custody is not.
 
@@ -83,6 +83,71 @@ AWS_PROFILE=sei sops -d node-19-signing-key.secret.yaml | grep priv_validator_ke
 ```
 
 **A plaintext `priv_validator_key.json` must never reach git, logs, or a terminal that's scrollback-captured.** Treat the extraction host as sensitive.
+
+### Operator account keyring (optional — on-node governance signing)
+
+Mount this **only** if the node should sign operator txs itself — governance/upgrade votes, `MsgEditValidator`, withdraw-commission. The validator signs blocks and runs fine without it; the operator key is otherwise used off-node. (node-19 mounts it so upgrade votes can be cast from the node.)
+
+**Security tradeoff — decide before mounting.** The operator account key controls the validator's *treasury and governance* (withdraw-commission, move self-stake, change withdraw address, vote, edit, unjail) — a strictly larger blast radius than the consensus key, which only risks slashing. The pod runs `shareProcessNamespace: true`, so a compromise of the internet-exposed seid container can read the unlocked key out of sidecar memory. **If you only need voting, the safer pattern is an `authz` `MsgVote`-only grant to a dedicated low-privilege key** — mount *that*, keep the full operator key offline; vote inheritance still attributes to the operator account (`MsgExec` sets `voter = granter`). Mount the full key only with eyes open.
+
+**1. Identify the operator account on-chain.** It's distinct from the consensus key. Resolve it from the consensus pubkey (the public `pub_key.value` in `priv_validator_key.json`), then check whether authority is delegated (`REST=https://rest-arctic-1.sei-apis.com`):
+
+```bash
+# consensus pubkey -> on-chain validator -> operator (valoper); the operator ACCOUNT (sei1…) shares the valoper's address bytes
+curl -s "$REST/cosmos/staking/v1beta1/validators?pagination.limit=300" \
+  | jq -r --arg pk "<pub_key.value>" '.validators[] | select(.consensus_pubkey.key==$pk) | "\(.description.moniker)\t\(.operator_address)"'
+curl -s "$REST/cosmos/authz/v1beta1/grants/granter/<operator-sei1>"                       # delegated authority? (empty = none)
+curl -s "$REST/cosmos/distribution/v1beta1/delegators/<operator-sei1>/withdraw_address"   # redirected?
+```
+A non-empty authz grant or a redirected withdraw address means operator authority is delegated/elsewhere — account for it before assuming this keyring is the whole story.
+
+**2. Convert `admin_key.json` → file-backend keyring.** Sei's `admin_key.json` is a `seid keys add --output json` export (`address`/`mnemonic`/`name`/`pubkey`/`type`). `operatorKeyring` needs a *file keyring* (`<keyName>.info` + `<hex>.address` + `keyhash`), not the raw json — import it on the host (touches the private key):
+
+```bash
+KR=$(mktemp -d); PASS=$(openssl rand -base64 32); echo "SAVE: $PASS"
+jq -r .address admin_key.json    # gate: must equal the operator account from step 1
+
+# `seid keys add --recover` reads BOTH the mnemonic AND the passphrase from stdin —
+# feed all three lines or the passphrase prompts hit EOF ("too many failed attempts"):
+printf '%s\n%s\n%s\n' "$(jq -r .mnemonic admin_key.json)" "$PASS" "$PASS" \
+  | seid keys add node_admin --recover --keyring-backend file --keyring-dir "$KR"
+
+seid keys show node_admin -a --keyring-backend file --keyring-dir "$KR"   # == operator account, or STOP
+ls "$KR/keyring-file"            # node_admin.info  <hex>.address  keyhash
+```
+
+**3. Two SOPS Secrets (keyring + passphrase, kept distinct).** Use `data:` (base64), **not** `stringData` — `.info`/`keyhash` are exact-byte sensitive (a YAML block-scalar newline breaks passphrase verification, unlike the JSON keys above which tolerate it):
+
+```yaml
+# node-19-operator-keyring.secret.yaml — data keys ARE the file-keyring filenames
+data:
+  node_admin.info: <base64 -w0 "$KR/keyring-file/node_admin.info">
+  <hex>.address:   <base64 -w0 "$KR/keyring-file/<hex>.address">
+  keyhash:         <base64 -w0 "$KR/keyring-file/keyhash">
+# node-19-operator-passphrase.secret.yaml
+data:
+  passphrase: <printf '%s' "$PASS" | base64 -w0>
+```
+`sops -e -i` both from the cluster dir, confirm `ENC[`, then validate the encoding decodes to the right shapes before committing:
+```bash
+yq -r '.data."node_admin.info"' …keyring.secret.yaml | base64 -d | cut -c1-3   # eyJ  (JWE)
+yq -r '.data.keyhash'            …keyring.secret.yaml | base64 -d | cut -c1-3   # $2a  (bcrypt)
+rm -rf "$KR"                                                                    # wipe cleartext keyring
+```
+(Encryption is **not** done until `sops -e -i` runs — base64 alone is not encryption. Don't commit a file whose `data` values aren't `ENC[…]`.)
+
+**4. Wire into the SND** — four DISTINCT secretNames (CEL-enforced: keyring ≠ passphrase ≠ signing ≠ node):
+```yaml
+validator:
+  operatorKeyring:
+    secret:
+      secretName: arctic-1-node-19-operator-keyring
+      keyName: node_admin
+      passphraseSecretRef:
+        secretName: arctic-1-node-19-operator-passphrase
+        key: passphrase
+```
+Controller ≥ `5d03f33` runs `validate-operator-keyring` on bring-up. On the node, vote with: `seid tx gov vote <id> <option> --from node_admin --keyring-backend file --keyring-dir $SEI_HOME/keyring-file`.
 
 ---
 
