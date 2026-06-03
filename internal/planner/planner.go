@@ -609,7 +609,7 @@ func paramsForTaskType(
 	case TaskDiscoverPeers:
 		return discoverPeersTask(node)
 	case TaskConfigureStateSync:
-		return configureStateSyncTask(node, snap)
+		return configureStateSyncTask(node)
 	case TaskConfigValidate:
 		return sidecar.ConfigValidateTask{}
 	case TaskMarkReady:
@@ -686,7 +686,8 @@ func discoverPeersTask(node *seiv1alpha1.SeiNode) sidecar.DiscoverPeersTask {
 	return sidecar.DiscoverPeersTask{Sources: sources}
 }
 
-func configureStateSyncTask(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSource) sidecar.ConfigureStateSyncTask {
+func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyncTask {
+	snap := node.Spec.SnapshotSource()
 	t := sidecar.ConfigureStateSyncTask{
 		UseLocalSnapshot: hasS3Snapshot(snap),
 		RpcServers:       node.Status.ResolvedRPCWitnesses,

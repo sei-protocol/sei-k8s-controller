@@ -13,11 +13,15 @@ func TestConfigureStateSyncTask_PassesResolvedWitnesses(t *testing.T) {
 		"syncer-0-1-0.syncer-0-1.arctic-1.svc.cluster.local:26657",
 	}
 	node := &seiv1alpha1.SeiNode{
+		Spec: seiv1alpha1.SeiNodeSpec{
+			FullNode: &seiv1alpha1.FullNodeSpec{
+				Snapshot: &seiv1alpha1.SnapshotSource{TrustPeriod: "168h0m0s", BackfillBlocks: 6000},
+			},
+		},
 		Status: seiv1alpha1.SeiNodeStatus{ResolvedRPCWitnesses: witnesses},
 	}
-	snap := &seiv1alpha1.SnapshotSource{TrustPeriod: "168h0m0s", BackfillBlocks: 6000}
 
-	task := configureStateSyncTask(node, snap)
+	task := configureStateSyncTask(node)
 
 	if !slices.Equal(task.RpcServers, witnesses) {
 		t.Errorf("RpcServers = %v, want %v", task.RpcServers, witnesses)
@@ -34,7 +38,7 @@ func TestConfigureStateSyncTask_PassesResolvedWitnesses(t *testing.T) {
 // sidecar falls back to deriving witnesses from persistent_peers.
 func TestConfigureStateSyncTask_NoWitnessesLeavesEmpty(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{}
-	task := configureStateSyncTask(node, nil)
+	task := configureStateSyncTask(node)
 	if len(task.RpcServers) != 0 {
 		t.Errorf("RpcServers = %v, want empty", task.RpcServers)
 	}
