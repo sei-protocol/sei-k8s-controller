@@ -14,6 +14,8 @@ const (
 	testRoleValue       = "validator"
 	testConsumerName    = "consumer"
 	testPeer1ResolvedID = "mock-node-id@peer-1-0.peer-1.default.svc.cluster.local:26656"
+	testWitnessNS       = "arctic-1"
+	testWitnessRole     = "syncer"
 )
 
 type errStub string
@@ -119,17 +121,18 @@ func TestReconcilePeers_PrefersExternalAddress(t *testing.T) {
 }
 
 func TestReconcilePeers_WitnessesExcludeSelfAndUseRPCPort(t *testing.T) {
+	const peerName = "syncer-0-1"
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "syncer-0-0", Namespace: "arctic-1",
-			Labels: map[string]string{testRoleLabel: "syncer"},
+			Name: "syncer-0-0", Namespace: testWitnessNS,
+			Labels: map[string]string{testRoleLabel: testWitnessRole},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "arctic-1",
+			ChainID: testWitnessNS,
 			Image:   "sei:latest",
 			Peers: []seiv1alpha1.PeerSource{
 				{Label: &seiv1alpha1.LabelPeerSource{
-					Selector: map[string]string{testRoleLabel: "syncer"},
+					Selector: map[string]string{testRoleLabel: testWitnessRole},
 				}},
 			},
 			FullNode: &seiv1alpha1.FullNodeSpec{},
@@ -137,11 +140,11 @@ func TestReconcilePeers_WitnessesExcludeSelfAndUseRPCPort(t *testing.T) {
 	}
 	peer := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "syncer-0-1", Namespace: "arctic-1",
-			Labels: map[string]string{testRoleLabel: "syncer"},
+			Name: peerName, Namespace: testWitnessNS,
+			Labels: map[string]string{testRoleLabel: testWitnessRole},
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID:  "arctic-1",
+			ChainID:  testWitnessNS,
 			Image:    "sei:latest",
 			FullNode: &seiv1alpha1.FullNodeSpec{},
 		},
@@ -152,7 +155,7 @@ func TestReconcilePeers_WitnessesExcludeSelfAndUseRPCPort(t *testing.T) {
 		t.Fatalf("reconcilePeers: %v", err)
 	}
 
-	want := "syncer-0-1-0.syncer-0-1.arctic-1.svc.cluster.local:26657"
+	want := peerName + "-0." + peerName + "." + testWitnessNS + ".svc.cluster.local:26657"
 	if len(node.Status.ResolvedRPCWitnesses) != 1 || node.Status.ResolvedRPCWitnesses[0] != want {
 		t.Errorf("resolvedRPCWitnesses = %v, want [%q] (self excluded, RPC port)",
 			node.Status.ResolvedRPCWitnesses, want)
