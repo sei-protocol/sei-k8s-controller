@@ -108,6 +108,55 @@ func TestReconcilePeers_PrefersExternalAddress(t *testing.T) {
 	if node.Status.ResolvedPeers[0] != want {
 		t.Errorf("resolvedPeers[0] = %q, want %q", node.Status.ResolvedPeers[0], want)
 	}
+
+	// The witness must be the internal RPC DNS, NOT the external P2P address:
+	// the NLB exposes P2P only. Writing the external address as a witness is
+	// the regression this fix prevents.
+	wantWitness := "pub-peer-0.pub-peer.default.svc.cluster.local:26657"
+	if len(node.Status.ResolvedRPCWitnesses) != 1 || node.Status.ResolvedRPCWitnesses[0] != wantWitness {
+		t.Errorf("resolvedRPCWitnesses = %v, want [%q]", node.Status.ResolvedRPCWitnesses, wantWitness)
+	}
+}
+
+func TestReconcilePeers_WitnessesExcludeSelfAndUseRPCPort(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "syncer-0-0", Namespace: "arctic-1",
+			Labels: map[string]string{testRoleLabel: "syncer"},
+		},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "arctic-1",
+			Image:   "sei:latest",
+			Peers: []seiv1alpha1.PeerSource{
+				{Label: &seiv1alpha1.LabelPeerSource{
+					Selector: map[string]string{testRoleLabel: "syncer"},
+				}},
+			},
+			FullNode: &seiv1alpha1.FullNodeSpec{},
+		},
+	}
+	peer := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "syncer-0-1", Namespace: "arctic-1",
+			Labels: map[string]string{testRoleLabel: "syncer"},
+		},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID:  "arctic-1",
+			Image:    "sei:latest",
+			FullNode: &seiv1alpha1.FullNodeSpec{},
+		},
+	}
+
+	r, _ := newNodeReconciler(t, node, peer)
+	if err := r.reconcilePeers(context.Background(), node); err != nil {
+		t.Fatalf("reconcilePeers: %v", err)
+	}
+
+	want := "syncer-0-1-0.syncer-0-1.arctic-1.svc.cluster.local:26657"
+	if len(node.Status.ResolvedRPCWitnesses) != 1 || node.Status.ResolvedRPCWitnesses[0] != want {
+		t.Errorf("resolvedRPCWitnesses = %v, want [%q] (self excluded, RPC port)",
+			node.Status.ResolvedRPCWitnesses, want)
+	}
 }
 
 func TestReconcilePeers_ExcludesSelf(t *testing.T) {

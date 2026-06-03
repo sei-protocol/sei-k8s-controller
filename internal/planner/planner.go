@@ -609,7 +609,7 @@ func paramsForTaskType(
 	case TaskDiscoverPeers:
 		return discoverPeersTask(node)
 	case TaskConfigureStateSync:
-		return configureStateSyncTask(snap)
+		return configureStateSyncTask(node, snap)
 	case TaskConfigValidate:
 		return sidecar.ConfigValidateTask{}
 	case TaskMarkReady:
@@ -686,9 +686,12 @@ func discoverPeersTask(node *seiv1alpha1.SeiNode) sidecar.DiscoverPeersTask {
 	return sidecar.DiscoverPeersTask{Sources: sources}
 }
 
-func configureStateSyncTask(snap *seiv1alpha1.SnapshotSource) sidecar.ConfigureStateSyncTask {
+func configureStateSyncTask(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSource) sidecar.ConfigureStateSyncTask {
 	t := sidecar.ConfigureStateSyncTask{
 		UseLocalSnapshot: hasS3Snapshot(snap),
+		// Internal-RPC witnesses resolved from label peers; empty when the
+		// node has none, leaving the sidecar to derive them from peers.
+		RpcServers: node.Status.ResolvedRPCWitnesses,
 	}
 	if snap != nil {
 		if snap.TrustPeriod != "" {
