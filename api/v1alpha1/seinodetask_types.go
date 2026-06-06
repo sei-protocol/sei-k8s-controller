@@ -6,7 +6,7 @@ import (
 
 // SeiNodeTaskKind discriminates the SeiNodeTask spec union. Exactly one of
 // the matching payload sub-structs in SeiNodeTaskSpec must be set.
-// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight
+// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;DiscoverPeers;RestartPod
 type SeiNodeTaskKind string
 
 const (
@@ -37,6 +37,23 @@ const (
 	// (target.nodeRef); the task submits await-condition(height=H) to the
 	// target's sidecar and completes when the local height crosses H.
 	SeiNodeTaskKindAwaitNodesAtHeight SeiNodeTaskKind = "AwaitNodesAtHeight"
+
+	// SeiNodeTaskKindDiscoverPeers backs the sidecar `discover-peers` task.
+	// Re-resolves the target's spec.peers and writes persistent-peers into the
+	// on-disk config.toml (scalar merge). Disk-only: a running seid does not
+	// re-read config.toml, so compose with kind=RestartPod to apply. The two are
+	// not atomic — a DiscoverPeers success followed by a RestartPod failure
+	// leaves config.toml ahead of the running peer set until the next restart.
+	SeiNodeTaskKindDiscoverPeers SeiNodeTaskKind = "DiscoverPeers"
+
+	// SeiNodeTaskKindRestartPod backs the controller-side `restart-pod` task.
+	// Deletes the target's single pod so the StatefulSet's OnDelete strategy
+	// recreates it and seid re-reads config.toml. Completes when a distinct new
+	// pod is Ready. Single-replica stop-then-start gated by the RWO data PVC, so
+	// double-sign-safe: the new pod cannot bind the PVC until the old terminates.
+	// The pod to delete is caller-supplied via spec.restartPod.podUID; a UID that
+	// no longer matches the live pod completes as a no-op (see PodUID).
+	SeiNodeTaskKindRestartPod SeiNodeTaskKind = "RestartPod"
 )
 
 // SeiNodeTaskPhase is the high-level lifecycle state of a SeiNodeTask.
@@ -82,12 +99,15 @@ const (
 // Field names locked at v1alpha1 — see docs/design/seinode-task-lld.md
 // (PR sei-protocol/sei-k8s-controller#277).
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, awaitCondition, updateNodeImage, or awaitNodesAtHeight must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.discoverPeers) ? 1 : 0) + (has(self.restartPod) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, awaitCondition, updateNodeImage, awaitNodesAtHeight, discoverPeers, or restartPod must be set"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)",message="spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovVote' || has(self.govVote)",message="spec.govVote is required when kind=GovVote"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitCondition' || has(self.awaitCondition)",message="spec.awaitCondition is required when kind=AwaitCondition"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'UpdateNodeImage' || has(self.updateNodeImage)",message="spec.updateNodeImage is required when kind=UpdateNodeImage"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)",message="spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'DiscoverPeers' || has(self.discoverPeers)",message="spec.discoverPeers is required when kind=DiscoverPeers"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'RestartPod' || has(self.restartPod)",message="spec.restartPod is required when kind=RestartPod"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'RestartPod' || (has(self.restartPod) && size(self.restartPod.podUID) > 0)",message="spec.restartPod.podUID is required when kind=RestartPod"
 // +kubebuilder:validation:XValidation:rule="self.kind == oldSelf.kind",message="spec.kind is immutable"
 type SeiNodeTaskSpec struct {
 	// Kind selects the task implementation. Immutable after creation.
@@ -100,10 +120,11 @@ type SeiNodeTaskSpec struct {
 	// layer — express fan-out at the seitask-runner / Chaos Workflow layer.
 	Target SeiNodeTaskTarget `json:"target"`
 
-	// TimeoutSeconds bounds the total time the reconciler will spend driving
-	// this task to a terminal state, measured from first reconcile after
-	// status.task is populated. When 0 (default), no upper bound is applied
-	// and the task runs until it completes, fails terminally, or is deleted.
+	// TimeoutSeconds bounds execution time, measured from
+	// status.task.executionStartedAt (after the target meets
+	// spec.target.requirePhase). The requirePhase wait is bounded separately by
+	// spec.target.requirePhaseTimeout and is not charged here. 0 (default) is
+	// unbounded — the task runs until it completes, fails, or is deleted.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
@@ -129,6 +150,14 @@ type SeiNodeTaskSpec struct {
 	// AwaitNodesAtHeight is the payload for kind=AwaitNodesAtHeight.
 	// +optional
 	AwaitNodesAtHeight *AwaitNodesAtHeightPayload `json:"awaitNodesAtHeight,omitempty"`
+
+	// DiscoverPeers is the payload for kind=DiscoverPeers.
+	// +optional
+	DiscoverPeers *DiscoverPeersPayload `json:"discoverPeers,omitempty"`
+
+	// RestartPod is the payload for kind=RestartPod.
+	// +optional
+	RestartPod *RestartPodPayload `json:"restartPod,omitempty"`
 }
 
 // SeiNodeTaskTarget identifies the single SeiNode this task operates on.
@@ -314,6 +343,41 @@ type AwaitNodesAtHeightPayload struct {
 	TargetHeight int64 `json:"targetHeight"`
 }
 
+// DiscoverPeersPayload is the payload for kind=DiscoverPeers. It is empty: the
+// task re-resolves the target SeiNode's current spec.peers (ec2Tags, static,
+// and label sources) and writes persistent-peers into the on-disk config.toml
+// via the sidecar discover-peers task. There is nothing to parameterize — the
+// peer sources are fully determined by the target's spec/status. Fields would
+// only be added here if a future feature needs to override the target's
+// declared peers (not in scope).
+//
+// Writes config.toml only; the running seid does not pick up the new peers
+// until a restart. Compose with kind=RestartPod to apply. See the
+// SeiNodeTaskKindDiscoverPeers doc comment for the sequencing and atomicity
+// caveats.
+type DiscoverPeersPayload struct{}
+
+// RestartPodPayload is the payload for kind=RestartPod. The task deletes
+// exactly the pod named by PodUID (delete → OnDelete recreate) so seid re-reads
+// config.toml on start. See the SeiNodeTaskKindRestartPod doc comment for the
+// completion signal and safety properties.
+type RestartPodPayload struct {
+	// PodUID is the UID of the pod to restart, supplied by the caller. Obtain it
+	// immediately before creating the task; for the single-replica StatefulSet
+	// the pod is `<target.nodeRef.Name>-0`:
+	//   kubectl get pod <node>-0 -o jsonpath='{.metadata.uid}'
+	// The task deletes exactly this pod and completes when an owned Ready pod with
+	// a different UID appears. Content-addressed (UID, not creationTimestamp) so
+	// the OnDelete replacement is unambiguously distinguished from the original.
+	//
+	// The caller owns UID correctness: a non-empty UID that no longer matches the
+	// live pod (e.g. the pod was recreated out-of-band after it was read) deletes
+	// nothing and completes immediately as a no-op. Fetch the UID as late as
+	// possible — the controller does not re-validate it against the live pod.
+	// +kubebuilder:validation:MinLength=1
+	PodUID string `json:"podUID"`
+}
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
@@ -345,8 +409,9 @@ type SeiNodeTaskStatus struct {
 	// +optional
 	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
 
-	// StartedAt is when the controller first observed the task (used as the
-	// reference point for spec.timeoutSeconds).
+	// StartedAt is when the controller first observed the task (first reconcile)
+	// — task creation, not execution start. The execution timeout runs from
+	// status.task.executionStartedAt instead.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 
@@ -380,6 +445,21 @@ type SeiNodeTaskExecution struct {
 	// Nil before submission.
 	// +optional
 	SubmittedAt *metav1.Time `json:"submittedAt,omitempty"`
+
+	// ExecutionStartedAt is when the task was synthesized and dispatched (after
+	// the target met spec.target.requirePhase). The execution timeout is
+	// measured from here, not status.startedAt, so the requirePhase wait is not
+	// charged against the execution budget.
+	// +optional
+	ExecutionStartedAt *metav1.Time `json:"executionStartedAt,omitempty"`
+
+	// RestartedPodUID is the UID of the pod the kind=RestartPod task deletes,
+	// copied verbatim from spec.restartPod.podUID at synthesis. Content-addressed
+	// rather than clock-addressed: the task deletes only this pod and completes
+	// when an owned Ready pod with a different UID exists, sidestepping the
+	// same-second creationTimestamp race a time epoch would have.
+	// +optional
+	RestartedPodUID string `json:"restartedPodUID,omitempty"`
 }
 
 // SeiNodeTaskOutputs holds typed per-kind results. Exactly one sub-field is

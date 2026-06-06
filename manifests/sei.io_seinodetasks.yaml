@@ -106,6 +106,9 @@ spec:
                 required:
                 - targetHeight
                 type: object
+              discoverPeers:
+                description: DiscoverPeers is the payload for kind=DiscoverPeers.
+                type: object
               govSoftwareUpgrade:
                 description: GovSoftwareUpgrade is the payload for kind=GovSoftwareUpgrade.
                 properties:
@@ -245,7 +248,31 @@ spec:
                 - AwaitCondition
                 - UpdateNodeImage
                 - AwaitNodesAtHeight
+                - DiscoverPeers
+                - RestartPod
                 type: string
+              restartPod:
+                description: RestartPod is the payload for kind=RestartPod.
+                properties:
+                  podUID:
+                    description: |-
+                      PodUID is the UID of the pod to restart, supplied by the caller. Obtain it
+                      immediately before creating the task; for the single-replica StatefulSet
+                      the pod is `<target.nodeRef.Name>-0`:
+                        kubectl get pod <node>-0 -o jsonpath='{.metadata.uid}'
+                      The task deletes exactly this pod and completes when an owned Ready pod with
+                      a different UID appears. Content-addressed (UID, not creationTimestamp) so
+                      the OnDelete replacement is unambiguously distinguished from the original.
+
+                      The caller owns UID correctness: a non-empty UID that no longer matches the
+                      live pod (e.g. the pod was recreated out-of-band after it was read) deletes
+                      nothing and completes immediately as a no-op. Fetch the UID as late as
+                      possible — the controller does not re-validate it against the live pod.
+                    minLength: 1
+                    type: string
+                required:
+                - podUID
+                type: object
               target:
                 description: |-
                   Target identifies the single SeiNode this task operates on. Fan-out
@@ -289,10 +316,11 @@ spec:
                 type: object
               timeoutSeconds:
                 description: |-
-                  TimeoutSeconds bounds the total time the reconciler will spend driving
-                  this task to a terminal state, measured from first reconcile after
-                  status.task is populated. When 0 (default), no upper bound is applied
-                  and the task runs until it completes, fails terminally, or is deleted.
+                  TimeoutSeconds bounds execution time, measured from
+                  status.task.executionStartedAt (after the target meets
+                  spec.target.requirePhase). The requirePhase wait is bounded separately by
+                  spec.target.requirePhaseTimeout and is not charged here. 0 (default) is
+                  unbounded — the task runs until it completes, fails, or is deleted.
                 format: int32
                 minimum: 0
                 type: integer
@@ -315,10 +343,12 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: exactly one of govSoftwareUpgrade, govVote, awaitCondition,
-                updateNodeImage, or awaitNodesAtHeight must be set
+                updateNodeImage, awaitNodesAtHeight, discoverPeers, or restartPod
+                must be set
               rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
                 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage)
-                ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) == 1'
+                ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.discoverPeers)
+                ? 1 : 0) + (has(self.restartPod) ? 1 : 0) == 1'
             - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
               rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
             - message: spec.govVote is required when kind=GovVote
@@ -329,6 +359,13 @@ spec:
               rule: self.kind != 'UpdateNodeImage' || has(self.updateNodeImage)
             - message: spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight
               rule: self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)
+            - message: spec.discoverPeers is required when kind=DiscoverPeers
+              rule: self.kind != 'DiscoverPeers' || has(self.discoverPeers)
+            - message: spec.restartPod is required when kind=RestartPod
+              rule: self.kind != 'RestartPod' || has(self.restartPod)
+            - message: spec.restartPod.podUID is required when kind=RestartPod
+              rule: self.kind != 'RestartPod' || (has(self.restartPod) && size(self.restartPod.podUID)
+                > 0)
             - message: spec.kind is immutable
               rule: self.kind == oldSelf.kind
           status:
@@ -483,8 +520,9 @@ spec:
                 type: string
               startedAt:
                 description: |-
-                  StartedAt is when the controller first observed the task (used as the
-                  reference point for spec.timeoutSeconds).
+                  StartedAt is when the controller first observed the task (first reconcile)
+                  — task creation, not execution start. The execution timeout runs from
+                  status.task.executionStartedAt instead.
                 format: date-time
                 type: string
               targetFirstObservedAt:
@@ -504,9 +542,25 @@ spec:
                   err:
                     description: Err is the error message if the task failed.
                     type: string
+                  executionStartedAt:
+                    description: |-
+                      ExecutionStartedAt is when the task was synthesized and dispatched (after
+                      the target met spec.target.requirePhase). The execution timeout is
+                      measured from here, not status.startedAt, so the requirePhase wait is not
+                      charged against the execution budget.
+                    format: date-time
+                    type: string
                   id:
                     description: ID is the deterministic UUID v5 used as the sidecar
                       task ID.
+                    type: string
+                  restartedPodUID:
+                    description: |-
+                      RestartedPodUID is the UID of the pod the kind=RestartPod task deletes,
+                      copied verbatim from spec.restartPod.podUID at synthesis. Content-addressed
+                      rather than clock-addressed: the task deletes only this pod and completes
+                      when an owned Ready pod with a different UID exists, sidestepping the
+                      same-second creationTimestamp race a time epoch would have.
                     type: string
                   status:
                     description: Status is the lifecycle state of the underlying execution.
