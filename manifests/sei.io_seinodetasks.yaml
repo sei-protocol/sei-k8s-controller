@@ -106,6 +106,9 @@ spec:
                 required:
                 - targetHeight
                 type: object
+              discoverPeers:
+                description: DiscoverPeers is the payload for kind=DiscoverPeers.
+                type: object
               govSoftwareUpgrade:
                 description: GovSoftwareUpgrade is the payload for kind=GovSoftwareUpgrade.
                 properties:
@@ -245,7 +248,12 @@ spec:
                 - AwaitCondition
                 - UpdateNodeImage
                 - AwaitNodesAtHeight
+                - DiscoverPeers
+                - RestartPod
                 type: string
+              restartPod:
+                description: RestartPod is the payload for kind=RestartPod.
+                type: object
               target:
                 description: |-
                   Target identifies the single SeiNode this task operates on. Fan-out
@@ -315,10 +323,12 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: exactly one of govSoftwareUpgrade, govVote, awaitCondition,
-                updateNodeImage, or awaitNodesAtHeight must be set
+                updateNodeImage, awaitNodesAtHeight, discoverPeers, or restartPod
+                must be set
               rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
                 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage)
-                ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) == 1'
+                ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.discoverPeers)
+                ? 1 : 0) + (has(self.restartPod) ? 1 : 0) == 1'
             - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
               rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
             - message: spec.govVote is required when kind=GovVote
@@ -329,6 +339,10 @@ spec:
               rule: self.kind != 'UpdateNodeImage' || has(self.updateNodeImage)
             - message: spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight
               rule: self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)
+            - message: spec.discoverPeers is required when kind=DiscoverPeers
+              rule: self.kind != 'DiscoverPeers' || has(self.discoverPeers)
+            - message: spec.restartPod is required when kind=RestartPod
+              rule: self.kind != 'RestartPod' || has(self.restartPod)
             - message: spec.kind is immutable
               rule: self.kind == oldSelf.kind
           status:
@@ -507,6 +521,17 @@ spec:
                   id:
                     description: ID is the deterministic UUID v5 used as the sidecar
                       task ID.
+                    type: string
+                  restartedPodUID:
+                    description: |-
+                      RestartedPodUID is the UID of the target pod the kind=RestartPod task
+                      deletes. Captured once at task synthesis and persisted so the restart
+                      is content-addressed rather than clock-addressed: the task deletes only
+                      this pod and completes when an owned Ready pod with a *different* UID
+                      exists. This survives reconciler restarts and removes the same-second
+                      creationTimestamp race a time-based epoch would have. Empty when no pod
+                      existed at synthesis (nothing to re-delete; any owned Ready pod
+                      completes the task).
                     type: string
                   status:
                     description: Status is the lifecycle state of the underlying execution.

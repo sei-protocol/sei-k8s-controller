@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -86,7 +87,7 @@ type SeiNodeTaskReconciler struct {
 // +kubebuilder:rbac:groups=sei.io,resources=seinodetasks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sei.io,resources=seinodetasks/finalizers,verbs=update
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile drives the SeiNodeTask through Pending → Running → Complete|Failed.
@@ -132,16 +133,34 @@ func (r *SeiNodeTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Step 3+4: synthesize the one-shot task if missing. Validate the
-	// kind/payload mapping first so we fail-fast on unsupported kinds
-	// before stamping anything.
+	// kind/payload mapping first so we fail-fast on a malformed spec before
+	// stamping anything. UnsupportedKind is reserved for a genuinely unwired
+	// kind (the default case); a payload/param-build failure for a wired kind
+	// surfaces as ParamsBuildFailed, matching driveTask.
 	if fatal == nil && cr.Status.Task == nil {
 		if _, _, err := taskParamsForKind(cr, nil); err != nil {
-			r.markFailed(cr, now, "UnsupportedKind", err.Error())
+			reason := "ParamsBuildFailed"
+			if errors.Is(err, errUnsupportedKind) {
+				reason = "UnsupportedKind"
+			}
+			r.markFailed(cr, now, reason, err.Error())
 		} else {
-			cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{
+			exec := &seiv1alpha1.SeiNodeTaskExecution{
 				ID:     task.DeterministicTaskID(string(cr.UID), string(cr.Spec.Kind), 0),
 				Status: seiv1alpha1.TaskPending,
 			}
+			// Content-address the restart: capture the target pod's UID once,
+			// at synthesis, so the restart-pod task deletes exactly that pod
+			// and completes on a different (replacement) UID. Keying on UID
+			// avoids the same-second creationTimestamp race a clock epoch has.
+			if cr.Spec.Kind == seiv1alpha1.SeiNodeTaskKindRestartPod {
+				uid, err := r.targetPodUID(ctx, target)
+				if err != nil {
+					return r.flush(ctx, cr, before, statusBase, observedPhase, ctrl.Result{}, err)
+				}
+				exec.RestartedPodUID = string(uid)
+			}
+			cr.Status.Task = exec
 			r.setPhase(cr, seiv1alpha1.SeiNodeTaskPhaseRunning, now)
 			// Persist synthesis before any side effects — mirrors the
 			// "atomic plan creation" pattern from CLAUDE.md.
@@ -188,7 +207,7 @@ func (r *SeiNodeTaskReconciler) resolveTarget(ctx context.Context, cr *seiv1alph
 	}
 	if target.Status.Phase == requirePhase {
 		cr.Status.TargetFirstObservedAt = nil
-		apimeta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
+		setCondition(cr, metav1.Condition{
 			Type:    seiv1alpha1.ConditionSeiNodeTaskTargetReady,
 			Status:  metav1.ConditionTrue,
 			Reason:  "PhaseMet",
@@ -209,7 +228,7 @@ func (r *SeiNodeTaskReconciler) resolveTarget(ctx context.Context, cr *seiv1alph
 		return nil, ctrl.Result{}, fmt.Errorf("target %q did not reach phase %q within %s (current: %q)",
 			key.Name, requirePhase, timeout, target.Status.Phase)
 	}
-	apimeta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
+	setCondition(cr, metav1.Condition{
 		Type:    seiv1alpha1.ConditionSeiNodeTaskTargetReady,
 		Status:  metav1.ConditionFalse,
 		Reason:  "PhaseNotMet",
@@ -218,13 +237,49 @@ func (r *SeiNodeTaskReconciler) resolveTarget(ctx context.Context, cr *seiv1alph
 	return nil, ctrl.Result{RequeueAfter: targetWaitInterval}, nil
 }
 
+// targetPodUID returns the UID of the pod currently owned by the target's
+// StatefulSet, or "" when the StatefulSet or pod does not exist yet (the
+// StatefulSet may still be scheduling). A missing StatefulSet is not an error:
+// an empty UID means "nothing to re-delete", and the restart-pod task completes
+// on the first owned Ready pod. Only a real API error is returned (caller
+// requeues — we must not synthesize the task without resolving the UID).
+func (r *SeiNodeTaskReconciler) targetPodUID(ctx context.Context, target *seiv1alpha1.SeiNode) (types.UID, error) {
+	sts := &appsv1.StatefulSet{}
+	key := types.NamespacedName{Name: target.Name, Namespace: target.Namespace}
+	if err := r.Get(ctx, key, sts); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("getting statefulset %q for restart-pod synthesis: %w", target.Name, err)
+	}
+	if sts.Spec.Selector == nil || len(sts.Spec.Selector.MatchLabels) == 0 {
+		return "", nil
+	}
+
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods,
+		client.InNamespace(target.Namespace),
+		client.MatchingLabels(sts.Spec.Selector.MatchLabels),
+	); err != nil {
+		return "", fmt.Errorf("listing pods for statefulset %q: %w", target.Name, err)
+	}
+	for i := range pods.Items {
+		for _, ref := range pods.Items[i].OwnerReferences {
+			if ref.Kind == "StatefulSet" && ref.UID == sts.UID {
+				return pods.Items[i].UID, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 // driveTask executes/polls the synthesized task and mutates status fields
 // in-memory. Returns a transient error only when the task's Execute
 // returned a non-Terminal error (controller-runtime backs off).
 func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode, now time.Time) error {
 	taskType, params, err := taskParamsForKind(cr, target)
 	if err != nil {
-		r.markFailed(cr, now, "UnsupportedKind", err.Error())
+		r.markFailed(cr, now, "ParamsBuildFailed", err.Error())
 		return nil
 	}
 
@@ -262,7 +317,7 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 		cr.Status.Task.Status = seiv1alpha1.TaskComplete
 		populateOutputs(cr, target)
 		r.setPhase(cr, seiv1alpha1.SeiNodeTaskPhaseComplete, now)
-		apimeta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
+		setCondition(cr, metav1.Condition{
 			Type:   seiv1alpha1.ConditionSeiNodeTaskReady,
 			Status: metav1.ConditionTrue, Reason: "TaskComplete",
 		})
@@ -275,18 +330,46 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 		cr.Status.Task.Err = msg
 		r.markFailed(cr, now, "TaskFailed", msg)
 	default:
-		// Still running. Honor spec.timeoutSeconds against StartedAt.
-		if cr.Spec.TimeoutSeconds > 0 && cr.Status.StartedAt != nil {
-			deadline := cr.Status.StartedAt.Add(time.Duration(cr.Spec.TimeoutSeconds) * time.Second)
+		// Still running. Honor the effective timeout against StartedAt.
+		if timeout := effectiveTimeout(cr); timeout > 0 && cr.Status.StartedAt != nil {
+			deadline := cr.Status.StartedAt.Add(timeout)
 			if now.After(deadline) {
 				r.markFailed(cr, now, "Timeout",
-					fmt.Sprintf("task did not complete within %ds", cr.Spec.TimeoutSeconds))
+					fmt.Sprintf("task did not complete within %s", timeout))
 				cr.Status.Task.Status = seiv1alpha1.TaskFailed
 				cr.Status.Task.Err = "timeout"
 			}
 		}
 	}
 	return nil
+}
+
+// Per-kind default timeouts applied when spec.timeoutSeconds is 0 (unset).
+// These bound kinds whose completion depends on a pod becoming Ready or a quick
+// disk write — without a bound, a wedged seid (e.g. DiscoverPeers wrote peers
+// that crash-loop the node) would requeue forever with no Failed transition.
+// Sidecar-backed gov/await kinds keep the unbounded default: they poll the
+// chain and an operator chooses the bound via spec.timeoutSeconds.
+const (
+	defaultRestartPodTimeout    = 10 * time.Minute
+	defaultDiscoverPeersTimeout = 2 * time.Minute
+)
+
+// effectiveTimeout returns the timeout that drives a Failed(reason=Timeout)
+// transition. An explicit spec.timeoutSeconds always wins; otherwise a per-kind
+// default applies. 0 means unbounded.
+func effectiveTimeout(cr *seiv1alpha1.SeiNodeTask) time.Duration {
+	if cr.Spec.TimeoutSeconds > 0 {
+		return time.Duration(cr.Spec.TimeoutSeconds) * time.Second
+	}
+	switch cr.Spec.Kind {
+	case seiv1alpha1.SeiNodeTaskKindRestartPod:
+		return defaultRestartPodTimeout
+	case seiv1alpha1.SeiNodeTaskKindDiscoverPeers:
+		return defaultDiscoverPeersTimeout
+	default:
+		return 0
+	}
 }
 
 // taskParamsForKind dispatches CR.spec.kind to the internal/task registry.
@@ -358,6 +441,43 @@ func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode)
 			Action:       p.Action,
 		})
 
+	case seiv1alpha1.SeiNodeTaskKindDiscoverPeers:
+		if cr.Spec.DiscoverPeers == nil {
+			return "", nil, errors.New("spec.discoverPeers is required for kind=DiscoverPeers")
+		}
+		// Re-resolve the target's current spec.peers into sidecar peer sources.
+		// target is nil on the early-validation path (before the SeiNode is
+		// fetched); defer source-building to the driveTask call site, which
+		// has the target. The empty-peers check also runs there.
+		if target == nil {
+			return sidecar.TaskTypeDiscoverPeers, nil, nil
+		}
+		sources := discoverPeerSources(target)
+		if len(sources) == 0 {
+			return "", nil, fmt.Errorf("target SeiNode %q has no spec.peers to discover", cr.Spec.Target.NodeRef.Name)
+		}
+		return marshalTaskParams(sidecar.TaskTypeDiscoverPeers, sidecar.DiscoverPeersTask{Sources: sources})
+
+	case seiv1alpha1.SeiNodeTaskKindRestartPod:
+		if cr.Spec.RestartPod == nil {
+			return "", nil, errors.New("spec.restartPod is required for kind=RestartPod")
+		}
+		// RestartedPodUID is the content-addressed restart signal, captured
+		// once at synthesis (controller.targetPodUID) and persisted on
+		// status.task. Empty is valid: no pod existed at synthesis, so the
+		// task completes on the first owned Ready pod. On the nil-target
+		// early-validation path status.task is nil — pass through empty; the
+		// real value is threaded at the driveTask call site.
+		var podUID types.UID
+		if cr.Status.Task != nil {
+			podUID = types.UID(cr.Status.Task.RestartedPodUID)
+		}
+		return marshalTaskParams(task.TaskTypeRestartPod, task.RestartPodParams{
+			NodeName:        cr.Spec.Target.NodeRef.Name,
+			Namespace:       cr.Namespace,
+			RestartedPodUID: podUID,
+		})
+
 	case seiv1alpha1.SeiNodeTaskKindAwaitNodesAtHeight:
 		// Single-node target: map to the sidecar's per-node primitive
 		// (await-condition height=H) rather than the deployment-scoped
@@ -374,8 +494,56 @@ func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode)
 		})
 
 	default:
-		return "", nil, fmt.Errorf("kind %q is not wired in this build", cr.Spec.Kind)
+		return "", nil, fmt.Errorf("%w: kind %q is not wired in this build", errUnsupportedKind, cr.Spec.Kind)
 	}
+}
+
+// errUnsupportedKind sentinels the default case in taskParamsForKind: a kind
+// the CRD enum admits but this build does not wire. The synthesis site routes
+// it to reason=UnsupportedKind; every other (payload/param) failure is
+// ParamsBuildFailed. Reasons are a public enum (CLAUDE.md), so UnsupportedKind
+// must mean only that.
+var errUnsupportedKind = errors.New("unsupported kind")
+
+// discoverPeerSources translates the target SeiNode's spec.peers into sidecar
+// peer-discovery sources. Mirrors planner.discoverPeersTask — duplicated rather
+// than imported because the nodetask controller deliberately does not depend on
+// the planner package. Label sources resolve to the controller-composed
+// `<node_id>@<host>:<port>` entries already in target.status.resolvedPeers and
+// are routed as static so the sidecar writes them verbatim. Returns an empty
+// slice when the target declares no peers (caller fails the task).
+func discoverPeerSources(target *seiv1alpha1.SeiNode) []sidecar.PeerSource {
+	var sources []sidecar.PeerSource
+	for _, s := range target.Spec.Peers {
+		switch {
+		case s.EC2Tags != nil:
+			sources = append(sources, sidecar.PeerSource{
+				Type:   sidecar.PeerSourceEC2Tags,
+				Region: s.EC2Tags.Region,
+				Tags:   s.EC2Tags.Tags,
+			})
+		case s.Static != nil:
+			sources = append(sources, sidecar.PeerSource{
+				Type:      sidecar.PeerSourceStatic,
+				Addresses: s.Static.Addresses,
+			})
+		case s.Label != nil:
+			// A label source resolves to controller-composed entries in
+			// status.resolvedPeers. With none resolved yet, appending a
+			// zero-address static source would mask the empty-peers fail-fast
+			// (len(sources) would be >0) and submit a discover-peers that
+			// silently wipes persistent-peers. Skip it; the caller re-checks
+			// len(sources)==0 and fails fast.
+			if len(target.Status.ResolvedPeers) == 0 {
+				continue
+			}
+			sources = append(sources, sidecar.PeerSource{
+				Type:      sidecar.PeerSourceStatic,
+				Addresses: target.Status.ResolvedPeers,
+			})
+		}
+	}
+	return sources
 }
 
 // resolveSigningUID returns explicit when set; otherwise derives from target
@@ -433,7 +601,7 @@ func (r *SeiNodeTaskReconciler) setPhase(cr *seiv1alpha1.SeiNodeTask, phase seiv
 
 func (r *SeiNodeTaskReconciler) markFailed(cr *seiv1alpha1.SeiNodeTask, now time.Time, reason, msg string) {
 	r.setPhase(cr, seiv1alpha1.SeiNodeTaskPhaseFailed, now)
-	apimeta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
+	setCondition(cr, metav1.Condition{
 		Type:    seiv1alpha1.ConditionSeiNodeTaskFailed,
 		Status:  metav1.ConditionTrue,
 		Reason:  reason,
@@ -442,6 +610,16 @@ func (r *SeiNodeTaskReconciler) markFailed(cr *seiv1alpha1.SeiNodeTask, now time
 	if r.Recorder != nil {
 		r.Recorder.Event(cr, corev1.EventTypeWarning, reason, msg)
 	}
+}
+
+// setCondition is the single condition-write helper for this controller. It
+// stamps ObservedGeneration = cr.Generation per the CLAUDE.md discipline (so
+// consumers can tell whether a condition reflects the current spec) before
+// delegating to apimeta.SetStatusCondition, which handles lastTransitionTime
+// and idempotent upserts. All condition writes in this file route through here.
+func setCondition(cr *seiv1alpha1.SeiNodeTask, cond metav1.Condition) {
+	cond.ObservedGeneration = cr.Generation
+	apimeta.SetStatusCondition(&cr.Status.Conditions, cond)
 }
 
 func (r *SeiNodeTaskReconciler) flush(

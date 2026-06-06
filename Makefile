@@ -51,7 +51,9 @@ setup-envtest: $(LOCALBIN) ## Install setup-envtest and download K8s test binari
 
 test-integration: setup-envtest ## Run envtest-tagged integration tests.
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
-		go test -tags=envtest -timeout=10m ./internal/controller/nodedeployment/envtest/...
+		go test -tags=envtest -timeout=10m \
+			./internal/controller/nodedeployment/envtest/... \
+			./internal/controller/nodetask/envtest/...
 
 test-all: test test-integration ## Run unit + integration tests.
 
