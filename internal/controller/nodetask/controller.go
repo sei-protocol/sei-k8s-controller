@@ -316,6 +316,16 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 		return nil
 	}
 
+	// Backward-compat: a task synthesized by a pre-ExecutionStartedAt controller
+	// has a populated status.task but a nil anchor. Lazy-stamp it to now so the
+	// timeout branch applies; this gives a bounded fresh budget from the upgrade
+	// moment rather than running unbounded. Anchoring to status.startedAt could
+	// put the deadline in the past for a long-running task and spuriously fail it.
+	if cr.Status.Task.ExecutionStartedAt == nil {
+		t := metav1.NewTime(now)
+		cr.Status.Task.ExecutionStartedAt = &t
+	}
+
 	if cr.Status.Task.Status == seiv1alpha1.TaskPending {
 		execCtx, cancel := context.WithTimeout(ctx, sidecarExecuteTimeout)
 		err := exec.Execute(execCtx)

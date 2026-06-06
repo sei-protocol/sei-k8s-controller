@@ -939,6 +939,57 @@ func TestReconcile_DiscoverPeers_ExecTimeout_FromExecutionStart(t *testing.T) {
 	g.Expect(failed.Reason).To(Equal("Timeout"))
 }
 
+// Backward-compat: a task synthesized by a pre-ExecutionStartedAt controller has
+// a populated status.task but a nil anchor. The first post-upgrade reconcile must
+// lazy-stamp executionStartedAt (to now, not status.startedAt) so the task gets a
+// bounded fresh budget instead of running unbounded, then time out at
+// stamp + effectiveTimeout. Regression guard for the "In-flight tasks lose
+// timeout" finding.
+func TestReconcile_DiscoverPeers_PreUpgradeNilExecutionStart_StampsAndTimesOut(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	t0 := time.Now()
+	cr := newDiscoverPeersTask()
+	node := newRunningNode()
+	node.Spec.Peers = []seiv1alpha1.PeerSource{
+		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{testPeerAddr}}},
+	}
+	// Simulate a pre-upgrade in-flight task: already Running, status.task populated
+	// and submitted, but executionStartedAt nil (the field did not exist).
+	submitted := metav1.NewTime(t0.Add(-time.Hour))
+	cr.Status.Phase = seiv1alpha1.SeiNodeTaskPhaseRunning
+	cr.Status.StartedAt = &submitted
+	cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{
+		ID:                 task.DeterministicTaskID(string(cr.UID), string(cr.Spec.Kind), 0),
+		Status:             seiv1alpha1.TaskPending,
+		SubmittedAt:        &submitted,
+		ExecutionStartedAt: nil,
+	}
+	fakeSC := newFakeSidecarClient()
+
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, cr, node)
+
+	// R1: sidecar still running (no result set). The nil anchor is lazy-stamped to
+	// now (t0), NOT status.startedAt (1h ago) — anchoring to startedAt would put the
+	// deadline in the past and spuriously fail on the first reconcile.
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
+	g.Expect(got.Status.Task.ExecutionStartedAt).NotTo(BeNil())
+	g.Expect(got.Status.Task.ExecutionStartedAt.Time).To(BeTemporally("~", t0, time.Second))
+
+	// Past the fresh budget measured from the upgrade moment → Failed(Timeout).
+	r.Now = func() time.Time { return t0.Add(defaultDiscoverPeersTimeout + time.Second) }
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got = getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	failed := findFailedCond(got)
+	g.Expect(failed).NotTo(BeNil())
+	g.Expect(failed.Reason).To(Equal("Timeout"))
+}
+
 // ---------------------------------------------------------------------------
 // RestartPod
 // ---------------------------------------------------------------------------
