@@ -39,30 +39,18 @@ const (
 	SeiNodeTaskKindAwaitNodesAtHeight SeiNodeTaskKind = "AwaitNodesAtHeight"
 
 	// SeiNodeTaskKindDiscoverPeers backs the sidecar `discover-peers` task.
-	// Re-resolves the target SeiNode's spec.peers and writes persistent-peers
-	// into the on-disk config.toml (scalar merge — the rest of config.toml is
-	// preserved, so no config-apply is required).
-	//
-	// Writes to disk ONLY: the running seid does not re-read config.toml, so a
-	// fresh peer set is NOT picked up until the process restarts. Compose with
-	// kind=RestartPod to apply. Sequencing: DiscoverPeers (write) → RestartPod
-	// (apply). The two are not atomic — if DiscoverPeers succeeds but a
-	// subsequent RestartPod fails, the node runs with its old in-memory peers
-	// while config.toml holds the new set (a transient, self-healing divergence
-	// resolved by the next successful restart). Operate on the target's current
-	// spec.peers; no payload fields (YAGNI).
+	// Re-resolves the target's spec.peers and writes persistent-peers into the
+	// on-disk config.toml (scalar merge). Disk-only: a running seid does not
+	// re-read config.toml, so compose with kind=RestartPod to apply. The two are
+	// not atomic — a DiscoverPeers success followed by a RestartPod failure
+	// leaves config.toml ahead of the running peer set until the next restart.
 	SeiNodeTaskKindDiscoverPeers SeiNodeTaskKind = "DiscoverPeers"
 
 	// SeiNodeTaskKindRestartPod backs the controller-side `restart-pod` task.
-	// Deletes the target node's single pod so the StatefulSet's OnDelete
-	// strategy recreates it and seid re-reads config.toml on start — applying
-	// peers freshly written by a preceding DiscoverPeers task. Completes when a
-	// new pod (distinct from the one deleted) is recreated and Ready.
-	//
-	// Same mechanism as the NodeUpdate rollout's pod replacement: single-replica
-	// stop-then-start gated by the RWO data PVC, so it is double-sign-safe (the
-	// new pod cannot bind the PVC until the old one fully terminates). Operate
-	// on the target's current pod; no payload fields (YAGNI).
+	// Deletes the target's single pod so the StatefulSet's OnDelete strategy
+	// recreates it and seid re-reads config.toml. Completes when a distinct new
+	// pod is Ready. Single-replica stop-then-start gated by the RWO data PVC, so
+	// double-sign-safe: the new pod cannot bind the PVC until the old terminates.
 	SeiNodeTaskKindRestartPod SeiNodeTaskKind = "RestartPod"
 )
 
@@ -129,10 +117,11 @@ type SeiNodeTaskSpec struct {
 	// layer — express fan-out at the seitask-runner / Chaos Workflow layer.
 	Target SeiNodeTaskTarget `json:"target"`
 
-	// TimeoutSeconds bounds the total time the reconciler will spend driving
-	// this task to a terminal state, measured from first reconcile after
-	// status.task is populated. When 0 (default), no upper bound is applied
-	// and the task runs until it completes, fails terminally, or is deleted.
+	// TimeoutSeconds bounds execution time, measured from
+	// status.task.executionStartedAt (after the target meets
+	// spec.target.requirePhase). The requirePhase wait is bounded separately by
+	// spec.target.requirePhaseTimeout and is not charged here. 0 (default) is
+	// unbounded — the task runs until it completes, fails, or is deleted.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
@@ -403,8 +392,9 @@ type SeiNodeTaskStatus struct {
 	// +optional
 	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
 
-	// StartedAt is when the controller first observed the task (used as the
-	// reference point for spec.timeoutSeconds).
+	// StartedAt is when the controller first observed the task (first reconcile)
+	// — task creation, not execution start. The execution timeout runs from
+	// status.task.executionStartedAt instead.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 
@@ -439,14 +429,19 @@ type SeiNodeTaskExecution struct {
 	// +optional
 	SubmittedAt *metav1.Time `json:"submittedAt,omitempty"`
 
-	// RestartedPodUID is the UID of the target pod the kind=RestartPod task
-	// deletes. Captured once at task synthesis and persisted so the restart
-	// is content-addressed rather than clock-addressed: the task deletes only
-	// this pod and completes when an owned Ready pod with a *different* UID
-	// exists. This survives reconciler restarts and removes the same-second
-	// creationTimestamp race a time-based epoch would have. Empty when no pod
-	// existed at synthesis (nothing to re-delete; any owned Ready pod
-	// completes the task).
+	// ExecutionStartedAt is when the task was synthesized and dispatched (after
+	// the target met spec.target.requirePhase). The execution timeout is
+	// measured from here, not status.startedAt, so the requirePhase wait is not
+	// charged against the execution budget.
+	// +optional
+	ExecutionStartedAt *metav1.Time `json:"executionStartedAt,omitempty"`
+
+	// RestartedPodUID is the UID of the pod the kind=RestartPod task deletes,
+	// captured once at synthesis. Content-addressed rather than clock-addressed:
+	// the task deletes only this pod and completes when an owned Ready pod with a
+	// different UID exists, sidestepping the same-second creationTimestamp race a
+	// time epoch would have. Empty when no pod existed at synthesis (any owned
+	// Ready pod then completes the task).
 	// +optional
 	RestartedPodUID string `json:"restartedPodUID,omitempty"`
 }

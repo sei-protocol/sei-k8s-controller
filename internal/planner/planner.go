@@ -657,33 +657,7 @@ func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource) sidecar.SnapshotResto
 }
 
 func discoverPeersTask(node *seiv1alpha1.SeiNode) sidecar.DiscoverPeersTask {
-	if len(node.Spec.Peers) == 0 {
-		return sidecar.DiscoverPeersTask{}
-	}
-	var sources []sidecar.PeerSource
-	for _, s := range node.Spec.Peers {
-		switch {
-		case s.EC2Tags != nil:
-			sources = append(sources, sidecar.PeerSource{
-				Type:   sidecar.PeerSourceEC2Tags,
-				Region: s.EC2Tags.Region,
-				Tags:   s.EC2Tags.Tags,
-			})
-		case s.Static != nil:
-			sources = append(sources, sidecar.PeerSource{
-				Type:      sidecar.PeerSourceStatic,
-				Addresses: s.Static.Addresses,
-			})
-		case s.Label != nil:
-			// ResolvedPeers is pre-composed `<node_id>@<host>:<port>`;
-			// route as static so the sidecar writes them verbatim.
-			sources = append(sources, sidecar.PeerSource{
-				Type:      sidecar.PeerSourceStatic,
-				Addresses: node.Status.ResolvedPeers,
-			})
-		}
-	}
-	return sidecar.DiscoverPeersTask{Sources: sources}
+	return sidecar.DiscoverPeersTask{Sources: task.DiscoverPeerSources(node)}
 }
 
 func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyncTask {

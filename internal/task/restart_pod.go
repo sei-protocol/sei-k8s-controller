@@ -19,19 +19,13 @@ const TaskTypeRestartPod = "restart-pod"
 // RestartPodParams identifies the target SeiNode whose pod is restarted so
 // seid re-reads config.toml on the next start.
 //
-// RestartedPodUID is the content-addressed restart signal: the UID of the pod
-// that must be replaced. The controller captures it once at task synthesis and
-// threads it through params, so the signal is stable across reconciles (the
-// executor reconstructs the execution on every poll, exactly like
-// replace-pod/observe-image key on StatefulSet revision). The task deletes only
-// the pod with this UID and reports complete once an owned Ready pod with a
-// *different* UID exists. Keying on UID rather than a creation-time epoch kills
-// the same-second-truncation race by construction: an OnDelete replacement
-// always has a fresh UID regardless of how its creationTimestamp rounds.
-//
-// RestartedPodUID is empty when no pod existed at synthesis (the StatefulSet was
-// still scheduling). In that case there is nothing to re-delete and the task
-// completes as soon as any owned Ready pod appears.
+// RestartedPodUID is the content-addressed restart signal, captured once at
+// synthesis and threaded through params so it is stable across reconciles. The
+// task deletes only this pod and completes once an owned Ready pod with a
+// different UID exists. Keying on UID rather than a creation-time epoch avoids
+// the same-second-truncation race: an OnDelete replacement always has a fresh
+// UID. Empty when no pod existed at synthesis (any owned Ready pod then
+// completes the task).
 type RestartPodParams struct {
 	NodeName        string    `json:"nodeName"`
 	Namespace       string    `json:"namespace"`

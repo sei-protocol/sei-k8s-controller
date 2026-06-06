@@ -38,6 +38,11 @@ const (
 	testFees     = "2000usei"
 	testPeerAddr = "abc@10.0.0.1:26656"
 	testRev      = "rev-1"
+
+	testPeerRegion     = "us-east-1"
+	testPeerTagKey     = "role"
+	testPeerTagVal     = "validator"
+	testNDPSelectorKey = "sei.io/nodedeployment"
 )
 
 func newScheme(t *testing.T) *k8sruntime.Scheme {
@@ -658,11 +663,11 @@ func TestTaskParamsForKind_DiscoverPeers_EC2TagsAndLabel(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			Peers: []seiv1alpha1.PeerSource{
 				{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
-					Region: "us-east-1",
-					Tags:   map[string]string{"role": "validator"},
+					Region: testPeerRegion,
+					Tags:   map[string]string{testPeerTagKey: testPeerTagVal},
 				}},
 				{Label: &seiv1alpha1.LabelPeerSource{
-					Selector: map[string]string{"sei.io/nodedeployment": "g1"},
+					Selector: map[string]string{testNDPSelectorKey: "g1"},
 				}},
 			},
 		},
@@ -678,7 +683,7 @@ func TestTaskParamsForKind_DiscoverPeers_EC2TagsAndLabel(t *testing.T) {
 	var got sidecar.DiscoverPeersTask
 	g.Expect(json.Unmarshal(raw, &got)).To(Succeed())
 	g.Expect(got.Sources).To(Equal([]sidecar.PeerSource{
-		{Type: sidecar.PeerSourceEC2Tags, Region: "us-east-1", Tags: map[string]string{"role": "validator"}},
+		{Type: sidecar.PeerSourceEC2Tags, Region: testPeerRegion, Tags: map[string]string{testPeerTagKey: testPeerTagVal}},
 		{Type: sidecar.PeerSourceStatic, Addresses: []string{testPeerAddr}},
 	}))
 }
@@ -695,11 +700,11 @@ func TestTaskParamsForKind_DiscoverPeers_EC2TagsAndEmptyLabel(t *testing.T) {
 		Spec: seiv1alpha1.SeiNodeSpec{
 			Peers: []seiv1alpha1.PeerSource{
 				{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
-					Region: "us-east-1",
-					Tags:   map[string]string{"role": "validator"},
+					Region: testPeerRegion,
+					Tags:   map[string]string{testPeerTagKey: testPeerTagVal},
 				}},
 				{Label: &seiv1alpha1.LabelPeerSource{
-					Selector: map[string]string{"sei.io/nodedeployment": "g1"},
+					Selector: map[string]string{testNDPSelectorKey: "g1"},
 				}},
 			},
 		},
@@ -713,7 +718,7 @@ func TestTaskParamsForKind_DiscoverPeers_EC2TagsAndEmptyLabel(t *testing.T) {
 	var got sidecar.DiscoverPeersTask
 	g.Expect(json.Unmarshal(raw, &got)).To(Succeed())
 	g.Expect(got.Sources).To(Equal([]sidecar.PeerSource{
-		{Type: sidecar.PeerSourceEC2Tags, Region: "us-east-1", Tags: map[string]string{"role": "validator"}},
+		{Type: sidecar.PeerSourceEC2Tags, Region: testPeerRegion, Tags: map[string]string{testPeerTagKey: testPeerTagVal}},
 	}))
 }
 
@@ -809,9 +814,106 @@ func TestReconcile_DiscoverPeers_EmptyPeers_Fails(t *testing.T) {
 
 	got := getTask(t, ctx, c)
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
-	failed := findCond(got, seiv1alpha1.ConditionSeiNodeTaskFailed)
+	failed := findFailedCond(got)
 	g.Expect(failed).NotTo(BeNil())
 	g.Expect(failed.Reason).To(Equal("ParamsBuildFailed"))
+}
+
+// The execution timeout is measured from execution start (when the target
+// became Ready and the task was dispatched), NOT from status.startedAt. A
+// target that reaches Running only after a wait LONGER than the per-kind
+// default exec timeout (DiscoverPeers=2m) must NOT immediately Fail(Timeout):
+// execution gets its full budget from when it starts. Regression guard for the
+// "Task timeout includes target wait" finding.
+func TestReconcile_DiscoverPeers_LongTargetWait_DoesNotImmediatelyTimeOut(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	t0 := time.Now()
+	cr := newDiscoverPeersTask()
+	// requirePhaseTimeout (default 5m) must comfortably exceed the wait we
+	// simulate (3m > DiscoverPeers exec default 2m, < 5m requirePhase budget).
+	node := newRunningNode()
+	node.Status.Phase = seiv1alpha1.PhaseInitializing
+	node.Spec.Peers = []seiv1alpha1.PeerSource{
+		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{testPeerAddr}}},
+	}
+	fakeSC := newFakeSidecarClient()
+
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, cr, node)
+
+	// R1: target not Running → wait. Stamps startedAt=t0.
+	res, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(targetWaitInterval))
+	g.Expect(getTask(t, ctx, c).Status.Phase).NotTo(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+
+	// Target reaches Running only after 3m — longer than the 2m DiscoverPeers
+	// default exec timeout, but within the 5m requirePhase budget.
+	tReady := t0.Add(defaultDiscoverPeersTimeout + time.Minute)
+	r.Now = func() time.Time { return tReady }
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	g.Expect(c.Status().Update(ctx, node)).To(Succeed())
+
+	// R2: target now Ready → synthesize task. executionStartedAt=tReady.
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
+	g.Expect(got.Status.Task).NotTo(BeNil())
+	g.Expect(got.Status.Task.ExecutionStartedAt).NotTo(BeNil())
+	// Stamped at synthesis (R2), not at first reconcile (R1, t0).
+	g.Expect(got.Status.Task.ExecutionStartedAt.Time).To(BeTemporally("~", tReady, time.Second))
+	g.Expect(got.Status.Task.ExecutionStartedAt.Time).NotTo(BeTemporally("~", t0, time.Second))
+
+	// R3: Execute submits; Status still running. now is just past tReady — the
+	// task must NOT be Failed even though now-startedAt already exceeds the 2m
+	// exec timeout (the wait must not be charged against the exec budget).
+	r.Now = func() time.Time { return tReady.Add(time.Second) }
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got = getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
+
+	// Sidecar completes within the exec budget → Complete.
+	taskID, perr := uuid.Parse(got.Status.Task.ID)
+	g.Expect(perr).NotTo(HaveOccurred())
+	fakeSC.setResult(taskID, sidecar.Completed, "")
+	r.Now = func() time.Time { return tReady.Add(time.Minute) }
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
+}
+
+// Execution-start timeout still fires: a DiscoverPeers task whose sidecar never
+// completes Fails(Timeout) at executionStartedAt + default, confirming the
+// budget is enforced (just from the right reference point).
+func TestReconcile_DiscoverPeers_ExecTimeout_FromExecutionStart(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	t0 := time.Now()
+	cr := newDiscoverPeersTask()
+	node := newRunningNode()
+	node.Spec.Peers = []seiv1alpha1.PeerSource{
+		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{testPeerAddr}}},
+	}
+	fakeSC := newFakeSidecarClient()
+
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, cr, node)
+
+	_, err := r.Reconcile(ctx, req()) // R1 synthesize (executionStartedAt=t0)
+	g.Expect(err).NotTo(HaveOccurred())
+	_, err = r.Reconcile(ctx, req()) // R2 Execute + Status → Running (sidecar never completes)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
+
+	r.Now = func() time.Time { return t0.Add(defaultDiscoverPeersTimeout + time.Second) }
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	failed := findFailedCond(got)
+	g.Expect(failed).NotTo(BeNil())
+	g.Expect(failed.Reason).To(Equal("Timeout"))
 }
 
 // ---------------------------------------------------------------------------
@@ -953,7 +1055,7 @@ func TestReconcile_RestartPod_NeverReady_TimesOut(t *testing.T) {
 
 	got := getTask(t, ctx, c)
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
-	failed := findCond(got, seiv1alpha1.ConditionSeiNodeTaskFailed)
+	failed := findFailedCond(got)
 	g.Expect(failed).NotTo(BeNil())
 	g.Expect(failed.Reason).To(Equal("Timeout"))
 }
@@ -967,7 +1069,7 @@ func TestReconcile_DiscoverPeers_LabelEmptyResolved_Fails(t *testing.T) {
 	cr := newDiscoverPeersTask()
 	node := newRunningNode()
 	node.Spec.Peers = []seiv1alpha1.PeerSource{
-		{Label: &seiv1alpha1.LabelPeerSource{Selector: map[string]string{"sei.io/nodedeployment": "g1"}}},
+		{Label: &seiv1alpha1.LabelPeerSource{Selector: map[string]string{testNDPSelectorKey: "g1"}}},
 	}
 	// status.resolvedPeers intentionally empty.
 	fakeSC := newFakeSidecarClient()
@@ -985,7 +1087,7 @@ func TestReconcile_DiscoverPeers_LabelEmptyResolved_Fails(t *testing.T) {
 
 	got := getTask(t, ctx, c)
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
-	failed := findCond(got, seiv1alpha1.ConditionSeiNodeTaskFailed)
+	failed := findFailedCond(got)
 	g.Expect(failed).NotTo(BeNil())
 	g.Expect(failed.Reason).To(Equal("ParamsBuildFailed"))
 }
@@ -1035,9 +1137,11 @@ func restartTestPod(uid types.UID, created metav1.Time, ready bool) *corev1.Pod 
 	return pod
 }
 
-func findCond(cr *seiv1alpha1.SeiNodeTask, condType string) *metav1.Condition {
+// findFailedCond returns the Failed condition, the only condition the failure
+// tests assert on. Kept arg-free to avoid an always-constant parameter.
+func findFailedCond(cr *seiv1alpha1.SeiNodeTask) *metav1.Condition {
 	for i := range cr.Status.Conditions {
-		if cr.Status.Conditions[i].Type == condType {
+		if cr.Status.Conditions[i].Type == seiv1alpha1.ConditionSeiNodeTaskFailed {
 			return &cr.Status.Conditions[i]
 		}
 	}

@@ -27,8 +27,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
-
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
@@ -57,6 +55,13 @@ const (
 
 	// sidecarStatusTimeout bounds the GetTask HTTP call. Same reasoning.
 	sidecarStatusTimeout = 15 * time.Second
+
+	// Per-kind execution-timeout defaults applied when spec.timeoutSeconds is 0.
+	// These bound kinds whose completion depends on a pod becoming Ready or a
+	// quick disk write; sidecar-backed gov/await kinds stay unbounded (an
+	// operator sets spec.timeoutSeconds).
+	defaultRestartPodTimeout    = 10 * time.Minute
+	defaultDiscoverPeersTimeout = 2 * time.Minute
 )
 
 // resultRequeueImmediate mirrors planner.ResultRequeueImmediate without
@@ -140,19 +145,19 @@ func (r *SeiNodeTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if fatal == nil && cr.Status.Task == nil {
 		if _, _, err := taskParamsForKind(cr, nil); err != nil {
 			reason := "ParamsBuildFailed"
-			if errors.Is(err, errUnsupportedKind) {
+			if errors.Is(err, task.ErrUnsupportedKind) {
 				reason = "UnsupportedKind"
 			}
 			r.markFailed(cr, now, reason, err.Error())
 		} else {
+			execStart := metav1.NewTime(now)
 			exec := &seiv1alpha1.SeiNodeTaskExecution{
-				ID:     task.DeterministicTaskID(string(cr.UID), string(cr.Spec.Kind), 0),
-				Status: seiv1alpha1.TaskPending,
+				ID:                 task.DeterministicTaskID(string(cr.UID), string(cr.Spec.Kind), 0),
+				Status:             seiv1alpha1.TaskPending,
+				ExecutionStartedAt: &execStart,
 			}
-			// Content-address the restart: capture the target pod's UID once,
-			// at synthesis, so the restart-pod task deletes exactly that pod
-			// and completes on a different (replacement) UID. Keying on UID
-			// avoids the same-second creationTimestamp race a clock epoch has.
+			// Capture the target pod's UID once, at synthesis, to
+			// content-address the restart (see SeiNodeTaskExecution.RestartedPodUID).
 			if cr.Spec.Kind == seiv1alpha1.SeiNodeTaskKindRestartPod {
 				uid, err := r.targetPodUID(ctx, target)
 				if err != nil {
@@ -330,9 +335,11 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 		cr.Status.Task.Err = msg
 		r.markFailed(cr, now, "TaskFailed", msg)
 	default:
-		// Still running. Honor the effective timeout against StartedAt.
-		if timeout := effectiveTimeout(cr); timeout > 0 && cr.Status.StartedAt != nil {
-			deadline := cr.Status.StartedAt.Add(timeout)
+		// Still running; enforce the execution timeout against
+		// ExecutionStartedAt (not status.startedAt — keeps the requirePhase wait
+		// off the budget).
+		if timeout := effectiveTimeout(cr); timeout > 0 && cr.Status.Task.ExecutionStartedAt != nil {
+			deadline := cr.Status.Task.ExecutionStartedAt.Add(timeout)
 			if now.After(deadline) {
 				r.markFailed(cr, now, "Timeout",
 					fmt.Sprintf("task did not complete within %s", timeout))
@@ -344,19 +351,9 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 	return nil
 }
 
-// Per-kind default timeouts applied when spec.timeoutSeconds is 0 (unset).
-// These bound kinds whose completion depends on a pod becoming Ready or a quick
-// disk write — without a bound, a wedged seid (e.g. DiscoverPeers wrote peers
-// that crash-loop the node) would requeue forever with no Failed transition.
-// Sidecar-backed gov/await kinds keep the unbounded default: they poll the
-// chain and an operator chooses the bound via spec.timeoutSeconds.
-const (
-	defaultRestartPodTimeout    = 10 * time.Minute
-	defaultDiscoverPeersTimeout = 2 * time.Minute
-)
-
-// effectiveTimeout returns the timeout that drives a Failed(reason=Timeout)
-// transition. An explicit spec.timeoutSeconds always wins; otherwise a per-kind
+// effectiveTimeout returns the execution timeout (measured from
+// status.task.executionStartedAt) that drives a Failed(reason=Timeout)
+// transition. An explicit spec.timeoutSeconds wins; otherwise a per-kind
 // default applies. 0 means unbounded.
 func effectiveTimeout(cr *seiv1alpha1.SeiNodeTask) time.Duration {
 	if cr.Spec.TimeoutSeconds > 0 {
@@ -372,200 +369,25 @@ func effectiveTimeout(cr *seiv1alpha1.SeiNodeTask) time.Duration {
 	}
 }
 
-// taskParamsForKind dispatches CR.spec.kind to the internal/task registry.
-// For sidecar-backed kinds we marshal the sidecar TaskBuilder struct
-// directly: the registry's sidecarTask[T] helper unmarshals back into the
-// same typed struct, then calls ToTaskRequest(). Field names on the
-// sidecar structs (PascalCase, no JSON tags) are the wire keys.
-//
-// target is the resolved SeiNode the task runs against. Pass nil from the
-// early-validation path where target hasn't been fetched yet — KeyName
-// derivation is deferred to the driveTask call site, which has target.
+// taskParamsForKind resolves CR.spec.kind to a task type and serialized
+// payload. It is a thin dispatcher: the per-kind constructors live in the task
+// package (task.SeiNodeTaskParamsFor). target is the resolved SeiNode; pass nil
+// from the early-validation path (before the SeiNode is fetched). A nil payload
+// (DiscoverPeers, nil target) marshals to nil params — source-building is
+// deferred to the driveTask call site, which has target.
 func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (taskType string, params json.RawMessage, err error) {
-	switch cr.Spec.Kind {
-	case seiv1alpha1.SeiNodeTaskKindUpdateNodeImage:
-		if cr.Spec.UpdateNodeImage == nil {
-			return "", nil, errors.New("spec.updateNodeImage is required for kind=UpdateNodeImage")
-		}
-		return marshalTaskParams(task.TaskTypeUpdateNodeImage, task.UpdateNodeImageParams{
-			NodeName:  cr.Spec.Target.NodeRef.Name,
-			Namespace: cr.Namespace,
-			Image:     cr.Spec.UpdateNodeImage.Image,
-		})
-
-	case seiv1alpha1.SeiNodeTaskKindGovVote:
-		p := cr.Spec.GovVote
-		if p == nil {
-			return "", nil, errors.New("spec.govVote is required for kind=GovVote")
-		}
-		return marshalTaskParams(sidecar.TaskTypeGovVote, sidecar.GovVoteTask{
-			ChainID:    p.ChainID,
-			KeyName:    resolveSigningUID(p.KeyName, target),
-			ProposalID: p.ProposalID,
-			Option:     p.Option,
-			Memo:       p.Memo,
-			Fees:       p.Fees,
-			Gas:        p.Gas,
-		})
-
-	case seiv1alpha1.SeiNodeTaskKindGovSoftwareUpgrade:
-		p := cr.Spec.GovSoftwareUpgrade
-		if p == nil {
-			return "", nil, errors.New("spec.govSoftwareUpgrade is required for kind=GovSoftwareUpgrade")
-		}
-		return marshalTaskParams(sidecar.TaskTypeGovSoftwareUpgrade, sidecar.GovSoftwareUpgradeTask{
-			ChainID:        p.ChainID,
-			KeyName:        resolveSigningUID(p.KeyName, target),
-			Title:          p.Title,
-			Description:    p.Description,
-			UpgradeName:    p.UpgradeName,
-			UpgradeHeight:  p.UpgradeHeight,
-			UpgradeInfo:    p.UpgradeInfo,
-			InitialDeposit: p.InitialDeposit,
-			Memo:           p.Memo,
-			Fees:           p.Fees,
-			Gas:            p.Gas,
-		})
-
-	case seiv1alpha1.SeiNodeTaskKindAwaitCondition:
-		p := cr.Spec.AwaitCondition
-		if p == nil {
-			return "", nil, errors.New("spec.awaitCondition is required for kind=AwaitCondition")
-		}
-		if p.Height == nil {
-			return "", nil, errors.New("spec.awaitCondition.height is required (height is the only condition wired in MVP)")
-		}
-		return marshalTaskParams(sidecar.TaskTypeAwaitCondition, sidecar.AwaitConditionTask{
-			Condition:    sidecar.ConditionHeight,
-			TargetHeight: p.Height.TargetHeight,
-			Action:       p.Action,
-		})
-
-	case seiv1alpha1.SeiNodeTaskKindDiscoverPeers:
-		if cr.Spec.DiscoverPeers == nil {
-			return "", nil, errors.New("spec.discoverPeers is required for kind=DiscoverPeers")
-		}
-		// Re-resolve the target's current spec.peers into sidecar peer sources.
-		// target is nil on the early-validation path (before the SeiNode is
-		// fetched); defer source-building to the driveTask call site, which
-		// has the target. The empty-peers check also runs there.
-		if target == nil {
-			return sidecar.TaskTypeDiscoverPeers, nil, nil
-		}
-		sources := discoverPeerSources(target)
-		if len(sources) == 0 {
-			return "", nil, fmt.Errorf("target SeiNode %q has no spec.peers to discover", cr.Spec.Target.NodeRef.Name)
-		}
-		return marshalTaskParams(sidecar.TaskTypeDiscoverPeers, sidecar.DiscoverPeersTask{Sources: sources})
-
-	case seiv1alpha1.SeiNodeTaskKindRestartPod:
-		if cr.Spec.RestartPod == nil {
-			return "", nil, errors.New("spec.restartPod is required for kind=RestartPod")
-		}
-		// RestartedPodUID is the content-addressed restart signal, captured
-		// once at synthesis (controller.targetPodUID) and persisted on
-		// status.task. Empty is valid: no pod existed at synthesis, so the
-		// task completes on the first owned Ready pod. On the nil-target
-		// early-validation path status.task is nil — pass through empty; the
-		// real value is threaded at the driveTask call site.
-		var podUID types.UID
-		if cr.Status.Task != nil {
-			podUID = types.UID(cr.Status.Task.RestartedPodUID)
-		}
-		return marshalTaskParams(task.TaskTypeRestartPod, task.RestartPodParams{
-			NodeName:        cr.Spec.Target.NodeRef.Name,
-			Namespace:       cr.Namespace,
-			RestartedPodUID: podUID,
-		})
-
-	case seiv1alpha1.SeiNodeTaskKindAwaitNodesAtHeight:
-		// Single-node target: map to the sidecar's per-node primitive
-		// (await-condition height=H) rather than the deployment-scoped
-		// controller-side awaitNodesAtHeight task. This keeps the CR's
-		// status.task.id equal to the sidecar task ID and avoids the
-		// fan-out fixture for a fan-of-one.
-		p := cr.Spec.AwaitNodesAtHeight
-		if p == nil {
-			return "", nil, errors.New("spec.awaitNodesAtHeight is required for kind=AwaitNodesAtHeight")
-		}
-		return marshalTaskParams(sidecar.TaskTypeAwaitCondition, sidecar.AwaitConditionTask{
-			Condition:    sidecar.ConditionHeight,
-			TargetHeight: p.TargetHeight,
-		})
-
-	default:
-		return "", nil, fmt.Errorf("%w: kind %q is not wired in this build", errUnsupportedKind, cr.Spec.Kind)
-	}
-}
-
-// errUnsupportedKind sentinels the default case in taskParamsForKind: a kind
-// the CRD enum admits but this build does not wire. The synthesis site routes
-// it to reason=UnsupportedKind; every other (payload/param) failure is
-// ParamsBuildFailed. Reasons are a public enum (CLAUDE.md), so UnsupportedKind
-// must mean only that.
-var errUnsupportedKind = errors.New("unsupported kind")
-
-// discoverPeerSources translates the target SeiNode's spec.peers into sidecar
-// peer-discovery sources. Mirrors planner.discoverPeersTask — duplicated rather
-// than imported because the nodetask controller deliberately does not depend on
-// the planner package. Label sources resolve to the controller-composed
-// `<node_id>@<host>:<port>` entries already in target.status.resolvedPeers and
-// are routed as static so the sidecar writes them verbatim. Returns an empty
-// slice when the target declares no peers (caller fails the task).
-func discoverPeerSources(target *seiv1alpha1.SeiNode) []sidecar.PeerSource {
-	var sources []sidecar.PeerSource
-	for _, s := range target.Spec.Peers {
-		switch {
-		case s.EC2Tags != nil:
-			sources = append(sources, sidecar.PeerSource{
-				Type:   sidecar.PeerSourceEC2Tags,
-				Region: s.EC2Tags.Region,
-				Tags:   s.EC2Tags.Tags,
-			})
-		case s.Static != nil:
-			sources = append(sources, sidecar.PeerSource{
-				Type:      sidecar.PeerSourceStatic,
-				Addresses: s.Static.Addresses,
-			})
-		case s.Label != nil:
-			// A label source resolves to controller-composed entries in
-			// status.resolvedPeers. With none resolved yet, appending a
-			// zero-address static source would mask the empty-peers fail-fast
-			// (len(sources) would be >0) and submit a discover-peers that
-			// silently wipes persistent-peers. Skip it; the caller re-checks
-			// len(sources)==0 and fails fast.
-			if len(target.Status.ResolvedPeers) == 0 {
-				continue
-			}
-			sources = append(sources, sidecar.PeerSource{
-				Type:      sidecar.PeerSourceStatic,
-				Addresses: target.Status.ResolvedPeers,
-			})
-		}
-	}
-	return sources
-}
-
-// resolveSigningUID returns explicit when set; otherwise derives from target
-// via seiv1alpha1.ResolveOperatorKeyringUID. With nil target (early-
-// validation path), returns the empty string — the final marshal happens
-// later from driveTask, which has target.
-func resolveSigningUID(explicit string, target *seiv1alpha1.SeiNode) string {
-	if explicit != "" {
-		return explicit
-	}
-	if target == nil {
-		return ""
-	}
-	return seiv1alpha1.ResolveOperatorKeyringUID(target)
-}
-
-func marshalTaskParams(taskType string, v any) (string, json.RawMessage, error) {
-	raw, err := json.Marshal(v)
+	p, err := task.SeiNodeTaskParamsFor(cr, target)
 	if err != nil {
-		return "", nil, fmt.Errorf("marshaling %s params: %w", taskType, err)
+		return "", nil, err
 	}
-	return taskType, raw, nil
+	if p.Payload == nil {
+		return p.Type, nil, nil
+	}
+	raw, err := json.Marshal(p.Payload)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshaling %s params: %w", p.Type, err)
+	}
+	return p.Type, raw, nil
 }
 
 // populateOutputs stamps the typed per-kind outputs on Complete.
