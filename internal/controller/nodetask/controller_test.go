@@ -1003,7 +1003,7 @@ func newRestartPodTask() *seiv1alpha1.SeiNodeTask {
 				NodeRef:      seiv1alpha1.SeiNodeTaskNodeRef{Name: testNodeName},
 				RequirePhase: seiv1alpha1.PhaseRunning,
 			},
-			RestartPod: &seiv1alpha1.RestartPodPayload{},
+			RestartPod: &seiv1alpha1.RestartPodPayload{PodUID: "pod-uid-old"},
 		},
 	}
 }
@@ -1048,7 +1048,7 @@ func TestReconcile_RestartPod_HappyPath(t *testing.T) {
 
 	r, c := newReconciler(t, t0, cr, node, sts, oldPod)
 
-	// R1: synthesize task (captures the target pod UID on status.task).
+	// R1: synthesize task (copies spec.restartPod.podUID to status.task verbatim).
 	_, err := r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
 	got := getTask(t, ctx, c)
@@ -1073,31 +1073,6 @@ func TestReconcile_RestartPod_HappyPath(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	got = getTask(t, ctx, c)
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
-}
-
-// No owned pod observed at synthesis: the target is at requirePhase but has no
-// pod to restart, so the controller fails terminally (RestartTargetPodNotFound)
-// rather than synthesizing an empty-UID task or deferring. targetPodUID reads
-// through the uncached APIReader, so this is a genuine absence, not cache lag.
-func TestReconcile_RestartPod_NoPodAtSynthesis_Fails(t *testing.T) {
-	g := NewWithT(t)
-	ctx := context.Background()
-	t0 := time.Now()
-	cr := newRestartPodTask()
-	node := newRunningNode()
-	sts := restartTestSTS()
-
-	r, c := newReconciler(t, t0, cr, node, sts) // no pod
-
-	_, err := r.Reconcile(ctx, req())
-	g.Expect(err).NotTo(HaveOccurred())
-
-	got := getTask(t, ctx, c)
-	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
-	g.Expect(got.Status.Task).To(BeNil(), "must fail without synthesizing an empty-UID task")
-	failed := findFailedCond(got)
-	g.Expect(failed).NotTo(BeNil())
-	g.Expect(failed.Reason).To(Equal("RestartTargetPodNotFound"))
 }
 
 // A RestartPod whose pod never becomes Ready must transition to Failed at the
@@ -1210,11 +1185,10 @@ func restartTestPod(uid types.UID, created metav1.Time, ready bool) *corev1.Pod 
 	return pod
 }
 
-// findFailedCond returns the Failed condition, the only condition the failure
-// tests assert on. Kept arg-free to avoid an always-constant parameter.
-// An unwired kind fails fast at synthesis with reason=UnsupportedKind (routed
-// from the typed task.ErrUnsupportedKind via errors.As), distinct from the
-// ParamsBuildFailed reason used for wired-kind payload errors.
+// An unwired kind fails fast at synthesis with reason=UnsupportedKind — the
+// reason travels with the error (task.FailureReason), distinct from the
+// ParamsBuildFailed reason used for wired-kind payload errors, with no
+// conditional at the call site.
 func TestReconcile_UnsupportedKind_FailsWithReason(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
@@ -1235,6 +1209,8 @@ func TestReconcile_UnsupportedKind_FailsWithReason(t *testing.T) {
 	g.Expect(failed.Reason).To(Equal("UnsupportedKind"))
 }
 
+// findFailedCond returns the Failed condition, the only condition the failure
+// tests assert on. Kept arg-free to avoid an always-constant parameter.
 func findFailedCond(cr *seiv1alpha1.SeiNodeTask) *metav1.Condition {
 	for i := range cr.Status.Conditions {
 		if cr.Status.Conditions[i].Type == seiv1alpha1.ConditionSeiNodeTaskFailed {

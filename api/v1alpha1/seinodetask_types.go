@@ -51,6 +51,8 @@ const (
 	// recreates it and seid re-reads config.toml. Completes when a distinct new
 	// pod is Ready. Single-replica stop-then-start gated by the RWO data PVC, so
 	// double-sign-safe: the new pod cannot bind the PVC until the old terminates.
+	// The pod to delete is caller-supplied via spec.restartPod.podUID; a UID that
+	// no longer matches the live pod completes as a no-op (see PodUID).
 	SeiNodeTaskKindRestartPod SeiNodeTaskKind = "RestartPod"
 )
 
@@ -105,6 +107,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)",message="spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'DiscoverPeers' || has(self.discoverPeers)",message="spec.discoverPeers is required when kind=DiscoverPeers"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartPod' || has(self.restartPod)",message="spec.restartPod is required when kind=RestartPod"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'RestartPod' || (has(self.restartPod) && size(self.restartPod.podUID) > 0)",message="spec.restartPod.podUID is required when kind=RestartPod"
 // +kubebuilder:validation:XValidation:rule="self.kind == oldSelf.kind",message="spec.kind is immutable"
 type SeiNodeTaskSpec struct {
 	// Kind selects the task implementation. Immutable after creation.
@@ -354,12 +357,26 @@ type AwaitNodesAtHeightPayload struct {
 // caveats.
 type DiscoverPeersPayload struct{}
 
-// RestartPodPayload is the payload for kind=RestartPod. It is empty: the task
-// restarts the target's single pod (delete → OnDelete recreate) so seid
-// re-reads config.toml on start. There is nothing to parameterize — the target
-// is identified by spec.target.nodeRef. See the SeiNodeTaskKindRestartPod doc
-// comment for the completion signal and safety properties.
-type RestartPodPayload struct{}
+// RestartPodPayload is the payload for kind=RestartPod. The task deletes
+// exactly the pod named by PodUID (delete → OnDelete recreate) so seid re-reads
+// config.toml on start. See the SeiNodeTaskKindRestartPod doc comment for the
+// completion signal and safety properties.
+type RestartPodPayload struct {
+	// PodUID is the UID of the pod to restart, supplied by the caller. Obtain it
+	// immediately before creating the task; for the single-replica StatefulSet
+	// the pod is `<target.nodeRef.Name>-0`:
+	//   kubectl get pod <node>-0 -o jsonpath='{.metadata.uid}'
+	// The task deletes exactly this pod and completes when an owned Ready pod with
+	// a different UID appears. Content-addressed (UID, not creationTimestamp) so
+	// the OnDelete replacement is unambiguously distinguished from the original.
+	//
+	// The caller owns UID correctness: a non-empty UID that no longer matches the
+	// live pod (e.g. the pod was recreated out-of-band after it was read) deletes
+	// nothing and completes immediately as a no-op. Fetch the UID as late as
+	// possible — the controller does not re-validate it against the live pod.
+	// +kubebuilder:validation:MinLength=1
+	PodUID string `json:"podUID"`
+}
 
 // ---------------------------------------------------------------------------
 // Status
@@ -437,11 +454,10 @@ type SeiNodeTaskExecution struct {
 	ExecutionStartedAt *metav1.Time `json:"executionStartedAt,omitempty"`
 
 	// RestartedPodUID is the UID of the pod the kind=RestartPod task deletes,
-	// captured once at synthesis. Content-addressed rather than clock-addressed:
-	// the task deletes only this pod and completes when an owned Ready pod with a
-	// different UID exists, sidestepping the same-second creationTimestamp race a
-	// time epoch would have. Empty when no pod existed at synthesis (any owned
-	// Ready pod then completes the task).
+	// copied verbatim from spec.restartPod.podUID at synthesis. Content-addressed
+	// rather than clock-addressed: the task deletes only this pod and completes
+	// when an owned Ready pod with a different UID exists, sidestepping the
+	// same-second creationTimestamp race a time epoch would have.
 	// +optional
 	RestartedPodUID string `json:"restartedPodUID,omitempty"`
 }

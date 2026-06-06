@@ -19,16 +19,60 @@ type SeiNodeTaskParams struct {
 	Payload any
 }
 
+// Stable SeiNodeTask Failed-condition reasons for param-build errors. These are
+// a public enum (CLAUDE.md) consumed by runbooks/alerting — keep the strings
+// stable.
+const (
+	ReasonParamsBuildFailed = "ParamsBuildFailed"
+	ReasonUnsupportedKind   = "UnsupportedKind"
+)
+
+// ReasonedError is an error that carries the stable SeiNodeTask condition
+// reason it should surface as. Every error SeiNodeTaskParamsFor returns
+// implements it, so the synthesis/driveTask call sites map err→reason via
+// FailureReason without type-switching on individual error values.
+type ReasonedError interface {
+	error
+	Reason() string
+}
+
+// FailureReason returns the stable condition reason for a param-build error.
+// It unwraps to a ReasonedError when present and otherwise defaults to
+// ParamsBuildFailed — the catch-all for any failure that did not carry its own
+// reason (e.g. a marshal error wrapped by the caller).
+func FailureReason(err error) string {
+	var re ReasonedError
+	if errors.As(err, &re) {
+		return re.Reason()
+	}
+	return ReasonParamsBuildFailed
+}
+
 // ErrUnsupportedKind reports an unwired SeiNodeTask kind: one the CRD enum
-// admits but this build does not dispatch. It carries the offending kind so the
-// synthesis site can route it to reason=UnsupportedKind (a public enum,
-// CLAUDE.md) via errors.As; every other param-build failure is ParamsBuildFailed.
+// admits but this build does not dispatch. It carries the offending kind and
+// reports reason=UnsupportedKind (a public enum, CLAUDE.md); every other
+// param-build failure reports ParamsBuildFailed.
 type ErrUnsupportedKind struct {
 	Kind seiv1alpha1.SeiNodeTaskKind
 }
 
 func (e *ErrUnsupportedKind) Error() string {
 	return fmt.Sprintf("unsupported kind %q is not wired in this build", e.Kind)
+}
+
+func (e *ErrUnsupportedKind) Reason() string { return ReasonUnsupportedKind }
+
+// paramsError is a param-build failure for a wired kind (missing payload,
+// empty peer sources, missing pod UID, etc.). It reports reason=ParamsBuildFailed
+// so FailureReason routes it without a call-site conditional.
+type paramsError struct{ msg string }
+
+func (e *paramsError) Error() string  { return e.msg }
+func (e *paramsError) Reason() string { return ReasonParamsBuildFailed }
+
+// paramsErrorf builds a ParamsBuildFailed-reasoned error.
+func paramsErrorf(format string, args ...any) error {
+	return &paramsError{msg: fmt.Sprintf(format, args...)}
 }
 
 // SeiNodeTaskParamsFor resolves a SeiNodeTask kind to its task type and
@@ -58,7 +102,7 @@ func SeiNodeTaskParamsFor(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNo
 
 func updateNodeImageParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
 	if cr.Spec.UpdateNodeImage == nil {
-		return SeiNodeTaskParams{}, errors.New("spec.updateNodeImage is required for kind=UpdateNodeImage")
+		return SeiNodeTaskParams{}, paramsErrorf("spec.updateNodeImage is required for kind=UpdateNodeImage")
 	}
 	return SeiNodeTaskParams{TaskTypeUpdateNodeImage, UpdateNodeImageParams{
 		NodeName:  cr.Spec.Target.NodeRef.Name,
@@ -70,7 +114,7 @@ func updateNodeImageParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, erro
 func govVoteParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (SeiNodeTaskParams, error) {
 	p := cr.Spec.GovVote
 	if p == nil {
-		return SeiNodeTaskParams{}, errors.New("spec.govVote is required for kind=GovVote")
+		return SeiNodeTaskParams{}, paramsErrorf("spec.govVote is required for kind=GovVote")
 	}
 	return SeiNodeTaskParams{sidecar.TaskTypeGovVote, sidecar.GovVoteTask{
 		ChainID:    p.ChainID,
@@ -86,7 +130,7 @@ func govVoteParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (Se
 func govSoftwareUpgradeParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (SeiNodeTaskParams, error) {
 	p := cr.Spec.GovSoftwareUpgrade
 	if p == nil {
-		return SeiNodeTaskParams{}, errors.New("spec.govSoftwareUpgrade is required for kind=GovSoftwareUpgrade")
+		return SeiNodeTaskParams{}, paramsErrorf("spec.govSoftwareUpgrade is required for kind=GovSoftwareUpgrade")
 	}
 	return SeiNodeTaskParams{sidecar.TaskTypeGovSoftwareUpgrade, sidecar.GovSoftwareUpgradeTask{
 		ChainID:        p.ChainID,
@@ -106,10 +150,10 @@ func govSoftwareUpgradeParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.S
 func awaitConditionParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
 	p := cr.Spec.AwaitCondition
 	if p == nil {
-		return SeiNodeTaskParams{}, errors.New("spec.awaitCondition is required for kind=AwaitCondition")
+		return SeiNodeTaskParams{}, paramsErrorf("spec.awaitCondition is required for kind=AwaitCondition")
 	}
 	if p.Height == nil {
-		return SeiNodeTaskParams{}, errors.New("spec.awaitCondition.height is required (height is the only condition wired in MVP)")
+		return SeiNodeTaskParams{}, paramsErrorf("spec.awaitCondition.height is required (height is the only condition wired in MVP)")
 	}
 	return SeiNodeTaskParams{sidecar.TaskTypeAwaitCondition, sidecar.AwaitConditionTask{
 		Condition:    sidecar.ConditionHeight,
@@ -125,7 +169,7 @@ func awaitConditionParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error
 func awaitNodesAtHeightParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
 	p := cr.Spec.AwaitNodesAtHeight
 	if p == nil {
-		return SeiNodeTaskParams{}, errors.New("spec.awaitNodesAtHeight is required for kind=AwaitNodesAtHeight")
+		return SeiNodeTaskParams{}, paramsErrorf("spec.awaitNodesAtHeight is required for kind=AwaitNodesAtHeight")
 	}
 	return SeiNodeTaskParams{sidecar.TaskTypeAwaitCondition, sidecar.AwaitConditionTask{
 		Condition:    sidecar.ConditionHeight,
@@ -148,7 +192,7 @@ func awaitNodesAtHeightParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, e
 // submitting a zero-source write.
 func discoverPeersParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (SeiNodeTaskParams, error) {
 	if cr.Spec.DiscoverPeers == nil {
-		return SeiNodeTaskParams{}, errors.New("spec.discoverPeers is required for kind=DiscoverPeers")
+		return SeiNodeTaskParams{}, paramsErrorf("spec.discoverPeers is required for kind=DiscoverPeers")
 	}
 	// target is nil on the early-validation path; defer source-building (and the
 	// empty-peers check) to the driveTask call site, which has the target.
@@ -181,7 +225,7 @@ func discoverPeersParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNod
 		}
 	}
 	if len(sources) == 0 {
-		return SeiNodeTaskParams{}, fmt.Errorf("target SeiNode %q has no usable peer sources to discover "+
+		return SeiNodeTaskParams{}, paramsErrorf("target SeiNode %q has no usable peer sources to discover "+
 			"(empty spec.peers, or only label sources with unresolved status.resolvedPeers)", cr.Spec.Target.NodeRef.Name)
 	}
 	return SeiNodeTaskParams{sidecar.TaskTypeDiscoverPeers, sidecar.DiscoverPeersTask{Sources: sources}}, nil
@@ -189,10 +233,15 @@ func discoverPeersParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNod
 
 func restartPodParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
 	if cr.Spec.RestartPod == nil {
-		return SeiNodeTaskParams{}, errors.New("spec.restartPod is required for kind=RestartPod")
+		return SeiNodeTaskParams{}, paramsErrorf("spec.restartPod is required for kind=RestartPod")
 	}
-	// RestartedPodUID is content-addressed: captured once at synthesis and
-	// persisted on status.task. Empty is valid on the early-validation path
+	// The pod UID is caller-supplied verbatim (spec.restartPod.podUID) and CEL
+	// requires it non-empty for kind=RestartPod; this is the defensive backstop.
+	if cr.Spec.RestartPod.PodUID == "" {
+		return SeiNodeTaskParams{}, paramsErrorf("spec.restartPod.podUID is required for kind=RestartPod")
+	}
+	// RestartedPodUID is content-addressed: copied from spec into status.task at
+	// synthesis, then threaded here. Empty is valid on the early-validation path
 	// (status.task nil) — the real value is threaded once status.task exists.
 	var podUID types.UID
 	if cr.Status.Task != nil {

@@ -253,6 +253,25 @@ spec:
                 type: string
               restartPod:
                 description: RestartPod is the payload for kind=RestartPod.
+                properties:
+                  podUID:
+                    description: |-
+                      PodUID is the UID of the pod to restart, supplied by the caller. Obtain it
+                      immediately before creating the task; for the single-replica StatefulSet
+                      the pod is `<target.nodeRef.Name>-0`:
+                        kubectl get pod <node>-0 -o jsonpath='{.metadata.uid}'
+                      The task deletes exactly this pod and completes when an owned Ready pod with
+                      a different UID appears. Content-addressed (UID, not creationTimestamp) so
+                      the OnDelete replacement is unambiguously distinguished from the original.
+
+                      The caller owns UID correctness: a non-empty UID that no longer matches the
+                      live pod (e.g. the pod was recreated out-of-band after it was read) deletes
+                      nothing and completes immediately as a no-op. Fetch the UID as late as
+                      possible — the controller does not re-validate it against the live pod.
+                    minLength: 1
+                    type: string
+                required:
+                - podUID
                 type: object
               target:
                 description: |-
@@ -344,6 +363,9 @@ spec:
               rule: self.kind != 'DiscoverPeers' || has(self.discoverPeers)
             - message: spec.restartPod is required when kind=RestartPod
               rule: self.kind != 'RestartPod' || has(self.restartPod)
+            - message: spec.restartPod.podUID is required when kind=RestartPod
+              rule: self.kind != 'RestartPod' || (has(self.restartPod) && size(self.restartPod.podUID)
+                > 0)
             - message: spec.kind is immutable
               rule: self.kind == oldSelf.kind
           status:
@@ -535,11 +557,10 @@ spec:
                   restartedPodUID:
                     description: |-
                       RestartedPodUID is the UID of the pod the kind=RestartPod task deletes,
-                      captured once at synthesis. Content-addressed rather than clock-addressed:
-                      the task deletes only this pod and completes when an owned Ready pod with a
-                      different UID exists, sidestepping the same-second creationTimestamp race a
-                      time epoch would have. Empty when no pod existed at synthesis (any owned
-                      Ready pod then completes the task).
+                      copied verbatim from spec.restartPod.podUID at synthesis. Content-addressed
+                      rather than clock-addressed: the task deletes only this pod and completes
+                      when an owned Ready pod with a different UID exists, sidestepping the
+                      same-second creationTimestamp race a time epoch would have.
                     type: string
                   status:
                     description: Status is the lifecycle state of the underlying execution.

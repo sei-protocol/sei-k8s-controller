@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -84,13 +83,6 @@ type SeiNodeTaskReconciler struct {
 	Platform  platform.Config
 	ConfigFor ExecutionConfigFor
 
-	// APIReader bypasses the controller-runtime cache. targetPodUID reads the
-	// target's pod through it so a freshly-created pod (or a just-replaced one)
-	// is observed without cache lag — the difference between failing a RestartPod
-	// as PodNotFound and capturing the live UID. Defaults to the cached Client
-	// when unset (tests).
-	APIReader client.Reader
-
 	// Now is overridable for tests. Defaults to time.Now.
 	Now func() time.Time
 }
@@ -146,38 +138,18 @@ func (r *SeiNodeTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Step 3+4: synthesize the one-shot task if missing. Validate the
 	// kind/payload mapping first so we fail-fast on a malformed spec before
-	// stamping anything. UnsupportedKind is reserved for a genuinely unwired
-	// kind (the default case); a payload/param-build failure for a wired kind
-	// surfaces as ParamsBuildFailed, matching driveTask.
+	// stamping anything. The reason travels with the error (task.FailureReason):
+	// an unwired kind yields UnsupportedKind, any wired-kind param-build failure
+	// yields ParamsBuildFailed — no call-site conditional.
 	if fatal == nil && cr.Status.Task == nil {
 		if _, _, err := taskParamsForKind(cr, nil); err != nil {
-			reason := "ParamsBuildFailed"
-			var unsupported *task.ErrUnsupportedKind
-			if errors.As(err, &unsupported) {
-				reason = "UnsupportedKind"
-			}
-			r.markFailed(cr, now, reason, err.Error())
+			r.markFailed(cr, now, task.FailureReason(err), err.Error())
 		} else {
-			// RestartPod must content-address a REAL pod (see
-			// SeiNodeTaskExecution.RestartedPodUID). Capturing an empty UID would
-			// make restart-pod a silent no-op that completes on the first owned
-			// Ready pod — including a pod that was never restarted. The target is
-			// already at requirePhase (default Running), so it should always have a
-			// pod; an absent one means there's nothing to restart. Fail terminally
-			// rather than synthesizing with an empty UID. targetPodUID reads through
-			// the uncached APIReader, so cache lag isn't the cause.
+			// RestartPod content-addresses the caller-supplied pod UID
+			// (spec.restartPod.podUID, CEL-required non-empty); copy it verbatim.
 			var restartedPodUID string
 			if cr.Spec.Kind == seiv1alpha1.SeiNodeTaskKindRestartPod {
-				uid, err := r.targetPodUID(ctx, target)
-				if err != nil {
-					return r.flush(ctx, cr, before, statusBase, observedPhase, ctrl.Result{}, err)
-				}
-				if uid == "" {
-					r.markFailed(cr, now, "RestartTargetPodNotFound",
-						fmt.Sprintf("target SeiNode %q has no owned pod to restart", cr.Spec.Target.NodeRef.Name))
-					return r.flush(ctx, cr, before, statusBase, observedPhase, ctrl.Result{}, nil)
-				}
-				restartedPodUID = string(uid)
+				restartedPodUID = cr.Spec.RestartPod.PodUID
 			}
 			execStart := metav1.NewTime(now)
 			cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{
@@ -262,50 +234,13 @@ func (r *SeiNodeTaskReconciler) resolveTarget(ctx context.Context, cr *seiv1alph
 	return nil, ctrl.Result{RequeueAfter: targetWaitInterval}, nil
 }
 
-// targetPodUID returns the UID of the pod currently owned by the target's
-// StatefulSet, or "" when the StatefulSet or pod does not exist. Reads through
-// the uncached APIReader so a freshly-created pod is observed without cache lag;
-// an empty result therefore means the target genuinely has no owned pod, which
-// the synthesis site treats as a terminal RestartTargetPodNotFound. A missing
-// StatefulSet is not an error; only a real API error is returned (caller requeues).
-func (r *SeiNodeTaskReconciler) targetPodUID(ctx context.Context, target *seiv1alpha1.SeiNode) (types.UID, error) {
-	reader := r.reader()
-	sts := &appsv1.StatefulSet{}
-	key := types.NamespacedName{Name: target.Name, Namespace: target.Namespace}
-	if err := reader.Get(ctx, key, sts); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("getting statefulset %q for restart-pod synthesis: %w", target.Name, err)
-	}
-	if sts.Spec.Selector == nil || len(sts.Spec.Selector.MatchLabels) == 0 {
-		return "", nil
-	}
-
-	pods := &corev1.PodList{}
-	if err := reader.List(ctx, pods,
-		client.InNamespace(target.Namespace),
-		client.MatchingLabels(sts.Spec.Selector.MatchLabels),
-	); err != nil {
-		return "", fmt.Errorf("listing pods for statefulset %q: %w", target.Name, err)
-	}
-	for i := range pods.Items {
-		for _, ref := range pods.Items[i].OwnerReferences {
-			if ref.Kind == "StatefulSet" && ref.UID == sts.UID {
-				return pods.Items[i].UID, nil
-			}
-		}
-	}
-	return "", nil
-}
-
 // driveTask executes/polls the synthesized task and mutates status fields
 // in-memory. Returns a transient error only when the task's Execute
 // returned a non-Terminal error (controller-runtime backs off).
 func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode, now time.Time) error {
 	taskType, params, err := taskParamsForKind(cr, target)
 	if err != nil {
-		r.markFailed(cr, now, "ParamsBuildFailed", err.Error())
+		r.markFailed(cr, now, task.FailureReason(err), err.Error())
 		return nil
 	}
 
@@ -510,14 +445,6 @@ func (r *SeiNodeTaskReconciler) now() time.Time {
 		return r.Now()
 	}
 	return time.Now()
-}
-
-// reader returns the uncached APIReader when wired, else the cached Client.
-func (r *SeiNodeTaskReconciler) reader() client.Reader {
-	if r.APIReader != nil {
-		return r.APIReader
-	}
-	return r.Client
 }
 
 // SetupWithManager wires the reconciler. We Watch SeiNodes (not Own) — the

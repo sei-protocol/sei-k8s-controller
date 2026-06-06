@@ -18,15 +18,16 @@ const TaskTypeRestartPod = "restart-pod"
 // RestartPodParams identifies the target SeiNode whose pod is restarted so
 // seid re-reads config.toml on the next start.
 //
-// RestartedPodUID is the content-addressed restart signal, captured once at
-// synthesis and threaded through params so it is stable across reconciles. The
-// task deletes only this pod and completes once an owned Ready pod with a
-// different UID exists. Keying on UID rather than a creation-time epoch avoids
-// the same-second-truncation race: an OnDelete replacement always has a fresh
-// UID. The synthesis site never populates this empty for kind=RestartPod (it
-// fails the CR with RestartTargetPodNotFound when the target has no owned pod);
-// an empty UID reaching the task is treated as a wait, never as success, so a
-// no-op restart can't masquerade as complete.
+// RestartedPodUID is the content-addressed restart signal, supplied by the
+// caller (spec.restartPod.podUID), copied to status.task at synthesis, and
+// threaded through params so it is stable across reconciles. The task deletes
+// only this pod and completes once an owned Ready pod with a different UID
+// exists. Keying on UID rather than a creation-time epoch avoids the
+// same-second-truncation race: an OnDelete replacement always has a fresh UID.
+// CEL requires a non-empty podUID for kind=RestartPod; an empty UID reaching the
+// task is treated as a wait, never success. The caller owns UID correctness: a
+// non-empty UID that matches no live pod deletes nothing and completes as a
+// no-op (the contract is documented on the PodUID API field).
 type RestartPodParams struct {
 	NodeName        string    `json:"nodeName"`
 	Namespace       string    `json:"namespace"`
@@ -86,8 +87,9 @@ func (e *restartPodExecution) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Only delete the captured pod — a different UID is already the
-	// replacement (idempotency across reconciles).
+	// Only delete the supplied pod. A different or absent UID means either the
+	// OnDelete replacement already exists (idempotent across reconciles) or the
+	// caller-supplied UID was already stale — either way nothing to delete.
 	if pod == nil || pod.UID != e.params.RestartedPodUID || pod.DeletionTimestamp != nil {
 		return nil
 	}
