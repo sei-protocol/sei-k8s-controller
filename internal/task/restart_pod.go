@@ -24,9 +24,9 @@ const TaskTypeRestartPod = "restart-pod"
 // different UID exists. Keying on UID rather than a creation-time epoch avoids
 // the same-second-truncation race: an OnDelete replacement always has a fresh
 // UID. The synthesis site never populates this empty for kind=RestartPod (it
-// defers synthesis until a pod is observed); an empty UID reaching the task is
-// treated as a wait, never as success, so a no-op restart can't masquerade as
-// complete.
+// fails the CR with RestartTargetPodNotFound when the target has no owned pod);
+// an empty UID reaching the task is treated as a wait, never as success, so a
+// no-op restart can't masquerade as complete.
 type RestartPodParams struct {
 	NodeName        string    `json:"nodeName"`
 	Namespace       string    `json:"namespace"`

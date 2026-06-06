@@ -278,10 +278,11 @@ func main() {
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
 	taskRecorder := mgr.GetEventRecorderFor("seinodetask-controller")
 	if err := (&nodetaskcontroller.SeiNodeTaskReconciler{
-		Client:   kc,
-		Scheme:   mgr.GetScheme(),
-		Recorder: taskRecorder,
-		Platform: platformCfg,
+		Client:    kc,
+		Scheme:    mgr.GetScheme(),
+		Recorder:  taskRecorder,
+		Platform:  platformCfg,
+		APIReader: mgr.GetAPIReader(),
 		ConfigFor: func(_ context.Context, _ *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) task.ExecutionConfig {
 			return task.ExecutionConfig{
 				BuildSidecarClient: func() (task.SidecarClient, error) {

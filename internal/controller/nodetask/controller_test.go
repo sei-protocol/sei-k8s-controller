@@ -756,7 +756,30 @@ func TestTaskParamsForKind_DiscoverPeers_EmptyPeers_Errors(t *testing.T) {
 
 	_, _, err := taskParamsForKind(cr, target)
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("no spec.peers"))
+	g.Expect(err.Error()).To(ContainSubstring("no usable peer sources"))
+}
+
+// A label-only target whose status.resolvedPeers is still empty yields zero
+// usable sources: the nodetask builder fails fast rather than submitting a
+// zero-source discover-peers (which would wipe persistent-peers). This is the
+// nodetask's deliberate divergence from the planner's init path, which would
+// freeze a zero-address static source and submit it.
+func TestTaskParamsForKind_DiscoverPeers_LabelUnresolved_FailsFast(t *testing.T) {
+	g := NewWithT(t)
+	cr := newDiscoverPeersTask()
+	target := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: testNodeName, Namespace: testNS},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			Peers: []seiv1alpha1.PeerSource{
+				{Label: &seiv1alpha1.LabelPeerSource{Selector: map[string]string{testNDPSelectorKey: "g1"}}},
+			},
+		},
+		// ResolvedPeers intentionally empty.
+	}
+
+	_, _, err := taskParamsForKind(cr, target)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("no usable peer sources"))
 }
 
 func TestReconcile_DiscoverPeers_EndToEnd(t *testing.T) {
@@ -1001,11 +1024,11 @@ func TestReconcile_RestartPod_HappyPath(t *testing.T) {
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
 }
 
-// No owned pod observed at the first synthesis attempt: the controller must
-// defer synthesis (NOT stamp an empty-UID task, NOT complete). Once a pod
-// appears it captures that pod's UID, deletes it, and completes only after a
-// DIFFERENT-UID Ready pod exists — i.e. a real restart, never a silent no-op.
-func TestReconcile_RestartPod_NoPodAtSynthesis_DefersThenRestarts(t *testing.T) {
+// No owned pod observed at synthesis: the target is at requirePhase but has no
+// pod to restart, so the controller fails terminally (RestartTargetPodNotFound)
+// rather than synthesizing an empty-UID task or deferring. targetPodUID reads
+// through the uncached APIReader, so this is a genuine absence, not cache lag.
+func TestReconcile_RestartPod_NoPodAtSynthesis_Fails(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 	t0 := time.Now()
@@ -1013,76 +1036,17 @@ func TestReconcile_RestartPod_NoPodAtSynthesis_DefersThenRestarts(t *testing.T) 
 	node := newRunningNode()
 	sts := restartTestSTS()
 
-	r, c := newReconciler(t, t0, cr, node, sts) // no pod yet
+	r, c := newReconciler(t, t0, cr, node, sts) // no pod
 
-	// R1: target is Running but no owned pod — defer synthesis, do not complete.
 	_, err := r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
+
 	got := getTask(t, ctx, c)
-	g.Expect(got.Status.Task).To(BeNil(), "must not synthesize an empty-UID task")
-	g.Expect(got.Status.Phase).NotTo(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
-	g.Expect(got.Status.Phase).NotTo(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
-
-	// The owned pod now appears (Ready). R2 must capture THIS pod's UID, not
-	// complete on it.
-	oldPod := restartTestPod("pod-uid-old", metav1.NewTime(t0.Add(-time.Hour)), true)
-	g.Expect(c.Create(ctx, oldPod)).To(Succeed())
-
-	_, err = r.Reconcile(ctx, req()) // R2: capture UID, synthesize
-	g.Expect(err).NotTo(HaveOccurred())
-	got = getTask(t, ctx, c)
-	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
-	g.Expect(got.Status.Task).NotTo(BeNil())
-	g.Expect(got.Status.Task.RestartedPodUID).To(Equal("pod-uid-old"))
-
-	// R3: Execute deletes the captured pod; Status (same UID gone) → still Running.
-	_, err = r.Reconcile(ctx, req())
-	g.Expect(err).NotTo(HaveOccurred())
-	deleted := &corev1.Pod{}
-	g.Expect(apierrors.IsNotFound(
-		c.Get(ctx, types.NamespacedName{Name: oldPod.Name, Namespace: testNS}, deleted),
-	)).To(BeTrue())
-	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
-
-	// A different-UID Ready replacement appears → Complete.
-	g.Expect(c.Create(ctx, restartTestPod("pod-uid-new", metav1.NewTime(t0.Add(time.Minute)), true))).To(Succeed())
-	_, err = r.Reconcile(ctx, req())
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
-}
-
-// Bounded-failure: target is at RequirePhase but no owned pod ever appears.
-// The synthesis-side deferral must surface a bounded Failed (reason=
-// RestartTargetUnresolved) at requirePhaseTimeout — never hang, never
-// silent-complete.
-func TestReconcile_RestartPod_NoPodEverAppears_FailsBounded(t *testing.T) {
-	g := NewWithT(t)
-	ctx := context.Background()
-	t0 := time.Now()
-	cr := newRestartPodTask()
-	node := newRunningNode()
-	sts := restartTestSTS()
-
-	r, c := newReconciler(t, t0, cr, node, sts) // no pod, ever
-
-	// R1: target at requirePhase but no pod — defer synthesis, requeue.
-	_, err := r.Reconcile(ctx, req())
-	g.Expect(err).NotTo(HaveOccurred())
-	got := getTask(t, ctx, c)
-	g.Expect(got.Status.Task).To(BeNil())
-	g.Expect(got.Status.Phase).NotTo(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
-
-	// Advance past the requirePhase timeout.
-	r.Now = func() time.Time { return t0.Add(defaultRequirePhaseTimeout + time.Second) }
-	_, err = r.Reconcile(ctx, req())
-	g.Expect(err).NotTo(HaveOccurred())
-
-	got = getTask(t, ctx, c)
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
-	g.Expect(got.Status.Task).To(BeNil(), "must fail without ever synthesizing an empty-UID task")
+	g.Expect(got.Status.Task).To(BeNil(), "must fail without synthesizing an empty-UID task")
 	failed := findFailedCond(got)
 	g.Expect(failed).NotTo(BeNil())
-	g.Expect(failed.Reason).To(Equal("RestartTargetUnresolved"))
+	g.Expect(failed.Reason).To(Equal("RestartTargetPodNotFound"))
 }
 
 // A RestartPod whose pod never becomes Ready must transition to Failed at the
@@ -1197,6 +1161,29 @@ func restartTestPod(uid types.UID, created metav1.Time, ready bool) *corev1.Pod 
 
 // findFailedCond returns the Failed condition, the only condition the failure
 // tests assert on. Kept arg-free to avoid an always-constant parameter.
+// An unwired kind fails fast at synthesis with reason=UnsupportedKind (routed
+// from the typed task.ErrUnsupportedKind via errors.As), distinct from the
+// ParamsBuildFailed reason used for wired-kind payload errors.
+func TestReconcile_UnsupportedKind_FailsWithReason(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	cr := newUpdateImageTask()
+	cr.Spec.Kind = seiv1alpha1.SeiNodeTaskKind("FutureUnwiredKind")
+	cr.Spec.UpdateNodeImage = nil
+	node := newRunningNode()
+
+	r, c := newReconciler(t, time.Now(), cr, node)
+
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	failed := findFailedCond(got)
+	g.Expect(failed).NotTo(BeNil())
+	g.Expect(failed.Reason).To(Equal("UnsupportedKind"))
+}
+
 func findFailedCond(cr *seiv1alpha1.SeiNodeTask) *metav1.Condition {
 	for i := range cr.Status.Conditions {
 		if cr.Status.Conditions[i].Type == seiv1alpha1.ConditionSeiNodeTaskFailed {

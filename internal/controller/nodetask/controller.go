@@ -84,6 +84,13 @@ type SeiNodeTaskReconciler struct {
 	Platform  platform.Config
 	ConfigFor ExecutionConfigFor
 
+	// APIReader bypasses the controller-runtime cache. targetPodUID reads the
+	// target's pod through it so a freshly-created pod (or a just-replaced one)
+	// is observed without cache lag — the difference between failing a RestartPod
+	// as PodNotFound and capturing the live UID. Defaults to the cached Client
+	// when unset (tests).
+	APIReader client.Reader
+
 	// Now is overridable for tests. Defaults to time.Now.
 	Now func() time.Time
 }
@@ -145,7 +152,8 @@ func (r *SeiNodeTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if fatal == nil && cr.Status.Task == nil {
 		if _, _, err := taskParamsForKind(cr, nil); err != nil {
 			reason := "ParamsBuildFailed"
-			if errors.Is(err, task.ErrUnsupportedKind) {
+			var unsupported *task.ErrUnsupportedKind
+			if errors.As(err, &unsupported) {
 				reason = "UnsupportedKind"
 			}
 			r.markFailed(cr, now, reason, err.Error())
@@ -153,10 +161,11 @@ func (r *SeiNodeTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			// RestartPod must content-address a REAL pod (see
 			// SeiNodeTaskExecution.RestartedPodUID). Capturing an empty UID would
 			// make restart-pod a silent no-op that completes on the first owned
-			// Ready pod — including a pod that was never restarted. When no owned
-			// pod is observed yet (cache lag, or a brief gap between the target
-			// reaching Running and its pod existing), defer synthesis and re-attempt
-			// the capture on the next reconcile, bounded so it can't spin forever.
+			// Ready pod — including a pod that was never restarted. The target is
+			// already at requirePhase (default Running), so it should always have a
+			// pod; an absent one means there's nothing to restart. Fail terminally
+			// rather than synthesizing with an empty UID. targetPodUID reads through
+			// the uncached APIReader, so cache lag isn't the cause.
 			var restartedPodUID string
 			if cr.Spec.Kind == seiv1alpha1.SeiNodeTaskKindRestartPod {
 				uid, err := r.targetPodUID(ctx, target)
@@ -164,11 +173,9 @@ func (r *SeiNodeTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 					return r.flush(ctx, cr, before, statusBase, observedPhase, ctrl.Result{}, err)
 				}
 				if uid == "" {
-					waitResult, fatal := r.awaitRestartTarget(cr, now)
-					if fatal != nil {
-						r.markFailed(cr, now, "RestartTargetUnresolved", fatal.Error())
-					}
-					return r.flush(ctx, cr, before, statusBase, observedPhase, waitResult, nil)
+					r.markFailed(cr, now, "RestartTargetPodNotFound",
+						fmt.Sprintf("target SeiNode %q has no owned pod to restart", cr.Spec.Target.NodeRef.Name))
+					return r.flush(ctx, cr, before, statusBase, observedPhase, ctrl.Result{}, nil)
 				}
 				restartedPodUID = string(uid)
 			}
@@ -255,45 +262,17 @@ func (r *SeiNodeTaskReconciler) resolveTarget(ctx context.Context, cr *seiv1alph
 	return nil, ctrl.Result{RequeueAfter: targetWaitInterval}, nil
 }
 
-// awaitRestartTarget bounds the deferral when a RestartPod target is at
-// RequirePhase but no owned pod has been observed yet (so targetPodUID returned
-// empty). It reuses the requirePhaseTimeout budget, anchored on status.StartedAt
-// (set on first reconcile, never cleared — resolveTarget owns/clears
-// TargetFirstObservedAt, so this can't share it). For RestartPod the target is
-// already at its required phase, so StartedAt approximates the phase-met instant;
-// if it didn't, resolveTarget's own requirePhaseTimeout would have failed the CR
-// first. Returns (requeueResult, nil) while within budget, or (zero, fatalErr)
-// once exhausted — a RestartPod with requirePhase=Running should always have a
-// pod, so reaching the timeout means the target never produced one.
-func (r *SeiNodeTaskReconciler) awaitRestartTarget(cr *seiv1alpha1.SeiNodeTask, now time.Time) (ctrl.Result, error) {
-	timeout := defaultRequirePhaseTimeout
-	if cr.Spec.Target.RequirePhaseTimeout != nil {
-		timeout = cr.Spec.Target.RequirePhaseTimeout.Duration
-	}
-	if cr.Status.StartedAt != nil && now.Sub(cr.Status.StartedAt.Time) > timeout {
-		return ctrl.Result{}, fmt.Errorf(
-			"no pod owned by target %q observed within %s; cannot restart a nonexistent pod",
-			cr.Spec.Target.NodeRef.Name, timeout)
-	}
-	setCondition(cr, metav1.Condition{
-		Type:    seiv1alpha1.ConditionSeiNodeTaskTargetReady,
-		Status:  metav1.ConditionFalse,
-		Reason:  "PodNotObserved",
-		Message: fmt.Sprintf("target %s is at required phase but its pod is not observed yet", cr.Spec.Target.NodeRef.Name),
-	})
-	return ctrl.Result{RequeueAfter: targetWaitInterval}, nil
-}
-
 // targetPodUID returns the UID of the pod currently owned by the target's
-// StatefulSet, or "" when the StatefulSet or pod does not exist yet (the
-// StatefulSet may still be scheduling). A missing StatefulSet is not an error;
-// the empty case is handled by the synthesis-site deferral (awaitRestartTarget)
-// so a RestartPod task is never synthesized with an empty UID. Only a real API
-// error is returned (caller requeues).
+// StatefulSet, or "" when the StatefulSet or pod does not exist. Reads through
+// the uncached APIReader so a freshly-created pod is observed without cache lag;
+// an empty result therefore means the target genuinely has no owned pod, which
+// the synthesis site treats as a terminal RestartTargetPodNotFound. A missing
+// StatefulSet is not an error; only a real API error is returned (caller requeues).
 func (r *SeiNodeTaskReconciler) targetPodUID(ctx context.Context, target *seiv1alpha1.SeiNode) (types.UID, error) {
+	reader := r.reader()
 	sts := &appsv1.StatefulSet{}
 	key := types.NamespacedName{Name: target.Name, Namespace: target.Namespace}
-	if err := r.Get(ctx, key, sts); err != nil {
+	if err := reader.Get(ctx, key, sts); err != nil {
 		if apierrors.IsNotFound(err) {
 			return "", nil
 		}
@@ -304,7 +283,7 @@ func (r *SeiNodeTaskReconciler) targetPodUID(ctx context.Context, target *seiv1a
 	}
 
 	pods := &corev1.PodList{}
-	if err := r.List(ctx, pods,
+	if err := reader.List(ctx, pods,
 		client.InNamespace(target.Namespace),
 		client.MatchingLabels(sts.Spec.Selector.MatchLabels),
 	); err != nil {
@@ -521,6 +500,14 @@ func (r *SeiNodeTaskReconciler) now() time.Time {
 		return r.Now()
 	}
 	return time.Now()
+}
+
+// reader returns the uncached APIReader when wired, else the cached Client.
+func (r *SeiNodeTaskReconciler) reader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // SetupWithManager wires the reconciler. We Watch SeiNodes (not Own) — the

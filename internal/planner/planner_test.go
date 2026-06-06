@@ -5,51 +5,52 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// The init plan for a label-only node with empty status.resolvedPeers must
-// still carry a discover-peers step, but as the init-aware task type with NO
-// frozen params — it re-derives sources from the live node each reconcile and
-// defers (never submits a zero-source write) until reconcilePeers populates
-// resolvedPeers. Freezing empty sources at plan-build time would defeat that.
-func TestBuildBasePlan_LabelPeersEmptyResolved_InitDiscoverPeersNilParams(t *testing.T) {
+// The init/bootstrap discover-peers task freezes its sources at plan-build time
+// from the live SeiNode: ec2Tags→EC2Tags, static→Static, and label→Static of
+// status.resolvedPeers (pre-composed addresses written verbatim). A label-only
+// node with empty resolvedPeers freezes a single zero-address static source —
+// the behavior the SeiNodeTask DiscoverPeers kind diverges from (it fails fast),
+// but the init path intentionally retains.
+func TestDiscoverPeersTask_FreezesSourcesFromLiveNode(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "label-node", Namespace: "label-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "peer-node", Namespace: "peer-ns"},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID:  "label-chain",
-			Image:    "sei:v1",
-			FullNode: &seiv1alpha1.FullNodeSpec{},
 			Peers: []seiv1alpha1.PeerSource{
-				{Label: &seiv1alpha1.LabelPeerSource{Selector: map[string]string{"sei.io/chain": "label-chain"}}},
+				{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "us-east-1", Tags: map[string]string{"role": "seed"}}},
+				{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{"abc@1.2.3.4:26656"}}},
+				{Label: &seiv1alpha1.LabelPeerSource{Selector: map[string]string{"sei.io/chain": "c"}}},
 			},
 		},
-		// No status.resolvedPeers — label not yet resolved.
+		Status: seiv1alpha1.SeiNodeStatus{ResolvedPeers: []string{"def@5.6.7.8:26656"}},
 	}
 
-	plan, err := (&fullNodePlanner{}).BuildPlan(node)
-	if err != nil {
-		t.Fatalf("BuildPlan: %v", err)
+	got := discoverPeersTask(node)
+	want := sidecar.DiscoverPeersTask{Sources: []sidecar.PeerSource{
+		{Type: sidecar.PeerSourceEC2Tags, Region: "us-east-1", Tags: map[string]string{"role": "seed"}},
+		{Type: sidecar.PeerSourceStatic, Addresses: []string{"abc@1.2.3.4:26656"}},
+		{Type: sidecar.PeerSourceStatic, Addresses: []string{"def@5.6.7.8:26656"}},
+	}}
+	if len(got.Sources) != len(want.Sources) {
+		t.Fatalf("source count = %d, want %d (%+v)", len(got.Sources), len(want.Sources), got.Sources)
 	}
-
-	var found *seiv1alpha1.PlannedTask
-	for i := range plan.Tasks {
-		if plan.Tasks[i].Type == task.TaskTypeDiscoverPeersInit {
-			found = &plan.Tasks[i]
+	for i := range want.Sources {
+		if got.Sources[i].Type != want.Sources[i].Type {
+			t.Errorf("source[%d].Type = %q, want %q", i, got.Sources[i].Type, want.Sources[i].Type)
 		}
 	}
-	if found == nil {
-		t.Fatalf("init plan must contain %q; got %v", task.TaskTypeDiscoverPeersInit, planTaskTypes(plan))
-	}
-	// No frozen sources: the init task re-derives them from the live node, so
-	// the persisted params are empty (marshal of nil → "null"), never a
-	// DiscoverPeersTask with stale/empty sources.
-	if found.Params != nil && string(found.Params.Raw) != "null" {
-		t.Errorf("init discover-peers must not freeze sources at plan-build time, got %s", string(found.Params.Raw))
-	}
-	if found.MaxRetries != discoverPeersMaxRetries {
-		t.Errorf("init discover-peers MaxRetries = %d, want %d (bounded deferral budget)", found.MaxRetries, discoverPeersMaxRetries)
+}
+
+// No spec.peers freezes an empty DiscoverPeersTask (the init path submits it
+// rather than failing — distinct from the nodetask kind's fail-fast).
+func TestDiscoverPeersTask_NoPeers_Empty(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "ns"}}
+	if got := discoverPeersTask(node); len(got.Sources) != 0 {
+		t.Errorf("expected empty sources, got %+v", got.Sources)
 	}
 }
 
