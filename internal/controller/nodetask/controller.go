@@ -150,22 +150,35 @@ func (r *SeiNodeTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 			r.markFailed(cr, now, reason, err.Error())
 		} else {
-			execStart := metav1.NewTime(now)
-			exec := &seiv1alpha1.SeiNodeTaskExecution{
-				ID:                 task.DeterministicTaskID(string(cr.UID), string(cr.Spec.Kind), 0),
-				Status:             seiv1alpha1.TaskPending,
-				ExecutionStartedAt: &execStart,
-			}
-			// Capture the target pod's UID once, at synthesis, to
-			// content-address the restart (see SeiNodeTaskExecution.RestartedPodUID).
+			// RestartPod must content-address a REAL pod (see
+			// SeiNodeTaskExecution.RestartedPodUID). Capturing an empty UID would
+			// make restart-pod a silent no-op that completes on the first owned
+			// Ready pod — including a pod that was never restarted. When no owned
+			// pod is observed yet (cache lag, or a brief gap between the target
+			// reaching Running and its pod existing), defer synthesis and re-attempt
+			// the capture on the next reconcile, bounded so it can't spin forever.
+			var restartedPodUID string
 			if cr.Spec.Kind == seiv1alpha1.SeiNodeTaskKindRestartPod {
 				uid, err := r.targetPodUID(ctx, target)
 				if err != nil {
 					return r.flush(ctx, cr, before, statusBase, observedPhase, ctrl.Result{}, err)
 				}
-				exec.RestartedPodUID = string(uid)
+				if uid == "" {
+					waitResult, fatal := r.awaitRestartTarget(cr, now)
+					if fatal != nil {
+						r.markFailed(cr, now, "RestartTargetUnresolved", fatal.Error())
+					}
+					return r.flush(ctx, cr, before, statusBase, observedPhase, waitResult, nil)
+				}
+				restartedPodUID = string(uid)
 			}
-			cr.Status.Task = exec
+			execStart := metav1.NewTime(now)
+			cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{
+				ID:                 task.DeterministicTaskID(string(cr.UID), string(cr.Spec.Kind), 0),
+				Status:             seiv1alpha1.TaskPending,
+				ExecutionStartedAt: &execStart,
+				RestartedPodUID:    restartedPodUID,
+			}
 			r.setPhase(cr, seiv1alpha1.SeiNodeTaskPhaseRunning, now)
 			// Persist synthesis before any side effects — mirrors the
 			// "atomic plan creation" pattern from CLAUDE.md.
@@ -242,12 +255,41 @@ func (r *SeiNodeTaskReconciler) resolveTarget(ctx context.Context, cr *seiv1alph
 	return nil, ctrl.Result{RequeueAfter: targetWaitInterval}, nil
 }
 
+// awaitRestartTarget bounds the deferral when a RestartPod target is at
+// RequirePhase but no owned pod has been observed yet (so targetPodUID returned
+// empty). It reuses the requirePhaseTimeout budget, anchored on status.StartedAt
+// (set on first reconcile, never cleared — resolveTarget owns/clears
+// TargetFirstObservedAt, so this can't share it). For RestartPod the target is
+// already at its required phase, so StartedAt approximates the phase-met instant;
+// if it didn't, resolveTarget's own requirePhaseTimeout would have failed the CR
+// first. Returns (requeueResult, nil) while within budget, or (zero, fatalErr)
+// once exhausted — a RestartPod with requirePhase=Running should always have a
+// pod, so reaching the timeout means the target never produced one.
+func (r *SeiNodeTaskReconciler) awaitRestartTarget(cr *seiv1alpha1.SeiNodeTask, now time.Time) (ctrl.Result, error) {
+	timeout := defaultRequirePhaseTimeout
+	if cr.Spec.Target.RequirePhaseTimeout != nil {
+		timeout = cr.Spec.Target.RequirePhaseTimeout.Duration
+	}
+	if cr.Status.StartedAt != nil && now.Sub(cr.Status.StartedAt.Time) > timeout {
+		return ctrl.Result{}, fmt.Errorf(
+			"no pod owned by target %q observed within %s; cannot restart a nonexistent pod",
+			cr.Spec.Target.NodeRef.Name, timeout)
+	}
+	setCondition(cr, metav1.Condition{
+		Type:    seiv1alpha1.ConditionSeiNodeTaskTargetReady,
+		Status:  metav1.ConditionFalse,
+		Reason:  "PodNotObserved",
+		Message: fmt.Sprintf("target %s is at required phase but its pod is not observed yet", cr.Spec.Target.NodeRef.Name),
+	})
+	return ctrl.Result{RequeueAfter: targetWaitInterval}, nil
+}
+
 // targetPodUID returns the UID of the pod currently owned by the target's
 // StatefulSet, or "" when the StatefulSet or pod does not exist yet (the
-// StatefulSet may still be scheduling). A missing StatefulSet is not an error:
-// an empty UID means "nothing to re-delete", and the restart-pod task completes
-// on the first owned Ready pod. Only a real API error is returned (caller
-// requeues — we must not synthesize the task without resolving the UID).
+// StatefulSet may still be scheduling). A missing StatefulSet is not an error;
+// the empty case is handled by the synthesis-site deferral (awaitRestartTarget)
+// so a RestartPod task is never synthesized with an empty UID. Only a real API
+// error is returned (caller requeues).
 func (r *SeiNodeTaskReconciler) targetPodUID(ctx context.Context, target *seiv1alpha1.SeiNode) (types.UID, error) {
 	sts := &appsv1.StatefulSet{}
 	key := types.NamespacedName{Name: target.Name, Namespace: target.Namespace}

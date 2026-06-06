@@ -1001,9 +1001,11 @@ func TestReconcile_RestartPod_HappyPath(t *testing.T) {
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
 }
 
-// Target pod not yet created: Execute is a transient no-op; the task waits for
-// a Ready post-epoch pod to appear, then completes.
-func TestReconcile_RestartPod_PodMissing_WaitsThenCompletes(t *testing.T) {
+// No owned pod observed at the first synthesis attempt: the controller must
+// defer synthesis (NOT stamp an empty-UID task, NOT complete). Once a pod
+// appears it captures that pod's UID, deletes it, and completes only after a
+// DIFFERENT-UID Ready pod exists — i.e. a real restart, never a silent no-op.
+func TestReconcile_RestartPod_NoPodAtSynthesis_DefersThenRestarts(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 	t0 := time.Now()
@@ -1011,20 +1013,76 @@ func TestReconcile_RestartPod_PodMissing_WaitsThenCompletes(t *testing.T) {
 	node := newRunningNode()
 	sts := restartTestSTS()
 
-	r, c := newReconciler(t, t0, cr, node, sts) // no pod
+	r, c := newReconciler(t, t0, cr, node, sts) // no pod yet
 
-	_, err := r.Reconcile(ctx, req()) // R1 synthesize
+	// R1: target is Running but no owned pod — defer synthesis, do not complete.
+	_, err := r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
-	_, err = r.Reconcile(ctx, req()) // R2 Execute (no pod) + Status
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Task).To(BeNil(), "must not synthesize an empty-UID task")
+	g.Expect(got.Status.Phase).NotTo(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
+	g.Expect(got.Status.Phase).NotTo(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+
+	// The owned pod now appears (Ready). R2 must capture THIS pod's UID, not
+	// complete on it.
+	oldPod := restartTestPod("pod-uid-old", metav1.NewTime(t0.Add(-time.Hour)), true)
+	g.Expect(c.Create(ctx, oldPod)).To(Succeed())
+
+	_, err = r.Reconcile(ctx, req()) // R2: capture UID, synthesize
 	g.Expect(err).NotTo(HaveOccurred())
+	got = getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
+	g.Expect(got.Status.Task).NotTo(BeNil())
+	g.Expect(got.Status.Task.RestartedPodUID).To(Equal("pod-uid-old"))
+
+	// R3: Execute deletes the captured pod; Status (same UID gone) → still Running.
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	deleted := &corev1.Pod{}
+	g.Expect(apierrors.IsNotFound(
+		c.Get(ctx, types.NamespacedName{Name: oldPod.Name, Namespace: testNS}, deleted),
+	)).To(BeTrue())
 	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
 
-	// A Ready replacement pod appears (empty captured UID → any owned Ready
-	// pod completes the task).
+	// A different-UID Ready replacement appears → Complete.
 	g.Expect(c.Create(ctx, restartTestPod("pod-uid-new", metav1.NewTime(t0.Add(time.Minute)), true))).To(Succeed())
 	_, err = r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
+}
+
+// Bounded-failure: target is at RequirePhase but no owned pod ever appears.
+// The synthesis-side deferral must surface a bounded Failed (reason=
+// RestartTargetUnresolved) at requirePhaseTimeout — never hang, never
+// silent-complete.
+func TestReconcile_RestartPod_NoPodEverAppears_FailsBounded(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	t0 := time.Now()
+	cr := newRestartPodTask()
+	node := newRunningNode()
+	sts := restartTestSTS()
+
+	r, c := newReconciler(t, t0, cr, node, sts) // no pod, ever
+
+	// R1: target at requirePhase but no pod — defer synthesis, requeue.
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Task).To(BeNil())
+	g.Expect(got.Status.Phase).NotTo(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+
+	// Advance past the requirePhase timeout.
+	r.Now = func() time.Time { return t0.Add(defaultRequirePhaseTimeout + time.Second) }
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got = getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	g.Expect(got.Status.Task).To(BeNil(), "must fail without ever synthesizing an empty-UID task")
+	failed := findFailedCond(got)
+	g.Expect(failed).NotTo(BeNil())
+	g.Expect(failed.Reason).To(Equal("RestartTargetUnresolved"))
 }
 
 // A RestartPod whose pod never becomes Ready must transition to Failed at the

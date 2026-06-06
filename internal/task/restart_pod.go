@@ -23,8 +23,10 @@ const TaskTypeRestartPod = "restart-pod"
 // task deletes only this pod and completes once an owned Ready pod with a
 // different UID exists. Keying on UID rather than a creation-time epoch avoids
 // the same-second-truncation race: an OnDelete replacement always has a fresh
-// UID. Empty when no pod existed at synthesis (any owned Ready pod then
-// completes the task).
+// UID. The synthesis site never populates this empty for kind=RestartPod (it
+// defers synthesis until a pod is observed); an empty UID reaching the task is
+// treated as a wait, never as success, so a no-op restart can't masquerade as
+// complete.
 type RestartPodParams struct {
 	NodeName        string    `json:"nodeName"`
 	Namespace       string    `json:"namespace"`
@@ -72,8 +74,10 @@ func (e *restartPodExecution) Execute(ctx context.Context) error {
 		return err
 	}
 
-	// Nothing to delete: no pod was captured at synthesis (StatefulSet was
-	// still scheduling), so the first pod that appears is already the target.
+	// Defense-in-depth: the synthesis site never dispatches an empty UID for
+	// RestartPod, so this is unreachable in practice. If one ever slips through,
+	// delete nothing — Status reports Running so the controller's execution
+	// timeout fails the task rather than completing without a restart.
 	if e.params.RestartedPodUID == "" {
 		return nil
 	}
@@ -91,12 +95,17 @@ func (e *restartPodExecution) Execute(ctx context.Context) error {
 }
 
 // Status completes when an owned pod that is NOT the restarted pod is Ready.
-// When no pod was captured (RestartedPodUID empty), any owned Ready pod
-// completes. The original pod (matching UID), a terminating pod, or a missing
-// pod reports Running so the executor re-polls.
+// An empty RestartedPodUID never completes (it reports Running until the
+// controller's execution timeout fails the task): completing on the first owned
+// Ready pod would let a restart that deleted nothing masquerade as success. The
+// original pod (matching UID), a terminating pod, or a missing pod also reports
+// Running so the executor re-polls.
 func (e *restartPodExecution) Status(ctx context.Context) ExecutionStatus {
 	if s, done := e.isTerminal(); done {
 		return s
+	}
+	if e.params.RestartedPodUID == "" {
+		return ExecutionRunning
 	}
 
 	node, sts, err := e.fetchStatefulSet(ctx)

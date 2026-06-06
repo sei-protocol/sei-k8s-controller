@@ -207,16 +207,17 @@ func TestRestartPod_Replacement_NotReDeleted(t *testing.T) {
 	g.Expect(exec.Status(ctx)).To(Equal(ExecutionComplete))
 }
 
-// No pod existed at synthesis (empty RestartedPodUID, e.g. STS still
-// scheduling): Execute is a no-op and never deletes; the task completes on the
-// first owned Ready pod.
-func TestRestartPod_EmptyUID_NoDeleteWaitsForReady(t *testing.T) {
+// Defense-in-depth: an empty RestartedPodUID must NEVER complete-on-first-Ready
+// (the synthesis site never dispatches one, but a stray empty UID can't be
+// allowed to masquerade as a successful restart). Execute deletes nothing and
+// Status stays Running even with an owned Ready pod present, so the controller's
+// execution timeout fails the task rather than silent-completing.
+func TestRestartPod_EmptyUID_NeverCompletes(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 	node := restartPodNode()
 	sts := stsForRestart()
-	// A pod already exists; with empty captured UID the task must not delete it.
-	existing := podForRestart(restartedUID, someTime, false, false)
+	existing := podForRestart(restartedUID, someTime, true, false) // owned + Ready
 
 	cfg := restartPodCfg(t, node, sts, existing)
 	exec := newRestartPodExecWithUID(t, cfg, "")
@@ -225,11 +226,7 @@ func TestRestartPod_EmptyUID_NoDeleteWaitsForReady(t *testing.T) {
 	got := &corev1.Pod{}
 	g.Expect(cfg.KubeClient.Get(ctx, types.NamespacedName{Name: existing.Name, Namespace: restartNS}, got)).To(Succeed())
 	g.Expect(got.DeletionTimestamp).To(BeNil(), "empty UID must not delete any pod")
-	g.Expect(exec.Status(ctx)).To(Equal(ExecutionRunning))
-
-	existing.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
-	g.Expect(cfg.KubeClient.Status().Update(ctx, existing)).To(Succeed())
-	g.Expect(exec.Status(ctx)).To(Equal(ExecutionComplete))
+	g.Expect(exec.Status(ctx)).To(Equal(ExecutionRunning), "empty UID must not complete on a Ready pod")
 }
 
 // No pod exists at Execute time: Execute is a no-op; the task waits for a Ready
