@@ -28,8 +28,13 @@ import (
 const unknownValue = "unknown"
 
 const (
-	TaskSnapshotRestore    = sidecar.TaskTypeSnapshotRestore
-	TaskDiscoverPeers      = sidecar.TaskTypeDiscoverPeers
+	TaskSnapshotRestore = sidecar.TaskTypeSnapshotRestore
+	// TaskDiscoverPeers in the init/bootstrap progression is the init-aware
+	// variant (re-derives sources from the live SeiNode per reconcile, defers
+	// on unresolved peers) rather than the sidecar-backed type the SeiNodeTask
+	// DiscoverPeers kind submits — its sources cannot be frozen at plan-build
+	// time. See task.TaskTypeDiscoverPeersInit.
+	TaskDiscoverPeers      = task.TaskTypeDiscoverPeersInit
 	TaskConfigureGenesis   = sidecar.TaskTypeConfigureGenesis
 	TaskConfigureStateSync = sidecar.TaskTypeConfigureStateSync
 	TaskConfigApply        = sidecar.TaskTypeConfigApply
@@ -607,7 +612,10 @@ func paramsForTaskType(
 		}
 		return &seiconfig.ConfigIntent{}
 	case TaskDiscoverPeers:
-		return discoverPeersTask(node)
+		// No params: the init discover-peers task re-derives sources from the
+		// live SeiNode each reconcile, so freezing (possibly-unresolved) sources
+		// at plan-build time would defeat convergence.
+		return nil
 	case TaskConfigureStateSync:
 		return configureStateSyncTask(node)
 	case TaskConfigValidate:
@@ -654,10 +662,6 @@ func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource) sidecar.SnapshotResto
 		return sidecar.SnapshotRestoreTask{}
 	}
 	return sidecar.SnapshotRestoreTask{TargetHeight: snap.S3.TargetHeight}
-}
-
-func discoverPeersTask(node *seiv1alpha1.SeiNode) sidecar.DiscoverPeersTask {
-	return sidecar.DiscoverPeersTask{Sources: task.DiscoverPeerSources(node)}
 }
 
 func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyncTask {
