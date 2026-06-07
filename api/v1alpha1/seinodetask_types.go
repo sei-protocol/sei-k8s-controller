@@ -6,7 +6,7 @@ import (
 
 // SeiNodeTaskKind discriminates the SeiNodeTask spec union. Exactly one of
 // the matching payload sub-structs in SeiNodeTaskSpec must be set.
-// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;DiscoverPeers;RestartPod
+// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;DiscoverPeers;RestartPod;MarkReady
 type SeiNodeTaskKind string
 
 const (
@@ -40,9 +40,9 @@ const (
 
 	// SeiNodeTaskKindDiscoverPeers backs the sidecar `discover-peers` task.
 	// Re-resolves the target's spec.peers and writes persistent-peers into the
-	// on-disk config.toml (scalar merge). Disk-only: a running seid does not
-	// re-read config.toml, so compose with kind=RestartPod to apply. The two are
-	// not atomic — a DiscoverPeers success followed by a RestartPod failure
+	// on-disk config.toml (scalar merge). Disk-only: a running seid reads
+	// config.toml at startup, so compose with kind=RestartPod to apply. The two
+	// run independently — a DiscoverPeers success followed by a RestartPod failure
 	// leaves config.toml ahead of the running peer set until the next restart.
 	SeiNodeTaskKindDiscoverPeers SeiNodeTaskKind = "DiscoverPeers"
 
@@ -54,6 +54,17 @@ const (
 	// The pod to delete is caller-supplied via spec.restartPod.podUID; a UID that
 	// no longer matches the live pod completes as a no-op (see PodUID).
 	SeiNodeTaskKindRestartPod SeiNodeTaskKind = "RestartPod"
+
+	// SeiNodeTaskKindMarkReady backs the sidecar `mark-ready` task (fire-and-forget).
+	// Re-marks sidecar readiness so /v0/healthz returns 200, which unblocks the seid
+	// start-gate and the proxy readiness probe. Useful after a readiness-blind restart
+	// or image rollout to promote a parked node promptly, rather than waiting for the
+	// node controller's reapproval poll. Empty payload — nothing to parameterize.
+	//
+	// Completion is the submit ack: the task reports Complete once the sidecar
+	// accepts the request, a beat before /v0/healthz serves 200. Gate on the node
+	// actually serving with a following AwaitCondition/AwaitNodesAtHeight step.
+	SeiNodeTaskKindMarkReady SeiNodeTaskKind = "MarkReady"
 )
 
 // SeiNodeTaskPhase is the high-level lifecycle state of a SeiNodeTask.
@@ -99,7 +110,7 @@ const (
 // Field names locked at v1alpha1 — see docs/design/seinode-task-lld.md
 // (PR sei-protocol/sei-k8s-controller#277).
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.discoverPeers) ? 1 : 0) + (has(self.restartPod) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, awaitCondition, updateNodeImage, awaitNodesAtHeight, discoverPeers, or restartPod must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.discoverPeers) ? 1 : 0) + (has(self.restartPod) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, awaitCondition, updateNodeImage, awaitNodesAtHeight, discoverPeers, restartPod, or markReady must be set"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)",message="spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovVote' || has(self.govVote)",message="spec.govVote is required when kind=GovVote"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitCondition' || has(self.awaitCondition)",message="spec.awaitCondition is required when kind=AwaitCondition"
@@ -108,6 +119,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.kind != 'DiscoverPeers' || has(self.discoverPeers)",message="spec.discoverPeers is required when kind=DiscoverPeers"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartPod' || has(self.restartPod)",message="spec.restartPod is required when kind=RestartPod"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartPod' || (has(self.restartPod) && size(self.restartPod.podUID) > 0)",message="spec.restartPod.podUID is required when kind=RestartPod"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'MarkReady' || has(self.markReady)",message="spec.markReady is required when kind=MarkReady"
 // +kubebuilder:validation:XValidation:rule="self.kind == oldSelf.kind",message="spec.kind is immutable"
 type SeiNodeTaskSpec struct {
 	// Kind selects the task implementation. Immutable after creation.
@@ -158,6 +170,10 @@ type SeiNodeTaskSpec struct {
 	// RestartPod is the payload for kind=RestartPod.
 	// +optional
 	RestartPod *RestartPodPayload `json:"restartPod,omitempty"`
+
+	// MarkReady is the payload for kind=MarkReady.
+	// +optional
+	MarkReady *MarkReadyPayload `json:"markReady,omitempty"`
 }
 
 // SeiNodeTaskTarget identifies the single SeiNode this task operates on.
@@ -346,13 +362,11 @@ type AwaitNodesAtHeightPayload struct {
 // DiscoverPeersPayload is the payload for kind=DiscoverPeers. It is empty: the
 // task re-resolves the target SeiNode's current spec.peers (ec2Tags, static,
 // and label sources) and writes persistent-peers into the on-disk config.toml
-// via the sidecar discover-peers task. There is nothing to parameterize — the
-// peer sources are fully determined by the target's spec/status. Fields would
-// only be added here if a future feature needs to override the target's
-// declared peers (not in scope).
+// via the sidecar discover-peers task. It is empty: the peer sources are fully
+// determined by the target's spec/status, so there is nothing to parameterize.
 //
-// Writes config.toml only; the running seid does not pick up the new peers
-// until a restart. Compose with kind=RestartPod to apply. See the
+// Writes config.toml only; the running seid picks up the new peers on its next
+// restart. Compose with kind=RestartPod to apply. See the
 // SeiNodeTaskKindDiscoverPeers doc comment for the sequencing and atomicity
 // caveats.
 type DiscoverPeersPayload struct{}
@@ -370,13 +384,19 @@ type RestartPodPayload struct {
 	// a different UID appears. Content-addressed (UID, not creationTimestamp) so
 	// the OnDelete replacement is unambiguously distinguished from the original.
 	//
-	// The caller owns UID correctness: a non-empty UID that no longer matches the
-	// live pod (e.g. the pod was recreated out-of-band after it was read) deletes
-	// nothing and completes immediately as a no-op. Fetch the UID as late as
-	// possible — the controller does not re-validate it against the live pod.
+	// The caller owns UID correctness: the controller uses this UID verbatim, so a
+	// UID that no longer matches the live pod (e.g. the pod was recreated
+	// out-of-band after it was read) completes immediately as a no-op. Fetch the
+	// UID as late as possible.
 	// +kubebuilder:validation:MinLength=1
 	PodUID string `json:"podUID"`
 }
+
+// MarkReadyPayload is the payload for kind=MarkReady. It is empty: the sidecar
+// mark-ready task (sidecar.MarkReadyTask) takes no inputs — it re-marks the
+// target sidecar's in-process readiness flag so /v0/healthz serves 200. See the
+// SeiNodeTaskKindMarkReady doc comment for the use case.
+type MarkReadyPayload struct{}
 
 // ---------------------------------------------------------------------------
 // Status

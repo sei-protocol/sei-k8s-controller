@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
@@ -43,6 +45,48 @@ func TestSeiNodeTaskParamsFor_WiredKindMissingPayload_NotUnsupported(t *testing.
 	var unsupported *ErrUnsupportedKind
 	if errors.As(err, &unsupported) {
 		t.Error("missing-payload error must not be *ErrUnsupportedKind")
+	}
+}
+
+// kind=MarkReady maps to the sidecar mark-ready task with an empty payload —
+// no target needed, no source building.
+func TestSeiNodeTaskParamsFor_MarkReady(t *testing.T) {
+	cr := &seiv1alpha1.SeiNodeTask{
+		Spec: seiv1alpha1.SeiNodeTaskSpec{
+			Kind:      seiv1alpha1.SeiNodeTaskKindMarkReady,
+			MarkReady: &seiv1alpha1.MarkReadyPayload{},
+		},
+	}
+
+	p, err := SeiNodeTaskParamsFor(cr, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Type != sidecar.TaskTypeMarkReady {
+		t.Errorf("Type = %q, want %q", p.Type, sidecar.TaskTypeMarkReady)
+	}
+	if _, ok := p.Payload.(sidecar.MarkReadyTask); !ok {
+		t.Errorf("Payload = %T, want sidecar.MarkReadyTask", p.Payload)
+	}
+}
+
+// kind=MarkReady with a nil payload is a param-build failure (ParamsBuildFailed),
+// not an unsupported kind. CEL normally blocks this; the guard is the backstop.
+func TestSeiNodeTaskParamsFor_MarkReady_NilPayload_ParamsBuildFailed(t *testing.T) {
+	cr := &seiv1alpha1.SeiNodeTask{
+		Spec: seiv1alpha1.SeiNodeTaskSpec{Kind: seiv1alpha1.SeiNodeTaskKindMarkReady},
+	}
+
+	_, err := SeiNodeTaskParamsFor(cr, nil)
+	if err == nil {
+		t.Fatal("expected error for missing payload, got nil")
+	}
+	var unsupported *ErrUnsupportedKind
+	if errors.As(err, &unsupported) {
+		t.Error("missing-payload error must not be *ErrUnsupportedKind")
+	}
+	if got := FailureReason(err); got != ReasonParamsBuildFailed {
+		t.Errorf("FailureReason = %q, want %q", got, ReasonParamsBuildFailed)
 	}
 }
 

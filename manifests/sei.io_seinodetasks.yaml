@@ -250,7 +250,11 @@ spec:
                 - AwaitNodesAtHeight
                 - DiscoverPeers
                 - RestartPod
+                - MarkReady
                 type: string
+              markReady:
+                description: MarkReady is the payload for kind=MarkReady.
+                type: object
               restartPod:
                 description: RestartPod is the payload for kind=RestartPod.
                 properties:
@@ -264,10 +268,10 @@ spec:
                       a different UID appears. Content-addressed (UID, not creationTimestamp) so
                       the OnDelete replacement is unambiguously distinguished from the original.
 
-                      The caller owns UID correctness: a non-empty UID that no longer matches the
-                      live pod (e.g. the pod was recreated out-of-band after it was read) deletes
-                      nothing and completes immediately as a no-op. Fetch the UID as late as
-                      possible — the controller does not re-validate it against the live pod.
+                      The caller owns UID correctness: the controller uses this UID verbatim, so a
+                      UID that no longer matches the live pod (e.g. the pod was recreated
+                      out-of-band after it was read) completes immediately as a no-op. Fetch the
+                      UID as late as possible.
                     minLength: 1
                     type: string
                 required:
@@ -343,12 +347,13 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: exactly one of govSoftwareUpgrade, govVote, awaitCondition,
-                updateNodeImage, awaitNodesAtHeight, discoverPeers, or restartPod
-                must be set
+                updateNodeImage, awaitNodesAtHeight, discoverPeers, restartPod, or
+                markReady must be set
               rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
                 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage)
                 ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.discoverPeers)
-                ? 1 : 0) + (has(self.restartPod) ? 1 : 0) == 1'
+                ? 1 : 0) + (has(self.restartPod) ? 1 : 0) + (has(self.markReady) ?
+                1 : 0) == 1'
             - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
               rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
             - message: spec.govVote is required when kind=GovVote
@@ -366,6 +371,8 @@ spec:
             - message: spec.restartPod.podUID is required when kind=RestartPod
               rule: self.kind != 'RestartPod' || (has(self.restartPod) && size(self.restartPod.podUID)
                 > 0)
+            - message: spec.markReady is required when kind=MarkReady
+              rule: self.kind != 'MarkReady' || has(self.markReady)
             - message: spec.kind is immutable
               rule: self.kind == oldSelf.kind
           status:
