@@ -371,6 +371,8 @@ spec:
             - message: spec.restartPod.podUID is required when kind=RestartPod
               rule: self.kind != 'RestartPod' || (has(self.restartPod) && size(self.restartPod.podUID)
                 > 0)
+            - message: spec.restartPod.podUID is immutable
+              rule: self.kind != 'RestartPod' || self.restartPod.podUID == oldSelf.restartPod.podUID
             - message: spec.markReady is required when kind=MarkReady
               rule: self.kind != 'MarkReady' || has(self.markReady)
             - message: spec.kind is immutable
@@ -560,14 +562,6 @@ spec:
                   id:
                     description: ID is the deterministic UUID v5 used as the sidecar
                       task ID.
-                    type: string
-                  restartedPodUID:
-                    description: |-
-                      RestartedPodUID is the UID of the pod the kind=RestartPod task deletes,
-                      copied verbatim from spec.restartPod.podUID at synthesis. Content-addressed
-                      rather than clock-addressed: the task deletes only this pod and completes
-                      when an owned Ready pod with a different UID exists, sidestepping the
-                      same-second creationTimestamp race a time epoch would have.
                     type: string
                   status:
                     description: Status is the lifecycle state of the underlying execution.

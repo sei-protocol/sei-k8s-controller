@@ -1067,7 +1067,7 @@ func newRestartPodTask() *seiv1alpha1.SeiNodeTask {
 func TestTaskParamsForKind_RestartPod(t *testing.T) {
 	g := NewWithT(t)
 	cr := newRestartPodTask()
-	cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{RestartedPodUID: "pod-uid-captured"}
+	cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{ID: "task-id"}
 	taskType, raw, err := taskParamsForKind(cr, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(taskType).To(Equal(task.TaskTypeRestartPod))
@@ -1076,19 +1076,20 @@ func TestTaskParamsForKind_RestartPod(t *testing.T) {
 	g.Expect(json.Unmarshal(raw, &got)).To(Succeed())
 	g.Expect(got.NodeName).To(Equal(testNodeName))
 	g.Expect(got.Namespace).To(Equal(testNS))
-	g.Expect(got.RestartedPodUID).To(Equal(types.UID("pod-uid-captured")))
+	g.Expect(got.RestartedPodUID).To(Equal(types.UID("pod-uid-old")))
 }
 
-// The early-validation path (status.task nil) builds params with an empty
-// captured UID — the real value is threaded once status.task is populated.
-func TestTaskParamsForKind_RestartPod_NilTaskEmptyUID(t *testing.T) {
+// The early-validation path (status.task nil) reads the UID straight from the
+// immutable spec.restartPod.podUID — no snapshot dependency, so it yields the
+// spec value even before status.task exists.
+func TestTaskParamsForKind_RestartPod_NilTaskReadsSpec(t *testing.T) {
 	g := NewWithT(t)
 	cr := newRestartPodTask()
 	_, raw, err := taskParamsForKind(cr, nil)
 	g.Expect(err).NotTo(HaveOccurred())
 	var got task.RestartPodParams
 	g.Expect(json.Unmarshal(raw, &got)).To(Succeed())
-	g.Expect(got.RestartedPodUID).To(BeEmpty())
+	g.Expect(got.RestartedPodUID).To(Equal(types.UID("pod-uid-old")))
 }
 
 func TestReconcile_RestartPod_HappyPath(t *testing.T) {
@@ -1104,12 +1105,13 @@ func TestReconcile_RestartPod_HappyPath(t *testing.T) {
 
 	r, c := newReconciler(t, t0, cr, node, sts, oldPod)
 
-	// R1: synthesize task (copies spec.restartPod.podUID to status.task verbatim).
+	// R1: synthesize task. The restart UID is read from the immutable
+	// spec.restartPod.podUID each reconcile, not snapshotted to status.task.
 	_, err := r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
 	got := getTask(t, ctx, c)
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
-	g.Expect(got.Status.Task.RestartedPodUID).To(Equal("pod-uid-old"))
+	g.Expect(got.Spec.RestartPod.PodUID).To(Equal("pod-uid-old"))
 
 	// R2: Execute deletes the captured pod; Status sees no pod → still Running.
 	_, err = r.Reconcile(ctx, req())

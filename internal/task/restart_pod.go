@@ -18,16 +18,16 @@ const TaskTypeRestartPod = "restart-pod"
 // RestartPodParams identifies the target SeiNode whose pod is restarted so
 // seid re-reads config.toml on the next start.
 //
-// RestartedPodUID is the content-addressed restart signal, supplied by the
-// caller (spec.restartPod.podUID), copied to status.task at synthesis, and
-// threaded through params so it is stable across reconciles. The task deletes
-// this pod and completes once a replacement owned pod (a different UID) is
-// Ready. Keying on UID rather than a creation-time epoch survives the
-// same-second-truncation race: an OnDelete replacement always has a fresh UID.
-// CEL requires a non-empty podUID for kind=RestartPod. The caller owns UID
-// correctness: the task acts only on a UID that matches a live pod, so a stale
-// UID leaves the pod in place and completes as a no-op (the contract is
-// documented on the PodUID API field).
+// RestartedPodUID is the content-addressed restart signal, read directly from
+// the immutable spec.restartPod.podUID each reconcile (not snapshotted to
+// status.task), so it is stable across reconciles. The task deletes this pod and
+// completes once a replacement owned pod (a different UID) is Ready. Keying on
+// UID rather than a creation-time epoch survives the same-second-truncation
+// race: an OnDelete replacement always has a fresh UID. CEL requires a non-empty,
+// immutable podUID for kind=RestartPod. The caller owns UID correctness: the task
+// acts only on a UID that matches a live pod, so a stale UID leaves the pod in
+// place and completes as a no-op (the contract is documented on the PodUID API
+// field).
 type RestartPodParams struct {
 	NodeName        string    `json:"nodeName"`
 	Namespace       string    `json:"namespace"`

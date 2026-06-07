@@ -119,6 +119,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.kind != 'DiscoverPeers' || has(self.discoverPeers)",message="spec.discoverPeers is required when kind=DiscoverPeers"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartPod' || has(self.restartPod)",message="spec.restartPod is required when kind=RestartPod"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartPod' || (has(self.restartPod) && size(self.restartPod.podUID) > 0)",message="spec.restartPod.podUID is required when kind=RestartPod"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'RestartPod' || self.restartPod.podUID == oldSelf.restartPod.podUID",message="spec.restartPod.podUID is immutable"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'MarkReady' || has(self.markReady)",message="spec.markReady is required when kind=MarkReady"
 // +kubebuilder:validation:XValidation:rule="self.kind == oldSelf.kind",message="spec.kind is immutable"
 type SeiNodeTaskSpec struct {
@@ -472,14 +473,6 @@ type SeiNodeTaskExecution struct {
 	// charged against the execution budget.
 	// +optional
 	ExecutionStartedAt *metav1.Time `json:"executionStartedAt,omitempty"`
-
-	// RestartedPodUID is the UID of the pod the kind=RestartPod task deletes,
-	// copied verbatim from spec.restartPod.podUID at synthesis. Content-addressed
-	// rather than clock-addressed: the task deletes only this pod and completes
-	// when an owned Ready pod with a different UID exists, sidestepping the
-	// same-second creationTimestamp race a time epoch would have.
-	// +optional
-	RestartedPodUID string `json:"restartedPodUID,omitempty"`
 }
 
 // SeiNodeTaskOutputs holds typed per-kind results. Exactly one sub-field is
