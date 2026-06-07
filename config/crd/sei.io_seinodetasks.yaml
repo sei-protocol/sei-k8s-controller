@@ -249,33 +249,14 @@ spec:
                 - UpdateNodeImage
                 - AwaitNodesAtHeight
                 - DiscoverPeers
-                - RestartPod
+                - RestartSeid
                 - MarkReady
                 type: string
               markReady:
                 description: MarkReady is the payload for kind=MarkReady.
                 type: object
-              restartPod:
-                description: RestartPod is the payload for kind=RestartPod.
-                properties:
-                  podUID:
-                    description: |-
-                      PodUID is the UID of the pod to restart, supplied by the caller. Obtain it
-                      immediately before creating the task; for the single-replica StatefulSet
-                      the pod is `<target.nodeRef.Name>-0`:
-                        kubectl get pod <node>-0 -o jsonpath='{.metadata.uid}'
-                      The task deletes exactly this pod and completes when an owned Ready pod with
-                      a different UID appears. Content-addressed (UID, not creationTimestamp) so
-                      the OnDelete replacement is unambiguously distinguished from the original.
-
-                      The caller owns UID correctness: the controller uses this UID verbatim, so a
-                      UID that no longer matches the live pod (e.g. the pod was recreated
-                      out-of-band after it was read) completes immediately as a no-op. Fetch the
-                      UID as late as possible.
-                    minLength: 1
-                    type: string
-                required:
-                - podUID
+              restartSeid:
+                description: RestartSeid is the payload for kind=RestartSeid.
                 type: object
               target:
                 description: |-
@@ -347,13 +328,13 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: exactly one of govSoftwareUpgrade, govVote, awaitCondition,
-                updateNodeImage, awaitNodesAtHeight, discoverPeers, restartPod, or
+                updateNodeImage, awaitNodesAtHeight, discoverPeers, restartSeid, or
                 markReady must be set
               rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
                 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage)
                 ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.discoverPeers)
-                ? 1 : 0) + (has(self.restartPod) ? 1 : 0) + (has(self.markReady) ?
-                1 : 0) == 1'
+                ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady)
+                ? 1 : 0) == 1'
             - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
               rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
             - message: spec.govVote is required when kind=GovVote
@@ -366,13 +347,8 @@ spec:
               rule: self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)
             - message: spec.discoverPeers is required when kind=DiscoverPeers
               rule: self.kind != 'DiscoverPeers' || has(self.discoverPeers)
-            - message: spec.restartPod is required when kind=RestartPod
-              rule: self.kind != 'RestartPod' || has(self.restartPod)
-            - message: spec.restartPod.podUID is required when kind=RestartPod
-              rule: self.kind != 'RestartPod' || (has(self.restartPod) && size(self.restartPod.podUID)
-                > 0)
-            - message: spec.restartPod.podUID is immutable
-              rule: self.kind != 'RestartPod' || self.restartPod.podUID == oldSelf.restartPod.podUID
+            - message: spec.restartSeid is required when kind=RestartSeid
+              rule: self.kind != 'RestartSeid' || has(self.restartSeid)
             - message: spec.markReady is required when kind=MarkReady
               rule: self.kind != 'MarkReady' || has(self.markReady)
             - message: spec.kind is immutable

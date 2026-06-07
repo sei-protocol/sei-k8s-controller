@@ -1786,6 +1786,8 @@ github.com/sei-protocol/seictl v0.0.50 h1:zBOLIPI/G0oPsLV0DLlGnjCgckkyihOZ03llkF
 github.com/sei-protocol/seictl v0.0.50/go.mod h1:yNPLcFKRTbKvsdKFuQseMHkkXTol7FXidnGKJa/bUXQ=
 github.com/sei-protocol/seictl v0.0.55 h1:JZ15hoAS7ft3LL85SeYtkP3Gr/oMlEQnBjhefbDdiZ4=
 github.com/sei-protocol/seictl v0.0.55/go.mod h1:sDWY/llzQPnblG/WS6uQ7vqDtshNQ0WJTJzRUgmfFpg=
+github.com/sei-protocol/seictl v0.0.56 h1:zRCZdGiRrvP+zv/DYhmfP570MOR9nO6o9VWncABkJSo=
+github.com/sei-protocol/seictl v0.0.56/go.mod h1:sDWY/llzQPnblG/WS6uQ7vqDtshNQ0WJTJzRUgmfFpg=
 github.com/sei-protocol/seilog v0.0.3 h1:Zi7oWXdX5jv92dY8n482xH032LtNebC89Y+qYZlBn0Y=
 github.com/sei-protocol/seilog v0.0.3/go.mod h1:CKg58wraWnB3gRxWQ0v1rIVr0gmDHjkfP1bM2giKFFU=
 github.com/shirou/gopsutil v2.20.5+incompatible/go.mod h1:5b4v6he4MtMOwMlS0TUMTu2PcXUg8+E1lC7eC3UO/RA=

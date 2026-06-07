@@ -14,7 +14,7 @@ import (
 )
 
 // podCycle is the shared plumbing for the controller-side pod-lifecycle tasks
-// (replace-pod, restart-pod). Both delete StatefulSet-owned pods to drive the
+// (currently replace-pod). It deletes StatefulSet-owned pods to drive the
 // StatefulSet's OnDelete update strategy — pod lifecycle is the SeiNode
 // controller's responsibility, not the StatefulSet controller's. The common
 // core is: fetch the StatefulSet (cache-bypassing), guard against an absent
