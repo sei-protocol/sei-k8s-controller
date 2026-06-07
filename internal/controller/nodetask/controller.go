@@ -146,18 +146,11 @@ func (r *SeiNodeTaskReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if _, _, err := taskParamsForKind(cr, nil); err != nil {
 			r.markFailed(cr, now, task.FailureReason(err), err.Error())
 		} else {
-			// RestartPod content-addresses the caller-supplied pod UID
-			// (spec.restartPod.podUID, CEL-required non-empty); copy it verbatim.
-			var restartedPodUID string
-			if cr.Spec.Kind == seiv1alpha1.SeiNodeTaskKindRestartPod {
-				restartedPodUID = cr.Spec.RestartPod.PodUID
-			}
 			execStart := metav1.NewTime(now)
 			cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{
 				ID:                 task.DeterministicTaskID(string(cr.UID), string(cr.Spec.Kind), 0),
 				Status:             seiv1alpha1.TaskPending,
 				ExecutionStartedAt: &execStart,
-				RestartedPodUID:    restartedPodUID,
 			}
 			r.setPhase(cr, seiv1alpha1.SeiNodeTaskPhaseRunning, now)
 			// Persist synthesis before any side effects — mirrors the

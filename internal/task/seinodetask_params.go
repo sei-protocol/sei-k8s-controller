@@ -237,21 +237,15 @@ func restartPodParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
 		return SeiNodeTaskParams{}, paramsErrorf("spec.restartPod is required for kind=RestartPod")
 	}
 	// The pod UID is caller-supplied verbatim (spec.restartPod.podUID) and CEL
-	// requires it non-empty for kind=RestartPod; this is the defensive backstop.
+	// requires it non-empty (and immutable) for kind=RestartPod; this is the
+	// defensive backstop.
 	if cr.Spec.RestartPod.PodUID == "" {
 		return SeiNodeTaskParams{}, paramsErrorf("spec.restartPod.podUID is required for kind=RestartPod")
-	}
-	// RestartedPodUID is content-addressed: copied from spec into status.task at
-	// synthesis, then threaded here. Empty is valid on the early-validation path
-	// (status.task nil) — the real value is threaded once status.task exists.
-	var podUID types.UID
-	if cr.Status.Task != nil {
-		podUID = types.UID(cr.Status.Task.RestartedPodUID)
 	}
 	return SeiNodeTaskParams{TaskTypeRestartPod, RestartPodParams{
 		NodeName:        cr.Spec.Target.NodeRef.Name,
 		Namespace:       cr.Namespace,
-		RestartedPodUID: podUID,
+		RestartedPodUID: types.UID(cr.Spec.RestartPod.PodUID),
 	}}, nil
 }
 

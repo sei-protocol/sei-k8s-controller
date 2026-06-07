@@ -167,3 +167,19 @@ func TestCEL_KindImmutable_DiscoverPeersToRestartPod(t *testing.T) {
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("kind is immutable"))
 }
+
+// spec.restartPod.podUID is immutable — the task content-addresses the pod to
+// delete, so the restart target cannot be re-pointed after creation.
+func TestCEL_RestartPodUIDImmutable(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "poduid-immutable", seiv1alpha1.SeiNodeTaskKindRestartPod)
+	snt.Spec.RestartPod = &seiv1alpha1.RestartPodPayload{PodUID: "pod-uid-1"}
+	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
+
+	patch := client.MergeFrom(snt.DeepCopy())
+	snt.Spec.RestartPod.PodUID = "pod-uid-2"
+	err := testCli.Patch(testCtx, snt, patch)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("podUID is immutable"))
+}
