@@ -235,6 +235,7 @@ type fakeSidecarClient struct {
 	mu        sync.Mutex
 	submitted []sidecar.TaskRequest
 	results   map[uuid.UUID]*sidecar.TaskResult
+	getCalls  int
 }
 
 func newFakeSidecarClient() *fakeSidecarClient {
@@ -254,6 +255,7 @@ func (f *fakeSidecarClient) SubmitTask(_ context.Context, req sidecar.TaskReques
 func (f *fakeSidecarClient) GetTask(_ context.Context, id uuid.UUID) (*sidecar.TaskResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.getCalls++
 	if r, ok := f.results[id]; ok {
 		return r, nil
 	}
@@ -905,6 +907,60 @@ func TestReconcile_DiscoverPeers_LongTargetWait_DoesNotImmediatelyTimeOut(t *tes
 	_, err = r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
+}
+
+// ---------------------------------------------------------------------------
+// MarkReady
+// ---------------------------------------------------------------------------
+
+func newMarkReadyTask() *seiv1alpha1.SeiNodeTask {
+	return &seiv1alpha1.SeiNodeTask{
+		ObjectMeta: metav1.ObjectMeta{Name: testTaskName, Namespace: testNS, UID: "task-uid-markready", Generation: 1},
+		Spec: seiv1alpha1.SeiNodeTaskSpec{
+			Kind: seiv1alpha1.SeiNodeTaskKindMarkReady,
+			Target: seiv1alpha1.SeiNodeTaskTarget{
+				NodeRef:      seiv1alpha1.SeiNodeTaskNodeRef{Name: testNodeName},
+				RequirePhase: seiv1alpha1.PhaseRunning,
+			},
+			MarkReady: &seiv1alpha1.MarkReadyPayload{},
+		},
+	}
+}
+
+// MarkReady is fire-and-forget (registered sidecarTask[...](true)): Execute
+// completes the task the moment SubmitTask is acked, so Complete means "the
+// mark-ready request was accepted" and lands at the submit reconcile, with
+// Status reading back the cached terminal state. The test pins that contract:
+// Complete at R2, and getCalls==0 confirms the completion served from cache.
+func TestReconcile_MarkReady_EndToEnd(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	t0 := time.Now()
+	cr := newMarkReadyTask()
+	node := newRunningNode()
+	fakeSC := newFakeSidecarClient()
+
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, cr, node)
+
+	// R1: synthesize task.
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
+
+	// R2: Execute submits mark-ready and completes immediately on the ack —
+	// no staged result, no further reconcile required.
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
+
+	fakeSC.mu.Lock()
+	defer fakeSC.mu.Unlock()
+	g.Expect(fakeSC.submitted).To(HaveLen(1))
+	g.Expect(fakeSC.submitted[0].Type).To(Equal(sidecar.TaskTypeMarkReady))
+	// Completion served from the cached terminal state set at submit; getCalls==0
+	// pins the fire-and-forget contract (a sidecarTask[...](false) regression,
+	// which polls GetTask to terminal, would trip this).
+	g.Expect(fakeSC.getCalls).To(Equal(0))
 }
 
 // Execution-start timeout still fires: a DiscoverPeers task whose sidecar never

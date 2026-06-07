@@ -53,6 +53,41 @@ func TestCEL_RestartPod_Accepted(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
 }
 
+// MarkReady with its matching empty payload is accepted.
+func TestCEL_MarkReady_Accepted(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "markready-ok", seiv1alpha1.SeiNodeTaskKindMarkReady)
+	snt.Spec.MarkReady = &seiv1alpha1.MarkReadyPayload{}
+	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
+}
+
+// kind=MarkReady with NO payload is rejected (zero payloads / kind-required rule).
+func TestCEL_MarkReady_NoPayload_Rejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "markready-nopayload", seiv1alpha1.SeiNodeTaskKindMarkReady)
+	err := testCli.Create(testCtx, snt)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(Or(
+		ContainSubstring("exactly one"),
+		ContainSubstring("markReady is required"),
+	))
+}
+
+// kind=MarkReady with a second payload (markReady + restartPod) is rejected by
+// the exactly-one union rule.
+func TestCEL_MarkReady_MultiplePayloads_Rejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "markready-two-payloads", seiv1alpha1.SeiNodeTaskKindMarkReady)
+	snt.Spec.MarkReady = &seiv1alpha1.MarkReadyPayload{}
+	snt.Spec.RestartPod = &seiv1alpha1.RestartPodPayload{PodUID: "pod-uid-1"}
+	err := testCli.Create(testCtx, snt)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("exactly one"))
+}
+
 // kind=DiscoverPeers with NO payload is rejected (zero payloads).
 func TestCEL_DiscoverPeers_NoPayload_Rejected(t *testing.T) {
 	g := NewWithT(t)

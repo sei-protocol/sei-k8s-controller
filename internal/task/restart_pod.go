@@ -21,13 +21,13 @@ const TaskTypeRestartPod = "restart-pod"
 // RestartedPodUID is the content-addressed restart signal, supplied by the
 // caller (spec.restartPod.podUID), copied to status.task at synthesis, and
 // threaded through params so it is stable across reconciles. The task deletes
-// only this pod and completes once an owned Ready pod with a different UID
-// exists. Keying on UID rather than a creation-time epoch avoids the
+// this pod and completes once a replacement owned pod (a different UID) is
+// Ready. Keying on UID rather than a creation-time epoch survives the
 // same-second-truncation race: an OnDelete replacement always has a fresh UID.
-// CEL requires a non-empty podUID for kind=RestartPod; an empty UID reaching the
-// task is treated as a wait, never success. The caller owns UID correctness: a
-// non-empty UID that matches no live pod deletes nothing and completes as a
-// no-op (the contract is documented on the PodUID API field).
+// CEL requires a non-empty podUID for kind=RestartPod. The caller owns UID
+// correctness: the task acts only on a UID that matches a live pod, so a stale
+// UID leaves the pod in place and completes as a no-op (the contract is
+// documented on the PodUID API field).
 type RestartPodParams struct {
 	NodeName        string    `json:"nodeName"`
 	Namespace       string    `json:"namespace"`
@@ -59,10 +59,11 @@ func deserializeRestartPod(id string, params json.RawMessage, cfg ExecutionConfi
 // controller's responsibility, and OnDelete recreates the pod at the same
 // (unchanged) revision so seid re-reads config.toml on start.
 //
-// Idempotent and stateless across reconciles: the captured pod is deleted; a
-// replacement pod (different UID), an empty UID (none captured), or a missing
-// pod is a no-op. A missing StatefulSet/pod is a transient wait (apply-statefulset
-// or scheduling may lag), not an error.
+// Idempotent and stateless across reconciles: Execute deletes the pod whose UID
+// matches RestartedPodUID. Any other observed state — the replacement pod (a
+// different UID), an empty UID, or a missing pod — leaves the cluster untouched.
+// A missing StatefulSet/pod is a transient wait (apply-statefulset or scheduling
+// may lag) and reports Running for the next reconcile.
 func (e *restartPodExecution) Execute(ctx context.Context) error {
 	node, sts, err := e.fetchStatefulSet(ctx)
 	if err != nil {
@@ -75,10 +76,10 @@ func (e *restartPodExecution) Execute(ctx context.Context) error {
 		return err
 	}
 
-	// Defense-in-depth: the synthesis site never dispatches an empty UID for
-	// RestartPod, so this is unreachable in practice. If one ever slips through,
-	// delete nothing — Status reports Running so the controller's execution
-	// timeout fails the task rather than completing without a restart.
+	// Defense-in-depth: CEL and synthesis guarantee a non-empty UID, so this is a
+	// backstop. An empty UID short-circuits to a Running Status, leaving the
+	// execution timeout to fail the task — a restart that deleted nothing stays
+	// out of the Complete state.
 	if e.params.RestartedPodUID == "" {
 		return nil
 	}
@@ -87,21 +88,20 @@ func (e *restartPodExecution) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Only delete the supplied pod. A different or absent UID means either the
-	// OnDelete replacement already exists (idempotent across reconciles) or the
-	// caller-supplied UID was already stale — either way nothing to delete.
+	// Delete only the supplied pod. A matching live pod is the one to restart; a
+	// different UID is already the OnDelete replacement (idempotent across
+	// reconciles) or a stale caller-supplied UID — both leave the cluster as-is.
 	if pod == nil || pod.UID != e.params.RestartedPodUID || pod.DeletionTimestamp != nil {
 		return nil
 	}
 	return e.deletePod(ctx, pod)
 }
 
-// Status completes when an owned pod that is NOT the restarted pod is Ready.
-// An empty RestartedPodUID never completes (it reports Running until the
-// controller's execution timeout fails the task): completing on the first owned
-// Ready pod would let a restart that deleted nothing masquerade as success. The
-// original pod (matching UID), a terminating pod, or a missing pod also reports
-// Running so the executor re-polls.
+// Status completes when the replacement pod — a Ready owned pod whose UID
+// differs from RestartedPodUID — exists. An empty RestartedPodUID holds the task
+// at Running until the execution timeout fails it, so a restart that deleted
+// nothing stays out of the Complete state. The original pod (matching UID), a
+// terminating pod, or a missing pod also hold at Running so the executor re-polls.
 func (e *restartPodExecution) Status(ctx context.Context) ExecutionStatus {
 	if s, done := e.isTerminal(); done {
 		return s

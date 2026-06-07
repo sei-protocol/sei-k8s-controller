@@ -29,8 +29,8 @@ const (
 
 // ReasonedError is an error that carries the stable SeiNodeTask condition
 // reason it should surface as. Every error SeiNodeTaskParamsFor returns
-// implements it, so the synthesis/driveTask call sites map err→reason via
-// FailureReason without type-switching on individual error values.
+// implements it, so the synthesis/driveTask call sites read the reason off the
+// error via FailureReason.
 type ReasonedError interface {
 	error
 	Reason() string
@@ -38,8 +38,8 @@ type ReasonedError interface {
 
 // FailureReason returns the stable condition reason for a param-build error.
 // It unwraps to a ReasonedError when present and otherwise defaults to
-// ParamsBuildFailed — the catch-all for any failure that did not carry its own
-// reason (e.g. a marshal error wrapped by the caller).
+// ParamsBuildFailed for any other error (e.g. a marshal error wrapped by the
+// caller).
 func FailureReason(err error) string {
 	var re ReasonedError
 	if errors.As(err, &re) {
@@ -49,9 +49,8 @@ func FailureReason(err error) string {
 }
 
 // ErrUnsupportedKind reports an unwired SeiNodeTask kind: one the CRD enum
-// admits but this build does not dispatch. It carries the offending kind and
-// reports reason=UnsupportedKind (a public enum, CLAUDE.md); every other
-// param-build failure reports ParamsBuildFailed.
+// admits but this build leaves unwired. It carries the offending kind and
+// reports reason=UnsupportedKind (a public enum, CLAUDE.md).
 type ErrUnsupportedKind struct {
 	Kind seiv1alpha1.SeiNodeTaskKind
 }
@@ -95,6 +94,8 @@ func SeiNodeTaskParamsFor(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNo
 		return discoverPeersParams(cr, target)
 	case seiv1alpha1.SeiNodeTaskKindRestartPod:
 		return restartPodParams(cr)
+	case seiv1alpha1.SeiNodeTaskKindMarkReady:
+		return markReadyParams(cr)
 	default:
 		return SeiNodeTaskParams{}, &ErrUnsupportedKind{Kind: cr.Spec.Kind}
 	}
@@ -252,6 +253,16 @@ func restartPodParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
 		Namespace:       cr.Namespace,
 		RestartedPodUID: podUID,
 	}}, nil
+}
+
+// markReadyParams builds the empty sidecar mark-ready payload. CEL requires
+// spec.markReady for kind=MarkReady; this guard covers the early-validation path
+// (taskParamsForKind runs before the spec is admission-checked in tests).
+func markReadyParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
+	if cr.Spec.MarkReady == nil {
+		return SeiNodeTaskParams{}, paramsErrorf("spec.markReady is required for kind=MarkReady")
+	}
+	return SeiNodeTaskParams{sidecar.TaskTypeMarkReady, sidecar.MarkReadyTask{}}, nil
 }
 
 // resolveSigningUID returns explicit when set; otherwise derives from target

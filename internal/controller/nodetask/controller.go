@@ -61,6 +61,7 @@ const (
 	// operator sets spec.timeoutSeconds).
 	defaultRestartPodTimeout    = 10 * time.Minute
 	defaultDiscoverPeersTimeout = 2 * time.Minute
+	defaultMarkReadyTimeout     = 2 * time.Minute
 )
 
 // resultRequeueImmediate mirrors planner.ResultRequeueImmediate without
@@ -330,6 +331,8 @@ func effectiveTimeout(cr *seiv1alpha1.SeiNodeTask) time.Duration {
 		return defaultRestartPodTimeout
 	case seiv1alpha1.SeiNodeTaskKindDiscoverPeers:
 		return defaultDiscoverPeersTimeout
+	case seiv1alpha1.SeiNodeTaskKindMarkReady:
+		return defaultMarkReadyTimeout
 	default:
 		return 0
 	}
@@ -359,13 +362,11 @@ func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode)
 // populateOutputs stamps the typed per-kind outputs on Complete.
 //
 // Sidecar-backed kinds (GovVote, GovSoftwareUpgrade, AwaitCondition,
-// AwaitNodesAtHeight) intentionally do NOT populate status.outputs in this
-// PR. The sidecar's TaskResult shape carries the values, but extracting
-// them would require structural changes on the sidecar side (typed
-// per-task result payloads). We defer that work and leave the typed
-// output fields on the CRD unset and forward-compatible. Downstream
-// consumers coordinate via chain queries (chain-as-medium), not
-// task-to-task currying. See conversation history / PR 3 scope notes.
+// AwaitNodesAtHeight) leave their typed output fields unset for now: surfacing
+// the values the sidecar's TaskResult carries needs typed per-task result
+// payloads on the sidecar side, which is deferred. The CRD fields stay
+// forward-compatible, and downstream consumers coordinate via chain queries
+// (chain-as-medium) rather than task-to-task currying.
 func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) {
 	switch cr.Spec.Kind {
 	case seiv1alpha1.SeiNodeTaskKindUpdateNodeImage:
