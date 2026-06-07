@@ -23,6 +23,9 @@ const (
 	stsUID         = types.UID("sts-uid-1")
 	testReplaceNs  = "default"
 	testReplaceSTS = "node-1"
+
+	ownedPodUID   = types.UID("pod-uid-owned")
+	unownedPodUID = types.UID("pod-uid-unowned")
 )
 
 func replacePodNode() *seiv1alpha1.SeiNode {
@@ -107,6 +110,100 @@ func newReplacePodExec(t *testing.T, cfg ExecutionConfig) TaskExecution {
 		t.Fatal(err)
 	}
 	return exec
+}
+
+func newReplacePodExecRaw(t *testing.T, cfg ExecutionConfig) *replacePodExecution {
+	t.Helper()
+	return newReplacePodExec(t, cfg).(*replacePodExecution)
+}
+
+// fetchStatefulSet signals a missing StatefulSet as (node, nil, nil) so callers
+// treat it as a transient wait rather than an error.
+func TestReplacePod_FetchStatefulSet_MissingIsTransient(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	cfg := replacePodCfg(t, node)
+
+	exec := newReplacePodExecRaw(t, cfg)
+	gotNode, sts, err := exec.fetchStatefulSet(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(sts).To(BeNil())
+	g.Expect(gotNode.Name).To(Equal(node.Name))
+}
+
+func TestReplacePod_GuardSelectorAndReplicas(t *testing.T) {
+	node := replacePodNode()
+
+	t.Run("nil selector is terminal", func(t *testing.T) {
+		g := NewWithT(t)
+		sts := stsForReplace("rev-1", "rev-1")
+		sts.Spec.Selector = nil
+		err := guardSelectorAndReplicas(node, sts)
+		var termErr *TerminalError
+		g.Expect(err).To(BeAssignableToTypeOf(termErr))
+		g.Expect(err.Error()).To(ContainSubstring("no selector"))
+	})
+
+	t.Run("empty selector is terminal", func(t *testing.T) {
+		g := NewWithT(t)
+		sts := stsForReplace("rev-1", "rev-1")
+		sts.Spec.Selector = &metav1.LabelSelector{}
+		err := guardSelectorAndReplicas(node, sts)
+		var termErr *TerminalError
+		g.Expect(err).To(BeAssignableToTypeOf(termErr))
+	})
+
+	t.Run("multi-replica is terminal and names the task", func(t *testing.T) {
+		g := NewWithT(t)
+		sts := stsForReplace("rev-1", "rev-1")
+		three := int32(3)
+		sts.Spec.Replicas = &three
+		err := guardSelectorAndReplicas(node, sts)
+		var termErr *TerminalError
+		g.Expect(err).To(BeAssignableToTypeOf(termErr))
+		g.Expect(err.Error()).To(ContainSubstring("multi-replica"))
+		g.Expect(err.Error()).To(ContainSubstring(TaskTypeReplacePod))
+	})
+
+	t.Run("single-replica with selector passes", func(t *testing.T) {
+		g := NewWithT(t)
+		g.Expect(guardSelectorAndReplicas(node, stsForReplace("rev-1", "rev-1"))).To(Succeed())
+	})
+}
+
+// ownedPods returns only pods that carry an ownerReference to the StatefulSet,
+// even when a label-matching but unowned pod shares the selector.
+func TestReplacePod_OwnedPods_FiltersByOwnership(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("old-rev", "new-rev")
+
+	owned := podForReplace("old-rev", false)
+	owned.UID = ownedPodUID
+	unowned := podForReplace("old-rev", false)
+	unowned.Name = testReplaceSTS + "-imposter"
+	unowned.UID = unownedPodUID
+	unowned.OwnerReferences = nil // matches selector labels but not owned
+
+	cfg := replacePodCfg(t, node, sts, owned, unowned)
+	exec := newReplacePodExecRaw(t, cfg)
+
+	pods, err := exec.ownedPods(context.Background(), node, sts)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(pods).To(HaveLen(1))
+	g.Expect(pods[0].UID).To(Equal(ownedPodUID))
+}
+
+// deletePod tolerates an already-absent pod (NotFound) so the task is
+// idempotent across reconciles.
+func TestReplacePod_DeletePod_NotFoundTolerant(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	cfg := replacePodCfg(t, node)
+	exec := newReplacePodExecRaw(t, cfg)
+
+	ghost := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "gone", Namespace: testReplaceNs}}
+	g.Expect(exec.deletePod(context.Background(), ghost)).To(Succeed())
 }
 
 // Stale-revision pod present → task deletes it and completes.

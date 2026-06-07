@@ -44,13 +44,24 @@ func TestCEL_DiscoverPeers_Accepted(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
 }
 
-// RestartPod with a payload carrying a non-empty podUID is accepted.
-func TestCEL_RestartPod_Accepted(t *testing.T) {
+// RestartSeid with its matching empty payload is accepted.
+func TestCEL_RestartSeid_Accepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
-	snt := baseTask(ns, "restart-ok", seiv1alpha1.SeiNodeTaskKindRestartPod)
-	snt.Spec.RestartPod = &seiv1alpha1.RestartPodPayload{PodUID: "pod-uid-1"}
+	snt := baseTask(ns, "restart-ok", seiv1alpha1.SeiNodeTaskKindRestartSeid)
+	snt.Spec.RestartSeid = &seiv1alpha1.RestartSeidPayload{}
 	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
+}
+
+// The removed RestartPod kind is no longer in the enum, so a CR with
+// kind=RestartPod is rejected at the schema layer.
+func TestCEL_RestartPod_Removed_Rejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "restartpod-gone", seiv1alpha1.SeiNodeTaskKind("RestartPod"))
+	err := testCli.Create(testCtx, snt)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("Unsupported value"))
 }
 
 // MarkReady with its matching empty payload is accepted.
@@ -75,14 +86,14 @@ func TestCEL_MarkReady_NoPayload_Rejected(t *testing.T) {
 	))
 }
 
-// kind=MarkReady with a second payload (markReady + restartPod) is rejected by
+// kind=MarkReady with a second payload (markReady + restartSeid) is rejected by
 // the exactly-one union rule.
 func TestCEL_MarkReady_MultiplePayloads_Rejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 	snt := baseTask(ns, "markready-two-payloads", seiv1alpha1.SeiNodeTaskKindMarkReady)
 	snt.Spec.MarkReady = &seiv1alpha1.MarkReadyPayload{}
-	snt.Spec.RestartPod = &seiv1alpha1.RestartPodPayload{PodUID: "pod-uid-1"}
+	snt.Spec.RestartSeid = &seiv1alpha1.RestartSeidPayload{}
 	err := testCli.Create(testCtx, snt)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("exactly one"))
@@ -101,58 +112,46 @@ func TestCEL_DiscoverPeers_NoPayload_Rejected(t *testing.T) {
 	))
 }
 
-// kind=RestartPod with NO payload is rejected.
-func TestCEL_RestartPod_NoPayload_Rejected(t *testing.T) {
+// kind=RestartSeid with NO payload is rejected.
+func TestCEL_RestartSeid_NoPayload_Rejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
-	snt := baseTask(ns, "restart-nopayload", seiv1alpha1.SeiNodeTaskKindRestartPod)
-	err := testCli.Create(testCtx, snt)
-	g.Expect(err).To(HaveOccurred())
-}
-
-// kind=RestartPod with a payload but empty podUID is rejected — the controller
-// content-addresses the pod to delete, so an empty UID is not a valid restart
-// target.
-func TestCEL_RestartPod_EmptyPodUID_Rejected(t *testing.T) {
-	g := NewWithT(t)
-	ns := makeNamespace(t)
-	snt := baseTask(ns, "restart-emptyuid", seiv1alpha1.SeiNodeTaskKindRestartPod)
-	snt.Spec.RestartPod = &seiv1alpha1.RestartPodPayload{}
+	snt := baseTask(ns, "restart-nopayload", seiv1alpha1.SeiNodeTaskKindRestartSeid)
 	err := testCli.Create(testCtx, snt)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(Or(
-		ContainSubstring("podUID is required"),
-		ContainSubstring("should be at least 1 chars long"),
+		ContainSubstring("exactly one"),
+		ContainSubstring("restartSeid is required"),
 	))
 }
 
-// kind=DiscoverPeers with TWO payloads (discoverPeers + restartPod) is
+// kind=DiscoverPeers with TWO payloads (discoverPeers + restartSeid) is
 // rejected by the exactly-one union rule.
 func TestCEL_MultiplePayloads_Rejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 	snt := baseTask(ns, "two-payloads", seiv1alpha1.SeiNodeTaskKindDiscoverPeers)
 	snt.Spec.DiscoverPeers = &seiv1alpha1.DiscoverPeersPayload{}
-	snt.Spec.RestartPod = &seiv1alpha1.RestartPodPayload{}
+	snt.Spec.RestartSeid = &seiv1alpha1.RestartSeidPayload{}
 	err := testCli.Create(testCtx, snt)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("exactly one"))
 }
 
-// kind=DiscoverPeers carrying a mismatched payload (restartPod) is rejected by
+// kind=DiscoverPeers carrying a mismatched payload (restartSeid) is rejected by
 // the kind/payload agreement rule.
 func TestCEL_KindPayloadMismatch_Rejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 	snt := baseTask(ns, "kind-mismatch", seiv1alpha1.SeiNodeTaskKindDiscoverPeers)
-	snt.Spec.RestartPod = &seiv1alpha1.RestartPodPayload{}
+	snt.Spec.RestartSeid = &seiv1alpha1.RestartSeidPayload{}
 	err := testCli.Create(testCtx, snt)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("discoverPeers is required"))
 }
 
-// spec.kind is immutable — a DiscoverPeers task cannot be flipped to RestartPod.
-func TestCEL_KindImmutable_DiscoverPeersToRestartPod(t *testing.T) {
+// spec.kind is immutable — a DiscoverPeers task cannot be flipped to RestartSeid.
+func TestCEL_KindImmutable_DiscoverPeersToRestartSeid(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 	snt := baseTask(ns, "kind-immutable", seiv1alpha1.SeiNodeTaskKindDiscoverPeers)
@@ -160,26 +159,10 @@ func TestCEL_KindImmutable_DiscoverPeersToRestartPod(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
 
 	patch := client.MergeFrom(snt.DeepCopy())
-	snt.Spec.Kind = seiv1alpha1.SeiNodeTaskKindRestartPod
+	snt.Spec.Kind = seiv1alpha1.SeiNodeTaskKindRestartSeid
 	snt.Spec.DiscoverPeers = nil
-	snt.Spec.RestartPod = &seiv1alpha1.RestartPodPayload{PodUID: "pod-uid-1"}
+	snt.Spec.RestartSeid = &seiv1alpha1.RestartSeidPayload{}
 	err := testCli.Patch(testCtx, snt, patch)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("kind is immutable"))
-}
-
-// spec.restartPod.podUID is immutable — the task content-addresses the pod to
-// delete, so the restart target cannot be re-pointed after creation.
-func TestCEL_RestartPodUIDImmutable(t *testing.T) {
-	g := NewWithT(t)
-	ns := makeNamespace(t)
-	snt := baseTask(ns, "poduid-immutable", seiv1alpha1.SeiNodeTaskKindRestartPod)
-	snt.Spec.RestartPod = &seiv1alpha1.RestartPodPayload{PodUID: "pod-uid-1"}
-	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
-
-	patch := client.MergeFrom(snt.DeepCopy())
-	snt.Spec.RestartPod.PodUID = "pod-uid-2"
-	err := testCli.Patch(testCtx, snt, patch)
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("podUID is immutable"))
 }

@@ -56,10 +56,11 @@ const (
 	sidecarStatusTimeout = 15 * time.Second
 
 	// Per-kind execution-timeout defaults applied when spec.timeoutSeconds is 0.
-	// These bound kinds whose completion depends on a pod becoming Ready or a
+	// These bound kinds whose completion depends on seid coming back up or a
 	// quick disk write; sidecar-backed gov/await kinds stay unbounded (an
-	// operator sets spec.timeoutSeconds).
-	defaultRestartPodTimeout    = 10 * time.Minute
+	// operator sets spec.timeoutSeconds). RestartSeid gets a generous 10m: the
+	// sidecar SIGTERMs seid (up to ~90s graceful), then polls seid's RPC back up.
+	defaultRestartSeidTimeout   = 10 * time.Minute
 	defaultDiscoverPeersTimeout = 2 * time.Minute
 	defaultMarkReadyTimeout     = 2 * time.Minute
 )
@@ -320,8 +321,8 @@ func effectiveTimeout(cr *seiv1alpha1.SeiNodeTask) time.Duration {
 		return time.Duration(cr.Spec.TimeoutSeconds) * time.Second
 	}
 	switch cr.Spec.Kind {
-	case seiv1alpha1.SeiNodeTaskKindRestartPod:
-		return defaultRestartPodTimeout
+	case seiv1alpha1.SeiNodeTaskKindRestartSeid:
+		return defaultRestartSeidTimeout
 	case seiv1alpha1.SeiNodeTaskKindDiscoverPeers:
 		return defaultDiscoverPeersTimeout
 	case seiv1alpha1.SeiNodeTaskKindMarkReady:

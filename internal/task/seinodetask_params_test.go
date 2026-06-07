@@ -4,8 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"k8s.io/apimachinery/pkg/types"
-
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -92,43 +90,45 @@ func TestSeiNodeTaskParamsFor_MarkReady_NilPayload_ParamsBuildFailed(t *testing.
 	}
 }
 
-// restartPodParams reads the restart UID straight from the immutable
-// spec.restartPod.podUID — independent of status.task. Both the early-validation
-// path (status.task nil) and the post-synthesis path (status.task set) yield the
-// spec value.
-func TestRestartPodParams_ReadsSpecPodUID(t *testing.T) {
-	base := func() *seiv1alpha1.SeiNodeTask {
-		return &seiv1alpha1.SeiNodeTask{
-			Spec: seiv1alpha1.SeiNodeTaskSpec{
-				Kind:       seiv1alpha1.SeiNodeTaskKindRestartPod,
-				RestartPod: &seiv1alpha1.RestartPodPayload{PodUID: "pod-uid-1"},
-			},
-		}
+// kind=RestartSeid maps to the sidecar restart-seid task with an empty payload —
+// no target needed, no source building (mirrors MarkReady).
+func TestSeiNodeTaskParamsFor_RestartSeid(t *testing.T) {
+	cr := &seiv1alpha1.SeiNodeTask{
+		Spec: seiv1alpha1.SeiNodeTaskSpec{
+			Kind:        seiv1alpha1.SeiNodeTaskKindRestartSeid,
+			RestartSeid: &seiv1alpha1.RestartSeidPayload{},
+		},
 	}
 
-	cases := map[string]*seiv1alpha1.SeiNodeTask{
-		"status.task nil": base(),
-		"status.task set": func() *seiv1alpha1.SeiNodeTask {
-			cr := base()
-			cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{ID: "task-id"}
-			return cr
-		}(),
+	p, err := SeiNodeTaskParamsFor(cr, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Type != sidecar.TaskTypeRestartSeid {
+		t.Errorf("Type = %q, want %q", p.Type, sidecar.TaskTypeRestartSeid)
+	}
+	if _, ok := p.Payload.(sidecar.RestartSeidTask); !ok {
+		t.Errorf("Payload = %T, want sidecar.RestartSeidTask", p.Payload)
+	}
+}
+
+// kind=RestartSeid with a nil payload is a param-build failure (ParamsBuildFailed),
+// not an unsupported kind. CEL normally blocks this; the guard is the backstop.
+func TestSeiNodeTaskParamsFor_RestartSeid_NilPayload_ParamsBuildFailed(t *testing.T) {
+	cr := &seiv1alpha1.SeiNodeTask{
+		Spec: seiv1alpha1.SeiNodeTaskSpec{Kind: seiv1alpha1.SeiNodeTaskKindRestartSeid},
 	}
 
-	for name, cr := range cases {
-		t.Run(name, func(t *testing.T) {
-			p, err := SeiNodeTaskParamsFor(cr, nil)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			rp, ok := p.Payload.(RestartPodParams)
-			if !ok {
-				t.Fatalf("Payload = %T, want RestartPodParams", p.Payload)
-			}
-			if rp.RestartedPodUID != types.UID("pod-uid-1") {
-				t.Errorf("RestartedPodUID = %q, want %q", rp.RestartedPodUID, "pod-uid-1")
-			}
-		})
+	_, err := SeiNodeTaskParamsFor(cr, nil)
+	if err == nil {
+		t.Fatal("expected error for missing payload, got nil")
+	}
+	var unsupported *ErrUnsupportedKind
+	if errors.As(err, &unsupported) {
+		t.Error("missing-payload error must not be *ErrUnsupportedKind")
+	}
+	if got := FailureReason(err); got != ReasonParamsBuildFailed {
+		t.Errorf("FailureReason = %q, want %q", got, ReasonParamsBuildFailed)
 	}
 }
 

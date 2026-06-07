@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/types"
-
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -92,8 +90,8 @@ func SeiNodeTaskParamsFor(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNo
 		return awaitNodesAtHeightParams(cr)
 	case seiv1alpha1.SeiNodeTaskKindDiscoverPeers:
 		return discoverPeersParams(cr, target)
-	case seiv1alpha1.SeiNodeTaskKindRestartPod:
-		return restartPodParams(cr)
+	case seiv1alpha1.SeiNodeTaskKindRestartSeid:
+		return restartSeidParams(cr)
 	case seiv1alpha1.SeiNodeTaskKindMarkReady:
 		return markReadyParams(cr)
 	default:
@@ -232,21 +230,14 @@ func discoverPeersParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNod
 	return SeiNodeTaskParams{sidecar.TaskTypeDiscoverPeers, sidecar.DiscoverPeersTask{Sources: sources}}, nil
 }
 
-func restartPodParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
-	if cr.Spec.RestartPod == nil {
-		return SeiNodeTaskParams{}, paramsErrorf("spec.restartPod is required for kind=RestartPod")
+// restartSeidParams builds the empty sidecar restart-seid payload. CEL requires
+// spec.restartSeid for kind=RestartSeid; this guard covers the early-validation
+// path (taskParamsForKind runs before the spec is admission-checked in tests).
+func restartSeidParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
+	if cr.Spec.RestartSeid == nil {
+		return SeiNodeTaskParams{}, paramsErrorf("spec.restartSeid is required for kind=RestartSeid")
 	}
-	// The pod UID is caller-supplied verbatim (spec.restartPod.podUID) and CEL
-	// requires it non-empty (and immutable) for kind=RestartPod; this is the
-	// defensive backstop.
-	if cr.Spec.RestartPod.PodUID == "" {
-		return SeiNodeTaskParams{}, paramsErrorf("spec.restartPod.podUID is required for kind=RestartPod")
-	}
-	return SeiNodeTaskParams{TaskTypeRestartPod, RestartPodParams{
-		NodeName:        cr.Spec.Target.NodeRef.Name,
-		Namespace:       cr.Namespace,
-		RestartedPodUID: types.UID(cr.Spec.RestartPod.PodUID),
-	}}, nil
+	return SeiNodeTaskParams{sidecar.TaskTypeRestartSeid, sidecar.RestartSeidTask{}}, nil
 }
 
 // markReadyParams builds the empty sidecar mark-ready payload. CEL requires

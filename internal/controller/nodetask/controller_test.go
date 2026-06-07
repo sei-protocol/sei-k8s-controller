@@ -10,9 +10,6 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -37,7 +34,6 @@ const (
 	testKeyName  = "operator"
 	testFees     = "2000usei"
 	testPeerAddr = "abc@10.0.0.1:26656"
-	testRev      = "rev-1"
 
 	testPeerRegion     = "us-east-1"
 	testPeerTagKey     = "role"
@@ -1047,115 +1043,99 @@ func TestReconcile_DiscoverPeers_PreUpgradeNilExecutionStart_StampsAndTimesOut(t
 }
 
 // ---------------------------------------------------------------------------
-// RestartPod
+// RestartSeid
 // ---------------------------------------------------------------------------
 
-func newRestartPodTask() *seiv1alpha1.SeiNodeTask {
+func newRestartSeidTask() *seiv1alpha1.SeiNodeTask {
 	return &seiv1alpha1.SeiNodeTask{
 		ObjectMeta: metav1.ObjectMeta{Name: testTaskName, Namespace: testNS, UID: "task-uid-restart", Generation: 1},
 		Spec: seiv1alpha1.SeiNodeTaskSpec{
-			Kind: seiv1alpha1.SeiNodeTaskKindRestartPod,
+			Kind: seiv1alpha1.SeiNodeTaskKindRestartSeid,
 			Target: seiv1alpha1.SeiNodeTaskTarget{
 				NodeRef:      seiv1alpha1.SeiNodeTaskNodeRef{Name: testNodeName},
 				RequirePhase: seiv1alpha1.PhaseRunning,
 			},
-			RestartPod: &seiv1alpha1.RestartPodPayload{PodUID: "pod-uid-old"},
+			RestartSeid: &seiv1alpha1.RestartSeidPayload{},
 		},
 	}
 }
 
-func TestTaskParamsForKind_RestartPod(t *testing.T) {
+func TestTaskParamsForKind_RestartSeid(t *testing.T) {
 	g := NewWithT(t)
-	cr := newRestartPodTask()
-	cr.Status.Task = &seiv1alpha1.SeiNodeTaskExecution{ID: "task-id"}
+	cr := newRestartSeidTask()
 	taskType, raw, err := taskParamsForKind(cr, nil)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(taskType).To(Equal(task.TaskTypeRestartPod))
+	g.Expect(taskType).To(Equal(sidecar.TaskTypeRestartSeid))
 
-	var got task.RestartPodParams
+	var got sidecar.RestartSeidTask
 	g.Expect(json.Unmarshal(raw, &got)).To(Succeed())
-	g.Expect(got.NodeName).To(Equal(testNodeName))
-	g.Expect(got.Namespace).To(Equal(testNS))
-	g.Expect(got.RestartedPodUID).To(Equal(types.UID("pod-uid-old")))
+	g.Expect(got).To(Equal(sidecar.RestartSeidTask{}))
 }
 
-// The early-validation path (status.task nil) reads the UID straight from the
-// immutable spec.restartPod.podUID — no snapshot dependency, so it yields the
-// spec value even before status.task exists.
-func TestTaskParamsForKind_RestartPod_NilTaskReadsSpec(t *testing.T) {
-	g := NewWithT(t)
-	cr := newRestartPodTask()
-	_, raw, err := taskParamsForKind(cr, nil)
-	g.Expect(err).NotTo(HaveOccurred())
-	var got task.RestartPodParams
-	g.Expect(json.Unmarshal(raw, &got)).To(Succeed())
-	g.Expect(got.RestartedPodUID).To(Equal(types.UID("pod-uid-old")))
-}
-
-func TestReconcile_RestartPod_HappyPath(t *testing.T) {
+// RestartSeid is poll-to-completion (registered sidecarTask[...](false)): unlike
+// MarkReady's fire-and-forget ack, the controller polls GetTask until the
+// restart-seid task reports terminal (seid's RPC back up). Mirrors the
+// DiscoverPeers poll shape.
+func TestReconcile_RestartSeid_EndToEnd(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
-	// t0 is the restart epoch (status.startedAt). The pre-existing pod is
-	// created before it; the OnDelete replacement after it.
 	t0 := time.Now()
-	cr := newRestartPodTask()
+	cr := newRestartSeidTask()
 	node := newRunningNode()
-	sts := restartTestSTS()
-	oldPod := restartTestPod("pod-uid-old", metav1.NewTime(t0.Add(-time.Hour)), true)
+	fakeSC := newFakeSidecarClient()
 
-	r, c := newReconciler(t, t0, cr, node, sts, oldPod)
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, cr, node)
 
-	// R1: synthesize task. The restart UID is read from the immutable
-	// spec.restartPod.podUID each reconcile, not snapshotted to status.task.
+	// R1: synthesize task.
 	_, err := r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
 	got := getTask(t, ctx, c)
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
-	g.Expect(got.Spec.RestartPod.PodUID).To(Equal("pod-uid-old"))
+	taskID, perr := uuid.Parse(got.Status.Task.ID)
+	g.Expect(perr).NotTo(HaveOccurred())
 
-	// R2: Execute deletes the captured pod; Status sees no pod → still Running.
+	// R2: Execute submits restart-seid to the sidecar; not yet terminal → Running.
 	_, err = r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
-	deleted := &corev1.Pod{}
-	derr := c.Get(ctx, types.NamespacedName{Name: oldPod.Name, Namespace: testNS}, deleted)
-	g.Expect(apierrors.IsNotFound(derr)).To(BeTrue())
-	got = getTask(t, ctx, c)
-	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
+	fakeSC.mu.Lock()
+	g.Expect(fakeSC.submitted).To(HaveLen(1))
+	g.Expect(fakeSC.submitted[0].Type).To(Equal(sidecar.TaskTypeRestartSeid))
+	fakeSC.mu.Unlock()
+	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
+	// Poll contract: the controller queried GetTask (not served from a submit-time
+	// cache like a fire-and-forget task would).
+	fakeSC.mu.Lock()
+	g.Expect(fakeSC.getCalls).To(BeNumerically(">", 0))
+	fakeSC.mu.Unlock()
 
-	// Simulate OnDelete recreation with a Ready replacement (different UID).
-	newPod := restartTestPod("pod-uid-new", metav1.NewTime(t0.Add(time.Minute)), true)
-	g.Expect(c.Create(ctx, newPod)).To(Succeed())
-
-	// R3: Status sees the fresh Ready pod → Complete.
+	// Sidecar reports the restart-seid task complete (seid RPC back up).
+	fakeSC.setResult(taskID, sidecar.Completed, "")
 	_, err = r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
 	got = getTask(t, ctx, c)
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
 }
 
-// A RestartPod whose pod never becomes Ready must transition to Failed at the
-// per-kind default timeout (spec.timeoutSeconds=0), not requeue forever.
-func TestReconcile_RestartPod_NeverReady_TimesOut(t *testing.T) {
+// A RestartSeid whose sidecar restart-seid never completes must transition to
+// Failed at the per-kind default timeout (spec.timeoutSeconds=0), not requeue
+// forever.
+func TestReconcile_RestartSeid_NeverCompletes_TimesOut(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 	t0 := time.Now()
-	cr := newRestartPodTask() // timeoutSeconds unset → default applies
+	cr := newRestartSeidTask() // timeoutSeconds unset → default applies
 	node := newRunningNode()
-	sts := restartTestSTS()
-	// Pod present but never Ready; Execute deletes it and the replacement
-	// (recreated by OnDelete in prod) never appears in this test.
-	oldPod := restartTestPod("pod-uid-old", metav1.NewTime(t0.Add(-time.Hour)), false)
+	fakeSC := newFakeSidecarClient()
 
-	r, c := newReconciler(t, t0, cr, node, sts, oldPod)
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, cr, node)
 
-	_, err := r.Reconcile(ctx, req()) // R1 synthesize (stamps startedAt=t0)
+	_, err := r.Reconcile(ctx, req()) // R1 synthesize (executionStartedAt=t0)
 	g.Expect(err).NotTo(HaveOccurred())
-	_, err = r.Reconcile(ctx, req()) // R2 Execute + Status → still Running
+	_, err = r.Reconcile(ctx, req()) // R2 Execute + Status → Running (never completes)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(getTask(t, ctx, c).Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
 
-	// Advance past the RestartPod default timeout.
-	r.Now = func() time.Time { return t0.Add(defaultRestartPodTimeout + time.Second) }
+	r.Now = func() time.Time { return t0.Add(defaultRestartSeidTimeout + time.Second) }
 	_, err = r.Reconcile(ctx, req())
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -1196,51 +1176,6 @@ func TestReconcile_DiscoverPeers_LabelEmptyResolved_Fails(t *testing.T) {
 	failed := findFailedCond(got)
 	g.Expect(failed).NotTo(BeNil())
 	g.Expect(failed.Reason).To(Equal("ParamsBuildFailed"))
-}
-
-func restartTestSTS() *appsv1.StatefulSet {
-	one := int32(1)
-	return &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: testNodeName, Namespace: testNS, UID: "sts-uid-restart", Generation: 1,
-		},
-		Spec: appsv1.StatefulSetSpec{
-			Replicas: &one,
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"sei.io/node": testNodeName}},
-		},
-		Status: appsv1.StatefulSetStatus{
-			ObservedGeneration: 1,
-			CurrentRevision:    testRev,
-			UpdateRevision:     testRev,
-		},
-	}
-}
-
-func restartTestPod(uid types.UID, created metav1.Time, ready bool) *corev1.Pod {
-	controller := true
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              testNodeName + "-0",
-			Namespace:         testNS,
-			UID:               uid,
-			CreationTimestamp: created,
-			Labels: map[string]string{
-				"sei.io/node":                         testNodeName,
-				appsv1.ControllerRevisionHashLabelKey: testRev,
-			},
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "apps/v1",
-				Kind:       "StatefulSet",
-				Name:       testNodeName,
-				UID:        "sts-uid-restart",
-				Controller: &controller,
-			}},
-		},
-	}
-	if ready {
-		pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
-	}
-	return pod
 }
 
 // An unwired kind fails fast at synthesis with reason=UnsupportedKind — the
@@ -1307,4 +1242,45 @@ func TestReconcile_GovVote_SidecarFailure(t *testing.T) {
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
 	g.Expect(got.Status.Task.Status).To(Equal(seiv1alpha1.TaskFailed))
 	g.Expect(got.Status.Task.Err).To(ContainSubstring(sidecarErr))
+}
+
+// The headline correctness property of restart-seid: the sidecar task FAILS LOUD
+// (never SIGKILLs) when seid does not exit in the grace window, and that failure
+// must surface as a Failed SeiNodeTask carrying the sidecar's error — not a
+// silent success or an indefinite requeue. Mirrors TestReconcile_GovVote_SidecarFailure.
+func TestReconcile_RestartSeid_SidecarFailLoud_Fails(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	t0 := time.Now()
+	cr := newRestartSeidTask()
+	node := newRunningNode()
+	fakeSC := newFakeSidecarClient()
+
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, cr, node)
+
+	// R1: synthesize.
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got := getTask(t, ctx, c)
+	taskID, perr := uuid.Parse(got.Status.Task.ID)
+	g.Expect(perr).NotTo(HaveOccurred())
+
+	// Stage the fail-loud result BEFORE R2 so the first Status poll after Execute
+	// sees Failed.
+	const sidecarErr = "seid pid still alive after SIGTERM; leaving it running"
+	fakeSC.setResult(taskID, sidecar.Failed, sidecarErr)
+
+	// R2: Execute submits restart-seid; Status polls and sees Failed → CR Failed.
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got = getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	g.Expect(got.Status.Task.Status).To(Equal(seiv1alpha1.TaskFailed))
+	g.Expect(got.Status.Task.Err).To(ContainSubstring(sidecarErr))
+
+	failed := findFailedCond(got)
+	g.Expect(failed).NotTo(BeNil())
+	g.Expect(failed.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(failed.Reason).To(Equal("TaskFailed"))
+	g.Expect(failed.Message).To(ContainSubstring(sidecarErr))
 }
