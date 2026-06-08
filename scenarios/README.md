@@ -145,7 +145,7 @@ Per-step interpretation:
 
 | Step | What success means |
 |---|---|
-| `compute-target-height` | Created `workflow-vars-${SEI_WORKFLOW_RUN_ID}` ConfigMap with `TARGET_HEIGHT` / `UPGRADE_HEIGHT` / `POST_UPGRADE_HEIGHT` / `PANIC_BOUNDARY`. |
+| `compute-target-height` | Created `workflow-vars-${SEI_WORKFLOW_RUN_ID}` ConfigMap with `TARGET_HEIGHT` / `UPGRADE_HEIGHT` / `POST_UPGRADE_HEIGHT`. |
 | `submit-upgrade-proposal` | SeiNodeTask `.status.phase=Complete`. proposalId is NOT extracted here (sidecar structured outputs are intentionally empty post-PR 3); `resolve-proposal-id` derives it from the chain. |
 | `resolve-proposal-id` | Polled gov REST for a voting-period proposal whose plan name matches `$SEI_UPGRADE_NAME`, merged `PROPOSAL_ID` into the workflow-vars ConfigMap. |
 | `vote-yes-all-validators` | All 4 vote tasks Complete. |

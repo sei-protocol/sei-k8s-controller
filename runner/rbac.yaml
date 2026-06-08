@@ -44,7 +44,7 @@ rules:
 # all validators onto the post-upgrade binary in a single write.
 - apiGroups: ["sei.io"]
   resources: ["seinodedeployments"]
-  verbs: ["create", "get", "list", "watch", "patch", "update"]
+  verbs: ["create", "get", "list", "watch", "patch"]
 - apiGroups: ["sei.io"]
   resources: ["seinodedeployments/status"]
   verbs: ["get"]

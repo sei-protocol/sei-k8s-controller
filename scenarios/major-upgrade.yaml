@@ -385,9 +385,11 @@ spec:
     # + 200 blocks measured at compute-target-height, but the proposal flow
     # (~60s voting period + tally) burns most of that budget first, so only
     # ~100 blocks (~60s at ~600ms blocks) remain once the proposal has passed.
-    # 150s is ~2.5x that remainder. Over-waiting is free (the chain just sits
-    # halted until the swap); the only failure mode is waiting too short, so err
-    # generous -- raise this if block time runs slow on a cold chain.
+    # Over-waiting is free (the chain just sits halted until the swap); the only
+    # failure mode is waiting too short. The full wall-clock from height
+    # measurement to swap (~60s voting + 150s here) must exceed 200 x block_time,
+    # so block time above ~1s would break it -- raise this if a cold chain's
+    # early blocks run slow.
     - name: settle-into-halt
       templateType: Task
       deadline: 8m
