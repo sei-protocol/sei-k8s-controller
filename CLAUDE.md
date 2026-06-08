@@ -15,6 +15,7 @@ Kubernetes operator for managing Sei blockchain nodes. Single binary, two contro
 Always use the available subagents for relevant work:
 - **kubernetes-specialist**: Use for all Kubernetes design, deployment, troubleshooting, and operational decisions. Consult before making changes to CRDs, RBAC, kustomize configs, StatefulSet specs, or any cluster-facing resource definitions.
 - **platform-engineer**: Use for architectural decisions about platform composability, developer experience, CI/CD workflows, and infrastructure abstraction patterns.
+- **idiomatic-reviewer**: Use to review code changes for idiomatic conformance to Go, controller-runtime, and this repo's own documented patterns. It digests this CLAUDE.md + the package's `doc.go` into a local idiom profile that outranks generic idiom, then gives two-altitude feedback (design + surgical), each finding cited. Reviews for idiom; it does not author the system (that's kubernetes-specialist). Backed by the `/idiomatic` skill.
 
 ## Code Standards
 
