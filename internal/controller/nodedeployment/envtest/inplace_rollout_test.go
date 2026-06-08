@@ -202,6 +202,29 @@ func TestInPlaceRollout_EndToEnd(t *testing.T) {
 		return cond.Reason == "RolloutComplete"
 	}, "rollout plan complete, status.rollout cleared, RolloutInProgress=False/RolloutComplete")
 
+	// 6b. No post-rollout churn. The major-upgrade scenario depends on the
+	//     SND template being the single source of child image: once the
+	//     rollout settles, the controller must stop touching child spec, so
+	//     child .metadata.generation holds steady. A regression that
+	//     re-asserts a drifting child image (e.g. fighting an external
+	//     per-child patcher) would keep bumping generation here.
+	settled := getSND(t, key)
+	gens := map[string]int64{}
+	for _, kid := range listChildren(t, settled) {
+		gens[kid.Name] = kid.Generation
+	}
+	g.Expect(gens).To(HaveLen(replicas))
+	g.Consistently(func() bool {
+		for _, kid := range listChildren(t, getSND(t, key)) {
+			if kid.Generation != gens[kid.Name] {
+				t.Logf("child %s generation churned: %d -> %d", kid.Name, gens[kid.Name], kid.Generation)
+				return false
+			}
+		}
+		return true
+	}, 3*time.Second, pollInterval).Should(BeTrue(),
+		"child generations hold steady after rollout (no flip-flop churn)")
+
 	// 7. Deleting the SND removes all children. envtest has no kube-
 	//    controller-manager to perform garbage-collection by owner-ref,
 	//    so the SND controller's finalizer path is what we exercise:

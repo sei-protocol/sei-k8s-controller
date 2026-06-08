@@ -16,7 +16,7 @@ the acceptance test for one capability surface.
 
 | File | Mirrors | Purpose |
 |---|---|---|
-| `major-upgrade.yaml` | `sei-chain/integration_test/upgrade_module/major_upgrade_test.yaml` | 4-validator software-upgrade flow with early-upgrade panic, at-height panic, downgrade-and-catchup, and final convergence. MVP acceptance for the SeiNodeTask CRD. |
+| `major-upgrade.yaml` | `sei-chain/integration_test/upgrade_module/major_upgrade_test.yaml` | 4-validator software-upgrade flow: gov proposal, vote, then a single SND template image bump that rolls all validators onto the new binary at the upgrade height. MVP acceptance for the SeiNodeTask CRD. |
 | `testnet-deployment.yaml` | n/a | Reference 4-validator `SeiNodeDeployment` the Workflow can target. |
 
 ## Where this runs
@@ -150,14 +150,8 @@ Per-step interpretation:
 | `resolve-proposal-id` | Polled gov REST for a voting-period proposal whose plan name matches `$SEI_UPGRADE_NAME`, merged `PROPOSAL_ID` into the workflow-vars ConfigMap. |
 | `vote-yes-all-validators` | All 4 vote tasks Complete. |
 | `wait-for-proposal-to-pass` | Proposal observed `PROPOSAL_STATUS_PASSED`. |
-| `early-upgrade-node-0` | SeiNode status.currentImage observed equal to post-upgrade image (NOT readiness -- see LLD). |
-| `wait-for-target-height-nodes-1-2-3` | Sidecar AwaitNodesAtHeight observed local height >= `TARGET_HEIGHT` on each of nodes 1/2/3. |
-| `upgrade-nodes-1-2-3` | Image patch landed on each (same semantics as early-upgrade). |
-| `await-post-upgrade-progress-nodes-1-2-3` | Post-upgrade height-advance check: each of nodes 1/2/3 advanced past `POST_UPGRADE_HEIGHT` (= `TARGET_HEIGHT + 10`) via AwaitCondition. This is the liveness assertion. |
-| `downgrade-node-0` | Image reverted to pre-upgrade (same semantics as upgrade). |
-| `wait-for-target-height-node-0` | Node-0 caught up to `TARGET_HEIGHT - 1` (will panic at `TARGET_HEIGHT` on the pre-upgrade binary). |
-| `upgrade-node-0` | Final image patch to post-upgrade on node-0. |
-| `await-post-upgrade-progress-node-0` | Post-upgrade height-advance check on node-0 past `POST_UPGRADE_HEIGHT`. Final liveness assertion. |
+| `bump-snd-image` | `kubectl patch seinodedeployment` set `spec.template.spec.image` to the post-upgrade build. The SND controller (InPlace) re-asserts the image onto every child and rolls all validators onto the new binary. |
+| `await-post-upgrade-progress` | Post-upgrade height-advance check: each of nodes 0/1/2/3 advanced past `POST_UPGRADE_HEIGHT` (= `TARGET_HEIGHT + 10`) via AwaitCondition. This is the liveness assertion -- a node that crosses the boundary has survived the upgrade. |
 
 ### 5. Cleanup
 
@@ -236,10 +230,15 @@ namespace as the Workflow:
    steps to a structured kind also lets us delete the `configmaps` RBAC
    verbs (only the runner's outputs ConfigMap-write would remain).
 
-3. **`UpdateNodeImage` completes on image-applied, not Ready.** Required
-   by this scenario (early-upgrade is expected to CrashLoop), but
-   surprising for happy-path users. Documented on the kind's CRD
-   description.
+3. **Upgrade rolls the whole fleet, not staggered per-node.** This
+   Workflow bumps the SND template image once and lets the SND controller
+   roll all validators together. It does NOT exercise the staggered
+   early-upgrade-one-node-then-the-rest path the source
+   `major_upgrade_test.yaml` does. Per-child `UpdateNodeImage` against a
+   SND-owned node fights the controller's template re-assertion (the child
+   image flip-flops, the StatefulSet churns, `observe-image` never settles),
+   so staggered rollout needs a different primitive (e.g. SND-level
+   partition/maxUnavailable) before it can return.
 
 4. **The runner image is not yet auto-published.** Add a `runner` step to
    `.github/workflows/ecr.yml` once this scenario is wired into a CI job.

@@ -10,6 +10,12 @@
 # all carry ownerRef to this Workflow CR, so the wrapper's only cleanup duty
 # is `kubectl delete workflow`.
 #
+# Upgrade mechanism: a single bump-snd-image step patches the SND template
+# image; the SND controller rolls all validators onto the new binary. The
+# SND template is the one source of truth for child image -- per-child
+# UpdateNodeImage would fight the controller's template re-assertion and
+# churn the StatefulSet so the rollout never settles.
+#
 # Workflow-vars producers/consumers
 # ---------------------------------
 # provision-validator-chain seeds CHAIN_ID + VALIDATOR_TM_RPC + VALIDATOR_REST.
@@ -54,10 +60,8 @@ spec:
         - resolve-proposal-id
         - vote-yes-all-validators
         - wait-for-proposal-to-pass
-        - early-upgrade-node-0
-        - wait-for-target-height-nodes-1-2-3
-        - upgrade-nodes-1-2-3
-        - await-post-upgrade-progress-nodes-1-2-3
+        - bump-snd-image
+        - await-post-upgrade-progress
         - upload-report
 
     # Every seitask container projects Workflow identity via downward API:
@@ -369,153 +373,79 @@ spec:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
 
-    # Patches node-0 image to the post-upgrade build. UpdateNodeImage
-    # completes on observed currentImage, NOT readiness -- nodes are
-    # expected to CrashLoop after early upgrade.
-    - name: early-upgrade-node-0
-      templateType: Task
-      deadline: 10m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_IMAGE
-          args:
-            - runner
-            - --template=/templates/update-node-image.yaml.tmpl
-            - --var=NODE=$SEI_CHAIN_ID-0
-            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
-            - --var=REQUIRE_PHASE=Running
-            - --timeout=8m
-          env:
-            - name: SEI_WORKFLOW_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
-            - name: SEI_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
-
-    # Nodes 1-3 panic-halt at the upgrade height and their RPC dies with them,
-    # so RPC-polled height-awaits stall indefinitely. Sleep long enough that
-    # the chain has provably passed the upgrade height (TARGET = CUR+200 ≈
-    # 120s at ~600ms blocks, plus voting/tally margin).
-    - name: wait-for-target-height-nodes-1-2-3
+    # Bumps the SeiNodeDeployment template image to the post-upgrade build in
+    # a single patch. The SND controller (InPlace strategy) re-asserts the new
+    # image onto every child SeiNode and drives each node's NodeUpdate plan;
+    # the validators roll together onto the new binary at the upgrade height.
+    #
+    # Patches spec.template.spec.image only -- a strategic/merge patch leaves
+    # the rest of the template untouched. Per-child UpdateNodeImage is NOT used
+    # here: the SND controller would re-assert the template image every
+    # reconcile, flip-flopping the child spec.image and churning the
+    # StatefulSet so the rollout never settles (observe-image never completes).
+    # The SND template is the single source of truth for child image.
+    - name: bump-snd-image
       templateType: Task
       deadline: 5m
       task:
         container:
-          name: sleep
+          name: bump-snd-image
           image: alpine/k8s:1.31.0
-          command: ["/bin/sh", "-c", "sleep 180"]
-
-    # Upstream major_upgrade_test.yaml runs each as its own sequential input,
-    # so we serialize here too. Avoids stampeding the SeiNode reconciler.
-    - name: upgrade-nodes-1-2-3
-      templateType: Serial
-      deadline: 30m
-      children:
-        - upgrade-node-1
-        - upgrade-node-2
-        - upgrade-node-3
-
-    - name: upgrade-node-1
-      templateType: Task
-      deadline: 10m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_IMAGE
+          command: ["/bin/sh", "-c"]
           args:
-            - runner
-            - --template=/templates/update-node-image.yaml.tmpl
-            - --var=NODE=$SEI_CHAIN_ID-1
-            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
-            - --var=REQUIRE_PHASE=Running
-            - --timeout=8m
+            - |
+              set -eu
+              kubectl patch seinodedeployment "${SEI_CHAIN_ID}" \
+                --type=merge \
+                --patch "{\"spec\":{\"template\":{\"spec\":{\"image\":\"${SEI_POST_UPGRADE_IMG}\"}}}}"
+              echo "patched seinodedeployment/${SEI_CHAIN_ID} template image to ${SEI_POST_UPGRADE_IMG}"
           env:
-            - name: SEI_WORKFLOW_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
-            - name: SEI_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
+            - name: SEI_CHAIN_ID
+              value: "$SEI_CHAIN_ID"
+            - name: SEI_POST_UPGRADE_IMG
+              value: "$SEI_POST_UPGRADE_IMG"
 
-    - name: upgrade-node-2
-      templateType: Task
-      deadline: 10m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_IMAGE
-          args:
-            - runner
-            - --template=/templates/update-node-image.yaml.tmpl
-            - --var=NODE=$SEI_CHAIN_ID-2
-            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
-            - --var=REQUIRE_PHASE=Running
-            - --timeout=8m
-          env:
-            - name: SEI_WORKFLOW_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
-            - name: SEI_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
-
-    - name: upgrade-node-3
-      templateType: Task
-      deadline: 10m
-      task:
-        container:
-          name: runner
-          image: $SEITASK_IMAGE
-          args:
-            - runner
-            - --template=/templates/update-node-image.yaml.tmpl
-            - --var=NODE=$SEI_CHAIN_ID-3
-            - --var=IMAGE=$SEI_POST_UPGRADE_IMG
-            - --var=REQUIRE_PHASE=Running
-            - --timeout=8m
-          env:
-            - name: SEI_WORKFLOW_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
-            - name: SEI_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-          envFrom:
-            - configMapRef:
-                name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
-
-    # Liveness: each upgraded node advances past TARGET_HEIGHT+10
-    # (= POST_UPGRADE_HEIGHT). AwaitCondition over the height predicate.
-    - name: await-post-upgrade-progress-nodes-1-2-3
+    # Liveness: each validator advances past TARGET_HEIGHT+10
+    # (= POST_UPGRADE_HEIGHT) after the SND rolls all nodes onto the new
+    # binary. AwaitCondition over the height predicate, one per validator.
+    - name: await-post-upgrade-progress
       templateType: Parallel
-      deadline: 10m
+      deadline: 15m
       children:
+        - await-post-upgrade-progress-node-0
         - await-post-upgrade-progress-node-1
         - await-post-upgrade-progress-node-2
         - await-post-upgrade-progress-node-3
 
+    - name: await-post-upgrade-progress-node-0
+      templateType: Task
+      deadline: 12m
+      task:
+        container:
+          name: runner
+          image: $SEITASK_IMAGE
+          args:
+            - runner
+            - --template=/templates/await-condition.yaml.tmpl
+            - --var=NODE=$SEI_CHAIN_ID-0
+            - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
+            - --timeout=10m
+          env:
+            - name: SEI_WORKFLOW_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['chaos-mesh.org/workflow']
+            - name: SEI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          envFrom:
+            - configMapRef:
+                name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
+
     - name: await-post-upgrade-progress-node-1
       templateType: Task
-      deadline: 8m
+      deadline: 12m
       task:
         container:
           name: runner
@@ -525,7 +455,7 @@ spec:
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_CHAIN_ID-1
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
-            - --timeout=6m
+            - --timeout=10m
           env:
             - name: SEI_WORKFLOW_NAME
               valueFrom:
@@ -541,7 +471,7 @@ spec:
 
     - name: await-post-upgrade-progress-node-2
       templateType: Task
-      deadline: 8m
+      deadline: 12m
       task:
         container:
           name: runner
@@ -551,7 +481,7 @@ spec:
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_CHAIN_ID-2
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
-            - --timeout=6m
+            - --timeout=10m
           env:
             - name: SEI_WORKFLOW_NAME
               valueFrom:
@@ -567,7 +497,7 @@ spec:
 
     - name: await-post-upgrade-progress-node-3
       templateType: Task
-      deadline: 8m
+      deadline: 12m
       task:
         container:
           name: runner
@@ -577,7 +507,7 @@ spec:
             - --template=/templates/await-condition.yaml.tmpl
             - --var=NODE=$SEI_CHAIN_ID-3
             - --var=TARGET_HEIGHT=$(POST_UPGRADE_HEIGHT)
-            - --timeout=6m
+            - --timeout=10m
           env:
             - name: SEI_WORKFLOW_NAME
               valueFrom:

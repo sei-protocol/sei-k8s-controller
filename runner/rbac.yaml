@@ -39,10 +39,12 @@ rules:
   verbs: ["get", "list", "watch"]
 # SeiNodeDeployment: create + read for provision-snd. Polls .status.phase
 # until Ready and reads .status.endpoints to publish role-scoped TM/REST/
-# EVM URLs into workflow-vars.
+# EVM URLs into workflow-vars. patch covers the major-upgrade bump-snd-image
+# step, which `kubectl patch --type=merge`es spec.template.spec.image to roll
+# all validators onto the post-upgrade binary in a single write.
 - apiGroups: ["sei.io"]
   resources: ["seinodedeployments"]
-  verbs: ["create", "get", "list", "watch"]
+  verbs: ["create", "get", "list", "watch", "patch", "update"]
 - apiGroups: ["sei.io"]
   resources: ["seinodedeployments/status"]
   verbs: ["get"]
