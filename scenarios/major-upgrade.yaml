@@ -60,6 +60,7 @@ spec:
         - resolve-proposal-id
         - vote-yes-all-validators
         - wait-for-proposal-to-pass
+        - settle-into-halt
         - bump-snd-image
         - await-post-upgrade-progress
         - upload-report
@@ -372,6 +373,35 @@ spec:
           envFrom:
             - configMapRef:
                 name: workflow-vars-major-upgrade-$SEI_WORKFLOW_RUN_ID
+
+    # Waits for the chain to reach UPGRADE_HEIGHT and halt before the binary
+    # swap. The old binary panics ("UPGRADE NEEDED") at UPGRADE_HEIGHT; the new
+    # binary panics ("BINARY UPDATED BEFORE TRIGGER", sei-cosmos x/upgrade
+    # abci.go) if it processes ANY block below UPGRADE_HEIGHT. So bump-snd-image
+    # must land only after every validator has committed UPGRADE_HEIGHT-1 and
+    # halted. The height can't be polled at that point -- all validators halt
+    # together and stop serving RPC exactly when the predicate would be true --
+    # so this is a fixed wait, not an AwaitCondition. UPGRADE_HEIGHT is current
+    # + 200 blocks measured at compute-target-height, but the proposal flow
+    # (~60s voting period + tally) burns most of that budget first, so only
+    # ~100 blocks (~60s at ~600ms blocks) remain once the proposal has passed.
+    # 150s is ~2.5x that remainder. Over-waiting is free (the chain just sits
+    # halted until the swap); the only failure mode is waiting too short, so err
+    # generous -- raise this if block time runs slow on a cold chain.
+    - name: settle-into-halt
+      templateType: Task
+      deadline: 8m
+      task:
+        container:
+          name: settle-into-halt
+          image: alpine/k8s:1.31.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "waiting 150s for the chain to reach UPGRADE_HEIGHT and halt before swapping the binary"
+              sleep 150
+              echo "settle window elapsed; proceeding to bump-snd-image"
 
     # Bumps the SeiNodeDeployment template image to the post-upgrade build in
     # a single patch. The SND controller (InPlace strategy) re-asserts the new
