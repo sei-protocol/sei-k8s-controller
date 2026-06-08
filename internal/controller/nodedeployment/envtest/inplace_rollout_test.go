@@ -202,6 +202,27 @@ func TestInPlaceRollout_EndToEnd(t *testing.T) {
 		return cond.Reason == "RolloutComplete"
 	}, "rollout plan complete, status.rollout cleared, RolloutInProgress=False/RolloutComplete")
 
+	// 6b. No image flip-flop after rollout. The major-upgrade scenario depends
+	//     on the SND template being the single source of child image: once the
+	//     rollout settles, every child's spec.image must stay pinned to the
+	//     template image and never revert. The pre-fix per-child UpdateNodeImage
+	//     path drove children away from the template, and ensureSeiNode would
+	//     re-assert it every reconcile -> oscillation. We assert spec.image
+	//     (the actual invariant) rather than metadata.generation, which takes
+	//     one benign post-rollout bump when the revision podLabel resyncs.
+	settled := getSND(t, key)
+	g.Expect(listChildren(t, settled)).To(HaveLen(replicas))
+	g.Consistently(func() bool {
+		for _, kid := range listChildren(t, getSND(t, key)) {
+			if kid.Spec.Image != newImage {
+				t.Logf("child %s image reverted: %s", kid.Name, kid.Spec.Image)
+				return false
+			}
+		}
+		return true
+	}, 3*time.Second, pollInterval).Should(BeTrue(),
+		"child spec.image stays pinned to template image after rollout (no flip-flop)")
+
 	// 7. Deleting the SND removes all children. envtest has no kube-
 	//    controller-manager to perform garbage-collection by owner-ref,
 	//    so the SND controller's finalizer path is what we exercise:
