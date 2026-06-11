@@ -42,9 +42,9 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, node.Spec.Peers, fn.Snapshot, intent)
+		return buildBootstrapPlan(node, fn.Snapshot, intent)
 	}
-	return buildBasePlan(node, node.Spec.Peers, fn.Snapshot, intent)
+	return buildBasePlan(node, fn.Snapshot, intent)
 }
 
 // buildRunningPlan returns the update plan for a Running full node, or
