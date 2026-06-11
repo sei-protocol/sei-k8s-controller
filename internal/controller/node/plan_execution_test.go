@@ -269,14 +269,14 @@ func TestBuildPlan_SnapshotWithPeers(t *testing.T) {
 	}
 	plan := mustBuildPlan(t, node)
 	got := taskTypes(plan)
-	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
 func TestBuildPlan_StateSync(t *testing.T) {
 	plan := mustBuildPlan(t, peerSyncNode())
 	got := taskTypes(plan)
-	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -294,7 +294,7 @@ func TestBuildPlan_GenesisWithPeers(t *testing.T) {
 	}
 	plan := mustBuildPlan(t, node)
 	got := taskTypes(plan)
-	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -302,7 +302,7 @@ func TestBuildPlan_Replayer(t *testing.T) {
 	node := replayerNode()
 	plan := mustBuildPlan(t, node)
 	got := taskTypes(plan)
-	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskSnapshotRestore, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigureStateSync, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 
@@ -310,7 +310,7 @@ func TestBuildPlan_Archive(t *testing.T) {
 	node := snapshotterNode()
 	plan := mustBuildPlan(t, node)
 	got := taskTypes(plan)
-	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskDiscoverPeers, planner.TaskConfigValidate, planner.TaskMarkReady}
+	want := []string{task.TaskTypeEnsureDataPVC, task.TaskTypeApplyRBACProxyConfig, task.TaskTypeApplyStatefulSet, task.TaskTypeApplyService, planner.TaskConfigureGenesis, planner.TaskConfigApply, planner.TaskConfigValidate, planner.TaskMarkReady}
 	assertProgression(t, got, want)
 }
 

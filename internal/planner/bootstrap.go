@@ -23,7 +23,7 @@ func buildBootstrapPlan(
 	jobName := task.BootstrapJobName(node)
 	serviceName := node.Name
 
-	bootstrapProg, err := buildSidecarProgression(node, snap)
+	bootstrapProg, err := buildSidecarProgression(snap)
 	if err != nil {
 		return nil, err
 	}
@@ -132,11 +132,7 @@ func buildBootstrapPlan(
 // after bootstrap teardown and only includes the config tasks needed to
 // prepare the already-restored data directory for production use.
 func buildPostBootstrapProgression(node *seiv1alpha1.SeiNode) ([]string, error) {
-	prog := []string{TaskConfigureGenesis, TaskConfigApply}
-	if needsDiscoverPeers(node) {
-		prog = append(prog, TaskDiscoverPeers)
-	}
-	prog = append(prog, TaskConfigValidate, TaskMarkReady)
+	prog := []string{TaskConfigureGenesis, TaskConfigApply, TaskConfigValidate, TaskMarkReady}
 	if sg := SnapshotGeneration(node); sg != nil && sg.Tendermint != nil && sg.Tendermint.Publish != nil {
 		return insertBefore(prog, TaskMarkReady, TaskSnapshotUpload)
 	}
@@ -162,11 +158,6 @@ func IsBootstrapComplete(plan *seiv1alpha1.TaskPlan) bool {
 // this gives ~30 minutes for the group controller to assemble and upload
 // genesis.json.
 const genesisConfigureMaxRetries = 180
-
-// discoverPeersMaxRetries gives ~9 minutes of retry (executor backoff
-// caps at 30s/attempt). Covers validator-RPC co-apply where the
-// validator's Tendermint RPC takes time to become reachable.
-const discoverPeersMaxRetries = 20
 
 // buildGenesisPlan constructs the full plan for genesis ceremony
 // nodes. Per-node artifact generation and upload runs first, then

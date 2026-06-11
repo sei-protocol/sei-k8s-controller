@@ -30,6 +30,7 @@ import (
 	nodedeploymentcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment"
 	nodetaskcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodetask"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
+	"github.com/sei-protocol/sei-k8s-controller/internal/peering"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/sidecartransport"
@@ -184,6 +185,15 @@ func main() {
 		return newSidecarClient(node)
 	}
 
+	// The controller resolves EC2 peers via its IRSA role; the ec2:DescribeInstances
+	// grant is provisioned out-of-band in Terraform (like the existing S3 access —
+	// see config/rbac/service_account.yaml). The Terraform grant IS the rollout
+	// switch: there is no code-level feature flag. During migration both this
+	// controller and the sidecar's SeiNode ServiceAccount hold the grant; the
+	// sidecar's grant is removed after its DiscoverPeers handler is retired. See
+	// PLT-452. Until the grant lands, resolveEC2 preserves the prior peer set on a
+	// DescribeInstances failure, so persistent_peers does not churn.
+
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
 	nodeRecorder := mgr.GetEventRecorderFor("seinode-controller")
 	if err := (&nodecontroller.SeiNodeReconciler{
@@ -195,6 +205,7 @@ func main() {
 			BuildSidecarClient: buildSidecarClient,
 			Platform:           platformCfg,
 		},
+		EC2Peers: peering.NewAWSEC2Resolver(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{

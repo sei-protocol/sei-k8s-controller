@@ -65,7 +65,7 @@ func (p *replayerPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alp
 			task.TaskTypeObserveImage,
 			TaskMarkReady,
 		}
-		return assembleUpdatePlan(node, prog, externalAddressPatch(node))
+		return assembleUpdatePlan(node, prog, p2pConfigPatch(node))
 	}
 	if sidecarNeedsReapproval(node) {
 		return buildMarkReadyPlan(node)

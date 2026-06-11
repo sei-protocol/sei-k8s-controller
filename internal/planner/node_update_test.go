@@ -115,12 +115,15 @@ func TestFullPlanner_ImageDrift_UpdateProgression(t *testing.T) {
 }
 
 // The update plan's config-patch must carry the external-address from
-// Spec.ExternalAddress — the publishable-P2P propagation contract.
-func TestFullPlanner_ConfigPatchCarriesExternalAddress(t *testing.T) {
+// Spec.ExternalAddress AND fold in the latest resolved persistent_peers from
+// Status.ResolvedPeers. Peer churn alone does not trigger a plan; the patch
+// only piggybacks the freshest peer set onto an image-drift update.
+func TestFullPlanner_ConfigPatchCarriesExternalAddressAndPeers(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
 	node.Spec.ExternalAddress = testExternalAddrAtl
 	node.Spec.Image = testImageV2
+	node.Status.ResolvedPeers = []string{"a@h1:26656", "b@h2:26656"}
 
 	plan, err := (&fullNodePlanner{}).BuildPlan(node)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -131,6 +134,7 @@ func TestFullPlanner_ConfigPatchCarriesExternalAddress(t *testing.T) {
 	p2p, ok := patch.Files["config.toml"]["p2p"].(map[string]any)
 	g.Expect(ok).To(BeTrue(), "config.toml.p2p should be a nested map")
 	g.Expect(p2p).To(HaveKeyWithValue("external-address", testExternalAddrAtl))
+	g.Expect(p2p).To(HaveKeyWithValue("persistent-peers", "a@h1:26656,b@h2:26656"))
 }
 
 // Two builds of the same spec must produce identical patch payloads

@@ -41,6 +41,31 @@ func TestCommonOverrides_EmptyExternalAddress(t *testing.T) {
 	}
 }
 
+// persistent_peers is stamped from status.resolvedPeers: joined when present,
+// empty (but present) when none — symmetric, like external_address. The empty
+// case is what lets us delete the #394 cold-start hack: an off-sidecar empty
+// peer set is just persistent_peers="", not a DiscoverPeers deadlock.
+func TestCommonOverrides_PersistentPeers(t *testing.T) {
+	withPeers := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-node"},
+		Status: seiv1alpha1.SeiNodeStatus{
+			ResolvedPeers: []string{"a@h1:26656", "b@h2:26656"},
+		},
+	}
+	if got := commonOverrides(withPeers)[keyP2PPersistentPeers]; got != "a@h1:26656,b@h2:26656" {
+		t.Errorf("persistent_peers = %q, want joined set", got)
+	}
+
+	none := &seiv1alpha1.SeiNode{ObjectMeta: metav1.ObjectMeta{Name: "test-node"}}
+	got, ok := commonOverrides(none)[keyP2PPersistentPeers]
+	if !ok {
+		t.Fatal("persistent_peers must be present (stamped empty), not absent")
+	}
+	if got != "" {
+		t.Errorf("persistent_peers = %q, want empty", got)
+	}
+}
+
 func TestCommonOverrides_UserOverrideTakesPrecedence(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node"},
