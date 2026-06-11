@@ -50,8 +50,7 @@ const (
 
 const (
 	overrideKeyLoggingLevel = "logging.level"
-	enforcedLoggingLevel    = "info"
-	logLevelError           = "error"
+	enforcedLoggingLevel    = "error"
 
 	// keyP2PPersistentPeers is the sei-config enrichment key for
 	// network.p2p.persistent_peers (WithHotReload). sei-config v0.0.19
@@ -671,16 +670,15 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 }
 
 // commonOverrides returns controller overrides that apply to all node modes.
-// logging.level is baselined to "error" (sei-config defaults "info");
-// spec.Overrides still wins via mergeOverrides for per-node verbosity.
+// logging.level is not set here — it is controller-enforced (not user-
+// overridable) in applyForcedOverrides.
 //
 // persistent_peers is written unconditionally from the controller-resolved set;
 // an empty set stamps "" — a valid no-peers config, since the controller is the
 // sole owner of peering and there is no sidecar round-trip to deadlock.
 func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	out := map[string]string{
-		overrideKeyLoggingLevel: logLevelError,
-		keyP2PPersistentPeers:   strings.Join(node.Status.ResolvedPeers, ","),
+		keyP2PPersistentPeers: strings.Join(node.Status.ResolvedPeers, ","),
 	}
 	if node.Spec.ExternalAddress != "" {
 		out[seiconfig.KeyP2PExternalAddress] = node.Spec.ExternalAddress
@@ -809,6 +807,9 @@ func mergeOverrides(controllerOverrides, userOverrides map[string]string) map[st
 	return merged
 }
 
+// applyForcedOverrides pins controller-enforced config keys that users may not
+// override. logging.level is forced to enforcedLoggingLevel ("error"); a user
+// attempt to set it is logged and discarded.
 func applyForcedOverrides(merged, userOverrides map[string]string) {
 	if got, ok := userOverrides[overrideKeyLoggingLevel]; ok && got != enforcedLoggingLevel {
 		ctrl.Log.WithName("planner").Info(

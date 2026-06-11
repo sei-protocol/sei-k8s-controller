@@ -23,9 +23,6 @@ func TestCommonOverrides_WithExternalAddress(t *testing.T) {
 	if got := overrides[seiconfig.KeyP2PExternalAddress]; got != "p2p.atlantic-2.seinetwork.io:26656" {
 		t.Errorf("p2p.external_address = %q, want %q", got, "p2p.atlantic-2.seinetwork.io:26656")
 	}
-	if got := overrides["logging.level"]; got != "error" {
-		t.Errorf("logging.level = %q, want %q", got, "error")
-	}
 }
 
 func TestCommonOverrides_EmptyExternalAddress(t *testing.T) {
@@ -33,8 +30,8 @@ func TestCommonOverrides_EmptyExternalAddress(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node"},
 	}
 	overrides := commonOverrides(node)
-	if got := overrides["logging.level"]; got != "error" {
-		t.Errorf("logging.level = %q, want %q", got, "error")
+	if _, ok := overrides["logging.level"]; ok {
+		t.Error("commonOverrides must not set logging.level; it is enforced in applyForcedOverrides")
 	}
 	if _, ok := overrides[seiconfig.KeyP2PExternalAddress]; ok {
 		t.Errorf("expected no p2p.external_address, got %q", overrides[seiconfig.KeyP2PExternalAddress])

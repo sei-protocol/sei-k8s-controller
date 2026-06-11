@@ -10,7 +10,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-func TestMergeOverrides_ForcesLoggingLevelInfo(t *testing.T) {
+func TestMergeOverrides_ForcesLoggingLevelError(t *testing.T) {
 	cases := []struct {
 		name string
 		user map[string]string
