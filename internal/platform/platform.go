@@ -21,8 +21,9 @@ const (
 )
 
 // Config holds infrastructure-level settings that vary per deployment
-// environment. All fields are required and read from environment variables
-// in main.go. See platformtest.Config() for test fixtures.
+// environment. Fields are read from environment variables in main.go and are
+// required unless documented otherwise — the StateSyncSyncers* pair is optional
+// (state-sync is opt-in). See platformtest.Config() for test fixtures.
 type Config struct {
 	NodepoolName        string
 	NodepoolArchive     string
@@ -58,6 +59,23 @@ type Config struct {
 	// CosmosExporterImage is the sei-cosmos-exporter sidecar image.
 	// The cosmos-exporter container is attached to every SeiNode pod.
 	CosmosExporterImage string
+
+	// StateSyncSyncersConfigMap is the name of the canonical-syncer ConfigMap
+	// the controller reads to populate state-sync rpc_servers. It is the trust
+	// root for state-sync: read-only to the controller, GitOps-written, RBAC-
+	// locked. Keyed by chain ID (data[chainID] = syncer RPC endpoints, as bare
+	// host:port — no http:// scheme prefix; the sidecar adds the scheme).
+	//
+	// State-sync is opt-in, so this and StateSyncSyncersNamespace may be empty
+	// when no node uses state-sync. When a node DOES enable state-sync and this
+	// is unset (or the ConfigMap yields <2 entries for its chain), the
+	// controller fails closed via StateSyncReady=False/NoSyncersConfigured
+	// rather than building a witness-less plan.
+	StateSyncSyncersConfigMap string
+
+	// StateSyncSyncersNamespace is the namespace of StateSyncSyncersConfigMap.
+	// Required when StateSyncSyncersConfigMap is set (Validate enforces the pair).
+	StateSyncSyncersNamespace string
 }
 
 // NodepoolForMode returns the Karpenter NodePool name for the given
@@ -103,6 +121,12 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(val) == "" {
 			return fmt.Errorf("%s is required", name)
 		}
+	}
+	// The state-sync syncer ConfigMap is optional, but a name without a
+	// namespace would issue a cluster-scoped Get that silently fails closed —
+	// catch that misconfiguration explicitly.
+	if c.StateSyncSyncersConfigMap != "" && c.StateSyncSyncersNamespace == "" {
+		return fmt.Errorf("SEI_STATESYNC_SYNCERS_NAMESPACE is required when SEI_STATESYNC_SYNCERS_CONFIGMAP is set")
 	}
 	return nil
 }

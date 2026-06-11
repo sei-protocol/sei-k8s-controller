@@ -1132,6 +1132,11 @@ func (in *SeiNodeStatus) DeepCopyInto(out *SeiNodeStatus) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.ResolvedStateSyncers != nil {
+		in, out := &in.ResolvedStateSyncers, &out.ResolvedStateSyncers
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.StatefulSet != nil {
 		in, out := &in.StatefulSet, &out.StatefulSet
 		*out = new(StatefulSetRef)

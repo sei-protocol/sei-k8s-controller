@@ -163,6 +163,10 @@ func main() {
 		KubeRBACProxyImage:  os.Getenv("SEI_KUBE_RBAC_PROXY_IMAGE"),
 		SidecarImage:        os.Getenv("SEI_SIDECAR_IMAGE"),
 		CosmosExporterImage: os.Getenv("SEI_COSMOS_EXPORTER_IMAGE"),
+
+		// State-sync canonical syncers are opt-in; these may be empty.
+		StateSyncSyncersConfigMap: os.Getenv("SEI_STATESYNC_SYNCERS_CONFIGMAP"),
+		StateSyncSyncersNamespace: os.Getenv("SEI_STATESYNC_SYNCERS_NAMESPACE"),
 	}
 
 	if err := platformCfg.Validate(); err != nil {

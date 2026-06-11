@@ -10,9 +10,12 @@ import (
 )
 
 // reconcilePeers resolves spec.peers into status.resolvedPeers (the composed
-// persistent_peers set) and status.resolvedRPCWitnesses (state-sync witnesses).
-// The plan plumbs the resolved set into config via the config-apply override
-// (init path) or the config-patch (running path).
+// persistent_peers set). The plan plumbs the resolved set into config via the
+// config-apply override (init path) or the config-patch (running path).
+//
+// State-sync witnesses are no longer derived here from label-matched peers;
+// they come from the controller-level canonical-syncer ConfigMap via the
+// StateSyncReady gate (see statesync.go).
 func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	resolver := peering.Resolver{
 		Reader:             r.Client,
@@ -26,9 +29,6 @@ func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha
 
 	if !slices.Equal(node.Status.ResolvedPeers, result.Peers) {
 		node.Status.ResolvedPeers = result.Peers
-	}
-	if !slices.Equal(node.Status.ResolvedRPCWitnesses, result.Witnesses) {
-		node.Status.ResolvedRPCWitnesses = result.Witnesses
 	}
 	return nil
 }

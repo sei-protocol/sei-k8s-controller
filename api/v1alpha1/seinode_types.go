@@ -289,6 +289,26 @@ const (
 
 	// ConditionSeiNodePaused mirrors spec.paused: True when paused.
 	ConditionSeiNodePaused = "Paused"
+
+	// ConditionStateSyncReady gates the state-sync-bearing plan. Always-present
+	// once reconciled. True means canonical syncers are configured and the plan
+	// may proceed; False fails closed (no state-sync plan built). Its semantics
+	// are "canonical syncers configured + plan may proceed", NOT "trust
+	// hardened" — the >=2 byte-for-byte agreement check is the sidecar's job and
+	// lands with the seictl bump; this condition is a configured-count gate only.
+	ConditionStateSyncReady = "StateSyncReady"
+)
+
+// Reasons for the StateSyncReady condition.
+const (
+	// ReasonStateSyncReady: state-sync enabled and >=2 canonical syncers are
+	// configured for the chain; the state-sync-bearing plan may proceed.
+	ReasonStateSyncReady = "Ready"
+	// ReasonStateSyncNoSyncersConfigured: state-sync enabled but the canonical-
+	// syncer ConfigMap yields <2 entries for the chain (fail closed).
+	ReasonStateSyncNoSyncersConfigured = "NoSyncersConfigured"
+	// ReasonStateSyncNotApplicable: the node does not enable state-sync.
+	ReasonStateSyncNotApplicable = "NotApplicable"
 )
 
 // Reasons for the ImportPVCReady condition.
@@ -360,14 +380,23 @@ type SeiNodeStatus struct {
 	// +optional
 	ResolvedPeers []string `json:"resolvedPeers,omitempty"`
 
-	// ResolvedRPCWitnesses carries the in-cluster RPC endpoints
-	// (`<peer>-0.<peer>.<ns>.svc.cluster.local:26657`) of the label-resolved
-	// peers, used as CometBFT state-sync light-client witnesses. Unlike
-	// ResolvedPeers these never carry an external P2P address — RPC is
-	// internal-only. When empty the sidecar derives witnesses from
-	// persistent_peers instead.
+	// ResolvedRPCWitnesses is DEPRECATED and no longer written. State-sync
+	// witnesses now come from the controller-level canonical-syncer ConfigMap
+	// (see ResolvedStateSyncers), not label-derived fleet peers. The field is
+	// retained present-but-unwritten this release (CRD field removal is a
+	// one-way door); remove it at the version bump.
+	//
+	// Deprecated: use ResolvedStateSyncers.
 	// +optional
 	ResolvedRPCWitnesses []string `json:"resolvedRPCWitnesses,omitempty"`
+
+	// ResolvedStateSyncers carries the canonical state-sync RPC endpoints
+	// (`host:port`) read from the canonical-syncer ConfigMap for this node's
+	// chain, fed verbatim into ConfigureStateSyncTask.RpcServers. Written by the
+	// StateSyncReady gate only when state-sync is enabled and >=2 syncers are
+	// configured; otherwise left empty (fail closed).
+	// +optional
+	ResolvedStateSyncers []string `json:"resolvedStateSyncers,omitempty"`
 
 	// StatefulSet references the StatefulSet the controller created for
 	// this SeiNode. UID is the identity check: an STS with the expected

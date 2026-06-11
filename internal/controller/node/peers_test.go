@@ -14,8 +14,6 @@ const (
 	testRoleValue       = "validator"
 	testConsumerName    = "consumer"
 	testPeer1ResolvedID = "mock-node-id@peer-1-0.peer-1.default.svc.cluster.local:26656"
-	testWitnessNS       = "arctic-1"
-	testWitnessRole     = "syncer"
 )
 
 type errStub string
@@ -111,54 +109,12 @@ func TestReconcilePeers_PrefersExternalAddress(t *testing.T) {
 		t.Errorf("resolvedPeers[0] = %q, want %q", node.Status.ResolvedPeers[0], want)
 	}
 
-	// The witness must be the internal RPC DNS, NOT the external P2P address:
-	// the NLB exposes P2P only. Writing the external address as a witness is
-	// the regression this fix prevents.
-	wantWitness := "pub-peer-0.pub-peer.default.svc.cluster.local:26657"
-	if len(node.Status.ResolvedRPCWitnesses) != 1 || node.Status.ResolvedRPCWitnesses[0] != wantWitness {
-		t.Errorf("resolvedRPCWitnesses = %v, want [%q]", node.Status.ResolvedRPCWitnesses, wantWitness)
-	}
-}
-
-func TestReconcilePeers_WitnessesExcludeSelfAndUseRPCPort(t *testing.T) {
-	const peerName = "syncer-0-1"
-	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "syncer-0-0", Namespace: testWitnessNS,
-			Labels: map[string]string{testRoleLabel: testWitnessRole},
-		},
-		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: testWitnessNS,
-			Image:   "sei:latest",
-			Peers: []seiv1alpha1.PeerSource{
-				{Label: &seiv1alpha1.LabelPeerSource{
-					Selector: map[string]string{testRoleLabel: testWitnessRole},
-				}},
-			},
-			FullNode: &seiv1alpha1.FullNodeSpec{},
-		},
-	}
-	peer := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: peerName, Namespace: testWitnessNS,
-			Labels: map[string]string{testRoleLabel: testWitnessRole},
-		},
-		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID:  testWitnessNS,
-			Image:    "sei:latest",
-			FullNode: &seiv1alpha1.FullNodeSpec{},
-		},
-	}
-
-	r, _ := newNodeReconciler(t, node, peer)
-	if err := r.reconcilePeers(context.Background(), node); err != nil {
-		t.Fatalf("reconcilePeers: %v", err)
-	}
-
-	want := peerName + "-0." + peerName + "." + testWitnessNS + ".svc.cluster.local:26657"
-	if len(node.Status.ResolvedRPCWitnesses) != 1 || node.Status.ResolvedRPCWitnesses[0] != want {
-		t.Errorf("resolvedRPCWitnesses = %v, want [%q] (self excluded, RPC port)",
-			node.Status.ResolvedRPCWitnesses, want)
+	// State-sync witnesses are no longer derived from peers — they come from
+	// the canonical-syncer ConfigMap via the StateSyncReady gate. reconcilePeers
+	// must not write the deprecated ResolvedRPCWitnesses field.
+	//nolint:staticcheck // deliberately asserting the deprecated field stays unwritten
+	if node.Status.ResolvedRPCWitnesses != nil {
+		t.Errorf("resolvedRPCWitnesses should be unwritten, got %v", node.Status.ResolvedRPCWitnesses) //nolint:staticcheck // see above
 	}
 }
 
@@ -401,14 +357,6 @@ func TestReconcilePeers_NilSidecarFactorySkipsNewPeer(t *testing.T) {
 	}
 	if len(node.Status.ResolvedPeers) != 0 {
 		t.Fatalf("expected unresolvable peer to be skipped, got %d: %v", len(node.Status.ResolvedPeers), node.Status.ResolvedPeers)
-	}
-	// Intentional asymmetry: the witness needs no node_id, so it is emitted
-	// even though the peer was skipped from persistent_peers. seid can dial a
-	// state-sync RPC witness it has no P2P peering with; do not "symmetrize"
-	// this with ResolvedPeers.
-	wantWitness := "peer-1-0.peer-1.default.svc.cluster.local:26657"
-	if len(node.Status.ResolvedRPCWitnesses) != 1 || node.Status.ResolvedRPCWitnesses[0] != wantWitness {
-		t.Errorf("expected witness despite skipped peer, got %v", node.Status.ResolvedRPCWitnesses)
 	}
 }
 

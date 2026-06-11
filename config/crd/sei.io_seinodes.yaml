@@ -972,12 +972,23 @@ spec:
                 type: array
               resolvedRPCWitnesses:
                 description: |-
-                  ResolvedRPCWitnesses carries the in-cluster RPC endpoints
-                  (`<peer>-0.<peer>.<ns>.svc.cluster.local:26657`) of the label-resolved
-                  peers, used as CometBFT state-sync light-client witnesses. Unlike
-                  ResolvedPeers these never carry an external P2P address — RPC is
-                  internal-only. When empty the sidecar derives witnesses from
-                  persistent_peers instead.
+                  ResolvedRPCWitnesses is DEPRECATED and no longer written. State-sync
+                  witnesses now come from the controller-level canonical-syncer ConfigMap
+                  (see ResolvedStateSyncers), not label-derived fleet peers. The field is
+                  retained present-but-unwritten this release (CRD field removal is a
+                  one-way door); remove it at the version bump.
+
+                  Deprecated: use ResolvedStateSyncers.
+                items:
+                  type: string
+                type: array
+              resolvedStateSyncers:
+                description: |-
+                  ResolvedStateSyncers carries the canonical state-sync RPC endpoints
+                  (`host:port`) read from the canonical-syncer ConfigMap for this node's
+                  chain, fed verbatim into ConfigureStateSyncTask.RpcServers. Written by the
+                  StateSyncReady gate only when state-sync is enabled and >=2 syncers are
+                  configured; otherwise left empty (fail closed).
                 items:
                   type: string
                 type: array

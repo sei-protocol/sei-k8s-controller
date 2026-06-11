@@ -101,12 +101,9 @@ func TestResolve_Static_Verbatim(t *testing.T) {
 	}
 	want := []string{"abc@1.2.3.4:26656", "def@5.6.7.8:26656"}
 	assertEqualPeers(t, got.Peers, want)
-	if len(got.Witnesses) != 0 {
-		t.Errorf("static source should yield no witnesses, got %v", got.Witnesses)
-	}
 }
 
-func TestResolve_Label_ComposesNodeIDAndWitness(t *testing.T) {
+func TestResolve_Label_ComposesNodeID(t *testing.T) {
 	consumer := fullNode("consumer", nil)
 	consumer.Spec.Peers = []seiv1alpha1.PeerSource{
 		{Label: &seiv1alpha1.LabelPeerSource{Selector: map[string]string{roleLabel: rolePeer}}},
@@ -123,7 +120,6 @@ func TestResolve_Label_ComposesNodeIDAndWitness(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	assertEqualPeers(t, got.Peers, []string{"node-xyz@peer-1-0.peer-1.default.svc.cluster.local:26656"})
-	assertEqualPeers(t, got.Witnesses, []string{"peer-1-0.peer-1.default.svc.cluster.local:26657"})
 }
 
 func TestResolve_Label_PrefersExternalAddress(t *testing.T) {
@@ -143,9 +139,7 @@ func TestResolve_Label_PrefersExternalAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	// Peer uses external P2P address; witness stays internal RPC DNS.
 	assertEqualPeers(t, got.Peers, []string{"nid@pub.example.com:26656"})
-	assertEqualPeers(t, got.Witnesses, []string{"pub-0.pub.default.svc.cluster.local:26657"})
 }
 
 func TestResolve_Label_EmptySetYieldsNoPeers(t *testing.T) {
@@ -187,8 +181,6 @@ func TestResolve_Label_TransientFailurePreservesPriorEntry(t *testing.T) {
 	}
 	// node_id fetch failed but a prior entry for this host exists → preserved.
 	assertEqualPeers(t, got.Peers, prior)
-	// Witness is deterministic from identity → still emitted.
-	assertEqualPeers(t, got.Witnesses, []string{"peer-1-0.peer-1.default.svc.cluster.local:26657"})
 }
 
 func TestResolve_Label_TransientFailureNoPriorSkips(t *testing.T) {

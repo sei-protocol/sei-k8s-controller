@@ -132,6 +132,14 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
 
+	// State-sync gate sits before ResolvePlan so a fail-closed node never
+	// builds the state-sync-bearing plan. stop=true short-circuits the
+	// reconcile; the gate flushes via the existing flushStatus closure (single
+	// optimistic-lock patch, no separate write).
+	if res, stop, err := r.gateStateSync(ctx, node, flushStatus); stop {
+		return res, err
+	}
+
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
 	if err := r.Planner.ResolvePlan(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
