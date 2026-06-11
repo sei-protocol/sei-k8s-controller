@@ -897,23 +897,9 @@ spec:
                 required:
                 - spec
                 type: object
-              updateStrategy:
-                description: |-
-                  UpdateStrategy controls how changes to the template are rolled out
-                  to child SeiNodes. Every deployment must declare an explicit strategy.
-                properties:
-                  type:
-                    description: Type selects the deployment strategy.
-                    enum:
-                    - InPlace
-                    type: string
-                required:
-                - type
-                type: object
             required:
             - replicas
             - template
-            - updateStrategy
             type: object
             x-kubernetes-validations:
             - message: 'genesis is meaningful only for validator-role deployments

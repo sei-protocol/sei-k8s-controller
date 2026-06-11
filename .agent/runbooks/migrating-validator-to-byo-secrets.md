@@ -164,8 +164,6 @@ metadata:
 spec:
   replicas: 1                 # LOAD-BEARING — see §4. The CEL guard rejects >1.
   deletionPolicy: Delete      # NB: deleting the SeiNode cascades to the data PVC — see §6 finding 3
-  updateStrategy:
-    type: InPlace
   template:
     metadata:
       labels:

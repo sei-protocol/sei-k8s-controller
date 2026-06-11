@@ -1,7 +1,7 @@
 // Package fixtures provides reusable SeiNodeDeployment constructors for
 // envtest integration tests. The default builder produces a minimal
-// InPlace, full-node SND with no networking and no genesis ceremony —
-// the shape Phase 1 exercises end-to-end. Options layer narrowly.
+// full-node SND with no networking and no genesis ceremony — the shape
+// Phase 1 exercises end-to-end. Options layer narrowly.
 package fixtures
 
 import (
@@ -18,8 +18,8 @@ const DefaultImage = "ghcr.io/sei-protocol/seid:v1.0.0"
 // Option mutates a SeiNodeDeployment built by NewSND.
 type Option func(*seiv1alpha1.SeiNodeDeployment)
 
-// NewSND returns a SeiNodeDeployment with InPlace updateStrategy, a single
-// full-node replica, and the default seid image. Options layer on top.
+// NewSND returns a SeiNodeDeployment with a single full-node replica and
+// the default seid image. Options layer on top.
 // The returned object has no creationTimestamp / resourceVersion — call
 // client.Create to persist it.
 func NewSND(namespace, name string, opts ...Option) *seiv1alpha1.SeiNodeDeployment {
@@ -30,9 +30,6 @@ func NewSND(namespace, name string, opts ...Option) *seiv1alpha1.SeiNodeDeployme
 		},
 		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
 			Replicas: 1,
-			UpdateStrategy: seiv1alpha1.UpdateStrategy{
-				Type: seiv1alpha1.UpdateStrategyInPlace,
-			},
 			Template: seiv1alpha1.SeiNodeTemplate{
 				Spec: seiv1alpha1.SeiNodeSpec{
 					ChainID:  "pacific-1",

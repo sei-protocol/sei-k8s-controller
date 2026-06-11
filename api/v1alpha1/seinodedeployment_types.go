@@ -43,30 +43,12 @@ type SeiNodeDeploymentSpec struct {
 	// +optional
 	Networking *NetworkingConfig `json:"networking,omitempty"`
 
-	// UpdateStrategy controls how changes to the template are rolled out
-	// to child SeiNodes. Every deployment must declare an explicit strategy.
-	UpdateStrategy UpdateStrategy `json:"updateStrategy"`
-
 	// Paused freezes plan-driven orchestration. While true, no new plans
 	// start, no rollouts trigger, no template changes propagate to
 	// children, and any active plan freezes in place. Networking and
 	// Service reconciliation continue. Children inherit the paused state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
-}
-
-// UpdateStrategyType identifies the deployment strategy.
-// +kubebuilder:validation:Enum=InPlace
-type UpdateStrategyType string
-
-const (
-	UpdateStrategyInPlace UpdateStrategyType = "InPlace"
-)
-
-// UpdateStrategy controls how spec changes propagate to child SeiNodes.
-type UpdateStrategy struct {
-	// Type selects the deployment strategy.
-	Type UpdateStrategyType `json:"type"`
 }
 
 // GenesisCeremonyConfig configures genesis ceremony orchestration for a node group.
