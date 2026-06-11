@@ -32,22 +32,22 @@ const minCanonicalSyncers = 2
 // lockdown that fixes the trust-root namespace.
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
-// gateStateSync runs the state-sync gate and, when the node fails closed,
-// flushes the StateSyncReady condition via the caller's flushStatus closure
+// enforceStateSyncGate is the fail-closed half of the state-sync gate. It runs
+// AFTER reconcileStateSyncGate has resolved the always-present StateSyncReady
+// condition and returned `ready`. When the node is not ready and has no active
+// plan, it flushes the resolved condition via the caller's flushStatus closure
 // (preserving the single-patch / optimistic-lock model), emits a Warning Event,
-// and signals the reconciler to stop before ResolvePlan. stop=true means the
-// plan loop must short-circuit; an already-active plan is left to run to
-// completion (we don't yank a state-sync plan mid-execution on a transient
-// ConfigMap blip — the gate re-asserts once the plan goes terminal).
-func (r *SeiNodeReconciler) gateStateSync(
-	ctx context.Context,
+// and signals the reconciler to stop before ResolvePlan so a fail-closed node
+// never builds the state-sync-bearing plan. stop=true means the plan loop must
+// short-circuit; an already-active plan is left to run to completion (we don't
+// yank a state-sync plan mid-execution on a transient ConfigMap blip — the gate
+// re-asserts once the plan goes terminal). It makes no API calls itself, so it
+// takes no context — resolution (the ConfigMap read) already happened.
+func (r *SeiNodeReconciler) enforceStateSyncGate(
 	node *seiv1alpha1.SeiNode,
+	ready bool,
 	flushStatus func() error,
 ) (_ ctrl.Result, stop bool, _ error) {
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	if err != nil {
-		return ctrl.Result{}, true, fmt.Errorf("reconciling state-sync gate: %w", err)
-	}
 	planActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
 	if ready || planActive {
 		return ctrl.Result{}, false, nil
@@ -62,9 +62,12 @@ func (r *SeiNodeReconciler) gateStateSync(
 }
 
 // reconcileStateSyncGate resolves the canonical-syncer set for a state-sync
-// node and sets ConditionStateSyncReady accordingly. It mutates node.Status
-// in-memory only — the condition and ResolvedStateSyncers are flushed by the
-// caller's single optimistic-lock status patch, never a separate write.
+// node and sets the always-present ConditionStateSyncReady accordingly. It
+// mutates node.Status in-memory only — the condition and ResolvedStateSyncers
+// are flushed by the caller's single optimistic-lock status patch, never a
+// separate write. It is the resolution half of the gate: the caller runs it
+// before the Failed/Paused early-returns so StateSyncReady is seeded on every
+// path, then feeds `ready` into enforceStateSyncGate for fail-closed handling.
 //
 // It returns true ("ready to plan") when the state-sync-bearing plan may
 // proceed: either state-sync is disabled (NotApplicable — the plan has no

@@ -282,6 +282,56 @@ func TestReconcile_StateSyncFailClosed_NoPlanBuilt(t *testing.T) {
 	g.Expect(sawWarning).To(BeTrue(), "expected a StateSyncBlocked Warning Event")
 }
 
+// Full reconcile path: a paused node still gets the always-present
+// StateSyncReady condition seeded, even though reconcile returns early on
+// spec.paused before the gate enforcement. State-sync enabled with no syncers
+// resolves to False/NoSyncersConfigured; state-sync disabled resolves to
+// False/NotApplicable. Either way the condition must be present — and a paused
+// node must build NO plan (pause semantics preserved).
+func TestReconcile_PausedNode_StateSyncReadyStillSeeded(t *testing.T) {
+	cases := []struct {
+		name       string
+		node       *seiv1alpha1.SeiNode
+		withCM     bool
+		wantReason string
+	}{
+		{
+			name:       "state-sync enabled, no syncers",
+			node:       stateSyncNode("paused-ss", "default"),
+			withCM:     true,
+			wantReason: seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
+		},
+		{
+			name:       "state-sync disabled",
+			node:       newSnapshotNode("paused-s3", "default"),
+			withCM:     false,
+			wantReason: seiv1alpha1.ReasonStateSyncNotApplicable,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			ctx := context.Background()
+
+			tc.node.Spec.Paused = true
+			r, c := newNodeReconciler(t, tc.node)
+			if tc.withCM {
+				withSyncerConfigMap(r)
+			}
+
+			_, err := r.Reconcile(ctx, nodeReqFor(tc.node.Name, "default"))
+			g.Expect(err).NotTo(HaveOccurred())
+
+			fetched := getSeiNode(t, ctx, c, tc.node.Name, "default")
+			cond := stateSyncCondition(fetched)
+			g.Expect(cond).NotTo(BeNil(), "StateSyncReady must be present even on a paused node")
+			g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			g.Expect(cond.Reason).To(Equal(tc.wantReason))
+			g.Expect(fetched.Status.Plan).To(BeNil(), "a paused node must build no plan")
+		})
+	}
+}
+
 // Full reconcile path: a state-sync node with >=2 syncers proceeds — a plan is
 // built carrying the canonical syncers, and StateSyncReady is True.
 func TestReconcile_StateSyncReady_BuildsPlanWithSyncers(t *testing.T) {

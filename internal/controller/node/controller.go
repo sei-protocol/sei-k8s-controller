@@ -107,6 +107,17 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.Status().Patch(ctx, node, statusBase)
 	}
 
+	// Resolve the always-present StateSyncReady condition before the Failed and
+	// Paused early-returns so it rides the existing flush on every path (Failed
+	// flush, Paused flush, and the normal end-of-reconcile patch) — no separate
+	// status write. The fail-closed enforcement happens later, on the active
+	// path only, via enforceStateSyncGate using the `ready` resolved here (one
+	// ConfigMap read per reconcile).
+	stateSyncReady, err := r.reconcileStateSyncGate(ctx, node)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("resolving state-sync gate: %w", err)
+	}
+
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
 		if err := flushStatus(); err != nil {
@@ -132,11 +143,12 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
 
-	// State-sync gate sits before ResolvePlan so a fail-closed node never
-	// builds the state-sync-bearing plan. stop=true short-circuits the
-	// reconcile; the gate flushes via the existing flushStatus closure (single
-	// optimistic-lock patch, no separate write).
-	if res, stop, err := r.gateStateSync(ctx, node, flushStatus); stop {
+	// Enforce the state-sync gate before ResolvePlan so a fail-closed node never
+	// builds the state-sync-bearing plan. Uses the `ready` resolved above (no
+	// re-read of the ConfigMap). stop=true short-circuits the reconcile; the
+	// gate flushes via the existing flushStatus closure (single optimistic-lock
+	// patch, no separate write).
+	if res, stop, err := r.enforceStateSyncGate(node, stateSyncReady, flushStatus); stop {
 		return res, err
 	}
 
@@ -171,33 +183,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return result, execErr
 	}
 
-	// Emit metrics/events if the phase changed.
-	if node.Status.Phase != observedPhase {
-		ns, name := node.Namespace, node.Name
-		nodePhaseTransitions.Add(ctx, 1,
-			metric.WithAttributes(
-				observability.AttrController.String(seiNodeControllerName),
-				observability.AttrNamespace.String(ns),
-				observability.AttrFromPhase.String(string(observedPhase)),
-				observability.AttrToPhase.String(string(node.Status.Phase)),
-			),
-		)
-		emitNodePhase(ns, name, node.Status.Phase)
-		r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
-			"Phase changed from %s to %s", observedPhase, node.Status.Phase)
-
-		// Record time spent in the previous phase.
-		if node.Status.PhaseTransitionTime != nil && observedPhase != "" {
-			dur := time.Since(node.Status.PhaseTransitionTime.Time).Seconds()
-			nodePhaseDuration.Record(ctx, dur,
-				metric.WithAttributes(
-					observability.AttrNamespace.String(ns),
-					observability.AttrChainID.String(node.Spec.ChainID),
-					observability.AttrPhase.String(string(observedPhase)),
-				),
-			)
-		}
-	}
+	r.emitPhaseTransition(ctx, node, observedPhase)
 
 	// Running nodes with no active plan requeue on a steady-state interval.
 	// Spec changes trigger immediate reconciles via GenerationChangedPredicate.
@@ -206,6 +192,39 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	return result, nil
+}
+
+// emitPhaseTransition records phase-transition metrics and a PhaseTransition
+// Event when the node's phase changed during this reconcile. A no-op when the
+// phase is unchanged.
+func (r *SeiNodeReconciler) emitPhaseTransition(ctx context.Context, node *seiv1alpha1.SeiNode, observedPhase seiv1alpha1.SeiNodePhase) {
+	if node.Status.Phase == observedPhase {
+		return
+	}
+	ns, name := node.Namespace, node.Name
+	nodePhaseTransitions.Add(ctx, 1,
+		metric.WithAttributes(
+			observability.AttrController.String(seiNodeControllerName),
+			observability.AttrNamespace.String(ns),
+			observability.AttrFromPhase.String(string(observedPhase)),
+			observability.AttrToPhase.String(string(node.Status.Phase)),
+		),
+	)
+	emitNodePhase(ns, name, node.Status.Phase)
+	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
+		"Phase changed from %s to %s", observedPhase, node.Status.Phase)
+
+	// Record time spent in the previous phase.
+	if node.Status.PhaseTransitionTime != nil && observedPhase != "" {
+		dur := time.Since(node.Status.PhaseTransitionTime.Time).Seconds()
+		nodePhaseDuration.Record(ctx, dur,
+			metric.WithAttributes(
+				observability.AttrNamespace.String(ns),
+				observability.AttrChainID.String(node.Spec.ChainID),
+				observability.AttrPhase.String(string(observedPhase)),
+			),
+		)
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
