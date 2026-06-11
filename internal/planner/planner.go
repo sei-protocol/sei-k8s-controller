@@ -303,7 +303,7 @@ func insertBefore(prog []string, target, taskType string) ([]string, error) {
 // bootstrap mode, inserting optional tasks (genesis, peers, state-sync) at
 // the correct positions. Used by both buildBasePlan and buildBootstrapPlan
 // to ensure they produce consistent sidecar progressions.
-func buildSidecarProgression(snap *seiv1alpha1.SnapshotSource, peers []seiv1alpha1.PeerSource) ([]string, error) {
+func buildSidecarProgression(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSource) ([]string, error) {
 	mode := bootstrapMode(snap)
 	prog := slices.Clone(baseProgression[mode])
 
@@ -311,7 +311,7 @@ func buildSidecarProgression(snap *seiv1alpha1.SnapshotSource, peers []seiv1alph
 	if prog, err = insertBefore(prog, TaskConfigApply, TaskConfigureGenesis); err != nil {
 		return nil, err
 	}
-	if len(peers) > 0 {
+	if needsDiscoverPeers(node) {
 		if prog, err = insertBefore(prog, TaskConfigValidate, TaskDiscoverPeers); err != nil {
 			return nil, err
 		}
@@ -514,11 +514,10 @@ func taskMaxRetries(taskType string) int {
 // then the base sidecar progression for the node's bootstrap mode.
 func buildBasePlan(
 	node *seiv1alpha1.SeiNode,
-	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
 	configIntent *seiconfig.ConfigIntent,
 ) (*seiv1alpha1.TaskPlan, error) {
-	sidecarProg, err := buildSidecarProgression(snap, peers)
+	sidecarProg, err := buildSidecarProgression(node, snap)
 	if err != nil {
 		return nil, err
 	}
@@ -656,6 +655,16 @@ func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource) sidecar.SnapshotResto
 	return sidecar.SnapshotRestoreTask{TargetHeight: snap.S3.TargetHeight}
 }
 
+// needsDiscoverPeers reports whether a discover-peers task belongs in the plan.
+// A node whose peer sources currently resolve to zero addresses (the first
+// validator(s) in a fresh cluster, whose label selector matches no running
+// peers yet) gets no task — there is nothing to apply, and seictl's
+// DiscoverPeersTask.Validate rejects an empty Sources list, which would
+// otherwise wedge the node before it can become a resolvable peer.
+func needsDiscoverPeers(node *seiv1alpha1.SeiNode) bool {
+	return len(discoverPeersTask(node).Sources) > 0
+}
+
 func discoverPeersTask(node *seiv1alpha1.SeiNode) sidecar.DiscoverPeersTask {
 	if len(node.Spec.Peers) == 0 {
 		return sidecar.DiscoverPeersTask{}
@@ -670,13 +679,23 @@ func discoverPeersTask(node *seiv1alpha1.SeiNode) sidecar.DiscoverPeersTask {
 				Tags:   s.EC2Tags.Tags,
 			})
 		case s.Static != nil:
+			if len(s.Static.Addresses) == 0 {
+				continue
+			}
 			sources = append(sources, sidecar.PeerSource{
 				Type:      sidecar.PeerSourceStatic,
 				Addresses: s.Static.Addresses,
 			})
 		case s.Label != nil:
-			// ResolvedPeers is pre-composed `<node_id>@<host>:<port>`;
-			// route as static so the sidecar writes them verbatim.
+			// A label selector resolving to zero in-cluster peers (the first
+			// validator(s) in a fresh cluster) is a no-op — emitting an empty
+			// static source trips seictl's missing-Addresses validation and
+			// wedges discover-peers on a retry loop. ResolvedPeers is
+			// pre-composed `<node_id>@<host>:<port>`; route as static so the
+			// sidecar writes them verbatim.
+			if len(node.Status.ResolvedPeers) == 0 {
+				continue
+			}
 			sources = append(sources, sidecar.PeerSource{
 				Type:      sidecar.PeerSourceStatic,
 				Addresses: node.Status.ResolvedPeers,

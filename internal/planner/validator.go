@@ -109,9 +109,9 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Ta
 		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, node.Spec.Peers, v.Snapshot, intent)
+		return buildBootstrapPlan(node, v.Snapshot, intent)
 	}
-	return buildBasePlan(node, node.Spec.Peers, v.Snapshot, intent)
+	return buildBasePlan(node, v.Snapshot, intent)
 }
 
 // buildRunningPlan returns the update plan for a Running validator. The

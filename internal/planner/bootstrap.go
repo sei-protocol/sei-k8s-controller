@@ -14,7 +14,6 @@ import (
 // post-bootstrap config tasks that run on the production StatefulSet pod.
 func buildBootstrapPlan(
 	node *seiv1alpha1.SeiNode,
-	peers []seiv1alpha1.PeerSource,
 	snap *seiv1alpha1.SnapshotSource,
 	configIntent *seiconfig.ConfigIntent,
 ) (*seiv1alpha1.TaskPlan, error) {
@@ -24,11 +23,11 @@ func buildBootstrapPlan(
 	jobName := task.BootstrapJobName(node)
 	serviceName := node.Name
 
-	bootstrapProg, err := buildSidecarProgression(snap, peers)
+	bootstrapProg, err := buildSidecarProgression(node, snap)
 	if err != nil {
 		return nil, err
 	}
-	postProg, err := buildPostBootstrapProgression(node, peers)
+	postProg, err := buildPostBootstrapProgression(node)
 	if err != nil {
 		return nil, err
 	}
@@ -132,9 +131,9 @@ func buildBootstrapPlan(
 // a separate, hand-written progression — it runs on the production pod
 // after bootstrap teardown and only includes the config tasks needed to
 // prepare the already-restored data directory for production use.
-func buildPostBootstrapProgression(node *seiv1alpha1.SeiNode, peers []seiv1alpha1.PeerSource) ([]string, error) {
+func buildPostBootstrapProgression(node *seiv1alpha1.SeiNode) ([]string, error) {
 	prog := []string{TaskConfigureGenesis, TaskConfigApply}
-	if len(peers) > 0 {
+	if needsDiscoverPeers(node) {
 		prog = append(prog, TaskDiscoverPeers)
 	}
 	prog = append(prog, TaskConfigValidate, TaskMarkReady)

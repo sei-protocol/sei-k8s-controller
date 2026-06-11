@@ -46,9 +46,9 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides()), node.Spec.Overrides),
 	}
 	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, intent)
+		return buildBootstrapPlan(node, &node.Spec.Replayer.Snapshot, intent)
 	}
-	return buildBasePlan(node, node.Spec.Peers, &node.Spec.Replayer.Snapshot, intent)
+	return buildBasePlan(node, &node.Spec.Replayer.Snapshot, intent)
 }
 
 // buildRunningPlan returns the update plan for a Running replayer node.

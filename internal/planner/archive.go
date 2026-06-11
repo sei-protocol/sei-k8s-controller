@@ -36,7 +36,7 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.
 		Mode:      seiconfig.ModeArchive,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
 	}
-	return buildBasePlan(node, node.Spec.Peers, nil, intent)
+	return buildBasePlan(node, nil, intent)
 }
 
 // buildRunningPlan returns the update plan for a Running archive node.
