@@ -1,26 +1,21 @@
 package planner
 
 import (
-	"fmt"
-
 	"github.com/google/uuid"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// ForDeployment returns the appropriate GroupPlanner for the group's
-// configured update strategy.
-func ForDeployment(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
-	switch group.Spec.UpdateStrategy.Type {
-	case seiv1alpha1.UpdateStrategyInPlace:
-		return &inPlaceDeploymentPlanner{}, nil
-	default:
-		return nil, fmt.Errorf("unknown update strategy type %q", group.Spec.UpdateStrategy.Type)
-	}
+// ForDeployment returns the GroupPlanner for a deployment. Rollouts are
+// always in-place: spec changes propagate to the existing child SeiNodes,
+// which roll their own pods.
+func ForDeployment(_ *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
+	return &inPlaceDeploymentPlanner{}, nil
 }
 
-// inPlaceDeploymentPlanner builds a deployment plan for the InPlace strategy.
+// inPlaceDeploymentPlanner builds the in-place deployment plan: update each
+// child SeiNode's spec, then await convergence.
 type inPlaceDeploymentPlanner struct{}
 
 func (p *inPlaceDeploymentPlanner) BuildPlan(

@@ -17,8 +17,7 @@ func TestInPlacePlan_ThreeTasks(t *testing.T) {
 	group := &seiv1alpha1.SeiNodeDeployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "wave-group", Namespace: "pacific-1", Generation: 2},
 		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
-			Replicas:       3,
-			UpdateStrategy: seiv1alpha1.UpdateStrategy{Type: seiv1alpha1.UpdateStrategyInPlace},
+			Replicas: 3,
 		},
 		Status: seiv1alpha1.SeiNodeDeploymentStatus{
 			IncumbentNodes: []string{"wave-group-0", "wave-group-1", "wave-group-2"},

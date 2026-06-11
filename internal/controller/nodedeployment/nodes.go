@@ -142,11 +142,6 @@ func (r *SeiNodeDeploymentReconciler) detectDeploymentNeeded(group *seiv1alpha1.
 		return // non-deployment plan in progress (e.g. genesis)
 	}
 
-	if group.Spec.UpdateStrategy.Type == "" {
-		log.Log.Info("updateStrategy.type is empty, treating as InPlace — update the manifest",
-			"group", group.Name, "namespace", group.Namespace)
-	}
-
 	group.Status.Rollout = &seiv1alpha1.RolloutStatus{
 		TargetHash: currentHash,
 		StartedAt:  metav1.Now(),

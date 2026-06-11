@@ -50,8 +50,6 @@ spec:
     accounts:
       - address: {{ .ADMIN_ADDRESS }}
         balance: 1000000000000usei
-  updateStrategy:
-    type: InPlace
 `
 
 const rpcTmpl = `apiVersion: sei.io/v1alpha1
@@ -69,8 +67,6 @@ spec:
         - label:
             selector:
               sei.io/chain: {{ .CHAIN_ID }}
-  updateStrategy:
-    type: InPlace
 `
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -144,8 +140,6 @@ spec:
       chainId: {{ .CHAIN_ID }}
       image: {{ .IMAGE }}
       validator: {}
-  updateStrategy:
-    type: InPlace
 `
 	path := writeTmpl(t, tmpl)
 	if _, err := renderTemplate(path, map[string]string{varKeyChainID: testChainID, varKeyImage: testImage}); err == nil {
