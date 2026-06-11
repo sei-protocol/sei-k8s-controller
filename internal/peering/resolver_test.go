@@ -21,12 +21,13 @@ import (
 )
 
 const (
-	nsDefault     = "default"
-	roleLabel     = "role"
-	rolePeer      = "peer"
-	roleSeed      = "seed"
-	ec2PeerEntry  = "ec2id@10.0.0.5:26656"
-	regionUSEast1 = "us-east-1"
+	nsDefault       = "default"
+	roleLabel       = "role"
+	rolePeer        = "peer"
+	roleSeed        = "seed"
+	ec2PeerEntry    = "ec2id@10.0.0.5:26656"
+	staticPeerEntry = "static@9.9.9.9:26656"
+	regionUSEast1   = "us-east-1"
 )
 
 // --- test doubles ---
@@ -260,6 +261,50 @@ func TestResolve_EC2_NilResolverPreservesPriorSet(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	assertEqualPeers(t, got.Peers, prior)
+}
+
+// TestResolve_EC2FirstPreserve_LaterSourcesStillResolve proves a transient EC2
+// failure (ordered first) does not discard or skip the sources after it: the
+// later Static source's fresh peers are present AND prior is unioned (no-shrink).
+func TestResolve_EC2FirstPreserve_LaterSourcesStillResolve(t *testing.T) {
+	node := fullNode("n", nil)
+	node.Spec.Peers = []seiv1alpha1.PeerSource{
+		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: regionUSEast1, Tags: map[string]string{roleLabel: roleSeed}}},
+		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{staticPeerEntry}}},
+	}
+	prior := []string{ec2PeerEntry}
+	r := Resolver{
+		Reader: newReader(t, node),
+		EC2:    &mockEC2{err: errors.New("throttled")},
+	}
+
+	got, err := r.Resolve(context.Background(), node, prior)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	assertEqualPeers(t, got.Peers, []string{ec2PeerEntry, staticPeerEntry})
+}
+
+// TestResolve_NonEC2FirstThenEC2Fails proves a fresh non-EC2 peer accumulated
+// before a failing EC2 source is retained (not discarded for the bare prior set)
+// while prior is unioned in.
+func TestResolve_NonEC2FirstThenEC2Fails(t *testing.T) {
+	node := fullNode("n", nil)
+	node.Spec.Peers = []seiv1alpha1.PeerSource{
+		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{staticPeerEntry}}},
+		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: regionUSEast1, Tags: map[string]string{roleLabel: roleSeed}}},
+	}
+	prior := []string{ec2PeerEntry}
+	r := Resolver{
+		Reader: newReader(t, node),
+		EC2:    &mockEC2{err: errors.New("throttled")},
+	}
+
+	got, err := r.Resolve(context.Background(), node, prior)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	assertEqualPeers(t, got.Peers, []string{ec2PeerEntry, staticPeerEntry})
 }
 
 // TestResolve_EC2_NilResolverMakesNoCall exercises the nil-resolver defensive

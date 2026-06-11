@@ -20,11 +20,9 @@ import (
 )
 
 // EC2 instance tag keys the resolver reads to compose a peer's P2P address.
-// EC2Tags is vestigial today (no live consumer), so these are a forward
-// contract: an EC2-backed sei node is expected to publish its Tendermint
-// node_id (and optionally a non-default P2P port) as instance tags. The
-// node_id is mandatory — without it there is no `<node_id>@host:port` to
-// compose, mirroring the Label path where a missing node_id skips the peer.
+// They are a forward contract: an EC2-backed sei node publishes its Tendermint
+// node_id (mandatory) and optionally a non-default P2P port as instance tags.
+// A missing node_id skips the peer, mirroring the Label path.
 const (
 	tagNodeID  = "sei.io/node-id"
 	tagP2PPort = "sei.io/p2p-port"
@@ -140,16 +138,13 @@ func resolveEC2Instances(ctx context.Context, c ec2API, src *seiv1alpha1.EC2Tags
 var nodeIDPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // composeEC2Peer builds `<node_id>@<host>:<port>` from an instance's tags and
-// network attributes. node_id comes from the tagNodeID tag (required); host
-// prefers public DNS, then public IP, then private DNS, then private IP; port
-// comes from the tagP2PPort tag, defaulting to the standard P2P port. Returns
-// false (and logs the reason) when the instance is unusable.
+// network attributes, returning false (logged) when the instance is unusable.
 //
-// node_id and host are tag/attribute-derived and validated before composition:
-// a node_id that isn't the CometBFT 40-hex shape, or a host containing a comma,
-// whitespace, or control characters, is rejected. A comma would inject extra
-// persistent_peers entries (the set is joined comma-separated downstream);
-// control characters would corrupt config.toml.
+// node_id and host are untrusted tag/attribute input, so both are validated
+// before composition: node_id must be the CometBFT 40-hex shape, and a host
+// containing a comma, whitespace, or control character is rejected. A comma
+// would inject extra persistent_peers entries (the set is joined comma-separated
+// downstream); control characters would corrupt config.toml.
 func composeEC2Peer(logger logr.Logger, inst *ec2types.Instance, region string) (string, bool) {
 	instanceID := aws.ToString(inst.InstanceId)
 
@@ -193,9 +188,8 @@ func composeEC2Peer(logger logr.Logger, inst *ec2types.Instance, region string) 
 	return fmt.Sprintf("%s@%s:%d", nodeID, host, port), true
 }
 
-// validHost rejects a host containing a comma (would inject extra
-// persistent_peers entries), whitespace, or any control character (would
-// corrupt config.toml). It is intentionally permissive otherwise — host
+// validHost rejects a comma, whitespace, or control character (see
+// composeEC2Peer for why). Intentionally permissive otherwise — host
 // resolvability is CometBFT's concern, not ours.
 func validHost(host string) bool {
 	return !strings.ContainsFunc(host, func(r rune) bool {
@@ -212,14 +206,12 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// resolveEC2 resolves an EC2Tags source. It returns (peers, preservePrior).
+// resolveEC2 resolves an EC2Tags source, returning (peers, preservePrior).
 // preservePrior is true on a transient resolve failure (or a nil EC2 resolver):
-// unlike the Label path, an EC2 DescribeInstances failure yields no host list,
-// so there is no per-peer entry to selectively preserve. The caller instead
-// keeps the node's entire prior resolved set unchanged, so persistent_peers
-// does not churn on a transient AWS error. (EC2Tags is vestigial — no live
-// consumer — so this whole-node preserve is acceptable in lieu of per-peer
-// granularity.)
+// unlike the Label path, a DescribeInstances failure yields no host list, so
+// there is no per-peer entry to selectively preserve. The caller unions the
+// node's prior resolved set instead, so persistent_peers does not churn on a
+// transient AWS error.
 func (r *Resolver) resolveEC2(
 	ctx context.Context,
 	src *seiv1alpha1.EC2TagsPeerSource,

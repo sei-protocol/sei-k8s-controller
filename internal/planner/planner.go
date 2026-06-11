@@ -51,6 +51,7 @@ const (
 const (
 	overrideKeyLoggingLevel = "logging.level"
 	enforcedLoggingLevel    = "info"
+	logLevelError           = "error"
 
 	// keyP2PPersistentPeers is the sei-config enrichment key for
 	// network.p2p.persistent_peers (WithHotReload). sei-config v0.0.19
@@ -670,16 +671,15 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 }
 
 // commonOverrides returns controller overrides that apply to all node modes.
-// sei-config defaults logging.level to "info"; we baseline it to "error" here.
+// logging.level is baselined to "error" (sei-config defaults "info");
 // spec.Overrides still wins via mergeOverrides for per-node verbosity.
 //
-// persistent_peers is written unconditionally from the controller-resolved
-// set: an empty set stamps "" (symmetric, like external_address), which is a
-// valid no-peers config — the controller is now the sole owner of peering, so
-// the sidecar DiscoverPeers round-trip (and its empty-source deadlock) is gone.
+// persistent_peers is written unconditionally from the controller-resolved set;
+// an empty set stamps "" — a valid no-peers config, since the controller is the
+// sole owner of peering and there is no sidecar round-trip to deadlock.
 func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	out := map[string]string{
-		overrideKeyLoggingLevel: "error",
+		overrideKeyLoggingLevel: logLevelError,
 		keyP2PPersistentPeers:   strings.Join(node.Status.ResolvedPeers, ","),
 	}
 	if node.Spec.ExternalAddress != "" {

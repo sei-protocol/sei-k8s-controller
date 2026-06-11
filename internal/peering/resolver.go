@@ -1,12 +1,6 @@
 // Package peering resolves a SeiNode's spec.peers into the fully-composed
-// `<node_id>@<host>:<port>` persistent_peers set (and the in-cluster RPC
-// witness endpoints for state sync). It collapses the two plan-path peer
-// builders that previously duplicated this work: the planner's discoverPeersTask
-// and the resolution the sidecar DiscoverPeers task performed.
-//
-// The imperative path — SeiNodeTask kind=DiscoverPeers (task.discoverPeersParams)
-// — still routes source-building to the sidecar and is the deferred 3-PR tail;
-// it is not collapsed here yet.
+// `<node_id>@<host>:<port>` persistent_peers set and the in-cluster RPC witness
+// endpoints for state sync. The controller is the sole owner of peer resolution.
 //
 // Resolve handles all three source kinds in-controller:
 //   - Label  — list matching SeiNodes, fetch each peer's node_id via its
@@ -15,9 +9,11 @@
 //   - EC2Tags — DescribeInstances by tag filters, compose each instance's
 //     P2P address from its node_id tag + IP/DNS.
 //
-// Resolution is level-triggered and idempotent: it preserves the prior
-// resolved entry for a peer whose node_id momentarily can't be fetched, so a
-// peer mid-restart does not churn the whole fleet's persistent_peers.
+// Resolution is level-triggered and idempotent, and transient failures never
+// shrink the set: a Label peer whose node_id can't be fetched keeps its prior
+// entry, and a transient EC2 DescribeInstances failure unions the prior set
+// wholesale (the flat prior set can't be split per source). So a peer
+// mid-restart or a brief AWS hiccup never churns the fleet's persistent_peers.
 package peering
 
 import (
@@ -35,26 +31,24 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-// errNoSidecarFactory marks a nil BuildSidecarClient: peer resolution treats it
-// as a transient per-peer failure (preserve-prior or skip), never a panic, so a
+// errNoSidecarFactory marks a nil BuildSidecarClient. It is treated as a
+// transient per-peer failure (preserve-prior or skip), never a panic, so a
 // degraded or test environment without a sidecar factory still reconciles.
 var errNoSidecarFactory = errors.New("sidecar client factory is nil")
 
-// Resolver resolves spec.peers into persistent_peers + RPC witnesses.
-// All dependencies are injected so the resolver is unit-testable without a
-// live cluster or AWS account.
+// Resolver resolves spec.peers into persistent_peers + RPC witnesses. All
+// dependencies are injected so it is unit-testable without a cluster or AWS.
 type Resolver struct {
 	// Reader lists SeiNodes for Label sources.
 	Reader client.Reader
 
-	// BuildSidecarClient returns a sidecar client for a peer SeiNode, used
-	// to fetch its Tendermint node_id. Nil is tolerated (treated as a
-	// transient failure) so tests and degraded environments don't panic.
+	// BuildSidecarClient fetches a peer's Tendermint node_id via its sidecar.
+	// Nil is tolerated (transient failure, not a panic) so tests and degraded
+	// environments still reconcile.
 	BuildSidecarClient func(node *seiv1alpha1.SeiNode) (task.SidecarClient, error)
 
-	// EC2 resolves EC2Tags sources. Nil means EC2 resolution is unavailable;
-	// an EC2Tags source declared while EC2 is nil is a transient failure
-	// (preserve prior / skip), matching the Label-path stability rule.
+	// EC2 resolves EC2Tags sources. Nil is treated as a transient failure
+	// (preserve-prior), matching the Label-path stability rule.
 	EC2 EC2Resolver
 }
 
@@ -77,6 +71,7 @@ func (r *Resolver) Resolve(ctx context.Context, node *seiv1alpha1.SeiNode, prior
 	priorByHost := indexResolvedPeersByHost(prior)
 
 	var peers, witnesses []string
+	var preserveEC2Prior bool
 	for i := range node.Spec.Peers {
 		src := &node.Spec.Peers[i]
 		switch {
@@ -91,17 +86,18 @@ func (r *Resolver) Resolve(ctx context.Context, node *seiv1alpha1.SeiNode, prior
 			peers = append(peers, src.Static.Addresses...)
 		case src.EC2Tags != nil:
 			endpoints, preservePrior := r.resolveEC2(ctx, src.EC2Tags)
-			if preservePrior {
-				// A transient EC2 failure preserves the node's prior resolved
-				// peer set wholesale (see resolveEC2) so this reconcile does
-				// not churn persistent_peers. Witnesses are deterministic from
-				// peer identity and re-derived every reconcile, so keep the set
-				// gathered so far rather than wiping ResolvedRPCWitnesses.
-				slices.Sort(witnesses)
-				return Result{Peers: prior, Witnesses: slices.Compact(witnesses)}, nil
-			}
+			preserveEC2Prior = preserveEC2Prior || preservePrior
 			peers = append(peers, endpoints...)
 		}
+	}
+
+	// A transient EC2 failure yields no fresh entries and the flat prior set
+	// can't be split per-source, so union prior to guarantee no-shrink while
+	// every other source still contributes its fresh results. Wrinkle: a Label
+	// peer legitimately removed in the same reconcile where EC2 also transiently
+	// fails is retained for one reconcile.
+	if preserveEC2Prior {
+		peers = append(peers, prior...)
 	}
 
 	slices.Sort(peers)

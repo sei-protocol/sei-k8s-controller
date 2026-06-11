@@ -185,14 +185,11 @@ func main() {
 		return newSidecarClient(node)
 	}
 
-	// The controller resolves EC2 peers via its IRSA role; the ec2:DescribeInstances
-	// grant is provisioned out-of-band in Terraform (like the existing S3 access —
-	// see config/rbac/service_account.yaml). The Terraform grant IS the rollout
-	// switch: there is no code-level feature flag. During migration both this
-	// controller and the sidecar's SeiNode ServiceAccount hold the grant; the
-	// sidecar's grant is removed after its DiscoverPeers handler is retired. See
-	// PLT-452. Until the grant lands, resolveEC2 preserves the prior peer set on a
-	// DescribeInstances failure, so persistent_peers does not churn.
+	// EC2 peer resolution rides the controller's IRSA role. The
+	// ec2:DescribeInstances grant is provisioned out-of-band in Terraform (like
+	// S3 — see config/rbac/service_account.yaml); that grant, not a code flag, is
+	// the rollout switch. Before it lands, resolveEC2 fails closed (preserve-prior),
+	// so persistent_peers does not churn.
 
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
 	nodeRecorder := mgr.GetEventRecorderFor("seinode-controller")

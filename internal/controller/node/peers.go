@@ -11,10 +11,8 @@ import (
 
 // reconcilePeers resolves spec.peers into status.resolvedPeers (the composed
 // persistent_peers set) and status.resolvedRPCWitnesses (state-sync witnesses).
-// It is a thin caller of peering.Resolver — the controller is the sole owner
-// of peer resolution; no sidecar round-trip is involved. The plan plumbs the
-// resolved set into config via the config-apply override on the init path and
-// the config-patch on the running path.
+// The plan plumbs the resolved set into config via the config-apply override
+// (init path) or the config-patch (running path).
 func (r *SeiNodeReconciler) reconcilePeers(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	resolver := peering.Resolver{
 		Reader:             r.Client,
