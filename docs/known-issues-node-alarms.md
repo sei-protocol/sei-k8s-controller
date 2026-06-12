@@ -8,7 +8,7 @@ Recurring alerts observed during SeiNode and SeiNodeDeployment deployments. Thes
 **Environment:** dev
 **Severity:** critical (alert), expected during iteration
 
-**What happens:** The shadow replayer fails during bootstrap, typically at `discover-peers` or `configure-state-sync`. Each failed deployment requires deleting and recreating the SeiNode.
+**What happens:** The shadow replayer fails during bootstrap, typically at `discover-peers` or `configure-state-sync`. Each failed deployment requires deleting and recreating the SeiNode. _(Historical: `discover-peers` was a sidecar bootstrap task when this incident occurred; peering is now controller-owned via the config-apply `persistent_peers` override and is no longer a distinct task.)_
 
 **Root causes encountered:**
 1. **Pruned peers (resolved):** State-syncer EC2 nodes pruned blocks below the snapshot height (200440000). `configure-state-sync` queries peers for a block hash at the trust height and gets empty responses. Fix: use a snapshot at a height within peers' retention window.
