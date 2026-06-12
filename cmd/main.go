@@ -163,6 +163,10 @@ func main() {
 		KubeRBACProxyImage:  os.Getenv("SEI_KUBE_RBAC_PROXY_IMAGE"),
 		SidecarImage:        os.Getenv("SEI_SIDECAR_IMAGE"),
 		CosmosExporterImage: os.Getenv("SEI_COSMOS_EXPORTER_IMAGE"),
+
+		// The application-config file is opt-in; this may be empty. Points at a
+		// read-only mounted file (a GitOps-written ConfigMap volume).
+		ControllerConfigFile: os.Getenv("SEI_CONTROLLER_CONFIG"),
 	}
 
 	if err := platformCfg.Validate(); err != nil {

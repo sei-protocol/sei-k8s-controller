@@ -1,6 +1,8 @@
 // Package peering resolves a SeiNode's spec.peers into the fully-composed
-// `<node_id>@<host>:<port>` persistent_peers set and the in-cluster RPC witness
-// endpoints for state sync. The controller is the sole owner of peer resolution.
+// `<node_id>@<host>:<port>` persistent_peers set. The controller is the sole
+// owner of peer resolution. State-sync witnesses are NOT resolved here — they
+// come from the controller-level canonical-syncer ConfigMap (see the node
+// controller's StateSyncReady gate), not label-matched fleet peers.
 //
 // Resolve handles all three source kinds in-controller:
 //   - Label  — list matching SeiNodes, fetch each peer's node_id via its
@@ -36,8 +38,8 @@ import (
 // degraded or test environment without a sidecar factory still reconciles.
 var errNoSidecarFactory = errors.New("sidecar client factory is nil")
 
-// Resolver resolves spec.peers into persistent_peers + RPC witnesses. All
-// dependencies are injected so it is unit-testable without a cluster or AWS.
+// Resolver resolves spec.peers into the persistent_peers set. All dependencies
+// are injected so it is unit-testable without a cluster or AWS.
 type Resolver struct {
 	// Reader lists SeiNodes for Label sources.
 	Reader client.Reader
@@ -57,9 +59,6 @@ type Result struct {
 	// Peers are the fully-composed `<node_id>@<host>:<port>` persistent_peers,
 	// sorted and de-duplicated.
 	Peers []string
-	// Witnesses are the in-cluster RPC endpoints of label-resolved peers,
-	// sorted and de-duplicated, for state-sync light-client use.
-	Witnesses []string
 }
 
 // Resolve resolves all of node.Spec.Peers. prior is the node's last resolved
@@ -70,18 +69,17 @@ type Result struct {
 func (r *Resolver) Resolve(ctx context.Context, node *seiv1alpha1.SeiNode, prior []string) (Result, error) {
 	priorByHost := indexResolvedPeersByHost(prior)
 
-	var peers, witnesses []string
+	var peers []string
 	var preserveEC2Prior bool
 	for i := range node.Spec.Peers {
 		src := &node.Spec.Peers[i]
 		switch {
 		case src.Label != nil:
-			endpoints, w, err := r.resolveLabel(ctx, node, src.Label, priorByHost)
+			endpoints, err := r.resolveLabel(ctx, node, src.Label, priorByHost)
 			if err != nil {
 				return Result{}, err
 			}
 			peers = append(peers, endpoints...)
-			witnesses = append(witnesses, w...)
 		case src.Static != nil:
 			peers = append(peers, src.Static.Addresses...)
 		case src.EC2Tags != nil:
@@ -102,24 +100,19 @@ func (r *Resolver) Resolve(ctx context.Context, node *seiv1alpha1.SeiNode, prior
 
 	slices.Sort(peers)
 	peers = slices.Compact(peers)
-	slices.Sort(witnesses)
-	witnesses = slices.Compact(witnesses)
-	return Result{Peers: peers, Witnesses: witnesses}, nil
+	return Result{Peers: peers}, nil
 }
 
-// resolveLabel lists SeiNodes matching the selector, composes each peer's
-// `<node_id>@<host>:<port>` entry, and yields the in-cluster RPC witness for
-// each matched peer. A per-peer node_id fetch failure preserves the prior
-// composed entry (from priorByHost) or skips the peer until it is resolvable —
-// transients never wedge the fleet. Witnesses are deterministic from peer
-// identity (no node_id needed) so every matched peer yields one regardless of
-// sidecar reachability.
+// resolveLabel lists SeiNodes matching the selector and composes each peer's
+// `<node_id>@<host>:<port>` entry. A per-peer node_id fetch failure preserves
+// the prior composed entry (from priorByHost) or skips the peer until it is
+// resolvable — transients never wedge the fleet.
 func (r *Resolver) resolveLabel(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
 	src *seiv1alpha1.LabelPeerSource,
 	priorByHost map[string]string,
-) ([]string, []string, error) {
+) ([]string, error) {
 	logger := log.FromContext(ctx)
 	ns := node.Namespace
 	if src.Namespace != "" {
@@ -131,17 +124,15 @@ func (r *Resolver) resolveLabel(
 		client.InNamespace(ns),
 		client.MatchingLabels(src.Selector),
 	); err != nil {
-		return nil, nil, fmt.Errorf("listing peers by label: %w", err)
+		return nil, fmt.Errorf("listing peers by label: %w", err)
 	}
 
-	var endpoints, witnesses []string
+	var endpoints []string
 	for i := range nodeList.Items {
 		peer := &nodeList.Items[i]
 		if peer.Name == node.Name && peer.Namespace == node.Namespace {
 			continue
 		}
-
-		witnesses = append(witnesses, peerRPCAddress(peer))
 
 		address := peerAddress(peer)
 		var sc task.SidecarClient
@@ -164,7 +155,7 @@ func (r *Resolver) resolveLabel(
 		}
 		logger.Info("skipping peer until node_id is resolvable", "peer", peer.Name, "err", err)
 	}
-	return endpoints, witnesses, nil
+	return endpoints, nil
 }
 
 // indexResolvedPeersByHost maps `host:port` → `<node_id>@host:port` for O(1)
@@ -189,13 +180,4 @@ func peerAddress(peer *seiv1alpha1.SeiNode) string {
 	}
 	return fmt.Sprintf("%s-0.%s.%s.svc.cluster.local:%d",
 		peer.Name, peer.Name, peer.Namespace, seiconfig.PortP2P)
-}
-
-// peerRPCAddress returns the in-cluster headless Service DNS for a peer's RPC
-// port. Unlike peerAddress it never consults Spec.ExternalAddress: the external
-// NLB exposes P2P only, so a state-sync light-client witness must target the
-// cluster-internal RPC endpoint or seid exits on "no witnesses connected".
-func peerRPCAddress(peer *seiv1alpha1.SeiNode) string {
-	return fmt.Sprintf("%s-0.%s.%s.svc.cluster.local:%d",
-		peer.Name, peer.Name, peer.Namespace, seiconfig.PortRPC)
 }

@@ -97,6 +97,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	statusBase := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
 	observedPhase := node.Status.Phase
 	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	prevStateSync := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionStateSyncReady)
 
 	setNodePausedCondition(node)
 
@@ -106,6 +107,15 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		return r.Status().Patch(ctx, node, statusBase)
 	}
+
+	// Resolve the always-present StateSyncReady condition before the Failed and
+	// Paused early-returns so it rides the existing flush on every path (Failed
+	// flush, Paused flush, and the normal end-of-reconcile patch) — no separate
+	// status write. Fail-closed enforcement lives in ResolvePlan, which declines
+	// to build a state-sync plan when this condition isn't True; that keeps
+	// terminal-plan cleanup and non-state-sync work running. A blocked gate
+	// requeues (see end of reconcile) without aborting the steps below.
+	stateSyncBlocked := r.reconcileStateSyncGate(node)
 
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
@@ -133,11 +143,15 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
+	// ResolvePlan runs unconditionally: it clears terminal plans and drives
+	// non-state-sync work. Its internal fail-closed gate declines to build a
+	// state-sync plan when StateSyncReady isn't True.
 	if err := r.Planner.ResolvePlan(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
 
 	r.emitSidecarReadinessEvent(node, prevSidecar)
+	r.emitStateSyncBlockedEvent(node, prevStateSync)
 
 	var result ctrl.Result
 	var execErr error
@@ -163,33 +177,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return result, execErr
 	}
 
-	// Emit metrics/events if the phase changed.
-	if node.Status.Phase != observedPhase {
-		ns, name := node.Namespace, node.Name
-		nodePhaseTransitions.Add(ctx, 1,
-			metric.WithAttributes(
-				observability.AttrController.String(seiNodeControllerName),
-				observability.AttrNamespace.String(ns),
-				observability.AttrFromPhase.String(string(observedPhase)),
-				observability.AttrToPhase.String(string(node.Status.Phase)),
-			),
-		)
-		emitNodePhase(ns, name, node.Status.Phase)
-		r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
-			"Phase changed from %s to %s", observedPhase, node.Status.Phase)
-
-		// Record time spent in the previous phase.
-		if node.Status.PhaseTransitionTime != nil && observedPhase != "" {
-			dur := time.Since(node.Status.PhaseTransitionTime.Time).Seconds()
-			nodePhaseDuration.Record(ctx, dur,
-				metric.WithAttributes(
-					observability.AttrNamespace.String(ns),
-					observability.AttrChainID.String(node.Spec.ChainID),
-					observability.AttrPhase.String(string(observedPhase)),
-				),
-			)
-		}
-	}
+	r.emitPhaseTransition(ctx, node, observedPhase)
 
 	// Running nodes with no active plan requeue on a steady-state interval.
 	// Spec changes trigger immediate reconciles via GenerationChangedPredicate.
@@ -197,7 +185,49 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 
+	// A blocked state-sync node (fail-closed or transient) builds no plan to
+	// drive a requeue, and the syncer file is a mounted volume with no watch.
+	// Poll so the gate re-resolves and unblocks once GitOps provisions or fixes
+	// the syncers. IsZero defers to any stronger requeue above (running-node
+	// poll, plan execution), so an active-plan node is unaffected.
+	if stateSyncBlocked && result.IsZero() {
+		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
+	}
+
 	return result, nil
+}
+
+// emitPhaseTransition records phase-transition metrics and a PhaseTransition
+// Event when the node's phase changed during this reconcile. A no-op when the
+// phase is unchanged.
+func (r *SeiNodeReconciler) emitPhaseTransition(ctx context.Context, node *seiv1alpha1.SeiNode, observedPhase seiv1alpha1.SeiNodePhase) {
+	if node.Status.Phase == observedPhase {
+		return
+	}
+	ns, name := node.Namespace, node.Name
+	nodePhaseTransitions.Add(ctx, 1,
+		metric.WithAttributes(
+			observability.AttrController.String(seiNodeControllerName),
+			observability.AttrNamespace.String(ns),
+			observability.AttrFromPhase.String(string(observedPhase)),
+			observability.AttrToPhase.String(string(node.Status.Phase)),
+		),
+	)
+	emitNodePhase(ns, name, node.Status.Phase)
+	r.Recorder.Eventf(node, corev1.EventTypeNormal, "PhaseTransition",
+		"Phase changed from %s to %s", observedPhase, node.Status.Phase)
+
+	// Record time spent in the previous phase.
+	if node.Status.PhaseTransitionTime != nil && observedPhase != "" {
+		dur := time.Since(node.Status.PhaseTransitionTime.Time).Seconds()
+		nodePhaseDuration.Record(ctx, dur,
+			metric.WithAttributes(
+				observability.AttrNamespace.String(ns),
+				observability.AttrChainID.String(node.Spec.ChainID),
+				observability.AttrPhase.String(string(observedPhase)),
+			),
+		)
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -299,4 +329,27 @@ func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode,
 		r.Recorder.Event(node, corev1.EventTypeNormal, "SidecarReadinessRestored",
 			"sidecar Healthz returned 200; mark-ready gate is open")
 	}
+}
+
+// emitStateSyncBlockedEvent fires a StateSyncBlocked Warning once, on the
+// transition into fail-closed (StateSyncReady leaving True/absent for a
+// fail-closed reason) — not on every requeue. NotApplicable (state-sync
+// disabled) never trips it.
+func (r *SeiNodeReconciler) emitStateSyncBlockedEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {
+	cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionStateSyncReady)
+	if cur == nil || cur.Status == metav1.ConditionTrue {
+		return
+	}
+	blockedReason := cur.Reason == seiv1alpha1.ReasonStateSyncNoSyncersConfigured ||
+		cur.Reason == seiv1alpha1.ReasonStateSyncSyncerSourceError
+	if !blockedReason {
+		return
+	}
+	// Transition = previously True, absent, or a different (non-blocked) reason.
+	if prev != nil && prev.Status == cur.Status && prev.Reason == cur.Reason {
+		return
+	}
+	r.Recorder.Eventf(node, corev1.EventTypeWarning, "StateSyncBlocked",
+		"state sync enabled but not ready for chain %q (%s); not building plan",
+		node.Spec.ChainID, cur.Reason)
 }
