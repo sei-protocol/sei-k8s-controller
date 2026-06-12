@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -48,6 +49,10 @@ func TestArchivePlanner_BlockSyncProgression(t *testing.T) {
 	}
 }
 
+// Peers now reach config via the config-apply override
+// (network.p2p.persistent_peers), not a sidecar discover-peers task. The
+// controller resolves spec.peers into status.resolvedPeers before plan build;
+// the planner reads that set. The plan must NOT contain a discover-peers task.
 func TestArchivePlanner_WithPeers(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "archive-0", Namespace: "pacific-1"},
@@ -58,6 +63,9 @@ func TestArchivePlanner_WithPeers(t *testing.T) {
 			Peers: []seiv1alpha1.PeerSource{
 				{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{"peer1@host:26656"}}},
 			},
+		},
+		Status: seiv1alpha1.SeiNodeStatus{
+			ResolvedPeers: []string{"peer1@host:26656"},
 		},
 	}
 
@@ -72,15 +80,35 @@ func TestArchivePlanner_WithPeers(t *testing.T) {
 		types = append(types, task.Type)
 	}
 
-	if !slices.Contains(types, TaskDiscoverPeers) {
-		t.Errorf("archive plan with peers should contain discover-peers, got %v", types)
+	if slices.Contains(types, TaskDiscoverPeers) {
+		t.Errorf("archive plan must not contain discover-peers (controller-owned peering), got %v", types)
 	}
 
-	for _, task := range plan.Tasks {
-		if task.Type == TaskDiscoverPeers && task.MaxRetries != discoverPeersMaxRetries {
-			t.Errorf("discover-peers MaxRetries = %d, want %d", task.MaxRetries, discoverPeersMaxRetries)
-		}
+	intent := configApplyIntent(t, plan)
+	if got := intent.Overrides[keyP2PPersistentPeers]; got != "peer1@host:26656" {
+		t.Errorf("persistent_peers override = %q, want %q", got, "peer1@host:26656")
 	}
+}
+
+// configApplyIntent extracts the *seiconfig.ConfigIntent from the plan's
+// config-apply task params.
+func configApplyIntent(t *testing.T, plan *seiv1alpha1.TaskPlan) *seiconfig.ConfigIntent {
+	t.Helper()
+	for _, tk := range plan.Tasks {
+		if tk.Type != TaskConfigApply {
+			continue
+		}
+		if tk.Params == nil {
+			t.Fatal("config-apply task has nil params")
+		}
+		var intent seiconfig.ConfigIntent
+		if err := json.Unmarshal(tk.Params.Raw, &intent); err != nil {
+			t.Fatalf("unmarshaling config-apply intent: %v", err)
+		}
+		return &intent
+	}
+	t.Fatal("plan has no config-apply task")
+	return nil
 }
 
 func TestArchivePlanner_SnapshotGenerationOverrides(t *testing.T) {

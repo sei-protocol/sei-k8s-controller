@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,7 +50,12 @@ const (
 
 const (
 	overrideKeyLoggingLevel = "logging.level"
-	enforcedLoggingLevel    = "info"
+	enforcedLoggingLevel    = "error"
+
+	// keyP2PPersistentPeers is the sei-config enrichment key for
+	// network.p2p.persistent_peers (WithHotReload). sei-config v0.0.19
+	// exposes no exported constant for it, so it is named here.
+	keyP2PPersistentPeers = "network.p2p.persistent_peers"
 )
 
 // baseProgression defines the ordered task sequence for each bootstrap mode.
@@ -300,21 +306,18 @@ func insertBefore(prog []string, target, taskType string) ([]string, error) {
 }
 
 // buildSidecarProgression constructs the sidecar task sequence for the given
-// bootstrap mode, inserting optional tasks (genesis, peers, state-sync) at
-// the correct positions. Used by both buildBasePlan and buildBootstrapPlan
-// to ensure they produce consistent sidecar progressions.
-func buildSidecarProgression(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.SnapshotSource) ([]string, error) {
+// bootstrap mode, inserting optional tasks (genesis, state-sync) at the
+// correct positions. Used by both buildBasePlan and buildBootstrapPlan to
+// ensure they produce consistent sidecar progressions. persistent_peers is no
+// longer a sidecar task — the controller writes it via the config-apply
+// override (see commonOverrides).
+func buildSidecarProgression(snap *seiv1alpha1.SnapshotSource) ([]string, error) {
 	mode := bootstrapMode(snap)
 	prog := slices.Clone(baseProgression[mode])
 
 	var err error
 	if prog, err = insertBefore(prog, TaskConfigApply, TaskConfigureGenesis); err != nil {
 		return nil, err
-	}
-	if needsDiscoverPeers(node) {
-		if prog, err = insertBefore(prog, TaskConfigValidate, TaskDiscoverPeers); err != nil {
-			return nil, err
-		}
 	}
 	if snap != nil {
 		if prog, err = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync); err != nil {
@@ -501,8 +504,6 @@ func taskMaxRetries(taskType string) int {
 		return genesisConfigureMaxRetries
 	case TaskAssembleGenesis:
 		return groupAssemblyMaxRetries
-	case TaskDiscoverPeers:
-		return discoverPeersMaxRetries
 	case task.TaskTypeReplacePod:
 		return 3
 	default:
@@ -517,7 +518,7 @@ func buildBasePlan(
 	snap *seiv1alpha1.SnapshotSource,
 	configIntent *seiconfig.ConfigIntent,
 ) (*seiv1alpha1.TaskPlan, error) {
-	sidecarProg, err := buildSidecarProgression(node, snap)
+	sidecarProg, err := buildSidecarProgression(snap)
 	if err != nil {
 		return nil, err
 	}
@@ -605,8 +606,6 @@ func paramsForTaskType(
 			return configIntent
 		}
 		return &seiconfig.ConfigIntent{}
-	case TaskDiscoverPeers:
-		return discoverPeersTask(node)
 	case TaskConfigureStateSync:
 		return configureStateSyncTask(node)
 	case TaskConfigValidate:
@@ -655,56 +654,6 @@ func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource) sidecar.SnapshotResto
 	return sidecar.SnapshotRestoreTask{TargetHeight: snap.S3.TargetHeight}
 }
 
-// needsDiscoverPeers reports whether a discover-peers task belongs in the plan.
-// A node whose peer sources currently resolve to zero addresses (the first
-// validator(s) in a fresh cluster, whose label selector matches no running
-// peers yet) gets no task — there is nothing to apply, and seictl's
-// DiscoverPeersTask.Validate rejects an empty Sources list, which would
-// otherwise wedge the node before it can become a resolvable peer.
-func needsDiscoverPeers(node *seiv1alpha1.SeiNode) bool {
-	return len(discoverPeersTask(node).Sources) > 0
-}
-
-func discoverPeersTask(node *seiv1alpha1.SeiNode) sidecar.DiscoverPeersTask {
-	if len(node.Spec.Peers) == 0 {
-		return sidecar.DiscoverPeersTask{}
-	}
-	var sources []sidecar.PeerSource
-	for _, s := range node.Spec.Peers {
-		switch {
-		case s.EC2Tags != nil:
-			sources = append(sources, sidecar.PeerSource{
-				Type:   sidecar.PeerSourceEC2Tags,
-				Region: s.EC2Tags.Region,
-				Tags:   s.EC2Tags.Tags,
-			})
-		case s.Static != nil:
-			if len(s.Static.Addresses) == 0 {
-				continue
-			}
-			sources = append(sources, sidecar.PeerSource{
-				Type:      sidecar.PeerSourceStatic,
-				Addresses: s.Static.Addresses,
-			})
-		case s.Label != nil:
-			// A label selector resolving to zero in-cluster peers (the first
-			// validator(s) in a fresh cluster) is a no-op — emitting an empty
-			// static source trips seictl's missing-Addresses validation and
-			// wedges discover-peers on a retry loop. ResolvedPeers is
-			// pre-composed `<node_id>@<host>:<port>`; route as static so the
-			// sidecar writes them verbatim.
-			if len(node.Status.ResolvedPeers) == 0 {
-				continue
-			}
-			sources = append(sources, sidecar.PeerSource{
-				Type:      sidecar.PeerSourceStatic,
-				Addresses: node.Status.ResolvedPeers,
-			})
-		}
-	}
-	return sidecar.DiscoverPeersTask{Sources: sources}
-}
-
 func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyncTask {
 	snap := node.Spec.SnapshotSource()
 	t := sidecar.ConfigureStateSyncTask{
@@ -721,11 +670,15 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 }
 
 // commonOverrides returns controller overrides that apply to all node modes.
-// sei-config defaults logging.level to "info"; we baseline it to "error" here.
-// spec.Overrides still wins via mergeOverrides for per-node verbosity.
+// logging.level is not set here — it is controller-enforced (not user-
+// overridable) in applyForcedOverrides.
+//
+// persistent_peers is stamped from Status.ResolvedPeers ("" when none — a valid
+// no-peers config). On an init plan it's frozen at build time and refreshes only
+// on the next deployment: peers update on deployments, not on churn.
 func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	out := map[string]string{
-		"logging.level": "error",
+		keyP2PPersistentPeers: strings.Join(node.Status.ResolvedPeers, ","),
 	}
 	if node.Spec.ExternalAddress != "" {
 		out[seiconfig.KeyP2PExternalAddress] = node.Spec.ExternalAddress
@@ -790,14 +743,22 @@ func imageDriftMessage(node *seiv1alpha1.SeiNode, p platform.Config) string {
 	}
 }
 
-// externalAddressPatch is the config.toml patch that stamps the
-// publishable-P2P external address. An empty Spec.ExternalAddress
-// stamps an empty value so opt-out reaches the pod symmetrically.
-func externalAddressPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
+// p2pConfigPatch is the config.toml patch a running-node update plan applies
+// to the controller-owned [p2p] keys. It stamps the publishable external
+// address AND folds in the latest controller-resolved persistent_peers, so an
+// already-firing update plan (image drift) carries the freshest observed peer
+// set. Peer churn alone does NOT trigger a plan — this only piggybacks the
+// latest valid state onto a deployment we are doing anyway. Both values stamp
+// empty when unset/none, so opt-out and no-peers reach the pod symmetrically.
+//
+// config.toml uses hyphenated keys (external-address, persistent-peers), unlike
+// the dotted enrichment keys used on the init-path config-apply override.
+func p2pConfigPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 	return map[string]map[string]any{
 		"config.toml": {
 			"p2p": map[string]any{
 				"external-address": node.Spec.ExternalAddress,
+				"persistent-peers": strings.Join(node.Status.ResolvedPeers, ","),
 			},
 		},
 	}
@@ -846,6 +807,9 @@ func mergeOverrides(controllerOverrides, userOverrides map[string]string) map[st
 	return merged
 }
 
+// applyForcedOverrides pins controller-enforced config keys that users may not
+// override. logging.level is forced to enforcedLoggingLevel ("error"); a user
+// attempt to set it is logged and discarded.
 func applyForcedOverrides(merged, userOverrides map[string]string) {
 	if got, ok := userOverrides[overrideKeyLoggingLevel]; ok && got != enforcedLoggingLevel {
 		ctrl.Log.WithName("planner").Info(

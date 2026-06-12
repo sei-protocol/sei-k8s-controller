@@ -51,6 +51,9 @@ type LabelPeerSource struct {
 }
 
 // EC2TagsPeerSource discovers peers via EC2 tag filters in a specific region.
+// node_id comes from the sei.io/node-id tag, not verified against the live peer;
+// a forged tag is rejected at the CometBFT handshake (degrades connectivity,
+// can't impersonate). Verify live if EC2Tags gets a real consumer.
 type EC2TagsPeerSource struct {
 	// Region is the AWS region to query for EC2 instances.
 	// +kubebuilder:validation:MinLength=1

@@ -26,6 +26,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
+	"github.com/sei-protocol/sei-k8s-controller/internal/peering"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
@@ -48,6 +49,10 @@ type SeiNodeReconciler struct {
 	Platform     PlatformConfig
 	Planner      *planner.NodeResolver
 	PlanExecutor planner.PlanExecutor[*seiv1alpha1.SeiNode]
+	// EC2Peers resolves EC2Tags peer sources via the AWS EC2 API. Nil is
+	// tolerated: an EC2Tags source declared with no resolver preserves the
+	// prior peer set rather than erroring (EC2Tags is vestigial today).
+	EC2Peers peering.EC2Resolver
 }
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
@@ -295,4 +300,3 @@ func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode,
 			"sidecar Healthz returned 200; mark-ready gate is open")
 	}
 }
-

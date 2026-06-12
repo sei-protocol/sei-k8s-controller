@@ -30,6 +30,7 @@ import (
 	nodedeploymentcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment"
 	nodetaskcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodetask"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
+	"github.com/sei-protocol/sei-k8s-controller/internal/peering"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/sidecartransport"
@@ -184,6 +185,12 @@ func main() {
 		return newSidecarClient(node)
 	}
 
+	// EC2 peer resolution rides the controller's IRSA role. The
+	// ec2:DescribeInstances grant is provisioned out-of-band in Terraform (like
+	// S3 — see config/rbac/service_account.yaml); that grant, not a code flag, is
+	// the rollout switch. Before it lands, resolveEC2 fails closed (preserve-prior),
+	// so persistent_peers does not churn.
+
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
 	nodeRecorder := mgr.GetEventRecorderFor("seinode-controller")
 	if err := (&nodecontroller.SeiNodeReconciler{
@@ -195,6 +202,7 @@ func main() {
 			BuildSidecarClient: buildSidecarClient,
 			Platform:           platformCfg,
 		},
+		EC2Peers: peering.NewAWSEC2Resolver(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
