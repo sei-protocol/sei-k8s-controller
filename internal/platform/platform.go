@@ -22,8 +22,12 @@ const (
 
 // Config holds infrastructure-level settings that vary per deployment
 // environment. Fields are read from environment variables in main.go and are
-// required unless documented otherwise — StateSyncSyncersFile is optional
+// required unless documented otherwise — ControllerConfigFile is optional
 // (state-sync is opt-in). See platformtest.Config() for test fixtures.
+//
+// Config is env-sourced infra; FileConfig (below) is the file-sourced
+// application config. They are deliberately distinct: ControllerConfigFile is
+// the path to the latter, not its contents.
 type Config struct {
 	NodepoolName        string
 	NodepoolArchive     string
@@ -60,19 +64,30 @@ type Config struct {
 	// The cosmos-exporter container is attached to every SeiNode pod.
 	CosmosExporterImage string
 
-	// StateSyncSyncersFile is the path to the read-only canonical-syncer file the
-	// controller reads to populate state-sync rpc_servers. It is the trust root
-	// for state-sync: a GitOps-written ConfigMap mounted read-only (directory
+	// ControllerConfigFile is the path to the read-only application-config file
+	// the controller reads (SEI_CONTROLLER_CONFIG). It is the trust root for
+	// state-sync today: a GitOps-written ConfigMap mounted read-only (directory
 	// mount, not subPath, so atomic ConfigMap swaps propagate without a pod
-	// restart). Content is a YAML map keyed by chain ID (chainID -> list of bare
-	// host:port endpoints — no http:// scheme prefix; the sidecar adds it).
+	// restart). Content is YAML decoded into FileConfig.
 	//
-	// State-sync is opt-in, so this may be empty when no node uses state-sync.
+	// The file is opt-in, so this may be empty when no node uses state-sync.
 	// When a node DOES enable state-sync and this is unset (or the file is
 	// missing, or yields <2 entries for its chain), the controller fails closed
 	// via StateSyncReady=False/NoSyncersConfigured rather than building a
 	// witness-less plan.
-	StateSyncSyncersFile string
+	ControllerConfigFile string
+}
+
+// FileConfig is the controller's file-sourced application config (SEI_CONTROLLER_CONFIG).
+// One section today (StateSync); PLT-475 folds the remaining infra knobs in.
+type FileConfig struct {
+	StateSync StateSyncConfig `json:"stateSync"`
+}
+
+// StateSyncConfig is the state-sync section of the application config.
+type StateSyncConfig struct {
+	// Syncers maps chainID -> bare host:port RPC endpoints (no scheme; sidecar adds it).
+	Syncers map[string][]string `json:"syncers"`
 }
 
 // NodepoolForMode returns the Karpenter NodePool name for the given

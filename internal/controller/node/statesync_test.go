@@ -29,15 +29,19 @@ const (
 	syncerSingle  = "only-one:26657"
 )
 
-// syncerFileYAML renders a chainID -> [host:port] map as the read-only syncer
-// file content (matching canonicalSyncers' expected YAML shape).
+// syncerFileYAML renders a chainID -> [host:port] map as the read-only
+// controller-config file content, wrapped under the stateSync.syncers section
+// (matching canonicalSyncers' expected platform.FileConfig shape).
 func syncerFileYAML(byChain map[string][]string) string {
 	var b strings.Builder
+	b.WriteString("stateSync:\n")
+	b.WriteString("  syncers:\n")
 	for chain, syncers := range byChain {
+		b.WriteString("    ")
 		b.WriteString(chain)
 		b.WriteString(":\n")
 		for _, s := range syncers {
-			b.WriteString("  - ")
+			b.WriteString("      - ")
 			b.WriteString(s)
 			b.WriteString("\n")
 		}
@@ -49,11 +53,11 @@ func syncerFileYAML(byChain map[string][]string) string {
 // platform at it. The file lives under t.TempDir(), auto-cleaned by the test.
 func writeSyncerFile(t *testing.T, r *SeiNodeReconciler, content string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "syncers.yaml")
+	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("writing syncer file: %v", err)
+		t.Fatalf("writing controller config file: %v", err)
 	}
-	r.Platform.StateSyncSyncersFile = path
+	r.Platform.ControllerConfigFile = path
 }
 
 // withSyncers writes a chainID -> syncers file and wires the reconciler to it.
@@ -148,7 +152,7 @@ func TestStateSyncGate_EnabledMissingFile_FailsClosed(t *testing.T) {
 
 	node := stateSyncNode("n", testChainID)
 	r, _ := newNodeReconciler(t, node)
-	r.Platform.StateSyncSyncersFile = filepath.Join(t.TempDir(), "absent.yaml") // never created
+	r.Platform.ControllerConfigFile = filepath.Join(t.TempDir(), "absent.yaml") // never created
 
 	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
@@ -192,7 +196,7 @@ func TestStateSyncGate_UnconfiguredSource_FailsClosed(t *testing.T) {
 	g := NewWithT(t)
 
 	node := stateSyncNode("n", testChainID)
-	r, _ := newNodeReconciler(t, node) // Platform leaves StateSyncSyncersFile empty.
+	r, _ := newNodeReconciler(t, node) // Platform leaves ControllerConfigFile empty.
 
 	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())

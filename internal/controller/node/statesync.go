@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
 // minCanonicalSyncers is the controller-side fail-closed floor: state-sync
@@ -77,23 +78,24 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (t
 	return false
 }
 
-// canonicalSyncers reads the read-only canonical-syncer file fresh and returns
-// the parsed syncer RPC endpoints for the given chain. An unset path, a missing
-// file, or a chain with no entry all yield an empty slice (no error) so the
-// caller fails closed via the StateSyncReady gate rather than crashing —
+// canonicalSyncers reads the read-only application-config file fresh and
+// returns the parsed syncer RPC endpoints for the given chain. An unset path, a
+// missing file, or a chain with no entry all yield an empty slice (no error) so
+// the caller fails closed via the StateSyncReady gate rather than crashing —
 // state-sync is opt-in and the file may legitimately be absent until GitOps
 // provisions the backing ConfigMap. Any other read or parse error is returned
 // so the gate can treat it as transient.
 //
-// File shape: a YAML map of chainID -> list of bare `host:port` RPC endpoints
-// (no scheme; the sidecar adds it). Each chain's entries are trimmed, blanks
-// dropped, sorted, and de-duplicated for a stable witness set.
+// File shape: see platform.FileConfig — the stateSync.syncers section is a YAML
+// map of chainID -> list of bare `host:port` RPC endpoints (no scheme; the
+// sidecar adds it). Each chain's entries are trimmed, blanks dropped, sorted,
+// and de-duplicated for a stable witness set.
 //
 // Read fresh on every call: a mounted ConfigMap swaps atomically (a symlink
 // flip on the directory mount), so re-reading picks up GitOps updates without a
 // pod restart. Never cache an open handle.
 func (r *SeiNodeReconciler) canonicalSyncers(chainID string) ([]string, error) {
-	path := strings.TrimSpace(r.Platform.StateSyncSyncersFile)
+	path := strings.TrimSpace(r.Platform.ControllerConfigFile)
 	if path == "" {
 		return nil, nil
 	}
@@ -106,15 +108,14 @@ func (r *SeiNodeReconciler) canonicalSyncers(chainID string) ([]string, error) {
 		return nil, err
 	}
 
-	syncers := map[string][]string{}
-	if err := yaml.Unmarshal(raw, &syncers); err != nil {
-		return nil, fmt.Errorf("parsing canonical-syncer file %q: %w", path, err)
+	var cfg platform.FileConfig
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing controller config file %q: %w", path, err)
 	}
 
-	// A YAML list entry may itself carry comma/whitespace-joined endpoints
-	// (forward-compatible with PLT-475's stateSync.syncers), so route the joined
-	// value through the same splitter the ConfigMap source used.
-	return parseSyncerList(strings.Join(syncers[chainID], "\n")), nil
+	// A YAML list entry may itself carry comma/whitespace-joined endpoints, so
+	// route the joined value through the same splitter the ConfigMap source used.
+	return parseSyncerList(strings.Join(cfg.StateSync.Syncers[chainID], "\n")), nil
 }
 
 // parseSyncerList splits a syncer value on newlines and commas, trims
