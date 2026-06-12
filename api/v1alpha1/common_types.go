@@ -51,16 +51,9 @@ type LabelPeerSource struct {
 }
 
 // EC2TagsPeerSource discovers peers via EC2 tag filters in a specific region.
-//
-// Trust boundary: a peer's node_id is tag-asserted from its `sei.io/node-id`
-// instance tag, NOT verified against the live peer (unlike the Label path,
-// which fetches it via the peer's sidecar). The tag is trusted, so anyone with
-// ec2:CreateTags on the target account is inside the trust boundary. A forged
-// node_id is accepted here but rejected at the CometBFT secret-connection
-// handshake, so a wrong tag degrades connectivity — it cannot impersonate.
-//
-// Un-defer: add live node_id verification (mirroring the Label path) when
-// EC2Tags gains a real consumer.
+// node_id comes from the sei.io/node-id tag, not verified against the live peer;
+// a forged tag is rejected at the CometBFT handshake (degrades connectivity,
+// can't impersonate). Verify live if EC2Tags gets a real consumer.
 type EC2TagsPeerSource struct {
 	// Region is the AWS region to query for EC2 instances.
 	// +kubebuilder:validation:MinLength=1

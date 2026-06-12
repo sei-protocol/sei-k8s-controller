@@ -673,9 +673,9 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 // logging.level is not set here — it is controller-enforced (not user-
 // overridable) in applyForcedOverrides.
 //
-// persistent_peers is written unconditionally from the controller-resolved set;
-// an empty set stamps "" — a valid no-peers config, since the controller is the
-// sole owner of peering and there is no sidecar round-trip to deadlock.
+// persistent_peers is stamped from Status.ResolvedPeers ("" when none — a valid
+// no-peers config). On an init plan it's frozen at build time and refreshes only
+// on the next deployment: peers update on deployments, not on churn.
 func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	out := map[string]string{
 		keyP2PPersistentPeers: strings.Join(node.Status.ResolvedPeers, ","),
