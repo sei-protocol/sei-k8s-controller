@@ -30,7 +30,6 @@ const unknownValue = "unknown"
 
 const (
 	TaskSnapshotRestore    = sidecar.TaskTypeSnapshotRestore
-	TaskDiscoverPeers      = sidecar.TaskTypeDiscoverPeers
 	TaskConfigureGenesis   = sidecar.TaskTypeConfigureGenesis
 	TaskConfigureStateSync = sidecar.TaskTypeConfigureStateSync
 	TaskConfigApply        = sidecar.TaskTypeConfigApply

@@ -14,7 +14,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.39.1
 	github.com/sei-protocol/sei-config v0.0.19
-	github.com/sei-protocol/seictl v0.0.56
+	github.com/sei-protocol/seictl v0.0.57
 	github.com/urfave/cli/v3 v3.6.1
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
