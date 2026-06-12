@@ -97,6 +97,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	statusBase := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
 	observedPhase := node.Status.Phase
 	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	prevStateSync := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionStateSyncReady)
 
 	setNodePausedCondition(node)
 
@@ -110,13 +111,11 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Resolve the always-present StateSyncReady condition before the Failed and
 	// Paused early-returns so it rides the existing flush on every path (Failed
 	// flush, Paused flush, and the normal end-of-reconcile patch) — no separate
-	// status write. The fail-closed enforcement happens later, on the active
-	// path only, via enforceStateSyncGate using the `ready` resolved here (one
-	// ConfigMap read per reconcile).
-	stateSyncReady, err := r.reconcileStateSyncGate(ctx, node)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("resolving state-sync gate: %w", err)
-	}
+	// status write. Fail-closed enforcement lives in ResolvePlan, which declines
+	// to build a state-sync plan when this condition isn't True; that keeps
+	// terminal-plan cleanup and non-state-sync work running. A transient
+	// ConfigMap read error requeues without aborting the steps below.
+	stateSyncTransient := r.reconcileStateSyncGate(ctx, node)
 
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
@@ -143,21 +142,16 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
 
-	// Enforce the state-sync gate before ResolvePlan so a fail-closed node never
-	// builds the state-sync-bearing plan. Uses the `ready` resolved above (no
-	// re-read of the ConfigMap). stop=true short-circuits the reconcile; the
-	// gate flushes via the existing flushStatus closure (single optimistic-lock
-	// patch, no separate write).
-	if res, stop, err := r.enforceStateSyncGate(node, stateSyncReady, flushStatus); stop {
-		return res, err
-	}
-
 	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
+	// ResolvePlan runs unconditionally: it clears terminal plans and drives
+	// non-state-sync work. Its internal fail-closed gate declines to build a
+	// state-sync plan when StateSyncReady isn't True.
 	if err := r.Planner.ResolvePlan(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
 	}
 
 	r.emitSidecarReadinessEvent(node, prevSidecar)
+	r.emitStateSyncBlockedEvent(node, prevStateSync)
 
 	var result ctrl.Result
 	var execErr error
@@ -188,6 +182,12 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Running nodes with no active plan requeue on a steady-state interval.
 	// Spec changes trigger immediate reconciles via GenerationChangedPredicate.
 	if node.Status.Phase == seiv1alpha1.PhaseRunning && (node.Status.Plan == nil || node.Status.Plan.Phase != seiv1alpha1.TaskPlanActive) {
+		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
+	}
+
+	// A transient canonical-syncer ConfigMap read failed closed without a plan
+	// to drive a requeue; poll so the gate re-resolves once the API recovers.
+	if stateSyncTransient && result.IsZero() {
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 
@@ -326,4 +326,27 @@ func (r *SeiNodeReconciler) emitSidecarReadinessEvent(node *seiv1alpha1.SeiNode,
 		r.Recorder.Event(node, corev1.EventTypeNormal, "SidecarReadinessRestored",
 			"sidecar Healthz returned 200; mark-ready gate is open")
 	}
+}
+
+// emitStateSyncBlockedEvent fires a StateSyncBlocked Warning once, on the
+// transition into fail-closed (StateSyncReady leaving True/absent for a
+// fail-closed reason) — not on every requeue. NotApplicable (state-sync
+// disabled) never trips it.
+func (r *SeiNodeReconciler) emitStateSyncBlockedEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {
+	cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionStateSyncReady)
+	if cur == nil || cur.Status == metav1.ConditionTrue {
+		return
+	}
+	blockedReason := cur.Reason == seiv1alpha1.ReasonStateSyncNoSyncersConfigured ||
+		cur.Reason == seiv1alpha1.ReasonStateSyncConfigMapReadError
+	if !blockedReason {
+		return
+	}
+	// Transition = previously True, absent, or a different (non-blocked) reason.
+	if prev != nil && prev.Status == cur.Status && prev.Reason == cur.Reason {
+		return
+	}
+	r.Recorder.Eventf(node, corev1.EventTypeWarning, "StateSyncBlocked",
+		"state sync enabled but not ready for chain %q (%s); not building plan",
+		node.Spec.ChainID, cur.Reason)
 }

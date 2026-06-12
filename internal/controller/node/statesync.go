@@ -11,7 +11,6 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -33,62 +32,41 @@ const minCanonicalSyncers = 2
 // lockdown that fixes the trust-root namespace.
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
-// enforceStateSyncGate is the fail-closed half of the state-sync gate. It runs
-// AFTER reconcileStateSyncGate has resolved the always-present StateSyncReady
-// condition and returned `ready`. When the node is not ready and has no active
-// plan, it flushes the resolved condition via the caller's flushStatus closure
-// (preserving the single-patch / optimistic-lock model), emits a Warning Event,
-// and signals the reconciler to stop before ResolvePlan so a fail-closed node
-// never builds the state-sync-bearing plan. stop=true means the plan loop must
-// short-circuit; an already-active plan is left to run to completion (we don't
-// yank a state-sync plan mid-execution on a transient ConfigMap blip — the gate
-// re-asserts once the plan goes terminal). It makes no API calls itself, so it
-// takes no context — resolution (the ConfigMap read) already happened.
-func (r *SeiNodeReconciler) enforceStateSyncGate(
-	node *seiv1alpha1.SeiNode,
-	ready bool,
-	flushStatus func() error,
-) (_ ctrl.Result, stop bool, _ error) {
-	planActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
-	if ready || planActive {
-		return ctrl.Result{}, false, nil
-	}
-	if err := flushStatus(); err != nil {
-		return ctrl.Result{}, true, fmt.Errorf("flushing state-sync gate status: %w", err)
-	}
-	r.Recorder.Eventf(node, corev1.EventTypeWarning, "StateSyncBlocked",
-		"state sync enabled but <%d canonical syncers configured for chain %q; not building plan",
-		minCanonicalSyncers, node.Spec.ChainID)
-	return ctrl.Result{RequeueAfter: statusPollInterval}, true, nil
-}
-
 // reconcileStateSyncGate resolves the canonical-syncer set for a state-sync
 // node and sets the always-present ConditionStateSyncReady accordingly. It
 // mutates node.Status in-memory only — the condition and ResolvedStateSyncers
 // are flushed by the caller's single optimistic-lock status patch, never a
-// separate write. It is the resolution half of the gate: the caller runs it
-// before the Failed/Paused early-returns so StateSyncReady is seeded on every
-// path, then feeds `ready` into enforceStateSyncGate for fail-closed handling.
+// separate write. The caller runs it before the Failed/Paused early-returns so
+// StateSyncReady is seeded on every path.
 //
-// It returns true ("ready to plan") when the state-sync-bearing plan may
-// proceed: either state-sync is disabled (NotApplicable — the plan has no
-// state-sync task to gate) or >=2 canonical syncers are configured (Ready).
-// It returns false to fail closed: state-sync is enabled but <2 syncers are
-// configured (NoSyncersConfigured), in which case the caller must skip
-// ResolvePlan, emit a Warning Event, and requeue.
-func (r *SeiNodeReconciler) reconcileStateSyncGate(ctx context.Context, node *seiv1alpha1.SeiNode) (bool, error) {
+// Fail-closed is enforced downstream, not here: the planner declines to build a
+// state-sync plan whenever StateSyncReady is not True (see ResolvePlan). That
+// keeps ResolvePlan running on every reconcile, so handleTerminalPlan still
+// clears terminal plans and non-state-sync work proceeds — this method only
+// resolves the condition.
+//
+// A transient (non-NotFound) ConfigMap read error is NOT fatal: it sets
+// StateSyncReady=Unknown/ConfigMapReadError and returns transient=true so the
+// caller requeues without aborting the StatefulSet/Failed/Paused/flush path. A
+// missing ConfigMap or <2 entries fails closed via False/NoSyncersConfigured.
+func (r *SeiNodeReconciler) reconcileStateSyncGate(ctx context.Context, node *seiv1alpha1.SeiNode) (transient bool) {
 	snap := node.Spec.SnapshotSource()
 	if snap == nil || snap.StateSync == nil {
 		// State-sync disabled: no state-sync task in the plan to gate.
 		node.Status.ResolvedStateSyncers = nil
 		setStateSyncReady(node, metav1.ConditionFalse, seiv1alpha1.ReasonStateSyncNotApplicable,
 			"node does not enable state sync")
-		return true, nil
+		return false
 	}
 
 	syncers, err := r.canonicalSyncers(ctx, node.Spec.ChainID)
 	if err != nil {
-		return false, fmt.Errorf("reading canonical-syncer ConfigMap: %w", err)
+		// Transient API error: fail closed (clear any stale set) but don't abort
+		// the reconcile. Requeue and re-read next tick.
+		node.Status.ResolvedStateSyncers = nil
+		setStateSyncReady(node, metav1.ConditionUnknown, seiv1alpha1.ReasonStateSyncConfigMapReadError,
+			fmt.Sprintf("reading canonical-syncer ConfigMap for chain %q: %v", node.Spec.ChainID, err))
+		return true
 	}
 
 	if len(syncers) < minCanonicalSyncers {
@@ -99,7 +77,7 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(ctx context.Context, node *se
 		setStateSyncReady(node, metav1.ConditionFalse, seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
 			fmt.Sprintf("state sync requires >=%d canonical syncers configured for chain %q; found %d",
 				minCanonicalSyncers, node.Spec.ChainID, len(syncers)))
-		return false, nil
+		return false
 	}
 
 	if !slices.Equal(node.Status.ResolvedStateSyncers, syncers) {
@@ -107,7 +85,7 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(ctx context.Context, node *se
 	}
 	setStateSyncReady(node, metav1.ConditionTrue, seiv1alpha1.ReasonStateSyncReady,
 		fmt.Sprintf("%d canonical syncers configured for chain %q", len(syncers), node.Spec.ChainID))
-	return true, nil
+	return false
 }
 
 // canonicalSyncers reads the canonical-syncer ConfigMap and returns the parsed

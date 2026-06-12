@@ -309,6 +309,11 @@ const (
 	ReasonStateSyncNoSyncersConfigured = "NoSyncersConfigured"
 	// ReasonStateSyncNotApplicable: the node does not enable state-sync.
 	ReasonStateSyncNotApplicable = "NotApplicable"
+	// ReasonStateSyncConfigMapReadError: the canonical-syncer ConfigMap read
+	// failed for a non-NotFound reason (transient API error). Fails closed and
+	// requeues; the rest of the reconcile (StatefulSet, Failed/Paused handling,
+	// status flush) still runs.
+	ReasonStateSyncConfigMapReadError = "ConfigMapReadError"
 )
 
 // Reasons for the ImportPVCReady condition.

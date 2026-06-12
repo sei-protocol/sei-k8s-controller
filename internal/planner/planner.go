@@ -155,6 +155,16 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 	handleTerminalPlan(ctx, node)
 
+	// Fail-closed state-sync gate. Runs after handleTerminalPlan (so terminal
+	// plans still clear) but before building: a state-sync node whose
+	// StateSyncReady condition isn't True must never get a state-sync-bearing
+	// plan (CometBFT needs >=2 rpc-servers; we never fall back to peers). The
+	// condition is resolved upstream by the controller's reconcileStateSyncGate.
+	// Non-state-sync work is unaffected — only init-plan construction is gated.
+	if stateSyncBlocksPlan(node) {
+		return nil
+	}
+
 	mode, err := p.plannerForMode(node)
 	if err != nil {
 		return err
@@ -178,6 +188,25 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		node.Status.PhaseTransitionTime = &now
 	}
 	return nil
+}
+
+// stateSyncBlocksPlan reports whether the fail-closed state-sync gate must
+// suppress plan construction this reconcile. It fires only on the init path
+// (pre-Running), which is the only path that builds a state-sync-bearing plan
+// via buildSidecarProgression — a Running node's update plans carry no
+// state-sync task, so an image roll must not be blocked by a syncer-ConfigMap
+// blip. The gate trips when state-sync is enabled and the controller-resolved
+// StateSyncReady condition is not True (NoSyncersConfigured or the transient
+// ConfigMapReadError). A missing condition (not yet resolved) does not gate.
+func stateSyncBlocksPlan(node *seiv1alpha1.SeiNode) bool {
+	if node.Status.Phase == seiv1alpha1.PhaseRunning {
+		return false
+	}
+	if !hasStateSync(node.Spec.SnapshotSource()) {
+		return false
+	}
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionStateSyncReady)
+	return cond != nil && cond.Status != metav1.ConditionTrue
 }
 
 // handleTerminalPlan handles completed or failed plans: clears conditions
@@ -656,11 +685,12 @@ func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource) sidecar.SnapshotResto
 
 func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyncTask {
 	snap := node.Spec.SnapshotSource()
-	// RpcServers come from the controller-level canonical-syncer ConfigMap,
-	// resolved by the StateSyncReady gate into Status.ResolvedStateSyncers
-	// (replacing the label-derived ResolvedRPCWitnesses path — peers are no
-	// longer used as witnesses). The gate guarantees >=2 curated entries here;
-	// the sidecar establishes the trust point from them as it does today.
+	// RpcServers come from the controller-level canonical-syncer ConfigMap via
+	// Status.ResolvedStateSyncers (peers are no longer used as witnesses). This
+	// runs only when stateSyncBlocksPlan passed, i.e. StateSyncReady=True, which
+	// guarantees >=2 curated entries. The set is snapshotted into the task params
+	// here and never re-read at execution — so a transient ConfigMap blip on an
+	// already-active plan can't empty an in-flight witness list.
 	t := sidecar.ConfigureStateSyncTask{
 		UseLocalSnapshot: hasS3Snapshot(snap),
 		RpcServers:       node.Status.ResolvedStateSyncers,

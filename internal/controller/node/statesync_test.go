@@ -7,10 +7,14 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
@@ -25,6 +29,7 @@ const (
 	testNodeName     = "sei-test"
 	syncerA          = "a:26657"
 	syncerB          = "b:26657"
+	syncerSingle     = "only-one:26657"
 )
 
 func syncerConfigMap(data map[string]string) *corev1.ConfigMap {
@@ -88,9 +93,8 @@ func TestStateSyncGate_EnabledWithTwoSyncers_Ready(t *testing.T) {
 	r, _ := newNodeReconciler(t, node, cm)
 	withSyncerConfigMap(r)
 
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ready).To(BeTrue())
+	transient := r.reconcileStateSyncGate(ctx, node)
+	g.Expect(transient).To(BeFalse())
 
 	cond := stateSyncCondition(node)
 	g.Expect(cond).NotTo(BeNil())
@@ -113,9 +117,8 @@ func TestStateSyncGate_EnabledWithOneSyncer_FailsClosed(t *testing.T) {
 	r, _ := newNodeReconciler(t, node, cm)
 	withSyncerConfigMap(r)
 
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ready).To(BeFalse())
+	transient := r.reconcileStateSyncGate(ctx, node)
+	g.Expect(transient).To(BeFalse())
 
 	cond := stateSyncCondition(node)
 	g.Expect(cond).NotTo(BeNil())
@@ -132,9 +135,8 @@ func TestStateSyncGate_EnabledMissingConfigMap_FailsClosed(t *testing.T) {
 	r, _ := newNodeReconciler(t, node) // no ConfigMap object
 	withSyncerConfigMap(r)
 
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ready).To(BeFalse())
+	transient := r.reconcileStateSyncGate(ctx, node)
+	g.Expect(transient).To(BeFalse())
 
 	cond := stateSyncCondition(node)
 	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
@@ -150,9 +152,8 @@ func TestStateSyncGate_EnabledNoChainEntry_FailsClosed(t *testing.T) {
 	r, _ := newNodeReconciler(t, node, cm)
 	withSyncerConfigMap(r)
 
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ready).To(BeFalse())
+	transient := r.reconcileStateSyncGate(ctx, node)
+	g.Expect(transient).To(BeFalse())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
 }
 
@@ -163,9 +164,8 @@ func TestStateSyncGate_UnconfiguredConfigMapRef_FailsClosed(t *testing.T) {
 	node := stateSyncNode("n", testChainID)
 	r, _ := newNodeReconciler(t, node) // Platform leaves the ConfigMap name empty.
 
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ready).To(BeFalse())
+	transient := r.reconcileStateSyncGate(ctx, node)
+	g.Expect(transient).To(BeFalse())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
 }
 
@@ -178,9 +178,8 @@ func TestStateSyncGate_Disabled_NotApplicable(t *testing.T) {
 	r, _ := newNodeReconciler(t, node)
 	withSyncerConfigMap(r)
 
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ready).To(BeTrue())
+	transient := r.reconcileStateSyncGate(ctx, node)
+	g.Expect(transient).To(BeFalse())
 
 	cond := stateSyncCondition(node)
 	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
@@ -205,9 +204,8 @@ func TestStateSyncGate_NoSnapshotSource_NotApplicable(t *testing.T) {
 	r, _ := newNodeReconciler(t, node)
 	withSyncerConfigMap(r)
 
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ready).To(BeTrue())
+	transient := r.reconcileStateSyncGate(ctx, node)
+	g.Expect(transient).To(BeFalse())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNotApplicable))
 }
 
@@ -223,9 +221,8 @@ func TestStateSyncGate_FailClosedClearsStaleSyncers(t *testing.T) {
 	withSyncerConfigMap(r)
 	r.Platform.StateSyncSyncersConfigMap = "" // force unconfigured
 
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ready).To(BeFalse())
+	transient := r.reconcileStateSyncGate(ctx, node)
+	g.Expect(transient).To(BeFalse())
 	g.Expect(node.Status.ResolvedStateSyncers).To(BeNil())
 }
 
@@ -238,9 +235,8 @@ func TestStateSyncGate_NonStateSyncNodeUnaffected(t *testing.T) {
 	node := newSnapshotNode("n", testNamespace)
 	r, _ := newNodeReconciler(t, node)
 
-	ready, err := r.reconcileStateSyncGate(ctx, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ready).To(BeTrue())
+	transient := r.reconcileStateSyncGate(ctx, node)
+	g.Expect(transient).To(BeFalse())
 	g.Expect(node.Status.ResolvedStateSyncers).To(BeEmpty())
 	g.Expect(slices.Contains([]string{
 		seiv1alpha1.ReasonStateSyncReady, seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
@@ -256,7 +252,7 @@ func TestReconcile_StateSyncFailClosed_NoPlanBuilt(t *testing.T) {
 
 	node := stateSyncNode("ss-0", testNamespace)
 	node.Spec.ChainID = testChainID
-	cm := syncerConfigMap(map[string]string{testChainID: "only-one:26657"})
+	cm := syncerConfigMap(map[string]string{testChainID: syncerSingle})
 	r, c := newNodeReconciler(t, node, cm)
 	rec := record.NewFakeRecorder(10)
 	r.Recorder = rec
@@ -335,6 +331,122 @@ func TestReconcile_PausedNode_StateSyncReadyStillSeeded(t *testing.T) {
 			g.Expect(fetched.Status.Plan).To(BeNil(), "a paused node must build no plan")
 		})
 	}
+}
+
+// Fail-closed must NOT block terminal-plan cleanup. A state-sync node with <2
+// syncers and a terminal plan on status must have that plan cleared
+// (handleTerminalPlan runs inside ResolvePlan, which now runs unconditionally)
+// while still building NO new state-sync plan.
+func TestReconcile_StateSyncFailClosed_ClearsTerminalPlan(t *testing.T) {
+	cases := []struct {
+		name  string
+		phase seiv1alpha1.TaskPlanPhase
+	}{
+		{"complete", seiv1alpha1.TaskPlanComplete},
+		{"failed", seiv1alpha1.TaskPlanFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			ctx := context.Background()
+
+			node := stateSyncNode("ss-term", testNamespace)
+			node.Spec.ChainID = testChainID
+			node.Status.Phase = seiv1alpha1.PhaseInitializing
+			node.Status.Plan = &seiv1alpha1.TaskPlan{
+				ID:    "stale-plan",
+				Phase: tc.phase,
+				Tasks: []seiv1alpha1.PlannedTask{{Type: planner.TaskConfigApply, Status: seiv1alpha1.TaskComplete}},
+			}
+			cm := syncerConfigMap(map[string]string{testChainID: syncerSingle})
+			r, c := newNodeReconciler(t, node, cm)
+			withSyncerConfigMap(r)
+
+			_, err := r.Reconcile(ctx, nodeReqFor("ss-term", testNamespace))
+			g.Expect(err).NotTo(HaveOccurred())
+
+			fetched := getSeiNode(t, ctx, c, "ss-term", testNamespace)
+			g.Expect(fetched.Status.Plan).To(BeNil(),
+				"terminal plan must be cleared even when fail-closed")
+			cond := stateSyncCondition(fetched)
+			g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
+		})
+	}
+}
+
+// A non-NotFound ConfigMap read error must be transient: reconcileStatefulSet,
+// Paused/Failed handling, and the status flush still run, the reconcile
+// requeues instead of hard-aborting, and StateSyncReady reflects it via
+// Unknown/ConfigMapReadError.
+func TestReconcile_StateSyncConfigMapReadError_Transient(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := stateSyncNode("ss-err", testNamespace)
+	node.Spec.ChainID = testChainID
+	r, c := newNodeReconcilerWithGetError(t, node, func(key client.ObjectKey) error {
+		if key.Name == testSyncerCMName {
+			return apierrors.NewServiceUnavailable("etcd unavailable")
+		}
+		return nil
+	})
+	withSyncerConfigMap(r)
+
+	res, err := r.Reconcile(ctx, nodeReqFor("ss-err", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred(), "transient ConfigMap error must not hard-abort")
+	g.Expect(res.RequeueAfter).To(BeNumerically(">", 0), "transient error must requeue")
+
+	fetched := getSeiNode(t, ctx, c, "ss-err", testNamespace)
+	cond := stateSyncCondition(fetched)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Status).To(Equal(metav1.ConditionUnknown))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncConfigMapReadError))
+	g.Expect(fetched.Status.Plan).To(BeNil(), "no state-sync plan while the gate is unresolved")
+	// StatefulSet sync still ran despite the ConfigMap error.
+	sts := &appsv1.StatefulSet{}
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "ss-err", Namespace: testNamespace}, sts)).To(Succeed(),
+		"reconcileStatefulSet must run even when the ConfigMap read fails")
+}
+
+// The StateSyncBlocked Warning fires once on the transition into fail-closed,
+// not on every requeue.
+func TestReconcile_StateSyncBlocked_EventFiresOncePerTransition(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := stateSyncNode("ss-evt", testNamespace)
+	node.Spec.ChainID = testChainID
+	cm := syncerConfigMap(map[string]string{testChainID: syncerSingle})
+	r, _ := newNodeReconciler(t, node, cm)
+	rec := record.NewFakeRecorder(10)
+	r.Recorder = rec
+	withSyncerConfigMap(r)
+
+	countBlocked := func() int {
+		n := 0
+		for {
+			select {
+			case e := <-rec.Events:
+				if strings.Contains(e, "StateSyncBlocked") {
+					n++
+				}
+				continue
+			default:
+			}
+			return n
+		}
+	}
+
+	_, err := r.Reconcile(ctx, nodeReqFor("ss-evt", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(countBlocked()).To(Equal(1), "first fail-closed reconcile emits StateSyncBlocked")
+
+	// Plan stays nil and the condition is already False/NoSyncersConfigured, so a
+	// second reconcile is a no-op transition — no repeat event.
+	_, err = r.Reconcile(ctx, nodeReqFor("ss-evt", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(countBlocked()).To(Equal(0), "steady-state requeue must not re-emit StateSyncBlocked")
 }
 
 // Full reconcile path: a state-sync node with >=2 syncers proceeds — a plan is
