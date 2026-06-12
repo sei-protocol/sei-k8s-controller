@@ -49,10 +49,10 @@ func TestArchivePlanner_BlockSyncProgression(t *testing.T) {
 	}
 }
 
-// Peers now reach config via the config-apply override
-// (network.p2p.persistent_peers), not a sidecar discover-peers task. The
-// controller resolves spec.peers into status.resolvedPeers before plan build;
-// the planner reads that set. The plan must NOT contain a discover-peers task.
+// Peers reach config via the config-apply override
+// (network.p2p.persistent_peers): the controller resolves spec.peers into
+// status.resolvedPeers before plan build, and the planner folds that set into
+// the override.
 func TestArchivePlanner_WithPeers(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "archive-0", Namespace: "pacific-1"},
@@ -73,15 +73,6 @@ func TestArchivePlanner_WithPeers(t *testing.T) {
 	plan, err := p.BuildPlan(node)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
-	}
-
-	types := make([]string, 0, len(plan.Tasks))
-	for _, task := range plan.Tasks {
-		types = append(types, task.Type)
-	}
-
-	if slices.Contains(types, TaskDiscoverPeers) {
-		t.Errorf("archive plan must not contain discover-peers (controller-owned peering), got %v", types)
 	}
 
 	intent := configApplyIntent(t, plan)
