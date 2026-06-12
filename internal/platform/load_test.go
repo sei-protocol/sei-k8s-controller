@@ -6,12 +6,15 @@ import (
 	"testing"
 )
 
+// envNodepool is asserted in multiple fallback cases, so it's named (goconst).
+const envNodepool = "env-nodepool"
+
 // setMigratedEnv sets every migrated infra env var to a recognizable "env-"
 // prefixed value so a test can assert which source a resolved field came from.
 func setMigratedEnv(t *testing.T) {
 	t.Helper()
 	for _, kv := range [][2]string{
-		{"SEI_NODEPOOL_NAME", "env-nodepool"},
+		{"SEI_NODEPOOL_NAME", envNodepool},
 		{"SEI_NODEPOOL_ARCHIVE", "env-nodepool-archive"},
 		{"SEI_TOLERATION_KEY", "env-toleration"},
 		{"SEI_SERVICE_ACCOUNT", "env-sa"},
@@ -64,7 +67,7 @@ func TestLoad_NoFile_AllEnv(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if cfg.NodepoolName != "env-nodepool" || cfg.SnapshotBucket != "env-snap-bucket" || cfg.SidecarImage != "env-sidecar" {
+	if cfg.NodepoolName != envNodepool || cfg.SnapshotBucket != "env-snap-bucket" || cfg.SidecarImage != "env-sidecar" {
 		t.Errorf("expected env-sourced values, got nodepool=%q snapshot=%q sidecar=%q",
 			cfg.NodepoolName, cfg.SnapshotBucket, cfg.SidecarImage)
 	}
@@ -134,7 +137,7 @@ func TestLoad_MissingFileFallsBackToEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.NodepoolName != "env-nodepool" {
+	if cfg.NodepoolName != envNodepool {
 		t.Errorf("NodepoolName = %q, want env fallback", cfg.NodepoolName)
 	}
 }
