@@ -23,6 +23,8 @@ One line per kind; the **behavior note** is the part not obvious from the payloa
 | `AwaitCondition` | waits on a local node condition (height) | `action: SIGTERM_SEID` SIGTERMs seid after the condition — the coordinated halt-at-height primitive |
 | `AwaitNodesAtHeight` | waits for the target to cross a height | **single-node** (`target.nodeRef`); maps to the sidecar `await-condition(height=H)` and **drops `action`** |
 | `UpdateNodeImage` | patches `spec.image`, waits for `currentImage` | **no readiness check** — completes on image observation; green ≠ healthy node |
+| `RestartSeid` | restarts seid in place | SIGTERMs seid so it re-reads `config.toml` **without bouncing the sidecar** (no mark-ready reapproval gap); empty payload; completion = local RPC serving again, **not** caught-up/voting — gate height with a following `AwaitNodesAtHeight`. Supersedes `RestartPod` |
+| `MarkReady` | re-marks sidecar readiness | fire-and-forget; re-asserts `/v0/healthz=200` to unblock the seid start-gate / proxy probe after a readiness-blind restart or rollout; empty payload; completion = the submit ack (a beat before `/v0/healthz` serves 200) — gate real serving with a following `AwaitCondition`/`AwaitNodesAtHeight` |
 
 ## Lifecycle
 
@@ -34,7 +36,7 @@ is stamped **atomically before any side effect**; terminal CRs are **no-op recon
 - `target.requirePhase` (default `Running`) / `requirePhaseTimeout` (default `5m`) gate
   dispatch; **the timeout is terminal** — a target that never reaches the phase fails the
   task (delete+recreate to retry), it does not wait forever.
-- `timeoutSeconds` (0 = unbounded) bounds the run from `status.startedAt`.
+- `timeoutSeconds` bounds the run from `status.task.executionStartedAt` (the requirePhase wait is **not** charged). `0` means the per-kind default: unbounded for most kinds, but **`RestartSeid` 10m / `MarkReady` 2m**.
 - Status writes use the single optimistic-lock patch model (see `CLAUDE.md`).
 
 ## Conditions
@@ -43,21 +45,22 @@ is stamped **atomically before any side effect**; terminal CRs are **no-op recon
 `Ready=True` only at `Complete`, `Failed=True` only at `Failed`. Treat `reason` as the
 stable public API for runbooks/alerting:
 
-- `TargetReady`: `Resolving` / `PhaseMet` / `PhaseNotMet` / `ResolveTimeout`
-- `Failed`: `TargetResolveFailed` / `UnsupportedKind` / `TaskTerminalError` / `TaskFailed` / `Timeout` / `DeserializeFailed`
+- `TargetReady`: `PhaseMet` / `PhaseNotMet`
+- `Failed`: `TargetResolveFailed` / `ParamsBuildFailed` / `UnsupportedKind` / `DeserializeFailed` / `TaskTerminalError` / `TaskFailed` / `Timeout`
 
-> Caveat: the direct condition writes in `nodetask/controller.go` do **not** set
-> `observedGeneration` today (a known `CLAUDE.md` divergence) — do not gate on condition
-> freshness for SeiNodeTask until it is harmonized.
+All condition writes route through `setCondition`, which stamps
+`observedGeneration = cr.Generation` — so a condition reliably reflects the spec generation
+it was evaluated against.
 
 ## Signing topology
 
 The operator keyring is **sidecar-resident** (mounted on `sei-sidecar`, not signable from
-the main `seid` container). `keyName` resolves via **`ResolveOperatorKeyringUID`**
-(`api/v1alpha1/validator_types.go`), a three-branch chain:
+the main `seid` container). `keyName` resolves in two layers: the params builder
+(`resolveSigningUID`) takes an explicit `keyName` when set; otherwise it derives via
+**`ResolveOperatorKeyringUID`** (`api/v1alpha1/validator_types.go`):
 
-1. explicit `keyName` → that key;
-2. `.validator.operatorKeyring.secret` set but `keyName` empty → **`node_admin`**;
+1. explicit `keyName` → that key (`resolveSigningUID`);
+2. `.validator.operatorKeyring.secret` set, `keyName` empty → **`node_admin`**;
 3. `.secret` **unset** → **`validator`** (the gentx genesis-ceremony key).
 
 A gentx-bootstrapped validator that assumes `node_admin` signs with the wrong key.
@@ -75,7 +78,7 @@ Two layers, distinct:
   restart, and a `submittedAt` stamp guards `Execute` to run **once**. So the submit-proposal
   rehydration risk is a **controller-restart-after-submit** window, not a re-apply window.
 
-## status.outputs reality
+## status.outputs
 
 `status.outputs` is **unpopulated for all sidecar-backed kinds** (`GovVote`,
 `GovSoftwareUpgrade`, `AwaitCondition`, `AwaitNodesAtHeight`) — **only**
@@ -141,4 +144,4 @@ spec:
 ```
 
 Generate one per validator from the live list per cluster, wire into that cluster's Flux
-path, and `flux reconcile`. A param-change submission example follows once PLT-487 lands.
+path, and `flux reconcile`.
