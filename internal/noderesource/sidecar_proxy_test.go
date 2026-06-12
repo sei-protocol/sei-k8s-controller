@@ -101,5 +101,5 @@ func TestGenerateStatefulSet_ProxyImageMissing_Errors(t *testing.T) {
 	p.KubeRBACProxyImage = ""
 	_, err := GenerateStatefulSet(newGenesisNode("a", "default"), p)
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("KUBE_RBAC_PROXY_IMAGE"))
+	g.Expect(err.Error()).To(ContainSubstring("images.kubeRBACProxy"))
 }

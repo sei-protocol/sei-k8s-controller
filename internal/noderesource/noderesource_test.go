@@ -1349,7 +1349,7 @@ func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
 	_, err := GenerateStatefulSet(node, cfg)
 
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("SEI_COSMOS_EXPORTER_IMAGE is required"))
+	g.Expect(err.Error()).To(ContainSubstring("images.cosmosExporter is required"))
 }
 
 func TestCosmosExporter_ReadinessProbe_TargetsExporterListener(t *testing.T) {
