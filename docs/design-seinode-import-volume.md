@@ -62,7 +62,7 @@ spec:
       pvcName: data-archive-0-0      # name of a pre-existing PVC in the SeiNode's namespace
 ```
 
-Planner behavior: **the init plan is unchanged.** The only difference is inside `ensure-data-pvc`: if `spec.dataVolume.import.pvcName` is set, the task verifies the named PVC instead of creating a fresh one. Every successor task (`apply-statefulset`, `apply-service`, `configure-genesis`, `config-apply`, `discover-peers`, `configure-state-sync`, `config-validate`, `mark-ready`) runs exactly as it does today.
+Planner behavior: **the init plan is unchanged.** The only difference is inside `ensure-data-pvc`: if `spec.dataVolume.import.pvcName` is set, the task verifies the named PVC instead of creating a fresh one. Every successor task (`apply-statefulset`, `apply-service`, `configure-genesis`, `config-apply`, `configure-state-sync`, `config-validate`, `mark-ready`) runs exactly as it does today.
 
 This is a deliberate "no extra fluff" choice: import is a PVC-source substitution, not a bootstrap off-ramp. The operator is trusted to provide a PVC whose contents are compatible with the rest of the init progression. If the imported data is from an incompatible seid version, the wrong chain, or in an unexpected on-disk format, seid will fail to start on the pod and the operator gets a clear signal from the Failed plan — same failure channel as any other init problem.
 

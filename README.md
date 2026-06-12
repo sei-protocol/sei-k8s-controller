@@ -72,7 +72,7 @@ spec:
 
 | Mode | Condition | Key tasks |
 |------|-----------|-----------|
-| Full node | `spec.fullNode` set | `configure-genesis` > `snapshot-restore` > `config-apply` > `discover-peers` > `mark-ready` |
+| Full node | `spec.fullNode` set | `configure-genesis` > `snapshot-restore` > `config-apply` > `mark-ready` |
 | Validator | `spec.validator` set | Same as full node, or genesis ceremony flow for new networks |
 | Archive | `spec.archive` set | State sync with archival pruning configuration |
 | Replayer | `spec.replayer` set | Snapshot restore with result export for shadow validation |
