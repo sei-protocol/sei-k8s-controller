@@ -18,9 +18,10 @@ import (
 
 // minCanonicalSyncers is the controller-side fail-closed floor: state-sync
 // requires at least two configured canonical syncers before the
-// state-sync-bearing plan may proceed. This is a CONFIGURED-COUNT check; the
-// >=2 byte-for-byte agreement check is the sidecar's job and lands with the
-// seictl trust-hardening bump.
+// state-sync-bearing plan may proceed (CometBFT needs >=2 rpc-servers, and we
+// never fall back to peers as witnesses). Reliability comes from curating the
+// canonical-syncer set, not from cross-witness checking — the sidecar keeps its
+// existing trust-pinning behavior.
 const minCanonicalSyncers = 2
 
 // The controller only READS the canonical-syncer ConfigMap. The read-only

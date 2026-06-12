@@ -292,10 +292,10 @@ const (
 
 	// ConditionStateSyncReady gates the state-sync-bearing plan. Always-present
 	// once reconciled. True means canonical syncers are configured and the plan
-	// may proceed; False fails closed (no state-sync plan built). Its semantics
-	// are "canonical syncers configured + plan may proceed", NOT "trust
-	// hardened" — the >=2 byte-for-byte agreement check is the sidecar's job and
-	// lands with the seictl bump; this condition is a configured-count gate only.
+	// may proceed; False fails closed (no state-sync plan built, and peers are
+	// never used as witnesses). It is a configured-count gate: witness
+	// reliability comes from curating the canonical-syncer set, and the sidecar
+	// establishes the trust point from them as it does today.
 	ConditionStateSyncReady = "StateSyncReady"
 )
 

@@ -658,9 +658,9 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 	snap := node.Spec.SnapshotSource()
 	// RpcServers come from the controller-level canonical-syncer ConfigMap,
 	// resolved by the StateSyncReady gate into Status.ResolvedStateSyncers
-	// (replacing the label-derived ResolvedRPCWitnesses path). The gate
-	// guarantees >=2 entries here; the >=2 byte-for-byte agreement check is the
-	// sidecar's job and lands with the seictl trust-hardening bump.
+	// (replacing the label-derived ResolvedRPCWitnesses path — peers are no
+	// longer used as witnesses). The gate guarantees >=2 curated entries here;
+	// the sidecar establishes the trust point from them as it does today.
 	t := sidecar.ConfigureStateSyncTask{
 		UseLocalSnapshot: hasS3Snapshot(snap),
 		RpcServers:       node.Status.ResolvedStateSyncers,
