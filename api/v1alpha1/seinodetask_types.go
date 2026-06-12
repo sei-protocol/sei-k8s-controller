@@ -88,8 +88,8 @@ const (
 	ConditionSeiNodeTaskFailed = "Failed"
 
 	// ConditionSeiNodeTaskTargetReady reflects whether the target SeiNode
-	// satisfies spec.target.requirePhase. Reason indicates why (Resolving,
-	// PhaseMet, PhaseNotMet, ResolveTimeout).
+	// satisfies spec.target.requirePhase. Reason indicates why (PhaseMet,
+	// PhaseNotMet).
 	ConditionSeiNodeTaskTargetReady = "TargetReady"
 )
 
