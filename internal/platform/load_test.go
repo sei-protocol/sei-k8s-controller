@@ -14,33 +14,33 @@ const envNodepool = "env-nodepool"
 func setMigratedEnv(t *testing.T) {
 	t.Helper()
 	for _, kv := range [][2]string{
-		{"SEI_NODEPOOL_NAME", envNodepool},
-		{"SEI_NODEPOOL_ARCHIVE", "env-nodepool-archive"},
-		{"SEI_TOLERATION_KEY", "env-toleration"},
-		{"SEI_SERVICE_ACCOUNT", "env-sa"},
-		{"SEI_STORAGE_CLASS_PERF", "env-perf"},
-		{"SEI_STORAGE_CLASS_DEFAULT", "env-default"},
-		{"SEI_STORAGE_CLASS_ARCHIVE", "env-archive"},
-		{"SEI_STORAGE_SIZE_DEFAULT", "env-size-default"},
-		{"SEI_STORAGE_SIZE_ARCHIVE", "env-size-archive"},
-		{"SEI_RESOURCE_CPU_ARCHIVE", "env-cpu-archive"},
-		{"SEI_RESOURCE_MEM_ARCHIVE", "env-mem-archive"},
-		{"SEI_RESOURCE_CPU_DEFAULT", "env-cpu-default"},
-		{"SEI_RESOURCE_MEM_DEFAULT", "env-mem-default"},
-		{"SEI_SNAPSHOT_BUCKET", "env-snap-bucket"},
-		{"SEI_SNAPSHOT_REGION", "env-snap-region"},
-		{"SEI_RESULT_EXPORT_BUCKET", "env-export-bucket"},
-		{"SEI_RESULT_EXPORT_REGION", "env-export-region"},
-		{"SEI_RESULT_EXPORT_PREFIX", "env-export-prefix"},
-		{"SEI_GENESIS_BUCKET", "env-genesis-bucket"},
-		{"SEI_GENESIS_REGION", "env-genesis-region"},
-		{"SEI_SIDECAR_IMAGE", "env-sidecar"},
-		{"SEI_KUBE_RBAC_PROXY_IMAGE", "env-rbac-proxy"},
-		{"SEI_COSMOS_EXPORTER_IMAGE", "env-cosmos-exporter"},
-		{"SEI_GATEWAY_NAME", "env-gw-name"},
-		{"SEI_GATEWAY_NAMESPACE", "env-gw-ns"},
-		{"SEI_GATEWAY_DOMAIN", "env-gw-domain"},
-		{"SEI_GATEWAY_PUBLIC_DOMAIN", "env-gw-public"},
+		{envNodepoolName, envNodepool},
+		{envNodepoolArchive, "env-nodepool-archive"},
+		{envTolerationKey, "env-toleration"},
+		{envServiceAccount, "env-sa"},
+		{envStorageClassPerf, "env-perf"},
+		{envStorageClassDefault, "env-default"},
+		{envStorageClassArchive, "env-archive"},
+		{envStorageSizeDefault, "env-size-default"},
+		{envStorageSizeArchive, "env-size-archive"},
+		{envResourceCPUArchive, "env-cpu-archive"},
+		{envResourceMemArchive, "env-mem-archive"},
+		{envResourceCPUDefault, "env-cpu-default"},
+		{envResourceMemDefault, "env-mem-default"},
+		{envSnapshotBucket, "env-snap-bucket"},
+		{envSnapshotRegion, "env-snap-region"},
+		{envResultExportBucket, "env-export-bucket"},
+		{envResultExportRegion, "env-export-region"},
+		{envResultExportPrefix, "env-export-prefix"},
+		{envGenesisBucket, "env-genesis-bucket"},
+		{envGenesisRegion, "env-genesis-region"},
+		{envSidecarImage, "env-sidecar"},
+		{envKubeRBACProxyImage, "env-rbac-proxy"},
+		{envCosmosExporterImage, "env-cosmos-exporter"},
+		{envGatewayName, "env-gw-name"},
+		{envGatewayNamespace, "env-gw-ns"},
+		{envGatewayDomain, "env-gw-domain"},
+		{envGatewayPublicDomain, "env-gw-public"},
 	} {
 		t.Setenv(kv[0], kv[1])
 	}
@@ -58,7 +58,7 @@ func writeConfig(t *testing.T, body string) string {
 // No file configured: every infra field resolves from the environment.
 func TestLoad_NoFile_AllEnv(t *testing.T) {
 	setMigratedEnv(t)
-	t.Setenv("SEI_CONTROLLER_CONFIG", "")
+	t.Setenv(envControllerConfig, "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -89,7 +89,7 @@ storage:
 images:
   sidecar: file-sidecar
 `)
-	t.Setenv("SEI_CONTROLLER_CONFIG", path)
+	t.Setenv(envControllerConfig, path)
 
 	cfg, err := Load()
 	if err != nil {
@@ -131,7 +131,7 @@ images:
 // falls back to the environment.
 func TestLoad_MissingFileFallsBackToEnv(t *testing.T) {
 	setMigratedEnv(t)
-	t.Setenv("SEI_CONTROLLER_CONFIG", filepath.Join(t.TempDir(), "absent.yaml"))
+	t.Setenv(envControllerConfig, filepath.Join(t.TempDir(), "absent.yaml"))
 
 	cfg, err := Load()
 	if err != nil {
@@ -146,7 +146,7 @@ func TestLoad_MissingFileFallsBackToEnv(t *testing.T) {
 // fall back to env (that would mask an operator mistake).
 func TestLoad_MalformedFile_Errors(t *testing.T) {
 	path := writeConfig(t, "scheduling: [not-a-map")
-	t.Setenv("SEI_CONTROLLER_CONFIG", path)
+	t.Setenv(envControllerConfig, path)
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for malformed config file, got nil")

@@ -164,37 +164,47 @@ func (c Config) NodepoolForMode(mode string) string {
 // the env var so the error points at either fix; networking/gateway fields name
 // only their env var.
 func (c Config) Validate() error {
-	required := map[string]string{
-		"scheduling.nodepoolName (or SEI_NODEPOOL_NAME)":       c.NodepoolName,
-		"scheduling.nodepoolArchive (or SEI_NODEPOOL_ARCHIVE)": c.NodepoolArchive,
-		"scheduling.tolerationKey (or SEI_TOLERATION_KEY)":     c.TolerationKey,
-		"scheduling.serviceAccount (or SEI_SERVICE_ACCOUNT)":   c.ServiceAccount,
-		"storage.classPerf (or SEI_STORAGE_CLASS_PERF)":        c.StorageClassPerf,
-		"storage.classDefault (or SEI_STORAGE_CLASS_DEFAULT)":  c.StorageClassDefault,
-		"storage.classArchive (or SEI_STORAGE_CLASS_ARCHIVE)":  c.StorageClassArchive,
-		"storage.sizeDefault (or SEI_STORAGE_SIZE_DEFAULT)":    c.StorageSizeDefault,
-		"storage.sizeArchive (or SEI_STORAGE_SIZE_ARCHIVE)":    c.StorageSizeArchive,
-		"resources.cpuArchive (or SEI_RESOURCE_CPU_ARCHIVE)":   c.ResourceCPUArchive,
-		"resources.memArchive (or SEI_RESOURCE_MEM_ARCHIVE)":   c.ResourceMemArchive,
-		"resources.cpuDefault (or SEI_RESOURCE_CPU_DEFAULT)":   c.ResourceCPUDefault,
-		"resources.memDefault (or SEI_RESOURCE_MEM_DEFAULT)":   c.ResourceMemDefault,
-		"snapshot.bucket (or SEI_SNAPSHOT_BUCKET)":             c.SnapshotBucket,
-		"snapshot.region (or SEI_SNAPSHOT_REGION)":             c.SnapshotRegion,
-		"resultExport.bucket (or SEI_RESULT_EXPORT_BUCKET)":    c.ResultExportBucket,
-		"resultExport.region (or SEI_RESULT_EXPORT_REGION)":    c.ResultExportRegion,
-		"resultExport.prefix (or SEI_RESULT_EXPORT_PREFIX)":    c.ResultExportPrefix,
-		"genesis.bucket (or SEI_GENESIS_BUCKET)":               c.GenesisBucket,
-		"genesis.region (or SEI_GENESIS_REGION)":               c.GenesisRegion,
-		"images.sidecar (or SEI_SIDECAR_IMAGE)":                c.SidecarImage,
-		"images.kubeRBACProxy (or SEI_KUBE_RBAC_PROXY_IMAGE)":  c.KubeRBACProxyImage,
-		"SEI_GATEWAY_NAME":      c.GatewayName,
-		"SEI_GATEWAY_NAMESPACE": c.GatewayNamespace,
-		"SEI_GATEWAY_DOMAIN":    c.GatewayDomain,
+	// fileKey is empty for env-only fields (networking/gateway); they report
+	// just the env var. Slice order is the report order for the first missing.
+	required := []struct {
+		fileKey string
+		envVar  string
+		val     string
+	}{
+		{"scheduling.nodepoolName", envNodepoolName, c.NodepoolName},
+		{"scheduling.nodepoolArchive", envNodepoolArchive, c.NodepoolArchive},
+		{"scheduling.tolerationKey", envTolerationKey, c.TolerationKey},
+		{"scheduling.serviceAccount", envServiceAccount, c.ServiceAccount},
+		{"storage.classPerf", envStorageClassPerf, c.StorageClassPerf},
+		{"storage.classDefault", envStorageClassDefault, c.StorageClassDefault},
+		{"storage.classArchive", envStorageClassArchive, c.StorageClassArchive},
+		{"storage.sizeDefault", envStorageSizeDefault, c.StorageSizeDefault},
+		{"storage.sizeArchive", envStorageSizeArchive, c.StorageSizeArchive},
+		{"resources.cpuArchive", envResourceCPUArchive, c.ResourceCPUArchive},
+		{"resources.memArchive", envResourceMemArchive, c.ResourceMemArchive},
+		{"resources.cpuDefault", envResourceCPUDefault, c.ResourceCPUDefault},
+		{"resources.memDefault", envResourceMemDefault, c.ResourceMemDefault},
+		{"snapshot.bucket", envSnapshotBucket, c.SnapshotBucket},
+		{"snapshot.region", envSnapshotRegion, c.SnapshotRegion},
+		{"resultExport.bucket", envResultExportBucket, c.ResultExportBucket},
+		{"resultExport.region", envResultExportRegion, c.ResultExportRegion},
+		{"resultExport.prefix", envResultExportPrefix, c.ResultExportPrefix},
+		{"genesis.bucket", envGenesisBucket, c.GenesisBucket},
+		{"genesis.region", envGenesisRegion, c.GenesisRegion},
+		{"images.sidecar", envSidecarImage, c.SidecarImage},
+		{"images.kubeRBACProxy", envKubeRBACProxyImage, c.KubeRBACProxyImage},
+		{"", envGatewayName, c.GatewayName},
+		{"", envGatewayNamespace, c.GatewayNamespace},
+		{"", envGatewayDomain, c.GatewayDomain},
 	}
-	for name, val := range required {
-		if strings.TrimSpace(val) == "" {
-			return fmt.Errorf("%s is required", name)
+	for _, f := range required {
+		if strings.TrimSpace(f.val) != "" {
+			continue
 		}
+		if f.fileKey == "" {
+			return fmt.Errorf("%s is required", f.envVar)
+		}
+		return fmt.Errorf("%s (or %s) is required", f.fileKey, f.envVar)
 	}
 	return nil
 }
