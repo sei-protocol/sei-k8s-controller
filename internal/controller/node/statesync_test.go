@@ -20,6 +20,11 @@ const (
 	testSyncerCMName = "canonical-syncers"
 	testSyncerCMNS   = "sei-platform"
 	testChainID      = "arctic-1"
+	testNamespace    = "default"
+	testImage        = "sei:latest"
+	testNodeName     = "sei-test"
+	syncerA          = "a:26657"
+	syncerB          = "b:26657"
 )
 
 func syncerConfigMap(data map[string]string) *corev1.ConfigMap {
@@ -32,10 +37,10 @@ func syncerConfigMap(data map[string]string) *corev1.ConfigMap {
 // stateSyncNode returns a FullNode with state sync enabled on the given chain.
 func stateSyncNode(name, chainID string) *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID: chainID,
-			Image:   "sei:latest",
+			Image:   testImage,
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{StateSync: &seiv1alpha1.StateSyncSource{}},
 			},
@@ -60,10 +65,10 @@ func TestParseSyncerList(t *testing.T) {
 	}{
 		{"empty", "", nil},
 		{"whitespace only", "  \n\t ", nil},
-		{"newline separated", "b:26657\na:26657", []string{"a:26657", "b:26657"}},
-		{"comma separated", "b:26657,a:26657", []string{"a:26657", "b:26657"}},
-		{"mixed with blanks", "a:26657,\n b:26657 ,,\n", []string{"a:26657", "b:26657"}},
-		{"dedup", "a:26657\na:26657\nb:26657", []string{"a:26657", "b:26657"}},
+		{"newline separated", "b:26657\na:26657", []string{syncerA, syncerB}},
+		{"comma separated", "b:26657,a:26657", []string{syncerA, syncerB}},
+		{"mixed with blanks", "a:26657,\n b:26657 ,,\n", []string{syncerA, syncerB}},
+		{"dedup", "a:26657\na:26657\nb:26657", []string{syncerA, syncerB}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,7 +174,7 @@ func TestStateSyncGate_Disabled_NotApplicable(t *testing.T) {
 	ctx := context.Background()
 
 	// S3 snapshot node: state sync not enabled.
-	node := newSnapshotNode("n", "default")
+	node := newSnapshotNode("n", testNamespace)
 	r, _ := newNodeReconciler(t, node)
 	withSyncerConfigMap(r)
 
@@ -190,10 +195,10 @@ func TestStateSyncGate_NoSnapshotSource_NotApplicable(t *testing.T) {
 	ctx := context.Background()
 
 	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: testNamespace},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID:  "sei-test",
-			Image:    "sei:latest",
+			ChainID:  testNodeName,
+			Image:    testImage,
 			FullNode: &seiv1alpha1.FullNodeSpec{},
 		},
 	}
@@ -230,7 +235,7 @@ func TestStateSyncGate_NonStateSyncNodeUnaffected(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := newSnapshotNode("n", "default")
+	node := newSnapshotNode("n", testNamespace)
 	r, _ := newNodeReconciler(t, node)
 
 	ready, err := r.reconcileStateSyncGate(ctx, node)
@@ -249,7 +254,7 @@ func TestReconcile_StateSyncFailClosed_NoPlanBuilt(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := stateSyncNode("ss-0", "default")
+	node := stateSyncNode("ss-0", testNamespace)
 	node.Spec.ChainID = testChainID
 	cm := syncerConfigMap(map[string]string{testChainID: "only-one:26657"})
 	r, c := newNodeReconciler(t, node, cm)
@@ -257,10 +262,10 @@ func TestReconcile_StateSyncFailClosed_NoPlanBuilt(t *testing.T) {
 	r.Recorder = rec
 	withSyncerConfigMap(r)
 
-	_, err := r.Reconcile(ctx, nodeReqFor("ss-0", "default"))
+	_, err := r.Reconcile(ctx, nodeReqFor("ss-0", testNamespace))
 	g.Expect(err).NotTo(HaveOccurred())
 
-	fetched := getSeiNode(t, ctx, c, "ss-0", "default")
+	fetched := getSeiNode(t, ctx, c, "ss-0", testNamespace)
 	g.Expect(fetched.Status.Plan).To(BeNil(), "no state-sync plan must be built when fail-closed")
 	cond := stateSyncCondition(fetched)
 	g.Expect(cond).NotTo(BeNil())
@@ -297,13 +302,13 @@ func TestReconcile_PausedNode_StateSyncReadyStillSeeded(t *testing.T) {
 	}{
 		{
 			name:       "state-sync enabled, no syncers",
-			node:       stateSyncNode("paused-ss", "default"),
+			node:       stateSyncNode("paused-ss", testNamespace),
 			withCM:     true,
 			wantReason: seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
 		},
 		{
 			name:       "state-sync disabled",
-			node:       newSnapshotNode("paused-s3", "default"),
+			node:       newSnapshotNode("paused-s3", testNamespace),
 			withCM:     false,
 			wantReason: seiv1alpha1.ReasonStateSyncNotApplicable,
 		},
@@ -319,10 +324,10 @@ func TestReconcile_PausedNode_StateSyncReadyStillSeeded(t *testing.T) {
 				withSyncerConfigMap(r)
 			}
 
-			_, err := r.Reconcile(ctx, nodeReqFor(tc.node.Name, "default"))
+			_, err := r.Reconcile(ctx, nodeReqFor(tc.node.Name, testNamespace))
 			g.Expect(err).NotTo(HaveOccurred())
 
-			fetched := getSeiNode(t, ctx, c, tc.node.Name, "default")
+			fetched := getSeiNode(t, ctx, c, tc.node.Name, testNamespace)
 			cond := stateSyncCondition(fetched)
 			g.Expect(cond).NotTo(BeNil(), "StateSyncReady must be present even on a paused node")
 			g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
@@ -338,7 +343,7 @@ func TestReconcile_StateSyncReady_BuildsPlanWithSyncers(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	node := stateSyncNode("ss-1", "default")
+	node := stateSyncNode("ss-1", testNamespace)
 	node.Spec.ChainID = testChainID
 	cm := syncerConfigMap(map[string]string{
 		testChainID: "a.arctic-1.example.com:26657\nb.arctic-1.example.com:26657",
@@ -346,10 +351,10 @@ func TestReconcile_StateSyncReady_BuildsPlanWithSyncers(t *testing.T) {
 	r, c := newNodeReconciler(t, node, cm)
 	withSyncerConfigMap(r)
 
-	_, err := r.Reconcile(ctx, nodeReqFor("ss-1", "default"))
+	_, err := r.Reconcile(ctx, nodeReqFor("ss-1", testNamespace))
 	g.Expect(err).NotTo(HaveOccurred())
 
-	fetched := getSeiNode(t, ctx, c, "ss-1", "default")
+	fetched := getSeiNode(t, ctx, c, "ss-1", testNamespace)
 	g.Expect(fetched.Status.Plan).NotTo(BeNil(), "a plan must be built when state-sync is ready")
 	g.Expect(findPlannedTask(fetched.Status.Plan, planner.TaskConfigureStateSync)).
 		NotTo(BeNil(), "plan must carry the configure-state-sync task")
