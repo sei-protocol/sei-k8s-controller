@@ -2,41 +2,64 @@ package node
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 const (
-	testSyncerCMName = "canonical-syncers"
-	testSyncerCMNS   = "sei-platform"
-	testChainID      = "arctic-1"
-	testNamespace    = "default"
-	testImage        = "sei:latest"
-	testNodeName     = "sei-test"
-	syncerA          = "a:26657"
-	syncerB          = "b:26657"
-	syncerSingle     = "only-one:26657"
+	testChainID   = "arctic-1"
+	testNamespace = "default"
+	testImage     = "sei:latest"
+	testNodeName  = "sei-test"
+	syncerA       = "a:26657"
+	syncerB       = "b:26657"
+	syncerSingle  = "only-one:26657"
 )
 
-func syncerConfigMap(data map[string]string) *corev1.ConfigMap {
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: testSyncerCMName, Namespace: testSyncerCMNS},
-		Data:       data,
+// syncerFileYAML renders a chainID -> [host:port] map as the read-only syncer
+// file content (matching canonicalSyncers' expected YAML shape).
+func syncerFileYAML(byChain map[string][]string) string {
+	var b strings.Builder
+	for chain, syncers := range byChain {
+		b.WriteString(chain)
+		b.WriteString(":\n")
+		for _, s := range syncers {
+			b.WriteString("  - ")
+			b.WriteString(s)
+			b.WriteString("\n")
+		}
 	}
+	return b.String()
+}
+
+// writeSyncerFile writes content to a temp file and points the reconciler's
+// platform at it. The file lives under t.TempDir(), auto-cleaned by the test.
+func writeSyncerFile(t *testing.T, r *SeiNodeReconciler, content string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "syncers.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("writing syncer file: %v", err)
+	}
+	r.Platform.StateSyncSyncersFile = path
+}
+
+// withSyncers writes a chainID -> syncers file and wires the reconciler to it.
+func withSyncers(t *testing.T, r *SeiNodeReconciler, byChain map[string][]string) {
+	t.Helper()
+	writeSyncerFile(t, r, syncerFileYAML(byChain))
 }
 
 // stateSyncNode returns a FullNode with state sync enabled on the given chain.
@@ -51,11 +74,6 @@ func stateSyncNode(name, chainID string) *seiv1alpha1.SeiNode {
 			},
 		},
 	}
-}
-
-func withSyncerConfigMap(r *SeiNodeReconciler) {
-	r.Platform.StateSyncSyncersConfigMap = testSyncerCMName
-	r.Platform.StateSyncSyncersNamespace = testSyncerCMNS
 }
 
 func stateSyncCondition(node *seiv1alpha1.SeiNode) *metav1.Condition {
@@ -84,16 +102,14 @@ func TestParseSyncerList(t *testing.T) {
 
 func TestStateSyncGate_EnabledWithTwoSyncers_Ready(t *testing.T) {
 	g := NewWithT(t)
-	ctx := context.Background()
 
 	node := stateSyncNode("n", testChainID)
-	cm := syncerConfigMap(map[string]string{
-		testChainID: "syncer-1.arctic-1.example.com:26657\nsyncer-0.arctic-1.example.com:26657",
+	r, _ := newNodeReconciler(t, node)
+	withSyncers(t, r, map[string][]string{
+		testChainID: {"syncer-1.arctic-1.example.com:26657", "syncer-0.arctic-1.example.com:26657"},
 	})
-	r, _ := newNodeReconciler(t, node, cm)
-	withSyncerConfigMap(r)
 
-	transient := r.reconcileStateSyncGate(ctx, node)
+	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
 
 	cond := stateSyncCondition(node)
@@ -110,14 +126,12 @@ func TestStateSyncGate_EnabledWithTwoSyncers_Ready(t *testing.T) {
 
 func TestStateSyncGate_EnabledWithOneSyncer_FailsClosed(t *testing.T) {
 	g := NewWithT(t)
-	ctx := context.Background()
 
 	node := stateSyncNode("n", testChainID)
-	cm := syncerConfigMap(map[string]string{testChainID: "only-one.arctic-1.example.com:26657"})
-	r, _ := newNodeReconciler(t, node, cm)
-	withSyncerConfigMap(r)
+	r, _ := newNodeReconciler(t, node)
+	withSyncers(t, r, map[string][]string{testChainID: {"only-one.arctic-1.example.com:26657"}})
 
-	transient := r.reconcileStateSyncGate(ctx, node)
+	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
 
 	cond := stateSyncCondition(node)
@@ -127,15 +141,16 @@ func TestStateSyncGate_EnabledWithOneSyncer_FailsClosed(t *testing.T) {
 	g.Expect(node.Status.ResolvedStateSyncers).To(BeNil())
 }
 
-func TestStateSyncGate_EnabledMissingConfigMap_FailsClosed(t *testing.T) {
+// A configured path pointing at a file that doesn't exist (the backing
+// ConfigMap isn't provisioned yet) fails closed, not transient.
+func TestStateSyncGate_EnabledMissingFile_FailsClosed(t *testing.T) {
 	g := NewWithT(t)
-	ctx := context.Background()
 
 	node := stateSyncNode("n", testChainID)
-	r, _ := newNodeReconciler(t, node) // no ConfigMap object
-	withSyncerConfigMap(r)
+	r, _ := newNodeReconciler(t, node)
+	r.Platform.StateSyncSyncersFile = filepath.Join(t.TempDir(), "absent.yaml") // never created
 
-	transient := r.reconcileStateSyncGate(ctx, node)
+	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
 
 	cond := stateSyncCondition(node)
@@ -145,40 +160,54 @@ func TestStateSyncGate_EnabledMissingConfigMap_FailsClosed(t *testing.T) {
 
 func TestStateSyncGate_EnabledNoChainEntry_FailsClosed(t *testing.T) {
 	g := NewWithT(t)
-	ctx := context.Background()
 
 	node := stateSyncNode("n", testChainID)
-	cm := syncerConfigMap(map[string]string{"other-chain": "a:26657\nb:26657"})
-	r, _ := newNodeReconciler(t, node, cm)
-	withSyncerConfigMap(r)
+	r, _ := newNodeReconciler(t, node)
+	withSyncers(t, r, map[string][]string{"other-chain": {syncerA, syncerB}})
 
-	transient := r.reconcileStateSyncGate(ctx, node)
+	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
 }
 
-func TestStateSyncGate_UnconfiguredConfigMapRef_FailsClosed(t *testing.T) {
+// An unreadable/unparseable file is transient (Unknown + requeue), distinct
+// from absence which fails closed.
+func TestStateSyncGate_ParseError_Transient(t *testing.T) {
 	g := NewWithT(t)
-	ctx := context.Background()
 
 	node := stateSyncNode("n", testChainID)
-	r, _ := newNodeReconciler(t, node) // Platform leaves the ConfigMap name empty.
+	r, _ := newNodeReconciler(t, node)
+	writeSyncerFile(t, r, "this: [is: not: valid: yaml") // malformed
 
-	transient := r.reconcileStateSyncGate(ctx, node)
+	transient := r.reconcileStateSyncGate(node)
+	g.Expect(transient).To(BeTrue())
+
+	cond := stateSyncCondition(node)
+	g.Expect(cond.Status).To(Equal(metav1.ConditionUnknown))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncSyncerSourceError))
+	g.Expect(node.Status.ResolvedStateSyncers).To(BeNil())
+}
+
+func TestStateSyncGate_UnconfiguredSource_FailsClosed(t *testing.T) {
+	g := NewWithT(t)
+
+	node := stateSyncNode("n", testChainID)
+	r, _ := newNodeReconciler(t, node) // Platform leaves StateSyncSyncersFile empty.
+
+	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
 }
 
 func TestStateSyncGate_Disabled_NotApplicable(t *testing.T) {
 	g := NewWithT(t)
-	ctx := context.Background()
 
 	// S3 snapshot node: state sync not enabled.
 	node := newSnapshotNode("n", testNamespace)
 	r, _ := newNodeReconciler(t, node)
-	withSyncerConfigMap(r)
+	withSyncers(t, r, map[string][]string{testChainID: {syncerA, syncerB}})
 
-	transient := r.reconcileStateSyncGate(ctx, node)
+	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
 
 	cond := stateSyncCondition(node)
@@ -191,7 +220,6 @@ func TestStateSyncGate_Disabled_NotApplicable(t *testing.T) {
 // state-sync-disabled: NotApplicable, never blocks the plan.
 func TestStateSyncGate_NoSnapshotSource_NotApplicable(t *testing.T) {
 	g := NewWithT(t)
-	ctx := context.Background()
 
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: testNamespace},
@@ -202,9 +230,9 @@ func TestStateSyncGate_NoSnapshotSource_NotApplicable(t *testing.T) {
 		},
 	}
 	r, _ := newNodeReconciler(t, node)
-	withSyncerConfigMap(r)
+	withSyncers(t, r, map[string][]string{testChainID: {syncerA, syncerB}})
 
-	transient := r.reconcileStateSyncGate(ctx, node)
+	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNotApplicable))
 }
@@ -213,15 +241,12 @@ func TestStateSyncGate_NoSnapshotSource_NotApplicable(t *testing.T) {
 // so a previously-good set can't leak into ConfigureStateSyncTask.
 func TestStateSyncGate_FailClosedClearsStaleSyncers(t *testing.T) {
 	g := NewWithT(t)
-	ctx := context.Background()
 
 	node := stateSyncNode("n", testChainID)
 	node.Status.ResolvedStateSyncers = []string{"old-a:26657", "old-b:26657"}
-	r, _ := newNodeReconciler(t, node) // unconfigured ref → fail closed
-	withSyncerConfigMap(r)
-	r.Platform.StateSyncSyncersConfigMap = "" // force unconfigured
+	r, _ := newNodeReconciler(t, node) // unconfigured source → fail closed
 
-	transient := r.reconcileStateSyncGate(ctx, node)
+	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
 	g.Expect(node.Status.ResolvedStateSyncers).To(BeNil())
 }
@@ -230,12 +255,11 @@ func TestStateSyncGate_FailClosedClearsStaleSyncers(t *testing.T) {
 // node — regression guard for the full reconcile path.
 func TestStateSyncGate_NonStateSyncNodeUnaffected(t *testing.T) {
 	g := NewWithT(t)
-	ctx := context.Background()
 
 	node := newSnapshotNode("n", testNamespace)
 	r, _ := newNodeReconciler(t, node)
 
-	transient := r.reconcileStateSyncGate(ctx, node)
+	transient := r.reconcileStateSyncGate(node)
 	g.Expect(transient).To(BeFalse())
 	g.Expect(node.Status.ResolvedStateSyncers).To(BeEmpty())
 	g.Expect(slices.Contains([]string{
@@ -252,11 +276,10 @@ func TestReconcile_StateSyncFailClosed_NoPlanBuilt(t *testing.T) {
 
 	node := stateSyncNode("ss-0", testNamespace)
 	node.Spec.ChainID = testChainID
-	cm := syncerConfigMap(map[string]string{testChainID: syncerSingle})
-	r, c := newNodeReconciler(t, node, cm)
+	r, c := newNodeReconciler(t, node)
 	rec := record.NewFakeRecorder(10)
 	r.Recorder = rec
-	withSyncerConfigMap(r)
+	withSyncers(t, r, map[string][]string{testChainID: {syncerSingle}})
 
 	_, err := r.Reconcile(ctx, nodeReqFor("ss-0", testNamespace))
 	g.Expect(err).NotTo(HaveOccurred())
@@ -291,22 +314,22 @@ func TestReconcile_StateSyncFailClosed_NoPlanBuilt(t *testing.T) {
 // node must build NO plan (pause semantics preserved).
 func TestReconcile_PausedNode_StateSyncReadyStillSeeded(t *testing.T) {
 	cases := []struct {
-		name       string
-		node       *seiv1alpha1.SeiNode
-		withCM     bool
-		wantReason string
+		name        string
+		node        *seiv1alpha1.SeiNode
+		withSyncers bool
+		wantReason  string
 	}{
 		{
-			name:       "state-sync enabled, no syncers",
-			node:       stateSyncNode("paused-ss", testNamespace),
-			withCM:     true,
-			wantReason: seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
+			name:        "state-sync enabled, no syncers",
+			node:        stateSyncNode("paused-ss", testNamespace),
+			withSyncers: true,
+			wantReason:  seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
 		},
 		{
-			name:       "state-sync disabled",
-			node:       newSnapshotNode("paused-s3", testNamespace),
-			withCM:     false,
-			wantReason: seiv1alpha1.ReasonStateSyncNotApplicable,
+			name:        "state-sync disabled",
+			node:        newSnapshotNode("paused-s3", testNamespace),
+			withSyncers: false,
+			wantReason:  seiv1alpha1.ReasonStateSyncNotApplicable,
 		},
 	}
 	for _, tc := range cases {
@@ -316,8 +339,9 @@ func TestReconcile_PausedNode_StateSyncReadyStillSeeded(t *testing.T) {
 
 			tc.node.Spec.Paused = true
 			r, c := newNodeReconciler(t, tc.node)
-			if tc.withCM {
-				withSyncerConfigMap(r)
+			if tc.withSyncers {
+				// Empty map for the chain → fail closed, but source is wired.
+				withSyncers(t, r, map[string][]string{"other-chain": {syncerA, syncerB}})
 			}
 
 			_, err := r.Reconcile(ctx, nodeReqFor(tc.node.Name, testNamespace))
@@ -358,9 +382,8 @@ func TestReconcile_StateSyncFailClosed_ClearsTerminalPlan(t *testing.T) {
 				Phase: tc.phase,
 				Tasks: []seiv1alpha1.PlannedTask{{Type: planner.TaskConfigApply, Status: seiv1alpha1.TaskComplete}},
 			}
-			cm := syncerConfigMap(map[string]string{testChainID: syncerSingle})
-			r, c := newNodeReconciler(t, node, cm)
-			withSyncerConfigMap(r)
+			r, c := newNodeReconciler(t, node)
+			withSyncers(t, r, map[string][]string{testChainID: {syncerSingle}})
 
 			_, err := r.Reconcile(ctx, nodeReqFor("ss-term", testNamespace))
 			g.Expect(err).NotTo(HaveOccurred())
@@ -375,38 +398,33 @@ func TestReconcile_StateSyncFailClosed_ClearsTerminalPlan(t *testing.T) {
 	}
 }
 
-// A non-NotFound ConfigMap read error must be transient: reconcileStatefulSet,
+// An unparseable syncer file must be transient: reconcileStatefulSet,
 // Paused/Failed handling, and the status flush still run, the reconcile
 // requeues instead of hard-aborting, and StateSyncReady reflects it via
-// Unknown/ConfigMapReadError.
-func TestReconcile_StateSyncConfigMapReadError_Transient(t *testing.T) {
+// Unknown/SyncerSourceError.
+func TestReconcile_StateSyncSyncerSourceError_Transient(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
 	node := stateSyncNode("ss-err", testNamespace)
 	node.Spec.ChainID = testChainID
-	r, c := newNodeReconcilerWithGetError(t, node, func(key client.ObjectKey) error {
-		if key.Name == testSyncerCMName {
-			return apierrors.NewServiceUnavailable("etcd unavailable")
-		}
-		return nil
-	})
-	withSyncerConfigMap(r)
+	r, c := newNodeReconciler(t, node)
+	writeSyncerFile(t, r, "{ this is not: valid yaml: at all") // malformed
 
 	res, err := r.Reconcile(ctx, nodeReqFor("ss-err", testNamespace))
-	g.Expect(err).NotTo(HaveOccurred(), "transient ConfigMap error must not hard-abort")
+	g.Expect(err).NotTo(HaveOccurred(), "transient syncer-source error must not hard-abort")
 	g.Expect(res.RequeueAfter).To(BeNumerically(">", 0), "transient error must requeue")
 
 	fetched := getSeiNode(t, ctx, c, "ss-err", testNamespace)
 	cond := stateSyncCondition(fetched)
 	g.Expect(cond).NotTo(BeNil())
 	g.Expect(cond.Status).To(Equal(metav1.ConditionUnknown))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncConfigMapReadError))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncSyncerSourceError))
 	g.Expect(fetched.Status.Plan).To(BeNil(), "no state-sync plan while the gate is unresolved")
-	// StatefulSet sync still ran despite the ConfigMap error.
+	// StatefulSet sync still ran despite the syncer-source error.
 	sts := &appsv1.StatefulSet{}
 	g.Expect(c.Get(ctx, types.NamespacedName{Name: "ss-err", Namespace: testNamespace}, sts)).To(Succeed(),
-		"reconcileStatefulSet must run even when the ConfigMap read fails")
+		"reconcileStatefulSet must run even when the syncer source read fails")
 }
 
 // The StateSyncBlocked Warning fires once on the transition into fail-closed,
@@ -417,11 +435,10 @@ func TestReconcile_StateSyncBlocked_EventFiresOncePerTransition(t *testing.T) {
 
 	node := stateSyncNode("ss-evt", testNamespace)
 	node.Spec.ChainID = testChainID
-	cm := syncerConfigMap(map[string]string{testChainID: syncerSingle})
-	r, _ := newNodeReconciler(t, node, cm)
+	r, _ := newNodeReconciler(t, node)
 	rec := record.NewFakeRecorder(10)
 	r.Recorder = rec
-	withSyncerConfigMap(r)
+	withSyncers(t, r, map[string][]string{testChainID: {syncerSingle}})
 
 	countBlocked := func() int {
 		n := 0
@@ -457,11 +474,10 @@ func TestReconcile_StateSyncReady_BuildsPlanWithSyncers(t *testing.T) {
 
 	node := stateSyncNode("ss-1", testNamespace)
 	node.Spec.ChainID = testChainID
-	cm := syncerConfigMap(map[string]string{
-		testChainID: "a.arctic-1.example.com:26657\nb.arctic-1.example.com:26657",
+	r, c := newNodeReconciler(t, node)
+	withSyncers(t, r, map[string][]string{
+		testChainID: {"a.arctic-1.example.com:26657", "b.arctic-1.example.com:26657"},
 	})
-	r, c := newNodeReconciler(t, node, cm)
-	withSyncerConfigMap(r)
 
 	_, err := r.Reconcile(ctx, nodeReqFor("ss-1", testNamespace))
 	g.Expect(err).NotTo(HaveOccurred())

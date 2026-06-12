@@ -305,15 +305,15 @@ const (
 	// configured for the chain; the state-sync-bearing plan may proceed.
 	ReasonStateSyncReady = "Ready"
 	// ReasonStateSyncNoSyncersConfigured: state-sync enabled but the canonical-
-	// syncer ConfigMap yields <2 entries for the chain (fail closed).
+	// syncer source yields <2 entries for the chain (fail closed).
 	ReasonStateSyncNoSyncersConfigured = "NoSyncersConfigured"
 	// ReasonStateSyncNotApplicable: the node does not enable state-sync.
 	ReasonStateSyncNotApplicable = "NotApplicable"
-	// ReasonStateSyncConfigMapReadError: the canonical-syncer ConfigMap read
-	// failed for a non-NotFound reason (transient API error). Fails closed and
-	// requeues; the rest of the reconcile (StatefulSet, Failed/Paused handling,
-	// status flush) still runs.
-	ReasonStateSyncConfigMapReadError = "ConfigMapReadError"
+	// ReasonStateSyncSyncerSourceError: reading or parsing the canonical-syncer
+	// source file failed for a reason other than absence (transient). Fails
+	// closed and requeues; the rest of the reconcile (StatefulSet, Failed/Paused
+	// handling, status flush) still runs.
+	ReasonStateSyncSyncerSourceError = "SyncerSourceError"
 )
 
 // Reasons for the ImportPVCReady condition.

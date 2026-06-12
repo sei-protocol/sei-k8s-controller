@@ -114,8 +114,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// status write. Fail-closed enforcement lives in ResolvePlan, which declines
 	// to build a state-sync plan when this condition isn't True; that keeps
 	// terminal-plan cleanup and non-state-sync work running. A transient
-	// ConfigMap read error requeues without aborting the steps below.
-	stateSyncTransient := r.reconcileStateSyncGate(ctx, node)
+	// syncer-source read error requeues without aborting the steps below.
+	stateSyncTransient := r.reconcileStateSyncGate(node)
 
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
@@ -338,7 +338,7 @@ func (r *SeiNodeReconciler) emitStateSyncBlockedEvent(node *seiv1alpha1.SeiNode,
 		return
 	}
 	blockedReason := cur.Reason == seiv1alpha1.ReasonStateSyncNoSyncersConfigured ||
-		cur.Reason == seiv1alpha1.ReasonStateSyncConfigMapReadError
+		cur.Reason == seiv1alpha1.ReasonStateSyncSyncerSourceError
 	if !blockedReason {
 		return
 	}

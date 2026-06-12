@@ -15,7 +15,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
@@ -66,51 +65,6 @@ func newNodeReconcilerWithSidecar(t *testing.T, mock *mockSidecarClient, objs ..
 					APIReader:          c,
 					Scheme:             s,
 					Resource:           node,
-					Platform:           platformtest.Config(),
-				}
-			},
-		},
-	}
-	return r, c
-}
-
-// newNodeReconcilerWithGetError builds a reconciler whose client returns getErr
-// (when non-nil) for the matching key on Get, used to exercise transient
-// API-error handling. Other operations pass through to the fake client.
-func newNodeReconcilerWithGetError(t *testing.T, node *seiv1alpha1.SeiNode, getErr func(client.ObjectKey) error) (*SeiNodeReconciler, client.Client) {
-	t.Helper()
-	s := newNodeTestScheme(t)
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(node).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if err := getErr(key); err != nil {
-					return err
-				}
-				return cl.Get(ctx, key, obj, opts...)
-			},
-		}).
-		Build()
-	mock := &mockSidecarClient{nodeID: "mock-node-id"}
-	r := &SeiNodeReconciler{
-		Client:   c,
-		Scheme:   s,
-		Recorder: record.NewFakeRecorder(100),
-		Platform: platformtest.Config(),
-		Planner: &planner.NodeResolver{
-			BuildSidecarClient: func(_ *seiv1alpha1.SeiNode) (task.SidecarClient, error) { return mock, nil },
-			Platform:           platformtest.Config(),
-		},
-		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
-			ConfigFor: func(_ context.Context, n *seiv1alpha1.SeiNode) task.ExecutionConfig {
-				return task.ExecutionConfig{
-					BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
-					KubeClient:         c,
-					APIReader:          c,
-					Scheme:             s,
-					Resource:           n,
 					Platform:           platformtest.Config(),
 				}
 			},

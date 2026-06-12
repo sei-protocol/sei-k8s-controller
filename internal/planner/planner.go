@@ -194,10 +194,10 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 // suppress plan construction this reconcile. It fires only on the init path
 // (pre-Running), which is the only path that builds a state-sync-bearing plan
 // via buildSidecarProgression — a Running node's update plans carry no
-// state-sync task, so an image roll must not be blocked by a syncer-ConfigMap
+// state-sync task, so an image roll must not be blocked by a syncer-source
 // blip. The gate trips when state-sync is enabled and the controller-resolved
 // StateSyncReady condition is not True (NoSyncersConfigured or the transient
-// ConfigMapReadError). A missing condition (not yet resolved) does not gate.
+// SyncerSourceError). A missing condition (not yet resolved) does not gate.
 func stateSyncBlocksPlan(node *seiv1alpha1.SeiNode) bool {
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return false

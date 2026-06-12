@@ -81,6 +81,11 @@ spec:
             value: gateway
           - name: SEI_GATEWAY_DOMAIN
             value: prod.platform.sei.io
+          # Read-only canonical-syncer source. Points at the mounted ConfigMap
+          # (directory mount, not subPath) so GitOps swaps propagate without a
+          # pod restart. Optional: the controller fails closed when absent.
+          - name: SEI_STATESYNC_SYNCERS_FILE
+            value: /etc/sei/statesync-syncers/syncers.yaml
         ports:
         - containerPort: 8080
           name: metrics
@@ -110,7 +115,19 @@ spec:
           requests:
             cpu: 50m
             memory: 128Mi
-        volumeMounts: []
-      volumes: []
+        volumeMounts:
+          # Directory mount (not subPath): subPath snapshots the ConfigMap at
+          # mount time and never updates, defeating the fresh-read-per-reconcile
+          # contract. readOnly so the controller can't rewrite its trust root.
+          - name: statesync-syncers
+            mountPath: /etc/sei/statesync-syncers
+            readOnly: true
+      volumes:
+        # GitOps provisions the ConfigMap content out of this repo. optional so
+        # the controller starts (and fails closed) when it isn't present yet.
+        - name: statesync-syncers
+          configMap:
+            name: canonical-syncers
+            optional: true
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

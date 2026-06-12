@@ -164,9 +164,9 @@ func main() {
 		SidecarImage:        os.Getenv("SEI_SIDECAR_IMAGE"),
 		CosmosExporterImage: os.Getenv("SEI_COSMOS_EXPORTER_IMAGE"),
 
-		// State-sync canonical syncers are opt-in; these may be empty.
-		StateSyncSyncersConfigMap: os.Getenv("SEI_STATESYNC_SYNCERS_CONFIGMAP"),
-		StateSyncSyncersNamespace: os.Getenv("SEI_STATESYNC_SYNCERS_NAMESPACE"),
+		// State-sync canonical syncers are opt-in; this may be empty. Points at a
+		// read-only mounted file (a GitOps-written ConfigMap volume).
+		StateSyncSyncersFile: os.Getenv("SEI_STATESYNC_SYNCERS_FILE"),
 	}
 
 	if err := platformCfg.Validate(); err != nil {

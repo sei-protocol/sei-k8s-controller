@@ -1,16 +1,14 @@
 package node
 
 import (
-	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/yaml"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -22,15 +20,6 @@ import (
 // canonical-syncer set, not from cross-witness checking — the sidecar keeps its
 // existing trust-pinning behavior.
 const minCanonicalSyncers = 2
-
-// The controller only READS the canonical-syncer ConfigMap. The read-only
-// intent is NOT yet enforced: the reconciler's pre-existing cluster-wide
-// configmaps grant (controller.go) confers write access that controller-gen
-// unions in, so this marker is documentary only. Scoping the controller to
-// read-only on the trust root (so it cannot rewrite its own trust source) is a
-// PLT-452 launch-gate blocker tracked in PLT-471, landing with the namespace
-// lockdown that fixes the trust-root namespace.
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 // reconcileStateSyncGate resolves the canonical-syncer set for a state-sync
 // node and sets the always-present ConditionStateSyncReady accordingly. It
@@ -45,11 +34,11 @@ const minCanonicalSyncers = 2
 // clears terminal plans and non-state-sync work proceeds — this method only
 // resolves the condition.
 //
-// A transient (non-NotFound) ConfigMap read error is NOT fatal: it sets
-// StateSyncReady=Unknown/ConfigMapReadError and returns transient=true so the
+// A transient (non-absence) read or parse error is NOT fatal: it sets
+// StateSyncReady=Unknown/SyncerSourceError and returns transient=true so the
 // caller requeues without aborting the StatefulSet/Failed/Paused/flush path. A
-// missing ConfigMap or <2 entries fails closed via False/NoSyncersConfigured.
-func (r *SeiNodeReconciler) reconcileStateSyncGate(ctx context.Context, node *seiv1alpha1.SeiNode) (transient bool) {
+// missing source file or <2 entries fails closed via False/NoSyncersConfigured.
+func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (transient bool) {
 	snap := node.Spec.SnapshotSource()
 	if snap == nil || snap.StateSync == nil {
 		// State-sync disabled: no state-sync task in the plan to gate.
@@ -59,13 +48,13 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(ctx context.Context, node *se
 		return false
 	}
 
-	syncers, err := r.canonicalSyncers(ctx, node.Spec.ChainID)
+	syncers, err := r.canonicalSyncers(node.Spec.ChainID)
 	if err != nil {
-		// Transient API error: fail closed (clear any stale set) but don't abort
-		// the reconcile. Requeue and re-read next tick.
+		// Transient read/parse error: fail closed (clear any stale set) but don't
+		// abort the reconcile. Requeue and re-read next tick.
 		node.Status.ResolvedStateSyncers = nil
-		setStateSyncReady(node, metav1.ConditionUnknown, seiv1alpha1.ReasonStateSyncConfigMapReadError,
-			fmt.Sprintf("reading canonical-syncer ConfigMap for chain %q: %v", node.Spec.ChainID, err))
+		setStateSyncReady(node, metav1.ConditionUnknown, seiv1alpha1.ReasonStateSyncSyncerSourceError,
+			fmt.Sprintf("reading canonical-syncer source for chain %q: %v", node.Spec.ChainID, err))
 		return true
 	}
 
@@ -88,35 +77,47 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(ctx context.Context, node *se
 	return false
 }
 
-// canonicalSyncers reads the canonical-syncer ConfigMap and returns the parsed
-// syncer RPC endpoints for the given chain. A missing ConfigMap, an unset
-// ConfigMap reference, or a chain with no entry all yield an empty slice (no
-// error) so the caller fails closed via the StateSyncReady gate rather than
-// crashing — state-sync is opt-in and the ConfigMap may legitimately be absent
-// until GitOps provisions it.
+// canonicalSyncers reads the read-only canonical-syncer file fresh and returns
+// the parsed syncer RPC endpoints for the given chain. An unset path, a missing
+// file, or a chain with no entry all yield an empty slice (no error) so the
+// caller fails closed via the StateSyncReady gate rather than crashing —
+// state-sync is opt-in and the file may legitimately be absent until GitOps
+// provisions the backing ConfigMap. Any other read or parse error is returned
+// so the gate can treat it as transient.
 //
-// Data shape: data[chainID] is a list of `host:port` RPC endpoints separated by
-// newlines and/or commas. Blank entries are dropped; the result is sorted and
-// de-duplicated for a stable witness set.
-func (r *SeiNodeReconciler) canonicalSyncers(ctx context.Context, chainID string) ([]string, error) {
-	name := r.Platform.StateSyncSyncersConfigMap
-	if strings.TrimSpace(name) == "" {
+// File shape: a YAML map of chainID -> list of bare `host:port` RPC endpoints
+// (no scheme; the sidecar adds it). Each chain's entries are trimmed, blanks
+// dropped, sorted, and de-duplicated for a stable witness set.
+//
+// Read fresh on every call: a mounted ConfigMap swaps atomically (a symlink
+// flip on the directory mount), so re-reading picks up GitOps updates without a
+// pod restart. Never cache an open handle.
+func (r *SeiNodeReconciler) canonicalSyncers(chainID string) ([]string, error) {
+	path := strings.TrimSpace(r.Platform.StateSyncSyncersFile)
+	if path == "" {
 		return nil, nil
 	}
 
-	cm := &corev1.ConfigMap{}
-	key := types.NamespacedName{Name: name, Namespace: r.Platform.StateSyncSyncersNamespace}
-	if err := r.Get(ctx, key, cm); err != nil {
-		if apierrors.IsNotFound(err) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
 
-	return parseSyncerList(cm.Data[chainID]), nil
+	syncers := map[string][]string{}
+	if err := yaml.Unmarshal(raw, &syncers); err != nil {
+		return nil, fmt.Errorf("parsing canonical-syncer file %q: %w", path, err)
+	}
+
+	// A YAML list entry may itself carry comma/whitespace-joined endpoints
+	// (forward-compatible with PLT-475's stateSync.syncers), so route the joined
+	// value through the same splitter the ConfigMap source used.
+	return parseSyncerList(strings.Join(syncers[chainID], "\n")), nil
 }
 
-// parseSyncerList splits a ConfigMap value on newlines and commas, trims
+// parseSyncerList splits a syncer value on newlines and commas, trims
 // whitespace, drops blanks, then sorts and de-duplicates.
 func parseSyncerList(raw string) []string {
 	fields := strings.FieldsFunc(raw, func(r rune) bool {
