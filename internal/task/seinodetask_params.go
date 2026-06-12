@@ -73,8 +73,8 @@ func paramsErr(msg string) error {
 
 // SeiNodeTaskParamsFor resolves a SeiNodeTask kind to its task type and
 // payload. target is the resolved SeiNode; pass nil from the early-validation
-// path (before the SeiNode is fetched) — KeyName/peer-source derivation that
-// needs target is deferred to the driveTask call site.
+// path (before the SeiNode is fetched) — derivation that needs target (e.g.
+// gov-proposal signing identity) is deferred to the driveTask call site.
 func SeiNodeTaskParamsFor(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (SeiNodeTaskParams, error) {
 	switch cr.Spec.Kind {
 	case seiv1alpha1.SeiNodeTaskKindUpdateNodeImage:
