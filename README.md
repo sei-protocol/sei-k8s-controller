@@ -77,6 +77,12 @@ spec:
 | Archive | `spec.archive` set | State sync with archival pruning configuration |
 | Replayer | `spec.replayer` set | Snapshot restore with result export for shadow validation |
 
+### SeiNodeTask
+
+A one-shot operation against a single `SeiNode` (governance votes/proposals, image updates,
+height/condition waits). See **[docs/seinode-task.md](docs/seinode-task.md)** for the kinds,
+lifecycle, signing topology, idempotency, and operational gotchas.
+
 ## Platform Configuration
 
 The controller reads all infrastructure-level settings from environment variables. Every field is required — the controller fails fast at startup if any are missing.
