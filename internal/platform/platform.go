@@ -80,10 +80,10 @@ type Config struct {
 // FileConfig is the controller's file-sourced application config (SEI_CONTROLLER_CONFIG).
 //
 // The infra sections (scheduling, storage, resources, snapshot, resultExport,
-// genesis, images) back the migration of platform.Config off environment
-// variables (PLT-475). They are resolved once at startup by Load, file-wins
-// over the historical env vars. The stateSync section is read per-reconcile (it
-// hot-reloads); the infra sections are not (an infra change warrants a restart).
+// genesis, images) carry the infra config that was historically env-sourced.
+// They are resolved once at startup by Load, the file value winning over the
+// env fallback. The stateSync section is read per-reconcile (it hot-reloads);
+// the infra sections are not (an infra change warrants a restart).
 //
 // Networking/gateway config is deliberately absent — it stays env-sourced
 // pending its removal from the controller in the GitOps networking move (PLT-451).
@@ -161,8 +161,8 @@ func (c Config) NodepoolForMode(mode string) string {
 
 // Validate returns an error if a required field is missing from both the
 // app-config file and the environment. The source label names the file key and
-// the env var for migrated fields (PLT-475) so the error points at either fix;
-// networking/gateway fields name only their env var.
+// the env var so the error points at either fix; networking/gateway fields name
+// only their env var.
 func (c Config) Validate() error {
 	required := map[string]string{
 		"scheduling.nodepoolName (or SEI_NODEPOOL_NAME)":       c.NodepoolName,

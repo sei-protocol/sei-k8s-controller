@@ -9,7 +9,9 @@ Two read paths, by design:
 
 - **Infra sections** (`scheduling`, `storage`, `resources`, `snapshot`,
   `resultExport`, `genesis`, `images`) are resolved **once at startup** by
-  `platform.Load`. Changing them requires a controller restart.
+  `platform.Load`. Editing them in the live ConfigMap propagates to the mount
+  but has **no effect until the controller pod restarts**
+  (`kubectl rollout restart`) — only `stateSync` hot-reloads.
 - **`stateSync`** is re-read **per reconcile** so syncer changes hot-reload
   without a restart (the directory mount swaps atomically).
 
@@ -43,7 +45,7 @@ scheduling:
   tolerationKey: sei.io/workload  # SEI_TOLERATION_KEY
   serviceAccount: seid-node       # SEI_SERVICE_ACCOUNT
 
-storage:
+storage:                          # note: no sizePerf — matches the historical env layout
   classPerf: gp3-10k-750          # SEI_STORAGE_CLASS_PERF
   classDefault: gp3               # SEI_STORAGE_CLASS_DEFAULT
   classArchive: gp3-archive       # SEI_STORAGE_CLASS_ARCHIVE

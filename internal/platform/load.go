@@ -12,10 +12,11 @@ import (
 // file (a GitOps-written ConfigMap mounted as a directory).
 const envControllerConfig = "SEI_CONTROLLER_CONFIG"
 
-// Load resolves the platform Config at startup. For each migrated infra field
-// (PLT-475) a non-empty value in the app-config file wins; an absent one falls
-// back to its historical env var, so an unset SEI_CONTROLLER_CONFIG yields the
-// original all-env behavior. Networking/gateway fields and the config-file path
+// Load resolves the platform Config at startup. A non-empty value in the
+// app-config file wins; an absent infra field falls back to its historical env
+// var, so an unset SEI_CONTROLLER_CONFIG yields the original all-env behavior.
+// That env fallback is transitional — removed once the ConfigMap is populated
+// everywhere (PLT-475). Networking/gateway fields and the config-file path
 // itself are env-sourced.
 //
 // The file is read once here; infra changes therefore require a controller
@@ -94,7 +95,7 @@ func ReadFileConfig(path string) (FileConfig, error) {
 }
 
 // fileOrEnv returns the file value when non-empty, otherwise the named env var
-// (the transitional PLT-475 fallback).
+// (the transitional fallback).
 func fileOrEnv(fileVal, envVar string) string {
 	if strings.TrimSpace(fileVal) != "" {
 		return fileVal
