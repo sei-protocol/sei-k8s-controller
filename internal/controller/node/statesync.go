@@ -2,13 +2,11 @@ package node
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/yaml"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
@@ -88,22 +86,9 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (b
 // on the directory mount), so re-reading picks up GitOps updates without a pod
 // restart. Never cache an open handle.
 func (r *SeiNodeReconciler) canonicalSyncers(chainID string) ([]string, error) {
-	path := strings.TrimSpace(r.Platform.ControllerConfigFile)
-	if path == "" {
-		return nil, nil
-	}
-
-	raw, err := os.ReadFile(path)
+	cfg, err := platform.ReadFileConfig(r.Platform.ControllerConfigFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
-	}
-
-	var cfg platform.FileConfig
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing controller config file %q: %w", path, err)
 	}
 
 	// A YAML list entry may itself carry comma/whitespace-joined endpoints, so

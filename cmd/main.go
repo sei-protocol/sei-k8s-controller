@@ -135,40 +135,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	platformCfg := platform.Config{
-		NodepoolName:        os.Getenv("SEI_NODEPOOL_NAME"),
-		NodepoolArchive:     os.Getenv("SEI_NODEPOOL_ARCHIVE"),
-		TolerationKey:       os.Getenv("SEI_TOLERATION_KEY"),
-		ServiceAccount:      os.Getenv("SEI_SERVICE_ACCOUNT"),
-		StorageClassPerf:    os.Getenv("SEI_STORAGE_CLASS_PERF"),
-		StorageClassDefault: os.Getenv("SEI_STORAGE_CLASS_DEFAULT"),
-		StorageClassArchive: os.Getenv("SEI_STORAGE_CLASS_ARCHIVE"),
-		StorageSizeDefault:  os.Getenv("SEI_STORAGE_SIZE_DEFAULT"),
-		StorageSizeArchive:  os.Getenv("SEI_STORAGE_SIZE_ARCHIVE"),
-		ResourceCPUArchive:  os.Getenv("SEI_RESOURCE_CPU_ARCHIVE"),
-		ResourceMemArchive:  os.Getenv("SEI_RESOURCE_MEM_ARCHIVE"),
-		ResourceCPUDefault:  os.Getenv("SEI_RESOURCE_CPU_DEFAULT"),
-		ResourceMemDefault:  os.Getenv("SEI_RESOURCE_MEM_DEFAULT"),
-		SnapshotBucket:      os.Getenv("SEI_SNAPSHOT_BUCKET"),
-		SnapshotRegion:      os.Getenv("SEI_SNAPSHOT_REGION"),
-		ResultExportBucket:  os.Getenv("SEI_RESULT_EXPORT_BUCKET"),
-		ResultExportRegion:  os.Getenv("SEI_RESULT_EXPORT_REGION"),
-		ResultExportPrefix:  os.Getenv("SEI_RESULT_EXPORT_PREFIX"),
-		GenesisBucket:       os.Getenv("SEI_GENESIS_BUCKET"),
-		GenesisRegion:       os.Getenv("SEI_GENESIS_REGION"),
-		GatewayName:         os.Getenv("SEI_GATEWAY_NAME"),
-		GatewayNamespace:    os.Getenv("SEI_GATEWAY_NAMESPACE"),
-		GatewayDomain:       os.Getenv("SEI_GATEWAY_DOMAIN"),
-		GatewayPublicDomain: os.Getenv("SEI_GATEWAY_PUBLIC_DOMAIN"),
-		KubeRBACProxyImage:  os.Getenv("SEI_KUBE_RBAC_PROXY_IMAGE"),
-		SidecarImage:        os.Getenv("SEI_SIDECAR_IMAGE"),
-		CosmosExporterImage: os.Getenv("SEI_COSMOS_EXPORTER_IMAGE"),
-
-		// The application-config file is opt-in; this may be empty. Points at a
-		// read-only mounted file (a GitOps-written ConfigMap volume).
-		ControllerConfigFile: os.Getenv("SEI_CONTROLLER_CONFIG"),
+	platformCfg, err := platform.Load()
+	if err != nil {
+		setupLog.Error(err, "Failed to load platform configuration")
+		os.Exit(1)
 	}
-
 	if err := platformCfg.Validate(); err != nil {
 		setupLog.Error(err, "Invalid platform configuration")
 		os.Exit(1)
