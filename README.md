@@ -79,29 +79,9 @@ spec:
 
 ## Platform Configuration
 
-The controller reads all infrastructure-level settings from environment variables. Every field is required — the controller fails fast at startup if any are missing.
+Infrastructure-level settings (node pools, storage, resources, snapshot/genesis/result-export buckets, sidecar images) are read from the mounted app-config file (`SEI_CONTROLLER_CONFIG` → `platform.FileConfig`), which is authoritative — the controller fails fast at startup if a required field is unset. See [`docs/controller-app-config.md`](docs/controller-app-config.md) for the schema.
 
-| Env var | Description |
-|---------|-------------|
-| `SEI_NODEPOOL_NAME` | Karpenter NodePool for pod scheduling |
-| `SEI_TOLERATION_KEY` | Taint key to tolerate |
-| `SEI_TOLERATION_VALUE` | Taint value to tolerate |
-| `SEI_SERVICE_ACCOUNT` | ServiceAccount for node pods |
-| `SEI_STORAGE_CLASS_PERF` | StorageClass for full/validator/archive nodes |
-| `SEI_STORAGE_CLASS_DEFAULT` | StorageClass for other modes |
-| `SEI_STORAGE_SIZE_DEFAULT` | PVC size for full/validator nodes |
-| `SEI_STORAGE_SIZE_ARCHIVE` | PVC size for archive nodes |
-| `SEI_RESOURCE_CPU_ARCHIVE` | CPU request for archive nodes |
-| `SEI_RESOURCE_MEM_ARCHIVE` | Memory request for archive nodes |
-| `SEI_RESOURCE_CPU_DEFAULT` | CPU request for full/validator nodes |
-| `SEI_RESOURCE_MEM_DEFAULT` | Memory request for full/validator nodes |
-| `SEI_SNAPSHOT_BUCKET` | S3 bucket for snapshot storage |
-| `SEI_SNAPSHOT_REGION` | AWS region for snapshot S3 operations |
-| `SEI_RESULT_EXPORT_BUCKET` | S3 bucket for shadow result exports |
-| `SEI_RESULT_EXPORT_REGION` | AWS region for result export bucket |
-| `SEI_RESULT_EXPORT_PREFIX` | S3 key prefix for result exports |
-| `SEI_GENESIS_BUCKET` | S3 bucket for genesis artifacts |
-| `SEI_GENESIS_REGION` | AWS region for genesis artifacts bucket |
+Gateway config (`SEI_GATEWAY_NAME`, `SEI_GATEWAY_NAMESPACE`, `SEI_GATEWAY_DOMAIN`) and the config-file path (`SEI_CONTROLLER_CONFIG`) remain environment variables.
 
 ## Development
 

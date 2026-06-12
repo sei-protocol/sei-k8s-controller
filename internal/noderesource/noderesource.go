@@ -224,7 +224,7 @@ func DefaultResourcesForMode(mode string, p PlatformConfig) corev1.ResourceRequi
 // never seid main or any non-sidecar init container.
 func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.StatefulSet, error) {
 	if p.KubeRBACProxyImage == "" {
-		return nil, fmt.Errorf("SEI_KUBE_RBAC_PROXY_IMAGE is not configured on the controller")
+		return nil, fmt.Errorf("images.kubeRBACProxy is not configured in the app-config file")
 	}
 	one := int32(1)
 	labels := ResourceLabels(node)
@@ -644,7 +644,7 @@ func cosmosExporterWaitCommand() (command []string, args []string) {
 // buildCosmosExporterContainer renders the cosmos-exporter sidecar.
 func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
 	if p.CosmosExporterImage == "" {
-		return corev1.Container{}, fmt.Errorf("SEI_COSMOS_EXPORTER_IMAGE is required on the operator Deployment")
+		return corev1.Container{}, fmt.Errorf("images.cosmosExporter is required in the app-config file")
 	}
 	command, args := cosmosExporterWaitCommand()
 	return corev1.Container{
