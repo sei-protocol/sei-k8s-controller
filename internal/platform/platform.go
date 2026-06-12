@@ -21,9 +21,8 @@ const (
 )
 
 // Config holds infrastructure-level settings that vary per deployment
-// environment. It is resolved by Load: the infra fields are read from the
-// app-config file (FileConfig) when present, falling back to their historical
-// env vars (PLT-475, transitional); the networking/gateway fields and
+// environment. It is resolved by Load: infra fields come from the app-config
+// file (FileConfig), which is authoritative; the networking/gateway fields and
 // ControllerConfigFile are env-sourced. Fields are required unless documented
 // otherwise — ControllerConfigFile is optional (state-sync is opt-in). See
 // platformtest.Config() for test fixtures.
@@ -80,10 +79,9 @@ type Config struct {
 // FileConfig is the controller's file-sourced application config (SEI_CONTROLLER_CONFIG).
 //
 // The infra sections (scheduling, storage, resources, snapshot, resultExport,
-// genesis, images) carry the infra config that was historically env-sourced.
-// They are resolved once at startup by Load, the file value winning over the
-// env fallback. The stateSync section is read per-reconcile (it hot-reloads);
-// the infra sections are not (an infra change warrants a restart).
+// genesis, images) are the authoritative source for that config, resolved once
+// at startup by Load. The stateSync section is read per-reconcile (it
+// hot-reloads); the infra sections are not (an infra change warrants a restart).
 //
 // Networking/gateway config is deliberately absent — it stays env-sourced
 // pending its removal from the controller in the GitOps networking move (PLT-451).
@@ -159,52 +157,46 @@ func (c Config) NodepoolForMode(mode string) string {
 	return c.NodepoolName
 }
 
-// Validate returns an error if a required field is missing from both the
-// app-config file and the environment. The source label names the file key and
-// the env var so the error points at either fix; networking/gateway fields name
-// only their env var.
+// Validate returns an error if a required field is unset. name is the field's
+// app-config file key, except the networking/gateway fields (still env-sourced
+// pending PLT-451) which name their env var. Slice order is the report order
+// for the first missing field.
 func (c Config) Validate() error {
-	// fileKey is empty for env-only fields (networking/gateway); they report
-	// just the env var. Slice order is the report order for the first missing.
 	required := []struct {
-		fileKey string
-		envVar  string
-		val     string
+		name string
+		val  string
 	}{
-		{"scheduling.nodepoolName", envNodepoolName, c.NodepoolName},
-		{"scheduling.nodepoolArchive", envNodepoolArchive, c.NodepoolArchive},
-		{"scheduling.tolerationKey", envTolerationKey, c.TolerationKey},
-		{"scheduling.serviceAccount", envServiceAccount, c.ServiceAccount},
-		{"storage.classPerf", envStorageClassPerf, c.StorageClassPerf},
-		{"storage.classDefault", envStorageClassDefault, c.StorageClassDefault},
-		{"storage.classArchive", envStorageClassArchive, c.StorageClassArchive},
-		{"storage.sizeDefault", envStorageSizeDefault, c.StorageSizeDefault},
-		{"storage.sizeArchive", envStorageSizeArchive, c.StorageSizeArchive},
-		{"resources.cpuArchive", envResourceCPUArchive, c.ResourceCPUArchive},
-		{"resources.memArchive", envResourceMemArchive, c.ResourceMemArchive},
-		{"resources.cpuDefault", envResourceCPUDefault, c.ResourceCPUDefault},
-		{"resources.memDefault", envResourceMemDefault, c.ResourceMemDefault},
-		{"snapshot.bucket", envSnapshotBucket, c.SnapshotBucket},
-		{"snapshot.region", envSnapshotRegion, c.SnapshotRegion},
-		{"resultExport.bucket", envResultExportBucket, c.ResultExportBucket},
-		{"resultExport.region", envResultExportRegion, c.ResultExportRegion},
-		{"resultExport.prefix", envResultExportPrefix, c.ResultExportPrefix},
-		{"genesis.bucket", envGenesisBucket, c.GenesisBucket},
-		{"genesis.region", envGenesisRegion, c.GenesisRegion},
-		{"images.sidecar", envSidecarImage, c.SidecarImage},
-		{"images.kubeRBACProxy", envKubeRBACProxyImage, c.KubeRBACProxyImage},
-		{"", envGatewayName, c.GatewayName},
-		{"", envGatewayNamespace, c.GatewayNamespace},
-		{"", envGatewayDomain, c.GatewayDomain},
+		{"scheduling.nodepoolName", c.NodepoolName},
+		{"scheduling.nodepoolArchive", c.NodepoolArchive},
+		{"scheduling.tolerationKey", c.TolerationKey},
+		{"scheduling.serviceAccount", c.ServiceAccount},
+		{"storage.classPerf", c.StorageClassPerf},
+		{"storage.classDefault", c.StorageClassDefault},
+		{"storage.classArchive", c.StorageClassArchive},
+		{"storage.sizeDefault", c.StorageSizeDefault},
+		{"storage.sizeArchive", c.StorageSizeArchive},
+		{"resources.cpuArchive", c.ResourceCPUArchive},
+		{"resources.memArchive", c.ResourceMemArchive},
+		{"resources.cpuDefault", c.ResourceCPUDefault},
+		{"resources.memDefault", c.ResourceMemDefault},
+		{"snapshot.bucket", c.SnapshotBucket},
+		{"snapshot.region", c.SnapshotRegion},
+		{"resultExport.bucket", c.ResultExportBucket},
+		{"resultExport.region", c.ResultExportRegion},
+		{"resultExport.prefix", c.ResultExportPrefix},
+		{"genesis.bucket", c.GenesisBucket},
+		{"genesis.region", c.GenesisRegion},
+		{"images.sidecar", c.SidecarImage},
+		{"images.kubeRBACProxy", c.KubeRBACProxyImage},
+		{"images.cosmosExporter", c.CosmosExporterImage},
+		{envGatewayName, c.GatewayName},
+		{envGatewayNamespace, c.GatewayNamespace},
+		{envGatewayDomain, c.GatewayDomain},
 	}
 	for _, f := range required {
-		if strings.TrimSpace(f.val) != "" {
-			continue
+		if strings.TrimSpace(f.val) == "" {
+			return fmt.Errorf("%s is required", f.name)
 		}
-		if f.fileKey == "" {
-			return fmt.Errorf("%s is required", f.envVar)
-		}
-		return fmt.Errorf("%s (or %s) is required", f.fileKey, f.envVar)
 	}
 	return nil
 }

@@ -15,12 +15,11 @@ Two read paths, by design:
 - **`stateSync`** is re-read **per reconcile** so syncer changes hot-reload
   without a restart (the directory mount swaps atomically).
 
-## Transitional env fallback (PLT-475)
+## Source of truth
 
-For each infra field, a non-empty file value wins; an absent one falls back to
-its historical `SEI_*` env var. So an unset `SEI_CONTROLLER_CONFIG` reproduces
-the original all-env behavior. The fallback is removed in a follow-up once the
-ConfigMap is verified populated, after which the file is authoritative.
+The file is **authoritative** for infra config: a required field unset in the
+file fails `Config.Validate` at startup (the controller does not boot). There is
+no env-var fallback for these fields.
 
 Networking/gateway config (`SEI_GATEWAY_*`, `SEI_P2P_ENDPOINT_DOMAIN`,
 `SEI_NLB_TARGET_TYPE`) is **not** in the file — it stays env-sourced pending its
