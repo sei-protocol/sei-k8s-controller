@@ -35,13 +35,16 @@ func baseTask(ns, name string, kind seiv1alpha1.SeiNodeTaskKind) *seiv1alpha1.Se
 	}
 }
 
-// DiscoverPeers with its matching empty payload is accepted.
-func TestCEL_DiscoverPeers_Accepted(t *testing.T) {
+// The retired DiscoverPeers kind is no longer in the enum, so a CR with
+// kind=DiscoverPeers is rejected at the schema layer (the imperative emitter
+// was removed — the controller owns peering via config-apply).
+func TestCEL_DiscoverPeers_Removed_Rejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
-	snt := baseTask(ns, "discover-ok", seiv1alpha1.SeiNodeTaskKindDiscoverPeers)
-	snt.Spec.DiscoverPeers = &seiv1alpha1.DiscoverPeersPayload{}
-	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
+	snt := baseTask(ns, "discover-gone", seiv1alpha1.SeiNodeTaskKind("DiscoverPeers"))
+	err := testCli.Create(testCtx, snt)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("Unsupported value"))
 }
 
 // RestartSeid with its matching empty payload is accepted.
@@ -99,19 +102,6 @@ func TestCEL_MarkReady_MultiplePayloads_Rejected(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("exactly one"))
 }
 
-// kind=DiscoverPeers with NO payload is rejected (zero payloads).
-func TestCEL_DiscoverPeers_NoPayload_Rejected(t *testing.T) {
-	g := NewWithT(t)
-	ns := makeNamespace(t)
-	snt := baseTask(ns, "discover-nopayload", seiv1alpha1.SeiNodeTaskKindDiscoverPeers)
-	err := testCli.Create(testCtx, snt)
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(Or(
-		ContainSubstring("exactly one"),
-		ContainSubstring("discoverPeers is required"),
-	))
-}
-
 // kind=RestartSeid with NO payload is rejected.
 func TestCEL_RestartSeid_NoPayload_Rejected(t *testing.T) {
 	g := NewWithT(t)
@@ -125,43 +115,43 @@ func TestCEL_RestartSeid_NoPayload_Rejected(t *testing.T) {
 	))
 }
 
-// kind=DiscoverPeers with TWO payloads (discoverPeers + restartSeid) is
-// rejected by the exactly-one union rule.
+// kind=RestartSeid with TWO payloads (restartSeid + markReady) is rejected by
+// the exactly-one union rule.
 func TestCEL_MultiplePayloads_Rejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
-	snt := baseTask(ns, "two-payloads", seiv1alpha1.SeiNodeTaskKindDiscoverPeers)
-	snt.Spec.DiscoverPeers = &seiv1alpha1.DiscoverPeersPayload{}
+	snt := baseTask(ns, "two-payloads", seiv1alpha1.SeiNodeTaskKindRestartSeid)
 	snt.Spec.RestartSeid = &seiv1alpha1.RestartSeidPayload{}
+	snt.Spec.MarkReady = &seiv1alpha1.MarkReadyPayload{}
 	err := testCli.Create(testCtx, snt)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("exactly one"))
 }
 
-// kind=DiscoverPeers carrying a mismatched payload (restartSeid) is rejected by
+// kind=RestartSeid carrying a mismatched payload (markReady) is rejected by
 // the kind/payload agreement rule.
 func TestCEL_KindPayloadMismatch_Rejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
-	snt := baseTask(ns, "kind-mismatch", seiv1alpha1.SeiNodeTaskKindDiscoverPeers)
-	snt.Spec.RestartSeid = &seiv1alpha1.RestartSeidPayload{}
+	snt := baseTask(ns, "kind-mismatch", seiv1alpha1.SeiNodeTaskKindRestartSeid)
+	snt.Spec.MarkReady = &seiv1alpha1.MarkReadyPayload{}
 	err := testCli.Create(testCtx, snt)
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("discoverPeers is required"))
+	g.Expect(err.Error()).To(ContainSubstring("restartSeid is required"))
 }
 
-// spec.kind is immutable — a DiscoverPeers task cannot be flipped to RestartSeid.
-func TestCEL_KindImmutable_DiscoverPeersToRestartSeid(t *testing.T) {
+// spec.kind is immutable — a RestartSeid task cannot be flipped to MarkReady.
+func TestCEL_KindImmutable_RestartSeidToMarkReady(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
-	snt := baseTask(ns, "kind-immutable", seiv1alpha1.SeiNodeTaskKindDiscoverPeers)
-	snt.Spec.DiscoverPeers = &seiv1alpha1.DiscoverPeersPayload{}
+	snt := baseTask(ns, "kind-immutable", seiv1alpha1.SeiNodeTaskKindRestartSeid)
+	snt.Spec.RestartSeid = &seiv1alpha1.RestartSeidPayload{}
 	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
 
 	patch := client.MergeFrom(snt.DeepCopy())
-	snt.Spec.Kind = seiv1alpha1.SeiNodeTaskKindRestartSeid
-	snt.Spec.DiscoverPeers = nil
-	snt.Spec.RestartSeid = &seiv1alpha1.RestartSeidPayload{}
+	snt.Spec.Kind = seiv1alpha1.SeiNodeTaskKindMarkReady
+	snt.Spec.RestartSeid = nil
+	snt.Spec.MarkReady = &seiv1alpha1.MarkReadyPayload{}
 	err := testCli.Patch(testCtx, snt, patch)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("kind is immutable"))

@@ -35,7 +35,7 @@ func TestSeiNodeTaskParamsFor_UnsupportedKind_TypedError(t *testing.T) {
 // unsupported kind — it must not satisfy errors.As(*ErrUnsupportedKind).
 func TestSeiNodeTaskParamsFor_WiredKindMissingPayload_NotUnsupported(t *testing.T) {
 	cr := &seiv1alpha1.SeiNodeTask{
-		Spec: seiv1alpha1.SeiNodeTaskSpec{Kind: seiv1alpha1.SeiNodeTaskKindDiscoverPeers},
+		Spec: seiv1alpha1.SeiNodeTaskSpec{Kind: seiv1alpha1.SeiNodeTaskKindRestartSeid},
 	}
 
 	_, err := SeiNodeTaskParamsFor(cr, nil)
@@ -138,7 +138,7 @@ func TestSeiNodeTaskParamsFor_RestartSeid_NilPayload_ParamsBuildFailed(t *testin
 // conditional.
 func TestFailureReason(t *testing.T) {
 	wired := &seiv1alpha1.SeiNodeTask{
-		Spec: seiv1alpha1.SeiNodeTaskSpec{Kind: seiv1alpha1.SeiNodeTaskKindDiscoverPeers},
+		Spec: seiv1alpha1.SeiNodeTaskSpec{Kind: seiv1alpha1.SeiNodeTaskKindRestartSeid},
 	}
 	_, err := SeiNodeTaskParamsFor(wired, nil)
 	if err == nil {

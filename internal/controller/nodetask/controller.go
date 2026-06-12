@@ -60,9 +60,8 @@ const (
 	// quick disk write; sidecar-backed gov/await kinds stay unbounded (an
 	// operator sets spec.timeoutSeconds). RestartSeid gets a generous 10m: the
 	// sidecar SIGTERMs seid (up to ~90s graceful), then polls seid's RPC back up.
-	defaultRestartSeidTimeout   = 10 * time.Minute
-	defaultDiscoverPeersTimeout = 2 * time.Minute
-	defaultMarkReadyTimeout     = 2 * time.Minute
+	defaultRestartSeidTimeout = 10 * time.Minute
+	defaultMarkReadyTimeout   = 2 * time.Minute
 )
 
 // resultRequeueImmediate mirrors planner.ResultRequeueImmediate without
@@ -323,8 +322,6 @@ func effectiveTimeout(cr *seiv1alpha1.SeiNodeTask) time.Duration {
 	switch cr.Spec.Kind {
 	case seiv1alpha1.SeiNodeTaskKindRestartSeid:
 		return defaultRestartSeidTimeout
-	case seiv1alpha1.SeiNodeTaskKindDiscoverPeers:
-		return defaultDiscoverPeersTimeout
 	case seiv1alpha1.SeiNodeTaskKindMarkReady:
 		return defaultMarkReadyTimeout
 	default:
@@ -336,8 +333,7 @@ func effectiveTimeout(cr *seiv1alpha1.SeiNodeTask) time.Duration {
 // payload. It is a thin dispatcher: the per-kind constructors live in the task
 // package (task.SeiNodeTaskParamsFor). target is the resolved SeiNode; pass nil
 // from the early-validation path (before the SeiNode is fetched). A nil payload
-// (DiscoverPeers, nil target) marshals to nil params — source-building is
-// deferred to the driveTask call site, which has target.
+// marshals to nil params.
 func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (taskType string, params json.RawMessage, err error) {
 	p, err := task.SeiNodeTaskParamsFor(cr, target)
 	if err != nil {

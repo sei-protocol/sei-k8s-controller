@@ -106,9 +106,6 @@ spec:
                 required:
                 - targetHeight
                 type: object
-              discoverPeers:
-                description: DiscoverPeers is the payload for kind=DiscoverPeers.
-                type: object
               govSoftwareUpgrade:
                 description: GovSoftwareUpgrade is the payload for kind=GovSoftwareUpgrade.
                 properties:
@@ -248,7 +245,6 @@ spec:
                 - AwaitCondition
                 - UpdateNodeImage
                 - AwaitNodesAtHeight
-                - DiscoverPeers
                 - RestartSeid
                 - MarkReady
                 type: string
@@ -328,13 +324,12 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: exactly one of govSoftwareUpgrade, govVote, awaitCondition,
-                updateNodeImage, awaitNodesAtHeight, discoverPeers, restartSeid, or
-                markReady must be set
+                updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must
+                be set
               rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
                 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage)
-                ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.discoverPeers)
-                ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady)
-                ? 1 : 0) == 1'
+                ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid)
+                ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1'
             - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
               rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
             - message: spec.govVote is required when kind=GovVote
@@ -345,8 +340,6 @@ spec:
               rule: self.kind != 'UpdateNodeImage' || has(self.updateNodeImage)
             - message: spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight
               rule: self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)
-            - message: spec.discoverPeers is required when kind=DiscoverPeers
-              rule: self.kind != 'DiscoverPeers' || has(self.discoverPeers)
             - message: spec.restartSeid is required when kind=RestartSeid
               rule: self.kind != 'RestartSeid' || has(self.restartSeid)
             - message: spec.markReady is required when kind=MarkReady

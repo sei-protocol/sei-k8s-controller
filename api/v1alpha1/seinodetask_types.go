@@ -6,7 +6,7 @@ import (
 
 // SeiNodeTaskKind discriminates the SeiNodeTask spec union. Exactly one of
 // the matching payload sub-structs in SeiNodeTaskSpec must be set.
-// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;DiscoverPeers;RestartSeid;MarkReady
+// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;RestartSeid;MarkReady
 type SeiNodeTaskKind string
 
 const (
@@ -37,14 +37,6 @@ const (
 	// (target.nodeRef); the task submits await-condition(height=H) to the
 	// target's sidecar and completes when the local height crosses H.
 	SeiNodeTaskKindAwaitNodesAtHeight SeiNodeTaskKind = "AwaitNodesAtHeight"
-
-	// SeiNodeTaskKindDiscoverPeers backs the sidecar `discover-peers` task.
-	// Re-resolves the target's spec.peers and writes persistent-peers into the
-	// on-disk config.toml (scalar merge). Disk-only: a running seid reads
-	// config.toml at startup, so compose with kind=RestartSeid to apply. The two
-	// run independently — a DiscoverPeers success followed by a RestartSeid failure
-	// leaves config.toml ahead of the running peer set until the next restart.
-	SeiNodeTaskKindDiscoverPeers SeiNodeTaskKind = "DiscoverPeers"
 
 	// SeiNodeTaskKindRestartSeid backs the sidecar `restart-seid` task. Restarts
 	// seid in place — the sidecar SIGTERMs the co-located seid process and the
@@ -113,13 +105,12 @@ const (
 // Field names locked at v1alpha1 — see docs/design/seinode-task-lld.md
 // (PR sei-protocol/sei-k8s-controller#277).
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.discoverPeers) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, awaitCondition, updateNodeImage, awaitNodesAtHeight, discoverPeers, restartSeid, or markReady must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must be set"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)",message="spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovVote' || has(self.govVote)",message="spec.govVote is required when kind=GovVote"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitCondition' || has(self.awaitCondition)",message="spec.awaitCondition is required when kind=AwaitCondition"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'UpdateNodeImage' || has(self.updateNodeImage)",message="spec.updateNodeImage is required when kind=UpdateNodeImage"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)",message="spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight"
-// +kubebuilder:validation:XValidation:rule="self.kind != 'DiscoverPeers' || has(self.discoverPeers)",message="spec.discoverPeers is required when kind=DiscoverPeers"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartSeid' || has(self.restartSeid)",message="spec.restartSeid is required when kind=RestartSeid"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'MarkReady' || has(self.markReady)",message="spec.markReady is required when kind=MarkReady"
 // +kubebuilder:validation:XValidation:rule="self.kind == oldSelf.kind",message="spec.kind is immutable"
@@ -164,10 +155,6 @@ type SeiNodeTaskSpec struct {
 	// AwaitNodesAtHeight is the payload for kind=AwaitNodesAtHeight.
 	// +optional
 	AwaitNodesAtHeight *AwaitNodesAtHeightPayload `json:"awaitNodesAtHeight,omitempty"`
-
-	// DiscoverPeers is the payload for kind=DiscoverPeers.
-	// +optional
-	DiscoverPeers *DiscoverPeersPayload `json:"discoverPeers,omitempty"`
 
 	// RestartSeid is the payload for kind=RestartSeid.
 	// +optional
@@ -360,18 +347,6 @@ type AwaitNodesAtHeightPayload struct {
 	// +kubebuilder:validation:Minimum=1
 	TargetHeight int64 `json:"targetHeight"`
 }
-
-// DiscoverPeersPayload is the payload for kind=DiscoverPeers. It is empty: the
-// task re-resolves the target SeiNode's current spec.peers (ec2Tags, static,
-// and label sources) and writes persistent-peers into the on-disk config.toml
-// via the sidecar discover-peers task. It is empty: the peer sources are fully
-// determined by the target's spec/status, so there is nothing to parameterize.
-//
-// Writes config.toml only; the running seid picks up the new peers on its next
-// restart. Compose with kind=RestartSeid to apply. See the
-// SeiNodeTaskKindDiscoverPeers doc comment for the sequencing and atomicity
-// caveats.
-type DiscoverPeersPayload struct{}
 
 // RestartSeidPayload is the payload for kind=RestartSeid. It is empty: the
 // sidecar restart-seid task (sidecar.RestartSeidTask) takes no inputs — it
