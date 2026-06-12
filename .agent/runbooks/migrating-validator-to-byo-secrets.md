@@ -271,9 +271,10 @@ Ordered. Do not reorder steps 3 and 4.
    - Flux decrypts the Secrets and the SeiNode's bootstrap plan runs (no-snapshot
      validator): ensure-data-pvc -> validate-signing-key -> validate-node-key ->
      apply-rbac-proxy-config -> apply-statefulset -> apply-service ->
-     configure-genesis -> config-apply -> discover-peers -> config-validate ->
-     mark-ready (config-apply writes the base config; discover-peers then writes
-     persistent-peers; config-validate checks the assembled result last). seid then
+     configure-genesis -> config-apply -> config-validate ->
+     mark-ready (config-apply writes the base config and folds in
+     persistent-peers from the controller-resolved peer set; config-validate
+     checks the assembled result last). seid then
      block-syncs once the pod is up (there is no "block-sync" task — it's seid
      catching up, observed via catching_up/height, not the plan).
    - Expect the networking.tcp DNS race on cold start (§6 finding 1): ~6-8 min of
@@ -302,7 +303,7 @@ Numbered as encountered. 1–4 are the ones that change operator behavior.
 
 **1. `networking.tcp` cold-start DNS race (self-heals).** A `tcp` validator gets a per-pod internet-facing NLB + an external-DNS Route53 record, and seid is configured with that hostname as its P2P `external-address`. On first boot seid resolves its own external address *before* external-DNS has published it → `lookup ...: no such host` → CrashLoopBackOff, made worse by CoreDNS negative-cache TTL. It clears on its own in ~6–8 min. **This is expected; do not drop `networking.tcp` to "fix" it** — a public arctic-1 validator needs the NLB.
 
-**2. Deploy clean — never blow-away-and-recreate a running chain's SND.** This bit the dry-run's genesis chain, whose nodes use **controller-generated** `node_key.json`: recreating the SND regenerates those keys per pod, but peers keep the *old* NodeIDs in `persistent_peers` → every P2P dial is rejected (`peer NodeID = X, want Y`) and the chain wedges (never produces a block). A fresh deploy's `discover-peers` wires correct NodeIDs the first time. **For *this* BYO validator the NodeID is pinned by the `nodeKey` Secret and is stable across recreation** — so its NodeID won't churn, but recreation is still hazardous for a different reason: finding 3 (it destroys the data PVC). Bottom line: don't recreate a running validator's SND; if you must replace, do it clean.
+**2. Deploy clean — never blow-away-and-recreate a running chain's SND.** This bit the dry-run's genesis chain, whose nodes use **controller-generated** `node_key.json`: recreating the SND regenerates those keys per pod, but peers keep the *old* NodeIDs in `persistent_peers` → every P2P dial is rejected (`peer NodeID = X, want Y`) and the chain wedges (never produces a block). A fresh deploy resolves and writes the correct NodeIDs into `persistent_peers` the first time. **For *this* BYO validator the NodeID is pinned by the `nodeKey` Secret and is stable across recreation** — so its NodeID won't churn, but recreation is still hazardous for a different reason: finding 3 (it destroys the data PVC). Bottom line: don't recreate a running validator's SND; if you must replace, do it clean.
 
 **3. Deleting the SeiNode destroys the data PVC.** A `Failed` SeiNode does **not** self-heal from a spec edit — the controller treats `Failed` as terminal and emits "Delete and recreate the resource to retry", so the only way to replan is to delete the SeiNode. But the data PVC carries a controller ownerRef **directly to the SeiNode** (the SeiNode owns the StatefulSet→Pod *and* the PVC in parallel — the PVC is **not** a StatefulSet `volumeClaimTemplate`, so it is not protected by the STS's `WhenDeleted=Retain`). Deleting the SeiNode therefore GC-deletes the PVC, destroying chain state and forcing a full re-sync. The **consensus identity survives** (it's in the Secrets), so the validator comes back as itself — but budget for the resync. Note the scope of `deletionPolicy: Retain`: it governs the **SND→child** cascade only — it protects the PVC when the *SND* is deleted, but a manual `kubectl delete seinode <child>` (the delete-to-replan action) still GC-deletes the PVC via the SeiNode ownerRef regardless.
 

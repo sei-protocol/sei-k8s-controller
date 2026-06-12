@@ -235,7 +235,7 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 // to report healthy and then runs seid with --halt-height. Polls /v0/healthz
 // which returns 503 until the mark-ready task completes, ensuring all
 // bootstrap sidecar tasks (snapshot-restore, configure-genesis, config-apply,
-// discover-peers, config-validate) have finished before seid starts.
+// config-validate) have finished before seid starts.
 //
 // Uses bash's /dev/tcp to make raw HTTP requests instead of wget/curl, which
 // are not available on all sei images.

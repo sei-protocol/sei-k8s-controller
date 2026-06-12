@@ -701,8 +701,7 @@ func TestTaskParamsForKind_RestartSeid(t *testing.T) {
 
 // RestartSeid is poll-to-completion (registered sidecarTask[...](false)): unlike
 // MarkReady's fire-and-forget ack, the controller polls GetTask until the
-// restart-seid task reports terminal (seid's RPC back up). Mirrors the
-// DiscoverPeers poll shape.
+// restart-seid task reports terminal (seid's RPC back up).
 func TestReconcile_RestartSeid_EndToEnd(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()

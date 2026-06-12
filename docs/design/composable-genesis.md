@@ -54,7 +54,6 @@ that no individual node can perform alone.
 ```
 init-validator          → create keys, gentx, publish identity to S3
 configure-genesis       → download assembled genesis.json from S3 (retries until available)
-discover-peers          → resolve network peers
 configure-state-sync    → (only if StateSync is set)
 config-patch            → apply TOML config patches
 mark-ready              → signal bootstrap complete
@@ -66,7 +65,6 @@ register-validator      → (only on existing chains) submit create-validator tx
 ```
 init-validator          → create keys (gentx not needed; genesis already exists)
 configure-genesis       → download existing chain genesis from S3 (immediately available)
-discover-peers          → resolve network peers
 configure-state-sync    → sync to chain tip
 config-patch            → apply TOML config patches
 mark-ready              → signal bootstrap complete
