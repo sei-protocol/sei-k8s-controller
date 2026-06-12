@@ -113,8 +113,8 @@ func TestStateSyncGate_EnabledWithTwoSyncers_Ready(t *testing.T) {
 		testChainID: {"syncer-1.arctic-1.example.com:26657", "syncer-0.arctic-1.example.com:26657"},
 	})
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeFalse())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeFalse())
 
 	cond := stateSyncCondition(node)
 	g.Expect(cond).NotTo(BeNil())
@@ -135,8 +135,8 @@ func TestStateSyncGate_EnabledWithOneSyncer_FailsClosed(t *testing.T) {
 	r, _ := newNodeReconciler(t, node)
 	withSyncers(t, r, map[string][]string{testChainID: {"only-one.arctic-1.example.com:26657"}})
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeFalse())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeTrue())
 
 	cond := stateSyncCondition(node)
 	g.Expect(cond).NotTo(BeNil())
@@ -154,8 +154,8 @@ func TestStateSyncGate_EnabledMissingFile_FailsClosed(t *testing.T) {
 	r, _ := newNodeReconciler(t, node)
 	r.Platform.ControllerConfigFile = filepath.Join(t.TempDir(), "absent.yaml") // never created
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeFalse())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeTrue())
 
 	cond := stateSyncCondition(node)
 	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
@@ -169,8 +169,8 @@ func TestStateSyncGate_EnabledNoChainEntry_FailsClosed(t *testing.T) {
 	r, _ := newNodeReconciler(t, node)
 	withSyncers(t, r, map[string][]string{"other-chain": {syncerA, syncerB}})
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeFalse())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeTrue())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
 }
 
@@ -183,8 +183,8 @@ func TestStateSyncGate_ParseError_Transient(t *testing.T) {
 	r, _ := newNodeReconciler(t, node)
 	writeSyncerFile(t, r, "this: [is: not: valid: yaml") // malformed
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeTrue())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeTrue())
 
 	cond := stateSyncCondition(node)
 	g.Expect(cond.Status).To(Equal(metav1.ConditionUnknown))
@@ -198,8 +198,8 @@ func TestStateSyncGate_UnconfiguredSource_FailsClosed(t *testing.T) {
 	node := stateSyncNode("n", testChainID)
 	r, _ := newNodeReconciler(t, node) // Platform leaves ControllerConfigFile empty.
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeFalse())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeTrue())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
 }
 
@@ -211,8 +211,8 @@ func TestStateSyncGate_Disabled_NotApplicable(t *testing.T) {
 	r, _ := newNodeReconciler(t, node)
 	withSyncers(t, r, map[string][]string{testChainID: {syncerA, syncerB}})
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeFalse())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeFalse())
 
 	cond := stateSyncCondition(node)
 	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
@@ -236,8 +236,8 @@ func TestStateSyncGate_NoSnapshotSource_NotApplicable(t *testing.T) {
 	r, _ := newNodeReconciler(t, node)
 	withSyncers(t, r, map[string][]string{testChainID: {syncerA, syncerB}})
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeFalse())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeFalse())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNotApplicable))
 }
 
@@ -250,8 +250,8 @@ func TestStateSyncGate_FailClosedClearsStaleSyncers(t *testing.T) {
 	node.Status.ResolvedStateSyncers = []string{"old-a:26657", "old-b:26657"}
 	r, _ := newNodeReconciler(t, node) // unconfigured source → fail closed
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeFalse())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeTrue())
 	g.Expect(node.Status.ResolvedStateSyncers).To(BeNil())
 }
 
@@ -263,8 +263,8 @@ func TestStateSyncGate_NonStateSyncNodeUnaffected(t *testing.T) {
 	node := newSnapshotNode("n", testNamespace)
 	r, _ := newNodeReconciler(t, node)
 
-	transient := r.reconcileStateSyncGate(node)
-	g.Expect(transient).To(BeFalse())
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeFalse())
 	g.Expect(node.Status.ResolvedStateSyncers).To(BeEmpty())
 	g.Expect(slices.Contains([]string{
 		seiv1alpha1.ReasonStateSyncReady, seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
@@ -308,6 +308,41 @@ func TestReconcile_StateSyncFailClosed_NoPlanBuilt(t *testing.T) {
 		break
 	}
 	g.Expect(sawWarning).To(BeTrue(), "expected a StateSyncBlocked Warning Event")
+}
+
+// A pre-Running, fail-closed state-sync node builds no plan, so nothing else
+// drives a requeue and the mounted syncer file has no watch. The gate must
+// requeue on the poll interval; once the file gains >=2 syncers the next
+// reconcile re-resolves the gate and builds the plan (unblocks).
+func TestReconcile_StateSyncFailClosed_RequeuesAndUnblocks(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := stateSyncNode("ss-poll", testNamespace)
+	node.Spec.ChainID = testChainID
+	node.Status.Phase = seiv1alpha1.PhasePending
+	r, c := newNodeReconciler(t, node)
+	withSyncers(t, r, map[string][]string{testChainID: {syncerSingle}})
+
+	res, err := r.Reconcile(ctx, nodeReqFor("ss-poll", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(statusPollInterval),
+		"fail-closed pre-Running node must poll the mounted syncer file")
+
+	fetched := getSeiNode(t, ctx, c, "ss-poll", testNamespace)
+	g.Expect(fetched.Status.Plan).To(BeNil())
+	g.Expect(stateSyncCondition(fetched).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
+
+	// GitOps provisions the syncers; the mounted file now satisfies the floor.
+	withSyncers(t, r, map[string][]string{testChainID: {syncerA, syncerB}})
+
+	_, err = r.Reconcile(ctx, nodeReqFor("ss-poll", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	fetched = getSeiNode(t, ctx, c, "ss-poll", testNamespace)
+	g.Expect(fetched.Status.Plan).NotTo(BeNil(), "gate unblocks once the file has >=2 syncers")
+	g.Expect(findPlannedTask(fetched.Status.Plan, planner.TaskConfigureStateSync)).NotTo(BeNil())
+	g.Expect(stateSyncCondition(fetched).Status).To(Equal(metav1.ConditionTrue))
 }
 
 // Full reconcile path: a paused node still gets the always-present

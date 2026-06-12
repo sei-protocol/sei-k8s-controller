@@ -158,9 +158,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 	// Fail-closed state-sync gate. Runs after handleTerminalPlan (so terminal
 	// plans still clear) but before building: a state-sync node whose
 	// StateSyncReady condition isn't True must never get a state-sync-bearing
-	// plan (CometBFT needs >=2 rpc-servers; we never fall back to peers). The
-	// condition is resolved upstream by the controller's reconcileStateSyncGate.
-	// Non-state-sync work is unaffected — only init-plan construction is gated.
+	// plan (CometBFT needs >=2 rpc-servers; we never fall back to peers).
 	if stateSyncBlocksPlan(node) {
 		return nil
 	}

@@ -22,24 +22,19 @@ import (
 // existing trust-pinning behavior.
 const minCanonicalSyncers = 2
 
-// reconcileStateSyncGate resolves the canonical-syncer set for a state-sync
-// node and sets the always-present ConditionStateSyncReady accordingly. It
-// mutates node.Status in-memory only — the condition and ResolvedStateSyncers
-// are flushed by the caller's single optimistic-lock status patch, never a
-// separate write. The caller runs it before the Failed/Paused early-returns so
-// StateSyncReady is seeded on every path.
+// reconcileStateSyncGate resolves the canonical-syncer set and sets the
+// always-present ConditionStateSyncReady. It mutates node.Status in-memory only;
+// the caller's single status patch flushes it. Run before the Failed/Paused
+// early-returns so StateSyncReady is seeded on every path.
 //
-// Fail-closed is enforced downstream, not here: the planner declines to build a
-// state-sync plan whenever StateSyncReady is not True (see ResolvePlan). That
-// keeps ResolvePlan running on every reconcile, so handleTerminalPlan still
-// clears terminal plans and non-state-sync work proceeds — this method only
-// resolves the condition.
-//
-// A transient (non-absence) read or parse error is NOT fatal: it sets
-// StateSyncReady=Unknown/SyncerSourceError and returns transient=true so the
-// caller requeues without aborting the StatefulSet/Failed/Paused/flush path. A
-// missing source file or <2 entries fails closed via False/NoSyncersConfigured.
-func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (transient bool) {
+// Fail-closed is enforced downstream: the planner declines to build a state-sync
+// plan whenever StateSyncReady is not True (see ResolvePlan), so this method only
+// resolves the condition. It returns blocked=true whenever state-sync is enabled
+// but the condition didn't resolve to True — both NoSyncersConfigured and the
+// transient SyncerSourceError. The caller requeues on blocked: the syncer file is
+// a mounted volume with no watch, so polling is the only way the gate re-resolves
+// and unblocks once GitOps provisions or fixes the syncers.
+func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (blocked bool) {
 	snap := node.Spec.SnapshotSource()
 	if snap == nil || snap.StateSync == nil {
 		// State-sync disabled: no state-sync task in the plan to gate.
@@ -67,7 +62,7 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (t
 		setStateSyncReady(node, metav1.ConditionFalse, seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
 			fmt.Sprintf("state sync requires >=%d canonical syncers configured for chain %q; found %d",
 				minCanonicalSyncers, node.Spec.ChainID, len(syncers)))
-		return false
+		return true
 	}
 
 	if !slices.Equal(node.Status.ResolvedStateSyncers, syncers) {
@@ -86,14 +81,12 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (t
 // provisions the backing ConfigMap. Any other read or parse error is returned
 // so the gate can treat it as transient.
 //
-// File shape: see platform.FileConfig — the stateSync.syncers section is a YAML
-// map of chainID -> list of bare `host:port` RPC endpoints (no scheme; the
-// sidecar adds it). Each chain's entries are trimmed, blanks dropped, sorted,
-// and de-duplicated for a stable witness set.
+// Endpoints are bare host:port (no scheme; the sidecar adds it); see
+// platform.FileConfig for the file shape.
 //
-// Read fresh on every call: a mounted ConfigMap swaps atomically (a symlink
-// flip on the directory mount), so re-reading picks up GitOps updates without a
-// pod restart. Never cache an open handle.
+// Read fresh on every call: a mounted ConfigMap swaps atomically (a symlink flip
+// on the directory mount), so re-reading picks up GitOps updates without a pod
+// restart. Never cache an open handle.
 func (r *SeiNodeReconciler) canonicalSyncers(chainID string) ([]string, error) {
 	path := strings.TrimSpace(r.Platform.ControllerConfigFile)
 	if path == "" {

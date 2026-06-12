@@ -113,9 +113,9 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// flush, Paused flush, and the normal end-of-reconcile patch) — no separate
 	// status write. Fail-closed enforcement lives in ResolvePlan, which declines
 	// to build a state-sync plan when this condition isn't True; that keeps
-	// terminal-plan cleanup and non-state-sync work running. A transient
-	// syncer-source read error requeues without aborting the steps below.
-	stateSyncTransient := r.reconcileStateSyncGate(node)
+	// terminal-plan cleanup and non-state-sync work running. A blocked gate
+	// requeues (see end of reconcile) without aborting the steps below.
+	stateSyncBlocked := r.reconcileStateSyncGate(node)
 
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
@@ -185,9 +185,12 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 
-	// A transient canonical-syncer ConfigMap read failed closed without a plan
-	// to drive a requeue; poll so the gate re-resolves once the API recovers.
-	if stateSyncTransient && result.IsZero() {
+	// A blocked state-sync node (fail-closed or transient) builds no plan to
+	// drive a requeue, and the syncer file is a mounted volume with no watch.
+	// Poll so the gate re-resolves and unblocks once GitOps provisions or fixes
+	// the syncers. IsZero defers to any stronger requeue above (running-node
+	// poll, plan execution), so an active-plan node is unaffected.
+	if stateSyncBlocked && result.IsZero() {
 		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
 	}
 

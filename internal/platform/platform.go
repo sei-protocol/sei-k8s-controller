@@ -79,7 +79,6 @@ type Config struct {
 }
 
 // FileConfig is the controller's file-sourced application config (SEI_CONTROLLER_CONFIG).
-// One section today (StateSync); PLT-475 folds the remaining infra knobs in.
 type FileConfig struct {
 	StateSync StateSyncConfig `json:"stateSync"`
 }
