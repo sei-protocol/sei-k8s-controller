@@ -15,12 +15,11 @@ Two read paths, by design:
 - **`stateSync`** is re-read **per reconcile** so syncer changes hot-reload
   without a restart (the directory mount swaps atomically).
 
-## Transitional env fallback (PLT-475)
+## Source of truth
 
-For each infra field, a non-empty file value wins; an absent one falls back to
-its historical `SEI_*` env var. So an unset `SEI_CONTROLLER_CONFIG` reproduces
-the original all-env behavior. The fallback is removed in a follow-up once the
-ConfigMap is verified populated, after which the file is authoritative.
+The file is **authoritative** for infra config: a required field unset in the
+file fails `Config.Validate` at startup (the controller does not boot). There is
+no env-var fallback for these fields.
 
 Networking/gateway config (`SEI_GATEWAY_*`, `SEI_P2P_ENDPOINT_DOMAIN`,
 `SEI_NLB_TARGET_TYPE`) is **not** in the file — it stays env-sourced pending its
@@ -37,46 +36,45 @@ stateSync:
       - rpc-1.example.net:26657
       - rpc-2.example.net:26657
 
-# --- infra (read once at startup; env-var fallback during PLT-475) ---
+# --- infra (authoritative; read once at startup) ---
 
 scheduling:
-  nodepoolName: sei-node          # SEI_NODEPOOL_NAME
-  nodepoolArchive: sei-archive    # SEI_NODEPOOL_ARCHIVE
-  tolerationKey: sei.io/workload  # SEI_TOLERATION_KEY
-  serviceAccount: seid-node       # SEI_SERVICE_ACCOUNT
+  nodepoolName: sei-node
+  nodepoolArchive: sei-archive
+  tolerationKey: sei.io/workload
+  serviceAccount: seid-node
 
-storage:                          # note: no sizePerf — matches the historical env layout
-  classPerf: gp3-10k-750          # SEI_STORAGE_CLASS_PERF
-  classDefault: gp3               # SEI_STORAGE_CLASS_DEFAULT
-  classArchive: gp3-archive       # SEI_STORAGE_CLASS_ARCHIVE
-  sizeDefault: 2000Gi             # SEI_STORAGE_SIZE_DEFAULT
-  sizeArchive: 40Ti               # SEI_STORAGE_SIZE_ARCHIVE
+storage:                  # no sizePerf — perf is a storage-class tier only
+  classPerf: gp3-10k-750
+  classDefault: gp3
+  classArchive: gp3-archive
+  sizeDefault: 2000Gi
+  sizeArchive: 40Ti
 
 resources:
-  cpuArchive: "48"                # SEI_RESOURCE_CPU_ARCHIVE
-  memArchive: 448Gi               # SEI_RESOURCE_MEM_ARCHIVE
-  cpuDefault: "4"                 # SEI_RESOURCE_CPU_DEFAULT
-  memDefault: 32Gi                # SEI_RESOURCE_MEM_DEFAULT
+  cpuArchive: "48"
+  memArchive: 448Gi
+  cpuDefault: "4"
+  memDefault: 32Gi
 
 snapshot:
-  bucket: sei-snapshots           # SEI_SNAPSHOT_BUCKET
-  region: us-east-2               # SEI_SNAPSHOT_REGION
+  bucket: sei-snapshots
+  region: us-east-2
 
 resultExport:
-  bucket: sei-shadow-results      # SEI_RESULT_EXPORT_BUCKET
-  region: us-east-2               # SEI_RESULT_EXPORT_REGION
-  prefix: shadow-results/         # SEI_RESULT_EXPORT_PREFIX
+  bucket: sei-shadow-results
+  region: us-east-2
+  prefix: shadow-results/
 
 genesis:
-  bucket: sei-k8s-genesis         # SEI_GENESIS_BUCKET
-  region: us-east-2               # SEI_GENESIS_REGION
+  bucket: sei-k8s-genesis
+  region: us-east-2
 
 images:
-  sidecar: ghcr.io/sei-protocol/seictl@sha256:...        # SEI_SIDECAR_IMAGE
-  kubeRBACProxy: quay.io/brancz/kube-rbac-proxy:v0.19.1  # SEI_KUBE_RBAC_PROXY_IMAGE
-  cosmosExporter: ghcr.io/sei-protocol/sei-cosmos-exporter@sha256:...  # SEI_COSMOS_EXPORTER_IMAGE
+  sidecar: ghcr.io/sei-protocol/seictl@sha256:...
+  kubeRBACProxy: quay.io/brancz/kube-rbac-proxy:v0.19.1
+  cosmosExporter: ghcr.io/sei-protocol/sei-cosmos-exporter@sha256:...
 ```
 
-A present-but-unparseable file is a hard startup error — it never silently falls
-back to env. Required fields missing from both sources fail `Config.Validate`
-with a message naming the file key and the env var.
+A present-but-unparseable file is a hard startup error. A required infra field
+unset in the file fails `Config.Validate` at startup, naming the file key.

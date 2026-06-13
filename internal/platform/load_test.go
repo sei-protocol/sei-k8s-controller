@@ -3,47 +3,49 @@ package platform
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// envNodepool is asserted in multiple fallback cases, so it's named (goconst).
-const envNodepool = "env-nodepool"
+// fullConfig is a complete, valid app-config file — every required infra field set.
+const fullConfig = `
+scheduling:
+  nodepoolName: file-nodepool
+  nodepoolArchive: file-nodepool-archive
+  tolerationKey: file-toleration
+  serviceAccount: file-sa
+storage:
+  classPerf: file-perf
+  classDefault: file-default
+  classArchive: file-archive
+  sizeDefault: file-size-default
+  sizeArchive: file-size-archive
+resources:
+  cpuArchive: file-cpu-archive
+  memArchive: file-mem-archive
+  cpuDefault: file-cpu-default
+  memDefault: file-mem-default
+snapshot:
+  bucket: file-snap-bucket
+  region: file-snap-region
+resultExport:
+  bucket: file-export-bucket
+  region: file-export-region
+  prefix: file-export-prefix
+genesis:
+  bucket: file-genesis-bucket
+  region: file-genesis-region
+images:
+  sidecar: file-sidecar
+  kubeRBACProxy: file-rbac-proxy
+  cosmosExporter: file-cosmos-exporter
+`
 
-// setMigratedEnv sets every migrated infra env var to a recognizable "env-"
-// prefixed value so a test can assert which source a resolved field came from.
-func setMigratedEnv(t *testing.T) {
+func setGatewayEnv(t *testing.T) {
 	t.Helper()
-	for _, kv := range [][2]string{
-		{envNodepoolName, envNodepool},
-		{envNodepoolArchive, "env-nodepool-archive"},
-		{envTolerationKey, "env-toleration"},
-		{envServiceAccount, "env-sa"},
-		{envStorageClassPerf, "env-perf"},
-		{envStorageClassDefault, "env-default"},
-		{envStorageClassArchive, "env-archive"},
-		{envStorageSizeDefault, "env-size-default"},
-		{envStorageSizeArchive, "env-size-archive"},
-		{envResourceCPUArchive, "env-cpu-archive"},
-		{envResourceMemArchive, "env-mem-archive"},
-		{envResourceCPUDefault, "env-cpu-default"},
-		{envResourceMemDefault, "env-mem-default"},
-		{envSnapshotBucket, "env-snap-bucket"},
-		{envSnapshotRegion, "env-snap-region"},
-		{envResultExportBucket, "env-export-bucket"},
-		{envResultExportRegion, "env-export-region"},
-		{envResultExportPrefix, "env-export-prefix"},
-		{envGenesisBucket, "env-genesis-bucket"},
-		{envGenesisRegion, "env-genesis-region"},
-		{envSidecarImage, "env-sidecar"},
-		{envKubeRBACProxyImage, "env-rbac-proxy"},
-		{envCosmosExporterImage, "env-cosmos-exporter"},
-		{envGatewayName, "env-gw-name"},
-		{envGatewayNamespace, "env-gw-ns"},
-		{envGatewayDomain, "env-gw-domain"},
-		{envGatewayPublicDomain, "env-gw-public"},
-	} {
-		t.Setenv(kv[0], kv[1])
-	}
+	t.Setenv(envGatewayName, "env-gw-name")
+	t.Setenv(envGatewayNamespace, "env-gw-ns")
+	t.Setenv(envGatewayDomain, "env-gw-domain")
 }
 
 func writeConfig(t *testing.T, body string) string {
@@ -55,10 +57,13 @@ func writeConfig(t *testing.T, body string) string {
 	return path
 }
 
-// No file configured: every infra field resolves from the environment.
-func TestLoad_NoFile_AllEnv(t *testing.T) {
-	setMigratedEnv(t)
-	t.Setenv(envControllerConfig, "")
+// Infra config is sourced from the file (authoritative); gateway from env. An
+// infra env var, even when set, is ignored — there is no fallback.
+func TestLoad_InfraFromFile_GatewayFromEnv(t *testing.T) {
+	setGatewayEnv(t)
+	t.Setenv("SEI_NODEPOOL_NAME", "env-ignored") // no longer consulted
+	path := writeConfig(t, fullConfig)
+	t.Setenv(envControllerConfig, path)
 
 	cfg, err := Load()
 	if err != nil {
@@ -67,83 +72,75 @@ func TestLoad_NoFile_AllEnv(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if cfg.NodepoolName != envNodepool || cfg.SnapshotBucket != "env-snap-bucket" || cfg.SidecarImage != "env-sidecar" {
-		t.Errorf("expected env-sourced values, got nodepool=%q snapshot=%q sidecar=%q",
-			cfg.NodepoolName, cfg.SnapshotBucket, cfg.SidecarImage)
-	}
-	if cfg.ControllerConfigFile != "" {
-		t.Errorf("ControllerConfigFile = %q, want empty", cfg.ControllerConfigFile)
-	}
-}
-
-// A field present in the file wins; a field absent from the file falls back to
-// its env var. Networking/gateway fields are always env-sourced.
-func TestLoad_FileWinsEnvFallback(t *testing.T) {
-	setMigratedEnv(t)
-	path := writeConfig(t, `
-scheduling:
-  nodepoolName: file-nodepool
-  serviceAccount: file-sa
-storage:
-  classPerf: file-perf
-images:
-  sidecar: file-sidecar
-`)
-	t.Setenv(envControllerConfig, path)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	// File-sourced.
 	if cfg.NodepoolName != "file-nodepool" {
-		t.Errorf("NodepoolName = %q, want file-nodepool", cfg.NodepoolName)
+		t.Errorf("NodepoolName = %q, want file-nodepool (infra env must be ignored)", cfg.NodepoolName)
 	}
-	if cfg.ServiceAccount != "file-sa" {
-		t.Errorf("ServiceAccount = %q, want file-sa", cfg.ServiceAccount)
+	if cfg.CosmosExporterImage != "file-cosmos-exporter" {
+		t.Errorf("CosmosExporterImage = %q, want file-cosmos-exporter", cfg.CosmosExporterImage)
 	}
-	if cfg.StorageClassPerf != "file-perf" {
-		t.Errorf("StorageClassPerf = %q, want file-perf", cfg.StorageClassPerf)
-	}
-	if cfg.SidecarImage != "file-sidecar" {
-		t.Errorf("SidecarImage = %q, want file-sidecar", cfg.SidecarImage)
-	}
-
-	// Env fallback (absent from file).
-	if cfg.NodepoolArchive != "env-nodepool-archive" {
-		t.Errorf("NodepoolArchive = %q, want env fallback", cfg.NodepoolArchive)
-	}
-	if cfg.TolerationKey != "env-toleration" {
-		t.Errorf("TolerationKey = %q, want env fallback", cfg.TolerationKey)
-	}
-
-	// Networking/gateway: always env, never file.
-	if cfg.GatewayName != "env-gw-name" || cfg.GatewayDomain != "env-gw-domain" {
-		t.Errorf("gateway fields should be env-sourced, got name=%q domain=%q", cfg.GatewayName, cfg.GatewayDomain)
+	if cfg.GatewayName != "env-gw-name" {
+		t.Errorf("GatewayName = %q, want env-gw-name", cfg.GatewayName)
 	}
 	if cfg.ControllerConfigFile != path {
 		t.Errorf("ControllerConfigFile = %q, want %q", cfg.ControllerConfigFile, path)
 	}
 }
 
-// A configured-but-missing file is not an error (the file is opt-in); resolution
-// falls back to the environment.
-func TestLoad_MissingFileFallsBackToEnv(t *testing.T) {
-	setMigratedEnv(t)
-	t.Setenv(envControllerConfig, filepath.Join(t.TempDir(), "absent.yaml"))
+// No file means no infra config — Validate fails at startup (no env fallback),
+// naming the file key.
+func TestLoad_NoFile_FailsValidate(t *testing.T) {
+	setGatewayEnv(t)
+	t.Setenv("SEI_NODEPOOL_NAME", "env-ignored")
+	t.Setenv(envControllerConfig, "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.NodepoolName != envNodepool {
-		t.Errorf("NodepoolName = %q, want env fallback", cfg.NodepoolName)
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatal("expected Validate to fail with no infra config, got nil")
+	}
+	if !strings.Contains(err.Error(), "scheduling.nodepoolName") {
+		t.Errorf("error should name the file key, got %q", err.Error())
 	}
 }
 
-// Malformed YAML is a hard error — a present-but-broken file must not silently
-// fall back to env (that would mask an operator mistake).
+// A required field absent from the file fails Validate, naming the file key.
+// Covers the CosmosExporterImage fold-in (now required at startup).
+func TestLoad_MissingField_FailsValidate(t *testing.T) {
+	setGatewayEnv(t)
+	body := strings.Replace(fullConfig, "  cosmosExporter: file-cosmos-exporter\n", "", 1)
+	path := writeConfig(t, body)
+	t.Setenv(envControllerConfig, path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "images.cosmosExporter") {
+		t.Fatalf("want Validate error naming images.cosmosExporter, got %v", err)
+	}
+}
+
+// A missing gateway env var fails Validate, naming the env var (gateway is still
+// env-sourced pending PLT-451).
+func TestLoad_MissingGateway_FailsValidate(t *testing.T) {
+	path := writeConfig(t, fullConfig)
+	t.Setenv(envControllerConfig, path)
+	// gateway env deliberately unset
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), envGatewayName) {
+		t.Fatalf("want Validate error naming %s, got %v", envGatewayName, err)
+	}
+}
+
+// Malformed YAML is a hard error — a present-but-broken file must not resolve to
+// an empty (and silently invalid) Config.
 func TestLoad_MalformedFile_Errors(t *testing.T) {
 	path := writeConfig(t, "scheduling: [not-a-map")
 	t.Setenv(envControllerConfig, path)

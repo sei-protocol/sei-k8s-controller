@@ -9,41 +9,11 @@ import (
 )
 
 // Environment-variable names. SEI_CONTROLLER_CONFIG points at the read-only
-// app-config file (a GitOps-written ConfigMap mounted as a directory); the rest
-// are the historical infra knobs Load falls back to when a field is absent from
-// that file. Single source of truth — referenced by Load and Config.Validate.
+// app-config file (a GitOps-written ConfigMap mounted as a directory). The
+// gateway vars stay env-sourced pending their removal from the controller in
+// the GitOps networking move (PLT-451); all other infra config is file-sourced.
 const (
 	envControllerConfig = "SEI_CONTROLLER_CONFIG"
-
-	envNodepoolName    = "SEI_NODEPOOL_NAME"
-	envNodepoolArchive = "SEI_NODEPOOL_ARCHIVE"
-	envTolerationKey   = "SEI_TOLERATION_KEY"
-	envServiceAccount  = "SEI_SERVICE_ACCOUNT"
-
-	envStorageClassPerf    = "SEI_STORAGE_CLASS_PERF"
-	envStorageClassDefault = "SEI_STORAGE_CLASS_DEFAULT"
-	envStorageClassArchive = "SEI_STORAGE_CLASS_ARCHIVE"
-	envStorageSizeDefault  = "SEI_STORAGE_SIZE_DEFAULT"
-	envStorageSizeArchive  = "SEI_STORAGE_SIZE_ARCHIVE"
-
-	envResourceCPUArchive = "SEI_RESOURCE_CPU_ARCHIVE"
-	envResourceMemArchive = "SEI_RESOURCE_MEM_ARCHIVE"
-	envResourceCPUDefault = "SEI_RESOURCE_CPU_DEFAULT"
-	envResourceMemDefault = "SEI_RESOURCE_MEM_DEFAULT"
-
-	envSnapshotBucket = "SEI_SNAPSHOT_BUCKET"
-	envSnapshotRegion = "SEI_SNAPSHOT_REGION"
-
-	envResultExportBucket = "SEI_RESULT_EXPORT_BUCKET"
-	envResultExportRegion = "SEI_RESULT_EXPORT_REGION"
-	envResultExportPrefix = "SEI_RESULT_EXPORT_PREFIX"
-
-	envGenesisBucket = "SEI_GENESIS_BUCKET"
-	envGenesisRegion = "SEI_GENESIS_REGION"
-
-	envSidecarImage        = "SEI_SIDECAR_IMAGE"
-	envKubeRBACProxyImage  = "SEI_KUBE_RBAC_PROXY_IMAGE"
-	envCosmosExporterImage = "SEI_COSMOS_EXPORTER_IMAGE"
 
 	envGatewayName         = "SEI_GATEWAY_NAME"
 	envGatewayNamespace    = "SEI_GATEWAY_NAMESPACE"
@@ -51,16 +21,15 @@ const (
 	envGatewayPublicDomain = "SEI_GATEWAY_PUBLIC_DOMAIN"
 )
 
-// Load resolves the platform Config at startup. A non-empty value in the
-// app-config file wins; an absent infra field falls back to its historical env
-// var, so an unset SEI_CONTROLLER_CONFIG yields the original all-env behavior.
-// That env fallback is transitional — removed once the ConfigMap is populated
-// everywhere (PLT-475). Networking/gateway fields and the config-file path
-// itself are env-sourced.
+// Load resolves the platform Config at startup. Infra config is read from the
+// app-config file (SEI_CONTROLLER_CONFIG → FileConfig), which is authoritative.
+// The networking/gateway fields and the config-file path itself stay
+// env-sourced, pending the gateway fields' removal in the GitOps networking
+// move (PLT-451).
 //
-// The file is read once here; infra changes therefore require a controller
-// restart. The stateSync section is read per-reconcile elsewhere (it hot-reloads).
-// Caller is expected to run Config.Validate after Load.
+// The file is read once here; infra changes require a controller restart. The
+// stateSync section is read per-reconcile elsewhere (it hot-reloads). Caller is
+// expected to run Config.Validate after Load.
 func Load() (Config, error) {
 	path := strings.TrimSpace(os.Getenv(envControllerConfig))
 	file, err := ReadFileConfig(path)
@@ -69,38 +38,38 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		NodepoolName:    fileOrEnv(file.Scheduling.NodepoolName, envNodepoolName),
-		NodepoolArchive: fileOrEnv(file.Scheduling.NodepoolArchive, envNodepoolArchive),
-		TolerationKey:   fileOrEnv(file.Scheduling.TolerationKey, envTolerationKey),
-		ServiceAccount:  fileOrEnv(file.Scheduling.ServiceAccount, envServiceAccount),
+		NodepoolName:    file.Scheduling.NodepoolName,
+		NodepoolArchive: file.Scheduling.NodepoolArchive,
+		TolerationKey:   file.Scheduling.TolerationKey,
+		ServiceAccount:  file.Scheduling.ServiceAccount,
 
-		StorageClassPerf:    fileOrEnv(file.Storage.ClassPerf, envStorageClassPerf),
-		StorageClassDefault: fileOrEnv(file.Storage.ClassDefault, envStorageClassDefault),
-		StorageClassArchive: fileOrEnv(file.Storage.ClassArchive, envStorageClassArchive),
-		StorageSizeDefault:  fileOrEnv(file.Storage.SizeDefault, envStorageSizeDefault),
-		StorageSizeArchive:  fileOrEnv(file.Storage.SizeArchive, envStorageSizeArchive),
+		StorageClassPerf:    file.Storage.ClassPerf,
+		StorageClassDefault: file.Storage.ClassDefault,
+		StorageClassArchive: file.Storage.ClassArchive,
+		StorageSizeDefault:  file.Storage.SizeDefault,
+		StorageSizeArchive:  file.Storage.SizeArchive,
 
-		ResourceCPUArchive: fileOrEnv(file.Resources.CPUArchive, envResourceCPUArchive),
-		ResourceMemArchive: fileOrEnv(file.Resources.MemArchive, envResourceMemArchive),
-		ResourceCPUDefault: fileOrEnv(file.Resources.CPUDefault, envResourceCPUDefault),
-		ResourceMemDefault: fileOrEnv(file.Resources.MemDefault, envResourceMemDefault),
+		ResourceCPUArchive: file.Resources.CPUArchive,
+		ResourceMemArchive: file.Resources.MemArchive,
+		ResourceCPUDefault: file.Resources.CPUDefault,
+		ResourceMemDefault: file.Resources.MemDefault,
 
-		SnapshotBucket: fileOrEnv(file.Snapshot.Bucket, envSnapshotBucket),
-		SnapshotRegion: fileOrEnv(file.Snapshot.Region, envSnapshotRegion),
+		SnapshotBucket: file.Snapshot.Bucket,
+		SnapshotRegion: file.Snapshot.Region,
 
-		ResultExportBucket: fileOrEnv(file.ResultExport.Bucket, envResultExportBucket),
-		ResultExportRegion: fileOrEnv(file.ResultExport.Region, envResultExportRegion),
-		ResultExportPrefix: fileOrEnv(file.ResultExport.Prefix, envResultExportPrefix),
+		ResultExportBucket: file.ResultExport.Bucket,
+		ResultExportRegion: file.ResultExport.Region,
+		ResultExportPrefix: file.ResultExport.Prefix,
 
-		GenesisBucket: fileOrEnv(file.Genesis.Bucket, envGenesisBucket),
-		GenesisRegion: fileOrEnv(file.Genesis.Region, envGenesisRegion),
+		GenesisBucket: file.Genesis.Bucket,
+		GenesisRegion: file.Genesis.Region,
 
-		SidecarImage:        fileOrEnv(file.Images.Sidecar, envSidecarImage),
-		KubeRBACProxyImage:  fileOrEnv(file.Images.KubeRBACProxy, envKubeRBACProxyImage),
-		CosmosExporterImage: fileOrEnv(file.Images.CosmosExporter, envCosmosExporterImage),
+		SidecarImage:        file.Images.Sidecar,
+		KubeRBACProxyImage:  file.Images.KubeRBACProxy,
+		CosmosExporterImage: file.Images.CosmosExporter,
 
 		// Networking/gateway: env-only, pending removal in the GitOps networking
-		// move (PLT-451). Not migrated to the file to avoid migrate-then-delete.
+		// move (PLT-451).
 		GatewayName:         os.Getenv(envGatewayName),
 		GatewayNamespace:    os.Getenv(envGatewayNamespace),
 		GatewayDomain:       os.Getenv(envGatewayDomain),
@@ -131,13 +100,4 @@ func ReadFileConfig(path string) (FileConfig, error) {
 		return FileConfig{}, fmt.Errorf("parsing controller config file %q: %w", path, err)
 	}
 	return cfg, nil
-}
-
-// fileOrEnv returns the file value when non-empty, otherwise the named env var
-// (the transitional fallback).
-func fileOrEnv(fileVal, envVar string) string {
-	if strings.TrimSpace(fileVal) != "" {
-		return fileVal
-	}
-	return os.Getenv(envVar)
 }

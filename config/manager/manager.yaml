@@ -35,46 +35,11 @@ spec:
         image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller:8b3f1749067bd07140fccd6d05da7894754688ca
         name: manager
         env:
-          - name: SEI_NODEPOOL_NAME
-            value: sei-node
-          - name: SEI_NODEPOOL_ARCHIVE
-            value: sei-archive
-          - name: SEI_TOLERATION_KEY
-            value: sei.io/workload
-          - name: SEI_SERVICE_ACCOUNT
-            value: seid-node
-          - name: SEI_STORAGE_CLASS_PERF
-            value: gp3-10k-750
-          - name: SEI_STORAGE_CLASS_DEFAULT
-            value: gp3
-          - name: SEI_STORAGE_CLASS_ARCHIVE
-            value: gp3-archive
-          - name: SEI_STORAGE_SIZE_DEFAULT
-            value: 2000Gi
-          - name: SEI_STORAGE_SIZE_ARCHIVE
-            value: 40Ti
-          - name: SEI_RESOURCE_CPU_ARCHIVE
-            value: "48"
-          - name: SEI_RESOURCE_MEM_ARCHIVE
-            value: 448Gi
-          - name: SEI_RESOURCE_CPU_DEFAULT
-            value: "4"
-          - name: SEI_RESOURCE_MEM_DEFAULT
-            value: 32Gi
-          - name: SEI_SNAPSHOT_BUCKET
-            value: dev-sei-snapshots
-          - name: SEI_SNAPSHOT_REGION
-            value: us-east-2
-          - name: SEI_RESULT_EXPORT_BUCKET
-            value: dev-sei-shadow-results
-          - name: SEI_RESULT_EXPORT_REGION
-            value: us-east-2
-          - name: SEI_RESULT_EXPORT_PREFIX
-            value: shadow-results/
-          - name: SEI_GENESIS_BUCKET
-            value: dev-sei-k8s-genesis-artifacts
-          - name: SEI_GENESIS_REGION
-            value: us-east-2
+          # Infra config (node pools, storage, resources, snapshot/genesis/
+          # result-export buckets, images) is sourced from the mounted
+          # app-config ConfigMap (SEI_CONTROLLER_CONFIG below); see
+          # docs/controller-app-config.md. Gateway config stays env-sourced
+          # pending its removal from the controller in PLT-451.
           - name: SEI_GATEWAY_NAME
             value: sei-gateway
           - name: SEI_GATEWAY_NAMESPACE
