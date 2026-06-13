@@ -8,15 +8,11 @@ rules:
   - ""
   resources:
   - configmaps
-  - persistentvolumeclaims
-  - services
+  - persistentvolumes
+  - secrets
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - ""
@@ -28,11 +24,15 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - persistentvolumes
-  - secrets
+  - persistentvolumeclaims
+  - services
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ""
