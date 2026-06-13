@@ -897,6 +897,19 @@ spec:
                 required:
                 - spec
                 type: object
+              updateStrategy:
+                description: |-
+                  UpdateStrategy is ignored; rollouts are always in-place. Retained so the
+                  API accepts deployments that still set it.
+                properties:
+                  type:
+                    description: Type selects the deployment strategy.
+                    enum:
+                    - InPlace
+                    type: string
+                required:
+                - type
+                type: object
             required:
             - replicas
             - template
