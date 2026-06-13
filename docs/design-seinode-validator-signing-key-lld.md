@@ -253,7 +253,7 @@ const (
 - Set on every reconcile after `validate-signing-key` runs, by the planner (matching the planner-owns-conditions pattern from CLAUDE.md).
 - Removed via `meta.RemoveStatusCondition` when `SigningKey` is unset on the spec.
 - The condition's presence in `.status.conditions` is itself a signal that the node is configured to mount external signing keys.
-- `ObservedGeneration` is set to `node.Generation` on every `meta.SetStatusCondition` call, mirroring `NodeUpdateInProgress` at `internal/planner/planner.go:195`.
+- `ObservedGeneration` is set to `node.Generation` on every `meta.SetStatusCondition` call, mirroring the `NodeUpdateInProgress` setCondition discipline in `internal/planner/planner.go`.
 
 ### Why no `SigningKeyMounted=True/False` condition
 
@@ -277,11 +277,13 @@ if v.SigningKey != nil {
 }
 ```
 
-The `SigningKey ↔ GenesisCeremony` mutual-exclusion check ensures a fresh-chain validator (which generates keys via the genesis ceremony) is not also configured to import keys from a Secret. The CRD-level `XValidation: exactly-one` covers `SigningKeySource` variants but not cross-field exclusion with `GenesisCeremony` — that goes here.
+The CRD-level `XValidation: exactly-one` covers `SigningKeySource` variants but not cross-field exclusion with `GenesisCeremony` — that goes here. The full legality of `SigningKey` against the other validator-source fields:
 
-The `SigningKey + Snapshot.BootstrapImage` combination is **valid and expected** — that's the migration use case (bootstrap-Job sync + signing key on production StatefulSet). No additional validation needed.
-
-The `SigningKey + neither GenesisCeremony nor Snapshot` combination is also valid — it represents a validator joining an existing chain via block-sync from genesis (slow but correct). We do not require a snapshot mechanism alongside `SigningKey`.
+| `SigningKey` combined with… | Verdict | Why |
+|---|---|---|
+| `GenesisCeremony` set | **Rejected** (this check) | A fresh-chain validator generates keys via the genesis ceremony; it must not also import keys from a Secret. |
+| `Snapshot.BootstrapImage` set | **Valid and expected** | The migration use case: bootstrap-Job sync + signing key on the production StatefulSet. No additional validation needed. |
+| neither `GenesisCeremony` nor `Snapshot` | **Valid** | A validator joining an existing chain via block-sync from genesis (slow but correct). A snapshot mechanism is not required alongside `SigningKey`. |
 
 ## 7. Finalizer interaction
 
@@ -419,7 +421,7 @@ No CRD data migration. Applying the new CRD on a cluster with old SeiNode object
 - `docs/design/composable-genesis.md` — sketches `register-validator` for the *new-chain validator joining* case (deferred for migration use case).
 - `api/v1alpha1/validator_types.go` — new fields per §1.
 - `api/v1alpha1/seinode_types.go` — new condition constant per §5.
-- `internal/noderesource/noderesource.go:229-447` — pod-spec changes per §2.
+- `internal/noderesource/noderesource.go` (`buildNodePodSpec`, `buildNodeMainContainer`) — pod-spec changes per §2.
 - `internal/task/validate_signing_key.go` — new task per §4.
-- `internal/planner/validator.go:17-36` — planner Validate additions per §6.
-- `internal/planner/bootstrap.go`, `internal/planner/planner.go:411` — plan integration per §4.
+- `internal/planner/validator.go` (`validatorPlanner.Validate`) — planner Validate additions per §6.
+- `internal/planner/bootstrap.go` (`buildBootstrapPlan`), `internal/planner/planner.go` (`buildBasePlan` validator path) — plan integration per §4.
