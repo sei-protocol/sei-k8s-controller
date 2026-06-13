@@ -41,7 +41,7 @@ jobs:
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
 
       # Monolithic Workflow-Task primitive binary (keygen, provision-snd,
-      # runner, ...) per docs/design/test-harness-lld.md. Published to
+      # runner, ...) per https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/test-harness/test-harness-lld.md. Published to
       # sei/seitask-runner so scenarios keep the image-name muscle memory;
       # the runner capability moves to args: ["runner", ...].
       - name: Build and push seitask image

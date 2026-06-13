@@ -92,7 +92,7 @@ Don't mix polarities for the same subject (no `XReady` + `XFailed` — pick one 
 - Edit types in `api/v1alpha1/` (e.g., `seinode_types.go`, `seinodedeployment_types.go`, `validator_types.go`).
 - After any type change, run `make manifests generate` to regenerate CRD YAML and DeepCopy methods.
 - Never hand-edit files in `manifests/` or `zz_generated.deepcopy.go`.
-- When changing `SeiNodeTask` kinds or their operational behavior, update `docs/seinode-task.md`. Its section headings are **cited anchors** for the gov-ops skill (PLT-489) — renaming one is a breaking change for that consumer.
+- When changing `SeiNodeTask` kinds or their operational behavior, update `https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task.md`. Its section headings are **cited anchors** for the gov-ops skill (PLT-489) — renaming one is a breaking change for that consumer.
 
 ### RBAC
 - RBAC is generated from `// +kubebuilder:rbac:` markers on controller files.

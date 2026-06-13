@@ -257,7 +257,7 @@ namespace as the Workflow:
 
 ## References
 
-- `docs/design/seinode-task-lld.md` -- the canonical interface contract.
+- `https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task-lld.md` -- the canonical interface contract.
 - `runner/rbac.yaml` -- RBAC the workflow expects on its ServiceAccount.
 - `runner/templates/*.yaml.tmpl` -- the templates the runner ships.
 - `sei-chain/integration_test/upgrade_module/major_upgrade_test.yaml` --

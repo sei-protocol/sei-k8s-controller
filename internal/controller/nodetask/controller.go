@@ -1,6 +1,6 @@
 // Package nodetask reconciles SeiNodeTask resources. Each SeiNodeTask
 // drives one synthesized task to a terminal state through the existing
-// internal/task TaskExecution machinery. See docs/design/seinode-task-lld.md
+// internal/task TaskExecution machinery. See https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task-lld.md
 // for the reconciler topology.
 package nodetask
 

@@ -80,7 +80,7 @@ spec:
 ### SeiNodeTask
 
 A one-shot operation against a single `SeiNode` (governance votes/proposals, image updates,
-height/condition waits). See **[docs/seinode-task.md](docs/seinode-task.md)** for the kinds,
+height/condition waits). See **[https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task.md](https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task.md)** for the kinds,
 lifecycle, signing topology, idempotency, and operational gotchas.
 
 ## Platform Configuration
