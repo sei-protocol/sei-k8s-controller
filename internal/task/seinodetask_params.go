@@ -1,6 +1,7 @@
 package task
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -83,6 +84,8 @@ func SeiNodeTaskParamsFor(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNo
 		return govVoteParams(cr, target)
 	case seiv1alpha1.SeiNodeTaskKindGovSoftwareUpgrade:
 		return govSoftwareUpgradeParams(cr, target)
+	case seiv1alpha1.SeiNodeTaskKindGovParamChange:
+		return govParamChangeParams(cr, target)
 	case seiv1alpha1.SeiNodeTaskKindAwaitCondition:
 		return awaitConditionParams(cr)
 	case seiv1alpha1.SeiNodeTaskKindAwaitNodesAtHeight:
@@ -136,6 +139,35 @@ func govSoftwareUpgradeParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.S
 		UpgradeName:    p.UpgradeName,
 		UpgradeHeight:  p.UpgradeHeight,
 		UpgradeInfo:    p.UpgradeInfo,
+		InitialDeposit: p.InitialDeposit,
+		Memo:           p.Memo,
+		Fees:           p.Fees,
+		Gas:            p.Gas,
+	}}, nil
+}
+
+func govParamChangeParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (SeiNodeTaskParams, error) {
+	p := cr.Spec.GovParamChange
+	if p == nil {
+		return SeiNodeTaskParams{}, paramsErr("spec.govParamChange is required for kind=GovParamChange")
+	}
+	// Forward each change's value as raw JSON bytes. The sidecar handler does
+	// the single string() conversion (gov_param_change.go) — converting here
+	// would double-encode and fail at apply.
+	changes := make([]sidecar.ParamChangeInput, 0, len(p.Changes))
+	for _, c := range p.Changes {
+		changes = append(changes, sidecar.ParamChangeInput{
+			Subspace: c.Subspace,
+			Key:      c.Key,
+			Value:    json.RawMessage(c.Value.Raw),
+		})
+	}
+	return SeiNodeTaskParams{sidecar.TaskTypeGovParamChange, sidecar.GovParamChangeTask{
+		ChainID:        p.ChainID,
+		KeyName:        resolveSigningUID(p.KeyName, target),
+		Title:          p.Title,
+		Description:    p.Description,
+		Changes:        changes,
 		InitialDeposit: p.InitialDeposit,
 		Memo:           p.Memo,
 		Fees:           p.Fees,

@@ -106,6 +106,96 @@ spec:
                 required:
                 - targetHeight
                 type: object
+              govParamChange:
+                description: GovParamChange is the payload for kind=GovParamChange.
+                properties:
+                  chainId:
+                    description: ChainID is the chain ID the proposal targets.
+                    minLength: 1
+                    type: string
+                  changes:
+                    description: Changes is the non-empty set of parameter changes.
+                    items:
+                      description: GovParamChangeEntry is one (subspace, key, value)
+                        parameter change.
+                      properties:
+                        key:
+                          description: Key is the parameter key within the subspace
+                            (e.g. "TimeoutParams").
+                          minLength: 1
+                          type: string
+                        subspace:
+                          description: Subspace is the params subspace (e.g. "baseapp",
+                            "staking").
+                          minLength: 1
+                          type: string
+                        value:
+                          description: |-
+                            Value is the new parameter value as JSON of whatever shape the
+                            param's registered type expects — a scalar (100), a string
+                            ("86400000000000"), a bool, or an object. Pass it as structured JSON,
+                            NOT a pre-escaped string: the controller forwards the raw bytes and
+                            the sidecar stringifies them exactly once, so an escaped string would
+                            double-encode and fail at apply. Integer-valued params must be JSON
+                            strings (Sei convention); see the sidecar handler for why.
+                          x-kubernetes-preserve-unknown-fields: true
+                      required:
+                      - key
+                      - subspace
+                      - value
+                      type: object
+                    minItems: 1
+                    type: array
+                  description:
+                    description: Description is the on-chain proposal description.
+                    minLength: 1
+                    type: string
+                  fees:
+                    description: |-
+                      Fees is the tx fee in coin notation (e.g. "8000usei"). usei-only, and
+                      must clear the target node's enforced minimum-gas-prices (e.g.
+                      0.02usei/gas on arctic-1) or the tx is silently CheckTx-rejected.
+                    minLength: 1
+                    type: string
+                  gas:
+                    description: Gas is the tx gas limit.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  initialDeposit:
+                    description: |-
+                      InitialDeposit is the proposal deposit in coin notation (e.g.
+                      "10000000usei"). usei-only; the sidecar pre-validates. Must be >=
+                      the chain's min_deposit to enter the voting period rather than the
+                      deposit period.
+                    minLength: 1
+                    type: string
+                  keyName:
+                    description: |-
+                      KeyName names the keyring entry that signs the proposal. Omit to let
+                      the controller derive from the target SeiNode: spec.validator.
+                      operatorKeyring.secret.keyName when .secret is set (defaulting to
+                      "node_admin"), otherwise "validator".
+                    pattern: ^[a-zA-Z0-9_-]+$
+                    type: string
+                  memo:
+                    description: |-
+                      Memo is the optional tx memo. The sidecar appends a `taskID=<id>` tag;
+                      do not pre-tag.
+                    type: string
+                  title:
+                    description: Title is the on-chain proposal title.
+                    minLength: 1
+                    type: string
+                required:
+                - chainId
+                - changes
+                - description
+                - fees
+                - gas
+                - initialDeposit
+                - title
+                type: object
               govSoftwareUpgrade:
                 description: GovSoftwareUpgrade is the payload for kind=GovSoftwareUpgrade.
                 properties:
@@ -242,6 +332,7 @@ spec:
                 enum:
                 - GovSoftwareUpgrade
                 - GovVote
+                - GovParamChange
                 - AwaitCondition
                 - UpdateNodeImage
                 - AwaitNodesAtHeight
@@ -323,17 +414,20 @@ spec:
             - target
             type: object
             x-kubernetes-validations:
-            - message: exactly one of govSoftwareUpgrade, govVote, awaitCondition,
-                updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must
-                be set
+            - message: exactly one of govSoftwareUpgrade, govVote, govParamChange,
+                awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid,
+                or markReady must be set
               rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
-                1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage)
-                ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid)
-                ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1'
+                1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.awaitCondition)
+                ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight)
+                ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady)
+                ? 1 : 0) == 1'
             - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
               rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
             - message: spec.govVote is required when kind=GovVote
               rule: self.kind != 'GovVote' || has(self.govVote)
+            - message: spec.govParamChange is required when kind=GovParamChange
+              rule: self.kind != 'GovParamChange' || has(self.govParamChange)
             - message: spec.awaitCondition is required when kind=AwaitCondition
               rule: self.kind != 'AwaitCondition' || has(self.awaitCondition)
             - message: spec.updateNodeImage is required when kind=UpdateNodeImage
@@ -439,6 +533,25 @@ spec:
                           task completion (i.e. >= spec.awaitNodesAtHeight.targetHeight).
                         format: int64
                         type: integer
+                    type: object
+                  govParamChange:
+                    description: GovParamChange outputs for kind=GovParamChange.
+                    properties:
+                      height:
+                        description: Height is the block height at which the tx was
+                          included.
+                        format: int64
+                        type: integer
+                      proposalId:
+                        description: |-
+                          ProposalID is the on-chain proposal ID parsed from the inclusion
+                          response events.
+                        format: int64
+                        type: integer
+                      txHash:
+                        description: TxHash is the upper-case hex-encoded transaction
+                          hash.
+                        type: string
                     type: object
                   govSoftwareUpgrade:
                     description: GovSoftwareUpgrade outputs for kind=GovSoftwareUpgrade.
