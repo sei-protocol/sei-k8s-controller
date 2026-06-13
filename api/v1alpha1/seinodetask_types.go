@@ -1,12 +1,13 @@
 package v1alpha1
 
 import (
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SeiNodeTaskKind discriminates the SeiNodeTask spec union. Exactly one of
 // the matching payload sub-structs in SeiNodeTaskSpec must be set.
-// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;RestartSeid;MarkReady
+// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;GovParamChange;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;RestartSeid;MarkReady
 type SeiNodeTaskKind string
 
 const (
@@ -20,6 +21,13 @@ const (
 	// MsgVote on an existing proposal. Chain-idempotent (last-write-wins on
 	// proposalId/voter).
 	SeiNodeTaskKindGovVote SeiNodeTaskKind = "GovVote"
+
+	// SeiNodeTaskKindGovParamChange backs the sidecar `gov-param-change` task.
+	// Submits MsgSubmitProposal wrapping a ParameterChangeProposal from the
+	// configured operator key. NOT chain-idempotent and — unlike a software
+	// upgrade — a param-change has no "applies once" safety net; see the
+	// REHYDRATION WARNING on the sidecar handler before composing with retries.
+	SeiNodeTaskKindGovParamChange SeiNodeTaskKind = "GovParamChange"
 
 	// SeiNodeTaskKindAwaitCondition backs the sidecar `await-condition` task.
 	// Polls a local node until a typed condition (e.g. height) is satisfied,
@@ -105,9 +113,10 @@ const (
 // Field names locked at v1alpha1 — see docs/design/seinode-task-lld.md
 // (PR sei-protocol/sei-k8s-controller#277).
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, govParamChange, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must be set"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)",message="spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovVote' || has(self.govVote)",message="spec.govVote is required when kind=GovVote"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'GovParamChange' || has(self.govParamChange)",message="spec.govParamChange is required when kind=GovParamChange"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitCondition' || has(self.awaitCondition)",message="spec.awaitCondition is required when kind=AwaitCondition"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'UpdateNodeImage' || has(self.updateNodeImage)",message="spec.updateNodeImage is required when kind=UpdateNodeImage"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)",message="spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight"
@@ -143,6 +152,10 @@ type SeiNodeTaskSpec struct {
 	// GovVote is the payload for kind=GovVote.
 	// +optional
 	GovVote *GovVotePayload `json:"govVote,omitempty"`
+
+	// GovParamChange is the payload for kind=GovParamChange.
+	// +optional
+	GovParamChange *GovParamChangePayload `json:"govParamChange,omitempty"`
 
 	// AwaitCondition is the payload for kind=AwaitCondition.
 	// +optional
@@ -259,6 +272,78 @@ type GovSoftwareUpgradePayload struct {
 	// Gas is the tx gas limit.
 	// +kubebuilder:validation:Minimum=1
 	Gas uint64 `json:"gas"`
+}
+
+// GovParamChangePayload mirrors
+// seictl/sidecar/client.GovParamChangeTask. The sidecar handler enforces
+// additional invariants (usei-only deposit, keyring presence) at submit
+// time — see that file for the canonical validation order.
+type GovParamChangePayload struct {
+	// ChainID is the chain ID the proposal targets.
+	// +kubebuilder:validation:MinLength=1
+	ChainID string `json:"chainId"`
+
+	// KeyName names the keyring entry that signs the proposal. Omit to let
+	// the controller derive from the target SeiNode: spec.validator.
+	// operatorKeyring.secret.keyName when .secret is set (defaulting to
+	// "node_admin"), otherwise "validator".
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9_-]+$`
+	KeyName string `json:"keyName,omitempty"`
+
+	// Title is the on-chain proposal title.
+	// +kubebuilder:validation:MinLength=1
+	Title string `json:"title"`
+
+	// Description is the on-chain proposal description.
+	// +kubebuilder:validation:MinLength=1
+	Description string `json:"description"`
+
+	// Changes is the non-empty set of parameter changes.
+	// +kubebuilder:validation:MinItems=1
+	Changes []GovParamChangeEntry `json:"changes"`
+
+	// InitialDeposit is the proposal deposit in coin notation (e.g.
+	// "10000000usei"). usei-only; the sidecar pre-validates. Must be >=
+	// the chain's min_deposit to enter the voting period rather than the
+	// deposit period.
+	// +kubebuilder:validation:MinLength=1
+	InitialDeposit string `json:"initialDeposit"`
+
+	// Memo is the optional tx memo. The sidecar appends a `taskID=<id>` tag;
+	// do not pre-tag.
+	// +optional
+	Memo string `json:"memo,omitempty"`
+
+	// Fees is the tx fee in coin notation (e.g. "8000usei"). usei-only, and
+	// must clear the target node's enforced minimum-gas-prices (e.g.
+	// 0.02usei/gas on arctic-1) or the tx is silently CheckTx-rejected.
+	// +kubebuilder:validation:MinLength=1
+	Fees string `json:"fees"`
+
+	// Gas is the tx gas limit.
+	// +kubebuilder:validation:Minimum=1
+	Gas uint64 `json:"gas"`
+}
+
+// GovParamChangeEntry is one (subspace, key, value) parameter change.
+type GovParamChangeEntry struct {
+	// Subspace is the params subspace (e.g. "baseapp", "staking").
+	// +kubebuilder:validation:MinLength=1
+	Subspace string `json:"subspace"`
+
+	// Key is the parameter key within the subspace (e.g. "TimeoutParams").
+	// +kubebuilder:validation:MinLength=1
+	Key string `json:"key"`
+
+	// Value is the new parameter value as JSON of whatever shape the
+	// param's registered type expects — a scalar (100), a string
+	// ("86400000000000"), a bool, or an object. Pass it as structured JSON,
+	// NOT a pre-escaped string: the controller forwards the raw bytes and
+	// the sidecar stringifies them exactly once, so an escaped string would
+	// double-encode and fail at apply. Integer-valued params must be JSON
+	// strings (Sei convention); see the sidecar handler for why.
+	Value apiextensionsv1.JSON `json:"value"`
 }
 
 // GovVotePayload mirrors seictl/sidecar/tasks/gov_vote.go::GovVoteRequest.
@@ -448,6 +533,10 @@ type SeiNodeTaskOutputs struct {
 	// +optional
 	GovVote *GovVoteOutputs `json:"govVote,omitempty"`
 
+	// GovParamChange outputs for kind=GovParamChange.
+	// +optional
+	GovParamChange *GovParamChangeOutputs `json:"govParamChange,omitempty"`
+
 	// AwaitCondition outputs for kind=AwaitCondition.
 	// +optional
 	AwaitCondition *AwaitConditionOutputs `json:"awaitCondition,omitempty"`
@@ -476,6 +565,26 @@ type GovSoftwareUpgradeOutputs struct {
 	// ProposalID is the on-chain proposal ID parsed from the inclusion
 	// response events. Empty when the sidecar could not determine
 	// inclusion before result-persist.
+	// +optional
+	ProposalID uint64 `json:"proposalId,omitempty"`
+}
+
+// GovParamChangeOutputs are the typed results for a completed
+// GovParamChange task. Like the other sidecar-backed gov outputs, these
+// fields are defined for forward compatibility but are NOT populated in
+// this PR (the sidecar TaskResult has no typed-output channel; downstream
+// consumers read the proposalId from the chain — see populateOutputs).
+type GovParamChangeOutputs struct {
+	// TxHash is the upper-case hex-encoded transaction hash.
+	// +optional
+	TxHash string `json:"txHash,omitempty"`
+
+	// Height is the block height at which the tx was included.
+	// +optional
+	Height int64 `json:"height,omitempty"`
+
+	// ProposalID is the on-chain proposal ID parsed from the inclusion
+	// response events.
 	// +optional
 	ProposalID uint64 `json:"proposalId,omitempty"`
 }
