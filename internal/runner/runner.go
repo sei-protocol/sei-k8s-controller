@@ -3,7 +3,7 @@
 // completion. The runner is intentionally generic — the per-kind shape comes
 // from text/template files mounted at /templates, not from CLI subcommands.
 //
-// Behavior contract (LLD: docs/design/seinode-task-lld.md "Runner container"):
+// Behavior contract (LLD: https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task-lld.md "Runner container"):
 //
 //  1. Source /workflow/vars/env.sh if present (env-file bridge between Workflow
 //     steps).

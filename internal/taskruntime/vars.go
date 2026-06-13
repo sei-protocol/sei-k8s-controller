@@ -4,7 +4,7 @@ import "strings"
 
 // VarKey is a typed key for the workflow-vars ConfigMap. Producers and
 // consumers reference these constants so renames are compile errors. Schema +
-// stability discipline: docs/design/test-harness-lld.md.
+// stability discipline: https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/test-harness/test-harness-lld.md.
 type VarKey string
 
 const (

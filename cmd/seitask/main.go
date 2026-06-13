@@ -1,7 +1,7 @@
 // Command seitask is the monolithic Workflow-Task primitive binary: one
 // binary, multiple urfave/cli subcommands (keygen, provision-snd, …) that
 // share the internal/taskruntime shared library. See
-// docs/design/test-harness-lld.md.
+// https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/test-harness/test-harness-lld.md.
 package main
 
 import (

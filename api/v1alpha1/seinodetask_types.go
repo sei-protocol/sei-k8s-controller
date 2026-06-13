@@ -110,7 +110,7 @@ const (
 // Exactly one payload sub-spec matching spec.kind must be set; the CEL rule
 // below mirrors SeiNodeSpec.fullNode|archive|replayer|validator.
 //
-// Field names locked at v1alpha1 — see docs/design/seinode-task-lld.md
+// Field names locked at v1alpha1 — see https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task-lld.md
 // (PR sei-protocol/sei-k8s-controller#277).
 //
 // +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, govParamChange, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must be set"
@@ -641,7 +641,7 @@ type AwaitNodesAtHeightOutputs struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SeiNodeTask is the Schema for the seinodetasks API — a single-shot
-// operation against a single SeiNode. See docs/design/seinode-task-lld.md
+// operation against a single SeiNode. See https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task-lld.md
 // (PR sei-protocol/sei-k8s-controller#277) for the interface contract.
 type SeiNodeTask struct {
 	metav1.TypeMeta   `json:",inline"`
