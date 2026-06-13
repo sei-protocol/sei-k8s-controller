@@ -37,8 +37,9 @@ spec:
         env:
           # Infra config (node pools, storage, resources, snapshot/genesis/
           # result-export buckets, images) is sourced from the mounted
-          # app-config ConfigMap (SEI_CONTROLLER_CONFIG below); see
-          # docs/controller-app-config.md. Gateway config stays env-sourced
+          # app-config ConfigMap (SEI_CONTROLLER_CONFIG below); see the
+          # controller-app-config schema in bdchatham-designs (relocated per
+          # Design 05 / PLT-497). Gateway config stays env-sourced
           # pending its removal from the controller in PLT-451.
           - name: SEI_GATEWAY_NAME
             value: sei-gateway
