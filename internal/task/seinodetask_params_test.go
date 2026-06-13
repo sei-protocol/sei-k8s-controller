@@ -1,6 +1,7 @@
 package task
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -102,6 +103,51 @@ func TestSeiNodeTaskParamsFor_GovParamChange_KeyNameDerivedFromTarget(t *testing
 	}
 	if got := p.Payload.(sidecar.GovParamChangeTask).KeyName; got != seiv1alpha1.DefaultOperatorKeyName {
 		t.Errorf("derived KeyName = %q, want %q", got, seiv1alpha1.DefaultOperatorKeyName)
+	}
+}
+
+// The Type that the build path produces MUST be in the Deserialize registry,
+// or the controller fails every GovParamChange task with DeserializeFailed
+// before it ever reaches the sidecar. This round-trip guards the registry
+// wiring (the build path alone does not exercise it).
+func TestSeiNodeTaskParamsFor_GovParamChange_DeserializeRoundTrip(t *testing.T) {
+	p, err := SeiNodeTaskParamsFor(govParamChangeCR(`{"propose":"300000000"}`), nil)
+	if err != nil {
+		t.Fatalf("params: %v", err)
+	}
+	raw, err := json.Marshal(p.Payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	exec, err := Deserialize(p.Type, "gpc-1", raw, ExecutionConfig{})
+	if err != nil {
+		t.Fatalf("Deserialize(%q) failed — is the task type registered? %v", p.Type, err)
+	}
+	if exec == nil {
+		t.Fatal("Deserialize returned nil TaskExecution")
+	}
+}
+
+// Multiple changes are forwarded in order, each value byte-preserved.
+func TestSeiNodeTaskParamsFor_GovParamChange_MultipleChanges(t *testing.T) {
+	cr := govParamChangeCR(`{"propose":"300000000"}`)
+	cr.Spec.GovParamChange.Changes = []seiv1alpha1.GovParamChangeEntry{
+		{Subspace: "baseapp", Key: "TimeoutParams", Value: apiextensionsv1.JSON{Raw: []byte(`{"propose":"300000000"}`)}},
+		{Subspace: "staking", Key: "MaxValidators", Value: apiextensionsv1.JSON{Raw: []byte(`"100"`)}},
+	}
+	p, err := SeiNodeTaskParamsFor(cr, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	task := p.Payload.(sidecar.GovParamChangeTask)
+	if len(task.Changes) != 2 {
+		t.Fatalf("got %d changes, want 2", len(task.Changes))
+	}
+	if task.Changes[0].Key != "TimeoutParams" || task.Changes[1].Key != "MaxValidators" {
+		t.Errorf("order not preserved: %q, %q", task.Changes[0].Key, task.Changes[1].Key)
+	}
+	if string(task.Changes[1].Value) != `"100"` {
+		t.Errorf("second value = %q, want %q", string(task.Changes[1].Value), `"100"`)
 	}
 }
 
