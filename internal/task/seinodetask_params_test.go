@@ -11,7 +11,10 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-const tpKey = "TimeoutParams"
+const (
+	tpKey   = "TimeoutParams"
+	baseapp = "baseapp"
+)
 
 func govParamChangeCR(value string) *seiv1alpha1.SeiNodeTask {
 	return &seiv1alpha1.SeiNodeTask{
@@ -23,7 +26,7 @@ func govParamChangeCR(value string) *seiv1alpha1.SeiNodeTask {
 				Title:       "Update Consensus Timeout Params",
 				Description: "Tighten timeouts.",
 				Changes: []seiv1alpha1.GovParamChangeEntry{
-					{Subspace: "baseapp", Key: tpKey, Value: apiextensionsv1.JSON{Raw: []byte(value)}},
+					{Subspace: baseapp, Key: tpKey, Value: apiextensionsv1.JSON{Raw: []byte(value)}},
 				},
 				InitialDeposit: "10000000usei",
 				Fees:           "8000usei",
@@ -53,7 +56,7 @@ func TestSeiNodeTaskParamsFor_GovParamChange(t *testing.T) {
 	if task.ChainID != "arctic-1" || task.KeyName != "node_admin" || task.Gas != 300000 {
 		t.Errorf("scalar fields not forwarded: %+v", task)
 	}
-	if len(task.Changes) != 1 || task.Changes[0].Subspace != "baseapp" || task.Changes[0].Key != tpKey {
+	if len(task.Changes) != 1 || task.Changes[0].Subspace != baseapp || task.Changes[0].Key != tpKey {
 		t.Fatalf("changes not mapped: %+v", task.Changes)
 	}
 	// Validate() must pass on the produced task (the sidecar runs it next).
@@ -134,7 +137,7 @@ func TestSeiNodeTaskParamsFor_GovParamChange_DeserializeRoundTrip(t *testing.T) 
 func TestSeiNodeTaskParamsFor_GovParamChange_MultipleChanges(t *testing.T) {
 	cr := govParamChangeCR(`{"propose":"300000000"}`)
 	cr.Spec.GovParamChange.Changes = []seiv1alpha1.GovParamChangeEntry{
-		{Subspace: "baseapp", Key: tpKey, Value: apiextensionsv1.JSON{Raw: []byte(`{"propose":"300000000"}`)}},
+		{Subspace: baseapp, Key: tpKey, Value: apiextensionsv1.JSON{Raw: []byte(`{"propose":"300000000"}`)}},
 		{Subspace: "staking", Key: "MaxValidators", Value: apiextensionsv1.JSON{Raw: []byte(`"100"`)}},
 	}
 	p, err := SeiNodeTaskParamsFor(cr, nil)
