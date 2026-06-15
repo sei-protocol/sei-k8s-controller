@@ -105,18 +105,31 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("reconciling internal RPC service: %w", err)
 	}
 
-	if err := r.reconcileNetworking(ctx, group); err != nil {
-		logger.Error(err, "reconciling networking")
-		return ctrl.Result{}, fmt.Errorf("reconciling networking: %w", err)
-	}
-
-	if !r.routeHostnameResolvable(ctx, group) {
-		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
-			"DNSPending", "waiting for route hostname to resolve in DNS")
-		if err := r.updateStatus(ctx, group, statusBase); err != nil {
-			return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
+	// External networking is GitOps-managed when orphaned: strip owner-refs
+	// (idempotent) and stop applying. ExternalAddress for children still flows
+	// through reconcileSeiNodes below, so the DNS-resolvability gate is skipped
+	// rather than allowed to short-circuit it.
+	if networkingOrphaned(group) {
+		if err := r.orphanNetworkingResources(ctx, group); err != nil {
+			logger.Error(err, "orphaning networking resources")
+			return ctrl.Result{}, fmt.Errorf("orphaning networking resources: %w", err)
 		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
+			"NetworkingOrphaned", "external networking is GitOps-managed; owner-refs stripped")
+	} else {
+		if err := r.reconcileNetworking(ctx, group); err != nil {
+			logger.Error(err, "reconciling networking")
+			return ctrl.Result{}, fmt.Errorf("reconciling networking: %w", err)
+		}
+
+		if !r.routeHostnameResolvable(ctx, group) {
+			setCondition(group, seiv1alpha1.ConditionNetworkingReady, metav1.ConditionFalse,
+				"DNSPending", "waiting for route hostname to resolve in DNS")
+			if err := r.updateStatus(ctx, group, statusBase); err != nil {
+				return ctrl.Result{}, fmt.Errorf("updating status: %w", err)
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 	}
 
 	if err := r.reconcileSeiNodes(ctx, group); err != nil {

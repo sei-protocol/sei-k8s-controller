@@ -79,8 +79,11 @@ func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *s
 
 	if isDeploymentPlan {
 		group.Status.ObservedGeneration = group.Generation
-		if err := r.reconcileNetworking(ctx, group); err != nil {
-			logger.Error(err, "reconciling networking after deployment")
+		// Skip networking re-apply when orphaned — those objects are GitOps-owned.
+		if !networkingOrphaned(group) {
+			if err := r.reconcileNetworking(ctx, group); err != nil {
+				logger.Error(err, "reconciling networking after deployment")
+			}
 		}
 		group.Status.Rollout = nil
 		setCondition(group, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
