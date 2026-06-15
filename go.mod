@@ -13,8 +13,8 @@ require (
 	github.com/go-logr/logr v1.4.3
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.39.1
-	github.com/sei-protocol/sei-config v0.0.19
-	github.com/sei-protocol/seictl v0.0.58-0.20260613152615-8dce7890a3c3
+	github.com/sei-protocol/sei-config v0.0.20
+	github.com/sei-protocol/seictl v0.0.58
 	github.com/urfave/cli/v3 v3.6.1
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0

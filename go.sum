@@ -1778,6 +1778,8 @@ github.com/sei-protocol/sei-config v0.0.16 h1:2wBHVmCaHnGeqRNrdpUSJByehYTLOSEkk+
 github.com/sei-protocol/sei-config v0.0.16/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
 github.com/sei-protocol/sei-config v0.0.19 h1:87jB4u/TmZ8+xMLWqIDNODGslOdMGhw6ydOpOEb2dK8=
 github.com/sei-protocol/sei-config v0.0.19/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
+github.com/sei-protocol/sei-config v0.0.20 h1:K5pmq5RUErCiH7VIRWiQREkHqPy9+1FukxqknbP1OMc=
+github.com/sei-protocol/sei-config v0.0.20/go.mod h1:IEAv5ynYw8Gu2F2qNfE4MQR0PPihAT6g7RWLpWdw5O0=
 github.com/sei-protocol/sei-load v0.0.0-20251007135253-78fbdc141082 h1:f2sY8OcN60UL1/6POx+HDMZ4w04FTZtSScnrFSnGZHg=
 github.com/sei-protocol/sei-load v0.0.0-20251007135253-78fbdc141082/go.mod h1:V0fNURAjS6A8+sA1VllegjNeSobay3oRUW5VFZd04bA=
 github.com/sei-protocol/sei-tm-db v0.0.5 h1:3WONKdSXEqdZZeLuWYfK5hP37TJpfaUa13vAyAlvaQY=
@@ -1792,6 +1794,8 @@ github.com/sei-protocol/seictl v0.0.57 h1:qyWpv5Iznlp7tQiAU0TYzlFZYHOohfmbVXn/AJ
 github.com/sei-protocol/seictl v0.0.57/go.mod h1:EnEHAT5/egP4aIB4Ir4tg5eK2150RfB9Ohw5xmpZQGE=
 github.com/sei-protocol/seictl v0.0.58-0.20260613152615-8dce7890a3c3 h1:2d0cKtxlx/bm2Lr1LfXhxDkXrwACLdfn2ZAmlhL0ZLo=
 github.com/sei-protocol/seictl v0.0.58-0.20260613152615-8dce7890a3c3/go.mod h1:EnEHAT5/egP4aIB4Ir4tg5eK2150RfB9Ohw5xmpZQGE=
+github.com/sei-protocol/seictl v0.0.58 h1:nsnPFXscdKCynFQ9ST2AK25xHD9FNkDnkquYmeF945o=
+github.com/sei-protocol/seictl v0.0.58/go.mod h1:4biVFBVsrMSRQi4G8UNiIEAbOgzFySUJ4q8I2oBSstg=
 github.com/sei-protocol/seilog v0.0.3 h1:Zi7oWXdX5jv92dY8n482xH032LtNebC89Y+qYZlBn0Y=
 github.com/sei-protocol/seilog v0.0.3/go.mod h1:CKg58wraWnB3gRxWQ0v1rIVr0gmDHjkfP1bM2giKFFU=
 github.com/shirou/gopsutil v2.20.5+incompatible/go.mod h1:5b4v6he4MtMOwMlS0TUMTu2PcXUg8+E1lC7eC3UO/RA=
