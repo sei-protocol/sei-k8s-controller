@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment/envtest/fixtures"
@@ -171,4 +172,94 @@ func TestNetworking_Orphaned_StripsOwnerRefs(t *testing.T) {
 		c := apimeta.FindStatusCondition(latest.Status.Conditions, seiv1alpha1.ConditionNetworkingReady)
 		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "NetworkingOrphaned"
 	}, "ConditionNetworkingReady=False/NetworkingOrphaned after orphan transition")
+}
+
+// TestNetworking_Delete_SkipsOrphanedObjects is the rollback/footgun guard.
+// Once networking is orphaned (owner-refs stripped, objects handed to GitOps),
+// the controller's delete path must skip those objects. Otherwise unsetting the
+// annotation, a re-rendered SND, or a rollback to a gate-less controller would
+// reach the spec.networking==nil delete branch and delete live GitOps-owned
+// networking. The per-pod P2P LB already had this guard; the external Service
+// and HTTPRoutes did not — this exercises both.
+func TestNetworking_Delete_SkipsOrphanedObjects(t *testing.T) {
+	g := NewWithT(t)
+	withP2PEndpointDomain(t, p2pEndpointTestDomain)
+	ns := makeNamespace(t)
+
+	snd := fixtures.NewSND(ns, "orphan-delete-guard",
+		fixtures.WithReplicas(1),
+		fixtures.WithNetworking(),
+	)
+	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
+
+	extSvcKey := types.NamespacedName{Name: snd.Name + "-external", Namespace: ns}
+
+	// Converge: external Service + 4 HTTPRoutes created and owned by the SND.
+	waitFor(t, func() bool {
+		svc := &corev1.Service{}
+		if err := testCli.Get(testCtx, extSvcKey, svc); err != nil {
+			return false
+		}
+		return metav1.IsControlledBy(svc, snd) && len(listHTTPRoutes(t, snd)) == 4
+	}, "external Service + 4 HTTPRoutes owned by SND before orphan")
+
+	// Orphan: stamp the annotation so the controller strips owner-refs from the
+	// external Service + HTTPRoutes. The template-label edit bumps generation so
+	// the generation-gated watch reticks promptly (orthogonal to the guard).
+	latest := getSND(t, client.ObjectKeyFromObject(snd))
+	patch := client.MergeFrom(latest.DeepCopy())
+	if latest.Annotations == nil {
+		latest.Annotations = map[string]string{}
+	}
+	latest.Annotations[networkingOrphanedAnnotation] = "true"
+	if latest.Spec.Template.Metadata == nil {
+		latest.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{}
+	}
+	if latest.Spec.Template.Metadata.Labels == nil {
+		latest.Spec.Template.Metadata.Labels = map[string]string{}
+	}
+	latest.Spec.Template.Metadata.Labels["test.sei.io/orphan-retick"] = "1"
+	g.Expect(testCli.Patch(testCtx, latest, patch)).To(Succeed())
+
+	// External Service owner-ref stripped — now GitOps-owned, still present.
+	waitFor(t, func() bool {
+		svc := &corev1.Service{}
+		if err := testCli.Get(testCtx, extSvcKey, svc); err != nil {
+			return false
+		}
+		return len(svc.GetOwnerReferences()) == 0
+	}, "external Service owner-ref stripped after orphan")
+
+	// The footgun: unset the annotation AND remove spec.networking together.
+	// The gate is now off, so reconcileNetworking runs and reaches the
+	// networking==nil delete branch — against objects the SND no longer owns.
+	latest = getSND(t, client.ObjectKeyFromObject(snd))
+	patch = client.MergeFrom(latest.DeepCopy())
+	delete(latest.Annotations, networkingOrphanedAnnotation)
+	latest.Spec.Networking = nil
+	g.Expect(testCli.Patch(testCtx, latest, patch)).To(Succeed())
+
+	// The delete path ran (condition flips to NetworkingDisabled)...
+	waitForStatus(t, client.ObjectKeyFromObject(snd), func(l *seiv1alpha1.SeiNodeDeployment) bool {
+		c := apimeta.FindStatusCondition(l.Status.Conditions, seiv1alpha1.ConditionNetworkingReady)
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "NetworkingDisabled"
+	}, "delete branch reached (ConditionNetworkingReady=False/NetworkingDisabled)")
+
+	// ...but the orphaned objects SURVIVE: the delete helpers skip what the SND
+	// no longer controls. Without the guard, the Service + routes vanish here.
+	g.Consistently(func() bool {
+		if err := testCli.Get(testCtx, extSvcKey, &corev1.Service{}); err != nil {
+			return false
+		}
+		// List by label, not listHTTPRoutes (which filters on IsControlledBy):
+		// post-orphan the routes are deliberately un-owned, so the helper would
+		// return 0 and defeat the survival assertion.
+		routes := &gatewayv1.HTTPRouteList{}
+		if err := testCli.List(testCtx, routes, client.InNamespace(ns),
+			client.MatchingLabels{"sei.io/nodedeployment": snd.Name}); err != nil {
+			return false
+		}
+		return len(routes.Items) == 4
+	}, 2*time.Second, 200*time.Millisecond).Should(BeTrue(),
+		"orphaned external Service + HTTPRoutes survive the controller delete path")
 }
