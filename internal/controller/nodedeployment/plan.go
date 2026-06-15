@@ -79,9 +79,7 @@ func (r *SeiNodeDeploymentReconciler) completePlan(ctx context.Context, group *s
 
 	if isDeploymentPlan {
 		group.Status.ObservedGeneration = group.Generation
-		// Same orphan gate as the main reconcile: re-running reconcileNetworking
-		// here on an orphaned group would re-create the GitOps-owned objects and
-		// force-steal field ownership mid-handoff.
+		// Skip networking re-apply when orphaned — those objects are GitOps-owned.
 		if !networkingOrphaned(group) {
 			if err := r.reconcileNetworking(ctx, group); err != nil {
 				logger.Error(err, "reconciling networking after deployment")

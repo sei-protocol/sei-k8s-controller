@@ -1455,8 +1455,7 @@ func TestResourceLabels_ChainAndRoleStampedUnconditionally(t *testing.T) {
 		{"archive", func(n *seiv1alpha1.SeiNode) { n.Spec.Archive = &seiv1alpha1.ArchiveSpec{} }, roleArchive},
 		{"replayer", func(n *seiv1alpha1.SeiNode) { n.Spec.Replayer = &seiv1alpha1.ReplayerSpec{} }, roleReplayer},
 		{"fullNode", func(n *seiv1alpha1.SeiNode) { n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{} }, roleFullNode},
-		// No mode sub-spec: deriveRole defaults to node, mirroring NodeMode's
-		// ModeFull fallback, so the metric label is never empty.
+		// No mode sub-spec: deriveRole defaults to full node.
 		{"noModeSet", func(_ *seiv1alpha1.SeiNode) {}, roleFullNode},
 	}
 	for _, tt := range tests {

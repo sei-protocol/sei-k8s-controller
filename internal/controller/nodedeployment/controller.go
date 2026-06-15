@@ -105,10 +105,10 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("reconciling internal RPC service: %w", err)
 	}
 
-	// When networking is orphaned, external objects are GitOps-managed:
-	// strip owner-refs (idempotent) and stop applying. The DNS-resolvability
-	// gate is skipped too — it would otherwise return before reconcileSeiNodes
-	// writes ExternalAddress, which must keep flowing during the handoff.
+	// External networking is GitOps-managed when orphaned: strip owner-refs
+	// (idempotent) and stop applying. ExternalAddress for children still flows
+	// through reconcileSeiNodes below, so the DNS-resolvability gate is skipped
+	// rather than allowed to short-circuit it.
 	if networkingOrphaned(group) {
 		if err := r.orphanNetworkingResources(ctx, group); err != nil {
 			logger.Error(err, "orphaning networking resources")

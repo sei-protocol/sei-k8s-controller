@@ -140,9 +140,9 @@ func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
 // deriveRole returns the role label value for the node's mode. Stamped
 // onto the pod template as `sei.io/role` and lifted into the `sei_role`
 // metric label by the platform PodMonitor (see
-// platform/clusters/*/monitoring/podmonitor-seid.yaml). Total: a node with
-// no mode sub-spec defaults to full-node, mirroring NodeMode's ModeFull
-// fallback, so `sei.io/role` is always present and metric series never drop.
+// platform/clusters/*/monitoring/podmonitor-seid.yaml). Total — a node with
+// no mode sub-spec is a full node — so `sei.io/role` is never empty and the
+// metric series never drops.
 func deriveRole(node *seiv1alpha1.SeiNode) string {
 	switch {
 	case node.Spec.Validator != nil:
