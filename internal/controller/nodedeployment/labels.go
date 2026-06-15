@@ -16,7 +16,20 @@ const (
 	revisionLabel       = "sei.io/revision"
 	chainLabel          = "sei.io/chain"
 	managedByAnnotation = "sei.io/managed-by"
+
+	// networkingOrphanedAnnotation freezes the external networking
+	// sub-reconcilers and strips SND owner-refs from the external Service,
+	// HTTPRoutes, and per-pod P2P LBs, handing those objects to GitOps
+	// (Flux) for adopt-in-place. The internal ClusterIP and the children's
+	// ExternalAddress write stay controller-owned.
+	networkingOrphanedAnnotation = "sei.io/networking-orphaned"
 )
+
+// networkingOrphaned reports whether external networking has been handed
+// off to GitOps for this group.
+func networkingOrphaned(group *seiv1alpha1.SeiNodeDeployment) bool {
+	return group.Annotations[networkingOrphanedAnnotation] == "true"
+}
 
 // seiNodeName is published as Status.PerPodServices[].Name and equals the
 // headless Service name; the format is part of the public interface.
