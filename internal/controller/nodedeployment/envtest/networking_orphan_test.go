@@ -251,6 +251,9 @@ func TestNetworking_Delete_SkipsOrphanedObjects(t *testing.T) {
 		if err := testCli.Get(testCtx, extSvcKey, &corev1.Service{}); err != nil {
 			return false
 		}
+		// List by label, not listHTTPRoutes (which filters on IsControlledBy):
+		// post-orphan the routes are deliberately un-owned, so the helper would
+		// return 0 and defeat the survival assertion.
 		routes := &gatewayv1.HTTPRouteList{}
 		if err := testCli.List(testCtx, routes, client.InNamespace(ns),
 			client.MatchingLabels{"sei.io/nodedeployment": snd.Name}); err != nil {

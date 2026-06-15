@@ -198,8 +198,7 @@ func (r *SeiNodeDeploymentReconciler) deleteHTTPRoutesByLabel(ctx context.Contex
 		return fmt.Errorf("listing HTTPRoutes for deletion: %w", err)
 	}
 	for i := range list.Items {
-		// Once owner-refs are stripped for GitOps adoption, the route is no
-		// longer ours to delete — leave it to its new owner.
+		// Skip what we no longer own: orphaned to GitOps.
 		if !metav1.IsControlledBy(&list.Items[i], group) {
 			continue
 		}
@@ -387,8 +386,7 @@ func (r *SeiNodeDeploymentReconciler) deleteExternalService(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("fetching external Service for deletion: %w", err)
 	}
-	// Once owner-refs are stripped for GitOps adoption, the object is no
-	// longer ours to delete — leave it to its new owner.
+	// Skip what we no longer own: orphaned to GitOps.
 	if !metav1.IsControlledBy(svc, group) {
 		return nil
 	}
