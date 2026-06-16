@@ -31,14 +31,14 @@ func TestSND_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
 	key := client.ObjectKeyFromObject(snd)
 
-	// 1. Initial settle. Both children exist and the SND has
+	// 1. Initial settle. Both children exist and the SeiNetwork has
 	//    ConditionPaused=False/NotPaused seeded.
 	waitForStatus(t, key, func(s *seiv1alpha1.SeiNetwork) bool {
 		return len(listChildren(t, s)) == 2 &&
 			pausedCond(s) != nil && pausedCond(s).Status == metav1.ConditionFalse
-	}, "two children exist and ConditionPaused=False is seeded on a fresh SND")
+	}, "two children exist and ConditionPaused=False is seeded on a fresh SeiNetwork")
 
-	// 2. Pause the SND. ConditionPaused flips True, Status.Phase moves
+	// 2. Pause the SeiNetwork. ConditionPaused flips True, Status.Phase moves
 	//    to Paused, and children pick up Spec.Paused=true on the next
 	//    reconcile.
 	cur := getNetwork(t, key)
@@ -63,7 +63,7 @@ func TestSND_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 			}
 		}
 		return true
-	}, "every child SeiNode must have Spec.Paused=true after SND pause")
+	}, "every child SeiNode must have Spec.Paused=true after SeiNetwork pause")
 
 	// 3. Image change is observed but blocked. Patch v1→v2 while paused
 	//    and assert child Spec.Image stays at the original for 3s — a

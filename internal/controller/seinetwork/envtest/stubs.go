@@ -34,7 +34,7 @@ import (
 // task.ExecutionConfig.BuildSidecarClient. The factory closure should
 // return the same *StubSidecarClient instance every call so submitted
 // task state is observable across the reconcile loop (and across the
-// SeiNode and SND reconcilers if both share the stub).
+// SeiNode and SeiNetwork reconcilers if both share the stub).
 type StubSidecarClient struct {
 	// CompleteAfter is the delay between SubmitTask and when GetTask
 	// reports Completed. Zero means complete on first GetTask call.

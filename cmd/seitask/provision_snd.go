@@ -16,7 +16,7 @@ import (
 func newProvisionSNDCommand() *cli.Command {
 	return &cli.Command{
 		Name: "provision-snd",
-		Usage: "Render a SeiNodeDeployment template, apply it, wait for Ready + " +
+		Usage: "Render a SeiNetwork template, apply it, wait for Ready + " +
 			"first block, and publish role-scoped endpoints to workflow-vars",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -27,12 +27,12 @@ func newProvisionSNDCommand() *cli.Command {
 			},
 			&cli.StringFlag{
 				Name:    "name",
-				Usage:   "SND metadata.name (defaults to <workflow>-<role>)",
+				Usage:   "SeiNetwork metadata.name (defaults to <workflow>-<role>)",
 				Sources: cli.EnvVars("SND_NAME"),
 			},
 			&cli.StringFlag{
 				Name:     "template",
-				Usage:    "Path to the Go text/template producing a SeiNodeDeployment YAML",
+				Usage:    "Path to the Go text/template producing a SeiNetwork YAML",
 				Sources:  cli.EnvVars("SND_TEMPLATE"),
 				Required: true,
 			},
@@ -85,7 +85,7 @@ func runProvisionSND(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	taskruntime.WriteExitReason(ctx, c, wf, nil)
-	log.Printf("provision-snd: SND %q Ready, chainID=%s, TM=%s", res.Name, res.ChainID, res.Endpoints.TendermintRpc)
+	log.Printf("provision-snd: SeiNetwork %q Ready, chainID=%s, TM=%s", res.Name, res.ChainID, res.Endpoints.TendermintRpc)
 	return nil
 }
 

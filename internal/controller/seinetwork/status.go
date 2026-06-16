@@ -59,10 +59,11 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 }
 
 // setRolloutInProgressCondition stamps the DERIVED RolloutInProgress
-// projection. True when a child's reported image lags spec.image (mid-roll or
-// wedged on a bad tag); False/AllUpToDate at steady state. No plan or revision
-// tracking owns this — it is pure computation from the child snapshot. Before
-// any children exist there is nothing to roll, so it reads False/AllUpToDate.
+// projection each reconcile. True when a child's reported image lags
+// spec.image (mid-roll or wedged on a bad tag); False/AllUpToDate at steady
+// state. No plan or revision tracking owns this — it is pure computation from
+// the child snapshot. Before any children exist there is nothing to roll, so
+// it reads False/AllUpToDate (matching the seed in seedAlwaysPresentConditions).
 func setRolloutInProgressCondition(network *seiv1alpha1.SeiNetwork, upToDate, desired int32, childCount int) {
 	if childCount > 0 && upToDate < desired {
 		setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
@@ -140,17 +141,22 @@ func setNodesReadyCondition(network *seiv1alpha1.SeiNetwork, ready, desired int3
 // PlanInProgress, RolloutInProgress, and GenesisCeremonyComplete.
 const ReasonNotStarted = "NotStarted"
 
-// seedAlwaysPresentConditions stamps the seeded always-present conditions.
-// The PlanInProgress seed fires only when absent so transition paths
-// (startPlan, completePlan, etc.) own the reason vocabulary once a network
-// has lifecycle state. RolloutInProgress is NOT seeded here — it is a derived
-// projection that updateStatus computes (and always sets) from the child
-// snapshot each reconcile, so it is present after the first reconcile.
+// seedAlwaysPresentConditions stamps the seeded always-present conditions so
+// the full set — GenesisCeremonyComplete, NodesReady, RolloutInProgress,
+// Paused, PlanInProgress — is present after the first reconcile and no
+// consumer ever sees a network missing one. Seeds use seedConditionIfAbsent,
+// so the live values that updateStatus computes later in the same reconcile
+// (NodesReady, RolloutInProgress) override these defaults; they only fill the
+// gap on early-return paths that exit before updateStatus.
 func (r *SeiNetworkReconciler) seedAlwaysPresentConditions(network *seiv1alpha1.SeiNetwork) {
 	r.setGenesisCeremonyCondition(network)
 	r.setPausedCondition(network)
 	seedConditionIfAbsent(network, seiv1alpha1.ConditionPlanInProgress,
 		ReasonNotStarted, "no plan has run yet")
+	seedConditionIfAbsent(network, seiv1alpha1.ConditionNodesReady,
+		"Pending", "no child nodes observed yet")
+	seedConditionIfAbsent(network, seiv1alpha1.ConditionRolloutInProgress,
+		"AllUpToDate", "no child nodes observed yet")
 }
 
 // setPausedCondition mirrors spec.paused and emits an event on each

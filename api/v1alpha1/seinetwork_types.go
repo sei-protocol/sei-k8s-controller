@@ -25,6 +25,8 @@ import (
 // scalars (see generateSeiNode).
 //
 // +kubebuilder:validation:XValidation:rule="self.genesis == oldSelf.genesis",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
+// +kubebuilder:validation:XValidation:rule="self.replicas == oldSelf.replicas",message="spec.replicas is fixed at the genesis ceremony; the validator set is minted into genesis state and cannot be grown or shrunk by editing the spec"
+// +kubebuilder:validation:XValidation:rule="(!has(self.dataVolume) && !has(oldSelf.dataVolume)) || self.dataVolume == oldSelf.dataVolume",message="spec.dataVolume is immutable once set; it backs a StatefulSet volumeClaimTemplate, which Kubernetes forbids changing after create"
 type SeiNetworkSpec struct {
 	// Image is the seid image the genesis validators run.
 	// +kubebuilder:validation:MinLength=1
@@ -42,6 +44,10 @@ type SeiNetworkSpec struct {
 	// DISTINCT generated identity, so replicas>1 is the normal safe case
 	// (no shared key → no double-sign). Each SeiNode is named
 	// "{network-name}-{ordinal}".
+	//
+	// FIXED at genesis: the validator set is minted into genesis state at the
+	// ceremony, so replicas is immutable after create (spec-level CEL). You
+	// cannot add a validator to an already-minted genesis, nor shrink the set.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:default=1
@@ -58,6 +64,11 @@ type SeiNetworkSpec struct {
 	// DataVolume configures the data PersistentVolumeClaim for each genesis
 	// validator. The ceremony-generated consensus identity lives here, so
 	// DeletionPolicy defaults to Retain.
+	//
+	// Immutable after create (spec-level CEL): it backs a StatefulSet
+	// volumeClaimTemplate, which Kubernetes forbids changing post-create, so a
+	// later edit could never take effect — admission rejects it rather than
+	// letting the controller silently ignore it.
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
 
@@ -66,8 +77,9 @@ type SeiNetworkSpec struct {
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
 
 	// PodLabels are additional labels merged into each child SeiNode's pod
-	// template. The controller always adds the reserved sei.io/nodedeployment
-	// and sei.io/nodedeployment-ordinal labels; these are additive.
+	// template. The controller always adds the reserved group labels
+	// (sei.io/nodedeployment{,-ordinal}, frozen GitOps selector keys, plus the
+	// canonical sei.io/seinetwork{,-ordinal} keys); these are additive.
 	// +optional
 	PodLabels map[string]string `json:"podLabels,omitempty"`
 

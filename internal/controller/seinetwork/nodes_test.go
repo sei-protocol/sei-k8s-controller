@@ -31,8 +31,12 @@ func TestGenerateSeiNode_SystemLabels(t *testing.T) {
 	network := newTestNetwork(testNetworkName, testGroupNS)
 
 	node := generateSeiNode(network, 1)
+	// Frozen GitOps selector keys (kept for selector continuity).
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupLabel, testNetworkName))
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupOrdinalLabel, "1"))
+	// New canonical seinetwork keys, stamped alongside the frozen ones.
+	g.Expect(node.Labels).To(HaveKeyWithValue(seinetworkLabel, testNetworkName))
+	g.Expect(node.Labels).To(HaveKeyWithValue(seinetworkOrdinalLabel, "1"))
 	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, testNamespace))
 }
 
@@ -49,6 +53,8 @@ func TestGenerateSeiNode_SystemPodLabelsOverrideUserLabels(t *testing.T) {
 	node := generateSeiNode(network, 0)
 
 	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, testNetworkName))
+	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(seinetworkLabel, testNetworkName),
+		"canonical seinetwork key is stamped on pods alongside the frozen key")
 	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue("team", "platform"),
 		"non-reserved user pod labels pass through")
 }

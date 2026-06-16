@@ -95,8 +95,8 @@ spec:
         - alert: ControllerHighReconcileLatency
           expr: |
             histogram_quantile(0.99,
-              sum by (controller, substep, le) (
-                rate(sei_controller_seinetwork_reconcile_substep_duration_seconds_bucket[5m])
+              sum by (controller, le) (
+                rate(controller_runtime_reconcile_time_seconds_bucket[5m])
               )
             ) > 10
           for: 10m
@@ -104,8 +104,8 @@ spec:
             severity: warning
             team: platform
           annotations:
-            summary: "SeiNetwork reconcile substep {{ $labels.substep }} is slow"
-            description: "p99 latency above 10s for 10 minutes."
+            summary: "Controller {{ $labels.controller }} reconcile is slow"
+            description: "p99 reconcile latency above 10s for 10 minutes."
             runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#controllerhighreconcilelatency
 
         - alert: TaskFailureRateHigh

@@ -30,11 +30,11 @@ type PeerSource struct {
 // headless Service DNS names ({name}-0.{name}.{namespace}.svc.cluster.local)
 // and writes them to status.resolvedPeers on every reconcile.
 //
-// Controller-managed labels available on every SeiNode owned by an SND:
+// Controller-managed labels available on every SeiNode owned by a SeiNetwork:
 //   - sei.io/chain — from .spec.template.spec.chainId
-//   - sei.io/nodedeployment — owning SND name
+//   - sei.io/nodedeployment — owning SeiNetwork name
 //   - sei.io/nodedeployment-ordinal — replica index
-//   - sei.io/revision — SND generation
+//   - sei.io/revision — SeiNetwork generation
 //
 // User-set keys on .spec.template.metadata.labels merge in; the four
 // reserved keys above are always controller-stamped.

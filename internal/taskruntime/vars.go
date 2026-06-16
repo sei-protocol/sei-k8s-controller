@@ -11,10 +11,10 @@ const (
 	// KeyRunID — Workflow CR's metadata.name. Written by the initializing Task.
 	KeyRunID VarKey = "RUN_ID"
 
-	// KeyChainID — the SND's chainId. One-way door.
+	// KeyChainID — the SeiNetwork's chainId. One-way door.
 	KeyChainID VarKey = "CHAIN_ID"
 
-	// Endpoints — written by provision-snd after SND is Ready.
+	// Endpoints — written by provision-snd after the SeiNetwork is Ready.
 	// KeyEVMJSONRPC is pod-0 only (release-test pins stateful EVM
 	// sequences to one pod). KeyEVMJSONRPCList is comma-separated
 	// per-pod URLs for seiload, whose stateful EVM workload needs to

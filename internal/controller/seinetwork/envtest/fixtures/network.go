@@ -69,3 +69,12 @@ func WithConfigOverrides(overrides map[string]string) Option {
 		network.Spec.ConfigOverrides = overrides
 	}
 }
+
+// WithDataVolumeImport sets spec.dataVolume to import a pre-existing PVC.
+func WithDataVolumeImport(pvcName string) Option {
+	return func(network *seiv1alpha1.SeiNetwork) {
+		network.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{
+			Import: &seiv1alpha1.DataVolumeImport{PVCName: pvcName},
+		}
+	}
+}

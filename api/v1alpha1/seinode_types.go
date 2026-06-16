@@ -15,7 +15,7 @@ type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
 	// it into P2P endpoint hostnames (e.g. `<node>-p2p.<chainID>.<domain>`) when
-	// the parent SND opts into TCP networking; the address is a one-way door
+	// the parent SeiNetwork opts into TCP networking; the address is a one-way door
 	// once peers cache it.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
@@ -74,8 +74,8 @@ type SeiNodeSpec struct {
 	Validator *ValidatorSpec `json:"validator,omitempty"`
 
 	// ExternalAddress is the routable P2P host:port written into seid's
-	// `p2p.external_address`. SND-managed nodes get this stamped by the
-	// SND reconciler when TCP networking is enabled. Standalone SeiNodes
+	// `p2p.external_address`. SeiNetwork-managed nodes get this stamped by the
+	// SeiNetwork reconciler when TCP networking is enabled. Standalone SeiNodes
 	// can set it directly.
 	// +optional
 	ExternalAddress string `json:"externalAddress,omitempty"`

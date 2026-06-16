@@ -183,9 +183,10 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.SeiNode {
 	gc := network.Spec.Genesis
 
-	podLabels := make(map[string]string, len(network.Spec.PodLabels)+1)
+	podLabels := make(map[string]string, len(network.Spec.PodLabels)+2)
 	maps.Copy(podLabels, network.Spec.PodLabels)
 	podLabels[groupLabel] = network.Name
+	podLabels[seinetworkLabel] = network.Name
 
 	spec := seiv1alpha1.SeiNodeSpec{
 		ChainID:    gc.ChainID,

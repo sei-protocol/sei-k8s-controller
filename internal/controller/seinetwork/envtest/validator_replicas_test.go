@@ -20,7 +20,7 @@ import (
 // consensus/P2P/operator identity is ceremony-generated on-cluster
 // (generate-identity), so multiple replicas carry distinct keys and replicas>1
 // is the normal safe case (no shared priv_validator_key.json → no
-// double-sign). This replaces the SND-era "signingKey ⇒ replicas==1" CEL rule,
+// double-sign). This replaces the SeiNetwork-era "signingKey ⇒ replicas==1" CEL rule,
 // which is moot by construction.
 func TestValidator_GeneratedIdentityMultiReplica(t *testing.T) {
 	t.Run("replicas 1 is accepted", func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestValidator_GeneratedIdentityMultiReplica(t *testing.T) {
 		}, "3 children with distinct ceremony ordinals and no BYO keys")
 	})
 
-	t.Run("scaling up a generated-identity pool is accepted", func(t *testing.T) {
+	t.Run("replicas is immutable after create", func(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
 		network := fixtures.NewNetwork(ns, "gen-scale", fixtures.WithReplicas(1))
@@ -71,7 +71,12 @@ func TestValidator_GeneratedIdentityMultiReplica(t *testing.T) {
 		err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
 			cur.Spec.Replicas = 3
 		})
-		g.Expect(err).NotTo(HaveOccurred(),
-			"scaling a generated-identity validator pool above 1 must be accepted")
+		// The validator set is minted into genesis state at the ceremony; you
+		// cannot add a validator to an already-minted genesis. Admission
+		// rejects the change rather than letting it silently no-op (a
+		// StatefulSet-backed scale that could never take effect).
+		g.Expect(err).To(HaveOccurred(),
+			"changing replicas after create must be rejected by spec-level CEL")
+		g.Expect(err.Error()).To(ContainSubstring("replicas is fixed at the genesis ceremony"))
 	})
 }

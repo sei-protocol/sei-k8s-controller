@@ -17,7 +17,7 @@ WORKDIR /
 COPY --from=builder /workspace/seitask /seitask
 # Runner templates (SeiNodeTask CRs) at the conventional mount path.
 COPY --from=builder /workspace/runner/templates /templates
-# Per-scenario SND templates (consumed by provision-snd's --template).
+# Per-scenario SeiNetwork templates (consumed by provision-snd's --template).
 # Add a COPY line per scenario; Workflow YAMLs reference paths under
 # /scenarios/<scenario>/.
 COPY --from=builder /workspace/scenarios/release-test /scenarios/release-test

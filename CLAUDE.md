@@ -1,12 +1,12 @@
 # sei-k8s-controller
 
-Kubernetes operator for managing Sei blockchain nodes. Single binary, two controllers: `SeiNodeDeployment` (fleet orchestration, genesis ceremonies, deployments) and `SeiNode` (individual node lifecycle).
+Kubernetes operator for managing Sei blockchain nodes. Single binary, three controllers: `SeiNetwork` (genesis-ceremony orchestration: bootstraps a chain's genesis.json and founding validator set, owns the child SeiNodes), `SeiNode` (individual node lifecycle), and `SeiNodeTask` (sidecar-driven task execution).
 
 ## Architecture
 
 - **API group**: `sei.io/v1alpha1`
-- **CRD types**: `SeiNodeDeployment`, `SeiNode` (defined in `api/v1alpha1/`)
-- **Controllers**: `internal/controller/nodedeployment/`, `internal/controller/node/`
+- **CRD types**: `SeiNetwork`, `SeiNode`, `SeiNodeTask` (defined in `api/v1alpha1/`)
+- **Controllers**: `internal/controller/seinetwork/`, `internal/controller/node/`, `internal/controller/nodetask/`
 - **Entry point**: `cmd/main.go` — thin binary that creates a `manager.Manager` and registers both controllers
 - **Framework**: controller-runtime v0.23.1 / kubebuilder v4.12.0
 
@@ -48,7 +48,7 @@ The single-patch reconcile model means each reconcile snapshots `obj.DeepCopy()`
 
 ### Conditions
 
-Every `metav1.Condition` on `SeiNodeDeployment`, `SeiNode`, or `SeiNodeTask` follows the Kubernetes upstream pattern: **once a controller sets a condition, it stays present on the reconciled object**, transitioning between `True` / `False` / `Unknown` with a stable `Reason` and a `lastTransitionTime`. This is the default. It matches Pod (`Ready`, `Initialized`, `ContainersReady`, `PodScheduled` — stably present once the kubelet has begun processing the pod), Deployment (`Available`, `Progressing` — stably present once the Deployment reconciles), Gateway-API HTTPRoute (`Accepted`, `ResolvedRefs` — stably present per ParentRef once the implementation reconciles it), and CAPI Cluster/Machine (`Ready`, `InfrastructureReady` — stably present after first reconcile). Even "feature off" or "feature broken" states are expressed as `Status=False, Reason=<stable enum value>` — never as absence.
+Every `metav1.Condition` on `SeiNetwork`, `SeiNode`, or `SeiNodeTask` follows the Kubernetes upstream pattern: **once a controller sets a condition, it stays present on the reconciled object**, transitioning between `True` / `False` / `Unknown` with a stable `Reason` and a `lastTransitionTime`. This is the default. It matches Pod (`Ready`, `Initialized`, `ContainersReady`, `PodScheduled` — stably present once the kubelet has begun processing the pod), Deployment (`Available`, `Progressing` — stably present once the Deployment reconciles), Gateway-API HTTPRoute (`Accepted`, `ResolvedRefs` — stably present per ParentRef once the implementation reconciles it), and CAPI Cluster/Machine (`Ready`, `InfrastructureReady` — stably present after first reconcile). Even "feature off" or "feature broken" states are expressed as `Status=False, Reason=<stable enum value>` — never as absence.
 
 **Use:**
 
@@ -89,7 +89,7 @@ Don't mix polarities for the same subject (no `XReady` + `XFailed` — pick one 
 - Run tests with `make test` before submitting changes.
 
 ### CRD Changes
-- Edit types in `api/v1alpha1/` (e.g., `seinode_types.go`, `seinodedeployment_types.go`, `validator_types.go`).
+- Edit types in `api/v1alpha1/` (e.g., `seinode_types.go`, `seinetwork_types.go`, `validator_types.go`).
 - After any type change, run `make manifests generate` to regenerate CRD YAML and DeepCopy methods.
 - Never hand-edit files in `manifests/` or `zz_generated.deepcopy.go`.
 - When changing `SeiNodeTask` kinds or their operational behavior, update `https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task.md`. Its section headings are **cited anchors** for the gov-ops skill (PLT-489) — renaming one is a breaking change for that consumer.
@@ -111,7 +111,7 @@ make docker-push IMG=<image>  # Push container image
 
 ## Key Patterns
 
-- **SeiNodeDeployment** creates and owns **SeiNode** resources. Groups orchestrate genesis ceremonies, manage deployments, and coordinate networking/monitoring.
+- **SeiNetwork** creates and owns **SeiNode** resources. It orchestrates the genesis ceremony, manages deployments, and coordinates networking/monitoring.
 - **SeiNode** creates StatefulSets (replicas=1), headless Services, and PVCs via server-side apply (fieldOwner: `seinode-controller`).
 - **Plan-driven reconciliation** — Both controllers use ordered task plans (stored in `.status.plan`) to drive lifecycle. Plans are built by `internal/planner/` (`ResolvePlan` for nodes, `ForGroup` for deployments), executed by `planner.Executor`, with individual tasks in `internal/task/`. The reconcile loop is: `ResolvePlan → persist plan → ExecutePlan`. See `internal/planner/doc.go` for the full plan lifecycle.
 - **Init plans** transition nodes from Pending → Running. They include infrastructure tasks (`ensure-data-pvc`, `apply-statefulset`, `apply-service`) followed by sidecar tasks (`configure-genesis`, `config-apply`, etc.).

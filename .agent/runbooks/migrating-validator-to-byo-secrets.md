@@ -1,7 +1,7 @@
 # Migrating a Validator onto the Platform with BYO Consensus Secrets
 
 **Audience:** operators cutting a live validator over from a legacy host (e.g. an `sei-infra` EC2 validator) onto the Kubernetes platform, carrying the validator's existing consensus identity via Kubernetes Secrets — the "bring-your-own-secrets" path. Written against the arctic-1 node-19 cutover but applies to any validator migration.
-**Scope:** the consensus identity that must move, the SND spec shape, the controller validation surface, the **stop-before-start double-sign discipline** and the layered defenses against equivocation, the cutover sequence, rollback, and the operational gotchas surfaced by the harbor dry-run.
+**Scope:** the consensus identity that must move, the SeiNetwork spec shape, the controller validation surface, the **stop-before-start double-sign discipline** and the layered defenses against equivocation, the cutover sequence, rollback, and the operational gotchas surfaced by the harbor dry-run.
 **Not in scope:** *why* the BYO-secrets surface exists or its controller internals — see the `validator.signingKey` / `nodeKey` / `operatorKeyring` types in `api/v1alpha1/validator_types.go`. Genesis-ceremony bring-up (keys minted on-cluster) is a different path — this runbook is for an **existing** identity moving hosts.
 
 > **The one rule that matters:** a consensus key may be live on exactly one host at a time. Everything below exists to guarantee the legacy signer is **fully stopped** before the platform signer starts. Two hosts signing the same key at the same height is equivocation — it tombstones the validator **permanently** (a new consensus key is the only recovery).
@@ -20,7 +20,7 @@ The migration is complete when **all** of the following hold:
 | `SeiNode.status.conditions[SigningKeyReady]` | `True`, `Reason=SigningKeyValidated` |
 | `SeiNode.status.conditions[NodeKeyReady]` | `True`, `Reason=NodeKeyValidated` |
 | `SeiNode.status.plan` | reaches `mark-ready=Complete`, then clears (node → `Running`) |
-| `SeiNodeDeployment` | `READY`. NB: for a no-genesis single validator the SND itself builds **no** plan — its `status.plan` stays nil; it reaches READY via child-node readiness, not its own plan |
+| `SeiNetwork` | `READY`. NB: for a no-genesis single validator the SeiNetwork itself builds **no** plan — its `status.plan` stays nil; it reaches READY via child-node readiness, not its own plan |
 | seid main container | `catching_up: false`, height climbing |
 | seid logs | `signed and pushed vote ... <ADDR>` at the chain tip — signing under the **migrated** address |
 | `cosmos_validators_jailed{...}` for this valoper | `0` (not jailed) |
@@ -136,7 +136,7 @@ rm -rf "$KR"                                                                    
 ```
 (Encryption is **not** done until `sops -e -i` runs — base64 alone is not encryption. Don't commit a file whose `data` values aren't `ENC[…]`.)
 
-**4. Wire into the SND** — four DISTINCT secretNames (CEL-enforced: keyring ≠ passphrase ≠ signing ≠ node):
+**4. Wire into the SeiNetwork** — four DISTINCT secretNames (CEL-enforced: keyring ≠ passphrase ≠ signing ≠ node):
 ```yaml
 validator:
   operatorKeyring:
@@ -151,13 +151,13 @@ Controller ≥ `5d03f33` runs `validate-operator-keyring` on bring-up. On the no
 
 ---
 
-## 3. SND spec shape
+## 3. SeiNetwork spec shape
 
 The migrated validator is `signingKey` + `nodeKey`, no genesis ceremony, no snapshot (block-syncs):
 
 ```yaml
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: node-19
   namespace: <ns>
@@ -212,11 +212,11 @@ Equivocation = the same consensus key signing two different things at one height
 
 **Three layers of defense, in order of when they act:**
 
-1. **Procedure (primary, preventive).** Stop-before-start: the legacy `seid` is stopped *and disabled* and confirmed not signing **before** the platform SND is applied/unpaused. This is the only layer that *prevents* the double-sign. The others only *catch* it.
+1. **Procedure (primary, preventive).** Stop-before-start: the legacy `seid` is stopped *and disabled* and confirmed not signing **before** the platform SeiNetwork is applied/unpaused. This is the only layer that *prevents* the double-sign. The others only *catch* it.
 2. **CEL admission guard (preventive, in-cluster case).** A `signingKey` validator is pinned to `replicas: 1` at admission — every replica would mount the same `priv_validator_key.json`, so >1 is an instant in-cluster equivocation. Rejection message:
    > `a validator with a signingKey must have replicas: 1 — every replica mounts the same priv_validator_key.json, so >1 replica double-signs (equivocation) and tombstones/slashes the validator`
 
-   *Verified live:* `kubectl apply --dry-run=server` of a `signingKey` SND with `replicas: 2` is rejected with the above; `replicas: 1` is accepted. This guard does **not** protect against a key live on a *different host* (the legacy EC2) — only layer 1 does.
+   *Verified live:* `kubectl apply --dry-run=server` of a `signingKey` SeiNetwork with `replicas: 2` is rejected with the above; `replicas: 1` is accepted. This guard does **not** protect against a key live on a *different host* (the legacy EC2) — only layer 1 does.
 3. **Alerting (detective, last resort).** Two platform alerts (sei-protocol/platform `alerts-validator-observability.yaml`):
    - `ValidatorDoubleSignEvidenceObserved` — `max by (chain_id) (max_over_time(tendermint_consensus_byzantine_validators[10m])) > 0`, `for: 0m`. Best-effort *leading* signal; fires within ~scrape interval of evidence landing.
    - `ValidatorNewlyJailed` — the *durable* detector; a tombstone shows up as a jailing. `for: 5m`, with a 30m lookback in the `unless`-delta (jailed-now `unless` jailed-30m-ago) — the 30m is the detection window, not the fire delay.
@@ -245,7 +245,7 @@ Ordered. Do not reorder steps 3 and 4.
 ```text
 1. PRE-STAGE (no consensus impact)
    - BYO Secrets committed (SOPS-encrypted, §2) to the platform repo.
-   - node-19 SND committed but NOT yet reconciling (kept out of the kustomization
+   - node-19 SeiNetwork committed but NOT yet reconciling (kept out of the kustomization
      resources list, or spec.paused: true).
    - sei-infra removal PR staged (sei-infra#1034). Mechanism: node-19 is the TAIL of
      its eu-central-1 region in inventory.json (regionDistributions nodeStartId 10,
@@ -284,7 +284,7 @@ Ordered. Do not reorder steps 3 and 4.
 4. VERIFY REJOIN
    - seid: catching_up=false, "signed and pushed vote ... <migrated ADDR>".
    - cosmos_validators_jailed = 0; tendermint_consensus_byzantine_validators = 0.
-   - SND READY, plan cleared.
+   - SeiNetwork READY, plan cleared.
 
 5. DECOMMISSION (after a soak, e.g. 24h signing cleanly)
    - shred the key material on the legacy host (§4).
@@ -303,9 +303,9 @@ Numbered as encountered. 1–4 are the ones that change operator behavior.
 
 **1. `networking.tcp` cold-start DNS race (self-heals).** A `tcp` validator gets a per-pod internet-facing NLB + an external-DNS Route53 record, and seid is configured with that hostname as its P2P `external-address`. On first boot seid resolves its own external address *before* external-DNS has published it → `lookup ...: no such host` → CrashLoopBackOff, made worse by CoreDNS negative-cache TTL. It clears on its own in ~6–8 min. **This is expected; do not drop `networking.tcp` to "fix" it** — a public arctic-1 validator needs the NLB.
 
-**2. Deploy clean — never blow-away-and-recreate a running chain's SND.** This bit the dry-run's genesis chain, whose nodes use **controller-generated** `node_key.json`: recreating the SND regenerates those keys per pod, but peers keep the *old* NodeIDs in `persistent_peers` → every P2P dial is rejected (`peer NodeID = X, want Y`) and the chain wedges (never produces a block). A fresh deploy resolves and writes the correct NodeIDs into `persistent_peers` the first time. **For *this* BYO validator the NodeID is pinned by the `nodeKey` Secret and is stable across recreation** — so its NodeID won't churn, but recreation is still hazardous for a different reason: finding 3 (it destroys the data PVC). Bottom line: don't recreate a running validator's SND; if you must replace, do it clean.
+**2. Deploy clean — never blow-away-and-recreate a running chain's SeiNetwork.** This bit the dry-run's genesis chain, whose nodes use **controller-generated** `node_key.json`: recreating the SeiNetwork regenerates those keys per pod, but peers keep the *old* NodeIDs in `persistent_peers` → every P2P dial is rejected (`peer NodeID = X, want Y`) and the chain wedges (never produces a block). A fresh deploy resolves and writes the correct NodeIDs into `persistent_peers` the first time. **For *this* BYO validator the NodeID is pinned by the `nodeKey` Secret and is stable across recreation** — so its NodeID won't churn, but recreation is still hazardous for a different reason: finding 3 (it destroys the data PVC). Bottom line: don't recreate a running validator's SeiNetwork; if you must replace, do it clean.
 
-**3. Deleting the SeiNode destroys the data PVC.** A `Failed` SeiNode does **not** self-heal from a spec edit — the controller treats `Failed` as terminal and emits "Delete and recreate the resource to retry", so the only way to replan is to delete the SeiNode. But the data PVC carries a controller ownerRef **directly to the SeiNode** (the SeiNode owns the StatefulSet→Pod *and* the PVC in parallel — the PVC is **not** a StatefulSet `volumeClaimTemplate`, so it is not protected by the STS's `WhenDeleted=Retain`). Deleting the SeiNode therefore GC-deletes the PVC, destroying chain state and forcing a full re-sync. The **consensus identity survives** (it's in the Secrets), so the validator comes back as itself — but budget for the resync. Note the scope of `deletionPolicy: Retain`: it governs the **SND→child** cascade only — it protects the PVC when the *SND* is deleted, but a manual `kubectl delete seinode <child>` (the delete-to-replan action) still GC-deletes the PVC via the SeiNode ownerRef regardless.
+**3. Deleting the SeiNode destroys the data PVC.** A `Failed` SeiNode does **not** self-heal from a spec edit — the controller treats `Failed` as terminal and emits "Delete and recreate the resource to retry", so the only way to replan is to delete the SeiNode. But the data PVC carries a controller ownerRef **directly to the SeiNode** (the SeiNode owns the StatefulSet→Pod *and* the PVC in parallel — the PVC is **not** a StatefulSet `volumeClaimTemplate`, so it is not protected by the STS's `WhenDeleted=Retain`). Deleting the SeiNode therefore GC-deletes the PVC, destroying chain state and forcing a full re-sync. The **consensus identity survives** (it's in the Secrets), so the validator comes back as itself — but budget for the resync. Note the scope of `deletionPolicy: Retain`: it governs the **SeiNetwork→child** cascade only — it protects the PVC when the *SeiNetwork* is deleted, but a manual `kubectl delete seinode <child>` (the delete-to-replan action) still GC-deletes the PVC via the SeiNode ownerRef regardless.
 
 **4. Controller operatorKeyring guard (fixed).** Pre-`5d03f33`, the *update* plan (`buildRunningPlan`) validated `operatorKeyring` unconditionally, so a no-operatorKeyring validator failed its first image/sidecar bump with `validate-operator-keyring: secretName is empty` (the node ran and signed fine; the controller reconcile wedged at the gate, blocking mark-ready and future updates). Fixed in sei-k8s-controller#380; ensure the cluster runs ≥ `5d03f33` (§3) before migrating.
 
@@ -331,7 +331,7 @@ Never run step 2 before step 1 is confirmed. After step 5 (key shredded on the h
 - [ ] Controller image ≥ `5d03f33` on the target cluster (§3).
 - [ ] `write_mode` override matches the seid image (§6.0).
 - [ ] BYO Secrets committed SOPS-encrypted; decrypt round-trips; no plaintext in git (§2).
-- [ ] SND staged but **not** reconciling (paused or out of kustomization) (§5.1).
+- [ ] SeiNetwork staged but **not** reconciling (paused or out of kustomization) (§5.1).
 - [ ] `replicas: 1` (the CEL guard enforces this, but verify) (§4).
 - [ ] sei-infra removal PR staged with the `nodeStartId` pin (so remaining validators don't reindex).
 - [ ] Legacy `seid` will be **disabled**, not just stopped (§4).
@@ -341,7 +341,7 @@ Never run step 2 before step 1 is confirmed. After step 5 (key shredded on the h
 
 ## References
 
-- Migration PR / SND: `sei-protocol/platform#816` (arctic-1 node-19).
+- Migration PR / SeiNetwork: `sei-protocol/platform#816` (arctic-1 node-19).
 - Umbrella issue: `sei-protocol/platform#801` (migrate all arctic-1 nodes onto K8s).
 - Legacy removal: `sei-protocol/sei-infra#1034` (node-19 removal + `nodeStartId` pin).
 - Controller fix: `sei-protocol/sei-k8s-controller#380` (operatorKeyring guard), shipped via `sei-protocol/platform#826` (image `5d03f33`).

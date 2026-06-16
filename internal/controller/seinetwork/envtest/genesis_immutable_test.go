@@ -107,13 +107,15 @@ func TestGenesis_ImmutabilityGate(t *testing.T) {
 
 	t.Run("same-content update is allowed", func(t *testing.T) {
 		g := NewWithT(t)
-		// Touching an unrelated field forces a write while genesis stays the
-		// same — confirms the CEL rule passes value-equality checks.
+		// Touching a mutable field forces a write while genesis stays the
+		// same — confirms the CEL rule passes value-equality checks. Uses
+		// spec.paused (mutable); replicas and dataVolume are themselves
+		// immutable now, so they can't serve as the "unrelated write" here.
 		err := updateNetworkWithRetry(t, key, func(cur *seiv1alpha1.SeiNetwork) {
-			cur.Spec.Replicas = 2
+			cur.Spec.Paused = true
 		})
 		g.Expect(err).NotTo(HaveOccurred(),
-			"editing non-genesis fields must still succeed while genesis is unchanged")
+			"editing non-genesis mutable fields must still succeed while genesis is unchanged")
 	})
 }
 

@@ -1,6 +1,6 @@
-# Reference 4-validator SeiNodeDeployment that the major-upgrade Workflow
+# Reference 4-validator SeiNetwork that the major-upgrade Workflow
 # can target. NOT a production manifest -- intended for ephemeral harbor
-# dev cluster testnets. Adjust .spec.template.spec.image and chainId to
+# dev cluster testnets. Adjust .spec.image and genesis.chainId to
 # match the upgrade you are exercising.
 #
 # After apply, wait for status.replicas==status.readyReplicas==4 and all
@@ -17,21 +17,17 @@ metadata:
     sei.io/scenario: major-upgrade
 ---
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: majorupgrade
   namespace: majorupgrade
 spec:
   replicas: 4
+  # PRE_UPGRADE image -- bump in lockstep with $SEI_PRE_UPGRADE_IMG in
+  # the Workflow apply step.
+  image: ghcr.io/sei-protocol/sei:v6.3.0
   genesis:
     chainId: majorupgrade-1
     stakingAmount: "10000000usei"
-  template:
-    spec:
-      chainId: majorupgrade-1
-      # PRE_UPGRADE image -- bump in lockstep with $SEI_PRE_UPGRADE_IMG in
-      # the Workflow apply step.
-      image: ghcr.io/sei-protocol/sei:v6.3.0
-      validator: {}
-      sidecar:
-        image: ghcr.io/sei-protocol/seictl:v0.0.29
+  sidecar:
+    image: ghcr.io/sei-protocol/seictl:v0.0.29
