@@ -26,7 +26,16 @@ const (
 // waitFor polls cond every pollInterval up to pollTimeout.
 func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
-	deadline := time.Now().Add(pollTimeout)
+	waitForWithin(t, pollTimeout, cond, msg)
+}
+
+// waitForWithin is waitFor with an explicit timeout, for waits whose
+// convergence chain is known to exceed the shared pollTimeout (e.g. the
+// genesis ceremony + initial boot + the child NodeUpdate plan that
+// backfills status.currentImage — see convergeTimeout).
+func waitForWithin(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
@@ -37,13 +46,20 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 		case <-time.After(pollInterval):
 		}
 	}
-	t.Fatalf("timeout after %s waiting for: %s", pollTimeout, msg)
+	t.Fatalf("timeout after %s waiting for: %s", timeout, msg)
 }
 
 // waitForStatus polls until the SeiNetwork identified by key satisfies predicate.
 func waitForStatus(t *testing.T, key client.ObjectKey, predicate func(*seiv1alpha1.SeiNetwork) bool, msg string) {
 	t.Helper()
-	waitFor(t, func() bool {
+	waitForStatusWithin(t, pollTimeout, key, predicate, msg)
+}
+
+// waitForStatusWithin is waitForStatus with an explicit timeout, for status
+// predicates whose convergence chain exceeds the shared pollTimeout.
+func waitForStatusWithin(t *testing.T, timeout time.Duration, key client.ObjectKey, predicate func(*seiv1alpha1.SeiNetwork) bool, msg string) {
+	t.Helper()
+	waitForWithin(t, timeout, func() bool {
 		network := &seiv1alpha1.SeiNetwork{}
 		if err := testCli.Get(testCtx, key, network); err != nil {
 			if apierrors.IsNotFound(err) {

@@ -57,7 +57,7 @@ func ExitReasonFor(err error) ExitReason {
 }
 
 // RoleScoped prefixes a key with an upper-cased role tag so scenarios with
-// multiple SNDs (validator + rpc) write disjoint workflow-vars keys.
+// multiple SeiNetworks (validator + rpc) write disjoint workflow-vars keys.
 // RoleScoped("validator", KeyTendermintRPC) → "VALIDATOR_TM_RPC".
 func RoleScoped(role string, key VarKey) VarKey {
 	return VarKey(strings.ToUpper(role) + "_" + string(key))

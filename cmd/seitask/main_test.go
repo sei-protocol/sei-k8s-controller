@@ -6,12 +6,12 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// TestTaskScheme_RoundTripsSND would have caught the first manual fire's
+// TestTaskScheme_RoundTripsSeiNetwork would have caught the first manual fire's
 // `no kind is registered for the type v1alpha1.SeiNetwork in scheme`
 // regression at `go test`, not at first cluster fire. Asserts the
 // package-level taskScheme has every type provision-snd / keygen /
 // upload-report constructs via typed Get/Create.
-func TestTaskScheme_RoundTripsSND(t *testing.T) {
+func TestTaskScheme_RoundTripsSeiNetwork(t *testing.T) {
 	gvks, _, err := taskScheme.ObjectKinds(&seiv1alpha1.SeiNetwork{})
 	if err != nil {
 		t.Fatalf("SeiNetwork not registered in taskScheme: %v", err)

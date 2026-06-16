@@ -137,8 +137,9 @@ func setNodesReadyCondition(network *seiv1alpha1.SeiNetwork, ready, desired int3
 }
 
 // ReasonNotStarted is the seed reason for always-present lifecycle
-// conditions before any transition has occurred. Shared across
-// PlanInProgress, RolloutInProgress, and GenesisCeremonyComplete.
+// conditions before any transition has occurred. Used by PlanInProgress
+// and GenesisCeremonyComplete. NodesReady seeds Pending and
+// RolloutInProgress seeds AllUpToDate instead.
 const ReasonNotStarted = "NotStarted"
 
 // seedAlwaysPresentConditions stamps the seeded always-present conditions so

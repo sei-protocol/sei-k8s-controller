@@ -16,14 +16,14 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/seinetwork/envtest/fixtures"
 )
 
-// TestSND_Paused_PropagatesAndBlocksOrchestration asserts:
+// TestSeiNetwork_Paused_PropagatesAndBlocksOrchestration asserts:
 //  1. spec.paused=true sets ConditionPaused=True and Status.Phase=Paused.
 //  2. Paused state propagates to every owned child SeiNode.
 //  3. An image change applied while paused does not propagate to children's
 //     spec (reconcileSeiNodes short-circuits while paused).
 //  4. Clearing spec.paused propagates back to children and the deferred
 //     image change propagates in-place to convergence.
-func TestSND_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
+func TestSeiNetwork_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 

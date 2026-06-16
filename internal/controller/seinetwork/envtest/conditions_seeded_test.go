@@ -43,7 +43,15 @@ func TestNetwork_AlwaysPresentConditionsSeededOnFirstReconcile(t *testing.T) {
 	// network reaches steady state (every child reports spec.image). It may
 	// transiently read True/ImageRolling while children are mid-genesis, so
 	// wait for the steady value rather than sampling immediately.
-	waitForStatus(t, client.ObjectKeyFromObject(network), func(n *seiv1alpha1.SeiNetwork) bool {
+	//
+	// Settling requires every child's status.currentImage to converge to the
+	// network image, which is only stamped by the child NodeUpdate plan's
+	// observe-image task — the init plan does not set currentImage. That chain
+	// (genesis ceremony + initial boot + NodeUpdate backfill, each task gated
+	// on the STS faker at a 5s TaskPollInterval) exceeds the shared 30s
+	// pollTimeout under CI load, so this wait uses convergeTimeout like the
+	// identical convergence in TestImageUpdate_DerivedProjection.
+	waitForStatusWithin(t, convergeTimeout, client.ObjectKeyFromObject(network), func(n *seiv1alpha1.SeiNetwork) bool {
 		c := findCondition(n, seiv1alpha1.ConditionRolloutInProgress)
 		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == reasonAllUpToDate
 	}, "RolloutInProgress settles to False/AllUpToDate at steady state")
