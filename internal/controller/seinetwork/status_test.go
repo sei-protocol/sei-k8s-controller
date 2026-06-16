@@ -1,6 +1,7 @@
 package seinetwork
 
 import (
+	"context"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -76,6 +77,53 @@ func TestComputeGroupPhase_PlanInProgress_Genesis(t *testing.T) {
 	nodes := makeNodes(3, seiv1alpha1.PhasePending)
 	phase := computeGroupPhase(network, 0, 3, nodes)
 	g.Expect(phase).To(Equal(seiv1alpha1.GroupPhaseInitializing))
+}
+
+// A latched CeremonyFailed condition drives GroupPhaseFailed even when the
+// child snapshot would otherwise resolve to a non-failed phase (here: no
+// children → Pending). This is what keeps a failed genesis ceremony visible
+// after updateStatus recomputes the phase.
+func TestComputeGroupPhase_CeremonyFailed_OverridesChildDerivedPhase(t *testing.T) {
+	g := NewWithT(t)
+	network := emptyNetwork()
+	setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+		"CeremonyFailed", "genesis ceremony plan failed")
+	// No children — child-derived logic alone would return Pending.
+	phase := computeGroupPhase(network, 0, 3, nil)
+	g.Expect(phase).To(Equal(seiv1alpha1.GroupPhaseFailed))
+}
+
+// Regression for "Failed plan phase overwritten": failPlan records the failure
+// on a condition, then both the per-reconcile condition seed
+// (seedAlwaysPresentConditions) AND the phase recomputation
+// (computeGroupPhase, as run by updateStatus) must preserve it. Before the fix
+// failPlan wrote Status.Phase=Degraded directly, which updateStatus clobbered
+// back to Pending, masking the failure.
+func TestFailedCeremony_SurfacesFailedPhase_AcrossUpdateStatus(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanFailed}
+	setPlanInProgress(network, "Genesis", "assembling")
+
+	r := newPlanTestReconciler(t, network)
+
+	// Reconcile N: plan fails.
+	r.failPlan(ctx, network)
+
+	// Reconcile N+1 begins with the condition seed running first.
+	r.seedAlwaysPresentConditions(network)
+	genesisCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete)
+	g.Expect(genesisCond).NotTo(BeNil())
+	g.Expect(genesisCond.Reason).To(Equal("CeremonyFailed"),
+		"the seed must not reset a latched CeremonyFailed back to NotStarted")
+
+	// updateStatus recomputes the phase from the (no) children — it must
+	// still surface Failed, driven by the latched condition.
+	phase := computeGroupPhase(network, 0, network.Spec.Replicas, nil)
+	g.Expect(phase).To(Equal(seiv1alpha1.GroupPhaseFailed),
+		"a failed genesis ceremony must surface GroupPhaseFailed, not be masked by the child-derived phase")
 }
 
 func makeNodes(n int, phase seiv1alpha1.SeiNodePhase) []seiv1alpha1.SeiNode {

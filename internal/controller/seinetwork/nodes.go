@@ -73,12 +73,20 @@ func (r *SeiNetworkReconciler) syncPausedToChildren(ctx context.Context, network
 // setGenesisCeremonyCondition stamps ConditionGenesisCeremonyComplete
 // with the network's current genesis lifecycle state:
 //
-//   - True / Complete    — ceremony finished (latched)
-//   - False / InProgress — ceremony executing under an active plan
-//   - False / NotStarted — ceremony not yet started
+//   - True  / Complete       — ceremony finished (latched)
+//   - False / InProgress     — ceremony executing under an active plan
+//   - False / CeremonyFailed — last ceremony plan failed; resting between
+//     failure and the auto-retry plan (set by failPlan, sticky until the
+//     retry plan starts and PlanInProgress flips back to True)
+//   - False / NotStarted     — ceremony not yet started
 //
 // Every SeiNetwork runs the ceremony (genesis is required), so there is no
-// NotApplicable branch. The latch check runs first.
+// NotApplicable branch. Order matters: Complete latches; an active plan (the
+// auto-retry) supersedes a prior CeremonyFailed so the condition tracks the
+// live attempt rather than lying about a stale failure; CeremonyFailed is
+// otherwise sticky so the failure survives the per-reconcile seed in the
+// window before the retry plan is built (it must not silently reset to
+// NotStarted, which is indistinguishable from "never ran").
 func (r *SeiNetworkReconciler) setGenesisCeremonyCondition(network *seiv1alpha1.SeiNetwork) {
 	if hasConditionTrue(network, seiv1alpha1.ConditionGenesisCeremonyComplete) {
 		return
@@ -86,6 +94,9 @@ func (r *SeiNetworkReconciler) setGenesisCeremonyCondition(network *seiv1alpha1.
 	if hasConditionTrue(network, seiv1alpha1.ConditionPlanInProgress) {
 		setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
 			"InProgress", "genesis ceremony is executing under an active plan")
+		return
+	}
+	if hasConditionReason(network, seiv1alpha1.ConditionGenesisCeremonyComplete, "CeremonyFailed") {
 		return
 	}
 	setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,

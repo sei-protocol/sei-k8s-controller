@@ -81,6 +81,14 @@ func computeGroupPhase(network *seiv1alpha1.SeiNetwork, ready, desired int32, no
 	if hasConditionTrue(network, seiv1alpha1.ConditionPlanInProgress) {
 		return seiv1alpha1.GroupPhaseInitializing
 	}
+	// A failed genesis ceremony is terminal for the network: failPlan latches
+	// GenesisCeremonyComplete=False/CeremonyFailed. Honor it here so the
+	// failure surfaces as GroupPhaseFailed instead of being masked by the
+	// child-derived phase below (a ceremony failure typically leaves no/healthy
+	// children, which would otherwise resolve to Pending/Initializing).
+	if hasConditionReason(network, seiv1alpha1.ConditionGenesisCeremonyComplete, "CeremonyFailed") {
+		return seiv1alpha1.GroupPhaseFailed
+	}
 
 	if len(nodes) == 0 {
 		return seiv1alpha1.GroupPhasePending
@@ -201,6 +209,14 @@ func seedConditionIfAbsent(network *seiv1alpha1.SeiNetwork, condType, reason, me
 func hasConditionTrue(network *seiv1alpha1.SeiNetwork, condType string) bool { //nolint:unparam // general-purpose utility
 	c := apimeta.FindStatusCondition(network.Status.Conditions, condType)
 	return c != nil && c.Status == metav1.ConditionTrue
+}
+
+// hasConditionReason reports whether the named condition is present with the
+// given Reason, regardless of Status. Used to recognize the latched
+// CeremonyFailed state when deriving the group phase.
+func hasConditionReason(network *seiv1alpha1.SeiNetwork, condType, reason string) bool {
+	c := apimeta.FindStatusCondition(network.Status.Conditions, condType)
+	return c != nil && c.Reason == reason
 }
 
 func setCondition(network *seiv1alpha1.SeiNetwork, condType string, status metav1.ConditionStatus, reason, message string) {

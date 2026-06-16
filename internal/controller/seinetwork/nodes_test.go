@@ -264,15 +264,29 @@ func TestSetGenesisCeremonyCondition(t *testing.T) {
 			wantReason: ReasonNotStarted,
 		},
 		{
-			// Post-failPlan: PlanInProgress=False, no latched Complete.
-			// The next reconcile must drop back to NotStarted so retries
-			// can proceed.
-			name: "plan failed returns to False/NotStarted",
+			// Resting state after failPlan: PlanInProgress=False and the
+			// genesis condition carries CeremonyFailed. The seed must keep it
+			// sticky (not reset to NotStarted) so the failure stays visible
+			// until the auto-retry plan starts.
+			name: "CeremonyFailed is sticky while no plan is active",
 			mutate: func(n *seiv1alpha1.SeiNetwork) {
 				setCondition(n, seiv1alpha1.ConditionPlanInProgress, metav1.ConditionFalse, "PlanFailed", "previous attempt failed")
+				setCondition(n, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse, "CeremonyFailed", "genesis ceremony plan failed")
 			},
 			wantStatus: metav1.ConditionFalse,
-			wantReason: ReasonNotStarted,
+			wantReason: "CeremonyFailed",
+		},
+		{
+			// The auto-retry plan supersedes a prior CeremonyFailed: an active
+			// plan moves the condition to InProgress so it tracks the live
+			// attempt rather than lying about the stale failure.
+			name: "active retry plan supersedes CeremonyFailed with InProgress",
+			mutate: func(n *seiv1alpha1.SeiNetwork) {
+				setCondition(n, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse, "CeremonyFailed", "genesis ceremony plan failed")
+				setCondition(n, seiv1alpha1.ConditionPlanInProgress, metav1.ConditionTrue, "PlanStarted", "retry")
+			},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: "InProgress",
 		},
 	}
 	for _, tc := range cases {

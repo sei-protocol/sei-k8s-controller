@@ -87,11 +87,20 @@ func (r *SeiNetworkReconciler) completePlan(ctx context.Context, network *seiv1a
 	logger.Info("plan completed")
 }
 
-// failPlan handles a failed plan. All mutations are in-memory.
+// failPlan handles a failed plan. Every SeiNetwork runs exactly one
+// network-level plan — the genesis ceremony — so a failing plan is the
+// ceremony failing. The failure is recorded on GenesisCeremonyComplete
+// (False/CeremonyFailed), a stable condition that survives the per-reconcile
+// phase recomputation in computeGroupPhase; the phase itself is derived from
+// that condition (GroupPhaseFailed) rather than written here, since
+// updateStatus recomputes Status.Phase later in the same reconcile. All
+// mutations are in-memory.
 func (r *SeiNetworkReconciler) failPlan(ctx context.Context, network *seiv1alpha1.SeiNetwork) {
 	logger := log.FromContext(ctx)
 
-	network.Status.Phase = seiv1alpha1.GroupPhaseDegraded
+	setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+		"CeremonyFailed", "genesis ceremony plan failed")
+
 	network.Status.Plan = nil
 	clearPlanInProgress(network, "PlanFailed", "Plan failed")
 

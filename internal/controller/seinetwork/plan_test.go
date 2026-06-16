@@ -31,9 +31,12 @@ func TestCompletePlan_GenesisCeremony_LatchesComplete(t *testing.T) {
 	g.Expect(network.Status.Plan).To(BeNil())
 }
 
-// A failed ceremony plan marks the network Degraded, clears the plan, and
-// drops PlanInProgress to False.
-func TestFailPlan_DegradesAndClearsPlan(t *testing.T) {
+// A failed ceremony plan latches GenesisCeremonyComplete=False/CeremonyFailed,
+// clears the plan, and drops PlanInProgress to False. The phase is NOT written
+// here — it is derived from the condition by computeGroupPhase (see
+// TestFailedCeremony_SurfacesFailedPhase_AcrossUpdateStatus) so it survives the
+// per-reconcile phase recomputation.
+func TestFailPlan_LatchesCeremonyFailedAndClearsPlan(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
@@ -46,7 +49,11 @@ func TestFailPlan_DegradesAndClearsPlan(t *testing.T) {
 	r.failPlan(ctx, network)
 
 	g.Expect(network.Status.Plan).To(BeNil())
-	g.Expect(network.Status.Phase).To(Equal(seiv1alpha1.GroupPhaseDegraded))
+
+	genesisCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete)
+	g.Expect(genesisCond).NotTo(BeNil())
+	g.Expect(genesisCond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(genesisCond.Reason).To(Equal("CeremonyFailed"))
 
 	planCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
 	g.Expect(planCond).NotTo(BeNil())
