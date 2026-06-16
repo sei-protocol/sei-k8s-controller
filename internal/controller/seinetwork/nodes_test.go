@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -38,6 +40,9 @@ func TestGenerateSeiNode_SystemLabels(t *testing.T) {
 	g.Expect(node.Labels).To(HaveKeyWithValue(seinetworkLabel, testNetworkName))
 	g.Expect(node.Labels).To(HaveKeyWithValue(seinetworkOrdinalLabel, "1"))
 	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, testNamespace))
+	// A SeiNetwork is always a validator pool, so the dropped-template
+	// sei.io/role is restamped here for role-filtering GitOps/selectors.
+	g.Expect(node.Labels).To(HaveKeyWithValue(roleLabel, roleValidator))
 }
 
 // The reserved group/ordinal pod labels are controller-owned and
@@ -175,6 +180,37 @@ func TestEnsureSeiNode_PropagatesImage(t *testing.T) {
 	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}
 	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
 	g.Expect(child.Spec.Image).To(Equal(newImage))
+}
+
+// Editing spec.sidecar.resources on a live network must propagate the WHOLE
+// Sidecar struct (not just image/port) to the existing child every reconcile,
+// so a sidecar resource bump reaches children.
+func TestEnsureSeiNode_PropagatesSidecarResources(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork("syncer", testNamespace)
+	r := newPlanTestReconciler(t, network)
+
+	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
+
+	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}
+	child := &seiv1alpha1.SeiNode{}
+	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
+	g.Expect(child.Spec.Sidecar).NotTo(BeNil())
+	g.Expect(child.Spec.Sidecar.Resources).To(BeNil(), "no resources set at create")
+
+	network.Spec.Sidecar.Resources = &corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
+	}
+	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
+
+	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
+	g.Expect(child.Spec.Sidecar.Resources).NotTo(BeNil(),
+		"a spec.sidecar.resources change must propagate to the child")
+	g.Expect(child.Spec.Sidecar.Resources.Requests.Memory().String()).To(Equal("256Mi"))
+	g.Expect(child.Spec.Sidecar.Resources.Limits.Memory().String()).To(Equal("512Mi"))
 }
 
 // generateSeiNode must not alias the network's ConfigOverrides map into the

@@ -22,7 +22,15 @@ const (
 	seinetworkLabel        = "sei.io/seinetwork"
 	seinetworkOrdinalLabel = "sei.io/seinetwork-ordinal"
 
-	chainLabel          = "sei.io/chain"
+	chainLabel = "sei.io/chain"
+	// roleLabel is the observability/selection identity the dropped
+	// SeiNodeTemplate used to carry. A SeiNetwork is always a validator
+	// pool, so children are stamped role=validator here — matching the
+	// pod-template sei.io/role the SeiNode controller derives — so GitOps
+	// and selectors that filter SeiNodes by role still resolve.
+	roleLabel     = "sei.io/role"
+	roleValidator = "validator"
+
 	managedByAnnotation = "sei.io/managed-by"
 )
 
@@ -40,18 +48,20 @@ func groupSelector(network *seiv1alpha1.SeiNetwork) map[string]string {
 }
 
 // seiNodeLabels builds the metadata labels for a child SeiNode. The reserved
-// group/ordinal/chain labels are controller-owned and authoritative. Both the
-// frozen nodedeployment keys and the canonical seinetwork keys are stamped
+// group/ordinal/chain/role labels are controller-owned and authoritative. Both
+// the frozen nodedeployment keys and the canonical seinetwork keys are stamped
 // here so every controller-managed sei.io/* group label has a single
-// authoritative origin.
+// authoritative origin. sei.io/role=validator records the pool's fixed role
+// (every SeiNetwork is a validator pool).
 func seiNodeLabels(network *seiv1alpha1.SeiNetwork, ordinal int) map[string]string {
 	ord := strconv.Itoa(ordinal)
-	labels := make(map[string]string, 5)
+	labels := make(map[string]string, 6)
 	labels[groupLabel] = network.Name
 	labels[groupOrdinalLabel] = ord
 	labels[seinetworkLabel] = network.Name
 	labels[seinetworkOrdinalLabel] = ord
 	labels[chainLabel] = network.Spec.Genesis.ChainID
+	labels[roleLabel] = roleValidator
 	return labels
 }
 

@@ -6,6 +6,7 @@ import (
 	"maps"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -139,12 +140,10 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 		existing.Spec.Image = desired.Spec.Image
 		updated = true
 	}
-	if desired.Spec.Sidecar == nil && existing.Spec.Sidecar != nil {
-		existing.Spec.Sidecar = nil
-		updated = true
-	} else if desired.Spec.Sidecar != nil && (existing.Spec.Sidecar == nil ||
-		existing.Spec.Sidecar.Image != desired.Spec.Sidecar.Image ||
-		existing.Spec.Sidecar.Port != desired.Spec.Sidecar.Port) {
+	// Sync the whole Sidecar struct (image, port, AND resources) so any
+	// spec.sidecar change propagates to children. Semantic.DeepEqual compares
+	// resource.Quantity by value, not by its unexported internal repr.
+	if !equality.Semantic.DeepEqual(existing.Spec.Sidecar, desired.Spec.Sidecar) {
 		existing.Spec.Sidecar = desired.Spec.Sidecar
 		updated = true
 	}

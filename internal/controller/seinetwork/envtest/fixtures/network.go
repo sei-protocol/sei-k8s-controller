@@ -70,6 +70,13 @@ func WithConfigOverrides(overrides map[string]string) Option {
 	}
 }
 
+// WithSidecar sets spec.sidecar.
+func WithSidecar(sidecar *seiv1alpha1.SidecarConfig) Option {
+	return func(network *seiv1alpha1.SeiNetwork) {
+		network.Spec.Sidecar = sidecar
+	}
+}
+
 // WithDataVolumeImport sets spec.dataVolume to import a pre-existing PVC.
 func WithDataVolumeImport(pvcName string) Option {
 	return func(network *seiv1alpha1.SeiNetwork) {
