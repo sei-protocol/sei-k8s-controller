@@ -96,8 +96,8 @@ func (r *SeiNetworkReconciler) setGenesisCeremonyCondition(network *seiv1alpha1.
 
 // detectDeploymentNeeded checks if deployment-worthy fields have changed
 // by comparing the current template hash against the stored hash. Only
-// fields that require new nodes (image, chainId) are hashed; sidecar,
-// overrides, and replica changes propagate in-place.
+// fields that require new nodes (chainId, image, sidecar image) are hashed;
+// overrides and replica changes propagate in-place.
 func (r *SeiNetworkReconciler) detectDeploymentNeeded(network *seiv1alpha1.SeiNetwork) {
 	if network.Status.TemplateHash == "" {
 		return // first reconcile, no baseline to compare against
@@ -207,15 +207,18 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 		existing.Spec.PodLabels = desired.Spec.PodLabels
 		updated = true
 	}
-	// Peers are controller-owned: the genesis ceremony's collect-and-set-peers
-	// task patches each child's Spec.Peers with the assembled validator set
-	// (a StaticPeerSource). generateSeiNode emits empty peers at create, so
-	// reconcile must NOT sync Peers here — doing so would clobber the
-	// ceremony's writes every loop. They are deliberately left untouched.
 	if !maps.Equal(existing.Spec.Overrides, desired.Spec.Overrides) {
 		existing.Spec.Overrides = desired.Spec.Overrides
 		updated = true
 	}
+	// No identity / Peers / DataVolume sync below — deliberate, all create-time only:
+	//   - Peers are controller-owned: the genesis ceremony's collect-and-set-peers
+	//     task patches each child's Spec.Peers with the assembled validator set
+	//     (a StaticPeerSource). generateSeiNode emits empty peers at create, so
+	//     syncing here would clobber the ceremony's writes every loop.
+	//   - DataVolume backs a StatefulSet volumeClaimTemplate, which is immutable
+	//     post-create; a post-create spec.dataVolume edit cannot take effect, so
+	//     we do not attempt to sync it.
 	if updated {
 		return r.Update(ctx, existing)
 	}
@@ -243,7 +246,7 @@ func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.
 	spec := seiv1alpha1.SeiNodeSpec{
 		ChainID:    gc.ChainID,
 		Image:      network.Spec.Image,
-		Overrides:  network.Spec.ConfigOverrides,
+		Overrides:  maps.Clone(network.Spec.ConfigOverrides),
 		Sidecar:    network.Spec.Sidecar.DeepCopy(),
 		DataVolume: network.Spec.DataVolume.DeepCopy(),
 		PodLabels:  podLabels,

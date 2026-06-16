@@ -3,8 +3,7 @@
 # SeiNetwork bootstraps a genesis validator pool only. An rpc fleet joining an
 # existing chain becomes standalone SeiNode CRs + hand-rolled GitOps networking,
 # orchestrated by the seictl/harbor-dev skills. Until that flow lands, this file
-# renders as a minimal scoped SeiNetwork so the bench harness keeps building;
-# its follower semantics (fullNode, peers) are intentionally dropped.
+# renders as a minimal scoped SeiNetwork so the bench harness keeps building.
 apiVersion: sei.io/v1alpha1
 kind: SeiNetwork
 metadata:

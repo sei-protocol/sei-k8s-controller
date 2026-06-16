@@ -199,10 +199,15 @@ func TestGenerateSeiNode_OverridesNotAliased(t *testing.T) {
 	network.Spec.ConfigOverrides = map[string]string{testOverrideKey: testOverrideVal}
 
 	node := generateSeiNode(network, 0)
-	node.Spec.Overrides = map[string]string{testOverrideKey: testOverrideVal, "modified": "true"}
+	// Mutate the returned child map in place. If the child aliased the parent
+	// map, this write would surface on network.Spec.ConfigOverrides.
+	node.Spec.Overrides["modified"] = "true"
+	node.Spec.Overrides[testOverrideKey] = "mutated"
 
 	g.Expect(network.Spec.ConfigOverrides).NotTo(HaveKey("modified"),
-		"reassigning the generated child's overrides must not mutate the network spec")
+		"writing a new key into the child's overrides must not write through to the network spec")
+	g.Expect(network.Spec.ConfigOverrides).To(HaveKeyWithValue(testOverrideKey, testOverrideVal),
+		"overwriting an existing key in the child's overrides must not mutate the network spec")
 }
 
 // setGenesisCeremonyCondition has no NotApplicable branch: every SeiNetwork

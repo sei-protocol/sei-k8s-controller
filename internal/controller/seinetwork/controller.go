@@ -129,7 +129,7 @@ func (r *SeiNetworkReconciler) handleDeletion(ctx context.Context, network *seiv
 
 	policy := network.Spec.DeletionPolicy
 	if policy == "" {
-		policy = seiv1alpha1.DeletionPolicyRetain // matches CRD default
+		policy = seiv1alpha1.DeletionPolicyRetain // kubebuilder default is Retain; keep in sync
 	}
 
 	if policy == seiv1alpha1.DeletionPolicyRetain {
