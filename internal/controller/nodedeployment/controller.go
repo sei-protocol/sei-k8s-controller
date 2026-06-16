@@ -106,9 +106,9 @@ func (r *SeiNodeDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// External networking is GitOps-managed when orphaned: strip owner-refs
-	// (idempotent) and stop applying. ExternalAddress for children still flows
-	// through reconcileSeiNodes below, so the DNS-resolvability gate is skipped
-	// rather than allowed to short-circuit it.
+	// (idempotent) and stop applying. The children's ExternalAddress is
+	// preserved (not recomputed) while orphaned — see ensureSeiNode — so the
+	// node keeps advertising its P2P address after spec.networking is removed.
 	if networkingOrphaned(group) {
 		if err := r.orphanNetworkingResources(ctx, group); err != nil {
 			logger.Error(err, "orphaning networking resources")

@@ -223,7 +223,13 @@ func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *
 		existing.Spec.Peers = desired.Spec.Peers
 		updated = true
 	}
-	if existing.Spec.ExternalAddress != desired.Spec.ExternalAddress {
+	// Once networking is orphaned (handed to GitOps), stop managing
+	// ExternalAddress: preserve whatever is on the SeiNode rather than
+	// recomputing it from spec.networking. Removing spec.networking flips
+	// TCPEnabled() false, which would otherwise clear the publishable P2P
+	// address and stop the node advertising it. Un-orphaning resumes
+	// recomputation — restore spec.networking too, or it recomputes to "".
+	if !networkingOrphaned(group) && existing.Spec.ExternalAddress != desired.Spec.ExternalAddress {
 		existing.Spec.ExternalAddress = desired.Spec.ExternalAddress
 		updated = true
 	}
@@ -278,7 +284,10 @@ func generateSeiNode(group *seiv1alpha1.SeiNodeDeployment, ordinal int) *seiv1al
 }
 
 // p2pEndpointAddressForChild returns the vanity host:port when the
-// SND opts into TCP networking, "" otherwise.
+// SND opts into TCP networking, "" otherwise — including for an orphaned
+// group (networking removed). ensureSeiNode preserves the existing value on
+// update while orphaned, but a deleted-and-recreated orphaned child won't
+// re-derive: the operator/GitOps re-pins its ExternalAddress.
 func (r *SeiNodeDeploymentReconciler) p2pEndpointAddressForChild(group *seiv1alpha1.SeiNodeDeployment, ordinal int) string {
 	if !group.Spec.Networking.TCPEnabled() {
 		return ""

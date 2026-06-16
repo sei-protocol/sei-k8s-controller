@@ -263,3 +263,60 @@ func TestNetworking_Delete_SkipsOrphanedObjects(t *testing.T) {
 	}, 2*time.Second, 200*time.Millisecond).Should(BeTrue(),
 		"orphaned external Service + HTTPRoutes survive the controller delete path")
 }
+
+// TestNetworking_Orphaned_PreservesExternalAddressAfterNetworkingRemoved is the
+// regression guard for the Step-C ExternalAddress trap. Removing spec.networking
+// flips TCPEnabled() false; without the orphan guard in ensureSeiNode the
+// controller would recompute the child's publishable P2P address to "" and clear
+// it — silently un-advertising the node. Once orphaned, the controller must
+// preserve the address it (or an operator) set, not recompute it.
+func TestNetworking_Orphaned_PreservesExternalAddressAfterNetworkingRemoved(t *testing.T) {
+	g := NewWithT(t)
+	withP2PEndpointDomain(t, p2pEndpointTestDomain)
+	ns := makeNamespace(t)
+
+	// Converge with TCP networking so the controller sets the child's address.
+	snd := fixtures.NewSND(ns, "orphan-extaddr",
+		fixtures.WithReplicas(1),
+		withTCP(),
+	)
+	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
+
+	const chainID = "pacific-1" // fixtures default
+	wantAddr := expectedP2PEndpointAddr(snd.Name, chainID, 0)
+	childKey := types.NamespacedName{Name: snd.Name + "-0", Namespace: ns}
+	waitFor(t, func() bool {
+		child := &seiv1alpha1.SeiNode{}
+		if err := testCli.Get(testCtx, childKey, child); err != nil {
+			return false
+		}
+		return child.Spec.ExternalAddress == wantAddr
+	}, "child has publishable address before orphan")
+
+	// The Step-A + Step-C end state in one edit: orphan AND remove networking.
+	// Removing spec.networking bumps generation, so the reconcile fires promptly.
+	latest := getSND(t, client.ObjectKeyFromObject(snd))
+	patch := client.MergeFrom(latest.DeepCopy())
+	if latest.Annotations == nil {
+		latest.Annotations = map[string]string{}
+	}
+	latest.Annotations[networkingOrphanedAnnotation] = "true"
+	latest.Spec.Networking = nil
+	g.Expect(testCli.Patch(testCtx, latest, patch)).To(Succeed())
+
+	waitForStatus(t, client.ObjectKeyFromObject(snd), func(l *seiv1alpha1.SeiNodeDeployment) bool {
+		c := apimeta.FindStatusCondition(l.Status.Conditions, seiv1alpha1.ConditionNetworkingReady)
+		return c != nil && c.Reason == "NetworkingOrphaned"
+	}, "ConditionNetworkingReady=NetworkingOrphaned after orphan + networking removal")
+
+	// The child's ExternalAddress is PRESERVED, not cleared — across multiple
+	// reconciles — even though spec.networking is gone (TCPEnabled false).
+	g.Consistently(func() string {
+		child := &seiv1alpha1.SeiNode{}
+		if err := testCli.Get(testCtx, childKey, child); err != nil {
+			return ""
+		}
+		return child.Spec.ExternalAddress
+	}, 3*time.Second, 200*time.Millisecond).Should(Equal(wantAddr),
+		"orphaned SND preserves child ExternalAddress after spec.networking removed")
+}
