@@ -36,7 +36,7 @@ func TestCompletePlan_ClearsRolloutInProgress(t *testing.T) {
 				Kind:       testKind,
 				Name:       testNetworkName,
 				UID:        network.UID,
-				Controller: boolPtr(true),
+				Controller: new(true),
 			}},
 		},
 		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning},
@@ -99,7 +99,7 @@ func TestFailPlan_ClearsRolloutInProgress(t *testing.T) {
 		Kind:       testKind,
 		Name:       testNetworkName,
 		UID:        network.UID,
-		Controller: boolPtr(true),
+		Controller: new(true),
 	}
 	childRunning := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{

@@ -214,7 +214,7 @@ func TestOrphanInternalService_RemovesOwnerRef(t *testing.T) {
 				Kind:       testKind,
 				Name:       network.Name,
 				UID:        network.UID,
-				Controller: boolPtr(true),
+				Controller: new(true),
 			}},
 		},
 	}

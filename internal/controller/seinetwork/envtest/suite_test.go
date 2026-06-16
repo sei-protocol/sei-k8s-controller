@@ -29,6 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
 	seinetworkcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/seinetwork"
@@ -117,6 +119,16 @@ func run(m *testing.M) (int, error) {
 	buildStubSC := func() (task.SidecarClient, error) { //nolint:unparam // signature pinned by task.ExecutionConfig field
 		return stubSC, nil
 	}
+	// NewSidecarClient returns the concrete *sidecar.SidecarClient that the
+	// genesis-ceremony collect-and-set-peers task drives for GetNodeID. The
+	// narrow StubSidecarClient can't satisfy the concrete type, so back a real
+	// client with a fake /v0/node-id transport (see envtestpkg.nodeIDDoer).
+	// Without this the ceremony stalls at collect-and-set-peers
+	// ("NewSidecarClient not configured") and the network never reaches Ready.
+	// node arg ignored: the fake transport answers regardless of host.
+	newNodeIDSC := func(_ *seiv1alpha1.SeiNode) (*sidecar.SidecarClient, error) {
+		return envtestpkg.NewNodeIDSidecarClient()
+	}
 
 	// StatefulSet status faker: envtest's apiserver has no StatefulSet
 	// controller, so .Status stays empty and the SeiNode rollout plan cannot
@@ -140,6 +152,7 @@ func run(m *testing.M) (int, error) {
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
 					BuildSidecarClient: buildStubSC,
+					NewSidecarClient:   newNodeIDSC,
 					KubeClient:         kc,
 					APIReader:          mgr.GetAPIReader(),
 					Scheme:             mgr.GetScheme(),
@@ -165,6 +178,7 @@ func run(m *testing.M) (int, error) {
 			ConfigFor: func(_ context.Context, network *seiv1alpha1.SeiNetwork) task.ExecutionConfig {
 				return task.ExecutionConfig{
 					BuildSidecarClient: buildStubSC,
+					NewSidecarClient:   newNodeIDSC,
 					KubeClient:         kc,
 					APIReader:          mgr.GetAPIReader(),
 					Scheme:             mgr.GetScheme(),

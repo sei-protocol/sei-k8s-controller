@@ -71,5 +71,3 @@ func newPlanTestReconciler(t *testing.T, objs ...client.Object) *SeiNetworkRecon
 		Recorder: record.NewFakeRecorder(100),
 	}
 }
-
-func boolPtr(b bool) *bool { return &b }

@@ -7,6 +7,9 @@ package envtest
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,4 +134,52 @@ func (s *StubSidecarClient) SubmittedCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.tasks)
+}
+
+// nodeIDDoer is a sidecar.HttpRequestDoer that answers only the
+// /v0/node-id endpoint with a canned, deterministic identity. It backs
+// the concrete *sidecar.SidecarClient that ExecutionConfig.NewSidecarClient
+// hands out — the path the genesis-ceremony collect-and-set-peers task
+// drives (task.collectAndSetPeersExecution.collectPeers → GetNodeID).
+//
+// The narrow StubSidecarClient satisfies task.SidecarClient (the
+// task-submit/poll/health interface) but cannot stand in for the
+// concrete *sidecar.SidecarClient that GetNodeID-via-NewSidecarClient
+// requires. Faking at the transport layer lets the real client code run
+// while keeping the response deterministic.
+//
+// GetNodeID GETs {baseURL}/v0/node-id and expects {"nodeId":"<hex>"};
+// any non-empty value satisfies the peer-list assembly. Non-node-id
+// requests get 404 so an unexpected call surfaces loudly rather than
+// silently succeeding.
+type nodeIDDoer struct {
+	nodeID string
+}
+
+func (d nodeIDDoer) Do(req *http.Request) (*http.Response, error) {
+	if !strings.HasSuffix(req.URL.Path, "/v0/node-id") {
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(strings.NewReader("nodeIDDoer: only /v0/node-id is stubbed")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	}
+	body := `{"nodeId":"` + d.nodeID + `"}`
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Request:    req,
+	}, nil
+}
+
+// NewNodeIDSidecarClient builds a concrete *sidecar.SidecarClient whose
+// HTTP transport is faked to answer /v0/node-id deterministically. Wire it
+// into ExecutionConfig.NewSidecarClient so the collect-and-set-peers task
+// resolves node IDs without a live sidecar. The base URL is arbitrary (the
+// fake transport ignores host); the returned node ID mirrors the
+// StubSidecarClient's deterministic GetNodeID contract.
+func NewNodeIDSidecarClient() (*sidecar.SidecarClient, error) {
+	return sidecar.NewSidecarClient("http://stub.invalid", sidecar.WithHTTPDoer(nodeIDDoer{nodeID: "stub-node-id"}))
 }
