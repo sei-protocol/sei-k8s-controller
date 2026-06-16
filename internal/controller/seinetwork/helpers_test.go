@@ -22,10 +22,14 @@ const (
 	testGroupNS     = "sei"
 	testAPIVersion  = "sei.io/v1alpha1"
 	testKind        = "SeiNetwork"
+
+	testOverrideKey = "evm.http_port"
+	testOverrideVal = "8545"
 )
 
-// newTestNetwork builds a validator-role SeiNetwork with a required genesis
-// ceremony — the only shape the Kind admits.
+// newTestNetwork builds a SeiNetwork with a required genesis ceremony — the
+// only shape the Kind admits. The controller synthesizes each child's
+// validator role from these scalars.
 func newTestNetwork(name, namespace string) *seiv1alpha1.SeiNetwork {
 	return &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
@@ -33,14 +37,7 @@ func newTestNetwork(name, namespace string) *seiv1alpha1.SeiNetwork {
 			Image:    "ghcr.io/sei-protocol/seid:v1.0.0",
 			Replicas: 3,
 			Genesis:  seiv1alpha1.GenesisCeremonyConfig{ChainID: testNamespace},
-			Template: seiv1alpha1.SeiNodeTemplate{
-				Spec: seiv1alpha1.SeiNodeSpec{
-					ChainID:   testNamespace,
-					Image:     "ghcr.io/sei-protocol/seid:v1.0.0",
-					Validator: &seiv1alpha1.ValidatorSpec{},
-					Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
-				},
-			},
+			Sidecar:  &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
 	}
 }

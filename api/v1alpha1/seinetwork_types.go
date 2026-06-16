@@ -7,48 +7,80 @@ import (
 
 // SeiNetworkSpec defines the desired state of a SeiNetwork.
 //
-// A SeiNetwork bootstraps a new Sei chain: a chainId plus a required genesis
-// ceremony that mints the chain's genesis.json/genesisHash and its founding
-// validator set. spec.genesis is mandatory — the Kind cannot exist without it.
-// The replicas are the genesis validators; the template is the validator role.
+// A SeiNetwork bootstraps a new Sei chain: a required genesis ceremony that
+// mints the chain's genesis.json/genesisHash and its founding validator set.
+// spec.genesis is mandatory — the Kind cannot exist without it. The replicas
+// are the genesis validators; the ceremony generates a distinct identity
+// (consensus key, P2P node key, operator account) for each one.
+//
+// The spec is purpose-built for genesis bootstrap, not a SeiNodeSpec template.
+// Follower/multi-role fields (signingKey, nodeKey, operatorKeyring, snapshot,
+// peers, externalAddress, fullNode/archive/replayer) are structurally absent:
+// supplying them describes a SeiNode, not a genesis validator pool. The
+// controller synthesizes each child SeiNode's validator spec from these
+// scalars (see generateSeiNode).
 //
 // +kubebuilder:validation:XValidation:rule="self.genesis == oldSelf.genesis",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
-// +kubebuilder:validation:XValidation:rule="has(self.template.spec.validator)",message="a SeiNetwork bootstraps a genesis validator set; template.spec.validator must be set"
-// +kubebuilder:validation:XValidation:rule="!has(self.template.spec.validator.signingKey) || self.replicas == 1",message="a validator with a signingKey must have replicas: 1 — every replica mounts the same priv_validator_key.json, so >1 replica double-signs (equivocation) and tombstones/slashes the validator"
 type SeiNetworkSpec struct {
 	// Image is the seid image the genesis validators run.
+	// +kubebuilder:validation:MinLength=1
 	Image string `json:"image"`
 
 	// Genesis is REQUIRED. The ceremony that bootstraps this chain.
-	// Immutable once set; enforced by spec-level CEL. A SeiNetwork cannot
-	// exist without it.
+	// genesis.chainId is the sole chain identity (no redundant top-level
+	// chainId). The ceremony GENERATES every validator's identity (consensus
+	// key, P2P node key, operator account) — there is no bring-your-own-key
+	// path. Immutable once set; enforced by spec-level CEL.
 	// +required
 	Genesis GenesisCeremonyConfig `json:"genesis"`
 
-	// Replicas is the number of genesis validators to create.
+	// Replicas is the number of genesis validators to create. Each gets a
+	// DISTINCT generated identity, so replicas>1 is the normal safe case
+	// (no shared key → no double-sign). Each SeiNode is named
+	// "{network-name}-{ordinal}".
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
 	// +kubebuilder:default=1
 	Replicas int32 `json:"replicas"`
 
-	// Template defines the validator-role SeiNode spec stamped out for each
-	// genesis validator. Each SeiNode is named "{network-name}-{ordinal}".
-	Template SeiNodeTemplate `json:"template"`
-
-	// DeletionPolicy controls what happens to child SeiNodes when the
-	// SeiNetwork is deleted. "Delete" (default) cascades deletion. "Retain"
-	// orphans children so they continue running independently — required for
-	// validator pools, whose PVCs hold node_key.json / priv_validator_key.json.
+	// ConfigOverrides are seid runtime config (config.toml/app.toml)
+	// overrides, a flat map of dotted sei-config keys (e.g. "evm.http_port")
+	// to string values. DISTINCT from genesis.overrides, which writes
+	// genesis.json chain state — these are mutable node runtime config that
+	// propagate to children in-place.
 	// +optional
-	// +kubebuilder:default=Delete
-	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+	ConfigOverrides map[string]string `json:"configOverrides,omitempty"`
+
+	// DataVolume configures the data PersistentVolumeClaim for each genesis
+	// validator. The ceremony-generated consensus identity lives here, so
+	// DeletionPolicy defaults to Retain.
+	// +optional
+	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
+
+	// Sidecar configures the sei-sidecar container on each genesis validator.
+	// +optional
+	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
+
+	// PodLabels are additional labels merged into each child SeiNode's pod
+	// template. The controller always adds the reserved sei.io/nodedeployment
+	// and sei.io/nodedeployment-ordinal labels; these are additive.
+	// +optional
+	PodLabels map[string]string `json:"podLabels,omitempty"`
 
 	// Paused freezes plan-driven orchestration. While true, no new plans
-	// start, no rollouts trigger, no template changes propagate to
-	// children, and any active plan freezes in place. Children inherit the
-	// paused state.
+	// start, no rollouts trigger, no spec changes propagate to children, and
+	// any active plan freezes in place. Children inherit the paused state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+
+	// DeletionPolicy controls what happens to child SeiNodes when the
+	// SeiNetwork is deleted. "Retain" (default) orphans children so they
+	// continue running independently — a validator pool's PVCs hold
+	// ceremony-generated, unrecoverable consensus identity. "Delete" cascades
+	// deletion.
+	// +optional
+	// +kubebuilder:default=Retain
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 
 // GenesisCeremonyConfig configures genesis ceremony orchestration for a network.
@@ -99,29 +131,6 @@ type GenesisAccount struct {
 	// Balance is the initial balance in coin notation (e.g. "1000000usei").
 	// +kubebuilder:validation:MinLength=1
 	Balance string `json:"balance"`
-}
-
-// SeiNodeTemplate wraps a SeiNodeSpec for use in the network template.
-type SeiNodeTemplate struct {
-	// Metadata allows setting labels and annotations on child SeiNodes.
-	// The controller always adds sei.io/nodedeployment and sei.io/nodedeployment-ordinal
-	// labels; user-specified labels are merged.
-	// +optional
-	Metadata *SeiNodeTemplateMeta `json:"metadata,omitempty"`
-
-	// Spec is the SeiNodeSpec applied to each replica.
-	Spec SeiNodeSpec `json:"spec"`
-}
-
-// SeiNodeTemplateMeta defines metadata for templated SeiNodes.
-type SeiNodeTemplateMeta struct {
-	// Labels are merged onto each child SeiNode's metadata.
-	// +optional
-	Labels map[string]string `json:"labels,omitempty"`
-
-	// Annotations are merged onto each child SeiNode's metadata.
-	// +optional
-	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

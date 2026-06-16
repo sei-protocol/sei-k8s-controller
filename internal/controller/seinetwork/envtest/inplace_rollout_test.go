@@ -223,15 +223,13 @@ func TestInPlaceRollout_EndToEnd(t *testing.T) {
 	}, 3*time.Second, pollInterval).Should(BeTrue(),
 		"child spec.image stays pinned to template image after rollout (no flip-flop)")
 
-	// 7. Deleting the SND removes all children. envtest has no kube-
-	//    controller-manager to perform garbage-collection by owner-ref,
-	//    so the SND controller's finalizer path is what we exercise:
-	//    it observes DeletionTimestamp, runs the DeletionPolicy=Delete
-	//    branch (default), and removes the finalizer. Children are
-	//    deleted by the apiserver's foreground cascade — but again,
-	//    no GC controller runs. We strip the SeiNode finalizers
-	//    proactively in t.Cleanup; here we just confirm the SND itself
-	//    is gone (its own deletion is finalizer-gated by the controller).
+	// 7. Deleting the network runs its finalizer path. The default
+	//    DeletionPolicy is Retain, so the controller orphans the children
+	//    (strips owner refs) rather than cascading; envtest has no kube-
+	//    controller-manager to GC by owner-ref anyway. We strip the SeiNode
+	//    finalizers proactively in t.Cleanup; here we just confirm the
+	//    network itself is gone (its own deletion is finalizer-gated by the
+	//    controller).
 	g.Expect(testCli.Delete(testCtx, getNetwork(t, key))).To(Succeed())
 
 	waitFor(t, func() bool {

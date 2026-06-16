@@ -119,7 +119,7 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 		return Result{}, taskruntime.Infra(fmt.Errorf("SND %s reached Ready but .status.endpoints.tendermintRpc is empty", current.Name))
 	}
 	endpoints := *current.Status.Endpoints
-	chainID := current.Spec.Template.Spec.ChainID
+	chainID := current.Spec.Genesis.ChainID
 
 	httpClient := p.HTTPClient
 	if httpClient == nil {

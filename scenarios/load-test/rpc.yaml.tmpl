@@ -1,25 +1,26 @@
+# PLACEHOLDER — pending the follower reshape (seinetwork-lld § Followers / M2-M3).
+# Followers (rpc/full/archive) are no longer modeled as a SeiNetwork: a
+# SeiNetwork bootstraps a genesis validator pool only. An rpc fleet joining an
+# existing chain becomes standalone SeiNode CRs + hand-rolled GitOps networking,
+# orchestrated by the seictl/harbor-dev skills. Until that flow lands, this file
+# renders as a minimal scoped SeiNetwork so the bench harness keeps building;
+# its follower semantics (fullNode, peers) are intentionally dropped.
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: PLACEHOLDER
 spec:
+  image: "{{ .IMAGE }}"
   replicas: 2
-  template:
-    spec:
-      chainId: "{{ .CHAIN_ID }}"
-      image: "{{ .IMAGE }}"
-      fullNode: {}
-      peers:
-        - label:
-            selector:
-              sei.io/chain: "{{ .CHAIN_ID }}"
-      overrides:
-        storage.state_commit.write_mode: memiavl_only
-        storage.state_store.write_mode: memiavl_only
-        evm.worker_pool_size: "32"
-        evm.worker_queue_size: "4000"
-        evm.max_tx_pool_txs: "10000"
-        {{- with (index . "MEMPOOL_SIZE") }}
-        mempool.size: "{{ . }}"
-        mempool.pending_size: "{{ . }}"
-        {{- end }}
+  configOverrides:
+    storage.state_commit.write_mode: memiavl_only
+    storage.state_store.write_mode: memiavl_only
+    evm.worker_pool_size: "32"
+    evm.worker_queue_size: "4000"
+    evm.max_tx_pool_txs: "10000"
+    {{- with (index . "MEMPOOL_SIZE") }}
+    mempool.size: "{{ . }}"
+    mempool.pending_size: "{{ . }}"
+    {{- end }}
+  genesis:
+    chainId: "{{ .CHAIN_ID }}"

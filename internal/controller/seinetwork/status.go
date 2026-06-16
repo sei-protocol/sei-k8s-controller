@@ -42,7 +42,7 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 		!hasConditionTrue(network, seiv1alpha1.ConditionRolloutInProgress) {
 		network.Status.ObservedGeneration = network.Generation
 		if !network.Spec.Paused {
-			network.Status.TemplateHash = templateHash(&network.Spec.Template.Spec)
+			network.Status.TemplateHash = templateHash(&network.Spec)
 		}
 	}
 	network.Status.Replicas = network.Spec.Replicas

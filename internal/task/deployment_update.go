@@ -41,7 +41,7 @@ func (e *updateNodeSpecsExecution) Execute(ctx context.Context) error {
 		return Terminal(err)
 	}
 
-	desiredImage := network.Spec.Template.Spec.Image
+	desiredImage := network.Spec.Image
 
 	for _, name := range e.params.NodeNames {
 		node := &seiv1alpha1.SeiNode{}
@@ -52,7 +52,7 @@ func (e *updateNodeSpecsExecution) Execute(ctx context.Context) error {
 			continue
 		}
 		node.Spec.Image = desiredImage
-		if sc := network.Spec.Template.Spec.Sidecar; sc != nil && node.Spec.Sidecar != nil {
+		if sc := network.Spec.Sidecar; sc != nil && node.Spec.Sidecar != nil {
 			node.Spec.Sidecar.Image = sc.Image
 		}
 		if err := e.cfg.KubeClient.Update(ctx, node); err != nil {

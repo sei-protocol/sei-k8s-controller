@@ -23,7 +23,7 @@ import (
 func updateNetworkWithRetry(t *testing.T, key client.ObjectKey, mutate func(*seiv1alpha1.SeiNetwork)) error {
 	t.Helper()
 	var lastErr error
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		cur := &seiv1alpha1.SeiNetwork{}
 		if err := testCli.Get(testCtx, key, cur); err != nil {
 			return err
@@ -53,7 +53,7 @@ func TestGenesis_ImmutabilityGate(t *testing.T) {
 
 	network := fixtures.NewNetwork(ns, "genesis-immutable")
 	network.Spec.Genesis = seiv1alpha1.GenesisCeremonyConfig{
-		ChainID:        "pacific-1",
+		ChainID:        fixtures.DefaultChainID,
 		StakingAmount:  "10000000usei",
 		AccountBalance: "1000000usei",
 	}

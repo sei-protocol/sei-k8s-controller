@@ -1,7 +1,8 @@
 // Package fixtures provides reusable SeiNetwork constructors for envtest
 // integration tests. The default builder produces a minimal single-replica
 // genesis validator pool — the only shape the Kind admits (genesis is
-// required, the template is the validator role). Options layer narrowly.
+// required; the controller synthesizes each child's validator role from the
+// scoped genesis spec). Options layer narrowly.
 package fixtures
 
 import (
@@ -10,7 +11,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// DefaultImage is the seid image stamped onto the template by NewNetwork.
+// DefaultImage is the seid image stamped on the network by NewNetwork.
 const DefaultImage = "ghcr.io/sei-protocol/seid:v1.0.0"
 
 // DefaultChainID is the genesis chain ID used by NewNetwork.
@@ -33,13 +34,6 @@ func NewNetwork(namespace, name string, opts ...Option) *seiv1alpha1.SeiNetwork 
 			Image:    DefaultImage,
 			Replicas: 1,
 			Genesis:  seiv1alpha1.GenesisCeremonyConfig{ChainID: DefaultChainID},
-			Template: seiv1alpha1.SeiNodeTemplate{
-				Spec: seiv1alpha1.SeiNodeSpec{
-					ChainID:   DefaultChainID,
-					Image:     DefaultImage,
-					Validator: &seiv1alpha1.ValidatorSpec{},
-				},
-			},
 		},
 	}
 	for _, opt := range opts {
@@ -55,11 +49,10 @@ func WithReplicas(n int32) Option {
 	}
 }
 
-// WithImage sets spec.image and spec.template.spec.image.
+// WithImage sets spec.image.
 func WithImage(image string) Option {
 	return func(network *seiv1alpha1.SeiNetwork) {
 		network.Spec.Image = image
-		network.Spec.Template.Spec.Image = image
 	}
 }
 
@@ -70,9 +63,9 @@ func WithGenesisAccounts(accounts ...seiv1alpha1.GenesisAccount) Option {
 	}
 }
 
-// WithPeers sets spec.template.spec.peers.
-func WithPeers(peers ...seiv1alpha1.PeerSource) Option {
+// WithConfigOverrides sets spec.configOverrides (seid runtime TOML).
+func WithConfigOverrides(overrides map[string]string) Option {
 	return func(network *seiv1alpha1.SeiNetwork) {
-		network.Spec.Template.Spec.Peers = peers
+		network.Spec.ConfigOverrides = overrides
 	}
 }

@@ -39,12 +39,8 @@ kind: SeiNetwork
 metadata:
   name: PLACEHOLDER
 spec:
+  image: {{ .IMAGE }}
   replicas: 4
-  template:
-    spec:
-      chainId: {{ .CHAIN_ID }}
-      image: {{ .IMAGE }}
-      validator: {}
   genesis:
     chainId: {{ .CHAIN_ID }}
     accounts:
@@ -52,21 +48,17 @@ spec:
         balance: 1000000000000usei
 `
 
-const rpcTmpl = `apiVersion: sei.io/v1alpha1
+const configOverridesTmpl = `apiVersion: sei.io/v1alpha1
 kind: SeiNetwork
 metadata:
   name: PLACEHOLDER
 spec:
+  image: {{ .IMAGE }}
   replicas: 2
-  template:
-    spec:
-      chainId: {{ .CHAIN_ID }}
-      image: {{ .IMAGE }}
-      fullNode: {}
-      peers:
-        - label:
-            selector:
-              sei.io/chain: {{ .CHAIN_ID }}
+  genesis:
+    chainId: {{ .CHAIN_ID }}
+  configOverrides:
+    evm.http_port: "8545"
 `
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -107,11 +99,8 @@ func TestRenderTemplate_SubstitutesVars(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderTemplate: %v", err)
 	}
-	if snd.Spec.Template.Spec.ChainID != testChainID {
-		t.Errorf("ChainID: %q", snd.Spec.Template.Spec.ChainID)
-	}
-	if snd.Spec.Template.Spec.Image != testImage {
-		t.Errorf("Image: %q", snd.Spec.Template.Spec.Image)
+	if snd.Spec.Image != testImage {
+		t.Errorf("Image: %q", snd.Spec.Image)
 	}
 	if snd.Spec.Genesis.ChainID != testChainID {
 		t.Errorf("Genesis.ChainID: %q", snd.Spec.Genesis.ChainID)
@@ -135,11 +124,9 @@ metadata:
   name: PLACEHOLDER
 spec:
   replcas: 4
-  template:
-    spec:
-      chainId: {{ .CHAIN_ID }}
-      image: {{ .IMAGE }}
-      validator: {}
+  image: {{ .IMAGE }}
+  genesis:
+    chainId: {{ .CHAIN_ID }}
 `
 	path := writeTmpl(t, tmpl)
 	if _, err := renderTemplate(path, map[string]string{varKeyChainID: testChainID, varKeyImage: testImage}); err == nil {
@@ -147,8 +134,8 @@ spec:
 	}
 }
 
-func TestRenderTemplate_FullNodePeerSelectorSubstitution(t *testing.T) {
-	path := writeTmpl(t, rpcTmpl)
+func TestRenderTemplate_ConfigOverridesSubstitution(t *testing.T) {
+	path := writeTmpl(t, configOverridesTmpl)
 	snd, err := renderTemplate(path, map[string]string{
 		varKeyChainID: testChainID,
 		varKeyImage:   testImage,
@@ -156,12 +143,11 @@ func TestRenderTemplate_FullNodePeerSelectorSubstitution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderTemplate: %v", err)
 	}
-	peers := snd.Spec.Template.Spec.Peers
-	if len(peers) != 1 || peers[0].Label == nil {
-		t.Fatalf("peers: %+v", peers)
+	if got := snd.Spec.ConfigOverrides["evm.http_port"]; got != "8545" {
+		t.Errorf("configOverrides[evm.http_port] = %q; want %q", got, "8545")
 	}
-	if got := peers[0].Label.Selector["sei.io/chain"]; got != testChainID {
-		t.Errorf("peers[0].label.selector[sei.io/chain] = %q; want %q", got, testChainID)
+	if snd.Spec.Genesis.ChainID != testChainID {
+		t.Errorf("Genesis.ChainID = %q; want %q", snd.Spec.Genesis.ChainID, testChainID)
 	}
 }
 
@@ -192,8 +178,8 @@ func TestBundledTemplates_RenderClean(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
-			if snd.Spec.Template.Spec.ChainID == "" {
-				t.Fatalf("ChainID empty after render: %+v", snd.Spec.Template.Spec)
+			if snd.Spec.Genesis.ChainID == "" {
+				t.Fatalf("genesis.chainId empty after render: %+v", snd.Spec)
 			}
 		})
 	}

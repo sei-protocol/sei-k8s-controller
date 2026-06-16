@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -37,26 +38,30 @@ func TestGenerateSeiNode_SystemLabels(t *testing.T) {
 	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, testNamespace))
 }
 
-func TestGenerateSeiNode_SystemLabelsOverrideUserLabels(t *testing.T) {
+// The reserved group/ordinal/revision pod labels are controller-owned and
+// must overwrite any same-keyed user PodLabels.
+func TestGenerateSeiNode_SystemPodLabelsOverrideUserLabels(t *testing.T) {
 	g := NewWithT(t)
 	network := newTestNetwork(testNetworkName, testGroupNS)
-	network.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{
-		Labels: map[string]string{
-			groupLabel: "user-attempt-to-override",
-		},
-	}
-	network.Spec.Template.Spec.PodLabels = map[string]string{
-		groupLabel: "another-override-attempt",
+	network.Spec.PodLabels = map[string]string{
+		groupLabel: "user-attempt-to-override",
+		"team":     "platform",
 	}
 
 	node := generateSeiNode(network, 0)
 
 	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, testNetworkName))
+	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue("team", "platform"),
+		"non-reserved user pod labels pass through")
 }
 
-func TestGenerateSeiNode_CopiesSpec(t *testing.T) {
+// generateSeiNode constructs the child spec from the scalar genesis fields:
+// chainId, image, configOverrides, sidecar all flow through directly, and a
+// genesis-ceremony validator is synthesized with no BYO key material.
+func TestGenerateSeiNode_ConstructsFromScalars(t *testing.T) {
 	g := NewWithT(t)
 	network := newTestNetwork(testNetworkName, testNamespace)
+	network.Spec.ConfigOverrides = map[string]string{testOverrideKey: testOverrideVal}
 
 	node := generateSeiNode(network, 0)
 
@@ -64,11 +69,27 @@ func TestGenerateSeiNode_CopiesSpec(t *testing.T) {
 	g.Expect(node.Namespace).To(Equal(testNamespace))
 	g.Expect(node.Spec.ChainID).To(Equal(testNamespace))
 	g.Expect(node.Spec.Image).To(Equal("ghcr.io/sei-protocol/seid:v1.0.0"))
+	g.Expect(node.Spec.Overrides).To(HaveKeyWithValue(testOverrideKey, testOverrideVal))
+	g.Expect(node.Spec.Sidecar).NotTo(BeNil())
 	g.Expect(node.Spec.Validator).NotTo(BeNil())
+
+	// No bring-your-own identity: every replica's identity is ceremony-generated.
+	g.Expect(node.Spec.Validator.SigningKey).To(BeNil())
+	g.Expect(node.Spec.Validator.NodeKey).To(BeNil())
+	g.Expect(node.Spec.Validator.OperatorKeyring).To(BeNil())
+	g.Expect(node.Spec.Validator.Snapshot).To(BeNil())
+
+	// Follower/networking fields are never set on a genesis validator.
+	g.Expect(node.Spec.Peers).To(BeEmpty())
+	g.Expect(node.Spec.ExternalAddress).To(BeEmpty())
+	g.Expect(node.Spec.FullNode).To(BeNil())
+	g.Expect(node.Spec.Archive).To(BeNil())
+	g.Expect(node.Spec.Replayer).To(BeNil())
 }
 
-// generateSeiNode stamps the per-node genesis ceremony config on the
-// validator template. Every SeiNetwork runs the ceremony.
+// generateSeiNode synthesizes the per-node genesis ceremony config from the
+// network's genesis block, with Index taken from the ordinal. ChainID is
+// sourced unconditionally from genesis.chainId.
 func TestGenerateSeiNode_StampsGenesisCeremony(t *testing.T) {
 	g := NewWithT(t)
 	network := newTestNetwork(testNetworkName, testGroupNS)
@@ -77,11 +98,10 @@ func TestGenerateSeiNode_StampsGenesisCeremony(t *testing.T) {
 		StakingAmount:  "5usei",
 		AccountBalance: "1000usei",
 	}
-	network.Spec.Template.Spec.ChainID = ""
 
 	node := generateSeiNode(network, 2)
 
-	g.Expect(node.Spec.ChainID).To(Equal("loadtest-1"), "chainId falls back to genesis when template leaves it empty")
+	g.Expect(node.Spec.ChainID).To(Equal("loadtest-1"), "chainId is sourced from genesis.chainId")
 	g.Expect(node.Spec.Validator).NotTo(BeNil())
 	g.Expect(node.Spec.Validator.GenesisCeremony).NotTo(BeNil())
 	g.Expect(node.Spec.Validator.GenesisCeremony.ChainID).To(Equal("loadtest-1"))
@@ -90,20 +110,8 @@ func TestGenerateSeiNode_StampsGenesisCeremony(t *testing.T) {
 	g.Expect(node.Spec.Validator.GenesisCeremony.Index).To(Equal(int32(2)))
 }
 
-func TestGenerateSeiNode_Annotations(t *testing.T) {
-	g := NewWithT(t)
-	network := newTestNetwork(testNetworkName, testGroupNS)
-	network.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{
-		Annotations: map[string]string{
-			"example.com/team": "platform",
-		},
-	}
-
-	node := generateSeiNode(network, 0)
-	g.Expect(node.Annotations).To(HaveKeyWithValue("example.com/team", "platform"))
-}
-
-func TestGenerateSeiNode_NoAnnotationsWhenNil(t *testing.T) {
+// The scoped genesis spec carries no per-node annotation knob, so children get none.
+func TestGenerateSeiNode_NoAnnotations(t *testing.T) {
 	g := NewWithT(t)
 	network := newTestNetwork(testNetworkName, testGroupNS)
 
@@ -135,7 +143,7 @@ func TestDetectDeploymentNeeded_InPlace_AlreadyActive_SameTarget(t *testing.T) {
 	network.Status.TemplateHash = testOldHash
 	network.Status.IncumbentNodes = []string{testNode0}
 
-	currentHash := templateHash(&network.Spec.Template.Spec)
+	currentHash := templateHash(&network.Spec)
 
 	setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
 		"TemplateChanged", "already rolling")
@@ -183,18 +191,18 @@ func TestDetectDeploymentNeeded_NoIncumbentNodes_NoRollout(t *testing.T) {
 	g.Expect(cond).To(BeNil())
 }
 
-func TestGenerateSeiNode_DeepCopiesTemplate(t *testing.T) {
+// generateSeiNode must not alias the network's ConfigOverrides map into the
+// child — a later mutation of the child spec must not write back through.
+func TestGenerateSeiNode_OverridesNotAliased(t *testing.T) {
 	g := NewWithT(t)
 	network := newTestNetwork(testNetworkName, testGroupNS)
-	network.Spec.Template.Spec.Overrides = map[string]string{
-		"evm.http_port": "8545",
-	}
+	network.Spec.ConfigOverrides = map[string]string{testOverrideKey: testOverrideVal}
 
 	node := generateSeiNode(network, 0)
-	node.Spec.Overrides["modified"] = "true"
+	node.Spec.Overrides = map[string]string{testOverrideKey: testOverrideVal, "modified": "true"}
 
-	g.Expect(network.Spec.Template.Spec.Overrides).NotTo(HaveKey("modified"),
-		"modification to generated SeiNode should not mutate the network template")
+	g.Expect(network.Spec.ConfigOverrides).NotTo(HaveKey("modified"),
+		"reassigning the generated child's overrides must not mutate the network spec")
 }
 
 // setGenesisCeremonyCondition has no NotApplicable branch: every SeiNetwork
@@ -257,19 +265,15 @@ func TestSetGenesisCeremonyCondition(t *testing.T) {
 	}
 }
 
-// Adding a peer source to an existing SeiNetwork must reach the child.
-func TestEnsureSeiNode_PropagatesPeersOnUpdate(t *testing.T) {
+// Peers are controller-owned: the collect-and-set-peers ceremony task patches
+// each child's Spec.Peers with the assembled validator set. ensureSeiNode
+// emits empty peers at create and MUST NOT clobber those controller writes on
+// a subsequent reconcile.
+func TestEnsureSeiNode_DoesNotClobberControllerSetPeers(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
 	network := newTestNetwork("syncer", testNamespace)
-	network.Spec.Template.Spec.Peers = []seiv1alpha1.PeerSource{
-		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
-			Region: "eu-central-1",
-			Tags:   map[string]string{"ChainIdentifier": testNamespace, "Component": "state-syncer"},
-		}},
-	}
-
 	r := newPlanTestReconciler(t, network)
 
 	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
@@ -277,58 +281,50 @@ func TestEnsureSeiNode_PropagatesPeersOnUpdate(t *testing.T) {
 	child := &seiv1alpha1.SeiNode{}
 	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}
 	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
-	g.Expect(child.Spec.Peers).To(HaveLen(1))
+	g.Expect(child.Spec.Peers).To(BeEmpty(), "child starts with no peers at create")
 
-	network.Spec.Template.Spec.Peers = append(network.Spec.Template.Spec.Peers,
-		seiv1alpha1.PeerSource{Label: &seiv1alpha1.LabelPeerSource{
-			Namespace: testNamespace,
-			Selector:  map[string]string{"sei.io/chain": testNamespace},
-		}})
+	// Simulate the collect-and-set-peers task patching peers onto the child.
+	patch := client.MergeFrom(child.DeepCopy())
+	child.Spec.Peers = []seiv1alpha1.PeerSource{
+		{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{"abc@syncer-0.syncer.pacific-1.svc:26656"}}},
+	}
+	g.Expect(r.Patch(ctx, child, patch)).To(Succeed())
 
+	// A subsequent reconcile must leave the controller-set peers intact.
 	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
-
 	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
-	g.Expect(child.Spec.Peers).To(HaveLen(2),
-		"existing child Spec.Peers must reflect network template additions")
-	g.Expect(child.Spec.Peers[1].Label).NotTo(BeNil())
-	g.Expect(child.Spec.Peers[1].Label.Selector).To(Equal(map[string]string{"sei.io/chain": testNamespace}))
+	g.Expect(child.Spec.Peers).To(HaveLen(1),
+		"controller-set peers must survive reconcile")
+	g.Expect(child.Spec.Peers[0].Static).NotTo(BeNil())
 }
 
-// Removing a peer source from the SeiNetwork must also propagate.
-func TestEnsureSeiNode_PropagatesPeerRemoval(t *testing.T) {
+// Editing spec.configOverrides on a live network must propagate in-place to
+// the existing child.
+func TestEnsureSeiNode_PropagatesConfigOverrides(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
 	network := newTestNetwork("syncer", testNamespace)
-	network.Spec.Template.Spec.Peers = []seiv1alpha1.PeerSource{
-		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"k": "v"}}},
-		{Label: &seiv1alpha1.LabelPeerSource{Namespace: testNamespace, Selector: map[string]string{"k": "v"}}},
-	}
-
 	r := newPlanTestReconciler(t, network)
+
 	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
 
-	network.Spec.Template.Spec.Peers = network.Spec.Template.Spec.Peers[:1]
+	network.Spec.ConfigOverrides = map[string]string{testOverrideKey: testOverrideVal}
 	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
 
 	child := &seiv1alpha1.SeiNode{}
-	g.Expect(r.Get(ctx, types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}, child)).To(Succeed())
-	g.Expect(child.Spec.Peers).To(HaveLen(1))
-	g.Expect(child.Spec.Peers[0].EC2Tags).NotTo(BeNil())
-	g.Expect(child.Spec.Peers[0].Label).To(BeNil())
+	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}
+	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
+	g.Expect(child.Spec.Overrides).To(HaveKeyWithValue(testOverrideKey, testOverrideVal))
 }
 
-// No-op reconcile path: identical template across two reconciles must not
-// trigger a child Update (no resourceVersion bump).
-func TestEnsureSeiNode_PeersNoOpWhenUnchanged(t *testing.T) {
+// No-op reconcile path: identical spec across two reconciles must not trigger
+// a child Update (no resourceVersion bump).
+func TestEnsureSeiNode_NoOpWhenUnchanged(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
 	network := newTestNetwork("syncer", testNamespace)
-	network.Spec.Template.Spec.Peers = []seiv1alpha1.PeerSource{
-		{Label: &seiv1alpha1.LabelPeerSource{Namespace: testNamespace, Selector: map[string]string{"k": "v"}}},
-	}
-
 	r := newPlanTestReconciler(t, network)
 	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
 

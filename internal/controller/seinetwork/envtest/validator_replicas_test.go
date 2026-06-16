@@ -3,6 +3,7 @@
 package envtest_test
 
 import (
+	"strconv"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -13,66 +14,64 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/seinetwork/envtest/fixtures"
 )
 
-// withSigningAndNodeKey attaches a signingKey + nodeKey to the validator
-// template, referencing distinct Secrets. Distinct names satisfy the
-// signingKey/nodeKey-paired CEL rules so a test can isolate the replicas==1
-// rule.
-func withSigningAndNodeKey(network *seiv1alpha1.SeiNetwork) {
-	network.Spec.Template.Spec.Validator.SigningKey = &seiv1alpha1.SigningKeySource{
-		Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "test-signing-key"},
-	}
-	network.Spec.Template.Spec.Validator.NodeKey = &seiv1alpha1.NodeKeySource{
-		Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "test-node-key"},
-	}
-}
-
-// TestValidator_SigningKeyRequiresSingleReplica asserts the spec-level CEL
-// rule that rejects replicas > 1 when validator.signingKey is set. Every
-// replica mounts the same priv_validator_key.json, so more than one replica
-// double-signs (equivocation) and tombstones/slashes the validator.
-func TestValidator_SigningKeyRequiresSingleReplica(t *testing.T) {
-	t.Run("signingKey with replicas 1 is accepted", func(t *testing.T) {
+// TestValidator_GeneratedIdentityMultiReplica asserts that a genesis validator
+// pool with replicas > 1 is accepted and fans out distinct per-replica
+// children. There is no signingKey field on a SeiNetwork — every replica's
+// consensus/P2P/operator identity is ceremony-generated on-cluster
+// (generate-identity), so multiple replicas carry distinct keys and replicas>1
+// is the normal safe case (no shared priv_validator_key.json → no
+// double-sign). This replaces the SND-era "signingKey ⇒ replicas==1" CEL rule,
+// which is moot by construction.
+func TestValidator_GeneratedIdentityMultiReplica(t *testing.T) {
+	t.Run("replicas 1 is accepted", func(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
-		network := fixtures.NewNetwork(ns, "val-keys-r1", fixtures.WithReplicas(1))
-		withSigningAndNodeKey(network)
-		g.Expect(testCli.Create(testCtx, network)).To(Succeed(),
-			"a signing validator with replicas:1 must be accepted")
+		network := fixtures.NewNetwork(ns, "gen-r1", fixtures.WithReplicas(1))
+		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
 	})
 
-	t.Run("signingKey with replicas 2 is rejected", func(t *testing.T) {
+	t.Run("replicas 3 is accepted and fans out 3 distinct children", func(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
-		network := fixtures.NewNetwork(ns, "val-keys-r2", fixtures.WithReplicas(2))
-		withSigningAndNodeKey(network)
-		err := testCli.Create(testCtx, network)
-		g.Expect(err).To(HaveOccurred(), "a signing validator with replicas:2 must be rejected")
-		g.Expect(err.Error()).To(ContainSubstring("must have replicas: 1"),
-			"rejection must carry the CEL rule message; got: %s", err.Error())
+		network := fixtures.NewNetwork(ns, "gen-r3", fixtures.WithReplicas(3))
+		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+		key := client.ObjectKeyFromObject(network)
+
+		waitFor(t, func() bool {
+			kids := listChildren(t, getNetwork(t, key))
+			if len(kids) != 3 {
+				return false
+			}
+			// Each child is a genesis-ceremony validator carrying a distinct
+			// ordinal (Index) and NO bring-your-own key material.
+			seen := map[int32]bool{}
+			for i := range kids {
+				v := kids[i].Spec.Validator
+				if v == nil || v.GenesisCeremony == nil {
+					return false
+				}
+				if v.SigningKey != nil || v.NodeKey != nil || v.OperatorKeyring != nil {
+					return false
+				}
+				seen[v.GenesisCeremony.Index] = true
+				if kids[i].Labels["sei.io/nodedeployment-ordinal"] != strconv.Itoa(int(v.GenesisCeremony.Index)) {
+					return false
+				}
+			}
+			return len(seen) == 3
+		}, "3 children with distinct ceremony ordinals and no BYO keys")
 	})
 
-	t.Run("validator without a signingKey allows replicas > 1", func(t *testing.T) {
+	t.Run("scaling up a generated-identity pool is accepted", func(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
-		// Genesis-ceremony validators generate per-replica identities
-		// on-cluster (generate-identity), so no fixed signingKey is mounted
-		// and multiple replicas are the composable-genesis N-validator fan-out.
-		network := fixtures.NewNetwork(ns, "val-nokeys-r3", fixtures.WithReplicas(3))
-		g.Expect(testCli.Create(testCtx, network)).To(Succeed(),
-			"a validator without a signingKey must allow replicas > 1")
-	})
-
-	t.Run("scaling a signing validator above 1 is rejected on update", func(t *testing.T) {
-		g := NewWithT(t)
-		ns := makeNamespace(t)
-		network := fixtures.NewNetwork(ns, "val-keys-scale", fixtures.WithReplicas(1))
-		withSigningAndNodeKey(network)
+		network := fixtures.NewNetwork(ns, "gen-scale", fixtures.WithReplicas(1))
 		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
 
 		err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
-			cur.Spec.Replicas = 2
+			cur.Spec.Replicas = 3
 		})
-		g.Expect(err).To(HaveOccurred(), "scaling a signing validator above 1 must be rejected")
-		g.Expect(err.Error()).To(ContainSubstring("must have replicas: 1"))
+		g.Expect(err).NotTo(HaveOccurred(),
+			"scaling a generated-identity validator pool above 1 must be accepted")
 	})
 }

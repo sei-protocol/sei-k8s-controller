@@ -129,7 +129,7 @@ func (r *SeiNetworkReconciler) handleDeletion(ctx context.Context, network *seiv
 
 	policy := network.Spec.DeletionPolicy
 	if policy == "" {
-		policy = seiv1alpha1.DeletionPolicyDelete
+		policy = seiv1alpha1.DeletionPolicyRetain // matches CRD default
 	}
 
 	if policy == seiv1alpha1.DeletionPolicyRetain {

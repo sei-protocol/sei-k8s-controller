@@ -110,12 +110,12 @@ func getNetwork(t *testing.T, key client.ObjectKey) *seiv1alpha1.SeiNetwork {
 	return network
 }
 
-// patchNetworkImage updates spec.template.spec.image on the given SeiNetwork.
+// patchNetworkImage updates spec.image on the given SeiNetwork.
 func patchNetworkImage(t *testing.T, network *seiv1alpha1.SeiNetwork, newImage string) {
 	t.Helper()
 	g := NewWithT(t)
 	patch := client.MergeFrom(network.DeepCopy())
-	network.Spec.Template.Spec.Image = newImage
+	network.Spec.Image = newImage
 	g.Expect(testCli.Patch(testCtx, network, patch)).To(Succeed())
 }
 

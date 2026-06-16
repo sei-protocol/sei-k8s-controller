@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"maps"
 	"strconv"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -40,32 +39,22 @@ func groupSelector(network *seiv1alpha1.SeiNetwork) map[string]string {
 	return map[string]string{groupLabel: network.Name}
 }
 
-// seiNodeLabels builds the metadata labels for a child SeiNode.
-// User-provided template labels are applied first; system labels
-// overwrite to prevent accidental breakage.
+// seiNodeLabels builds the metadata labels for a child SeiNode. The reserved
+// group/ordinal/revision/chain labels are controller-owned and authoritative.
 func seiNodeLabels(network *seiv1alpha1.SeiNetwork, ordinal int) map[string]string {
-	labels := make(map[string]string)
-	if network.Spec.Template.Metadata != nil {
-		maps.Copy(labels, network.Spec.Template.Metadata.Labels)
-	}
+	labels := make(map[string]string, 4)
 	labels[groupLabel] = network.Name
 	labels[groupOrdinalLabel] = strconv.Itoa(ordinal)
 	labels[revisionLabel] = activeRevision(network)
-	labels[chainLabel] = network.Spec.Template.Spec.ChainID
+	labels[chainLabel] = network.Spec.Genesis.ChainID
 	return labels
 }
 
 // seiNodeAnnotations builds the metadata annotations for a child SeiNode.
-func seiNodeAnnotations(network *seiv1alpha1.SeiNetwork) map[string]string {
-	if network.Spec.Template.Metadata == nil {
-		return nil
-	}
-	if len(network.Spec.Template.Metadata.Annotations) == 0 {
-		return nil
-	}
-	annotations := make(map[string]string, len(network.Spec.Template.Metadata.Annotations))
-	maps.Copy(annotations, network.Spec.Template.Metadata.Annotations)
-	return annotations
+// The scoped genesis spec carries no per-node annotation knob, so children
+// get none.
+func seiNodeAnnotations(_ *seiv1alpha1.SeiNetwork) map[string]string {
+	return nil
 }
 
 // resourceLabels returns labels for resources owned by the network.
@@ -82,11 +71,12 @@ func managedByAnnotations() map[string]string {
 
 // templateHash computes a hash over spec fields that trigger a deployment
 // plan when changed. Currently tracked: chainId, image, and sidecar image.
-// Fields like overrides, peers, and replica count propagate in-place via
-// ensureSeiNode without requiring a deployment plan.
-func templateHash(spec *seiv1alpha1.SeiNodeSpec) string {
+// Fields like configOverrides and replica count propagate in-place via
+// ensureSeiNode without requiring a deployment plan. chainId is immutable, so
+// in practice only an image (or sidecar image) change drives a rollout.
+func templateHash(spec *seiv1alpha1.SeiNetworkSpec) string {
 	h := sha256.New()
-	h.Write([]byte(spec.ChainID))
+	h.Write([]byte(spec.Genesis.ChainID))
 	h.Write([]byte(spec.Image))
 	if spec.Sidecar != nil {
 		h.Write([]byte(spec.Sidecar.Image))

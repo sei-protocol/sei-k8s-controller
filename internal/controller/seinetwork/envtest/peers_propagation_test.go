@@ -7,6 +7,7 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
+
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -14,94 +15,69 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/seinetwork/envtest/fixtures"
 )
 
-// Live edit to SND.spec.template.spec.peers must reach the already-created
-// child. Regression for the silent-allow-list gap in ensureSeiNode.
-func TestPeersPropagation_AddSourceOnLiveSND(t *testing.T) {
+// Peers on a child SeiNode are controller-owned: the genesis ceremony's
+// collect-and-set-peers task patches each child's Spec.Peers with the
+// assembled validator set. generateSeiNode emits empty peers at create, so a
+// subsequent network reconcile MUST NOT clobber those controller writes.
+//
+// This drives the invariant against a real apiserver: after the controller
+// converges the children, we simulate the ceremony's peer write, then force a
+// network reconcile (an in-place configOverrides edit) and assert the
+// controller-set peers survive.
+func TestPeers_ControllerSetSurviveReconcile(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	initial := []seiv1alpha1.PeerSource{
-		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
-			Region: "eu-central-1",
-			Tags:   map[string]string{"ChainIdentifier": "pacific-1", "Component": "state-syncer"},
-		}},
-	}
-	snd := fixtures.NewNetwork(ns, "peers-add",
-		fixtures.WithReplicas(1),
-		fixtures.WithPeers(initial...),
-	)
-	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
+	network := fixtures.NewNetwork(ns, "peers-survive", fixtures.WithReplicas(1))
+	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+	key := client.ObjectKeyFromObject(network)
 
-	childKey := types.NamespacedName{Name: snd.Name + "-0", Namespace: ns}
+	childKey := types.NamespacedName{Name: network.Name + "-0", Namespace: ns}
 	waitFor(t, func() bool {
 		child := &seiv1alpha1.SeiNode{}
-		if err := testCli.Get(testCtx, childKey, child); err != nil {
-			return false
-		}
-		return len(child.Spec.Peers) == 1
-	}, "child converged with initial peer set")
+		return testCli.Get(testCtx, childKey, child) == nil
+	}, "child SeiNode created")
 
-	// Live edit: add a LabelPeerSource (the platform#759 shape).
+	// Simulate the collect-and-set-peers ceremony task writing the assembled
+	// validator peer set onto the child.
+	peer := "stub-node-id@peers-survive-0.peers-survive-0." + ns + ".svc.cluster.local:26656"
 	g.Eventually(func() error {
-		latest := getNetwork(t, client.ObjectKeyFromObject(snd))
-		patch := client.MergeFrom(latest.DeepCopy())
-		latest.Spec.Template.Spec.Peers = append(latest.Spec.Template.Spec.Peers,
-			seiv1alpha1.PeerSource{Label: &seiv1alpha1.LabelPeerSource{
-				Namespace: ns,
-				Selector:  map[string]string{"sei.io/chain": "pacific-1"},
-			}})
-		return testCli.Patch(testCtx, latest, patch)
-	}, 5*time.Second, 200*time.Millisecond).Should(Succeed())
+		child := &seiv1alpha1.SeiNode{}
+		if err := testCli.Get(testCtx, childKey, child); err != nil {
+			return err
+		}
+		patch := client.MergeFrom(child.DeepCopy())
+		child.Spec.Peers = []seiv1alpha1.PeerSource{
+			{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{peer}}},
+		}
+		return testCli.Patch(testCtx, child, patch)
+	}, 5*time.Second, pollInterval).Should(Succeed())
 
+	// Force a network reconcile via an in-place configOverrides edit (a
+	// non-deployment field that propagates through ensureSeiNode).
+	g.Expect(updateNetworkWithRetry(t, key, func(cur *seiv1alpha1.SeiNetwork) {
+		cur.Spec.ConfigOverrides = map[string]string{"evm.http_port": "8545"}
+	})).To(Succeed())
+
+	// The override must reach the child AND the controller-set peers must
+	// remain intact across the reconcile.
 	waitFor(t, func() bool {
 		child := &seiv1alpha1.SeiNode{}
 		if err := testCli.Get(testCtx, childKey, child); err != nil {
 			return false
 		}
-		if len(child.Spec.Peers) != 2 {
-			return false
-		}
-		return child.Spec.Peers[1].Label != nil &&
-			child.Spec.Peers[1].Label.Selector["sei.io/chain"] == "pacific-1"
-	}, "child Spec.Peers reflected the live SND peer-list addition")
-}
+		return child.Spec.Overrides["evm.http_port"] == "8545" &&
+			len(child.Spec.Peers) == 1 &&
+			child.Spec.Peers[0].Static != nil
+	}, "config override propagated and controller-set peers survived reconcile")
 
-// Removing a peer source on a live SND must propagate (shrink case).
-func TestPeersPropagation_RemoveSourceOnLiveSND(t *testing.T) {
-	g := NewWithT(t)
-	ns := makeNamespace(t)
-
-	initial := []seiv1alpha1.PeerSource{
-		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"k": "v"}}},
-		{Label: &seiv1alpha1.LabelPeerSource{Namespace: ns, Selector: map[string]string{"k": "v"}}},
-	}
-	snd := fixtures.NewNetwork(ns, "peers-remove",
-		fixtures.WithReplicas(1),
-		fixtures.WithPeers(initial...),
-	)
-	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
-
-	childKey := types.NamespacedName{Name: snd.Name + "-0", Namespace: ns}
-	waitFor(t, func() bool {
+	// Belt-and-suspenders: peers stay put across several more reconcile laps.
+	g.Consistently(func() bool {
 		child := &seiv1alpha1.SeiNode{}
 		if err := testCli.Get(testCtx, childKey, child); err != nil {
 			return false
 		}
-		return len(child.Spec.Peers) == 2
-	}, "child converged with initial 2-source peer set")
-
-	g.Eventually(func() error {
-		latest := getNetwork(t, client.ObjectKeyFromObject(snd))
-		patch := client.MergeFrom(latest.DeepCopy())
-		latest.Spec.Template.Spec.Peers = latest.Spec.Template.Spec.Peers[:1]
-		return testCli.Patch(testCtx, latest, patch)
-	}, 5*time.Second, 200*time.Millisecond).Should(Succeed())
-
-	waitFor(t, func() bool {
-		child := &seiv1alpha1.SeiNode{}
-		if err := testCli.Get(testCtx, childKey, child); err != nil {
-			return false
-		}
-		return len(child.Spec.Peers) == 1 && child.Spec.Peers[0].EC2Tags != nil
-	}, "child Spec.Peers shrunk to match the live SND")
+		return len(child.Spec.Peers) == 1 && child.Spec.Peers[0].Static != nil
+	}, 3*time.Second, pollInterval).Should(BeTrue(),
+		"controller-set peers must not oscillate or be cleared")
 }

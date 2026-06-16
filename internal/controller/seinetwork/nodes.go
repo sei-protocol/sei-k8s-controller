@@ -6,7 +6,6 @@ import (
 	"maps"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -111,7 +110,7 @@ func (r *SeiNetworkReconciler) detectDeploymentNeeded(network *seiv1alpha1.SeiNe
 		return
 	}
 
-	currentHash := templateHash(&network.Spec.Template.Spec)
+	currentHash := templateHash(&network.Spec)
 	if currentHash == network.Status.TemplateHash {
 		return // no deployment-worthy fields changed
 	}
@@ -208,12 +207,13 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 		existing.Spec.PodLabels = desired.Spec.PodLabels
 		updated = true
 	}
-	// Peers are intentionally in-place propagatable (templateHash godoc
-	// in labels.go). Semantic.DeepEqual treats nil and empty maps/slices
-	// as equal — etcd round-trips normalize empties to nil, so reflect
-	// would spuriously diff after the first reconcile post-restart.
-	if !equality.Semantic.DeepEqual(existing.Spec.Peers, desired.Spec.Peers) {
-		existing.Spec.Peers = desired.Spec.Peers
+	// Peers are controller-owned: the genesis ceremony's collect-and-set-peers
+	// task patches each child's Spec.Peers with the assembled validator set
+	// (a StaticPeerSource). generateSeiNode emits empty peers at create, so
+	// reconcile must NOT sync Peers here — doing so would clobber the
+	// ceremony's writes every loop. They are deliberately left untouched.
+	if !maps.Equal(existing.Spec.Overrides, desired.Spec.Overrides) {
+		existing.Spec.Overrides = desired.Spec.Overrides
 		updated = true
 	}
 	if updated {
@@ -222,51 +222,50 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 	return nil
 }
 
-// generateSeiNode produces the desired child SeiNode for a given ordinal.
-// Pure: depends only on the SeiNetwork spec and ordinal. External
-// networking (P2P external address) is GitOps-owned since PLT-451 and is
-// not stamped here. The template's ExternalAddress is dropped to prevent
-// every child from sharing the same value if a user set it on the template.
+// generateSeiNode constructs the desired child SeiNode for a given ordinal
+// from the SeiNetwork's scalar genesis fields. Pure: depends only on the
+// SeiNetwork spec and ordinal.
+//
+// It does NOT deep-copy a template. The validator is synthesized as a
+// genesis-ceremony validator: SigningKey/NodeKey/OperatorKeyring/Snapshot are
+// nil (the ceremony generates a distinct identity per replica), Peers is empty
+// (the controller's collect-and-set-peers patches it in-place — see
+// ensureSeiNode), and ExternalAddress / FullNode / Archive / Replayer are
+// never set (external networking is GitOps-owned since PLT-451).
 func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.SeiNode {
-	labels := seiNodeLabels(network, ordinal)
-	annotations := seiNodeAnnotations(network)
+	gc := network.Spec.Genesis
 
-	spec := network.Spec.Template.Spec.DeepCopy()
-	spec.ExternalAddress = ""
-
-	podLabels := make(map[string]string)
-	if network.Spec.Template.Metadata != nil {
-		maps.Copy(podLabels, network.Spec.Template.Metadata.Labels)
-	}
-	maps.Copy(podLabels, spec.PodLabels)
+	podLabels := make(map[string]string, len(network.Spec.PodLabels)+2)
+	maps.Copy(podLabels, network.Spec.PodLabels)
 	podLabels[groupLabel] = network.Name
 	podLabels[revisionLabel] = activeRevision(network)
-	spec.PodLabels = podLabels
 
-	// Genesis is required on a SeiNetwork and the validator role is enforced
-	// by CEL; the nil-guard on Validator is defense-in-depth for in-memory
-	// specs that haven't been through admission.
-	gc := network.Spec.Genesis
-	if spec.Validator != nil {
-		if spec.ChainID == "" {
-			spec.ChainID = gc.ChainID
-		}
-		spec.Validator.GenesisCeremony = &seiv1alpha1.GenesisCeremonyNodeConfig{
-			ChainID:        gc.ChainID,
-			StakingAmount:  gc.StakingAmount,
-			AccountBalance: gc.AccountBalance,
-			Index:          int32(ordinal),
-		}
+	spec := seiv1alpha1.SeiNodeSpec{
+		ChainID:    gc.ChainID,
+		Image:      network.Spec.Image,
+		Overrides:  network.Spec.ConfigOverrides,
+		Sidecar:    network.Spec.Sidecar.DeepCopy(),
+		DataVolume: network.Spec.DataVolume.DeepCopy(),
+		PodLabels:  podLabels,
+		Paused:     network.Spec.Paused,
+		Validator: &seiv1alpha1.ValidatorSpec{
+			GenesisCeremony: &seiv1alpha1.GenesisCeremonyNodeConfig{
+				ChainID:        gc.ChainID,
+				StakingAmount:  gc.StakingAmount,
+				AccountBalance: gc.AccountBalance,
+				Index:          int32(ordinal),
+			},
+		},
 	}
 
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        seiNodeName(network, ordinal),
 			Namespace:   network.Namespace,
-			Labels:      labels,
-			Annotations: annotations,
+			Labels:      seiNodeLabels(network, ordinal),
+			Annotations: seiNodeAnnotations(network),
 		},
-		Spec: *spec,
+		Spec: spec,
 	}
 }
 

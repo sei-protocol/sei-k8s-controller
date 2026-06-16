@@ -1,17 +1,13 @@
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: PLACEHOLDER
 spec:
+  image: "{{ .IMAGE }}"
   replicas: 4
-  template:
-    spec:
-      chainId: "{{ .CHAIN_ID }}"
-      image: "{{ .IMAGE }}"
-      validator: {}
-      overrides:
-        tx_index.indexer: kv
-        api.rest.enable: "true"
+  configOverrides:
+    tx_index.indexer: kv
+    api.rest.enable: "true"
   genesis:
     chainId: "{{ .CHAIN_ID }}"
     overrides:

@@ -13,25 +13,22 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
 
+const (
+	duTestImage        = "sei:v2.0.0"
+	duTestChainID      = "pacific-1"
+	duTestSidecarImage = "seictl:v2"
+)
+
 func testDeploymentGroup() *seiv1alpha1.SeiNetwork {
 	return &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "wave", Namespace: "sei", UID: "uid-wave"},
 		Spec: seiv1alpha1.SeiNetworkSpec{
+			Image:    duTestImage,
 			Replicas: 2,
-			Template: seiv1alpha1.SeiNodeTemplate{
-				Spec: seiv1alpha1.SeiNodeSpec{
-					ChainID: "pacific-1",
-					Image:   "sei:v2.0.0",
-					FullNode: &seiv1alpha1.FullNodeSpec{
-						Snapshot: &seiv1alpha1.SnapshotSource{
-							S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100},
-						},
-					},
-					Sidecar: &seiv1alpha1.SidecarConfig{
-						Image: "seictl:v2",
-						Port:  7777,
-					},
-				},
+			Genesis:  seiv1alpha1.GenesisCeremonyConfig{ChainID: duTestChainID},
+			Sidecar: &seiv1alpha1.SidecarConfig{
+				Image: duTestSidecarImage,
+				Port:  7777,
 			},
 		},
 	}
@@ -64,7 +61,7 @@ func TestUpdateNodeSpecs_PatchesImage(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "wave-0", Namespace: "sei"},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "pacific-1",
+			ChainID: duTestChainID,
 			Image:   "sei:v1.0.0",
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
@@ -102,11 +99,11 @@ func TestUpdateNodeSpecs_PatchesImage(t *testing.T) {
 	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: "wave-0", Namespace: "sei"}, fetched); err != nil {
 		t.Fatalf("get node: %v", err)
 	}
-	if fetched.Spec.Image != "sei:v2.0.0" {
-		t.Errorf("image = %q, want %q", fetched.Spec.Image, "sei:v2.0.0")
+	if fetched.Spec.Image != duTestImage {
+		t.Errorf("image = %q, want %q", fetched.Spec.Image, duTestImage)
 	}
-	if fetched.Spec.Sidecar.Image != "seictl:v2" {
-		t.Errorf("sidecar image = %q, want %q", fetched.Spec.Sidecar.Image, "seictl:v2")
+	if fetched.Spec.Sidecar.Image != duTestSidecarImage {
+		t.Errorf("sidecar image = %q, want %q", fetched.Spec.Sidecar.Image, duTestSidecarImage)
 	}
 }
 
@@ -115,15 +112,15 @@ func TestUpdateNodeSpecs_SkipsCurrentImage(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "wave-0", Namespace: "sei"},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "pacific-1",
-			Image:   "sei:v2.0.0",
+			ChainID: duTestChainID,
+			Image:   duTestImage,
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100},
 				},
 			},
 			Sidecar: &seiv1alpha1.SidecarConfig{
-				Image: "seictl:v2",
+				Image: duTestSidecarImage,
 				Port:  7777,
 			},
 		},
@@ -153,8 +150,8 @@ func TestUpdateNodeSpecs_SkipsCurrentImage(t *testing.T) {
 	if err := cfg.KubeClient.Get(ctx, types.NamespacedName{Name: "wave-0", Namespace: "sei"}, fetched); err != nil {
 		t.Fatalf("get node: %v", err)
 	}
-	if fetched.Spec.Image != "sei:v2.0.0" {
-		t.Errorf("image should remain %q, got %q", "sei:v2.0.0", fetched.Spec.Image)
+	if fetched.Spec.Image != duTestImage {
+		t.Errorf("image should remain %q, got %q", duTestImage, fetched.Spec.Image)
 	}
 }
 
@@ -165,12 +162,12 @@ func TestAwaitSpecUpdate_CompletesWhenConverged(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "wave-0", Namespace: "sei"},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID:  "pacific-1",
-			Image:    "sei:v2.0.0",
+			ChainID:  duTestChainID,
+			Image:    duTestImage,
 			FullNode: &seiv1alpha1.FullNodeSpec{},
 		},
 		Status: seiv1alpha1.SeiNodeStatus{
-			CurrentImage: "sei:v2.0.0",
+			CurrentImage: duTestImage,
 		},
 	}
 	cfg := testDeploymentCfg(t, group, node)
@@ -195,8 +192,8 @@ func TestAwaitSpecUpdate_RunningWhenNotConverged(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "wave-0", Namespace: "sei"},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID:  "pacific-1",
-			Image:    "sei:v2.0.0",
+			ChainID:  duTestChainID,
+			Image:    duTestImage,
 			FullNode: &seiv1alpha1.FullNodeSpec{},
 		},
 		Status: seiv1alpha1.SeiNodeStatus{
