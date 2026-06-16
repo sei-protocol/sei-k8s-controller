@@ -15,11 +15,11 @@ import (
 
 func TestGenerateSeiNode_NameAndNamespace(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 
 	node := generateSeiNode(network, 0)
-	g.Expect(node.Name).To(Equal("genesis-net-0"))
-	g.Expect(node.Namespace).To(Equal("sei"))
+	g.Expect(node.Name).To(Equal(testNode0))
+	g.Expect(node.Namespace).To(Equal(testGroupNS))
 
 	node2 := generateSeiNode(network, 2)
 	g.Expect(node2.Name).To(Equal("genesis-net-2"))
@@ -27,19 +27,19 @@ func TestGenerateSeiNode_NameAndNamespace(t *testing.T) {
 
 func TestGenerateSeiNode_SystemLabels(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Generation = 7
 
 	node := generateSeiNode(network, 1)
-	g.Expect(node.Labels).To(HaveKeyWithValue(groupLabel, "genesis-net"))
+	g.Expect(node.Labels).To(HaveKeyWithValue(groupLabel, testNetworkName))
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupOrdinalLabel, "1"))
 	g.Expect(node.Labels).To(HaveKeyWithValue(revisionLabel, "7"))
-	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, "pacific-1"))
+	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, testNamespace))
 }
 
 func TestGenerateSeiNode_SystemLabelsOverrideUserLabels(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{
 		Labels: map[string]string{
 			groupLabel: "user-attempt-to-override",
@@ -51,18 +51,18 @@ func TestGenerateSeiNode_SystemLabelsOverrideUserLabels(t *testing.T) {
 
 	node := generateSeiNode(network, 0)
 
-	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, "genesis-net"))
+	g.Expect(node.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, testNetworkName))
 }
 
 func TestGenerateSeiNode_CopiesSpec(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "pacific-1")
+	network := newTestNetwork(testNetworkName, testNamespace)
 
 	node := generateSeiNode(network, 0)
 
-	g.Expect(node.Name).To(Equal("genesis-net-0"))
-	g.Expect(node.Namespace).To(Equal("pacific-1"))
-	g.Expect(node.Spec.ChainID).To(Equal("pacific-1"))
+	g.Expect(node.Name).To(Equal(testNode0))
+	g.Expect(node.Namespace).To(Equal(testNamespace))
+	g.Expect(node.Spec.ChainID).To(Equal(testNamespace))
 	g.Expect(node.Spec.Image).To(Equal("ghcr.io/sei-protocol/seid:v1.0.0"))
 	g.Expect(node.Spec.Validator).NotTo(BeNil())
 }
@@ -71,7 +71,7 @@ func TestGenerateSeiNode_CopiesSpec(t *testing.T) {
 // validator template. Every SeiNetwork runs the ceremony.
 func TestGenerateSeiNode_StampsGenesisCeremony(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Spec.Genesis = seiv1alpha1.GenesisCeremonyConfig{
 		ChainID:        "loadtest-1",
 		StakingAmount:  "5usei",
@@ -92,7 +92,7 @@ func TestGenerateSeiNode_StampsGenesisCeremony(t *testing.T) {
 
 func TestGenerateSeiNode_Annotations(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Spec.Template.Metadata = &seiv1alpha1.SeiNodeTemplateMeta{
 		Annotations: map[string]string{
 			"example.com/team": "platform",
@@ -105,7 +105,7 @@ func TestGenerateSeiNode_Annotations(t *testing.T) {
 
 func TestGenerateSeiNode_NoAnnotationsWhenNil(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 
 	node := generateSeiNode(network, 0)
 	g.Expect(node.Annotations).To(BeNil())
@@ -113,9 +113,9 @@ func TestGenerateSeiNode_NoAnnotationsWhenNil(t *testing.T) {
 
 func TestDetectDeploymentNeeded_InPlace_SetsRolloutInProgress(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Status.TemplateHash = testOldHash
-	network.Status.IncumbentNodes = []string{"genesis-net-0", "genesis-net-1", "genesis-net-2"}
+	network.Status.IncumbentNodes = []string{testNode0, "genesis-net-1", "genesis-net-2"}
 
 	r := &SeiNetworkReconciler{Recorder: record.NewFakeRecorder(10)}
 	r.detectDeploymentNeeded(network)
@@ -131,9 +131,9 @@ func TestDetectDeploymentNeeded_InPlace_SetsRolloutInProgress(t *testing.T) {
 
 func TestDetectDeploymentNeeded_InPlace_AlreadyActive_SameTarget(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Status.TemplateHash = testOldHash
-	network.Status.IncumbentNodes = []string{"genesis-net-0"}
+	network.Status.IncumbentNodes = []string{testNode0}
 
 	currentHash := templateHash(&network.Spec.Template.Spec)
 
@@ -151,9 +151,9 @@ func TestDetectDeploymentNeeded_InPlace_AlreadyActive_SameTarget(t *testing.T) {
 
 func TestDetectDeploymentNeeded_InPlace_Supersedes_StaleRollout(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Status.TemplateHash = testOldHash
-	network.Status.IncumbentNodes = []string{"genesis-net-0"}
+	network.Status.IncumbentNodes = []string{testNode0}
 
 	setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
 		"TemplateChanged", "already rolling")
@@ -171,7 +171,7 @@ func TestDetectDeploymentNeeded_InPlace_Supersedes_StaleRollout(t *testing.T) {
 // Regression armor for the empty-incumbents guard in detectDeploymentNeeded.
 func TestDetectDeploymentNeeded_NoIncumbentNodes_NoRollout(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Status.TemplateHash = testOldHash
 	network.Status.IncumbentNodes = nil
 
@@ -185,7 +185,7 @@ func TestDetectDeploymentNeeded_NoIncumbentNodes_NoRollout(t *testing.T) {
 
 func TestGenerateSeiNode_DeepCopiesTemplate(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Spec.Template.Spec.Overrides = map[string]string{
 		"evm.http_port": "8545",
 	}
@@ -243,7 +243,7 @@ func TestSetGenesisCeremonyCondition(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
-			network := newTestNetwork("genesis-net", "sei")
+			network := newTestNetwork(testNetworkName, testGroupNS)
 			tc.mutate(network)
 
 			r := &SeiNetworkReconciler{Recorder: record.NewFakeRecorder(10)}
@@ -262,11 +262,11 @@ func TestEnsureSeiNode_PropagatesPeersOnUpdate(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("syncer", "pacific-1")
+	network := newTestNetwork("syncer", testNamespace)
 	network.Spec.Template.Spec.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{
 			Region: "eu-central-1",
-			Tags:   map[string]string{"ChainIdentifier": "pacific-1", "Component": "state-syncer"},
+			Tags:   map[string]string{"ChainIdentifier": testNamespace, "Component": "state-syncer"},
 		}},
 	}
 
@@ -275,14 +275,14 @@ func TestEnsureSeiNode_PropagatesPeersOnUpdate(t *testing.T) {
 	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
 
 	child := &seiv1alpha1.SeiNode{}
-	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: "pacific-1"}
+	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}
 	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
 	g.Expect(child.Spec.Peers).To(HaveLen(1))
 
 	network.Spec.Template.Spec.Peers = append(network.Spec.Template.Spec.Peers,
 		seiv1alpha1.PeerSource{Label: &seiv1alpha1.LabelPeerSource{
-			Namespace: "pacific-1",
-			Selector:  map[string]string{"sei.io/chain": "pacific-1"},
+			Namespace: testNamespace,
+			Selector:  map[string]string{"sei.io/chain": testNamespace},
 		}})
 
 	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
@@ -291,7 +291,7 @@ func TestEnsureSeiNode_PropagatesPeersOnUpdate(t *testing.T) {
 	g.Expect(child.Spec.Peers).To(HaveLen(2),
 		"existing child Spec.Peers must reflect network template additions")
 	g.Expect(child.Spec.Peers[1].Label).NotTo(BeNil())
-	g.Expect(child.Spec.Peers[1].Label.Selector).To(Equal(map[string]string{"sei.io/chain": "pacific-1"}))
+	g.Expect(child.Spec.Peers[1].Label.Selector).To(Equal(map[string]string{"sei.io/chain": testNamespace}))
 }
 
 // Removing a peer source from the SeiNetwork must also propagate.
@@ -299,10 +299,10 @@ func TestEnsureSeiNode_PropagatesPeerRemoval(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("syncer", "pacific-1")
+	network := newTestNetwork("syncer", testNamespace)
 	network.Spec.Template.Spec.Peers = []seiv1alpha1.PeerSource{
 		{EC2Tags: &seiv1alpha1.EC2TagsPeerSource{Region: "eu-central-1", Tags: map[string]string{"k": "v"}}},
-		{Label: &seiv1alpha1.LabelPeerSource{Namespace: "pacific-1", Selector: map[string]string{"k": "v"}}},
+		{Label: &seiv1alpha1.LabelPeerSource{Namespace: testNamespace, Selector: map[string]string{"k": "v"}}},
 	}
 
 	r := newPlanTestReconciler(t, network)
@@ -312,7 +312,7 @@ func TestEnsureSeiNode_PropagatesPeerRemoval(t *testing.T) {
 	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
 
 	child := &seiv1alpha1.SeiNode{}
-	g.Expect(r.Get(ctx, types.NamespacedName{Name: testSyncerOrd0, Namespace: "pacific-1"}, child)).To(Succeed())
+	g.Expect(r.Get(ctx, types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}, child)).To(Succeed())
 	g.Expect(child.Spec.Peers).To(HaveLen(1))
 	g.Expect(child.Spec.Peers[0].EC2Tags).NotTo(BeNil())
 	g.Expect(child.Spec.Peers[0].Label).To(BeNil())
@@ -324,16 +324,16 @@ func TestEnsureSeiNode_PeersNoOpWhenUnchanged(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("syncer", "pacific-1")
+	network := newTestNetwork("syncer", testNamespace)
 	network.Spec.Template.Spec.Peers = []seiv1alpha1.PeerSource{
-		{Label: &seiv1alpha1.LabelPeerSource{Namespace: "pacific-1", Selector: map[string]string{"k": "v"}}},
+		{Label: &seiv1alpha1.LabelPeerSource{Namespace: testNamespace, Selector: map[string]string{"k": "v"}}},
 	}
 
 	r := newPlanTestReconciler(t, network)
 	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
 
 	child := &seiv1alpha1.SeiNode{}
-	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: "pacific-1"}
+	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}
 	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
 	rvBefore := child.ResourceVersion
 

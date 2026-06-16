@@ -19,17 +19,17 @@ import (
 
 func TestGenerateInternalService_NameAndNamespace(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 
 	svc := generateInternalService(network)
 
-	g.Expect(svc.Name).To(Equal("pacific-1-wave-internal"))
-	g.Expect(svc.Namespace).To(Equal("pacific-1"))
+	g.Expect(svc.Name).To(Equal(testInternalSvcName))
+	g.Expect(svc.Namespace).To(Equal(testNamespace))
 }
 
 func TestGenerateInternalService_ClusterIPType(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 
 	svc := generateInternalService(network)
 	g.Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
@@ -37,7 +37,7 @@ func TestGenerateInternalService_ClusterIPType(t *testing.T) {
 
 func TestGenerateInternalService_StatelessPortsOnly(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 
 	svc := generateInternalService(network)
 
@@ -68,27 +68,27 @@ func TestGenerateInternalService_StatelessPortsOnly(t *testing.T) {
 
 func TestGenerateInternalService_SelectorMatchesPodLabel(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 
 	svc := generateInternalService(network)
 
-	g.Expect(svc.Spec.Selector).To(Equal(map[string]string{groupLabel: "pacific-1-wave"}))
+	g.Expect(svc.Spec.Selector).To(Equal(map[string]string{groupLabel: testGroupLabelValue}))
 
 	child := generateSeiNode(network, 0)
-	g.Expect(child.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, "pacific-1-wave"),
+	g.Expect(child.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, testGroupLabelValue),
 		"child pods must carry the label the internal Service selects on")
 }
 
 func TestGenerateInternalService_SelectorIgnoresRevision(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 
 	// Active rollout — selector must not include the revision label so
 	// kube-proxy keeps routing to whichever pods are Ready during the rollout.
 	network.Status.Rollout = &seiv1alpha1.RolloutStatus{TargetHash: "newhash"}
 
 	svc := generateInternalService(network)
-	g.Expect(svc.Spec.Selector).To(Equal(map[string]string{groupLabel: "pacific-1-wave"}),
+	g.Expect(svc.Spec.Selector).To(Equal(map[string]string{groupLabel: testGroupLabelValue}),
 		"internal Service must track ready pods across revisions during rollouts")
 	g.Expect(svc.Spec.Selector).NotTo(HaveKey(revisionLabel),
 		"selector must not pin traffic by generation during an InPlace rollout")
@@ -96,7 +96,7 @@ func TestGenerateInternalService_SelectorIgnoresRevision(t *testing.T) {
 
 func TestGenerateInternalService_PublishNotReadyAddressesFalse(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 
 	svc := generateInternalService(network)
 	g.Expect(svc.Spec.PublishNotReadyAddresses).To(BeFalse())
@@ -104,10 +104,10 @@ func TestGenerateInternalService_PublishNotReadyAddressesFalse(t *testing.T) {
 
 func TestGenerateInternalService_Labels(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 
 	svc := generateInternalService(network)
-	g.Expect(svc.Labels).To(HaveKeyWithValue(groupLabel, "pacific-1-wave"))
+	g.Expect(svc.Labels).To(HaveKeyWithValue(groupLabel, testGroupLabelValue))
 	g.Expect(svc.Annotations).To(HaveKeyWithValue(managedByAnnotation, controllerName))
 }
 
@@ -117,7 +117,7 @@ func TestReconcileInternalService_CreatesServiceAndStampsStatus(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 	network.UID = "network-uid-1"
 
 	r := newPlanTestReconciler(t, network)
@@ -127,23 +127,23 @@ func TestReconcileInternalService_CreatesServiceAndStampsStatus(t *testing.T) {
 
 	// Status populated in memory (not yet flushed — caller owns that).
 	g.Expect(network.Status.InternalService).NotTo(BeNil())
-	g.Expect(network.Status.InternalService.Name).To(Equal("pacific-1-wave-internal"))
-	g.Expect(network.Status.InternalService.Namespace).To(Equal("pacific-1"))
+	g.Expect(network.Status.InternalService.Name).To(Equal(testInternalSvcName))
+	g.Expect(network.Status.InternalService.Namespace).To(Equal(testNamespace))
 	g.Expect(network.Status.InternalService.Ports.Rpc).To(Equal(seiconfig.PortRPC))
 	g.Expect(network.Status.InternalService.Ports.EvmHttp).To(Equal(seiconfig.PortEVMHTTP))
 	g.Expect(network.Status.InternalService.Ports.Rest).To(Equal(seiconfig.PortREST))
 
 	// Service was server-side applied.
 	svc := &corev1.Service{}
-	err = r.Get(ctx, types.NamespacedName{Name: "pacific-1-wave-internal", Namespace: "pacific-1"}, svc)
+	err = r.Get(ctx, types.NamespacedName{Name: testInternalSvcName, Namespace: testNamespace}, svc)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
-	g.Expect(svc.Spec.Selector).To(HaveKeyWithValue(groupLabel, "pacific-1-wave"))
+	g.Expect(svc.Spec.Selector).To(HaveKeyWithValue(groupLabel, testGroupLabelValue))
 
 	// Owner reference points at the network for cascade deletion.
 	g.Expect(svc.OwnerReferences).To(HaveLen(1))
 	g.Expect(svc.OwnerReferences[0].UID).To(Equal(network.UID))
-	g.Expect(svc.OwnerReferences[0].Kind).To(Equal("SeiNetwork"))
+	g.Expect(svc.OwnerReferences[0].Kind).To(Equal(testKind))
 	g.Expect(svc.OwnerReferences[0].Controller).NotTo(BeNil())
 	g.Expect(*svc.OwnerReferences[0].Controller).To(BeTrue())
 }
@@ -152,7 +152,7 @@ func TestReconcileInternalService_IdempotentOnRepeatApply(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 	network.UID = "network-uid-1"
 
 	r := newPlanTestReconciler(t, network)
@@ -163,10 +163,10 @@ func TestReconcileInternalService_IdempotentOnRepeatApply(t *testing.T) {
 	}
 
 	list := &corev1.ServiceList{}
-	err := r.List(ctx, list, client.InNamespace("pacific-1"))
+	err := r.List(ctx, list, client.InNamespace(testNamespace))
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(list.Items).To(HaveLen(1))
-	g.Expect(list.Items[0].Name).To(Equal("pacific-1-wave-internal"))
+	g.Expect(list.Items[0].Name).To(Equal(testInternalSvcName))
 }
 
 func TestReconcileInternalService_CascadeDeleteViaOwnerRef(t *testing.T) {
@@ -177,19 +177,19 @@ func TestReconcileInternalService_CascadeDeleteViaOwnerRef(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 	network.UID = "network-uid-cascade"
 
 	r := newPlanTestReconciler(t, network)
 	g.Expect(r.reconcileInternalService(ctx, network)).To(Succeed())
 
 	svc := &corev1.Service{}
-	g.Expect(r.Get(ctx, types.NamespacedName{Name: "pacific-1-wave-internal", Namespace: "pacific-1"}, svc)).To(Succeed())
+	g.Expect(r.Get(ctx, types.NamespacedName{Name: testInternalSvcName, Namespace: testNamespace}, svc)).To(Succeed())
 
 	g.Expect(svc.OwnerReferences).To(ContainElement(And(
-		HaveField("APIVersion", "sei.io/v1alpha1"),
-		HaveField("Kind", "SeiNetwork"),
-		HaveField("Name", "pacific-1-wave"),
+		HaveField("APIVersion", testAPIVersion),
+		HaveField("Kind", testKind),
+		HaveField("Name", testGroupLabelValue),
 		HaveField("UID", network.UID),
 		HaveField("Controller", gomegaPtrBool(true)),
 		HaveField("BlockOwnerDeletion", gomegaPtrBool(true)),
@@ -202,7 +202,7 @@ func TestOrphanInternalService_RemovesOwnerRef(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 	network.UID = "network-uid-orphan"
 
 	internalSvc := &corev1.Service{
@@ -210,8 +210,8 @@ func TestOrphanInternalService_RemovesOwnerRef(t *testing.T) {
 			Name:      internalServiceName(network),
 			Namespace: network.Namespace,
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "sei.io/v1alpha1",
-				Kind:       "SeiNetwork",
+				APIVersion: testAPIVersion,
+				Kind:       testKind,
 				Name:       network.Name,
 				UID:        network.UID,
 				Controller: boolPtr(true),
@@ -233,7 +233,7 @@ func TestOrphanInternalService_MissingServiceIsNoOp(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("pacific-1-wave", "pacific-1")
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
 	network.UID = "network-uid-missing"
 
 	r := newPlanTestReconciler(t, network)

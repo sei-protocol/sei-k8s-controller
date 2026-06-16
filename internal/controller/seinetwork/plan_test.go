@@ -15,7 +15,7 @@ func TestCompletePlan_ClearsRolloutInProgress(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Generation = 3
 	network.Status.Rollout = &seiv1alpha1.RolloutStatus{
 		TargetHash: "newhash1234",
@@ -28,13 +28,13 @@ func TestCompletePlan_ClearsRolloutInProgress(t *testing.T) {
 
 	childNode := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "genesis-net-0",
-			Namespace: "sei",
-			Labels:    map[string]string{groupLabel: "genesis-net"},
+			Name:      testNode0,
+			Namespace: testGroupNS,
+			Labels:    map[string]string{groupLabel: testNetworkName},
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "sei.io/v1alpha1",
-				Kind:       "SeiNetwork",
-				Name:       "genesis-net",
+				APIVersion: testAPIVersion,
+				Kind:       testKind,
+				Name:       testNetworkName,
 				UID:        network.UID,
 				Controller: boolPtr(true),
 			}},
@@ -65,7 +65,7 @@ func TestCompletePlan_GenesisCeremony_LatchesComplete(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanComplete}
 	setPlanInProgress(network, "Genesis", "assembling")
 
@@ -83,7 +83,7 @@ func TestFailPlan_ClearsRolloutInProgress(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("genesis-net", "sei")
+	network := newTestNetwork(testNetworkName, testGroupNS)
 	network.Generation = 3
 	network.Status.Rollout = &seiv1alpha1.RolloutStatus{
 		TargetHash: "newhash1234",
@@ -95,24 +95,24 @@ func TestFailPlan_ClearsRolloutInProgress(t *testing.T) {
 		"TemplateChanged", "hash changed")
 
 	ownerRef := metav1.OwnerReference{
-		APIVersion: "sei.io/v1alpha1",
-		Kind:       "SeiNetwork",
-		Name:       "genesis-net",
+		APIVersion: testAPIVersion,
+		Kind:       testKind,
+		Name:       testNetworkName,
 		UID:        network.UID,
 		Controller: boolPtr(true),
 	}
 	childRunning := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "genesis-net-0", Namespace: "sei",
-			Labels:          map[string]string{groupLabel: "genesis-net"},
+			Name: testNode0, Namespace: testGroupNS,
+			Labels:          map[string]string{groupLabel: testNetworkName},
 			OwnerReferences: []metav1.OwnerReference{ownerRef},
 		},
 		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning},
 	}
 	childFailed := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "genesis-net-1", Namespace: "sei",
-			Labels:          map[string]string{groupLabel: "genesis-net"},
+			Name: "genesis-net-1", Namespace: testGroupNS,
+			Labels:          map[string]string{groupLabel: testNetworkName},
 			OwnerReferences: []metav1.OwnerReference{ownerRef},
 		},
 		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseFailed},

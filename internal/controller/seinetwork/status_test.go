@@ -143,7 +143,7 @@ func TestSetPausedCondition(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
-			network := newTestNetwork("genesis-net", "sei")
+			network := newTestNetwork(testNetworkName, testGroupNS)
 			network.Spec.Paused = tc.paused
 			if tc.seedExist != nil {
 				network.Status.Conditions = append(network.Status.Conditions, *tc.seedExist)
@@ -218,7 +218,7 @@ func TestSeedAlwaysPresentConditions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
-			network := newTestNetwork("genesis-net", "sei")
+			network := newTestNetwork(testNetworkName, testGroupNS)
 			tc.mutate(network)
 
 			r := &SeiNetworkReconciler{Recorder: record.NewFakeRecorder(10)}

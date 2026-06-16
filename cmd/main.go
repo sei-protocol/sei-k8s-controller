@@ -27,8 +27,8 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
-	seinetworkcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/seinetwork"
 	nodetaskcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodetask"
+	seinetworkcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/seinetwork"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/peering"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"

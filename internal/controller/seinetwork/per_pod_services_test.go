@@ -17,7 +17,7 @@ func nodeWithOrdinal(name, ordinal string) seiv1alpha1.SeiNode {
 	return seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: "pacific-1",
+			Namespace: testNamespace,
 			Labels: map[string]string{
 				groupLabel:        testGroupLabelValue,
 				groupOrdinalLabel: ordinal,
@@ -48,7 +48,7 @@ func TestPopulatePerPodServices_AllHealthySorted(t *testing.T) {
 	g.Expect(got[1].Name).To(Equal("pacific-1-wave-1"))
 	g.Expect(got[2].Name).To(Equal("pacific-1-wave-2"))
 	for _, e := range got {
-		g.Expect(e.Namespace).To(Equal("pacific-1"))
+		g.Expect(e.Namespace).To(Equal(testNamespace))
 		g.Expect(e.Ports.EvmHttp).To(Equal(seiconfig.PortEVMHTTP))
 		g.Expect(e.Ports.EvmWs).To(Equal(seiconfig.PortEVMWS))
 	}
@@ -77,8 +77,8 @@ func TestPopulatePerPodServices_MissingOrdinalLabelSkipped(t *testing.T) {
 	noOrdinal := seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pacific-1-wave-99",
-			Namespace: "pacific-1",
-			Labels:    map[string]string{groupLabel: "pacific-1-wave"},
+			Namespace: testNamespace,
+			Labels:    map[string]string{groupLabel: testGroupLabelValue},
 		},
 	}
 	nodes := []seiv1alpha1.SeiNode{

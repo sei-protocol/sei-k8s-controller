@@ -16,6 +16,12 @@ import (
 const (
 	testOldHash    = "0000000000000000"
 	testSyncerOrd0 = "syncer-0"
+
+	testNetworkName = "genesis-net"
+	testNode0       = "genesis-net-0"
+	testGroupNS     = "sei"
+	testAPIVersion  = "sei.io/v1alpha1"
+	testKind        = "SeiNetwork"
 )
 
 // newTestNetwork builds a validator-role SeiNetwork with a required genesis
@@ -26,10 +32,10 @@ func newTestNetwork(name, namespace string) *seiv1alpha1.SeiNetwork {
 		Spec: seiv1alpha1.SeiNetworkSpec{
 			Image:    "ghcr.io/sei-protocol/seid:v1.0.0",
 			Replicas: 3,
-			Genesis:  seiv1alpha1.GenesisCeremonyConfig{ChainID: "pacific-1"},
+			Genesis:  seiv1alpha1.GenesisCeremonyConfig{ChainID: testNamespace},
 			Template: seiv1alpha1.SeiNodeTemplate{
 				Spec: seiv1alpha1.SeiNodeSpec{
-					ChainID:   "pacific-1",
+					ChainID:   testNamespace,
 					Image:     "ghcr.io/sei-protocol/seid:v1.0.0",
 					Validator: &seiv1alpha1.ValidatorSpec{},
 					Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
