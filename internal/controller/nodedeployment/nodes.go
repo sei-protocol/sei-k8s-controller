@@ -227,7 +227,8 @@ func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *
 	// ExternalAddress: preserve whatever is on the SeiNode rather than
 	// recomputing it from spec.networking. Removing spec.networking flips
 	// TCPEnabled() false, which would otherwise clear the publishable P2P
-	// address and stop the node advertising it.
+	// address and stop the node advertising it. Un-orphaning resumes
+	// recomputation — restore spec.networking too, or it recomputes to "".
 	if !networkingOrphaned(group) && existing.Spec.ExternalAddress != desired.Spec.ExternalAddress {
 		existing.Spec.ExternalAddress = desired.Spec.ExternalAddress
 		updated = true
