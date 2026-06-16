@@ -29,10 +29,6 @@ spec:
     - jsonPath: .spec.paused
       name: Paused
       type: boolean
-    - jsonPath: .status.rollout.targetHash
-      name: Target
-      priority: 1
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -67,6 +63,10 @@ spec:
               spec.genesis is mandatory — the Kind cannot exist without it. The replicas
               are the genesis validators; the ceremony generates a distinct identity
               (consensus key, P2P node key, operator account) for each one.
+
+              Consumer note: editing spec.image (or other propagatable fields) on a
+              running network rolls every genesis validator near-simultaneously, which
+              briefly interrupts consensus. Drain in-flight load before an image bump.
 
               The spec is purpose-built for genesis bootstrap, not a SeiNodeSpec template.
               Follower/multi-role fields (signingKey, nodeKey, operatorKeyring, snapshot,
@@ -207,8 +207,8 @@ spec:
               paused:
                 description: |-
                   Paused freezes plan-driven orchestration. While true, no new plans
-                  start, no rollouts trigger, no spec changes propagate to children, and
-                  any active plan freezes in place. Children inherit the paused state.
+                  start, no spec changes propagate to children, and any active plan
+                  freezes in place. Children inherit the paused state.
                 type: boolean
               podLabels:
                 additionalProperties:
@@ -436,9 +436,10 @@ spec:
                 type: string
               incumbentNodes:
                 description: |-
-                  IncumbentNodes lists the names of the currently active SeiNode resources.
-                  Set during steady-state reconciliation so that the deployment planner
-                  can read the current node set directly from the network object.
+                  IncumbentNodes lists the names of the child SeiNode resources. Refreshed
+                  each reconcile so the genesis planner can read the current node set
+                  directly from the network object. NOT rollout state — purely the
+                  ceremony's child-list feed.
                 items:
                   type: string
                 type: array
@@ -485,6 +486,13 @@ spec:
                 items:
                   description: GroupNodeStatus is a summary of a child SeiNode's state.
                   properties:
+                    currentImage:
+                      description: |-
+                        CurrentImage is the seid image the child reports running
+                        (mirrored from the child's status.currentImage). Compared against
+                        spec.image to derive UpToDateReplicas and the RolloutInProgress
+                        condition.
+                      type: string
                     name:
                       description: Name is the SeiNode resource name.
                       type: string
@@ -552,7 +560,6 @@ spec:
                 - Pending
                 - Initializing
                 - Ready
-                - Upgrading
                 - Paused
                 - Degraded
                 - Failed
@@ -693,29 +700,15 @@ spec:
                 description: Replicas is the desired number of SeiNodes.
                 format: int32
                 type: integer
-              rollout:
+              upToDateReplicas:
                 description: |-
-                  Rollout tracks an in-progress rollout across all strategy types.
-                  Nil when no rollout is active.
-                properties:
-                  startedAt:
-                    description: StartedAt is when the rollout was first detected.
-                    format: date-time
-                    type: string
-                  targetHash:
-                    description: TargetHash is the templateHash being rolled out to.
-                    type: string
-                required:
-                - startedAt
-                - targetHash
-                type: object
-              templateHash:
-                description: |-
-                  TemplateHash is a hash of the spec fields that require deployment
-                  orchestration when changed (image, chainId). Updated during steady-state
-                  reconciliation. Compared against the current spec to detect
-                  deployment-worthy changes.
-                type: string
+                  UpToDateReplicas is the number of child SeiNodes whose
+                  status.currentImage matches spec.image. Derived each reconcile from the
+                  child snapshot — no plan or revision tracking. When it lags Replicas a
+                  child is mid-roll (or wedged on a bad image tag); the derived
+                  RolloutInProgress condition mirrors this for `kubectl wait`.
+                format: int32
+                type: integer
             type: object
         type: object
     served: true

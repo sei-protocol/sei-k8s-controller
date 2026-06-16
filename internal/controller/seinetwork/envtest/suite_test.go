@@ -166,9 +166,8 @@ func run(m *testing.M) (int, error) {
 	}
 
 	// SeiNetwork reconciler. Its plan executor is wired with the same stub
-	// sidecar; the InPlace deployment plan tasks (UpdateNodeSpecs,
-	// AwaitSpecUpdate) are pure kube-client tasks. Genesis ceremony tasks call
-	// the sidecar and resolve to the stub.
+	// sidecar; the only network-level plan is the genesis ceremony, whose
+	// tasks call the sidecar and resolve to the stub.
 	recorder := mgr.GetEventRecorderFor("seinetwork-controller") //nolint:staticcheck // new events API migration is a separate effort
 	reconciler := &seinetworkcontroller.SeiNetworkReconciler{
 		Client:   kc,

@@ -69,16 +69,6 @@ func TestComputeGroupPhase_AllFailed(t *testing.T) {
 	g.Expect(phase).To(Equal(seiv1alpha1.GroupPhaseFailed))
 }
 
-func TestComputeGroupPhase_Upgrading(t *testing.T) {
-	g := NewWithT(t)
-	network := emptyNetwork()
-	network.Status.Rollout = &seiv1alpha1.RolloutStatus{TargetHash: "abc123"}
-	setPlanInProgress(network, "Deployment", "deploying")
-	nodes := makeNodes(3, seiv1alpha1.PhaseRunning)
-	phase := computeGroupPhase(network, 3, 3, nodes)
-	g.Expect(phase).To(Equal(seiv1alpha1.GroupPhaseUpgrading))
-}
-
 func TestComputeGroupPhase_PlanInProgress_Genesis(t *testing.T) {
 	g := NewWithT(t)
 	network := emptyNetwork()
@@ -94,16 +84,6 @@ func makeNodes(n int, phase seiv1alpha1.SeiNodePhase) []seiv1alpha1.SeiNode {
 		nodes[i].Status.Phase = phase
 	}
 	return nodes
-}
-
-func TestComputeGroupPhase_RolloutInProgress(t *testing.T) {
-	g := NewWithT(t)
-	network := emptyNetwork()
-	setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
-		"TemplateChanged", "hash changed")
-	nodes := makeNodes(3, seiv1alpha1.PhaseRunning)
-	phase := computeGroupPhase(network, 3, 3, nodes)
-	g.Expect(phase).To(Equal(seiv1alpha1.GroupPhaseUpgrading))
 }
 
 func TestSetPausedCondition(t *testing.T) {
@@ -176,13 +156,6 @@ func TestSeedAlwaysPresentConditions(t *testing.T) {
 			wantReason: ReasonNotStarted,
 		},
 		{
-			name:       "RolloutInProgress seeds False/NotStarted on a fresh network",
-			mutate:     func(n *seiv1alpha1.SeiNetwork) {},
-			condType:   seiv1alpha1.ConditionRolloutInProgress,
-			wantStatus: metav1.ConditionFalse,
-			wantReason: ReasonNotStarted,
-		},
-		{
 			// The seed runs before transition paths in the same
 			// reconcile, so a True write from startPlan must not be
 			// re-seeded on the next pass.
@@ -204,15 +177,6 @@ func TestSeedAlwaysPresentConditions(t *testing.T) {
 			condType:   seiv1alpha1.ConditionPlanInProgress,
 			wantStatus: metav1.ConditionFalse,
 			wantReason: "PlanComplete",
-		},
-		{
-			name: "RolloutInProgress=False/RolloutComplete is preserved",
-			mutate: func(n *seiv1alpha1.SeiNetwork) {
-				setCondition(n, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse, "RolloutComplete", "")
-			},
-			condType:   seiv1alpha1.ConditionRolloutInProgress,
-			wantStatus: metav1.ConditionFalse,
-			wantReason: "RolloutComplete",
 		},
 	}
 	for _, tc := range cases {

@@ -29,16 +29,14 @@ func TestGenerateSeiNode_NameAndNamespace(t *testing.T) {
 func TestGenerateSeiNode_SystemLabels(t *testing.T) {
 	g := NewWithT(t)
 	network := newTestNetwork(testNetworkName, testGroupNS)
-	network.Generation = 7
 
 	node := generateSeiNode(network, 1)
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupLabel, testNetworkName))
 	g.Expect(node.Labels).To(HaveKeyWithValue(groupOrdinalLabel, "1"))
-	g.Expect(node.Labels).To(HaveKeyWithValue(revisionLabel, "7"))
 	g.Expect(node.Labels).To(HaveKeyWithValue(chainLabel, testNamespace))
 }
 
-// The reserved group/ordinal/revision pod labels are controller-owned and
+// The reserved group/ordinal pod labels are controller-owned and
 // must overwrite any same-keyed user PodLabels.
 func TestGenerateSeiNode_SystemPodLabelsOverrideUserLabels(t *testing.T) {
 	g := NewWithT(t)
@@ -119,76 +117,58 @@ func TestGenerateSeiNode_NoAnnotations(t *testing.T) {
 	g.Expect(node.Annotations).To(BeNil())
 }
 
-func TestDetectDeploymentNeeded_InPlace_SetsRolloutInProgress(t *testing.T) {
-	g := NewWithT(t)
-	network := newTestNetwork(testNetworkName, testGroupNS)
-	network.Status.TemplateHash = testOldHash
-	network.Status.IncumbentNodes = []string{testNode0, "genesis-net-1", "genesis-net-2"}
+// setRolloutInProgressCondition is a derived projection: True when a child's
+// reported image lags spec.image, False/AllUpToDate at steady state, and
+// False before any children exist (nothing to roll).
+func TestSetRolloutInProgressCondition_Derived(t *testing.T) {
+	cases := []struct {
+		name       string
+		upToDate   int32
+		desired    int32
+		childCount int
+		wantStatus metav1.ConditionStatus
+		wantReason string
+	}{
+		{"all up to date", 3, 3, 3, metav1.ConditionFalse, "AllUpToDate"},
+		{"child mid-roll", 1, 3, 3, metav1.ConditionTrue, "ImageRolling"},
+		{"wedged on bad tag", 0, 2, 2, metav1.ConditionTrue, "ImageRolling"},
+		{"no children yet", 0, 3, 0, metav1.ConditionFalse, "AllUpToDate"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			network := newTestNetwork(testNetworkName, testGroupNS)
 
-	r := &SeiNetworkReconciler{Recorder: record.NewFakeRecorder(10)}
-	r.detectDeploymentNeeded(network)
+			setRolloutInProgressCondition(network, tc.upToDate, tc.desired, tc.childCount)
 
-	cond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
-	g.Expect(cond).NotTo(BeNil())
-	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(cond.Reason).To(Equal("TemplateChanged"))
-
-	g.Expect(network.Status.Rollout).NotTo(BeNil())
-	g.Expect(network.Status.Rollout.TargetHash).NotTo(BeEmpty())
+			cond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
+			g.Expect(cond).NotTo(BeNil(), "RolloutInProgress must always be present")
+			g.Expect(cond.Status).To(Equal(tc.wantStatus))
+			g.Expect(cond.Reason).To(Equal(tc.wantReason))
+		})
+	}
 }
 
-func TestDetectDeploymentNeeded_InPlace_AlreadyActive_SameTarget(t *testing.T) {
+// Editing spec.image on a live network must propagate in-place to the
+// existing child every reconcile (no hash gate). The child's own SeiNode
+// controller then rolls its StatefulSet.
+func TestEnsureSeiNode_PropagatesImage(t *testing.T) {
 	g := NewWithT(t)
-	network := newTestNetwork(testNetworkName, testGroupNS)
-	network.Status.TemplateHash = testOldHash
-	network.Status.IncumbentNodes = []string{testNode0}
+	ctx := context.Background()
 
-	currentHash := templateHash(&network.Spec)
+	network := newTestNetwork("syncer", testNamespace)
+	r := newPlanTestReconciler(t, network)
 
-	setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
-		"TemplateChanged", "already rolling")
+	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
 
-	existingRollout := &seiv1alpha1.RolloutStatus{TargetHash: currentHash}
-	network.Status.Rollout = existingRollout
+	const newImage = "ghcr.io/sei-protocol/seid:v2.0.0"
+	network.Spec.Image = newImage
+	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
 
-	r := &SeiNetworkReconciler{Recorder: record.NewFakeRecorder(10)}
-	r.detectDeploymentNeeded(network)
-
-	g.Expect(network.Status.Rollout).To(Equal(existingRollout))
-}
-
-func TestDetectDeploymentNeeded_InPlace_Supersedes_StaleRollout(t *testing.T) {
-	g := NewWithT(t)
-	network := newTestNetwork(testNetworkName, testGroupNS)
-	network.Status.TemplateHash = testOldHash
-	network.Status.IncumbentNodes = []string{testNode0}
-
-	setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
-		"TemplateChanged", "already rolling")
-
-	network.Status.Rollout = &seiv1alpha1.RolloutStatus{TargetHash: "stale-hash"}
-	network.Status.Plan = &seiv1alpha1.TaskPlan{Phase: seiv1alpha1.TaskPlanActive}
-
-	r := &SeiNetworkReconciler{Recorder: record.NewFakeRecorder(10)}
-	r.detectDeploymentNeeded(network)
-
-	g.Expect(network.Status.Rollout.TargetHash).NotTo(Equal("stale-hash"))
-	g.Expect(network.Status.Plan).To(BeNil())
-}
-
-// Regression armor for the empty-incumbents guard in detectDeploymentNeeded.
-func TestDetectDeploymentNeeded_NoIncumbentNodes_NoRollout(t *testing.T) {
-	g := NewWithT(t)
-	network := newTestNetwork(testNetworkName, testGroupNS)
-	network.Status.TemplateHash = testOldHash
-	network.Status.IncumbentNodes = nil
-
-	r := &SeiNetworkReconciler{Recorder: record.NewFakeRecorder(10)}
-	r.detectDeploymentNeeded(network)
-
-	g.Expect(network.Status.Rollout).To(BeNil())
-	cond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionRolloutInProgress)
-	g.Expect(cond).To(BeNil())
+	child := &seiv1alpha1.SeiNode{}
+	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}
+	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
+	g.Expect(child.Spec.Image).To(Equal(newImage))
 }
 
 // generateSeiNode must not alias the network's ConfigOverrides map into the
@@ -321,6 +301,46 @@ func TestEnsureSeiNode_PropagatesConfigOverrides(t *testing.T) {
 	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}
 	g.Expect(r.Get(ctx, childKey, child)).To(Succeed())
 	g.Expect(child.Spec.Overrides).To(HaveKeyWithValue(testOverrideKey, testOverrideVal))
+}
+
+// syncPausedToChildren runs unconditionally in Reconcile — before reconcilePlan
+// and regardless of plan state — so an unpause propagates to children even
+// while a network-level plan (the genesis ceremony) is in progress. This is the
+// deadlock guard: the SeiNode controller short-circuits on still-paused
+// children, so a resume gated on plan completion would wedge await-nodes-running.
+func TestSyncPausedToChildren_IgnoresPlanInProgress(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.UID = "net-uid"
+	setPlanInProgress(network, "Genesis", "assembling")
+
+	child := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testNode0,
+			Namespace: testGroupNS,
+			Labels:    map[string]string{groupLabel: testNetworkName},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: testAPIVersion,
+				Kind:       testKind,
+				Name:       testNetworkName,
+				UID:        network.UID,
+				Controller: new(true),
+			}},
+		},
+		Spec: seiv1alpha1.SeiNodeSpec{Paused: true},
+	}
+
+	r := newPlanTestReconciler(t, network, child)
+
+	// Unpause while PlanInProgress=True — must still reach the child.
+	g.Expect(r.syncPausedToChildren(ctx, network, false)).To(Succeed())
+
+	got := &seiv1alpha1.SeiNode{}
+	g.Expect(r.Get(ctx, types.NamespacedName{Name: testNode0, Namespace: testGroupNS}, got)).To(Succeed())
+	g.Expect(got.Spec.Paused).To(BeFalse(),
+		"unpause must propagate to children even while a plan is in progress")
 }
 
 // No-op reconcile path: identical spec across two reconciles must not trigger

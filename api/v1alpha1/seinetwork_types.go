@@ -13,6 +13,10 @@ import (
 // are the genesis validators; the ceremony generates a distinct identity
 // (consensus key, P2P node key, operator account) for each one.
 //
+// Consumer note: editing spec.image (or other propagatable fields) on a
+// running network rolls every genesis validator near-simultaneously, which
+// briefly interrupts consensus. Drain in-flight load before an image bump.
+//
 // The spec is purpose-built for genesis bootstrap, not a SeiNodeSpec template.
 // Follower/multi-role fields (signingKey, nodeKey, operatorKeyring, snapshot,
 // peers, externalAddress, fullNode/archive/replayer) are structurally absent:
@@ -68,8 +72,8 @@ type SeiNetworkSpec struct {
 	PodLabels map[string]string `json:"podLabels,omitempty"`
 
 	// Paused freezes plan-driven orchestration. While true, no new plans
-	// start, no rollouts trigger, no spec changes propagate to children, and
-	// any active plan freezes in place. Children inherit the paused state.
+	// start, no spec changes propagate to children, and any active plan
+	// freezes in place. Children inherit the paused state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
 
@@ -138,14 +142,13 @@ type GenesisAccount struct {
 // ---------------------------------------------------------------------------
 
 // SeiNetworkPhase represents the high-level lifecycle state.
-// +kubebuilder:validation:Enum=Pending;Initializing;Ready;Upgrading;Paused;Degraded;Failed;Terminating
+// +kubebuilder:validation:Enum=Pending;Initializing;Ready;Paused;Degraded;Failed;Terminating
 type SeiNetworkPhase string
 
 const (
 	GroupPhasePending      SeiNetworkPhase = "Pending"
 	GroupPhaseInitializing SeiNetworkPhase = "Initializing"
 	GroupPhaseReady        SeiNetworkPhase = "Ready"
-	GroupPhaseUpgrading    SeiNetworkPhase = "Upgrading"
 	GroupPhasePaused       SeiNetworkPhase = "Paused"
 	GroupPhaseDegraded     SeiNetworkPhase = "Degraded"
 	GroupPhaseFailed       SeiNetworkPhase = "Failed"
@@ -160,13 +163,6 @@ type SeiNetworkStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// TemplateHash is a hash of the spec fields that require deployment
-	// orchestration when changed (image, chainId). Updated during steady-state
-	// reconciliation. Compared against the current spec to detect
-	// deployment-worthy changes.
-	// +optional
-	TemplateHash string `json:"templateHash,omitempty"`
-
 	// Phase is the high-level lifecycle state.
 	Phase SeiNetworkPhase `json:"phase,omitempty"`
 
@@ -175,6 +171,14 @@ type SeiNetworkStatus struct {
 
 	// ReadyReplicas is the number of SeiNodes in Running phase.
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+
+	// UpToDateReplicas is the number of child SeiNodes whose
+	// status.currentImage matches spec.image. Derived each reconcile from the
+	// child snapshot — no plan or revision tracking. When it lags Replicas a
+	// child is mid-roll (or wedged on a bad image tag); the derived
+	// RolloutInProgress condition mirrors this for `kubectl wait`.
+	// +optional
+	UpToDateReplicas int32 `json:"upToDateReplicas,omitempty"`
 
 	// Nodes reports the status of each child SeiNode.
 	// +listType=map
@@ -199,16 +203,12 @@ type SeiNetworkStatus struct {
 	// +optional
 	GenesisS3URI string `json:"genesisS3URI,omitempty"`
 
-	// IncumbentNodes lists the names of the currently active SeiNode resources.
-	// Set during steady-state reconciliation so that the deployment planner
-	// can read the current node set directly from the network object.
+	// IncumbentNodes lists the names of the child SeiNode resources. Refreshed
+	// each reconcile so the genesis planner can read the current node set
+	// directly from the network object. NOT rollout state — purely the
+	// ceremony's child-list feed.
 	// +optional
 	IncumbentNodes []string `json:"incumbentNodes,omitempty"`
-
-	// Rollout tracks an in-progress rollout across all strategy types.
-	// Nil when no rollout is active.
-	// +optional
-	Rollout *RolloutStatus `json:"rollout,omitempty"`
 
 	// InternalService reports the in-cluster ClusterIP Service that kube-proxy
 	// load-balances across healthy child pods. Populated unconditionally.
@@ -332,17 +332,13 @@ type GroupNodeStatus struct {
 
 	// Phase is the SeiNode's current phase.
 	Phase SeiNodePhase `json:"phase,omitempty"`
-}
 
-// RolloutStatus tracks an in-progress rollout. Presence on the parent
-// SeiNetwork is the single source of truth for "rollout in progress" —
-// `Status.Rollout != nil` and the `RolloutInProgress` condition move together.
-type RolloutStatus struct {
-	// TargetHash is the templateHash being rolled out to.
-	TargetHash string `json:"targetHash"`
-
-	// StartedAt is when the rollout was first detected.
-	StartedAt metav1.Time `json:"startedAt"`
+	// CurrentImage is the seid image the child reports running
+	// (mirrored from the child's status.currentImage). Compared against
+	// spec.image to derive UpToDateReplicas and the RolloutInProgress
+	// condition.
+	// +optional
+	CurrentImage string `json:"currentImage,omitempty"`
 }
 
 // Status condition types for SeiNetwork.
@@ -350,8 +346,12 @@ const (
 	ConditionNodesReady              = "NodesReady"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
 	ConditionPlanInProgress          = "PlanInProgress"
-	ConditionRolloutInProgress       = "RolloutInProgress"
-	ConditionPaused                  = "Paused"
+	// ConditionRolloutInProgress is a DERIVED projection (not a state machine):
+	// True when UpToDateReplicas < Replicas (a child is mid-roll or wedged on a
+	// bad image), False/AllUpToDate otherwise. Computed in updateStatus from the
+	// child snapshot — no plan or revision tracking owns it.
+	ConditionRolloutInProgress = "RolloutInProgress"
+	ConditionPaused            = "Paused"
 )
 
 // +kubebuilder:object:root=true
@@ -361,7 +361,6 @@ const (
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.spec.paused`
-// +kubebuilder:printcolumn:name="Target",type=string,JSONPath=`.status.rollout.targetHash`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // SeiNetwork is the Schema for the seinetworks API.

@@ -11,8 +11,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 // --- Pure generator ---
@@ -77,21 +75,6 @@ func TestGenerateInternalService_SelectorMatchesPodLabel(t *testing.T) {
 	child := generateSeiNode(network, 0)
 	g.Expect(child.Spec.PodLabels).To(HaveKeyWithValue(groupLabel, testGroupLabelValue),
 		"child pods must carry the label the internal Service selects on")
-}
-
-func TestGenerateInternalService_SelectorIgnoresRevision(t *testing.T) {
-	g := NewWithT(t)
-	network := newTestNetwork(testGroupLabelValue, testNamespace)
-
-	// Active rollout — selector must not include the revision label so
-	// kube-proxy keeps routing to whichever pods are Ready during the rollout.
-	network.Status.Rollout = &seiv1alpha1.RolloutStatus{TargetHash: "newhash"}
-
-	svc := generateInternalService(network)
-	g.Expect(svc.Spec.Selector).To(Equal(map[string]string{groupLabel: testGroupLabelValue}),
-		"internal Service must track ready pods across revisions during rollouts")
-	g.Expect(svc.Spec.Selector).NotTo(HaveKey(revisionLabel),
-		"selector must not pin traffic by generation during an InPlace rollout")
 }
 
 func TestGenerateInternalService_PublishNotReadyAddressesFalse(t *testing.T) {

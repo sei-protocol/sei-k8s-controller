@@ -11,7 +11,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -135,31 +134,6 @@ func listChildren(t *testing.T, network *seiv1alpha1.SeiNetwork) []seiv1alpha1.S
 	return out
 }
 
-// condTrue reports whether condType is present and True on the SeiNetwork.
-func condTrue(network *seiv1alpha1.SeiNetwork, condType string) bool {
-	c := apimeta.FindStatusCondition(network.Status.Conditions, condType)
-	return c != nil && c.Status == metav1.ConditionTrue
-}
-
-// listEventsForNetwork returns events whose InvolvedObject UID matches the
-// SeiNetwork and (optionally) whose Reason matches the filter.
-func listEventsForNetwork(t *testing.T, network *seiv1alpha1.SeiNetwork, reason string) []corev1.Event {
-	t.Helper()
-	list := &corev1.EventList{}
-	if err := testCli.List(testCtx, list, client.InNamespace(network.Namespace)); err != nil {
-		t.Logf("listEventsForNetwork list error: %v", err)
-		return nil
-	}
-	out := make([]corev1.Event, 0, len(list.Items))
-	for i := range list.Items {
-		e := list.Items[i]
-		if e.InvolvedObject.UID != network.UID {
-			continue
-		}
-		if reason != "" && e.Reason != reason {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
-}
+// reasonAllUpToDate is the derived RolloutInProgress reason at steady state
+// (every child reports spec.image).
+const reasonAllUpToDate = "AllUpToDate"

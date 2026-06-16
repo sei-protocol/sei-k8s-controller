@@ -88,12 +88,11 @@ func ForGroup(network *seiv1alpha1.SeiNetwork) (GroupPlanner, error) {
 		return &genesisGroupPlanner{}, nil
 	}
 
-	// Deployment: reconcileSeiNodes sets Rollout metadata when it
-	// detects a spec change requiring deployment orchestration.
-	if network.Status.Rollout != nil && network.Status.Plan == nil {
-		return ForDeployment(network)
-	}
-
+	// No deployment planner: image (and other propagatable) changes flow
+	// to children in-place via ensureSeiNode every reconcile, and each
+	// child's SeiNode controller rolls its own StatefulSet. The network's
+	// RolloutInProgress condition is a derived projection (see updateStatus),
+	// not a plan.
 	return nil, nil
 }
 

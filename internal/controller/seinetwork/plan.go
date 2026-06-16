@@ -71,24 +71,14 @@ func (r *SeiNetworkReconciler) startPlan(ctx context.Context, network *seiv1alph
 	logger.Info("plan started", "tasks", len(plan.Tasks))
 }
 
-// completePlan finalizes a completed plan. All mutations are in-memory.
+// completePlan finalizes a completed plan. Every SeiNetwork runs exactly one
+// network-level plan — the genesis ceremony — so a completing plan is the
+// ceremony completing. All mutations are in-memory.
 func (r *SeiNetworkReconciler) completePlan(ctx context.Context, network *seiv1alpha1.SeiNetwork) {
 	logger := log.FromContext(ctx)
 
-	isDeploymentPlan := network.Status.Rollout != nil
-
-	if isDeploymentPlan {
-		network.Status.ObservedGeneration = network.Generation
-		network.Status.Rollout = nil
-		setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
-			"RolloutComplete", "Deployment completed successfully")
-		r.Recorder.Event(network, corev1.EventTypeNormal, "RolloutComplete", "Deployment rollout completed successfully")
-	} else {
-		// Every SeiNetwork runs the genesis ceremony — a non-deployment plan
-		// completing is the ceremony completing.
-		setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue,
-			"Complete", "genesis ceremony completed")
-	}
+	setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue,
+		"Complete", "genesis ceremony completed")
 
 	network.Status.Plan = nil
 	clearPlanInProgress(network, "PlanComplete", "Plan completed successfully")
@@ -103,11 +93,6 @@ func (r *SeiNetworkReconciler) failPlan(ctx context.Context, network *seiv1alpha
 
 	network.Status.Phase = seiv1alpha1.GroupPhaseDegraded
 	network.Status.Plan = nil
-	if network.Status.Rollout != nil {
-		network.Status.Rollout = nil
-		setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
-			"RolloutFailed", "Deployment plan failed")
-	}
 	clearPlanInProgress(network, "PlanFailed", "Plan failed")
 
 	r.Recorder.Event(network, corev1.EventTypeWarning, "PlanFailed", "Plan failed")

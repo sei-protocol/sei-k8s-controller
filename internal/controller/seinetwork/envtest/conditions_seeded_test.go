@@ -18,7 +18,8 @@ import (
 // TestNetwork_AlwaysPresentConditionsSeededOnFirstReconcile asserts the
 // always-present conditions land on a fresh SeiNetwork:
 //   - PlanInProgress=False/NotStarted
-//   - RolloutInProgress=False/NotStarted
+//   - RolloutInProgress present as a derived projection (False/AllUpToDate
+//     once updateStatus computes it from the child snapshot)
 //   - GenesisCeremonyComplete present (reason races NotStarted→InProgress as
 //     the planner schedules the ceremony immediately, so assert presence only)
 func TestNetwork_AlwaysPresentConditionsSeededOnFirstReconcile(t *testing.T) {
@@ -34,12 +35,14 @@ func TestNetwork_AlwaysPresentConditionsSeededOnFirstReconcile(t *testing.T) {
 			findCondition(n, seiv1alpha1.ConditionGenesisCeremonyComplete) != nil
 	}, "PlanInProgress, RolloutInProgress, GenesisCeremonyComplete must all be present after first reconcile")
 
-	cur := &seiv1alpha1.SeiNetwork{}
-	g.Expect(testCli.Get(testCtx, client.ObjectKeyFromObject(network), cur)).To(Succeed())
-
-	rollout := findCondition(cur, seiv1alpha1.ConditionRolloutInProgress)
-	g.Expect(rollout.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(rollout.Reason).To(Equal("NotStarted"))
+	// The derived RolloutInProgress settles to False/AllUpToDate once the
+	// network reaches steady state (every child reports spec.image). It may
+	// transiently read True/ImageRolling while children are mid-genesis, so
+	// wait for the steady value rather than sampling immediately.
+	waitForStatus(t, client.ObjectKeyFromObject(network), func(n *seiv1alpha1.SeiNetwork) bool {
+		c := findCondition(n, seiv1alpha1.ConditionRolloutInProgress)
+		return c != nil && c.Status == metav1.ConditionFalse && c.Reason == reasonAllUpToDate
+	}, "RolloutInProgress settles to False/AllUpToDate at steady state")
 }
 
 func findCondition(n *seiv1alpha1.SeiNetwork, condType string) *metav1.Condition {

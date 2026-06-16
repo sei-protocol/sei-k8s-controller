@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	testOldHash    = "0000000000000000"
 	testSyncerOrd0 = "syncer-0"
 
 	testNetworkName = "genesis-net"

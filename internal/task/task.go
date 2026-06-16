@@ -240,10 +240,6 @@ var registry = map[string]taskDeserializer{
 	TaskTypeDeployBootstrapJob:     deserializeBootstrapJob,
 	TaskTypeAwaitBootstrapComplete: deserializeBootstrapAwait,
 	TaskTypeTeardownBootstrap:      deserializeBootstrapTeardown,
-
-	// Controller-side deployment tasks
-	TaskTypeUpdateNodeSpecs: deserializeUpdateNodeSpecs,
-	TaskTypeAwaitSpecUpdate: deserializeAwaitSpecUpdate,
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD

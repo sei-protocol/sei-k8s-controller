@@ -6,8 +6,9 @@
 // A plan is an ordered list of tasks stored in .status.plan on the owning
 // resource. The lifecycle is:
 //
-//  1. Build: ResolvePlan (for nodes) or ForGroup (for deployments) inspects the
-//     resource's current phase and spec, then builds an appropriate plan.
+//  1. Build: ResolvePlan (for nodes) or ForGroup (for the network genesis
+//     ceremony) inspects the resource's current phase and spec, then builds an
+//     appropriate plan.
 //  2. Persist: The controller flushes the plan into the resource's status.
 //     Execution does not start until the plan is persisted (atomic creation).
 //  3. Execute: Executor.ExecutePlan drives tasks in-memory. Synchronous tasks

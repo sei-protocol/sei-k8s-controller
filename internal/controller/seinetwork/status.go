@@ -19,34 +19,33 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 		return err
 	}
 
-	var readyReplicas int32
+	var readyReplicas, upToDateReplicas int32
 	nodeStatuses := make([]seiv1alpha1.GroupNodeStatus, 0, len(nodes))
 	for i := range nodes {
 		node := &nodes[i]
 		if node.Status.Phase == seiv1alpha1.PhaseRunning {
 			readyReplicas++
 		}
+		if node.Status.CurrentImage == network.Spec.Image {
+			upToDateReplicas++
+		}
 		nodeStatuses = append(nodeStatuses, seiv1alpha1.GroupNodeStatus{
-			Name:  node.Name,
-			Phase: node.Status.Phase,
+			Name:         node.Name,
+			Phase:        node.Status.Phase,
+			CurrentImage: node.Status.CurrentImage,
 		})
 	}
 
 	// ObservedGeneration tracks "controller has processed this spec" and
 	// must advance on every reconcile that runs to completion, including
 	// paused ones — generation-drift consumers (kubectl wait, ArgoCD,
-	// Flux) depend on it. TemplateHash is what defers template edits, so
-	// pause holds only that. Both still defer to completePlan during
-	// rollout/plan execution.
-	if !hasConditionTrue(network, seiv1alpha1.ConditionPlanInProgress) &&
-		!hasConditionTrue(network, seiv1alpha1.ConditionRolloutInProgress) {
+	// Flux) depend on it. It defers to completePlan during plan execution.
+	if !hasConditionTrue(network, seiv1alpha1.ConditionPlanInProgress) {
 		network.Status.ObservedGeneration = network.Generation
-		if !network.Spec.Paused {
-			network.Status.TemplateHash = templateHash(&network.Spec)
-		}
 	}
 	network.Status.Replicas = network.Spec.Replicas
 	network.Status.ReadyReplicas = readyReplicas
+	network.Status.UpToDateReplicas = upToDateReplicas
 	network.Status.Nodes = nodeStatuses
 	network.Status.PerPodServices = populatePerPodServices(log.FromContext(ctx), nodes)
 	network.Status.Endpoints = composeEndpoints(network)
@@ -54,21 +53,31 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	network.Status.Phase = computeGroupPhase(network, readyReplicas, network.Spec.Replicas, nodes)
 
 	setNodesReadyCondition(network, readyReplicas, network.Spec.Replicas, nodes)
+	setRolloutInProgressCondition(network, upToDateReplicas, network.Spec.Replicas, len(nodes))
 
 	return r.Status().Patch(ctx, network, statusBase)
+}
+
+// setRolloutInProgressCondition stamps the DERIVED RolloutInProgress
+// projection. True when a child's reported image lags spec.image (mid-roll or
+// wedged on a bad tag); False/AllUpToDate at steady state. No plan or revision
+// tracking owns this — it is pure computation from the child snapshot. Before
+// any children exist there is nothing to roll, so it reads False/AllUpToDate.
+func setRolloutInProgressCondition(network *seiv1alpha1.SeiNetwork, upToDate, desired int32, childCount int) {
+	if childCount > 0 && upToDate < desired {
+		setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
+			"ImageRolling", fmt.Sprintf("%d/%d replicas on spec.image", upToDate, desired))
+		return
+	}
+	setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionFalse,
+		"AllUpToDate", fmt.Sprintf("%d/%d replicas on spec.image", upToDate, desired))
 }
 
 func computeGroupPhase(network *seiv1alpha1.SeiNetwork, ready, desired int32, nodes []seiv1alpha1.SeiNode) seiv1alpha1.SeiNetworkPhase {
 	if network.Spec.Paused {
 		return seiv1alpha1.GroupPhasePaused
 	}
-	if hasConditionTrue(network, seiv1alpha1.ConditionRolloutInProgress) {
-		return seiv1alpha1.GroupPhaseUpgrading
-	}
 	if hasConditionTrue(network, seiv1alpha1.ConditionPlanInProgress) {
-		if network.Status.Rollout != nil {
-			return seiv1alpha1.GroupPhaseUpgrading
-		}
 		return seiv1alpha1.GroupPhaseInitializing
 	}
 
@@ -131,17 +140,17 @@ func setNodesReadyCondition(network *seiv1alpha1.SeiNetwork, ready, desired int3
 // PlanInProgress, RolloutInProgress, and GenesisCeremonyComplete.
 const ReasonNotStarted = "NotStarted"
 
-// seedAlwaysPresentConditions stamps every always-present condition.
-// The InProgress seeds fire only when absent so transition paths
-// (startPlan, completePlan, etc.) own the reason vocabulary once a
-// network has lifecycle state.
+// seedAlwaysPresentConditions stamps the seeded always-present conditions.
+// The PlanInProgress seed fires only when absent so transition paths
+// (startPlan, completePlan, etc.) own the reason vocabulary once a network
+// has lifecycle state. RolloutInProgress is NOT seeded here — it is a derived
+// projection that updateStatus computes (and always sets) from the child
+// snapshot each reconcile, so it is present after the first reconcile.
 func (r *SeiNetworkReconciler) seedAlwaysPresentConditions(network *seiv1alpha1.SeiNetwork) {
 	r.setGenesisCeremonyCondition(network)
 	r.setPausedCondition(network)
 	seedConditionIfAbsent(network, seiv1alpha1.ConditionPlanInProgress,
 		ReasonNotStarted, "no plan has run yet")
-	seedConditionIfAbsent(network, seiv1alpha1.ConditionRolloutInProgress,
-		ReasonNotStarted, "no rollout has run yet")
 }
 
 // setPausedCondition mirrors spec.paused and emits an event on each

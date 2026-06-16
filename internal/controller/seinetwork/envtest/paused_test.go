@@ -19,10 +19,10 @@ import (
 // TestSND_Paused_PropagatesAndBlocksOrchestration asserts:
 //  1. spec.paused=true sets ConditionPaused=True and Status.Phase=Paused.
 //  2. Paused state propagates to every owned child SeiNode.
-//  3. A template change applied while paused does not start a rollout
-//     and does not mutate children's spec.
+//  3. An image change applied while paused does not propagate to children's
+//     spec (reconcileSeiNodes short-circuits while paused).
 //  4. Clearing spec.paused propagates back to children and the deferred
-//     template change rolls forward to convergence.
+//     image change propagates in-place to convergence.
 func TestSND_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -65,18 +65,14 @@ func TestSND_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 		return true
 	}, "every child SeiNode must have Spec.Paused=true after SND pause")
 
-	// 3. Template change is observed but blocked. Patch v1→v2 while
-	//    paused and assert no rollout fires for 3s. The SND's
-	//    TemplateHash isn't rolled forward, Status.Rollout stays nil,
-	//    and child Spec.Image stays at the original.
+	// 3. Image change is observed but blocked. Patch v1→v2 while paused
+	//    and assert child Spec.Image stays at the original for 3s — a
+	//    paused reconcile short-circuits before ensureSeiNode.
 	cur = getNetwork(t, key)
 	patchNetworkImage(t, cur, "ghcr.io/sei-protocol/seid:v2.0.0")
 
 	g.Consistently(func(g Gomega) {
 		s := getNetwork(t, key)
-		g.Expect(s.Status.Rollout).To(BeNil(), "Status.Rollout must stay nil while paused")
-		g.Expect(condTrue(s, seiv1alpha1.ConditionRolloutInProgress)).To(BeFalse(),
-			"ConditionRolloutInProgress must not be True while paused")
 		g.Expect(s.Status.Plan).To(BeNil(), "Status.Plan must stay nil while paused")
 		for _, child := range listChildren(t, s) {
 			g.Expect(child.Spec.Image).To(Equal(fixtures.DefaultImage),
@@ -85,9 +81,7 @@ func TestSND_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 	}, 3*time.Second, 200*time.Millisecond).Should(Succeed())
 
 	// 4. Unpause. Children's Spec.Paused clears, and the deferred v2
-	//    template change rolls forward — TemplateHash must NOT have
-	//    silently advanced during the pause window, or this resume
-	//    converges to a stale spec.
+	//    image propagates in-place via ensureSeiNode.
 	cur = getNetwork(t, key)
 	patch = client.MergeFrom(cur.DeepCopy())
 	cur.Spec.Paused = false
@@ -106,13 +100,8 @@ func TestSND_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 		return true
 	}, "every child SeiNode must have Spec.Paused=false after unpause")
 
-	// 5. Deferred template change converges. ConditionRolloutInProgress
-	//    must reach True (the rollout starts), and every child's
-	//    Spec.Image must advance to v2 on subsequent ensureSeiNode runs.
-	waitForStatus(t, key, func(s *seiv1alpha1.SeiNetwork) bool {
-		return condTrue(s, seiv1alpha1.ConditionRolloutInProgress) || s.Status.Rollout != nil
-	}, "deferred template change must trigger a rollout after unpause")
-
+	// 5. The deferred image change propagates to every child's Spec.Image
+	//    on subsequent ensureSeiNode runs (no plan, no rollout machinery).
 	waitFor(t, func() bool {
 		children := listChildren(t, getNetwork(t, key))
 		if len(children) == 0 {
@@ -124,84 +113,19 @@ func TestSND_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 			}
 		}
 		return true
-	}, "child Spec.Image must converge to the v2 template after unpause")
+	}, "child Spec.Image must converge to v2 after unpause")
 }
 
 func pausedCond(s *seiv1alpha1.SeiNetwork) *metav1.Condition {
 	return apimeta.FindStatusCondition(s.Status.Conditions, seiv1alpha1.ConditionPaused)
 }
 
-// TestSND_Unpause_DuringActivePlan_PropagatesToChildren guards the
-// deadlock case: pause flips on with a plan in progress, then operator
-// unpauses. The unpause must clear Spec.Paused on every child or
-// await-nodes-running spins forever because the SeiNode controller
-// short-circuits on the still-paused children.
-func TestSND_Unpause_DuringActivePlan_PropagatesToChildren(t *testing.T) {
-	g := NewWithT(t)
-	ns := makeNamespace(t)
-
-	snd := fixtures.NewNetwork(ns, "pause-during-plan", fixtures.WithReplicas(2))
-	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
-	key := client.ObjectKeyFromObject(snd)
-
-	// Initial settle — both children exist, no plan, paused condition seeded False.
-	waitForStatus(t, key, func(s *seiv1alpha1.SeiNetwork) bool {
-		return len(listChildren(t, s)) == 2 &&
-			pausedCond(s) != nil && pausedCond(s).Status == metav1.ConditionFalse
-	}, "two children exist and ConditionPaused=False is seeded")
-
-	// Stall the faker so the v2 rollout's plan parks in flight.
-	testFaker.Pause()
-	t.Cleanup(testFaker.Resume)
-
-	patchNetworkImage(t, getNetwork(t, key), "ghcr.io/sei-protocol/seid:v2.0.0")
-
-	// Wait for ConditionPlanInProgress=True — the SND has an active
-	// stalled plan, which is the precondition the deadlock-on-unpause
-	// case requires.
-	waitForStatus(t, key, func(s *seiv1alpha1.SeiNetwork) bool {
-		return condTrue(s, seiv1alpha1.ConditionPlanInProgress)
-	}, "plan must be in progress before pause flips on")
-
-	// Pause with the plan active. Children pick up Paused=true.
-	cur := getNetwork(t, key)
-	patch := client.MergeFrom(cur.DeepCopy())
-	cur.Spec.Paused = true
-	g.Expect(testCli.Patch(testCtx, cur, patch)).To(Succeed())
-
-	waitFor(t, func() bool {
-		for _, c := range listChildren(t, getNetwork(t, key)) {
-			if !c.Spec.Paused {
-				return false
-			}
-		}
-		return true
-	}, "every child must reach Spec.Paused=true after SND pause")
-
-	// Unpause while ConditionPlanInProgress is still True. The
-	// controller propagates Spec.Paused=false to every child on this
-	// reconcile path so resume is not gated on plan completion.
-	cur = getNetwork(t, key)
-	patch = client.MergeFrom(cur.DeepCopy())
-	cur.Spec.Paused = false
-	g.Expect(testCli.Patch(testCtx, cur, patch)).To(Succeed())
-
-	waitFor(t, func() bool {
-		s := getNetwork(t, key)
-		if !condTrue(s, seiv1alpha1.ConditionPlanInProgress) {
-			// Test precondition lost — fail loudly so the test isn't
-			// silently passing on a non-deadlock path.
-			t.Fatalf("ConditionPlanInProgress must remain True throughout the test; got %+v",
-				apimeta.FindStatusCondition(s.Status.Conditions, seiv1alpha1.ConditionPlanInProgress))
-		}
-		for _, c := range listChildren(t, s) {
-			if c.Spec.Paused {
-				return false
-			}
-		}
-		return true
-	}, "every child must clear Spec.Paused=false on unpause even while ConditionPlanInProgress=True")
-}
+// Note: the unpause-during-active-plan deadlock guard moved to a unit test
+// (TestSyncPausedToChildren_IgnoresPlanInProgress in nodes_test.go). With the
+// rollout state machine gone, the genesis ceremony is the only network-level
+// plan and it completes too fast in envtest to deterministically pause
+// against; the invariant it guards — syncPausedToChildren runs unconditionally
+// regardless of plan state — is better asserted directly.
 
 // TestSeiNode_Paused_FreezesReconcile asserts a paused SeiNode reports
 // ConditionSeiNodePaused=True and does not advance through its lifecycle.

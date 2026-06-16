@@ -16,9 +16,11 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// reconcileSeiNodes ensures the desired child SeiNodes exist, populates
-// IncumbentNodes, and detects spec changes that require orchestration.
-// Mutations are skipped while a plan is in progress or while paused.
+// reconcileSeiNodes ensures the desired child SeiNodes exist with the desired
+// spec (image/sidecar/overrides/labels propagated in-place every reconcile)
+// and refreshes IncumbentNodes for the genesis planner. Mutations are skipped
+// while a plan is in progress (guarding the ceremony's child-Peers writes) or
+// while paused.
 func (r *SeiNetworkReconciler) reconcileSeiNodes(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
 	if network.Spec.Paused {
 		return r.populateIncumbentNodes(ctx, network)
@@ -37,12 +39,7 @@ func (r *SeiNetworkReconciler) reconcileSeiNodes(ctx context.Context, network *s
 		log.FromContext(ctx).Info("plan in progress, skipping SeiNode mutations")
 	}
 
-	if err := r.populateIncumbentNodes(ctx, network); err != nil {
-		return err
-	}
-
-	r.detectDeploymentNeeded(network)
-	return nil
+	return r.populateIncumbentNodes(ctx, network)
 }
 
 // syncPausedToChildren brings every owned child SeiNode's Spec.Paused
@@ -94,61 +91,9 @@ func (r *SeiNetworkReconciler) setGenesisCeremonyCondition(network *seiv1alpha1.
 		ReasonNotStarted, "genesis ceremony has not yet started")
 }
 
-// detectDeploymentNeeded checks if deployment-worthy fields have changed
-// by comparing the current template hash against the stored hash. Only
-// fields that require new nodes (chainId, image, sidecar image) are hashed;
-// overrides and replica changes propagate in-place.
-func (r *SeiNetworkReconciler) detectDeploymentNeeded(network *seiv1alpha1.SeiNetwork) {
-	if network.Status.TemplateHash == "" {
-		return // first reconcile, no baseline to compare against
-	}
-	if len(network.Status.IncumbentNodes) == 0 {
-		// No incumbent nodes (e.g. missing owner references after a manual
-		// edit); a rollout with empty node lists would create a plan whose
-		// tasks all complete as no-ops. Wait until populateIncumbentNodes
-		// finds the child set before declaring a rollout.
-		return
-	}
-
-	currentHash := templateHash(&network.Spec)
-	if currentHash == network.Status.TemplateHash {
-		return // no deployment-worthy fields changed
-	}
-
-	// Supersession: if the spec moved since the active rollout was created,
-	// replace the stale plan so the controller converges on the latest spec.
-	if hasConditionTrue(network, seiv1alpha1.ConditionRolloutInProgress) {
-		if network.Status.Rollout != nil && network.Status.Rollout.TargetHash == currentHash {
-			return // rollout already targets the current spec
-		}
-		oldTarget := ""
-		if network.Status.Rollout != nil {
-			oldTarget = network.Status.Rollout.TargetHash
-		}
-		network.Status.Plan = nil
-		r.Recorder.Eventf(network, corev1.EventTypeNormal, "RolloutSuperseded",
-			"Spec changed during active rollout, replacing plan (old target: %s)", oldTarget)
-	}
-
-	if !hasConditionTrue(network, seiv1alpha1.ConditionRolloutInProgress) &&
-		hasConditionTrue(network, seiv1alpha1.ConditionPlanInProgress) {
-		return // non-deployment plan in progress (e.g. genesis)
-	}
-
-	network.Status.Rollout = &seiv1alpha1.RolloutStatus{
-		TargetHash: currentHash,
-		StartedAt:  metav1.Now(),
-	}
-
-	setCondition(network, seiv1alpha1.ConditionRolloutInProgress, metav1.ConditionTrue,
-		"TemplateChanged", fmt.Sprintf("templateHash changed from %s to %s", network.Status.TemplateHash, currentHash))
-
-	r.Recorder.Eventf(network, corev1.EventTypeNormal, "RolloutStarted",
-		"InPlace rollout started (target: %s)", currentHash[:8])
-}
-
-// populateIncumbentNodes lists child SeiNodes and records their names
-// on the network status.
+// populateIncumbentNodes lists child SeiNodes and records their names on the
+// network status. This is the genesis planner's child-list feed, refreshed
+// each reconcile — NOT rollout state.
 func (r *SeiNetworkReconciler) populateIncumbentNodes(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
 	nodes, err := r.listChildSeiNodes(ctx, network)
 	if err != nil {
@@ -238,10 +183,9 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.SeiNode {
 	gc := network.Spec.Genesis
 
-	podLabels := make(map[string]string, len(network.Spec.PodLabels)+2)
+	podLabels := make(map[string]string, len(network.Spec.PodLabels)+1)
 	maps.Copy(podLabels, network.Spec.PodLabels)
 	podLabels[groupLabel] = network.Name
-	podLabels[revisionLabel] = activeRevision(network)
 
 	spec := seiv1alpha1.SeiNodeSpec{
 		ChainID:    gc.ChainID,
