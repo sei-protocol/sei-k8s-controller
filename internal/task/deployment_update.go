@@ -36,12 +36,12 @@ func deserializeUpdateNodeSpecs(id string, params json.RawMessage, cfg Execution
 func (e *updateNodeSpecsExecution) Execute(ctx context.Context) error {
 	logger := log.FromContext(ctx)
 
-	group, err := ResourceAs[*seiv1alpha1.SeiNodeDeployment](e.cfg)
+	network, err := ResourceAs[*seiv1alpha1.SeiNetwork](e.cfg)
 	if err != nil {
 		return Terminal(err)
 	}
 
-	desiredImage := group.Spec.Template.Spec.Image
+	desiredImage := network.Spec.Template.Spec.Image
 
 	for _, name := range e.params.NodeNames {
 		node := &seiv1alpha1.SeiNode{}
@@ -52,7 +52,7 @@ func (e *updateNodeSpecsExecution) Execute(ctx context.Context) error {
 			continue
 		}
 		node.Spec.Image = desiredImage
-		if sc := group.Spec.Template.Spec.Sidecar; sc != nil && node.Spec.Sidecar != nil {
+		if sc := network.Spec.Template.Spec.Sidecar; sc != nil && node.Spec.Sidecar != nil {
 			node.Spec.Sidecar.Image = sc.Image
 		}
 		if err := e.cfg.KubeClient.Update(ctx, node); err != nil {

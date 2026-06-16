@@ -27,7 +27,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	nodecontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/node"
-	nodedeploymentcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodedeployment"
+	seinetworkcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/seinetwork"
 	nodetaskcontroller "github.com/sei-protocol/sei-k8s-controller/internal/controller/nodetask"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/peering"
@@ -199,37 +199,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	p2pEndpointDomain := os.Getenv("SEI_P2P_ENDPOINT_DOMAIN")
-
-	nlbTargetType := os.Getenv("SEI_NLB_TARGET_TYPE")
-	switch nlbTargetType {
-	case "":
-		nlbTargetType = nodedeploymentcontroller.DefaultNLBTargetType
-	case nodedeploymentcontroller.NLBTargetTypeIP, nodedeploymentcontroller.NLBTargetTypeInstance:
-	default:
-		setupLog.Error(nil, "Invalid SEI_NLB_TARGET_TYPE — expected \"ip\" or \"instance\"", "value", nlbTargetType)
-		os.Exit(1)
-	}
-
 	//nolint:staticcheck // migrating to events.EventRecorder API is a separate effort
-	recorder := mgr.GetEventRecorderFor("seinodedeployment-controller")
-	if err := (&nodedeploymentcontroller.SeiNodeDeploymentReconciler{
-		Client:              kc,
-		Scheme:              mgr.GetScheme(),
-		Recorder:            recorder,
-		GatewayName:         platformCfg.GatewayName,
-		GatewayNamespace:    platformCfg.GatewayNamespace,
-		GatewayDomain:       platformCfg.GatewayDomain,
-		GatewayPublicDomain: platformCfg.GatewayPublicDomain,
-		P2PEndpointDomain:   p2pEndpointDomain,
-		NLBTargetType:       nlbTargetType,
-		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNodeDeployment]{
-			ConfigFor: func(ctx context.Context, group *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
+	recorder := mgr.GetEventRecorderFor("seinetwork-controller")
+	if err := (&seinetworkcontroller.SeiNetworkReconciler{
+		Client:   kc,
+		Scheme:   mgr.GetScheme(),
+		Recorder: recorder,
+		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNetwork]{
+			ConfigFor: func(ctx context.Context, network *seiv1alpha1.SeiNetwork) task.ExecutionConfig {
 				var assemblerNode *seiv1alpha1.SeiNode
 				nodes := &seiv1alpha1.SeiNodeList{}
 				if err := kc.List(ctx, nodes,
-					client.InNamespace(group.Namespace),
-					client.MatchingLabels{"sei.io/nodedeployment": group.Name},
+					client.InNamespace(network.Namespace),
+					client.MatchingLabels{"sei.io/nodedeployment": network.Name},
 				); err == nil && len(nodes.Items) > 0 {
 					sort.Slice(nodes.Items, func(i, j int) bool {
 						return nodes.Items[i].Name < nodes.Items[j].Name
@@ -239,7 +221,7 @@ func main() {
 				return task.ExecutionConfig{
 					BuildSidecarClient: func() (task.SidecarClient, error) {
 						if assemblerNode == nil {
-							return nil, fmt.Errorf("no assembler node found for group %s", group.Name)
+							return nil, fmt.Errorf("no assembler node found for network %s", network.Name)
 						}
 						return buildSidecarClient(assemblerNode)
 					},
@@ -247,14 +229,14 @@ func main() {
 					KubeClient:       kc,
 					APIReader:        mgr.GetAPIReader(),
 					Scheme:           mgr.GetScheme(),
-					Resource:         group,
+					Resource:         network,
 					Platform:         platformCfg,
 					ObjectStore:      objectStore,
 				}
 			},
 		},
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "SeiNodeDeployment")
+		setupLog.Error(err, "Failed to create controller", "controller", "SeiNetwork")
 		os.Exit(1)
 	}
 

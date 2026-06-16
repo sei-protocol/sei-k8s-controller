@@ -14,12 +14,12 @@ import (
 func TestInPlacePlan_ThreeTasks(t *testing.T) {
 	g := NewWithT(t)
 
-	group := &seiv1alpha1.SeiNodeDeployment{
+	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "wave-group", Namespace: "pacific-1", Generation: 2},
-		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+		Spec: seiv1alpha1.SeiNetworkSpec{
 			Replicas: 3,
 		},
-		Status: seiv1alpha1.SeiNodeDeploymentStatus{
+		Status: seiv1alpha1.SeiNetworkStatus{
 			IncumbentNodes: []string{"wave-group-0", "wave-group-1", "wave-group-2"},
 		},
 	}

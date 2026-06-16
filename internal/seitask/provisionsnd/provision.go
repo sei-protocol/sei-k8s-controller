@@ -98,7 +98,7 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 
 	if err := c.Create(ctx, snd, fieldOwner); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
-			return Result{}, taskruntime.Infra(fmt.Errorf("creating SeiNodeDeployment %s/%s: %w", snd.Namespace, snd.Name, err))
+			return Result{}, taskruntime.Infra(fmt.Errorf("creating SeiNetwork %s/%s: %w", snd.Namespace, snd.Name, err))
 		}
 		// Re-runs land here. Surface drift loudly so an operator who edited
 		// the template since the original Create knows the cluster is still
@@ -111,7 +111,7 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 		return Result{}, err
 	}
 
-	current := &seiv1alpha1.SeiNodeDeployment{}
+	current := &seiv1alpha1.SeiNetwork{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: snd.Namespace, Name: snd.Name}, current); err != nil {
 		return Result{}, taskruntime.Infra(fmt.Errorf("re-reading SND post-Ready: %w", err))
 	}
@@ -167,7 +167,7 @@ func withDefaults(p Params) Params {
 // against vars (missing keys fail the render — `missingkey=error` option),
 // then strict-unmarshals the rendered bytes into a SeiNodeDeployment so
 // typos in field names fail here, not at apiserver-Create time.
-func renderTemplate(path string, vars map[string]string) (*seiv1alpha1.SeiNodeDeployment, error) {
+func renderTemplate(path string, vars map[string]string) (*seiv1alpha1.SeiNetwork, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
@@ -180,7 +180,7 @@ func renderTemplate(path string, vars map[string]string) (*seiv1alpha1.SeiNodeDe
 	if err := tmpl.Execute(&buf, vars); err != nil {
 		return nil, fmt.Errorf("execute: %w", err)
 	}
-	out := &seiv1alpha1.SeiNodeDeployment{}
+	out := &seiv1alpha1.SeiNetwork{}
 	if err := yaml.UnmarshalStrict(buf.Bytes(), out); err != nil {
 		return nil, fmt.Errorf("unmarshal rendered yaml: %w", err)
 	}
@@ -190,9 +190,9 @@ func renderTemplate(path string, vars map[string]string) (*seiv1alpha1.SeiNodeDe
 // stampMetadata overwrites metadata fields the template MUST NOT control.
 // OwnerReferences are assigned (not appended) so a template that smuggles
 // a bogus ref can't leak through.
-func stampMetadata(snd *seiv1alpha1.SeiNodeDeployment, p Params) {
+func stampMetadata(snd *seiv1alpha1.SeiNetwork, p Params) {
 	snd.APIVersion = seiv1alpha1.GroupVersion.String()
-	snd.Kind = "SeiNodeDeployment"
+	snd.Kind = "SeiNetwork"
 	snd.Name = p.Name
 	snd.Namespace = p.Workflow.Namespace
 	snd.OwnerReferences = []metav1.OwnerReference{p.Workflow.OwnerRef()}
@@ -201,8 +201,8 @@ func stampMetadata(snd *seiv1alpha1.SeiNodeDeployment, p Params) {
 // warnIfDrift logs when a re-run finds the on-cluster SND.Spec different
 // from the freshly-rendered one. Operators who edited the template since
 // the original Create need to know the cluster still has the old spec.
-func warnIfDrift(ctx context.Context, c client.Client, fresh *seiv1alpha1.SeiNodeDeployment) {
-	existing := &seiv1alpha1.SeiNodeDeployment{}
+func warnIfDrift(ctx context.Context, c client.Client, fresh *seiv1alpha1.SeiNetwork) {
+	existing := &seiv1alpha1.SeiNetwork{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: fresh.Namespace, Name: fresh.Name}, existing); err != nil {
 		return
 	}
@@ -214,7 +214,7 @@ func warnIfDrift(ctx context.Context, c client.Client, fresh *seiv1alpha1.SeiNod
 
 func waitForReady(ctx context.Context, c client.Client, key types.NamespacedName, timeout, interval time.Duration) error {
 	return wait.PollUntilContextTimeout(ctx, interval, timeout, true, func(ctx context.Context) (bool, error) {
-		snd := &seiv1alpha1.SeiNodeDeployment{}
+		snd := &seiv1alpha1.SeiNetwork{}
 		if err := c.Get(ctx, key, snd); err != nil {
 			if apierrors.IsNotFound(err) {
 				return false, nil

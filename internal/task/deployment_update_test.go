@@ -13,10 +13,10 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
 
-func testDeploymentGroup() *seiv1alpha1.SeiNodeDeployment {
-	return &seiv1alpha1.SeiNodeDeployment{
+func testDeploymentGroup() *seiv1alpha1.SeiNetwork {
+	return &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "wave", Namespace: "sei", UID: "uid-wave"},
-		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+		Spec: seiv1alpha1.SeiNetworkSpec{
 			Replicas: 2,
 			Template: seiv1alpha1.SeiNodeTemplate{
 				Spec: seiv1alpha1.SeiNodeSpec{
@@ -37,7 +37,7 @@ func testDeploymentGroup() *seiv1alpha1.SeiNodeDeployment {
 	}
 }
 
-func testDeploymentCfg(t *testing.T, group *seiv1alpha1.SeiNodeDeployment, nodes ...*seiv1alpha1.SeiNode) ExecutionConfig {
+func testDeploymentCfg(t *testing.T, group *seiv1alpha1.SeiNetwork, nodes ...*seiv1alpha1.SeiNode) ExecutionConfig {
 	t.Helper()
 	s := testScheme(t)
 	builder := fake.NewClientBuilder().

@@ -35,7 +35,7 @@ const (
 )
 
 const validatorTmpl = `apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: PLACEHOLDER
 spec:
@@ -53,7 +53,7 @@ spec:
 `
 
 const rpcTmpl = `apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: PLACEHOLDER
 spec:
@@ -130,7 +130,7 @@ func TestRenderTemplate_MissingVarFailsRender(t *testing.T) {
 
 func TestRenderTemplate_StrictUnmarshalCatchesTypos(t *testing.T) {
 	tmpl := `apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: PLACEHOLDER
 spec:
@@ -200,7 +200,7 @@ func TestBundledTemplates_RenderClean(t *testing.T) {
 }
 
 func TestStampMetadata_AssignsOwnerRefsNotAppend(t *testing.T) {
-	snd := &seiv1alpha1.SeiNodeDeployment{
+	snd := &seiv1alpha1.SeiNetwork{
 		// Template author smuggling a bogus ownerRef: stampMetadata MUST
 		// overwrite, not append.
 		ObjectMeta: metav1.ObjectMeta{
@@ -269,7 +269,7 @@ func TestRun_EndToEnd_FakeClient(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(newScheme(t)).
 		WithObjects(prestaged).
-		WithStatusSubresource(&seiv1alpha1.SeiNodeDeployment{}).
+		WithStatusSubresource(&seiv1alpha1.SeiNetwork{}).
 		Build()
 
 	srv := fakeStatusServer(t, "42")

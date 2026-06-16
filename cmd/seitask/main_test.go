@@ -7,20 +7,20 @@ import (
 )
 
 // TestTaskScheme_RoundTripsSND would have caught the first manual fire's
-// `no kind is registered for the type v1alpha1.SeiNodeDeployment in scheme`
+// `no kind is registered for the type v1alpha1.SeiNetwork in scheme`
 // regression at `go test`, not at first cluster fire. Asserts the
 // package-level taskScheme has every type provision-snd / keygen /
 // upload-report constructs via typed Get/Create.
 func TestTaskScheme_RoundTripsSND(t *testing.T) {
-	gvks, _, err := taskScheme.ObjectKinds(&seiv1alpha1.SeiNodeDeployment{})
+	gvks, _, err := taskScheme.ObjectKinds(&seiv1alpha1.SeiNetwork{})
 	if err != nil {
-		t.Fatalf("SeiNodeDeployment not registered in taskScheme: %v", err)
+		t.Fatalf("SeiNetwork not registered in taskScheme: %v", err)
 	}
 	if len(gvks) == 0 {
-		t.Fatalf("no GVKs returned for SeiNodeDeployment")
+		t.Fatalf("no GVKs returned for SeiNetwork")
 	}
 	if gvks[0].Group != "sei.io" || gvks[0].Version != "v1alpha1" {
-		t.Fatalf("SeiNodeDeployment GVK: %+v; want sei.io/v1alpha1", gvks[0])
+		t.Fatalf("SeiNetwork GVK: %+v; want sei.io/v1alpha1", gvks[0])
 	}
 }
 

@@ -47,8 +47,8 @@ type ValidatorSpec struct {
 	// +optional
 	Snapshot *SnapshotSource `json:"snapshot,omitempty"`
 
-	// GenesisCeremony indicates this validator participates in a group genesis
-	// ceremony. Set by the SeiNodeDeployment controller — not intended for direct use.
+	// GenesisCeremony indicates this validator participates in a network genesis
+	// ceremony. Set by the SeiNetwork controller — not intended for direct use.
 	// +optional
 	GenesisCeremony *GenesisCeremonyNodeConfig `json:"genesisCeremony,omitempty"`
 
@@ -240,7 +240,7 @@ type PassphraseSecretRef struct {
 }
 
 // GenesisCeremonyNodeConfig holds per-node genesis ceremony parameters.
-// Populated by the SeiNodeDeployment controller when genesis is configured.
+// Populated by the SeiNetwork controller when genesis is configured.
 type GenesisCeremonyNodeConfig struct {
 	// ChainID of the genesis network.
 	// +kubebuilder:validation:MinLength=1

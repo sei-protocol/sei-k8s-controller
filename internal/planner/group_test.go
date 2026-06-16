@@ -13,15 +13,15 @@ import (
 )
 
 func TestBuildGroupAssemblyPlan(t *testing.T) {
-	group := &seiv1alpha1.SeiNodeDeployment{
+	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+		Spec: seiv1alpha1.SeiNetworkSpec{
 			Replicas: 3,
-			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+			Genesis: seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: "arctic-1", AccountBalance: testAccountBalance,
 			},
 		},
-		Status: seiv1alpha1.SeiNodeDeploymentStatus{
+		Status: seiv1alpha1.SeiNetworkStatus{
 			IncumbentNodes: []string{"node-0", "node-1", "node-2"},
 			// The planner triggers a genesis plan whenever
 			// ConditionGenesisCeremonyComplete is not True.
@@ -106,15 +106,15 @@ func TestBuildGroupAssemblyPlan(t *testing.T) {
 }
 
 func TestBuildGroupAssemblyPlan_DefaultS3(t *testing.T) {
-	group := &seiv1alpha1.SeiNodeDeployment{
+	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+		Spec: seiv1alpha1.SeiNetworkSpec{
 			Replicas: 1,
-			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+			Genesis: seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: sourceChainID, AccountBalance: testAccountBalance,
 			},
 		},
-		Status: seiv1alpha1.SeiNodeDeploymentStatus{
+		Status: seiv1alpha1.SeiNetworkStatus{
 			IncumbentNodes: []string{"node-0"},
 			// The planner triggers a genesis plan whenever
 			// ConditionGenesisCeremonyComplete is not True.
@@ -152,16 +152,16 @@ func TestBuildGroupAssemblyPlan_PropagatesOverrides(t *testing.T) {
 		"staking.params.unbonding_time": {Raw: []byte(`"600s"`)},
 		"gov.params.voting_period":      {Raw: []byte(`"30s"`)},
 	}
-	group := &seiv1alpha1.SeiNodeDeployment{
+	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "ov-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+		Spec: seiv1alpha1.SeiNetworkSpec{
 			Replicas: 1,
-			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+			Genesis: seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: sourceChainID, AccountBalance: testAccountBalance,
 				Overrides: overrides,
 			},
 		},
-		Status: seiv1alpha1.SeiNodeDeploymentStatus{
+		Status: seiv1alpha1.SeiNetworkStatus{
 			IncumbentNodes: []string{testNodeName},
 			// The planner triggers a genesis plan whenever
 			// ConditionGenesisCeremonyComplete is not True.
@@ -210,15 +210,15 @@ func TestBuildGroupAssemblyPlan_PropagatesOverrides(t *testing.T) {
 // Ensures the assemble-genesis Params shape stays the upstream title-cased one
 // when the user omits Overrides — guards against accidental field-rename drift.
 func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
-	group := &seiv1alpha1.SeiNodeDeployment{
+	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "noov-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+		Spec: seiv1alpha1.SeiNetworkSpec{
 			Replicas: 1,
-			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+			Genesis: seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: sourceChainID, AccountBalance: testAccountBalance,
 			},
 		},
-		Status: seiv1alpha1.SeiNodeDeploymentStatus{
+		Status: seiv1alpha1.SeiNetworkStatus{
 			IncumbentNodes: []string{testNodeName},
 			// The planner triggers a genesis plan whenever
 			// ConditionGenesisCeremonyComplete is not True.
@@ -251,16 +251,16 @@ func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
 }
 
 func TestBuildGroupAssemblyPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
-	group := &seiv1alpha1.SeiNodeDeployment{
+	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "det-group", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+		Spec: seiv1alpha1.SeiNetworkSpec{
 			Replicas: 2,
-			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+			Genesis: seiv1alpha1.GenesisCeremonyConfig{
 				ChainID:        "test-chain",
 				AccountBalance: testAccountBalance,
 			},
 		},
-		Status: seiv1alpha1.SeiNodeDeploymentStatus{
+		Status: seiv1alpha1.SeiNetworkStatus{
 			IncumbentNodes: []string{"node-0", "node-1"},
 			// The planner triggers a genesis plan whenever
 			// ConditionGenesisCeremonyComplete is not True.

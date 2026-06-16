@@ -22,18 +22,18 @@ const (
 	sourceChainID       = "pacific-1"
 )
 
-func groupWithAccounts(accounts []seiv1alpha1.GenesisAccount) *seiv1alpha1.SeiNodeDeployment {
-	return &seiv1alpha1.SeiNodeDeployment{
+func groupWithAccounts(accounts []seiv1alpha1.GenesisAccount) *seiv1alpha1.SeiNetwork {
+	return &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: testGroupName, Namespace: "nightly"},
-		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+		Spec: seiv1alpha1.SeiNetworkSpec{
 			Replicas: 1,
-			Genesis: &seiv1alpha1.GenesisCeremonyConfig{
+			Genesis: seiv1alpha1.GenesisCeremonyConfig{
 				ChainID:        "arctic-1",
 				AccountBalance: testAccountBalance,
 				Accounts:       accounts,
 			},
 		},
-		Status: seiv1alpha1.SeiNodeDeploymentStatus{
+		Status: seiv1alpha1.SeiNetworkStatus{
 			IncumbentNodes: []string{testNodeName},
 		},
 	}

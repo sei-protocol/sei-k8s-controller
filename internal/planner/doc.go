@@ -1,5 +1,5 @@
 // Package planner builds and executes ordered task plans that drive SeiNode
-// and SeiNodeDeployment resources through their lifecycle.
+// and SeiNetwork resources through their lifecycle.
 //
 // # Plan Lifecycle
 //
@@ -102,7 +102,7 @@
 //     node to a terminal phase. A non-empty FailedPhase (e.g. PhaseFailed on Init
 //     plans) is the terminal target.
 //   - TaskPlan.TargetPhase == "": no phase transition on completion. Group plans
-//     (SeiNodeDeployment) leave it empty; setTargetPhase is a no-op for any
+//     (SeiNetwork) leave it empty; setTargetPhase is a no-op for any
 //     object that is not a *SeiNode, so only SeiNode plans drive .Status.Phase.
 //   - PlannedTask.SubmittedAt == nil: the task has not been submitted yet (or was
 //     reset for retry). Set once on first submission; used as the plan-duration

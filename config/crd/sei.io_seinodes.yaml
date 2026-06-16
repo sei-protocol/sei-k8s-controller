@@ -474,8 +474,8 @@ spec:
                 properties:
                   genesisCeremony:
                     description: |-
-                      GenesisCeremony indicates this validator participates in a group genesis
-                      ceremony. Set by the SeiNodeDeployment controller — not intended for direct use.
+                      GenesisCeremony indicates this validator participates in a network genesis
+                      ceremony. Set by the SeiNetwork controller — not intended for direct use.
                     properties:
                       accountBalance:
                         description: |-

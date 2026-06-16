@@ -10,7 +10,7 @@ import (
 // ForDeployment returns the GroupPlanner for a deployment. Rollouts are
 // always in-place: spec changes propagate to the existing child SeiNodes,
 // which roll their own pods.
-func ForDeployment(_ *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
+func ForDeployment(_ *seiv1alpha1.SeiNetwork) (GroupPlanner, error) {
 	return &inPlaceDeploymentPlanner{}, nil
 }
 
@@ -19,18 +19,18 @@ func ForDeployment(_ *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
 type inPlaceDeploymentPlanner struct{}
 
 func (p *inPlaceDeploymentPlanner) BuildPlan(
-	group *seiv1alpha1.SeiNodeDeployment,
+	network *seiv1alpha1.SeiNetwork,
 ) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
-	nodeNames := group.Status.IncumbentNodes
-	ns := group.Namespace
+	nodeNames := network.Status.IncumbentNodes
+	ns := network.Namespace
 
 	prog := []struct {
 		taskType string
 		params   any
 	}{
 		{task.TaskTypeUpdateNodeSpecs, &task.UpdateNodeSpecsParams{
-			GroupName: group.Name,
+			GroupName: network.Name,
 			Namespace: ns,
 			NodeNames: nodeNames,
 		}},

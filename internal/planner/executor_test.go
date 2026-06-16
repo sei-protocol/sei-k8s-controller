@@ -261,9 +261,9 @@ func TestExecutePlan_ExhaustedRetries_FailsPlan(t *testing.T) {
 
 func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	s := testScheme(t)
-	group := &seiv1alpha1.SeiNodeDeployment{
+	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-group", Namespace: "default", Generation: 1},
-		Spec: seiv1alpha1.SeiNodeDeploymentSpec{
+		Spec: seiv1alpha1.SeiNetworkSpec{
 			Replicas: 3,
 		},
 	}
@@ -312,11 +312,11 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	fc := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(group).
-		WithStatusSubresource(&seiv1alpha1.SeiNodeDeployment{}).
+		WithStatusSubresource(&seiv1alpha1.SeiNetwork{}).
 		Build()
 
-	executor := &Executor[*seiv1alpha1.SeiNodeDeployment]{
-		ConfigFor: func(_ context.Context, g *seiv1alpha1.SeiNodeDeployment) task.ExecutionConfig {
+	executor := &Executor[*seiv1alpha1.SeiNetwork]{
+		ConfigFor: func(_ context.Context, g *seiv1alpha1.SeiNetwork) task.ExecutionConfig {
 			return task.ExecutionConfig{
 				BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
 				KubeClient:         fc,
