@@ -223,7 +223,12 @@ func (r *SeiNodeDeploymentReconciler) ensureSeiNode(ctx context.Context, group *
 		existing.Spec.Peers = desired.Spec.Peers
 		updated = true
 	}
-	if existing.Spec.ExternalAddress != desired.Spec.ExternalAddress {
+	// Once networking is orphaned (handed to GitOps), stop managing
+	// ExternalAddress: preserve whatever is on the SeiNode rather than
+	// recomputing it from spec.networking. Removing spec.networking flips
+	// TCPEnabled() false, which would otherwise clear the publishable P2P
+	// address and stop the node advertising it.
+	if !networkingOrphaned(group) && existing.Spec.ExternalAddress != desired.Spec.ExternalAddress {
 		existing.Spec.ExternalAddress = desired.Spec.ExternalAddress
 		updated = true
 	}
