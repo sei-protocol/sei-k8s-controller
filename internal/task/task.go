@@ -150,7 +150,7 @@ type SidecarClient interface {
 // external clients, runtime context, and platform configuration. New
 // dependencies are added here without changing Deserialize call sites.
 //
-// Resource is the owning Kubernetes object (SeiNode or SeiNodeDeployment).
+// Resource is the owning Kubernetes object (SeiNode or SeiNetwork).
 // Task executions that need a concrete type should type-assert it.
 // Treat as read-only; mutations belong in the reconciler after
 // ExecutePlan returns.
@@ -240,10 +240,6 @@ var registry = map[string]taskDeserializer{
 	TaskTypeDeployBootstrapJob:     deserializeBootstrapJob,
 	TaskTypeAwaitBootstrapComplete: deserializeBootstrapAwait,
 	TaskTypeTeardownBootstrap:      deserializeBootstrapTeardown,
-
-	// Controller-side deployment tasks
-	TaskTypeUpdateNodeSpecs: deserializeUpdateNodeSpecs,
-	TaskTypeAwaitSpecUpdate: deserializeAwaitSpecUpdate,
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD

@@ -203,9 +203,9 @@ SEI_RESOURCE_MEM_DEFAULT   (default: 128Mi)
 TEST_TIMEOUT               (default: 5m per test)
 ```
 
-### Test 1: `scheduling_test.go` — SND → SeiNode → StatefulSet → Pod real scheduling
+### Test 1: `scheduling_test.go` — SeiNetwork → SeiNode → StatefulSet → Pod real scheduling
 
-1. Apply a `SeiNodeDeployment` CR with `spec.replicas: 1`, `spec.image: busybox`
+1. Apply a `SeiNetwork` CR with `spec.replicas: 1`, `spec.image: busybox`
 2. Wait (up to 3 min) for controller to create `SeiNode` → `StatefulSet` → `Pod`
 3. Assert `Pod.status.phase == Running`
 4. Assert pod is on a node labeled `karpenter.sh/nodepool=local`
@@ -215,7 +215,7 @@ TEST_TIMEOUT               (default: 5m per test)
 
 ### Test 2: `genesis_ceremony_test.go` — Multi-node genesis ceremony
 
-1. Apply a `SeiNodeDeployment` with `spec.replicas: 3`
+1. Apply a `SeiNetwork` with `spec.replicas: 3`
 2. Wait for all 3 pods to be `Running`
 3. Assert exactly one pod has the ceremony-leader annotation/label set by the controller
 4. Assert all 3 pods reach the controller-defined "genesis complete" state (check status condition or annotation)
@@ -225,7 +225,7 @@ TEST_TIMEOUT               (default: 5m per test)
 
 ### Test 3: `dns_test.go` — Service DNS resolution
 
-1. Apply `SeiNodeDeployment` with `spec.replicas: 2`
+1. Apply `SeiNetwork` with `spec.replicas: 2`
 2. Wait for pods `Running`
 3. `kubectl exec` into pod-0, run `nslookup ${pod-1}.${headless-svc}.${ns}.svc.cluster.local`
 4. Assert the resolved IP matches pod-1's `status.podIP`
@@ -234,7 +234,7 @@ TEST_TIMEOUT               (default: 5m per test)
 
 ### Test 4: `rollout_test.go` — NodeUpdate rolling semantics
 
-1. Apply `SeiNodeDeployment` with `spec.replicas: 3`, record current image
+1. Apply `SeiNetwork` with `spec.replicas: 3`, record current image
 2. Patch `spec.image` to a new value (`busybox:latest` → `busybox:1.36`)
 3. Wait for StatefulSet rolling update to complete (`UpdatedReplicas == Replicas`)
 4. Assert each pod was restarted (check `pod.status.containerStatuses[0].restartCount` or pod UID changed)
@@ -244,7 +244,7 @@ TEST_TIMEOUT               (default: 5m per test)
 
 ### Test 5 (stretch): `ssa_test.go` — SSA field-ownership under load
 
-1. Apply a `SeiNodeDeployment`, wait for pod `Running`
+1. Apply a `SeiNetwork`, wait for pod `Running`
 2. Concurrently: controller applies its managed fields; test directly patches the same pod's labels via a different field manager
 3. Assert: no field-manager conflict error surfaces to the controller's status conditions
 4. Assert: controller's fields are not overwritten; test's patch fields are preserved

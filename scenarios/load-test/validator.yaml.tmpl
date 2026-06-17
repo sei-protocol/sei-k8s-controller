@@ -1,20 +1,16 @@
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: PLACEHOLDER
 spec:
+  image: "{{ .IMAGE }}"
   replicas: 4
-  template:
-    spec:
-      chainId: "{{ .CHAIN_ID }}"
-      image: "{{ .IMAGE }}"
-      validator: {}
-      overrides:
-        storage.state_commit.write_mode: memiavl_only
-        storage.state_store.write_mode: memiavl_only
-        {{- with (index . "MEMPOOL_SIZE") }}
-        mempool.size: "{{ . }}"
-        mempool.pending_size: "{{ . }}"
-        {{- end }}
+  configOverrides:
+    storage.state_commit.write_mode: memiavl_only
+    storage.state_store.write_mode: memiavl_only
+    {{- with (index . "MEMPOOL_SIZE") }}
+    mempool.size: "{{ . }}"
+    mempool.pending_size: "{{ . }}"
+    {{- end }}
   genesis:
     chainId: "{{ .CHAIN_ID }}"

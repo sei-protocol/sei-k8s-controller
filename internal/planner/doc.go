@@ -1,13 +1,14 @@
 // Package planner builds and executes ordered task plans that drive SeiNode
-// and SeiNodeDeployment resources through their lifecycle.
+// and SeiNetwork resources through their lifecycle.
 //
 // # Plan Lifecycle
 //
 // A plan is an ordered list of tasks stored in .status.plan on the owning
 // resource. The lifecycle is:
 //
-//  1. Build: ResolvePlan (for nodes) or ForGroup (for deployments) inspects the
-//     resource's current phase and spec, then builds an appropriate plan.
+//  1. Build: ResolvePlan (for nodes) or ForGroup (for the network genesis
+//     ceremony) inspects the resource's current phase and spec, then builds an
+//     appropriate plan.
 //  2. Persist: The controller flushes the plan into the resource's status.
 //     Execution does not start until the plan is persisted (atomic creation).
 //  3. Execute: Executor.ExecutePlan drives tasks in-memory. Synchronous tasks
@@ -102,7 +103,7 @@
 //     node to a terminal phase. A non-empty FailedPhase (e.g. PhaseFailed on Init
 //     plans) is the terminal target.
 //   - TaskPlan.TargetPhase == "": no phase transition on completion. Group plans
-//     (SeiNodeDeployment) leave it empty; setTargetPhase is a no-op for any
+//     (SeiNetwork) leave it empty; setTargetPhase is a no-op for any
 //     object that is not a *SeiNode, so only SeiNode plans drive .Status.Phase.
 //   - PlannedTask.SubmittedAt == nil: the task has not been submitted yet (or was
 //     reset for retry). Set once on first submission; used as the plan-duration

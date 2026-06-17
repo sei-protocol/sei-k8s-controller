@@ -24,7 +24,7 @@ import (
 )
 
 // taskScheme is the controller-runtime client scheme for every seitask
-// subcommand: builtin K8s types + sei.io/v1alpha1 (SeiNodeDeployment,
+// subcommand: builtin K8s types + sei.io/v1alpha1 (SeiNetwork,
 // SeiNodeTask, SeiNode) so typed Create/Get round-trips work. Chaos Mesh
 // CRs are read via unstructured so they're not registered here.
 var taskScheme = func() *runtime.Scheme {

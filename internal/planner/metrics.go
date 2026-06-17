@@ -102,8 +102,8 @@ func controllerName(obj client.Object) string {
 	switch obj.(type) {
 	case *seiv1alpha1.SeiNode:
 		return "seinode"
-	case *seiv1alpha1.SeiNodeDeployment:
-		return "seinodedeployment"
+	case *seiv1alpha1.SeiNetwork:
+		return "seinetwork"
 	default:
 		return unknownValue
 	}

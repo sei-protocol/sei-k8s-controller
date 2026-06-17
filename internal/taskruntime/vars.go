@@ -11,10 +11,10 @@ const (
 	// KeyRunID — Workflow CR's metadata.name. Written by the initializing Task.
 	KeyRunID VarKey = "RUN_ID"
 
-	// KeyChainID — the SND's chainId. One-way door.
+	// KeyChainID — the SeiNetwork's chainId. One-way door.
 	KeyChainID VarKey = "CHAIN_ID"
 
-	// Endpoints — written by provision-snd after SND is Ready.
+	// Endpoints — written by provision-snd after the SeiNetwork is Ready.
 	// KeyEVMJSONRPC is pod-0 only (release-test pins stateful EVM
 	// sequences to one pod). KeyEVMJSONRPCList is comma-separated
 	// per-pod URLs for seiload, whose stateful EVM workload needs to
@@ -57,7 +57,7 @@ func ExitReasonFor(err error) ExitReason {
 }
 
 // RoleScoped prefixes a key with an upper-cased role tag so scenarios with
-// multiple SNDs (validator + rpc) write disjoint workflow-vars keys.
+// multiple SeiNetworks (validator + rpc) write disjoint workflow-vars keys.
 // RoleScoped("validator", KeyTendermintRPC) → "VALIDATOR_TM_RPC".
 func RoleScoped(role string, key VarKey) VarKey {
 	return VarKey(strings.ToUpper(role) + "_" + string(key))

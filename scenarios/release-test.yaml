@@ -19,7 +19,7 @@
 #   $SEI_CHAIN_ID           chain id (e.g. "rel-$SEI_WORKFLOW_RUN_ID")
 #   $SEI_WORKFLOW_RUN_ID    unique per-run id; suffixes Workflow + Secret names
 #   $SEID_IMAGE             seid container image
-#   $SEITASK_IMAGE          seitask monolith image (SND templates baked in)
+#   $SEITASK_IMAGE          seitask monolith image (SeiNetwork templates baked in)
 #   $RELEASE_TEST_IMAGE     release-test harness image
 ---
 apiVersion: chaos-mesh.org/v1alpha1

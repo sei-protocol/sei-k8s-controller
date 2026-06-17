@@ -6,14 +6,14 @@
 #
 # Provisions a 4-validator chain in-workflow via provision-snd, runs the
 # upgrade pipeline against it, uploads the run snapshot to S3. Matches the
-# release-test/load-test pattern: SND lifecycle and workflow-vars ConfigMap
+# release-test/load-test pattern: SeiNetwork lifecycle and workflow-vars ConfigMap
 # all carry ownerRef to this Workflow CR, so the wrapper's only cleanup duty
 # is `kubectl delete workflow`.
 #
-# Upgrade mechanism: a single bump-snd-image step patches the SND template
-# image; the SND controller rolls all validators onto the new binary. The
-# SND template is the one source of truth for child image -- per-child
-# UpdateNodeImage would fight the controller's template re-assertion and
+# Upgrade mechanism: a single bump-snd-image step patches the SeiNetwork
+# spec.image; the SeiNetwork controller rolls all validators onto the new binary.
+# The SeiNetwork spec.image is the one source of truth for child image -- per-child
+# UpdateNodeImage would fight the controller's spec.image re-assertion and
 # churn the StatefulSet so the rollout never settles.
 #
 # Workflow-vars producers/consumers
@@ -32,12 +32,12 @@
 # a proposal matching $SEI_UPGRADE_NAME appears, then patches PROPOSAL_ID.
 #
 # Placeholders (wrapper envsubst's at apply time -- see scenarios/README.md):
-#   $SEI_NAMESPACE         namespace of workflow + provisioned SND
-#   $SEI_CHAIN_ID          chain id; also the SND name
+#   $SEI_NAMESPACE         namespace of workflow + provisioned SeiNetwork
+#   $SEI_CHAIN_ID          chain id; also the SeiNetwork name
 #   $SEI_PRE_UPGRADE_IMG   seid image the validators boot on
 #   $SEI_POST_UPGRADE_IMG  seid image the upgrade rolls out to
 #   $SEI_UPGRADE_NAME      upgrade plan name registered in seid
-#   $SEITASK_IMAGE         seitask monolith image (SND templates baked in)
+#   $SEITASK_IMAGE         seitask monolith image (SeiNetwork templates baked in)
 #   $SEI_WORKFLOW_RUN_ID   unique per-run id; suffixes Workflow + CM names
 ---
 apiVersion: chaos-mesh.org/v1alpha1
@@ -405,17 +405,17 @@ spec:
               sleep 150
               echo "settle window elapsed; proceeding to bump-snd-image"
 
-    # Bumps the SeiNodeDeployment template image to the post-upgrade build in
-    # a single patch. The SND controller (InPlace strategy) re-asserts the new
+    # Bumps the SeiNetwork image to the post-upgrade build in
+    # a single patch. The SeiNetwork controller re-asserts the new
     # image onto every child SeiNode and drives each node's NodeUpdate plan;
     # the validators roll together onto the new binary at the upgrade height.
     #
-    # Patches spec.template.spec.image only -- a strategic/merge patch leaves
-    # the rest of the template untouched. Per-child UpdateNodeImage is NOT used
-    # here: the SND controller would re-assert the template image every
-    # reconcile, flip-flopping the child spec.image and churning the
-    # StatefulSet so the rollout never settles (observe-image never completes).
-    # The SND template is the single source of truth for child image.
+    # Patches spec.image only -- a merge patch leaves the rest of the spec
+    # untouched. Per-child UpdateNodeImage is NOT used here: the SeiNetwork
+    # controller would re-assert spec.image every reconcile, flip-flopping the
+    # child spec.image and churning the StatefulSet so the rollout never settles
+    # (observe-image never completes). The SeiNetwork spec.image is the single
+    # source of truth for child image.
     - name: bump-snd-image
       templateType: Task
       deadline: 5m
@@ -427,10 +427,10 @@ spec:
           args:
             - |
               set -eu
-              kubectl patch seinodedeployment "${SEI_CHAIN_ID}" \
+              kubectl patch seinetwork "${SEI_CHAIN_ID}" \
                 --type=merge \
-                --patch "{\"spec\":{\"template\":{\"spec\":{\"image\":\"${SEI_POST_UPGRADE_IMG}\"}}}}"
-              echo "patched seinodedeployment/${SEI_CHAIN_ID} template image to ${SEI_POST_UPGRADE_IMG}"
+                --patch "{\"spec\":{\"image\":\"${SEI_POST_UPGRADE_IMG}\"}}"
+              echo "patched seinetwork/${SEI_CHAIN_ID} image to ${SEI_POST_UPGRADE_IMG}"
           env:
             - name: SEI_CHAIN_ID
               value: "$SEI_CHAIN_ID"
@@ -438,7 +438,7 @@ spec:
               value: "$SEI_POST_UPGRADE_IMG"
 
     # Liveness: each validator advances past TARGET_HEIGHT+10
-    # (= POST_UPGRADE_HEIGHT) after the SND rolls all nodes onto the new
+    # (= POST_UPGRADE_HEIGHT) after the SeiNetwork rolls all nodes onto the new
     # binary. AwaitCondition over the height predicate, one per validator.
     - name: await-post-upgrade-progress
       templateType: Parallel

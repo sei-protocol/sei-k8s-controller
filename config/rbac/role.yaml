@@ -76,21 +76,9 @@ rules:
   - get
   - list
 - apiGroups:
-  - gateway.networking.k8s.io
-  resources:
-  - httproutes
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - sei.io
   resources:
-  - seinodedeployments
+  - seinetworks
   - seinodes
   - seinodetasks
   verbs:
@@ -104,7 +92,7 @@ rules:
 - apiGroups:
   - sei.io
   resources:
-  - seinodedeployments/finalizers
+  - seinetworks/finalizers
   - seinodes/finalizers
   - seinodetasks/finalizers
   verbs:
@@ -112,7 +100,7 @@ rules:
 - apiGroups:
   - sei.io
   resources:
-  - seinodedeployments/status
+  - seinetworks/status
   - seinodes/status
   - seinodetasks/status
   verbs:

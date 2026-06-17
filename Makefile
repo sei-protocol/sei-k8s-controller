@@ -36,7 +36,7 @@ manifests: ## Generate CRD and RBAC manifests.
 	controller-gen rbac:roleName=manager-role crd webhook paths="./..." \
 		output:crd:artifacts:config=config/crd \
 		output:rbac:artifacts:config=config/rbac
-	cp config/crd/sei.io_seinodes.yaml config/crd/sei.io_seinodedeployments.yaml config/crd/sei.io_seinodetasks.yaml manifests/
+	cp config/crd/sei.io_seinodes.yaml config/crd/sei.io_seinetworks.yaml config/crd/sei.io_seinodetasks.yaml manifests/
 	cp config/rbac/role.yaml manifests/
 
 generate: ## Generate DeepCopy implementations.
@@ -52,7 +52,7 @@ setup-envtest: $(LOCALBIN) ## Install setup-envtest and download K8s test binari
 test-integration: setup-envtest ## Run envtest-tagged integration tests.
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
 		go test -tags=envtest -timeout=10m \
-			./internal/controller/nodedeployment/envtest/... \
+			./internal/controller/seinetwork/envtest/... \
 			./internal/controller/nodetask/envtest/...
 
 test-all: test test-integration ## Run unit + integration tests.

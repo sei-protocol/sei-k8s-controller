@@ -76,54 +76,51 @@ type NodePlanner interface {
 	Mode() string
 }
 
-// GroupPlanner encapsulates logic for building a group-level task plan.
+// GroupPlanner encapsulates logic for building a network-level task plan.
 type GroupPlanner interface {
-	BuildPlan(group *seiv1alpha1.SeiNodeDeployment) (*seiv1alpha1.TaskPlan, error)
+	BuildPlan(network *seiv1alpha1.SeiNetwork) (*seiv1alpha1.TaskPlan, error)
 }
 
-// ForGroup returns the appropriate GroupPlanner based on the group's
+// ForGroup returns the appropriate GroupPlanner based on the network's
 // current state and spec. Returns (nil, nil) when no plan is needed.
-func ForGroup(group *seiv1alpha1.SeiNodeDeployment) (GroupPlanner, error) {
-	if needsGenesisPlan(group) {
+func ForGroup(network *seiv1alpha1.SeiNetwork) (GroupPlanner, error) {
+	if needsGenesisPlan(network) {
 		return &genesisGroupPlanner{}, nil
 	}
 
-	// Deployment: reconcileSeiNodes sets Rollout metadata when it
-	// detects a spec change requiring deployment orchestration.
-	if group.Status.Rollout != nil && group.Status.Plan == nil {
-		return ForDeployment(group)
-	}
-
+	// No deployment planner: image (and other propagatable) changes flow
+	// to children in-place via ensureSeiNode every reconcile, and each
+	// child's SeiNode controller rolls its own StatefulSet. The network's
+	// RolloutInProgress condition is a derived projection (see updateStatus),
+	// not a plan.
 	return nil, nil
 }
 
-// needsGenesisPlan returns true when a genesis ceremony has not yet
-// completed for an SND that requires one. Reads
+// needsGenesisPlan returns true when the genesis ceremony has not yet
+// completed. Every SeiNetwork runs the ceremony (genesis is required), so
+// there is no genesis-absent short-circuit. Reads
 // ConditionGenesisCeremonyComplete: any value other than True/Complete
 // means "ceremony still needs to run."
-func needsGenesisPlan(group *seiv1alpha1.SeiNodeDeployment) bool {
-	if group.Spec.Genesis == nil {
+func needsGenesisPlan(network *seiv1alpha1.SeiNetwork) bool {
+	if network.Status.Plan != nil {
 		return false
 	}
-	if group.Status.Plan != nil {
+	if isConditionTrue(network, seiv1alpha1.ConditionGenesisCeremonyComplete) {
 		return false
 	}
-	if isConditionTrue(group, seiv1alpha1.ConditionGenesisCeremonyComplete) {
-		return false
-	}
-	return allReplicasCreated(group)
+	return allReplicasCreated(network)
 }
 
-func allReplicasCreated(group *seiv1alpha1.SeiNodeDeployment) bool {
-	return int32(len(group.Status.IncumbentNodes)) >= group.Spec.Replicas
+func allReplicasCreated(network *seiv1alpha1.SeiNetwork) bool {
+	return int32(len(network.Status.IncumbentNodes)) >= network.Spec.Replicas
 }
 
 // isConditionTrue returns whether the named condition is present with
 // Status=True. The name distinguishes this from a presence check —
 // always-present conditions (per CLAUDE.md `### Conditions`) require
 // callers to assert on Status, not on presence.
-func isConditionTrue(group *seiv1alpha1.SeiNodeDeployment, condType string) bool {
-	for _, c := range group.Status.Conditions {
+func isConditionTrue(network *seiv1alpha1.SeiNetwork, condType string) bool {
+	for _, c := range network.Status.Conditions {
 		if c.Type == condType && c.Status == metav1.ConditionTrue {
 			return true
 		}

@@ -15,36 +15,36 @@ const groupAssemblyMaxRetries = 180
 
 type genesisGroupPlanner struct{}
 
-// BuildPlan constructs a TaskPlan for the SeiNodeDeployment that:
+// BuildPlan constructs a TaskPlan for the SeiNetwork that:
 //  1. Assembles all per-node genesis artifacts into a final genesis.json
 //     (retried until the sidecar succeeds).
 //  2. Collects node IDs and sets persistent_peers on each child node.
 //  3. Waits for all child SeiNodes to reach PhaseRunning.
 func (p *genesisGroupPlanner) BuildPlan(
-	group *seiv1alpha1.SeiNodeDeployment,
+	network *seiv1alpha1.SeiNetwork,
 ) (*seiv1alpha1.TaskPlan, error) {
 	planID := uuid.New().String()
 	planIndex := 0
-	incumbentNodes := group.Status.IncumbentNodes
+	incumbentNodes := network.Status.IncumbentNodes
 
 	nodeParams := make([]sidecar.GenesisNodeParam, len(incumbentNodes))
 	for i, name := range incumbentNodes {
 		nodeParams[i] = sidecar.GenesisNodeParam{Name: name}
 	}
 
-	accounts := make([]sidecar.GenesisAccountEntry, len(group.Spec.Genesis.Accounts))
-	for i, a := range group.Spec.Genesis.Accounts {
+	accounts := make([]sidecar.GenesisAccountEntry, len(network.Spec.Genesis.Accounts))
+	for i, a := range network.Spec.Genesis.Accounts {
 		accounts[i] = sidecar.GenesisAccountEntry{Address: a.Address, Balance: a.Balance}
 	}
 
 	// Validate at planner-time so bech32 / shape errors hit
-	// `kubectl describe seinodedeployment` rather than a sidecar Job pod.
+	// `kubectl describe seinetwork` rather than a sidecar Job pod.
 	assembleParams := sidecar.AssembleAndUploadGenesisTask{
-		AccountBalance: group.Spec.Genesis.AccountBalance,
-		Namespace:      group.Namespace,
+		AccountBalance: network.Spec.Genesis.AccountBalance,
+		Namespace:      network.Namespace,
 		Nodes:          nodeParams,
 		Accounts:       accounts,
-		Overrides:      toRawMessages(group.Spec.Genesis.Overrides),
+		Overrides:      toRawMessages(network.Spec.Genesis.Overrides),
 	}
 	if err := assembleParams.Validate(); err != nil {
 		return nil, err
@@ -58,8 +58,8 @@ func (p *genesisGroupPlanner) BuildPlan(
 
 	collectPeersTask, err := buildPlannedTask(planID, task.TaskTypeCollectAndSetPeers, planIndex,
 		&task.CollectAndSetPeersParams{
-			GroupName: group.Name,
-			Namespace: group.Namespace,
+			GroupName: network.Name,
+			Namespace: network.Namespace,
 			NodeNames: incumbentNodes,
 		})
 	if err != nil {
@@ -69,8 +69,8 @@ func (p *genesisGroupPlanner) BuildPlan(
 
 	awaitTask, err := buildPlannedTask(planID, TaskAwaitNodesRunning, planIndex,
 		&task.AwaitNodesRunningParams{
-			GroupName: group.Name,
-			Namespace: group.Namespace,
+			GroupName: network.Name,
+			Namespace: network.Namespace,
 			Expected:  len(incumbentNodes),
 			NodeNames: incumbentNodes,
 		})

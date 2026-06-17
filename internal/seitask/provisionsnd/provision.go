@@ -1,10 +1,10 @@
 // Package provisionsnd implements `seitask provision-snd`: render a Go
-// template to a SeiNodeDeployment YAML, stamp an ownerRef to the parent
+// template to a SeiNetwork YAML, stamp an ownerRef to the parent
 // Workflow, Create it, await Ready, poll the chain RPC for first block,
 // then publish endpoints to workflow-vars under role-scoped keys
 // (VALIDATOR_TM_RPC, RPC_EVM_RPC, etc.).
 //
-// Templates are scenario-intrinsic: the full SND shape (mode, overrides,
+// Templates are scenario-intrinsic: the full SeiNetwork shape (mode, overrides,
 // peers, genesis ceremony) lives in the template body as proper YAML.
 // Per-run scalars (CHAIN_ID, IMAGE, ADMIN_ADDRESS, ...) flow in via --var
 // and resolve at render time. Same `--template + --var` contract as the
@@ -43,12 +43,12 @@ type Params struct {
 	// values get uppercased to compose VALIDATOR_TM_RPC etc.
 	Role string
 
-	// Name is the SeiNodeDeployment metadata.name. Defaults to
+	// Name is the SeiNetwork metadata.name. Defaults to
 	// "<Workflow.Name>-<Role>" when empty.
 	Name string
 
 	// TemplatePath is the on-disk path to the Go text/template producing
-	// a SeiNodeDeployment YAML. Required.
+	// a SeiNetwork YAML. Required.
 	TemplatePath string
 
 	// Vars are the template's substitution context (the .KEY map in
@@ -81,8 +81,8 @@ type Result struct {
 	Endpoints seiv1alpha1.Endpoints
 }
 
-// Run renders the template, creates the SND with an ownerRef to the parent
-// Workflow, waits for Ready, polls the chain RPC for first block, and
+// Run renders the template, creates the SeiNetwork with an ownerRef to the
+// parent Workflow, waits for Ready, polls the chain RPC for first block, and
 // writes role-scoped endpoints to workflow-vars.
 func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 	if err := validateParams(p); err != nil {
@@ -98,7 +98,7 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 
 	if err := c.Create(ctx, snd, fieldOwner); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
-			return Result{}, taskruntime.Infra(fmt.Errorf("creating SeiNodeDeployment %s/%s: %w", snd.Namespace, snd.Name, err))
+			return Result{}, taskruntime.Infra(fmt.Errorf("creating SeiNetwork %s/%s: %w", snd.Namespace, snd.Name, err))
 		}
 		// Re-runs land here. Surface drift loudly so an operator who edited
 		// the template since the original Create knows the cluster is still
@@ -111,15 +111,15 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 		return Result{}, err
 	}
 
-	current := &seiv1alpha1.SeiNodeDeployment{}
+	current := &seiv1alpha1.SeiNetwork{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: snd.Namespace, Name: snd.Name}, current); err != nil {
-		return Result{}, taskruntime.Infra(fmt.Errorf("re-reading SND post-Ready: %w", err))
+		return Result{}, taskruntime.Infra(fmt.Errorf("re-reading SeiNetwork post-Ready: %w", err))
 	}
 	if current.Status.Endpoints == nil || current.Status.Endpoints.TendermintRpc == "" {
-		return Result{}, taskruntime.Infra(fmt.Errorf("SND %s reached Ready but .status.endpoints.tendermintRpc is empty", current.Name))
+		return Result{}, taskruntime.Infra(fmt.Errorf("SeiNetwork %s reached Ready but .status.endpoints.tendermintRpc is empty", current.Name))
 	}
 	endpoints := *current.Status.Endpoints
-	chainID := current.Spec.Template.Spec.ChainID
+	chainID := current.Spec.Genesis.ChainID
 
 	httpClient := p.HTTPClient
 	if httpClient == nil {
@@ -165,9 +165,9 @@ func withDefaults(p Params) Params {
 
 // renderTemplate parses the file at path as a Go text/template, executes it
 // against vars (missing keys fail the render — `missingkey=error` option),
-// then strict-unmarshals the rendered bytes into a SeiNodeDeployment so
+// then strict-unmarshals the rendered bytes into a SeiNetwork so
 // typos in field names fail here, not at apiserver-Create time.
-func renderTemplate(path string, vars map[string]string) (*seiv1alpha1.SeiNodeDeployment, error) {
+func renderTemplate(path string, vars map[string]string) (*seiv1alpha1.SeiNetwork, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
@@ -180,7 +180,7 @@ func renderTemplate(path string, vars map[string]string) (*seiv1alpha1.SeiNodeDe
 	if err := tmpl.Execute(&buf, vars); err != nil {
 		return nil, fmt.Errorf("execute: %w", err)
 	}
-	out := &seiv1alpha1.SeiNodeDeployment{}
+	out := &seiv1alpha1.SeiNetwork{}
 	if err := yaml.UnmarshalStrict(buf.Bytes(), out); err != nil {
 		return nil, fmt.Errorf("unmarshal rendered yaml: %w", err)
 	}
@@ -190,42 +190,42 @@ func renderTemplate(path string, vars map[string]string) (*seiv1alpha1.SeiNodeDe
 // stampMetadata overwrites metadata fields the template MUST NOT control.
 // OwnerReferences are assigned (not appended) so a template that smuggles
 // a bogus ref can't leak through.
-func stampMetadata(snd *seiv1alpha1.SeiNodeDeployment, p Params) {
+func stampMetadata(snd *seiv1alpha1.SeiNetwork, p Params) {
 	snd.APIVersion = seiv1alpha1.GroupVersion.String()
-	snd.Kind = "SeiNodeDeployment"
+	snd.Kind = "SeiNetwork"
 	snd.Name = p.Name
 	snd.Namespace = p.Workflow.Namespace
 	snd.OwnerReferences = []metav1.OwnerReference{p.Workflow.OwnerRef()}
 }
 
-// warnIfDrift logs when a re-run finds the on-cluster SND.Spec different
+// warnIfDrift logs when a re-run finds the on-cluster SeiNetwork.Spec different
 // from the freshly-rendered one. Operators who edited the template since
 // the original Create need to know the cluster still has the old spec.
-func warnIfDrift(ctx context.Context, c client.Client, fresh *seiv1alpha1.SeiNodeDeployment) {
-	existing := &seiv1alpha1.SeiNodeDeployment{}
+func warnIfDrift(ctx context.Context, c client.Client, fresh *seiv1alpha1.SeiNetwork) {
+	existing := &seiv1alpha1.SeiNetwork{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: fresh.Namespace, Name: fresh.Name}, existing); err != nil {
 		return
 	}
 	if reflect.DeepEqual(existing.Spec, fresh.Spec) {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "WARN: SND %s/%s exists with spec different from rendered template; reusing on-cluster spec\n", fresh.Namespace, fresh.Name)
+	fmt.Fprintf(os.Stderr, "WARN: SeiNetwork %s/%s exists with spec different from rendered template; reusing on-cluster spec\n", fresh.Namespace, fresh.Name)
 }
 
 func waitForReady(ctx context.Context, c client.Client, key types.NamespacedName, timeout, interval time.Duration) error {
 	return wait.PollUntilContextTimeout(ctx, interval, timeout, true, func(ctx context.Context) (bool, error) {
-		snd := &seiv1alpha1.SeiNodeDeployment{}
+		snd := &seiv1alpha1.SeiNetwork{}
 		if err := c.Get(ctx, key, snd); err != nil {
 			if apierrors.IsNotFound(err) {
 				return false, nil
 			}
-			return false, taskruntime.Infra(fmt.Errorf("reading SND %s: %w", key, err))
+			return false, taskruntime.Infra(fmt.Errorf("reading SeiNetwork %s: %w", key, err))
 		}
 		switch snd.Status.Phase {
 		case seiv1alpha1.GroupPhaseReady:
 			return true, nil
 		case seiv1alpha1.GroupPhaseFailed:
-			return false, taskruntime.Task(fmt.Errorf("SND %s reached Failed phase", key))
+			return false, taskruntime.Task(fmt.Errorf("SeiNetwork %s reached Failed phase", key))
 		}
 		return false, nil
 	})

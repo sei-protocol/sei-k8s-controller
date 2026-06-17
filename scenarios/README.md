@@ -16,8 +16,8 @@ the acceptance test for one capability surface.
 
 | File | Mirrors | Purpose |
 |---|---|---|
-| `major-upgrade.yaml` | `sei-chain/integration_test/upgrade_module/major_upgrade_test.yaml` | 4-validator software-upgrade flow: gov proposal, vote, then a single SND template image bump that rolls all validators onto the new binary at the upgrade height. MVP acceptance for the SeiNodeTask CRD. |
-| `testnet-deployment.yaml` | n/a | Reference 4-validator `SeiNodeDeployment` the Workflow can target. |
+| `major-upgrade.yaml` | `sei-chain/integration_test/upgrade_module/major_upgrade_test.yaml` | 4-validator software-upgrade flow: gov proposal, vote, then a single SeiNetwork image bump that rolls all validators onto the new binary at the upgrade height. MVP acceptance for the SeiNodeTask CRD. |
+| `testnet-deployment.yaml` | n/a | Reference 4-validator `SeiNetwork` the Workflow can target. |
 
 ## Where this runs
 
@@ -30,13 +30,13 @@ designed for:
 - **Not** any cluster carrying a chain you care about.
 
 The Workflow does not provision the chain. It assumes a 4-validator
-`SeiNodeDeployment` exists in the target namespace before the Workflow
+`SeiNetwork` exists in the target namespace before the Workflow
 applies. See "Run" below.
 
 ## Prerequisites
 
 1. **CRDs installed** in the target cluster:
-   - `seinodedeployments.sei.io`
+   - `seinetworks.sei.io`
    - `seinodes.sei.io`
    - `seinodetasks.sei.io`
 
@@ -90,8 +90,8 @@ applies. See "Run" below.
 ```bash
 kubectl apply -f scenarios/testnet-deployment.yaml
 # wait for status.replicas == status.readyReplicas == 4
-kubectl -n majorupgrade wait --for=condition=Ready=true \
-  --timeout=15m seinodedeployment/majorupgrade
+kubectl -n majorupgrade wait --for=condition=NodesReady=true \
+  --timeout=15m seinetwork/majorupgrade
 # spot-check the validator phases
 kubectl -n majorupgrade get seinodes
 # expected: majorupgrade-0 .. majorupgrade-3, all Running.
@@ -150,7 +150,7 @@ Per-step interpretation:
 | `resolve-proposal-id` | Polled gov REST for a voting-period proposal whose plan name matches `$SEI_UPGRADE_NAME`, merged `PROPOSAL_ID` into the workflow-vars ConfigMap. |
 | `vote-yes-all-validators` | All 4 vote tasks Complete. |
 | `wait-for-proposal-to-pass` | Proposal observed `PROPOSAL_STATUS_PASSED`. |
-| `bump-snd-image` | `kubectl patch seinodedeployment` set `spec.template.spec.image` to the post-upgrade build. The SND controller (InPlace) re-asserts the image onto every child and rolls all validators onto the new binary. |
+| `bump-snd-image` | `kubectl patch seinetwork` set `spec.image` to the post-upgrade build. The SeiNetwork controller re-asserts the image onto every child and rolls all validators onto the new binary. |
 | `await-post-upgrade-progress` | Post-upgrade height-advance check: each of nodes 0/1/2/3 advanced past `POST_UPGRADE_HEIGHT` (= `TARGET_HEIGHT + 10`) via AwaitCondition. This is the liveness assertion -- a node that crosses the boundary has survived the upgrade. |
 
 ### 5. Cleanup
@@ -231,13 +231,13 @@ namespace as the Workflow:
    verbs (only the runner's outputs ConfigMap-write would remain).
 
 3. **Upgrade rolls the whole fleet, not staggered per-node.** This
-   Workflow bumps the SND template image once and lets the SND controller
+   Workflow bumps the SeiNetwork spec.image once and lets the SeiNetwork controller
    roll all validators together. It does NOT exercise the staggered
    early-upgrade-one-node-then-the-rest path the source
    `major_upgrade_test.yaml` does. Per-child `UpdateNodeImage` against a
-   SND-owned node fights the controller's template re-assertion (the child
+   SeiNetwork-owned node fights the controller's spec.image re-assertion (the child
    image flip-flops, the StatefulSet churns, `observe-image` never settles),
-   so staggered rollout needs a different primitive (e.g. SND-level
+   so staggered rollout needs a different primitive (e.g. SeiNetwork-level
    partition/maxUnavailable) before it can return.
 
 4. **The runner image is not yet auto-published.** Add a `runner` step to

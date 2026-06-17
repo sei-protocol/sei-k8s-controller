@@ -1,10 +1,10 @@
 # sei-k8s-controller
 
-A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) blockchain infrastructure. It defines two CRDs — `SeiNodeDeployment` and `SeiNode` — under the `sei.io/v1alpha1` API group.
+A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) blockchain infrastructure. It defines two CRDs — `SeiNetwork` and `SeiNode` — under the `sei.io/v1alpha1` API group.
 
 ## Overview
 
-`SeiNodeDeployment` orchestrates fleets of nodes: it manages genesis ceremonies, coordinates deployments, and provisions networking and monitoring. `SeiNode` manages a single Sei node — its PVC, StatefulSet, headless Service, and sidecar-driven bootstrap.
+`SeiNetwork` orchestrates fleets of nodes: it manages genesis ceremonies, coordinates deployments, and provisions networking and monitoring. `SeiNode` manages a single Sei node — its PVC, StatefulSet, headless Service, and sidecar-driven bootstrap.
 
 ### Key design decisions
 
@@ -16,32 +16,29 @@ A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) b
 
 ## CRDs
 
-### SeiNodeDeployment
+### SeiNetwork
 
-Orchestrates fleets of `SeiNode` resources with optional genesis ceremony support, including forking from an existing chain's exported state.
+Bootstraps a new Sei chain via a genesis ceremony that mints the chain's
+genesis.json and its founding validator set. `replicas` are the genesis
+validators; each gets a distinct ceremony-generated identity. The spec is
+scalar (no `SeiNode` template) — the controller synthesizes each child
+SeiNode's validator spec from these fields. `replicas`, `genesis`, and
+`dataVolume` are immutable after create (the validator set and on-disk
+identity are minted into genesis state at the ceremony).
 
 ```yaml
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: devnet
 spec:
   replicas: 4
+  image: sei-protocol/seid:v6.3.0
   genesis:
     chainId: my-devnet
     stakingAmount: "10000000usei"
-    # Optional: fork from an existing chain instead of fresh genesis
-    # fork:
-    #   sourceChainId: pacific-1
-    #   sourceImage: "ghcr.io/sei-protocol/sei:v5.9.0"
-    #   exportHeight: 100000000
-  template:
-    spec:
-      chainId: my-devnet
-      image: sei-protocol/seid:v6.3.0
-      validator: {}
-      sidecar:
-        image: ghcr.io/sei-protocol/seictl:v0.0.29
+  sidecar:
+    image: ghcr.io/sei-protocol/seictl:v0.0.29
 ```
 
 ### SeiNode
@@ -108,7 +105,7 @@ The `config/` directory follows the standard [Kubebuilder](https://book.kubebuil
 
 ```
 config/
-├── crd/              # Generated CRD manifests (SeiNode, SeiNodeDeployment)
+├── crd/              # Generated CRD manifests (SeiNode, SeiNetwork)
 ├── rbac/             # ServiceAccount, ClusterRole, bindings, leader election
 ├── manager/          # Deployment and metrics Service
 ├── monitoring/       # PrometheusRule and ServiceMonitor

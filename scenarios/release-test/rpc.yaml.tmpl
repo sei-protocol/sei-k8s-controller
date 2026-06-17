@@ -1,26 +1,22 @@
+# PLACEHOLDER — pending the follower reshape (seinetwork-lld § Followers / M2-M3).
+# Followers (rpc/full/archive) are no longer modeled as a SeiNetwork: a
+# SeiNetwork bootstraps a genesis validator pool only. An rpc fleet joining an
+# existing chain becomes standalone SeiNode CRs + hand-rolled GitOps networking,
+# orchestrated by the seictl/harbor-dev skills. Until that flow lands, this file
+# renders as a minimal scoped SeiNetwork so the bench harness keeps building.
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: PLACEHOLDER
 spec:
+  image: "{{ .IMAGE }}"
   replicas: 2
-  template:
-    spec:
-      chainId: "{{ .CHAIN_ID }}"
-      image: "{{ .IMAGE }}"
-      fullNode: {}
-      peers:
-        - label:
-            selector:
-              sei.io/chain: "{{ .CHAIN_ID }}"
-      overrides:
-        tx_index.indexer: kv
-        storage.state_commit.write_mode: memiavl_only
-        storage.state_store.write_mode: memiavl_only
-        mempool.ttl_duration: 60s
-        # Tighten /lag_status readiness to 2 blocks so SND phase=Ready
-        # means lag<=2 across the fleet. The release-test harness opens
-        # fresh HTTP connections per call; pods at meaningfully different
-        # heights break write-then-read sequences.
-        network.rpc.lag_threshold: "2"
-        evm.enabled_legacy_sei_apis: sei_getLogs,sei_getBlockByNumber,sei_getBlockByHash,sei_getSeiAddress,sei_getEVMAddress,sei_getCosmosTx,sei_getEvmTx,sei_newFilter,sei_getFilterLogs
+  configOverrides:
+    tx_index.indexer: kv
+    storage.state_commit.write_mode: memiavl_only
+    storage.state_store.write_mode: memiavl_only
+    mempool.ttl_duration: 60s
+    network.rpc.lag_threshold: "2"
+    evm.enabled_legacy_sei_apis: sei_getLogs,sei_getBlockByNumber,sei_getBlockByHash,sei_getSeiAddress,sei_getEVMAddress,sei_getCosmosTx,sei_getEvmTx,sei_newFilter,sei_getFilterLogs
+  genesis:
+    chainId: "{{ .CHAIN_ID }}"

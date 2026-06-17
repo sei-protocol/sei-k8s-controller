@@ -140,7 +140,7 @@ spec:
 
 ---
 
-## 4. Required SeiNode / SeiNodeDeployment spec
+## 4. Required SeiNode / SeiNetwork spec
 
 `dataVolume.import.pvcName` is the only new field. Names a PVC in the SeiNode's namespace; everything else about how the volume is sourced is the operator's responsibility.
 
@@ -167,17 +167,17 @@ spec:
   archive: {}                                # selects archive mode (see §6)
 ```
 
-### SeiNodeDeployment (typical for prod)
+### SeiNetwork (typical for prod)
 
 ```yaml
 apiVersion: sei.io/v1alpha1
-kind: SeiNodeDeployment
+kind: SeiNetwork
 metadata:
   name: archive-0
   namespace: <chain-namespace>
 spec:
   replicas: 1                                # archive nodes are single-instance per ordinal
-  deletionPolicy: Retain                     # do not delete the imported PVC on SeiNodeDeployment deletion
+  deletionPolicy: Retain                     # do not delete the imported PVC on SeiNetwork deletion
 
   template:
     spec:
@@ -203,7 +203,7 @@ spec:
 
 ### Immutability
 
-`spec.dataVolume.import.pvcName` is immutable on a SeiNode (CEL: `self == oldSelf`). To re-point at a different PVC, delete and recreate the SeiNode (or, for a SeiNodeDeployment, scale to 0, edit the template, scale up — the underlying StatefulSet picks up the new spec on creation).
+`spec.dataVolume.import.pvcName` is immutable on a SeiNode (CEL: `self == oldSelf`). To re-point at a different PVC, delete and recreate the SeiNode (or, for a SeiNetwork, scale to 0, edit the template, scale up — the underlying StatefulSet picks up the new spec on creation).
 
 ---
 
@@ -292,7 +292,7 @@ What stays the same across the migration:
 
 - **EBS volume** — never touched; `Retain` reclaim + the PV's `volumeHandle` re-references the same AWS volume.
 - **Names** — PV name, PVC name, EBS volume id all preserved. SeiNode → PVC → PV → EBS chain re-resolves automatically.
-- **SeiNode/SeiNodeDeployment spec** — no change; references PVC by name.
+- **SeiNode/SeiNetwork spec** — no change; references PVC by name.
 
 Verification after the new pod is Running:
 
@@ -316,13 +316,13 @@ If the `mount` line shows a `context=...` parameter, per-mount labeling is activ
 `PV.spec.csi.volumeHandle` is **immutable** on a bound PV. To re-point an archive at a freshly populated EBS, the PV must be deleted and recreated.
 
 ```text
-1. Scale SeiNodeDeployment to 0 replicas (or delete the SeiNode)
+1. Scale SeiNetwork to 0 replicas (or delete the SeiNode)
 2. Wait for the pod to terminate; CSI auto-detaches the EBS
 3. Detach the new EBS from the EC2 instance that populated it
 4. Delete the PV (Retain reclaim → both old and new EBS volumes survive)
 5. Update the PV manifest's volumeHandle to the new EBS volume id
 6. Apply the manifest (PV recreated; PVC re-binds via volumeName)
-7. Scale the SeiNodeDeployment back up
+7. Scale the SeiNetwork back up
 8. Watch init container — must log "data directory already initialized"
 9. Watch seid — height should climb past the seeded height within minutes
 ```

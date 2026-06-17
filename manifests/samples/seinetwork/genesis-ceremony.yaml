@@ -1,0 +1,36 @@
+# SeiNetwork — Genesis Ceremony (dev testnet)
+#
+# Bootstraps a new chain from scratch. spec.genesis is required: the
+# controller coordinates the ceremony, then the replicas run as the
+# chain's founding validator set.
+#   1. Each node generates identity + gentx, uploads artifacts to S3
+#   2. The network assembles final genesis.json from all artifacts
+#   3. Each node downloads genesis and starts the chain
+apiVersion: sei.io/v1alpha1
+kind: SeiNetwork
+metadata:
+  name: genesis-test
+  namespace: default
+spec:
+  replicas: 4
+  image: "ghcr.io/sei-protocol/sei:v6.3.0"
+
+  genesis:
+    chainId: genesis-test-1
+    stakingAmount: "10000000usei"
+    accountBalance: "1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom"
+    # overrides:
+    #   staking.params.unbonding_time: "1814400s"
+
+  template:
+    metadata:
+      labels:
+        sei.io/role: validator
+    spec:
+      chainId: genesis-test-1
+      image: "ghcr.io/sei-protocol/sei:v6.3.0"
+
+      sidecar:
+        image: ghcr.io/sei-protocol/seictl@sha256:2cb320dd583000765520293d4e28ecc79fed4432c76760923d3aaa47803a4dbf
+
+      validator: {}

@@ -1,0 +1,735 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: seinetworks.sei.io
+spec:
+  group: sei.io
+  names:
+    kind: SeiNetwork
+    listKind: SeiNetworkList
+    plural: seinetworks
+    shortNames:
+    - sn
+    singular: seinetwork
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - jsonPath: .status.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.paused
+      name: Paused
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SeiNetwork is the Schema for the seinetworks API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SeiNetworkSpec defines the desired state of a SeiNetwork.
+
+              A SeiNetwork bootstraps a new Sei chain: a required genesis ceremony that
+              mints the chain's genesis.json/genesisHash and its founding validator set.
+              spec.genesis is mandatory — the Kind cannot exist without it. The replicas
+              are the genesis validators; the ceremony generates a distinct identity
+              (consensus key, P2P node key, operator account) for each one.
+
+              Consumer note: editing spec.image (or other propagatable fields) on a
+              running network rolls every genesis validator near-simultaneously, which
+              briefly interrupts consensus. Drain in-flight load before an image bump.
+
+              The spec is purpose-built for genesis bootstrap, not a SeiNodeSpec template.
+              Follower/multi-role fields (signingKey, nodeKey, operatorKeyring, snapshot,
+              peers, externalAddress, fullNode/archive/replayer) are structurally absent:
+              supplying them describes a SeiNode, not a genesis validator pool. The
+              controller synthesizes each child SeiNode's validator spec from these
+              scalars (see generateSeiNode).
+            properties:
+              configOverrides:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ConfigOverrides are seid runtime config (config.toml/app.toml)
+                  overrides, a flat map of dotted sei-config keys (e.g. "evm.http_port")
+                  to string values. DISTINCT from genesis.overrides, which writes
+                  genesis.json chain state — these are mutable node runtime config that
+                  propagate to children in-place.
+                type: object
+              dataVolume:
+                description: |-
+                  DataVolume configures the data PersistentVolumeClaim for each genesis
+                  validator. The ceremony-generated consensus identity lives here, so
+                  DeletionPolicy defaults to Retain.
+
+                  Immutable after create (spec-level CEL): it backs a StatefulSet
+                  volumeClaimTemplate, which Kubernetes forbids changing post-create, so a
+                  later edit could never take effect — admission rejects it rather than
+                  letting the controller silently ignore it.
+                properties:
+                  import:
+                    description: |-
+                      Import references a pre-existing PersistentVolumeClaim in the same
+                      namespace as the SeiNode, instead of creating a new one. The
+                      controller validates the referenced PVC but never mutates it. Storage
+                      class is the importer's responsibility — the controller does not
+                      validate it.
+
+                      When Import is set, the controller never deletes the referenced PVC
+                      on SeiNode deletion — storage lifecycle is the operator's responsibility.
+                    properties:
+                      pvcName:
+                        description: |-
+                          PVCName is the name of a PersistentVolumeClaim in the SeiNode's
+                          namespace. The PVC must be Bound, ReadWriteOnce, and sized at or above
+                          the node mode's default storage size. Immutable after creation.
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: pvcName is immutable
+                          rule: self == oldSelf
+                    required:
+                    - pvcName
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: import cannot be unset once configured
+                  rule: (!has(oldSelf.import) || has(self.import))
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy controls what happens to child SeiNodes when the
+                  SeiNetwork is deleted. "Retain" (default) orphans children so they
+                  continue running independently — a validator pool's PVCs hold
+                  ceremony-generated, unrecoverable consensus identity. "Delete" cascades
+                  deletion.
+                enum:
+                - Delete
+                - Retain
+                type: string
+              genesis:
+                description: |-
+                  Genesis is REQUIRED. The ceremony that bootstraps this chain.
+                  genesis.chainId is the sole chain identity (no redundant top-level
+                  chainId). The ceremony GENERATES every validator's identity (consensus
+                  key, P2P node key, operator account) — there is no bring-your-own-key
+                  path. Immutable once set; enforced by spec-level CEL.
+                properties:
+                  accountBalance:
+                    default: 1000000000000000000000usei,1000000000000000000000uusdc,1000000000000000000000uatom
+                    description: AccountBalance is the initial balance for each validator's
+                      genesis account.
+                    type: string
+                  accounts:
+                    description: Accounts adds non-validator genesis accounts (e.g.
+                      for load test funding).
+                    items:
+                      description: GenesisAccount represents a non-validator genesis
+                        account to fund.
+                      properties:
+                        address:
+                          description: Address is the bech32-encoded account address.
+                          minLength: 1
+                          type: string
+                        balance:
+                          description: Balance is the initial balance in coin notation
+                            (e.g. "1000000usei").
+                          minLength: 1
+                          type: string
+                      required:
+                      - address
+                      - balance
+                      type: object
+                    type: array
+                  chainId:
+                    description: |-
+                      ChainID for the new network.
+                      Constrained to DNS-1123 label characters because child SeiNodes
+                      compose it into P2P endpoint hostnames; the address is a one-way
+                      door once peers cache it.
+                    maxLength: 64
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  maxCeremonyDuration:
+                    description: |-
+                      MaxCeremonyDuration is the maximum time from network creation to genesis
+                      assembly completion. Default: "15m".
+                    type: string
+                  overrides:
+                    additionalProperties:
+                      x-kubernetes-preserve-unknown-fields: true
+                    description: |-
+                      Overrides is a flat map of dotted snake_case key paths to JSON values,
+                      merged on top of sei-config's GenesisDefaults() before gentx generation.
+                      Keys follow cosmos JSON encoding (e.g. "staking.params.unbonding_time")
+                      and values are arbitrary JSON (string, number, bool, object, array)
+                      matching the type at that path in the underlying genesis schema.
+                    type: object
+                  stakingAmount:
+                    default: 10000000usei
+                    description: StakingAmount is the amount each validator self-delegates
+                      in its gentx.
+                    type: string
+                required:
+                - chainId
+                type: object
+              image:
+                description: Image is the seid image the genesis validators run.
+                minLength: 1
+                type: string
+              paused:
+                description: |-
+                  Paused freezes plan-driven orchestration. While true, no new plans
+                  start, no spec changes propagate to children, and any active plan
+                  freezes in place. Children inherit the paused state.
+                type: boolean
+              podLabels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodLabels are additional labels merged into each child SeiNode's pod
+                  template. The controller always adds the reserved group labels
+                  (sei.io/nodedeployment{,-ordinal}, frozen GitOps selector keys, plus the
+                  canonical sei.io/seinetwork{,-ordinal} keys); these are additive.
+                type: object
+              replicas:
+                default: 1
+                description: |-
+                  Replicas is the number of genesis validators to create. Each gets a
+                  DISTINCT generated identity, so replicas>1 is the normal safe case
+                  (no shared key → no double-sign). Each SeiNode is named
+                  "{network-name}-{ordinal}".
+
+                  FIXED at genesis: the validator set is minted into genesis state at the
+                  ceremony, so replicas is immutable after create (spec-level CEL). You
+                  cannot add a validator to an already-minted genesis, nor shrink the set.
+                format: int32
+                maximum: 100
+                minimum: 1
+                type: integer
+              sidecar:
+                description: Sidecar configures the sei-sidecar container on each
+                  genesis validator.
+                properties:
+                  image:
+                    description: Image overrides the sidecar container image.
+                    type: string
+                  port:
+                    default: 7777
+                    description: Port is the HTTP port the sidecar listens on.
+                    format: int32
+                    type: integer
+                  resources:
+                    description: Resources defines CPU/memory requests and limits
+                      for the sidecar container.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                type: object
+            required:
+            - genesis
+            - image
+            - replicas
+            type: object
+            x-kubernetes-validations:
+            - message: spec.genesis is immutable once set; the ceremony's outputs
+                (chain ID, validator gentxs, account balances) are baked into chain
+                state and cannot be retroactively rewritten by editing the spec
+              rule: self.genesis == oldSelf.genesis
+            - message: spec.replicas is fixed at the genesis ceremony; the validator
+                set is minted into genesis state and cannot be grown or shrunk by
+                editing the spec
+              rule: self.replicas == oldSelf.replicas
+            - message: spec.dataVolume is immutable once set; it backs a StatefulSet
+                volumeClaimTemplate, which Kubernetes forbids changing after create
+              rule: (!has(self.dataVolume) && !has(oldSelf.dataVolume)) || self.dataVolume
+                == oldSelf.dataVolume
+          status:
+            description: |-
+              SeiNetworkStatus defines the observed state of a SeiNetwork. The flat shape
+              (top-level genesisHash + genesisS3URI, endpoints, perPodServices,
+              internalService) is the consumer contract — skills parse this shape.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              endpoints:
+                description: |-
+                  Endpoints exposes composed in-cluster URLs derived from
+                  .status.internalService and .status.perPodServices. When
+                  .status.phase == Ready, .nodes is non-empty.
+                properties:
+                  nodes:
+                    description: |-
+                      Nodes lists per-pod URL bundles, keyed by SeiNode name. The list
+                      mirrors .status.perPodServices and exposes the protocols that
+                      require pod affinity (EVM JSON-RPC, EVM WebSocket).
+                    items:
+                      description: |-
+                        NodeEndpoint is the per-pod URL bundle for a single SeiNode replica.
+                        Name matches the SeiNode resource name and the corresponding entry in
+                        .status.perPodServices.
+                      properties:
+                        evmJsonRpc:
+                          description: EvmJsonRpc is the per-pod EVM JSON-RPC HTTP
+                            URL (http://).
+                          type: string
+                        evmWs:
+                          description: EvmWs is the per-pod EVM WebSocket URL (ws://).
+                          type: string
+                        name:
+                          description: Name is the SeiNode resource name (also the
+                            headless Service name).
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  tendermintRest:
+                    description: TendermintRest is the aggregate Cosmos REST (LCD)
+                      URL (http://).
+                    type: string
+                  tendermintRpc:
+                    description: TendermintRpc is the aggregate Tendermint / CometBFT
+                      RPC URL (http://).
+                    type: string
+                type: object
+              genesisHash:
+                description: |-
+                  GenesisHash is the SHA-256 hex digest of the assembled genesis.json
+                  (bare hex, no algorithm prefix). It gates the genesis download: a node
+                  booting from the S3 fallback must verify the downloaded genesis.json
+                  against this value.
+                type: string
+              genesisS3URI:
+                description: |-
+                  GenesisS3URI is the S3 URI of the uploaded genesis. Followers boot from
+                  this URI.
+                type: string
+              incumbentNodes:
+                description: |-
+                  IncumbentNodes lists the names of the child SeiNode resources. Refreshed
+                  each reconcile so the genesis planner can read the current node set
+                  directly from the network object. NOT rollout state — purely the
+                  ceremony's child-list feed.
+                items:
+                  type: string
+                type: array
+              internalService:
+                description: |-
+                  InternalService reports the in-cluster ClusterIP Service that kube-proxy
+                  load-balances across healthy child pods. Populated unconditionally.
+                properties:
+                  name:
+                    description: Name is the Kubernetes Service name (always "{network-name}-internal").
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the Service's namespace (always equal to the network's
+                      namespace).
+                    type: string
+                  ports:
+                    description: Ports enumerates the named ports on the Service.
+                    properties:
+                      evmHttp:
+                        description: EvmHttp is the EVM JSON-RPC HTTP port (8545).
+                        format: int32
+                        type: integer
+                      rest:
+                        description: Rest is the Cosmos REST (LCD) port (1317).
+                        format: int32
+                        type: integer
+                      rpc:
+                        description: Rpc is the Tendermint / CometBFT RPC port (26657).
+                        format: int32
+                        type: integer
+                    required:
+                    - evmHttp
+                    - rest
+                    - rpc
+                    type: object
+                required:
+                - name
+                - namespace
+                - ports
+                type: object
+              nodes:
+                description: Nodes reports the status of each child SeiNode.
+                items:
+                  description: GroupNodeStatus is a summary of a child SeiNode's state.
+                  properties:
+                    currentImage:
+                      description: |-
+                        CurrentImage is the seid image the child reports running
+                        (mirrored from the child's status.currentImage). Compared against
+                        spec.image to derive UpToDateReplicas and the RolloutInProgress
+                        condition.
+                      type: string
+                    name:
+                      description: Name is the SeiNode resource name.
+                      type: string
+                    phase:
+                      description: Phase is the SeiNode's current phase.
+                      enum:
+                      - Pending
+                      - Initializing
+                      - Running
+                      - Failed
+                      - Terminating
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              perPodServices:
+                description: |-
+                  PerPodServices lists the per-replica headless Services. Resolve each
+                  at {name}.{namespace}.svc; pod IPs are not included.
+                items:
+                  description: |-
+                    PerPodServiceStatus describes one child's headless Service.
+                    Name equals the child SeiNode name and the headless Service name.
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                    ports:
+                      description: |-
+                        PerPodServicePorts adds the stateful ports the cluster-internal Service
+                        omits. Field names are part of the public interface.
+                      properties:
+                        evmHttp:
+                          format: int32
+                          type: integer
+                        evmWs:
+                          format: int32
+                          type: integer
+                      required:
+                      - evmHttp
+                      - evmWs
+                      type: object
+                  required:
+                  - name
+                  - namespace
+                  - ports
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              phase:
+                description: Phase is the high-level lifecycle state.
+                enum:
+                - Pending
+                - Initializing
+                - Ready
+                - Paused
+                - Degraded
+                - Failed
+                - Terminating
+                type: string
+              plan:
+                description: |-
+                  Plan tracks the active network-level task plan (genesis assembly,
+                  deployment, etc.). Nil when no plan is in progress.
+                properties:
+                  failedPhase:
+                    description: |-
+                      FailedPhase is the SeiNodePhase the executor sets on the owning
+                      resource when the plan fails terminally. When empty, the executor
+                      does not perform a phase transition on failure.
+                    enum:
+                    - Pending
+                    - Initializing
+                    - Running
+                    - Failed
+                    - Terminating
+                    type: string
+                  failedTaskDetail:
+                    description: FailedTaskDetail records diagnostics about the task
+                      that caused the plan to fail.
+                    properties:
+                      error:
+                        description: Error is the error message from the failed execution.
+                        type: string
+                      id:
+                        description: ID is the task ID that failed.
+                        type: string
+                      maxRetries:
+                        description: MaxRetries is the configured retry limit.
+                        type: integer
+                      retryCount:
+                        description: RetryCount is the number of retries that were
+                          attempted.
+                        type: integer
+                      type:
+                        description: Type is the task type that failed.
+                        type: string
+                    required:
+                    - error
+                    - id
+                    - maxRetries
+                    - retryCount
+                    - type
+                    type: object
+                  failedTaskIndex:
+                    description: FailedTaskIndex is the index of the task that caused
+                      the plan to fail.
+                    type: integer
+                  id:
+                    description: ID is a unique identifier for this plan instance.
+                    type: string
+                  phase:
+                    description: Phase is the overall state of the plan.
+                    enum:
+                    - Active
+                    - Complete
+                    - Failed
+                    type: string
+                  targetPhase:
+                    description: |-
+                      TargetPhase is the SeiNodePhase the executor sets on the owning
+                      resource when the plan completes successfully. When empty, the
+                      executor does not perform a phase transition.
+                    enum:
+                    - Pending
+                    - Initializing
+                    - Running
+                    - Failed
+                    - Terminating
+                    type: string
+                  tasks:
+                    description: Tasks is the ordered list of tasks to execute.
+                    items:
+                      description: |-
+                        PlannedTask is a single task within a TaskPlan. Each task carries its full
+                        payload so the plan executor can deserialize and run it without needing
+                        access to the planner or sidecar client factory.
+                      properties:
+                        error:
+                          description: Error is the error message if the task failed.
+                          type: string
+                        id:
+                          description: |-
+                            ID is a deterministic UUID v5 derived from planID/taskType/planIndex.
+                            Used as the key for sidecar task submission and status polling.
+                          type: string
+                        maxRetries:
+                          description: |-
+                            MaxRetries is the maximum number of times this task can be retried after
+                            failure. When 0 (default), failures are terminal. Used for tasks like
+                            configure-genesis that may need to wait for upstream data to appear.
+                          type: integer
+                        params:
+                          description: |-
+                            Params is the opaque JSON payload for this task. Deserialized at
+                            execution time by task.Deserialize into the concrete task type.
+                          x-kubernetes-preserve-unknown-fields: true
+                        retryCount:
+                          description: RetryCount is the current retry attempt number.
+                          type: integer
+                        status:
+                          description: Status is the current state of this task.
+                          enum:
+                          - Pending
+                          - Complete
+                          - Failed
+                          type: string
+                        submittedAt:
+                          description: |-
+                            SubmittedAt is when the task was first submitted to the sidecar.
+                            Nil means the task has not been submitted yet.
+                          format: date-time
+                          type: string
+                        type:
+                          description: Type identifies the task (e.g. "snapshot-restore",
+                            "config-patch").
+                          type: string
+                      required:
+                      - id
+                      - status
+                      - type
+                      type: object
+                    type: array
+                required:
+                - phase
+                - tasks
+                type: object
+              readyReplicas:
+                description: ReadyReplicas is the number of SeiNodes in Running phase.
+                format: int32
+                type: integer
+              replicas:
+                description: Replicas is the desired number of SeiNodes.
+                format: int32
+                type: integer
+              upToDateReplicas:
+                description: |-
+                  UpToDateReplicas is the number of child SeiNodes whose
+                  status.currentImage matches spec.image. Derived each reconcile from the
+                  child snapshot — no plan or revision tracking. When it lags Replicas a
+                  child is mid-roll (or wedged on a bad image tag); the derived
+                  RolloutInProgress condition mirrors this for `kubectl wait`.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
