@@ -409,6 +409,46 @@ type SeiNodeStatus struct {
 	// (e.g., manual recreation out-of-band) and triggers replacement.
 	// +optional
 	StatefulSet *StatefulSetRef `json:"statefulSet,omitempty"`
+
+	// Endpoint is the in-cluster discoverable address(es) for this node, derived
+	// from its headless Service and mode. It is a DISCOVERABILITY signal, not a
+	// serve-readiness guarantee: the URL is published once the node is
+	// PhaseRunning and (for EVM) the mode serves EVM, but the seid listener may
+	// take additional time to bind — consumers MUST probe before driving load.
+	// omitempty leaves .status.endpoint absent for nodes that surface nothing.
+	// +optional
+	Endpoint *NodeEndpointStatus `json:"endpoint,omitempty"`
+}
+
+// NodeEndpointStatus carries the in-cluster URLs this SeiNode serves, derived
+// from its headless Service and operating mode. EVM URLs are populated only
+// when the node's mode serves EVM HTTP/WS (fullNode, archive); validator and
+// replayer modes leave them empty (validator mode disables EVM). All URLs
+// resolve to the node's headless Service at <name>.<namespace>.svc. Field names
+// match SeiNetwork's NodeEndpoint leaf (evmJsonRpc, evmWs) so consumers parse
+// one shape across both CRDs.
+type NodeEndpointStatus struct {
+	// EvmJsonRpc is the EVM JSON-RPC HTTP URL (http://). Empty unless the
+	// node's mode serves EVM (fullNode, archive).
+	// +optional
+	EvmJsonRpc string `json:"evmJsonRpc,omitempty"`
+
+	// EvmWs is the EVM WebSocket URL (ws://). Empty unless the node's mode
+	// serves EVM (fullNode, archive).
+	// +optional
+	EvmWs string `json:"evmWs,omitempty"`
+
+	// TendermintRpc is the Tendermint / CometBFT RPC URL (http://). Populated
+	// only for fullNode/archive (gated by servesEVM); not surfaced for
+	// validator/replayer — validators do bind RPC on 0.0.0.0 but we don't
+	// advertise it.
+	// +optional
+	TendermintRpc string `json:"tendermintRpc,omitempty"`
+
+	// TendermintRest is the Cosmos REST (LCD) URL (http://). Served only by
+	// fullNode/archive; validators disable the REST API.
+	// +optional
+	TendermintRest string `json:"tendermintRest,omitempty"`
 }
 
 // StatefulSetRef identifies a StatefulSet owned and managed by a

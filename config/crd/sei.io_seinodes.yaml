@@ -821,6 +821,39 @@ spec:
                   as no-drift so a controller upgrade doesn't fleet-roll every node
                   on first reconcile.
                 type: string
+              endpoint:
+                description: |-
+                  Endpoint is the in-cluster discoverable address(es) for this node, derived
+                  from its headless Service and mode. It is a DISCOVERABILITY signal, not a
+                  serve-readiness guarantee: the URL is published once the node is
+                  PhaseRunning and (for EVM) the mode serves EVM, but the seid listener may
+                  take additional time to bind — consumers MUST probe before driving load.
+                  omitempty leaves .status.endpoint absent for nodes that surface nothing.
+                properties:
+                  evmJsonRpc:
+                    description: |-
+                      EvmJsonRpc is the EVM JSON-RPC HTTP URL (http://). Empty unless the
+                      node's mode serves EVM (fullNode, archive).
+                    type: string
+                  evmWs:
+                    description: |-
+                      EvmWs is the EVM WebSocket URL (ws://). Empty unless the node's mode
+                      serves EVM (fullNode, archive).
+                    type: string
+                  tendermintRest:
+                    description: |-
+                      TendermintRest is the Cosmos REST (LCD) URL (http://). Served only by
+                      fullNode/archive (validators set API.REST.Enable=false —
+                      sei-config defaults.go:264).
+                    type: string
+                  tendermintRpc:
+                    description: |-
+                      TendermintRpc is the Tendermint / CometBFT RPC URL (http://). Populated
+                      only for fullNode/archive (gated by servesEVM); not surfaced for
+                      validator/replayer — note validators DO bind RPC on 0.0.0.0:26657
+                      (sei-config defaults.go:260), we simply don't advertise it.
+                    type: string
+                type: object
               phase:
                 description: Phase is the high-level lifecycle state.
                 enum:

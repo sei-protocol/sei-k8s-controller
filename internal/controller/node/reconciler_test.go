@@ -197,6 +197,98 @@ func TestNodeReconcile_SnapshotNode_StatefulSetHasInitContainers(t *testing.T) {
 	g.Expect(sts.Spec.Template.Spec.InitContainers[2].Name).To(Equal("kube-rbac-proxy"))
 }
 
+// runningFullNode returns a fullNode pre-seeded to Running with its STS already
+// present, mirroring TestNodeReconcile_RunningPhase_UpdatesStatefulSetImage. Used
+// to exercise the endpoint-status derivation, which only fires once Running.
+func runningFullNode(t *testing.T, name, namespace string) (*seiv1alpha1.SeiNode, *appsv1.StatefulSet) {
+	t.Helper()
+	node := newSnapshotNode(name, namespace) // fullNode shape
+	node.Spec.FullNode.Snapshot = nil        // plain follower, no restore
+	node.Finalizers = []string{nodeFinalizerName}
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.CurrentImage = node.Spec.Image
+
+	sts, err := noderesource.GenerateStatefulSet(node, platformtest.Config())
+	if err != nil {
+		t.Fatalf("generating statefulset: %v", err)
+	}
+	sts.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
+	return node, sts
+}
+
+func TestNodeReconcile_RunningFullNode_SetsEndpoint(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node, sts := runningFullNode(t, "chaos-rpc", "sei")
+	svc := noderesource.GenerateHeadlessService(node)
+	svc.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Service"))
+	r, c := newNodeReconciler(t, node, sts, svc)
+
+	_, err := r.Reconcile(ctx, nodeReqFor("chaos-rpc", "sei"))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got := getSeiNode(t, ctx, c, "chaos-rpc", "sei")
+	g.Expect(got.Status.Endpoint).NotTo(BeNil())
+	g.Expect(got.Status.Endpoint.EvmJsonRpc).To(Equal("http://chaos-rpc.sei.svc:8545"))
+	g.Expect(got.Status.Endpoint.EvmWs).To(Equal("ws://chaos-rpc.sei.svc:8546"))
+	g.Expect(got.Status.Endpoint.TendermintRpc).To(Equal("http://chaos-rpc.sei.svc:26657"))
+	g.Expect(got.Status.Endpoint.TendermintRest).To(Equal("http://chaos-rpc.sei.svc:1317"))
+
+	// The headless Service the URL resolves to exists with a :8545 port.
+	gotSvc := &corev1.Service{}
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "chaos-rpc", Namespace: "sei"}, gotSvc)).To(Succeed())
+	g.Expect(gotSvc.Spec.ClusterIP).To(Equal(corev1.ClusterIPNone))
+	var has8545 bool
+	for _, p := range gotSvc.Spec.Ports {
+		if p.Port == 8545 {
+			has8545 = true
+		}
+	}
+	g.Expect(has8545).To(BeTrue(), "headless Service should expose :8545")
+}
+
+func TestNodeReconcile_RunningValidator_NoEndpoint(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := newGenesisNode("genesis-val-0", "sei")
+	node.Finalizers = []string{nodeFinalizerName}
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.CurrentImage = node.Spec.Image
+
+	sts, err := noderesource.GenerateStatefulSet(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+	sts.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("StatefulSet"))
+
+	r, c := newNodeReconciler(t, node, sts)
+
+	_, err = r.Reconcile(ctx, nodeReqFor("genesis-val-0", "sei"))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got := getSeiNode(t, ctx, c, "genesis-val-0", "sei")
+	g.Expect(got.Status.Endpoint).To(BeNil())
+}
+
+func TestNodeReconcile_Endpoint_StableAcrossReconciles(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node, sts := runningFullNode(t, "chaos-rpc", "sei")
+	r, c := newNodeReconciler(t, node, sts)
+
+	_, err := r.Reconcile(ctx, nodeReqFor("chaos-rpc", "sei"))
+	g.Expect(err).NotTo(HaveOccurred())
+	first := getSeiNode(t, ctx, c, "chaos-rpc", "sei").Status.Endpoint
+	g.Expect(first).NotTo(BeNil())
+
+	// Second reconcile: identity-derived URLs are unchanged (no churn).
+	_, err = r.Reconcile(ctx, nodeReqFor("chaos-rpc", "sei"))
+	g.Expect(err).NotTo(HaveOccurred())
+	second := getSeiNode(t, ctx, c, "chaos-rpc", "sei").Status.Endpoint
+	g.Expect(second).To(Equal(first))
+}
+
 func TestNodeReconcile_RunningPhase_UpdatesStatefulSetImage(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
