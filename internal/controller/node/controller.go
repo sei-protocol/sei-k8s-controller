@@ -165,6 +165,13 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
 	}
 
+	// Set only when Running and never cleared on a transient non-Running: the
+	// URLs are identity-derived, so a Running->update->Running cycle keeps them
+	// stable and clearing would flap .status.endpoint for consumers.
+	if node.Status.Phase == seiv1alpha1.PhaseRunning {
+		node.Status.Endpoint = composeNodeEndpoints(node)
+	}
+
 	if !apiequality.Semantic.DeepEqual(before.Status, node.Status) {
 		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
 			if execErr != nil {
