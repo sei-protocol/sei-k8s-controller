@@ -644,3 +644,32 @@ func healthyRPCServer(t *testing.T) *httptest.Server {
 	t.Cleanup(srv.Close)
 	return srv
 }
+
+// TestBundledTemplates_RenderClean ensures every bundled SeiNode (rpc follower)
+// scenario template renders + strict-unmarshals against a representative --var
+// set. Guards against template-vs-schema drift after a CRD field rename. The
+// SeiNetwork genesis/validator templates are validated in provisionsnd.
+func TestBundledTemplates_RenderClean(t *testing.T) {
+	repoRoot, err := filepath.Abs("../../../")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"load-test", "release-test"} {
+		t.Run(scenario+"/rpc.yaml.tmpl", func(t *testing.T) {
+			p := Params{
+				TemplatePath: filepath.Join(repoRoot, "scenarios", scenario, "rpc.yaml.tmpl"),
+				Vars:         map[string]string{varKeyChainID: testChainID, varKeyImage: testImage},
+			}
+			node, err := renderNode(p, 0)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if node.Spec.ChainID != testChainID {
+				t.Fatalf("chainId = %q, want %q", node.Spec.ChainID, testChainID)
+			}
+			if node.Spec.FullNode == nil {
+				t.Fatalf("rpc template must render a fullNode SeiNode; spec = %+v", node.Spec)
+			}
+		})
+	}
+}
