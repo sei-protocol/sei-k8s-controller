@@ -31,13 +31,13 @@ func newProvisionSNDCommand() *cli.Command {
 				Sources: cli.EnvVars("SND_NAME"),
 			},
 			&cli.StringFlag{
-				Name:     "template",
+				Name:     flagTemplate,
 				Usage:    "Path to the Go text/template producing a SeiNetwork YAML",
 				Sources:  cli.EnvVars("SND_TEMPLATE"),
 				Required: true,
 			},
 			&cli.StringSliceFlag{
-				Name:  "var",
+				Name:  flagVar,
 				Usage: "KEY=VALUE substitution exposed to the template as .KEY (repeatable)",
 			},
 			&cli.DurationFlag{
@@ -65,7 +65,7 @@ func runProvisionSND(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	vars, err := parseKVPairs(cmd.StringSlice("var"))
+	vars, err := parseKVPairs(cmd.StringSlice(flagVar))
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func runProvisionSND(ctx context.Context, cmd *cli.Command) error {
 	p := provisionsnd.Params{
 		Role:              cmd.String("role"),
 		Name:              cmd.String("name"),
-		TemplatePath:      cmd.String("template"),
+		TemplatePath:      cmd.String(flagTemplate),
 		Vars:              vars,
 		ReadyTimeout:      cmd.Duration("ready-timeout"),
 		FirstBlockTimeout: cmd.Duration("first-block-timeout"),
