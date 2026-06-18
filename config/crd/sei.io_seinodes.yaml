@@ -843,15 +843,14 @@ spec:
                   tendermintRest:
                     description: |-
                       TendermintRest is the Cosmos REST (LCD) URL (http://). Served only by
-                      fullNode/archive (validators set API.REST.Enable=false —
-                      sei-config defaults.go:264).
+                      fullNode/archive; validators disable the REST API.
                     type: string
                   tendermintRpc:
                     description: |-
                       TendermintRpc is the Tendermint / CometBFT RPC URL (http://). Populated
                       only for fullNode/archive (gated by servesEVM); not surfaced for
-                      validator/replayer — note validators DO bind RPC on 0.0.0.0:26657
-                      (sei-config defaults.go:260), we simply don't advertise it.
+                      validator/replayer — validators do bind RPC on 0.0.0.0 but we don't
+                      advertise it.
                     type: string
                 type: object
               phase:
