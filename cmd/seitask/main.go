@@ -1,5 +1,6 @@
 // Command seitask is the monolithic Workflow-Task primitive binary: one
-// binary, multiple urfave/cli subcommands (keygen, provision-snd, …) that
+// binary, multiple urfave/cli subcommands (keygen, provision-snd,
+// provision-node, …) that
 // share the internal/taskruntime shared library. See
 // https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/test-harness/test-harness-lld.md.
 package main
@@ -44,6 +45,7 @@ func main() {
 		Commands: []*cli.Command{
 			newKeygenCommand(),
 			newProvisionSNDCommand(),
+			newProvisionNodeCommand(),
 			newRunnerCommand(),
 			newUploadReportCommand(),
 		},

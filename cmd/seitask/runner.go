@@ -26,12 +26,12 @@ func newRunnerCommand() *cli.Command {
 		Usage: "Apply a SeiNodeTask CR from a template and poll until terminal",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:     "template",
+				Name:     flagTemplate,
 				Usage:    "Path to the Go text/template producing a SeiNodeTask manifest (required)",
 				Required: true,
 			},
 			&cli.StringSliceFlag{
-				Name:  "var",
+				Name:  flagVar,
 				Usage: "KEY=VALUE substitution exposed to the template as .KEY (repeatable)",
 			},
 			&cli.StringSliceFlag{
@@ -80,7 +80,7 @@ func newRunnerCommand() *cli.Command {
 }
 
 func runRunner(ctx context.Context, cmd *cli.Command) error {
-	varMap, err := parseKVSlice(cmd.StringSlice("var"))
+	varMap, err := parseKVSlice(cmd.StringSlice(flagVar))
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func runRunner(ctx context.Context, cmd *cli.Command) error {
 
 	r := &runner.Run{
 		Opts: runner.Options{
-			TemplatePath:    cmd.String("template"),
+			TemplatePath:    cmd.String(flagTemplate),
 			Vars:            varMap,
 			OutputJSONPaths: cmd.StringSlice("output-jsonpath"),
 			OutputEnvFile:   cmd.String("output-env-file"),
