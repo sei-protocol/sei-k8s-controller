@@ -84,7 +84,13 @@ func (p *Provider) ProvisionNetwork(ctx context.Context, spec sei.NetworkSpec) (
 // the failure story precise (LLD §5.5). Un-defer a bounded errgroup at N>~20.
 func (p *Provider) ProvisionFleet(ctx context.Context, net sei.NetworkHandle, spec sei.FleetSpec) (sei.FleetHandle, error) {
 	networkNS := net.Namespace()
-	nodeNS := p.ns(spec.Namespace)
+	// FleetSpec.Namespace defaults to the network's namespace (spec.go doc), not
+	// the provider default: peer discovery targets networkNS, so creating
+	// followers elsewhere would leave discovery unable to find them.
+	nodeNS := spec.Namespace
+	if nodeNS == "" {
+		nodeNS = networkNS
+	}
 	chainID, err := p.networkChainID(ctx, net)
 	if err != nil {
 		return nil, err

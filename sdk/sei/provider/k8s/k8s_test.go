@@ -213,6 +213,47 @@ func TestProvisionFleet_PeerWiresToNetworkNamespace(t *testing.T) {
 	}
 }
 
+// TestProvisionFleet_DefaultsNamespaceToNetwork pins the FleetSpec.Namespace
+// empty-default contract (spec.go: "" => same as Network). When the genesis
+// network lives in a non-default namespace and FleetSpec.Namespace is left
+// empty, followers must be CREATED in the network's namespace — not the provider
+// default. Defaulting to the provider default would split create from peer
+// discovery (which targets networkNS), stranding followers and surfacing as a
+// misleading ClassTimeout.
+func TestProvisionFleet_DefaultsNamespaceToNetwork(t *testing.T) {
+	const networkNS = "genesis-ns" // deliberately != provider default (testNS)
+	srv := healthyRPC(t)
+
+	net := readyNetwork()
+	net.Namespace = networkNS
+	// The follower fixture lives in networkNS so the readiness wait resolves
+	// once the create lands there (the create namespace under test).
+	n0 := runningNode(rpc0Name, srv.URL, "http://rpc-0.genesis-ns.svc:1317", srv.URL)
+	n0.Namespace = networkNS
+	p := providerWith(t, srv.Client(), net, n0)
+
+	handle := &networkHandle{p: p, namespace: networkNS, name: testNet, net: net}
+	// FleetSpec.Namespace LEFT EMPTY — the empty-default path under test.
+	if _, err := p.ProvisionFleet(context.Background(), handle, sei.FleetSpec{
+		NamePrefix: rpcRole, Image: testImage, Replicas: 1,
+		RunningTimeout: time.Second, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("ProvisionFleet: %v", err)
+	}
+
+	// Follower must be created in the network's namespace...
+	applied := &seiv1alpha1.SeiNode{}
+	if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: networkNS, Name: rpc0Name}, applied); err != nil {
+		t.Fatalf("follower not created in network namespace %q: %v", networkNS, err)
+	}
+	// ...and NOT in the provider default.
+	stray := &seiv1alpha1.SeiNode{}
+	err := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: rpc0Name}, stray)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("follower leaked into provider default namespace %q (want only in %q), get err=%v", testNS, networkNS, err)
+	}
+}
+
 func TestProvisionFleet_FailFastOnFailedNode(t *testing.T) {
 	failed := runningNode(rpc0Name, "", "", "")
 	failed.Status.Phase = seiv1alpha1.PhaseFailed
