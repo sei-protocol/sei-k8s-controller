@@ -96,7 +96,7 @@ spec:
           expr: |
             histogram_quantile(0.99,
               sum by (controller, le) (
-                rate(controller_runtime_reconcile_time_seconds_bucket[5m])
+                rate(controller_runtime_reconcile_time_seconds_bucket{job="sei-k8s-controller"}[5m])
               )
             ) > 10
           for: 10m
