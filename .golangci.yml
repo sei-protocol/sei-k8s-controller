@@ -42,6 +42,10 @@ linters:
           - dupl
           - lll
         path: internal/*
+      - linters:
+          - dupl
+          - lll
+        path: sdk/*
     paths:
       - third_party$
       - builtin$
