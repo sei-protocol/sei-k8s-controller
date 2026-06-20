@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -13,7 +14,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 
@@ -251,6 +254,68 @@ func TestProvisionFleet_DefaultsNamespaceToNetwork(t *testing.T) {
 	err := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: rpc0Name}, stray)
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("follower leaked into provider default namespace %q (want only in %q), get err=%v", testNS, networkNS, err)
+	}
+}
+
+// TestProvisionFleet_CleansUpOnFailure pins the orphan-cleanup contract: when
+// ProvisionFleet fails partway (here the running-wait times out because a node
+// never reaches Running), it best-effort deletes the SeiNodes it applied. SDK
+// nodes carry no Workflow ownerRef, so nothing cascades — orphans would
+// accumulate across failed runs without this.
+func TestProvisionFleet_CleansUpOnFailure(t *testing.T) {
+	// No follower fixtures pre-staged: the SSA applies create the nodes, but they
+	// never reach PhaseRunning, so waitFleetRunning times out.
+	p := providerWith(t, http.DefaultClient, readyNetwork())
+	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
+
+	_, err := p.ProvisionFleet(context.Background(), net, sei.FleetSpec{
+		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 2,
+		RunningTimeout: 50 * time.Millisecond, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
+	})
+	if err == nil || !sei.IsTimeout(err) {
+		t.Fatalf("stalled fleet should time out, got %v", err)
+	}
+
+	// Both applied nodes must have been deleted on the failure path.
+	for _, name := range []string{rpc0Name, rpc1Name} {
+		got := &seiv1alpha1.SeiNode{}
+		gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: name}, got)
+		if !apierrors.IsNotFound(gErr) {
+			t.Errorf("%s should be cleaned up after failure, got err=%v", name, gErr)
+		}
+	}
+}
+
+// TestProvisionFleet_CleanupFailureAnnotatesNotMasks pins the secondary contract:
+// when the best-effort cleanup Delete itself fails, the ORIGINAL provisioning
+// error stays primary (callers still branch on the real cause), and the cleanup
+// failure is surfaced only as additional context.
+func TestProvisionFleet_CleanupFailureAnnotatesNotMasks(t *testing.T) {
+	delErr := errors.New("apiserver unreachable")
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme(t)).
+		WithRuntimeObjects(readyNetwork()).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.DeleteOption) error {
+				return delErr
+			},
+		}).
+		Build()
+	p := &Provider{c: c, httpClient: http.DefaultClient, defaultNS: testNS}
+	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
+
+	_, err := p.ProvisionFleet(context.Background(), net, sei.FleetSpec{
+		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 1,
+		RunningTimeout: 50 * time.Millisecond, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
+	})
+	// Original timeout stays primary...
+	if err == nil || !sei.IsTimeout(err) {
+		t.Fatalf("original timeout must stay primary, got %v", err)
+	}
+	// ...and the cleanup failure is surfaced as additional context.
+	if !errors.Is(err, delErr) {
+		t.Errorf("cleanup failure should be wrapped into the returned error, got %v", err)
 	}
 }
 

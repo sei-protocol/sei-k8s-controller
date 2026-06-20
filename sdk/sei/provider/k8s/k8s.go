@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -82,7 +83,11 @@ func (p *Provider) ProvisionNetwork(ctx context.Context, spec sei.NetworkSpec) (
 // reach PhaseRunning, then runs the per-node readiness gate before returning.
 // Serial fan-out: N is small, the apiserver is the bottleneck, and serial keeps
 // the failure story precise (LLD §5.5). Un-defer a bounded errgroup at N>~20.
-func (p *Provider) ProvisionFleet(ctx context.Context, net sei.NetworkHandle, spec sei.FleetSpec) (sei.FleetHandle, error) {
+//
+// On failure, best-effort deletes any SeiNodes it created so partial fleets
+// don't orphan: SDK nodes carry no Workflow ownerRef, so nothing cascades for
+// the caller (the FleetHandle is only returned on full success).
+func (p *Provider) ProvisionFleet(ctx context.Context, net sei.NetworkHandle, spec sei.FleetSpec) (_ sei.FleetHandle, err error) {
 	networkNS := net.Namespace()
 	// FleetSpec.Namespace defaults to the network's namespace (spec.go doc), not
 	// the provider default: peer discovery targets networkNS, so creating
@@ -97,36 +102,64 @@ func (p *Provider) ProvisionFleet(ctx context.Context, net sei.NetworkHandle, sp
 	}
 
 	names := make([]string, 0, spec.Replicas)
+	// Any error after the first apply cleans up the nodes created so far; cleanup
+	// failure annotates but never masks the original provisioning error.
+	defer func() {
+		if err != nil {
+			err = p.cleanupFleet(ctx, nodeNS, names, err)
+		}
+	}()
+
 	for ordinal := 0; ordinal < spec.Replicas; ordinal++ {
 		node := renderNode(spec, nodeNS, net.Name(), networkNS, chainID, ordinal)
 		resource := fmt.Sprintf("SeiNode %s/%s", nodeNS, node.Name)
-		if err := p.apply(ctx, node, resource); err != nil {
+		if err = p.apply(ctx, node, resource); err != nil {
 			return nil, err
 		}
 		names = append(names, node.Name)
 	}
 
-	if err := p.waitFleetRunning(ctx, nodeNS, names, spec.RunningTimeout, spec.PollInterval); err != nil {
+	if err = p.waitFleetRunning(ctx, nodeNS, names, spec.RunningTimeout, spec.PollInterval); err != nil {
 		return nil, err
 	}
 
 	for _, name := range names {
 		node := &seiv1alpha1.SeiNode{}
 		resource := fmt.Sprintf("SeiNode %s/%s", nodeNS, name)
-		if err := p.c.Get(ctx, types.NamespacedName{Namespace: nodeNS, Name: name}, node); err != nil {
-			return nil, &sei.Error{Class: sei.ClassInfra, Resource: resource,
+		if err = p.c.Get(ctx, types.NamespacedName{Namespace: nodeNS, Name: name}, node); err != nil {
+			err = &sei.Error{Class: sei.ClassInfra, Resource: resource,
 				Err: fmt.Errorf("re-reading SeiNode post-Running: %w", err)}
+			return nil, err
 		}
 		ep := node.Status.Endpoint
 		if ep == nil || ep.TendermintRpc == "" || ep.EvmJsonRpc == "" {
-			return nil, &sei.Error{Class: sei.ClassInfra, Resource: resource, Phase: string(node.Status.Phase),
+			err = &sei.Error{Class: sei.ClassInfra, Resource: resource, Phase: string(node.Status.Phase),
 				Err: fmt.Errorf("running but .status.endpoint missing TM/EVM URLs")}
+			return nil, err
 		}
-		if err := probeReady(ctx, p.httpClient, ep.TendermintRpc, ep.EvmJsonRpc, resource, spec.FirstBlockTimeout, spec.PollInterval); err != nil {
+		if err = probeReady(ctx, p.httpClient, ep.TendermintRpc, ep.EvmJsonRpc, resource, spec.FirstBlockTimeout, spec.PollInterval); err != nil {
 			return nil, err
 		}
 	}
 	return &fleetHandle{p: p, namespace: nodeNS, names: names}, nil
+}
+
+// cleanupFleet best-effort deletes the SeiNodes ProvisionFleet created when
+// provisioning fails partway. It returns the original provisioning error,
+// annotated if a delete itself failed — orig stays primary so the caller still
+// branches on the real cause (timeout/failed/infra), never on a cleanup hiccup.
+func (p *Provider) cleanupFleet(ctx context.Context, ns string, names []string, orig error) error {
+	var cleanupErrs []error
+	for _, name := range names {
+		obj := &seiv1alpha1.SeiNode{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		if delErr := p.c.Delete(ctx, obj); delErr != nil && !apierrors.IsNotFound(delErr) {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("SeiNode %s/%s: %w", ns, name, delErr))
+		}
+	}
+	if len(cleanupErrs) == 0 {
+		return orig
+	}
+	return fmt.Errorf("%w (cleanup of partial fleet also failed: %w)", orig, errors.Join(cleanupErrs...))
 }
 
 // ns returns specNS or the provider default when specNS is empty.

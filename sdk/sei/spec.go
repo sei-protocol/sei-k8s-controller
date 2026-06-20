@@ -4,8 +4,12 @@ import "time"
 
 // NetworkSpec is the typed input to ProvisionNetwork — the union of the WS-A
 // `seictl network apply` flag surface. Only fields the shipped CLI carries are
-// exposed; Set/Overrides are the escape hatch so the typed surface need not
-// chase every preset knob (LLD §3.3).
+// exposed; Overrides is the escape hatch so the typed surface need not chase
+// every preset knob (LLD §3.3).
+//
+// Strategic-merge Set (seictl `--set` parity) is deferred until a consumer needs
+// it — cleanly merging arbitrary paths into the typed CRs is out of MVP scope.
+// Overrides is the supported config path.
 type NetworkSpec struct {
 	Name      string // metadata.name; also the follower peer-selector value (§5.3)
 	Namespace string // "" => provider default (kubeconfig context / SA namespace)
@@ -16,7 +20,6 @@ type NetworkSpec struct {
 
 	GenesisAccounts []GenesisAccount
 	Overrides       map[string]string // -> spec.genesis.overrides (TOML-path keys)
-	Set             map[string]string // strategic-merge escape hatch
 
 	ReadyTimeout time.Duration // default 15m, mirrors seictl network watch
 }
@@ -37,8 +40,7 @@ type FleetSpec struct {
 	Preset     string // "rpc" (the only WS-A node preset today)
 	Replicas   int    // N; >= 1
 	Image      string
-	Overrides  map[string]string
-	Set        map[string]string
+	Overrides  map[string]string // -> spec.overrides; supported config path (Set deferred, see NetworkSpec)
 
 	RunningTimeout    time.Duration // default 15m — wait all N -> PhaseRunning
 	FirstBlockTimeout time.Duration // default 5m  — per-node readiness gate (§5.5)
