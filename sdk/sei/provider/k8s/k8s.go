@@ -60,11 +60,13 @@ func (p *Provider) Close() error { return nil }
 
 // ProvisionNetwork SSA-applies the SeiNetwork and waits for PhaseReady.
 //
-// On any error after the first apply, it best-effort deletes the SeiNetwork it
-// created so a failed run doesn't orphan: SDK resources carry no Workflow
+// Best-effort rollback of the created SeiNetwork if provisioning fails BEFORE it
+// reaches Ready (the resource never came up): SDK resources carry no Workflow
 // ownerRef, so nothing cascades for the caller (the handle is only returned on
-// full success). Cleanup runs under a fresh context (cleanupNetwork) so it still
-// fires when the caller's ctx is the very thing that just canceled.
+// full success). Once Ready, the rollback disarms — a later error (e.g. the
+// post-Ready re-read) returns the error and leaves the healthy network for the
+// caller to Teardown. Cleanup runs under a fresh context (cleanupNetwork) so it
+// still fires when the caller's ctx is the very thing that just canceled.
 func (p *Provider) ProvisionNetwork(ctx context.Context, spec sei.NetworkSpec) (_ sei.NetworkHandle, err error) {
 	ns := p.ns(spec.Namespace)
 	net := renderNetwork(spec, ns)
@@ -73,10 +75,12 @@ func (p *Provider) ProvisionNetwork(ctx context.Context, spec sei.NetworkSpec) (
 	if err = p.apply(ctx, net, resource); err != nil {
 		return nil, err
 	}
-	// Any error after the first apply deletes the network created above; cleanup
-	// failure annotates but never masks the original provisioning error.
+	// Armed from the first apply through waitNetworkReady; disarmed once Ready so
+	// a post-Ready error doesn't delete a healthy network. Cleanup failure
+	// annotates but never masks the original provisioning error.
+	provisioned := false
 	defer func() {
-		if err != nil {
+		if err != nil && !provisioned {
 			err = p.cleanupNetwork(ns, net.Name, err)
 		}
 	}()
@@ -84,6 +88,7 @@ func (p *Provider) ProvisionNetwork(ctx context.Context, spec sei.NetworkSpec) (
 	if err = p.waitNetworkReady(ctx, ns, net.Name, spec.ReadyTimeout); err != nil {
 		return nil, err
 	}
+	provisioned = true // Ready: the network is up; disarm the rollback.
 	// Re-read so the handle carries the Ready status (endpoints populated).
 	fresh := &seiv1alpha1.SeiNetwork{}
 	if err = p.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: net.Name}, fresh); err != nil {
@@ -99,9 +104,12 @@ func (p *Provider) ProvisionNetwork(ctx context.Context, spec sei.NetworkSpec) (
 // Serial fan-out: N is small, the apiserver is the bottleneck, and serial keeps
 // the failure story precise (LLD §5.5). Un-defer a bounded errgroup at N>~20.
 //
-// On failure, best-effort deletes any SeiNodes it created so partial fleets
-// don't orphan: SDK nodes carry no Workflow ownerRef, so nothing cascades for
-// the caller (the FleetHandle is only returned on full success).
+// Best-effort rollback of any SeiNodes it created if provisioning fails BEFORE
+// all nodes reach Running (they never came up): SDK nodes carry no Workflow
+// ownerRef, so nothing cascades for the caller (the FleetHandle is only returned
+// on full success). Once all nodes are Running, the rollback disarms — a later
+// error (post-Running re-read or readiness-probe failure) returns the error and
+// leaves the Running nodes for the caller to Teardown.
 func (p *Provider) ProvisionFleet(ctx context.Context, net sei.NetworkHandle, spec sei.FleetSpec) (_ sei.FleetHandle, err error) {
 	networkNS := net.Namespace()
 	// FleetSpec.Namespace defaults to the network's namespace (spec.go doc), not
@@ -117,10 +125,12 @@ func (p *Provider) ProvisionFleet(ctx context.Context, net sei.NetworkHandle, sp
 	}
 
 	names := make([]string, 0, spec.Replicas)
-	// Any error after the first apply cleans up the nodes created so far; cleanup
+	// Armed from the first apply through waitFleetRunning; disarmed once all nodes
+	// are Running so a post-Running error doesn't delete healthy nodes. Cleanup
 	// failure annotates but never masks the original provisioning error.
+	provisioned := false
 	defer func() {
-		if err != nil {
+		if err != nil && !provisioned {
 			err = p.cleanupFleet(nodeNS, names, err)
 		}
 	}()
@@ -137,6 +147,7 @@ func (p *Provider) ProvisionFleet(ctx context.Context, net sei.NetworkHandle, sp
 	if err = p.waitFleetRunning(ctx, nodeNS, names, spec.RunningTimeout, spec.PollInterval); err != nil {
 		return nil, err
 	}
+	provisioned = true // all Running: the nodes are up; disarm the rollback.
 
 	for _, name := range names {
 		node := &seiv1alpha1.SeiNode{}

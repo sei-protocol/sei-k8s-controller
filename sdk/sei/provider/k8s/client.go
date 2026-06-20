@@ -3,6 +3,7 @@ package k8s
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,18 +31,22 @@ func buildClient() (ctrlclient.Client, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("building client: %w", err)
 	}
-	return c, defaultNamespace(), nil
+	return c, defaultNamespace(saNamespaceFile), nil
 }
 
+// saNamespaceFile is the in-cluster service-account namespace projection.
+const saNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
 // defaultNamespace resolves the namespace a spec with Namespace=="" lands in:
-// $POD_NAMESPACE, then the in-cluster SA-namespace file, then "default".
-func defaultNamespace() string {
+// $POD_NAMESPACE, then the SA-namespace file at saFile, then "default".
+func defaultNamespace(saFile string) string {
 	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
 		return ns
 	}
-	const saNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
-	if b, err := os.ReadFile(saNamespaceFile); err == nil {
-		if ns := string(b); ns != "" {
+	if b, err := os.ReadFile(saFile); err == nil {
+		// The SA-namespace file carries a trailing newline; trim it so the
+		// namespace doesn't pick up a stray "\n".
+		if ns := strings.TrimSpace(string(b)); ns != "" {
 			return ns
 		}
 	}

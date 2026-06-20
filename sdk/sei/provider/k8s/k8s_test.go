@@ -345,6 +345,77 @@ func TestProvisionNetwork_CleansUpOnFailure(t *testing.T) {
 	}
 }
 
+// TestProvisionNetwork_ReadyNotDeletedOnReadError pins the rollback-disarm rule:
+// once the network reaches Ready it is up, so a subsequent (transient) failure
+// of the post-Ready re-read must return the error WITHOUT deleting the healthy
+// network — the round-4 orphan fix only covers failures BEFORE the resource is
+// up. A Get interceptor lets the readiness poll's Get through and fails only the
+// re-read that follows it.
+func TestProvisionNetwork_ReadyNotDeletedOnReadError(t *testing.T) {
+	readErr := errors.New("apiserver read timeout")
+	var netGets int
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme(t)).
+		WithRuntimeObjects(readyNetwork()).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, wc client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*seiv1alpha1.SeiNetwork); ok {
+					netGets++
+					// 1st Get = readiness poll (must observe Ready); the 2nd is the
+					// post-Ready re-read under test, which fails transiently. Later
+					// Gets (the test's own verification) pass through.
+					if netGets == 2 {
+						return readErr
+					}
+				}
+				return wc.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	p := &Provider{c: c, httpClient: http.DefaultClient, defaultNS: testNS}
+
+	_, err := p.ProvisionNetwork(context.Background(), sei.NetworkSpec{
+		Name: testNet, Namespace: testNS, ChainID: testChainID, Image: testImage, Replicas: 1,
+		ReadyTimeout: time.Second,
+	})
+	if err == nil || !errors.Is(err, readErr) {
+		t.Fatalf("post-Ready re-read error should be returned, got %v", err)
+	}
+	// The healthy network must NOT have been rolled back.
+	got := &seiv1alpha1.SeiNetwork{}
+	if gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: testNet}, got); gErr != nil {
+		t.Errorf("Ready network must survive a post-Ready re-read error, got err=%v", gErr)
+	}
+}
+
+// TestProvisionFleet_RunningNotDeletedOnProbeFailure pins the fleet analogue:
+// once every node reaches Running the fleet is up, so a subsequent readiness-
+// probe failure must return the error WITHOUT deleting the Running nodes. The
+// node fixture is Running but its endpoint points at an unreachable URL, so the
+// probe fails AFTER the bring-up window closes.
+func TestProvisionFleet_RunningNotDeletedOnProbeFailure(t *testing.T) {
+	// Running node whose RPC endpoints point at a closed port: waitFleetRunning
+	// passes (Phase=Running), then probeReady fails — the post-up window.
+	const dead = "http://127.0.0.1:1" // connection refused
+	n0 := runningNode(rpc0Name, dead, dead, dead)
+	p := providerWith(t, &http.Client{Timeout: 200 * time.Millisecond}, readyNetwork(), n0)
+	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
+
+	_, err := p.ProvisionFleet(context.Background(), net, sei.FleetSpec{
+		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 1,
+		RunningTimeout: time.Second, FirstBlockTimeout: 200 * time.Millisecond, PollInterval: 10 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatalf("probe failure on a Running fleet should return an error, got nil")
+	}
+	// The Running node must NOT have been rolled back.
+	got := &seiv1alpha1.SeiNode{}
+	if gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: rpc0Name}, got); gErr != nil {
+		t.Errorf("Running node must survive a post-Running probe failure, got err=%v", gErr)
+	}
+}
+
 // TestProvisionNetwork_CleanupRunsOnCanceledCtx proves the SDK-internal network
 // rollback uses a FRESH context, not the (canceled) provisioning ctx: with a
 // pre-canceled ctx the apply+wait fail, yet the rollback Delete must still land
