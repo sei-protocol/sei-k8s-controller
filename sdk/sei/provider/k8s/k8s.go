@@ -75,10 +75,16 @@ func (p *Provider) GetNetwork(ctx context.Context, name, namespace string) (sei.
 
 // CreateNode SSA-applies one SeiNode peered to spec.Network and returns a handle
 // immediately. Peering is derived from spec.Network — the canonical
-// sei.io/seinetwork wiring — at the node's own namespace.
+// sei.io/seinetwork wiring. The node lives at its own namespace; the peer selector
+// searches spec.NetworkNamespace (defaulting to the node's namespace when empty —
+// the co-located case), where the genesis validators live.
 func (p *Provider) CreateNode(ctx context.Context, spec sei.NodeSpec) (sei.NodeHandle, error) {
 	ns := p.ns(spec.Namespace)
-	node := renderNode(spec, ns)
+	networkNS := spec.NetworkNamespace
+	if networkNS == "" {
+		networkNS = ns
+	}
+	node := renderNode(spec, ns, networkNS)
 	if err := p.apply(ctx, node, fmt.Sprintf("SeiNode %s/%s", ns, node.Name)); err != nil {
 		return nil, err
 	}

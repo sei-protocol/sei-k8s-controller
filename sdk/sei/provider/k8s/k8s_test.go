@@ -205,6 +205,46 @@ func TestCreateNode_LabelsAndPeerWiring(t *testing.T) {
 	}
 }
 
+func TestCreateNode_PeerSelectorNamespace(t *testing.T) {
+	// Co-located (NetworkNamespace==""): the peer selector searches the node's own
+	// namespace. Cross-namespace: the selector searches the network's namespace,
+	// where the genesis validators live, while the node object stays in its own.
+	cases := []struct {
+		name      string
+		nodeNS    string
+		networkNS string
+		wantPeer  string
+	}{
+		{name: "co-located default", nodeNS: testNS, networkNS: "", wantPeer: testNS},
+		{name: "cross-namespace", nodeNS: "rpc-ns", networkNS: "genesis-ns", wantPeer: "genesis-ns"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := providerWith(t, http.DefaultClient)
+			if _, err := p.CreateNode(context.Background(), sei.NodeSpec{
+				Name: rpc0Name, Network: testNet, Image: testImage,
+				Namespace: tc.nodeNS, NetworkNamespace: tc.networkNS,
+			}); err != nil {
+				t.Fatalf("CreateNode: %v", err)
+			}
+			applied := &seiv1alpha1.SeiNode{}
+			if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: tc.nodeNS, Name: rpc0Name}, applied); err != nil {
+				t.Fatalf("get applied node: %v", err)
+			}
+			// The node object lives in its own namespace, never the network's.
+			if applied.Namespace != tc.nodeNS {
+				t.Errorf("node namespace = %q, want %q", applied.Namespace, tc.nodeNS)
+			}
+			if len(applied.Spec.Peers) != 1 || applied.Spec.Peers[0].Label == nil {
+				t.Fatalf("synthesized label peer missing: %+v", applied.Spec.Peers)
+			}
+			if got := applied.Spec.Peers[0].Label.Namespace; got != tc.wantPeer {
+				t.Errorf("peer selector namespace = %q, want %q", got, tc.wantPeer)
+			}
+		})
+	}
+}
+
 func TestNodeWaitReady_PhaseAndProbe(t *testing.T) {
 	srv := healthyRPC(t)
 	p := providerWith(t, srv.Client(), runningNode(srv.URL, srv.URL))

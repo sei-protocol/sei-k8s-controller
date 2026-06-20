@@ -3,7 +3,6 @@ package k8s
 import (
 	"context"
 	"fmt"
-
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,14 +34,14 @@ func (h *networkHandle) Namespace() string { return h.namespace }
 // TendermintRPC / REST read the aggregate URLs off .status.endpoints verbatim;
 // "" until the network is Ready.
 func (h *networkHandle) TendermintRPC() string {
-	if h.net.Status.Endpoints == nil {
+	if h.net == nil || h.net.Status.Endpoints == nil {
 		return ""
 	}
 	return h.net.Status.Endpoints.TendermintRpc
 }
 
 func (h *networkHandle) REST() string {
-	if h.net.Status.Endpoints == nil {
+	if h.net == nil || h.net.Status.Endpoints == nil {
 		return ""
 	}
 	return h.net.Status.Endpoints.TendermintRest
@@ -109,14 +108,14 @@ func (h *nodeHandle) Namespace() string { return h.namespace }
 
 // EVMRPC / TendermintRPC read the node's .status.endpoint verbatim.
 func (h *nodeHandle) EVMRPC() string {
-	if h.node.Status.Endpoint == nil {
+	if h.node == nil || h.node.Status.Endpoint == nil {
 		return ""
 	}
 	return h.node.Status.Endpoint.EvmJsonRpc
 }
 
 func (h *nodeHandle) TendermintRPC() string {
-	if h.node.Status.Endpoint == nil {
+	if h.node == nil || h.node.Status.Endpoint == nil {
 		return ""
 	}
 	return h.node.Status.Endpoint.TendermintRpc

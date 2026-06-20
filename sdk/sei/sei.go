@@ -42,8 +42,9 @@ func Open(ctx context.Context, mode string) (*Client, error) {
 	return &Client{provider: p}, nil
 }
 
-// Mode names the core matches in env-presence detection. These MUST equal the
-// keys the provider packages pass to Register.
+// Mode names the core matches in env-presence detection. Kept in sync with the
+// keys the provider packages pass to Register (the literals are duplicated there;
+// nothing mechanical enforces the match).
 const (
 	modeK8s    = "k8s"
 	modeLocal  = "local"

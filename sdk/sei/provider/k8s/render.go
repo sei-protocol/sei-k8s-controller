@@ -62,9 +62,10 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 
 // renderNode builds one RPC SeiNode and stamps the canonical object labels and
 // synthesized peer source. spec.Network drives both the object label and the peer
-// selector — the canonical sei.io/seinetwork wiring — at the node's own
-// namespace. ChainID defaults to spec.Network (the network name == chain ID).
-func renderNode(spec sei.NodeSpec, namespace string) *seiv1alpha1.SeiNode {
+// selector — the canonical sei.io/seinetwork wiring. The node lives at namespace;
+// the peer selector searches networkNS, where the genesis validators live (equal
+// to namespace when co-located). ChainID defaults to spec.Network.
+func renderNode(spec sei.NodeSpec, namespace, networkNS string) *seiv1alpha1.SeiNode {
 	node := &seiv1alpha1.SeiNode{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: seiv1alpha1.GroupVersion.String(),
@@ -85,7 +86,7 @@ func renderNode(spec sei.NodeSpec, namespace string) *seiv1alpha1.SeiNode {
 			Peers: []seiv1alpha1.PeerSource{{
 				Label: &seiv1alpha1.LabelPeerSource{
 					Selector:  map[string]string{sei.LabelSeiNetwork: spec.Network},
-					Namespace: namespace,
+					Namespace: networkNS,
 				},
 			}},
 		},

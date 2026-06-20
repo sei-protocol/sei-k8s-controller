@@ -25,9 +25,10 @@ type GenesisAccount struct {
 // The caller loops CreateNode for N nodes; there is no Replicas field. Network
 // drives the peer wiring (sei.io/seinetwork=<Network>), never a caller field.
 type NodeSpec struct {
-	Name      string            // metadata.name
-	Network   string            // peer-wire target: sei.io/seinetwork=<Network>; also default ChainID
-	Namespace string            // "" => client default
-	Image     string            // -> spec.image
-	Config    map[string]string // -> spec.overrides (TOML-path keys)
+	Name             string            // metadata.name
+	Network          string            // peer-wire target: sei.io/seinetwork=<Network>; also default ChainID
+	Namespace        string            // "" => client default
+	NetworkNamespace string            // "" => same as Namespace (co-located, the common case); set it when the SeiNetwork lives in a different namespace
+	Image            string            // -> spec.image
+	Config           map[string]string // -> spec.overrides (TOML-path keys)
 }

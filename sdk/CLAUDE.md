@@ -63,7 +63,9 @@ authors them once.
 - **k8s** — real. SSA apply under field-owner `sei-sdk`, typed CR render, the
   canonical object labels (`sei.io/role=node`, `sei.io/seinetwork=<network>`),
   peer wiring, kubeconfig resolution (incl. SA-namespace trim), status-read
-  endpoints.
+  endpoints. The node object lives at `NodeSpec.Namespace`; the peer selector
+  searches `NodeSpec.NetworkNamespace` (where the genesis validators live),
+  defaulting to the node's namespace when empty — the co-located common case.
 - **local**, **docker** — registered STUBS. `Open` resolves them, but every verb
   returns `ErrNotImplemented` so a mode picked by env fails clearly.
 

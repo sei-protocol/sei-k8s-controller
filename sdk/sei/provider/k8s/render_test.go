@@ -42,7 +42,7 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 
 func TestRenderNode_LabelsAndPeerWiring(t *testing.T) {
 	spec := sei.NodeSpec{Name: rpc1Name, Network: testNet, Image: testImage}
-	node := renderNode(spec, testNS)
+	node := renderNode(spec, testNS, testNS)
 
 	if node.Name != rpc1Name || node.Namespace != testNS {
 		t.Fatalf("name/ns = %s/%s, want %s/%s", node.Name, node.Namespace, rpc1Name, testNS)
@@ -84,7 +84,7 @@ func TestRenderNode_ConfigIntoOverrides(t *testing.T) {
 		Name: rpc0Name, Network: testNet, Image: testImage,
 		Config: map[string]string{"config.moniker": "rpc-0"},
 	}
-	node := renderNode(spec, testNS)
+	node := renderNode(spec, testNS, testNS)
 	if got := node.Spec.Overrides["config.moniker"]; got != "rpc-0" {
 		t.Errorf("node overrides = %v, want config.moniker=rpc-0", node.Spec.Overrides)
 	}
