@@ -32,11 +32,21 @@ rules:
 - apiGroups: ["sei.io"]
   resources: ["seinodetasks/status"]
   verbs: ["get"]
-# SeiNode: read-only, for --per-node-selector fan-out mode. Omit if your
-# Workflows only use single-node invocations.
+# SeiNode: create + read. create is required by provision-node, whose first
+# act is c.Create(SeiNode) to fan out N standalone follower CRs; without it
+# every provision-node step 403s. get/list/watch back the --per-node-selector
+# fan-out mode and the post-create wait-for-Running loop (.status.phase /
+# .status.endpoint are read off the main object, gated by seinodes get).
 - apiGroups: ["sei.io"]
   resources: ["seinodes"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["create", "get", "list", "watch"]
+# seinodes/status get is a forward-compat over-grant, NOT currently exercised:
+# provision-node reads .status off the main object (seinodes get), not the
+# subresource. Kept to match the /status pattern above and a future
+# c.Status() read.
+- apiGroups: ["sei.io"]
+  resources: ["seinodes/status"]
+  verbs: ["get"]
 # SeiNetwork: create + read for provision-snd. Polls .status.phase
 # until Ready and reads .status.endpoints to publish role-scoped TM/REST/
 # EVM URLs into workflow-vars. patch covers the major-upgrade bump-snd-image

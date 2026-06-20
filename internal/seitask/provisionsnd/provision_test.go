@@ -151,9 +151,10 @@ func TestRenderTemplate_ConfigOverridesSubstitution(t *testing.T) {
 	}
 }
 
-// TestBundledTemplates_RenderClean ensures every bundled scenario template
-// renders + strict-unmarshals against a representative --var set. Guards
-// against template-vs-schema drift after a CRD field rename.
+// TestBundledTemplates_RenderClean ensures every bundled SeiNetwork scenario
+// template (genesis/validator) renders + strict-unmarshals against a
+// representative --var set. Guards against template-vs-schema drift after a
+// CRD field rename. The SeiNode rpc.yaml.tmpl is validated in provisionnode.
 func TestBundledTemplates_RenderClean(t *testing.T) {
 	repoRoot, err := filepath.Abs("../../../")
 	if err != nil {
@@ -166,10 +167,6 @@ func TestBundledTemplates_RenderClean(t *testing.T) {
 		{
 			path: filepath.Join(repoRoot, "scenarios", "release-test", "validator.yaml.tmpl"),
 			vars: map[string]string{varKeyChainID: "rel-test", varKeyImage: "img:1", varKeyAdminAddress: testAdminAddress},
-		},
-		{
-			path: filepath.Join(repoRoot, "scenarios", "release-test", "rpc.yaml.tmpl"),
-			vars: map[string]string{varKeyChainID: "rel-test", varKeyImage: "img:1"},
 		},
 	}
 	for _, tc := range cases {

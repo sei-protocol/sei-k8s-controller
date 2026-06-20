@@ -1,22 +1,20 @@
-# PLACEHOLDER — pending the follower reshape (seinetwork-lld § Followers / M2-M3).
-# Followers (rpc/full/archive) are no longer modeled as a SeiNetwork: a
-# SeiNetwork bootstraps a genesis validator pool only. An rpc fleet joining an
-# existing chain becomes standalone SeiNode CRs + hand-rolled GitOps networking,
-# orchestrated by the seictl/harbor-dev skills. Until that flow lands, this file
-# renders as a minimal scoped SeiNetwork so the bench harness keeps building.
+# Standalone follower SeiNode. provision-node renders this once per replica,
+# stamping metadata.name=<base>-<ordinal> (e.g. <chain>-rpc-0), namespace,
+# ownerRef->Workflow, the sei.io/role=node + sei.io/seinetwork=<network> object
+# labels, and a synthesized peers[].label.selector{sei.io/seinetwork:<network>}.
+# This template describes the node only -- never its name, peering, or topology.
 apiVersion: sei.io/v1alpha1
-kind: SeiNetwork
+kind: SeiNode
 metadata:
-  name: PLACEHOLDER
+  name: PLACEHOLDER          # overwritten to <base>-<ordinal> by provision-node
 spec:
+  chainId: "{{ .CHAIN_ID }}"
   image: "{{ .IMAGE }}"
-  replicas: 2
-  configOverrides:
+  fullNode: {}               # the rpc role = EVM-serving full node
+  overrides:
     tx_index.indexer: kv
     storage.state_commit.write_mode: memiavl_only
     storage.state_store.write_mode: memiavl_only
     mempool.ttl_duration: 60s
     network.rpc.lag_threshold: "2"
     evm.enabled_legacy_sei_apis: sei_getLogs,sei_getBlockByNumber,sei_getBlockByHash,sei_getSeiAddress,sei_getEVMAddress,sei_getCosmosTx,sei_getEvmTx,sei_newFilter,sei_getFilterLogs
-  genesis:
-    chainId: "{{ .CHAIN_ID }}"
