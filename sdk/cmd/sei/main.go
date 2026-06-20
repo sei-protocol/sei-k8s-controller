@@ -23,6 +23,11 @@ import (
 	_ "github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider/k8s" // registers "k8s"
 )
 
+// teardownTimeout bounds the deferred cleanup deletes. They run on a fresh
+// context, so a SIGINT/deadline that canceled the provisioning ctx doesn't skip
+// them — but they still need a deadline of their own against a wedged apiserver.
+const teardownTimeout = 30 * time.Second
+
 func main() {
 	if len(os.Args) < 2 || os.Args[1] != "up" {
 		fmt.Fprintln(os.Stderr, "usage: sei up [flags]")
@@ -90,7 +95,14 @@ func up(ctx context.Context, args []string) error {
 		return err
 	}
 	if !*keep {
-		defer func() { _ = net.Teardown(ctx) }()
+		// Fresh ctx, NOT the provisioning ctx: on a SIGINT/SIGTERM or deadline exit
+		// the provisioning ctx is already canceled, and Teardown's Delete would
+		// short-circuit on ctx.Err() — skipping cleanup exactly when it's needed.
+		defer func() {
+			tdCtx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
+			defer cancel()
+			_ = net.Teardown(tdCtx)
+		}()
 	}
 
 	fleet, err := c.ProvisionFleet(ctx, net, sei.FleetSpec{
@@ -101,7 +113,13 @@ func up(ctx context.Context, args []string) error {
 		return err
 	}
 	if !*keep {
-		defer func() { _ = fleet.Teardown(ctx) }()
+		// Fresh ctx (see net.Teardown above): the deferred fleet teardown must
+		// outlive a canceled provisioning ctx.
+		defer func() {
+			tdCtx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
+			defer cancel()
+			_ = fleet.Teardown(tdCtx)
+		}()
 	}
 
 	for _, u := range fleet.Endpoints().EVMRPCList() {

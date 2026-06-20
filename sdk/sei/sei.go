@@ -124,7 +124,10 @@ func (n *Network) Name() string { return n.handle.Name() }
 // reconstructed.
 func (n *Network) Endpoints() Endpoints { return n.handle.Endpoints() }
 
-// Teardown deletes the network this handle owns. Idempotent.
+// Teardown deletes the network this handle owns. Idempotent. The caller owns
+// ctx: when tearing down after a cancellation/deadline (e.g. a deferred cleanup
+// on a SIGINT exit), pass a FRESH context, or the underlying Delete short-
+// circuits on ctx.Err() and silently skips.
 func (n *Network) Teardown(ctx context.Context) error { return n.handle.Teardown(ctx) }
 
 // Fleet is a provisioned follower-node fleet handle.
@@ -133,7 +136,10 @@ type Fleet struct{ handle FleetHandle }
 // Endpoints reads each follower SeiNode .status.endpoint into the 4-field leaf.
 func (f *Fleet) Endpoints() FleetEndpoints { return f.handle.Endpoints() }
 
-// Teardown deletes the fleet nodes this handle owns. Idempotent.
+// Teardown deletes the fleet nodes this handle owns. Idempotent. The caller owns
+// ctx: when tearing down after a cancellation/deadline (e.g. a deferred cleanup
+// on a SIGINT exit), pass a FRESH context, or the underlying Delete short-
+// circuits on ctx.Err() and silently skips.
 func (f *Fleet) Teardown(ctx context.Context) error { return f.handle.Teardown(ctx) }
 
 func validateNetworkSpec(s NetworkSpec) error {

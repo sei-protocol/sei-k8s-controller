@@ -319,6 +319,130 @@ func TestProvisionFleet_CleanupFailureAnnotatesNotMasks(t *testing.T) {
 	}
 }
 
+// TestProvisionNetwork_CleansUpOnFailure pins the SeiNetwork orphan-cleanup
+// contract: when ProvisionNetwork applies the SeiNetwork but the ready-wait
+// times out (the network never reaches Ready), it best-effort deletes the
+// SeiNetwork it created. SDK resources carry no ownerRef, so without this a
+// failed run orphans a SeiNetwork (and its cascaded children).
+func TestProvisionNetwork_CleansUpOnFailure(t *testing.T) {
+	// No network fixture pre-staged: the SSA apply creates the SeiNetwork, but it
+	// never reaches GroupPhaseReady, so waitNetworkReady times out.
+	p := providerWith(t, http.DefaultClient)
+
+	_, err := p.ProvisionNetwork(context.Background(), sei.NetworkSpec{
+		Name: testNet, Namespace: testNS, ChainID: testChainID, Image: testImage, Replicas: 1,
+		ReadyTimeout: 50 * time.Millisecond,
+	})
+	if err == nil || !sei.IsTimeout(err) {
+		t.Fatalf("stalled network should time out, got %v", err)
+	}
+
+	// The applied SeiNetwork must have been deleted on the failure path.
+	got := &seiv1alpha1.SeiNetwork{}
+	gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: testNet}, got)
+	if !apierrors.IsNotFound(gErr) {
+		t.Errorf("SeiNetwork should be cleaned up after failure, got err=%v", gErr)
+	}
+}
+
+// TestProvisionNetwork_CleanupRunsOnCanceledCtx proves the SDK-internal network
+// rollback uses a FRESH context, not the (canceled) provisioning ctx: with a
+// pre-canceled ctx the apply+wait fail, yet the rollback Delete must still land
+// on the apiserver. A Delete interceptor records the ctx it sees and asserts it
+// is NOT the canceled provisioning ctx (so cleanup fires when most needed).
+func TestProvisionNetwork_CleanupRunsOnCanceledCtx(t *testing.T) {
+	var deletedNet bool
+	var deleteCtxCanceled bool
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme(t)).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, wc client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, ok := obj.(*seiv1alpha1.SeiNetwork); ok {
+					deletedNet = true
+					deleteCtxCanceled = ctx.Err() != nil
+				}
+				return wc.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	p := &Provider{c: c, httpClient: http.DefaultClient, defaultNS: testNS}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // provisioning ctx is already canceled before the call
+
+	_, err := p.ProvisionNetwork(ctx, sei.NetworkSpec{
+		Name: testNet, Namespace: testNS, ChainID: testChainID, Image: testImage, Replicas: 1,
+		ReadyTimeout: 50 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatalf("canceled provisioning ctx should fail, got nil")
+	}
+	if !deletedNet {
+		t.Fatalf("rollback Delete never reached the apiserver under a canceled ctx")
+	}
+	if deleteCtxCanceled {
+		t.Errorf("rollback Delete ran on the canceled provisioning ctx, want a fresh one")
+	}
+	// And the network really is gone.
+	got := &seiv1alpha1.SeiNetwork{}
+	if gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: testNet}, got); !apierrors.IsNotFound(gErr) {
+		t.Errorf("SeiNetwork should be deleted under canceled-ctx rollback, got err=%v", gErr)
+	}
+}
+
+// TestProvisionFleet_CleanupRunsOnCanceledCtx is the fleet analogue: a
+// pre-canceled provisioning ctx fails the run, and the partial-fleet rollback
+// must still Delete the applied SeiNodes under a fresh (non-canceled) context.
+func TestProvisionFleet_CleanupRunsOnCanceledCtx(t *testing.T) {
+	deleted := map[string]bool{}
+	var anyDeleteCtxCanceled bool
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme(t)).
+		WithRuntimeObjects(readyNetwork()).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, wc client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
+					deleted[node.Name] = true
+					if ctx.Err() != nil {
+						anyDeleteCtxCanceled = true
+					}
+				}
+				return wc.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	p := &Provider{c: c, httpClient: http.DefaultClient, defaultNS: testNS}
+	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled before the call
+
+	_, err := p.ProvisionFleet(ctx, net, sei.FleetSpec{
+		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 2,
+		RunningTimeout: 50 * time.Millisecond, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatalf("canceled provisioning ctx should fail, got nil")
+	}
+	// The applies that landed before/despite cancellation must be rolled back.
+	for _, name := range []string{rpc0Name, rpc1Name} {
+		if deleted[name] {
+			got := &seiv1alpha1.SeiNode{}
+			if gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: name}, got); !apierrors.IsNotFound(gErr) {
+				t.Errorf("%s should be deleted under canceled-ctx rollback, got err=%v", name, gErr)
+			}
+		}
+	}
+	if len(deleted) == 0 {
+		t.Fatalf("no rollback Delete reached the apiserver under a canceled ctx")
+	}
+	if anyDeleteCtxCanceled {
+		t.Errorf("rollback Delete ran on the canceled provisioning ctx, want a fresh one")
+	}
+}
+
 func TestProvisionFleet_FailFastOnFailedNode(t *testing.T) {
 	failed := runningNode(rpc0Name, "", "", "")
 	failed.Status.Phase = seiv1alpha1.PhaseFailed

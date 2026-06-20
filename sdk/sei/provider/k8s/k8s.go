@@ -59,22 +59,37 @@ func (p *Provider) Name() string { return "k8s" }
 func (p *Provider) Close() error { return nil }
 
 // ProvisionNetwork SSA-applies the SeiNetwork and waits for PhaseReady.
-func (p *Provider) ProvisionNetwork(ctx context.Context, spec sei.NetworkSpec) (sei.NetworkHandle, error) {
+//
+// On any error after the first apply, it best-effort deletes the SeiNetwork it
+// created so a failed run doesn't orphan: SDK resources carry no Workflow
+// ownerRef, so nothing cascades for the caller (the handle is only returned on
+// full success). Cleanup runs under a fresh context (cleanupNetwork) so it still
+// fires when the caller's ctx is the very thing that just canceled.
+func (p *Provider) ProvisionNetwork(ctx context.Context, spec sei.NetworkSpec) (_ sei.NetworkHandle, err error) {
 	ns := p.ns(spec.Namespace)
 	net := renderNetwork(spec, ns)
 	resource := fmt.Sprintf("SeiNetwork %s/%s", ns, net.Name)
 
-	if err := p.apply(ctx, net, resource); err != nil {
+	if err = p.apply(ctx, net, resource); err != nil {
 		return nil, err
 	}
-	if err := p.waitNetworkReady(ctx, ns, net.Name, spec.ReadyTimeout); err != nil {
+	// Any error after the first apply deletes the network created above; cleanup
+	// failure annotates but never masks the original provisioning error.
+	defer func() {
+		if err != nil {
+			err = p.cleanupNetwork(ns, net.Name, err)
+		}
+	}()
+
+	if err = p.waitNetworkReady(ctx, ns, net.Name, spec.ReadyTimeout); err != nil {
 		return nil, err
 	}
 	// Re-read so the handle carries the Ready status (endpoints populated).
 	fresh := &seiv1alpha1.SeiNetwork{}
-	if err := p.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: net.Name}, fresh); err != nil {
-		return nil, &sei.Error{Class: sei.ClassInfra, Resource: resource,
+	if err = p.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: net.Name}, fresh); err != nil {
+		err = &sei.Error{Class: sei.ClassInfra, Resource: resource,
 			Err: fmt.Errorf("re-reading SeiNetwork post-Ready: %w", err)}
+		return nil, err
 	}
 	return &networkHandle{p: p, namespace: ns, name: net.Name, net: fresh}, nil
 }
@@ -106,7 +121,7 @@ func (p *Provider) ProvisionFleet(ctx context.Context, net sei.NetworkHandle, sp
 	// failure annotates but never masks the original provisioning error.
 	defer func() {
 		if err != nil {
-			err = p.cleanupFleet(ctx, nodeNS, names, err)
+			err = p.cleanupFleet(nodeNS, names, err)
 		}
 	}()
 
@@ -144,11 +159,30 @@ func (p *Provider) ProvisionFleet(ctx context.Context, net sei.NetworkHandle, sp
 	return &fleetHandle{p: p, namespace: nodeNS, names: names}, nil
 }
 
+// cleanupTimeout bounds an SDK-internal rollback delete. Rollback runs on a
+// fresh context (not the provisioning ctx), so it survives a canceled/expired
+// caller ctx — but it still needs a deadline of its own against a wedged
+// apiserver.
+const cleanupTimeout = 30 * time.Second
+
+// newCleanupContext returns a fresh, bounded context for an SDK-internal
+// rollback delete. It is deliberately derived from context.Background(), NOT the
+// provisioning ctx: a deadline/SIGINT exit cancels the provisioning ctx, and
+// reusing it would make every rollback Delete short-circuit on ctx.Err() exactly
+// when cleanup is most needed. The caller must defer the returned cancel.
+func newCleanupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), cleanupTimeout)
+}
+
 // cleanupFleet best-effort deletes the SeiNodes ProvisionFleet created when
 // provisioning fails partway. It returns the original provisioning error,
 // annotated if a delete itself failed — orig stays primary so the caller still
 // branches on the real cause (timeout/failed/infra), never on a cleanup hiccup.
-func (p *Provider) cleanupFleet(ctx context.Context, ns string, names []string, orig error) error {
+// Deletes run on a fresh bounded context so rollback fires even when the
+// provisioning ctx is what just canceled.
+func (p *Provider) cleanupFleet(ns string, names []string, orig error) error {
+	ctx, cancel := newCleanupContext()
+	defer cancel()
 	var cleanupErrs []error
 	for _, name := range names {
 		obj := &seiv1alpha1.SeiNode{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
@@ -160,6 +194,21 @@ func (p *Provider) cleanupFleet(ctx context.Context, ns string, names []string, 
 		return orig
 	}
 	return fmt.Errorf("%w (cleanup of partial fleet also failed: %w)", orig, errors.Join(cleanupErrs...))
+}
+
+// cleanupNetwork best-effort deletes the SeiNetwork ProvisionNetwork created when
+// provisioning fails after the first apply. Mirrors cleanupFleet: orig stays
+// primary, a delete failure annotates but never masks, NotFound is success, and
+// the delete runs on a fresh bounded context so rollback fires even when the
+// provisioning ctx is what just canceled.
+func (p *Provider) cleanupNetwork(ns, name string, orig error) error {
+	ctx, cancel := newCleanupContext()
+	defer cancel()
+	obj := &seiv1alpha1.SeiNetwork{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+	if delErr := p.c.Delete(ctx, obj); delErr != nil && !apierrors.IsNotFound(delErr) {
+		return fmt.Errorf("%w (cleanup of SeiNetwork %s/%s also failed: %w)", orig, ns, name, delErr)
+	}
+	return orig
 }
 
 // ns returns specNS or the provider default when specNS is empty.

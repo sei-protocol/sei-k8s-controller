@@ -22,6 +22,10 @@ type Provider interface {
 // resource so ProvisionFleet wires followers' peer discovery at the genesis
 // network's actual location — a network in namespace A must yield A, not the
 // provider default.
+//
+// Teardown takes the caller's ctx by design (the caller owns that choice). When
+// tearing down after a cancellation/deadline, pass a FRESH context — a Delete on
+// a canceled ctx short-circuits and silently no-ops.
 type NetworkHandle interface {
 	Name() string
 	Namespace() string
@@ -30,6 +34,10 @@ type NetworkHandle interface {
 }
 
 // FleetHandle is the provider-side state the core *Fleet wraps.
+//
+// Teardown takes the caller's ctx by design (the caller owns that choice). When
+// tearing down after a cancellation/deadline, pass a FRESH context — a Delete on
+// a canceled ctx short-circuits and silently no-ops.
 type FleetHandle interface {
 	Endpoints() FleetEndpoints
 	Teardown(ctx context.Context) error

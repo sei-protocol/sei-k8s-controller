@@ -50,6 +50,11 @@ func (h *networkHandle) Endpoints() sei.Endpoints {
 }
 
 // Teardown deletes the SeiNetwork. Idempotent: a NotFound is success.
+//
+// The caller owns ctx. When tearing down after a cancellation/deadline (e.g. a
+// deferred cleanup on a SIGINT exit), pass a FRESH context — a Delete on a
+// canceled ctx short-circuits on ctx.Err() and silently no-ops exactly when
+// cleanup is needed.
 func (h *networkHandle) Teardown(ctx context.Context) error {
 	obj := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: h.name, Namespace: h.namespace},
@@ -96,6 +101,11 @@ func (h *fleetHandle) Endpoints() sei.FleetEndpoints {
 
 // Teardown deletes every follower SeiNode. Idempotent: NotFound is success, and
 // it deletes whatever exists after a partial create.
+//
+// The caller owns ctx. When tearing down after a cancellation/deadline (e.g. a
+// deferred cleanup on a SIGINT exit), pass a FRESH context — a Delete on a
+// canceled ctx short-circuits on ctx.Err() and silently no-ops exactly when
+// cleanup is needed.
 func (h *fleetHandle) Teardown(ctx context.Context) error {
 	for _, name := range h.names {
 		obj := &seiv1alpha1.SeiNode{
