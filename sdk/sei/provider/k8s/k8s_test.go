@@ -3,9 +3,9 @@ package k8s
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -14,9 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 
@@ -24,17 +22,22 @@ import (
 )
 
 const (
-	testNS      = "nightly"
-	testNet     = "chaos-net"
-	testChainID = "sei-chaos-1"
-	testImage   = "img:1"
+	testNS    = "nightly"
+	testNet   = "chaos-net"
+	testImage = "img:1"
 
-	rpcRole   = "rpc"
 	rpc0Name  = "rpc-0"
 	rpc1Name  = "rpc-1"
-	chaosNet0 = "chaos-net-0"
 	resultKey = "result"
 )
+
+// TestMain shrinks the poll cadences so phase/probe tests resolve in
+// milliseconds instead of seconds; the caller's ctx still owns the budget.
+func TestMain(m *testing.M) {
+	pollInterval = 10 * time.Millisecond
+	probeInterval = 10 * time.Millisecond
+	os.Exit(m.Run())
+}
 
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -45,8 +48,7 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// healthyRPC returns a server that answers TM /status caught-up at height>1 and
-// EVM eth_blockNumber 200 (mirrors provision_test.go's healthyRPCServer).
+// healthyRPC answers TM /status with a height and EVM eth_blockNumber 200.
 func healthyRPC(t *testing.T) *httptest.Server {
 	t.Helper()
 	var mu sync.Mutex
@@ -54,7 +56,7 @@ func healthyRPC(t *testing.T) *httptest.Server {
 		mu.Lock()
 		defer mu.Unlock()
 		if r.Method == http.MethodGet { // TM /status
-			_, _ = w.Write([]byte(statusFixture("12", false, false)))
+			_, _ = w.Write([]byte(statusFixture("12", false)))
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, resultKey: "0x10"})
@@ -63,8 +65,7 @@ func healthyRPC(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// providerWith builds a Provider backed by a fake client pre-staged with objs
-// and the test HTTP client.
+// providerWith builds a Provider backed by a fake client pre-staged with objs.
 func providerWith(t *testing.T, hc *http.Client, objs ...runtime.Object) *Provider {
 	t.Helper()
 	c := fake.NewClientBuilder().
@@ -75,102 +76,120 @@ func providerWith(t *testing.T, hc *http.Client, objs ...runtime.Object) *Provid
 	return &Provider{c: c, httpClient: hc, defaultNS: testNS}
 }
 
-func runningNode(name, tmRPC, tmREST, evm string) *seiv1alpha1.SeiNode {
+func runningNode(tmRPC, evm string) *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS},
-		Spec:       seiv1alpha1.SeiNodeSpec{ChainID: testChainID, Image: testImage, FullNode: &seiv1alpha1.FullNodeSpec{}},
+		ObjectMeta: metav1.ObjectMeta{Name: rpc0Name, Namespace: testNS},
+		Spec:       seiv1alpha1.SeiNodeSpec{ChainID: testNet, Image: testImage, FullNode: &seiv1alpha1.FullNodeSpec{}},
 		Status: seiv1alpha1.SeiNodeStatus{
-			Phase: seiv1alpha1.PhaseRunning,
-			Endpoint: &seiv1alpha1.NodeEndpointStatus{
-				EvmJsonRpc: evm, TendermintRpc: tmRPC, TendermintRest: tmREST,
-			},
+			Phase:    seiv1alpha1.PhaseRunning,
+			Endpoint: &seiv1alpha1.NodeEndpointStatus{EvmJsonRpc: evm, TendermintRpc: tmRPC},
 		},
 	}
 }
 
-func readyNetwork() *seiv1alpha1.SeiNetwork {
+func readyNetwork(tmRPC string) *seiv1alpha1.SeiNetwork {
 	return &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: testNet, Namespace: testNS},
 		Spec: seiv1alpha1.SeiNetworkSpec{
 			Image: testImage, Replicas: 1,
-			Genesis: seiv1alpha1.GenesisCeremonyConfig{ChainID: testChainID},
+			Genesis: seiv1alpha1.GenesisCeremonyConfig{ChainID: testNet},
 		},
 		Status: seiv1alpha1.SeiNetworkStatus{
 			Phase: seiv1alpha1.GroupPhaseReady,
 			Endpoints: &seiv1alpha1.Endpoints{
-				TendermintRpc:  "http://chaos-net-internal.nightly.svc:26657",
+				TendermintRpc:  tmRPC,
 				TendermintRest: "http://chaos-net-internal.nightly.svc:1317",
-				Nodes: []seiv1alpha1.NodeEndpoint{
-					{Name: chaosNet0, EvmJsonRpc: "http://chaos-net-0.nightly.svc:8545", EvmWs: "ws://chaos-net-0.nightly.svc:8546"},
-				},
 			},
 		},
 	}
 }
 
-func TestProvisionNetwork_AppliesAndWaitsReady(t *testing.T) {
-	p := providerWith(t, http.DefaultClient, readyNetwork())
-	net, err := p.ProvisionNetwork(context.Background(), sei.NetworkSpec{
-		Name: testNet, Namespace: testNS, ChainID: testChainID, Image: testImage, Replicas: 1,
-		ReadyTimeout: time.Second,
+func TestCreateNetwork_AppliesAndReturnsHandle(t *testing.T) {
+	p := providerWith(t, http.DefaultClient)
+	h, err := p.CreateNetwork(context.Background(), sei.NetworkSpec{
+		Name: testNet, Namespace: testNS, Image: testImage, Validators: 1,
 	})
 	if err != nil {
-		t.Fatalf("ProvisionNetwork: %v", err)
+		t.Fatalf("CreateNetwork: %v", err)
 	}
-	ep := net.Endpoints()
-	if ep.TendermintRPC == "" || ep.TendermintREST == "" {
-		t.Errorf("aggregate TM endpoints missing: %+v", ep)
+	if h.Name() != testNet || h.Namespace() != testNS {
+		t.Fatalf("handle identity = %s/%s", h.Namespace(), h.Name())
 	}
-	if len(ep.Nodes) != 1 || ep.Nodes[0].EvmJsonRPC == "" {
-		t.Errorf("per-pod EVM endpoint missing: %+v", ep.Nodes)
+	// The object actually landed on the apiserver.
+	got := &seiv1alpha1.SeiNetwork{}
+	if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: testNet}, got); err != nil {
+		t.Fatalf("applied network not found: %v", err)
+	}
+	// Object() is the raw-CR escape hatch.
+	if _, ok := h.Object().(*seiv1alpha1.SeiNetwork); !ok {
+		t.Errorf("Object() did not return *SeiNetwork, got %T", h.Object())
 	}
 }
 
-func TestProvisionNetwork_FailFastOnFailedPhase(t *testing.T) {
-	failed := readyNetwork()
+func TestNetworkWaitReady_PhaseAndProbe(t *testing.T) {
+	srv := healthyRPC(t)
+	p := providerWith(t, srv.Client(), readyNetwork(srv.URL))
+	h := &networkHandle{p: p, namespace: testNS, name: testNet, net: &seiv1alpha1.SeiNetwork{}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := h.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady: %v", err)
+	}
+	// After WaitReady the cached status carries the endpoints.
+	if h.TendermintRPC() != srv.URL || h.REST() == "" {
+		t.Errorf("endpoints not projected after Ready: rpc=%q rest=%q", h.TendermintRPC(), h.REST())
+	}
+}
+
+func TestNetworkWaitReady_FailFastOnFailedPhase(t *testing.T) {
+	failed := readyNetwork("")
 	failed.Status.Phase = seiv1alpha1.GroupPhaseFailed
 	p := providerWith(t, http.DefaultClient, failed)
-	_, err := p.ProvisionNetwork(context.Background(), sei.NetworkSpec{
-		Name: testNet, Namespace: testNS, ChainID: testChainID, Image: testImage, Replicas: 1,
-		ReadyTimeout: time.Second,
-	})
-	if err == nil || !sei.IsFailed(err) {
-		t.Fatalf("Failed phase should yield ClassFailed, got %v", err)
+	h := &networkHandle{p: p, namespace: testNS, name: testNet, net: &seiv1alpha1.SeiNetwork{}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := h.WaitReady(ctx)
+	if err == nil {
+		t.Fatal("Failed phase should error")
+	}
+	if sei.IsTimeout(err) {
+		t.Fatalf("Failed phase must not be a timeout, got %v", err)
 	}
 }
 
-func TestProvisionFleet_FanOutProbeAndProject(t *testing.T) {
-	srv := healthyRPC(t)
-	// Pre-stage N=2 Running followers with endpoints pointing at the test server
-	// (the controller's job; the SDK tests wait+probe+project, not reconcile).
-	n0 := runningNode(rpc0Name, srv.URL, "http://rpc-0.nightly.svc:1317", srv.URL)
-	n1 := runningNode(rpc1Name, srv.URL, "http://rpc-1.nightly.svc:1317", srv.URL)
-	p := providerWith(t, srv.Client(), readyNetwork(), n0, n1)
+// TestNetworkWaitReady_DeadlineIsTimeout pins the deadline->IsTimeout contract:
+// a network that never reaches Ready under an elapsed ctx surfaces as
+// sei.IsTimeout.
+func TestNetworkWaitReady_DeadlineIsTimeout(t *testing.T) {
+	pending := readyNetwork("")
+	pending.Status.Phase = seiv1alpha1.GroupPhasePending
+	p := providerWith(t, http.DefaultClient, pending)
+	h := &networkHandle{p: p, namespace: testNS, name: testNet, net: &seiv1alpha1.SeiNetwork{}}
 
-	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
-	fleet, err := p.ProvisionFleet(context.Background(), net, sei.FleetSpec{
-		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 2,
-		RunningTimeout: time.Second, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	err := h.WaitReady(ctx)
+	if err == nil {
+		t.Fatal("never-Ready network should error on deadline")
+	}
+	if !sei.IsTimeout(err) {
+		t.Fatalf("elapsed deadline should be sei.IsTimeout, got %v", err)
+	}
+}
+
+func TestCreateNode_LabelsAndPeerWiring(t *testing.T) {
+	p := providerWith(t, http.DefaultClient)
+	h, err := p.CreateNode(context.Background(), sei.NodeSpec{
+		Name: rpc0Name, Network: testNet, Namespace: testNS, Image: testImage,
 	})
 	if err != nil {
-		t.Fatalf("ProvisionFleet: %v", err)
+		t.Fatalf("CreateNode: %v", err)
 	}
-
-	fe := fleet.Endpoints()
-	if len(fe.Nodes) != 2 {
-		t.Fatalf("fleet endpoints = %d nodes, want 2", len(fe.Nodes))
+	if h.Name() != rpc0Name {
+		t.Fatalf("node name = %q", h.Name())
 	}
-	// The 4-field leaf must carry TM RPC/REST per node (not the EVM-only shape).
-	for _, n := range fe.Nodes {
-		if n.TendermintRPC == "" || n.TendermintREST == "" {
-			t.Errorf("node %s dropped TM fields: %+v", n.Name, n)
-		}
-	}
-	if got := fe.EVMRPCList(); len(got) != 2 {
-		t.Errorf("EVMRPCList = %v, want 2 entries", got)
-	}
-
-	// The applied SeiNodes carry the canonical labels + peer wiring.
 	applied := &seiv1alpha1.SeiNode{}
 	if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: rpc0Name}, applied); err != nil {
 		t.Fatalf("get applied node: %v", err)
@@ -178,466 +197,107 @@ func TestProvisionFleet_FanOutProbeAndProject(t *testing.T) {
 	if applied.Labels[sei.LabelRole] != sei.RoleNode || applied.Labels[sei.LabelSeiNetwork] != testNet {
 		t.Errorf("applied node missing canonical labels: %v", applied.Labels)
 	}
-}
-
-// TestProvisionFleet_PeerWiresToNetworkNamespace pins the cross-namespace
-// peer-wiring contract: when the genesis network lives in a namespace distinct
-// from the provider default, followers must discover peers in the NETWORK's
-// namespace. Wiring to the provider default leaves followers unable to find the
-// genesis validators — surfacing later as a misleading ClassTimeout.
-func TestProvisionFleet_PeerWiresToNetworkNamespace(t *testing.T) {
-	const networkNS = "genesis-ns" // deliberately != provider default (testNS)
-	srv := healthyRPC(t)
-
-	net := readyNetwork()
-	net.Namespace = networkNS
-	// Followers provision into testNS (the provider default) while the network
-	// lives in networkNS — the case that exposes the bug.
-	n0 := runningNode(rpc0Name, srv.URL, "http://rpc-0.nightly.svc:1317", srv.URL)
-	p := providerWith(t, srv.Client(), net, n0)
-
-	handle := &networkHandle{p: p, namespace: networkNS, name: testNet, net: net}
-	if _, err := p.ProvisionFleet(context.Background(), handle, sei.FleetSpec{
-		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 1,
-		RunningTimeout: time.Second, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
-	}); err != nil {
-		t.Fatalf("ProvisionFleet: %v", err)
-	}
-
-	applied := &seiv1alpha1.SeiNode{}
-	if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: rpc0Name}, applied); err != nil {
-		t.Fatalf("get applied node: %v", err)
-	}
 	if len(applied.Spec.Peers) != 1 || applied.Spec.Peers[0].Label == nil {
 		t.Fatalf("synthesized label peer missing: %+v", applied.Spec.Peers)
 	}
-	if got := applied.Spec.Peers[0].Label.Namespace; got != networkNS {
-		t.Errorf("peer LabelPeerSource.Namespace = %q, want %q (network's namespace, not provider default)", got, networkNS)
+	if applied.Spec.Peers[0].Label.Selector[sei.LabelSeiNetwork] != testNet {
+		t.Errorf("peer selector = %v", applied.Spec.Peers[0].Label.Selector)
 	}
 }
 
-// TestProvisionFleet_DefaultsNamespaceToNetwork pins the FleetSpec.Namespace
-// empty-default contract (spec.go: "" => same as Network). When the genesis
-// network lives in a non-default namespace and FleetSpec.Namespace is left
-// empty, followers must be CREATED in the network's namespace — not the provider
-// default. Defaulting to the provider default would split create from peer
-// discovery (which targets networkNS), stranding followers and surfacing as a
-// misleading ClassTimeout.
-func TestProvisionFleet_DefaultsNamespaceToNetwork(t *testing.T) {
-	const networkNS = "genesis-ns" // deliberately != provider default (testNS)
+func TestNodeWaitReady_PhaseAndProbe(t *testing.T) {
 	srv := healthyRPC(t)
+	p := providerWith(t, srv.Client(), runningNode(srv.URL, srv.URL))
+	h := &nodeHandle{p: p, namespace: testNS, name: rpc0Name, node: &seiv1alpha1.SeiNode{}}
 
-	net := readyNetwork()
-	net.Namespace = networkNS
-	// The follower fixture lives in networkNS so the readiness wait resolves
-	// once the create lands there (the create namespace under test).
-	n0 := runningNode(rpc0Name, srv.URL, "http://rpc-0.genesis-ns.svc:1317", srv.URL)
-	n0.Namespace = networkNS
-	p := providerWith(t, srv.Client(), net, n0)
-
-	handle := &networkHandle{p: p, namespace: networkNS, name: testNet, net: net}
-	// FleetSpec.Namespace LEFT EMPTY — the empty-default path under test.
-	if _, err := p.ProvisionFleet(context.Background(), handle, sei.FleetSpec{
-		NamePrefix: rpcRole, Image: testImage, Replicas: 1,
-		RunningTimeout: time.Second, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
-	}); err != nil {
-		t.Fatalf("ProvisionFleet: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := h.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady: %v", err)
 	}
-
-	// Follower must be created in the network's namespace...
-	applied := &seiv1alpha1.SeiNode{}
-	if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: networkNS, Name: rpc0Name}, applied); err != nil {
-		t.Fatalf("follower not created in network namespace %q: %v", networkNS, err)
-	}
-	// ...and NOT in the provider default.
-	stray := &seiv1alpha1.SeiNode{}
-	err := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: rpc0Name}, stray)
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("follower leaked into provider default namespace %q (want only in %q), get err=%v", testNS, networkNS, err)
+	if h.EVMRPC() != srv.URL || h.TendermintRPC() != srv.URL {
+		t.Errorf("endpoints not projected: evm=%q tm=%q", h.EVMRPC(), h.TendermintRPC())
 	}
 }
 
-// TestProvisionFleet_CleansUpOnFailure pins the orphan-cleanup contract: when
-// ProvisionFleet fails partway (here the running-wait times out because a node
-// never reaches Running), it best-effort deletes the SeiNodes it applied. SDK
-// nodes carry no Workflow ownerRef, so nothing cascades — orphans would
-// accumulate across failed runs without this.
-func TestProvisionFleet_CleansUpOnFailure(t *testing.T) {
-	// No follower fixtures pre-staged: the SSA applies create the nodes, but they
-	// never reach PhaseRunning, so waitFleetRunning times out.
-	p := providerWith(t, http.DefaultClient, readyNetwork())
-	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
-
-	_, err := p.ProvisionFleet(context.Background(), net, sei.FleetSpec{
-		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 2,
-		RunningTimeout: 50 * time.Millisecond, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
-	})
-	if err == nil || !sei.IsTimeout(err) {
-		t.Fatalf("stalled fleet should time out, got %v", err)
-	}
-
-	// Both applied nodes must have been deleted on the failure path.
-	for _, name := range []string{rpc0Name, rpc1Name} {
-		got := &seiv1alpha1.SeiNode{}
-		gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: name}, got)
-		if !apierrors.IsNotFound(gErr) {
-			t.Errorf("%s should be cleaned up after failure, got err=%v", name, gErr)
-		}
-	}
-}
-
-// TestProvisionFleet_CleanupFailureAnnotatesNotMasks pins the secondary contract:
-// when the best-effort cleanup Delete itself fails, the ORIGINAL provisioning
-// error stays primary (callers still branch on the real cause), and the cleanup
-// failure is surfaced only as additional context.
-func TestProvisionFleet_CleanupFailureAnnotatesNotMasks(t *testing.T) {
-	delErr := errors.New("apiserver unreachable")
-	c := fake.NewClientBuilder().
-		WithScheme(newScheme(t)).
-		WithRuntimeObjects(readyNetwork()).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Delete: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.DeleteOption) error {
-				return delErr
-			},
-		}).
-		Build()
-	p := &Provider{c: c, httpClient: http.DefaultClient, defaultNS: testNS}
-	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
-
-	_, err := p.ProvisionFleet(context.Background(), net, sei.FleetSpec{
-		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 1,
-		RunningTimeout: 50 * time.Millisecond, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
-	})
-	// Original timeout stays primary...
-	if err == nil || !sei.IsTimeout(err) {
-		t.Fatalf("original timeout must stay primary, got %v", err)
-	}
-	// ...and the cleanup failure is surfaced as additional context.
-	if !errors.Is(err, delErr) {
-		t.Errorf("cleanup failure should be wrapped into the returned error, got %v", err)
-	}
-}
-
-// TestProvisionNetwork_CleansUpOnFailure pins the SeiNetwork orphan-cleanup
-// contract: when ProvisionNetwork applies the SeiNetwork but the ready-wait
-// times out (the network never reaches Ready), it best-effort deletes the
-// SeiNetwork it created. SDK resources carry no ownerRef, so without this a
-// failed run orphans a SeiNetwork (and its cascaded children).
-func TestProvisionNetwork_CleansUpOnFailure(t *testing.T) {
-	// No network fixture pre-staged: the SSA apply creates the SeiNetwork, but it
-	// never reaches GroupPhaseReady, so waitNetworkReady times out.
-	p := providerWith(t, http.DefaultClient)
-
-	_, err := p.ProvisionNetwork(context.Background(), sei.NetworkSpec{
-		Name: testNet, Namespace: testNS, ChainID: testChainID, Image: testImage, Replicas: 1,
-		ReadyTimeout: 50 * time.Millisecond,
-	})
-	if err == nil || !sei.IsTimeout(err) {
-		t.Fatalf("stalled network should time out, got %v", err)
-	}
-
-	// The applied SeiNetwork must have been deleted on the failure path.
-	got := &seiv1alpha1.SeiNetwork{}
-	gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: testNet}, got)
-	if !apierrors.IsNotFound(gErr) {
-		t.Errorf("SeiNetwork should be cleaned up after failure, got err=%v", gErr)
-	}
-}
-
-// TestProvisionNetwork_ReadyNotDeletedOnReadError pins the rollback-disarm rule:
-// once the network reaches Ready it is up, so a subsequent (transient) failure
-// of the post-Ready re-read must return the error WITHOUT deleting the healthy
-// network — the round-4 orphan fix only covers failures BEFORE the resource is
-// up. A Get interceptor lets the readiness poll's Get through and fails only the
-// re-read that follows it.
-func TestProvisionNetwork_ReadyNotDeletedOnReadError(t *testing.T) {
-	readErr := errors.New("apiserver read timeout")
-	var netGets int
-	c := fake.NewClientBuilder().
-		WithScheme(newScheme(t)).
-		WithRuntimeObjects(readyNetwork()).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, wc client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if _, ok := obj.(*seiv1alpha1.SeiNetwork); ok {
-					netGets++
-					// 1st Get = readiness poll (must observe Ready); the 2nd is the
-					// post-Ready re-read under test, which fails transiently. Later
-					// Gets (the test's own verification) pass through.
-					if netGets == 2 {
-						return readErr
-					}
-				}
-				return wc.Get(ctx, key, obj, opts...)
-			},
-		}).
-		Build()
-	p := &Provider{c: c, httpClient: http.DefaultClient, defaultNS: testNS}
-
-	_, err := p.ProvisionNetwork(context.Background(), sei.NetworkSpec{
-		Name: testNet, Namespace: testNS, ChainID: testChainID, Image: testImage, Replicas: 1,
-		ReadyTimeout: time.Second,
-	})
-	if err == nil || !errors.Is(err, readErr) {
-		t.Fatalf("post-Ready re-read error should be returned, got %v", err)
-	}
-	// The healthy network must NOT have been rolled back.
-	got := &seiv1alpha1.SeiNetwork{}
-	if gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: testNet}, got); gErr != nil {
-		t.Errorf("Ready network must survive a post-Ready re-read error, got err=%v", gErr)
-	}
-}
-
-// TestProvisionFleet_RunningNotDeletedOnProbeFailure pins the fleet analogue:
-// once every node reaches Running the fleet is up, so a subsequent readiness-
-// probe failure must return the error WITHOUT deleting the Running nodes. The
-// node fixture is Running but its endpoint points at an unreachable URL, so the
-// probe fails AFTER the bring-up window closes.
-func TestProvisionFleet_RunningNotDeletedOnProbeFailure(t *testing.T) {
-	// Running node whose RPC endpoints point at a closed port: waitFleetRunning
-	// passes (Phase=Running), then probeReady fails — the post-up window.
-	const dead = "http://127.0.0.1:1" // connection refused
-	n0 := runningNode(rpc0Name, dead, dead, dead)
-	p := providerWith(t, &http.Client{Timeout: 200 * time.Millisecond}, readyNetwork(), n0)
-	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
-
-	_, err := p.ProvisionFleet(context.Background(), net, sei.FleetSpec{
-		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 1,
-		RunningTimeout: time.Second, FirstBlockTimeout: 200 * time.Millisecond, PollInterval: 10 * time.Millisecond,
-	})
-	if err == nil {
-		t.Fatalf("probe failure on a Running fleet should return an error, got nil")
-	}
-	// The Running node must NOT have been rolled back.
-	got := &seiv1alpha1.SeiNode{}
-	if gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: rpc0Name}, got); gErr != nil {
-		t.Errorf("Running node must survive a post-Running probe failure, got err=%v", gErr)
-	}
-}
-
-// TestProvisionNetwork_CleanupRunsOnCanceledCtx proves the SDK-internal network
-// rollback uses a FRESH context, not the (canceled) provisioning ctx: with a
-// pre-canceled ctx the apply+wait fail, yet the rollback Delete must still land
-// on the apiserver. A Delete interceptor records the ctx it sees and asserts it
-// is NOT the canceled provisioning ctx (so cleanup fires when most needed).
-func TestProvisionNetwork_CleanupRunsOnCanceledCtx(t *testing.T) {
-	var deletedNet bool
-	var deleteCtxCanceled bool
-	c := fake.NewClientBuilder().
-		WithScheme(newScheme(t)).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Delete: func(ctx context.Context, wc client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-				if _, ok := obj.(*seiv1alpha1.SeiNetwork); ok {
-					deletedNet = true
-					deleteCtxCanceled = ctx.Err() != nil
-				}
-				return wc.Delete(ctx, obj, opts...)
-			},
-		}).
-		Build()
-	p := &Provider{c: c, httpClient: http.DefaultClient, defaultNS: testNS}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // provisioning ctx is already canceled before the call
-
-	_, err := p.ProvisionNetwork(ctx, sei.NetworkSpec{
-		Name: testNet, Namespace: testNS, ChainID: testChainID, Image: testImage, Replicas: 1,
-		ReadyTimeout: 50 * time.Millisecond,
-	})
-	if err == nil {
-		t.Fatalf("canceled provisioning ctx should fail, got nil")
-	}
-	if !deletedNet {
-		t.Fatalf("rollback Delete never reached the apiserver under a canceled ctx")
-	}
-	if deleteCtxCanceled {
-		t.Errorf("rollback Delete ran on the canceled provisioning ctx, want a fresh one")
-	}
-	// And the network really is gone.
-	got := &seiv1alpha1.SeiNetwork{}
-	if gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: testNet}, got); !apierrors.IsNotFound(gErr) {
-		t.Errorf("SeiNetwork should be deleted under canceled-ctx rollback, got err=%v", gErr)
-	}
-}
-
-// TestProvisionFleet_CleanupRunsOnCanceledCtx is the fleet analogue: a
-// pre-canceled provisioning ctx fails the run, and the partial-fleet rollback
-// must still Delete the applied SeiNodes under a fresh (non-canceled) context.
-func TestProvisionFleet_CleanupRunsOnCanceledCtx(t *testing.T) {
-	deleted := map[string]bool{}
-	var anyDeleteCtxCanceled bool
-	c := fake.NewClientBuilder().
-		WithScheme(newScheme(t)).
-		WithRuntimeObjects(readyNetwork()).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Delete: func(ctx context.Context, wc client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-				if node, ok := obj.(*seiv1alpha1.SeiNode); ok {
-					deleted[node.Name] = true
-					if ctx.Err() != nil {
-						anyDeleteCtxCanceled = true
-					}
-				}
-				return wc.Delete(ctx, obj, opts...)
-			},
-		}).
-		Build()
-	p := &Provider{c: c, httpClient: http.DefaultClient, defaultNS: testNS}
-	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // already canceled before the call
-
-	_, err := p.ProvisionFleet(ctx, net, sei.FleetSpec{
-		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 2,
-		RunningTimeout: 50 * time.Millisecond, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
-	})
-	if err == nil {
-		t.Fatalf("canceled provisioning ctx should fail, got nil")
-	}
-	// The applies that landed before/despite cancellation must be rolled back.
-	for _, name := range []string{rpc0Name, rpc1Name} {
-		if deleted[name] {
-			got := &seiv1alpha1.SeiNode{}
-			if gErr := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: name}, got); !apierrors.IsNotFound(gErr) {
-				t.Errorf("%s should be deleted under canceled-ctx rollback, got err=%v", name, gErr)
-			}
-		}
-	}
-	if len(deleted) == 0 {
-		t.Fatalf("no rollback Delete reached the apiserver under a canceled ctx")
-	}
-	if anyDeleteCtxCanceled {
-		t.Errorf("rollback Delete ran on the canceled provisioning ctx, want a fresh one")
-	}
-}
-
-func TestProvisionFleet_FailFastOnFailedNode(t *testing.T) {
-	failed := runningNode(rpc0Name, "", "", "")
+func TestNodeWaitReady_FailFastOnFailedPhase(t *testing.T) {
+	failed := runningNode("", "")
 	failed.Status.Phase = seiv1alpha1.PhaseFailed
 	p := providerWith(t, http.DefaultClient, failed)
-	net := &networkHandle{p: p, namespace: testNS, name: testNet, net: readyNetwork()}
-	_, err := p.ProvisionFleet(context.Background(), net, sei.FleetSpec{
-		NamePrefix: rpcRole, Namespace: testNS, Image: testImage, Replicas: 1,
-		RunningTimeout: time.Second, FirstBlockTimeout: time.Second, PollInterval: 10 * time.Millisecond,
-	})
-	if err == nil || !sei.IsFailed(err) {
-		t.Fatalf("Failed node should yield ClassFailed, got %v", err)
-	}
-}
+	h := &nodeHandle{p: p, namespace: testNS, name: rpc0Name, node: &seiv1alpha1.SeiNode{}}
 
-// TestFleetEndpoints_PreserveOrdinalOrder pins the D7 ordering contract for the
-// fleet projection: fleetHandle.Endpoints() iterates h.names, so the returned
-// Nodes must come back in ordinal order regardless of apiserver/map iteration
-// order. A harness indexes node-0 for the aggregate-TM semantics, so a reorder
-// is a silent correctness break.
-func TestFleetEndpoints_PreserveOrdinalOrder(t *testing.T) {
-	// Stage three nodes; the handle's names fix the order.
-	objs := []runtime.Object{
-		runningNode(rpc0Name, "http://rpc-0:26657", "http://rpc-0:1317", "http://rpc-0:8545"),
-		runningNode(rpc1Name, "http://rpc-1:26657", "http://rpc-1:1317", "http://rpc-1:8545"),
-		runningNode("rpc-2", "http://rpc-2:26657", "http://rpc-2:1317", "http://rpc-2:8545"),
-	}
-	p := providerWith(t, http.DefaultClient, objs...)
-	h := &fleetHandle{p: p, namespace: testNS, names: []string{rpc0Name, rpc1Name, "rpc-2"}}
-
-	fe := h.Endpoints()
-	want := []string{rpc0Name, rpc1Name, "rpc-2"}
-	if len(fe.Nodes) != len(want) {
-		t.Fatalf("fleet Nodes len = %d, want %d", len(fe.Nodes), len(want))
-	}
-	for i, w := range want {
-		if fe.Nodes[i].Name != w {
-			t.Errorf("fleet Nodes[%d].Name = %q, want %q (ordinal order broke)", i, fe.Nodes[i].Name, w)
-		}
-	}
-	// And EVMRPCList carries that same fleet order.
-	evm := fe.EVMRPCList()
-	wantEVM := []string{"http://rpc-0:8545", "http://rpc-1:8545", "http://rpc-2:8545"}
-	for i, w := range wantEVM {
-		if evm[i] != w {
-			t.Errorf("EVMRPCList[%d] = %q, want %q", i, evm[i], w)
-		}
-	}
-}
-
-// TestNetworkEndpoints_PreservePerPodOrder pins the per-pod order of the network
-// projection: Endpoints.Nodes must mirror the source .status.endpoints.nodes
-// order (D7 [0]=aggregate semantics, per-pod order stable).
-func TestNetworkEndpoints_PreservePerPodOrder(t *testing.T) {
-	net := readyNetwork()
-	net.Status.Endpoints.Nodes = []seiv1alpha1.NodeEndpoint{
-		{Name: "chaos-net-0", EvmJsonRpc: "http://chaos-net-0:8545"},
-		{Name: "chaos-net-1", EvmJsonRpc: "http://chaos-net-1:8545"},
-		{Name: "chaos-net-2", EvmJsonRpc: "http://chaos-net-2:8545"},
-	}
-	h := &networkHandle{namespace: testNS, name: testNet, net: net}
-	got := h.Endpoints()
-	want := []string{"chaos-net-0", "chaos-net-1", "chaos-net-2"}
-	if len(got.Nodes) != len(want) {
-		t.Fatalf("network Nodes len = %d, want %d", len(got.Nodes), len(want))
-	}
-	for i, w := range want {
-		if got.Nodes[i].Name != w {
-			t.Errorf("network Nodes[%d].Name = %q, want %q (per-pod order broke)", i, got.Nodes[i].Name, w)
-		}
-	}
-}
-
-func TestTeardown_Idempotent(t *testing.T) {
-	p := providerWith(t, http.DefaultClient, runningNode(rpc0Name, "x", "y", "z"))
-	h := &fleetHandle{p: p, namespace: testNS, names: []string{rpc0Name, rpc1Name}}
-
-	// rpc-1 never existed; teardown must still succeed (idempotent).
-	if err := h.Teardown(context.Background()); err != nil {
-		t.Fatalf("first teardown: %v", err)
-	}
-	// Second teardown after everything is gone is also a no-op.
-	if err := h.Teardown(context.Background()); err != nil {
-		t.Fatalf("second teardown: %v", err)
-	}
-	got := &seiv1alpha1.SeiNode{}
-	err := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: rpc0Name}, got)
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("rpc-0 should be deleted, got err=%v", err)
-	}
-}
-
-// TestPoll_ParentCancelIsCanceledNotTimeout proves poll distinguishes an
-// explicit caller abort (context.Canceled -> ClassCanceled) from an elapsed
-// readiness budget (context.DeadlineExceeded -> ClassTimeout): a never-true
-// condition under a canceled parent is an abort, not a timeout.
-func TestPoll_ParentCancelIsCanceledNotTimeout(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // explicit abort before the poll runs
-
-	never := func(context.Context) (bool, error) { return false, nil }
-	err := (&Provider{}).poll(ctx, time.Minute, 10*time.Millisecond, never, "SeiNode ns/rpc-0", time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := h.WaitReady(ctx)
 	if err == nil {
-		t.Fatal("poll should fail on a canceled parent context")
-	}
-	if !sei.IsCanceled(err) {
-		t.Fatalf("parent cancel should be ClassCanceled, got %v", err)
+		t.Fatal("Failed phase should error")
 	}
 	if sei.IsTimeout(err) {
-		t.Fatalf("parent cancel must NOT be ClassTimeout, got %v", err)
+		t.Fatalf("Failed phase must not be a timeout, got %v", err)
 	}
 }
 
-// TestPoll_BudgetElapsedIsTimeout is the contrast: a never-true condition whose
-// poll budget elapses (context.DeadlineExceeded) stays ClassTimeout.
-func TestPoll_BudgetElapsedIsTimeout(t *testing.T) {
-	never := func(context.Context) (bool, error) { return false, nil }
-	err := (&Provider{}).poll(context.Background(), 80*time.Millisecond, 10*time.Millisecond, never, "SeiNode ns/rpc-0", 80*time.Millisecond)
+// TestNodeWaitReady_DeadlineIsTimeout: a node stuck pre-Running under an elapsed
+// ctx surfaces as sei.IsTimeout.
+func TestNodeWaitReady_DeadlineIsTimeout(t *testing.T) {
+	pending := runningNode("", "")
+	pending.Status.Phase = seiv1alpha1.SeiNodePhase("Pending")
+	p := providerWith(t, http.DefaultClient, pending)
+	h := &nodeHandle{p: p, namespace: testNS, name: rpc0Name, node: &seiv1alpha1.SeiNode{}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	err := h.WaitReady(ctx)
 	if err == nil {
-		t.Fatal("poll should fail when the condition never becomes true")
+		t.Fatal("never-Running node should error on deadline")
 	}
 	if !sei.IsTimeout(err) {
-		t.Fatalf("elapsed budget should be ClassTimeout, got %v", err)
+		t.Fatalf("elapsed deadline should be sei.IsTimeout, got %v", err)
 	}
-	if sei.IsCanceled(err) {
-		t.Fatalf("elapsed budget must NOT be ClassCanceled, got %v", err)
+}
+
+func TestGetNetwork_ReadsBackStatus(t *testing.T) {
+	srv := healthyRPC(t)
+	p := providerWith(t, srv.Client(), readyNetwork(srv.URL))
+	h, err := p.GetNetwork(context.Background(), testNet, testNS)
+	if err != nil {
+		t.Fatalf("GetNetwork: %v", err)
+	}
+	if h.TendermintRPC() != srv.URL {
+		t.Errorf("GetNetwork did not project status endpoints: %q", h.TendermintRPC())
+	}
+}
+
+func TestGetNode_NotFoundPassesThrough(t *testing.T) {
+	p := providerWith(t, http.DefaultClient)
+	_, err := p.GetNode(context.Background(), "absent", testNS)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("GetNode of a missing node should pass apierrors.IsNotFound, got %v", err)
+	}
+}
+
+func TestDelete_Idempotent(t *testing.T) {
+	p := providerWith(t, http.DefaultClient, runningNode("x", "z"))
+	h := &nodeHandle{p: p, namespace: testNS, name: rpc0Name, node: &seiv1alpha1.SeiNode{}}
+
+	if err := h.Delete(context.Background()); err != nil {
+		t.Fatalf("first delete: %v", err)
+	}
+	// Second delete after it is gone is also a no-op (NotFound is success).
+	if err := h.Delete(context.Background()); err != nil {
+		t.Fatalf("second delete: %v", err)
+	}
+	got := &seiv1alpha1.SeiNode{}
+	if err := p.c.Get(context.Background(), types.NamespacedName{Namespace: testNS, Name: rpc0Name}, got); !apierrors.IsNotFound(err) {
+		t.Fatalf("node should be deleted, got err=%v", err)
+	}
+}
+
+func TestNetworkDelete_Idempotent(t *testing.T) {
+	p := providerWith(t, http.DefaultClient)
+	h := &networkHandle{p: p, namespace: testNS, name: testNet, net: &seiv1alpha1.SeiNetwork{}}
+	// Network never existed; delete must still succeed.
+	if err := h.Delete(context.Background()); err != nil {
+		t.Fatalf("delete of absent network should be a no-op, got %v", err)
 	}
 }

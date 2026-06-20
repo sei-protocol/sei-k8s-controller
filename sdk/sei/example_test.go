@@ -6,54 +6,64 @@ import (
 	"time"
 
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
-	_ "github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider/k8s" // flavor opt-in; SEI_NODE_CLUSTER selects it
+	_ "github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider/k8s" // mode opt-in; SEI_NODE_CLUSTER selects it
 )
 
-// Example_singleHarness is the WS-E §7 payoff, compiling: the k8s_nightly
-// pipeline (provision network -> provision fleet -> read endpoints -> assert ->
-// teardown) as one Go call graph sharing one context and one error model, with
-// no jq seams or URL reconstruction. It is a build-only example (no Output:
-// directive) — running it requires a real cluster.
-func Example_singleHarness() {
+// Example_lifecycle is the SDK's payoff, compiling: create a network -> wait
+// ready -> create N RPC nodes as peers -> wait ready -> use the endpoints ->
+// delete. One Go call graph, one context, one error model — no jq seams, no URL
+// reconstruction. It is a build-only example (no Output: directive); running it
+// requires a real cluster. The caller owns every Delete — the SDK never
+// auto-cleans.
+func Example_lifecycle() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	c, err := sei.Open(ctx, "") // "" => env: SEI_NODE_CLUSTER present -> k8s (no dsn)
+	c, err := sei.Open(ctx, "") // "" => env: SEI_NODE_CLUSTER present -> k8s
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	defer func() { _ = c.Close() }()
 
-	net, err := c.ProvisionNetwork(ctx, sei.NetworkSpec{
-		Name: "chaos-net", Preset: "genesis-chain",
-		ChainID: "sei-chaos-1", Image: "ghcr.io/sei/sei-chain:abc123", Replicas: 4,
+	net, err := c.CreateNetwork(ctx, sei.NetworkSpec{
+		Name: "chaos-net", Image: "ghcr.io/sei/sei-chain:abc123", Validators: 4,
 	})
 	if err != nil {
-		fmt.Println(err) // typed Timeout/Failed, branchable via sei.IsTimeout/IsFailed
+		fmt.Println(err)
 		return
 	}
-	defer func() { _ = net.Teardown(ctx) }()
+	defer func() { _ = net.Delete(ctx) }() // caller owns lifecycle
 
-	fleet, err := c.ProvisionFleet(ctx, net, sei.FleetSpec{
-		NamePrefix: "rpc", Preset: "rpc", Replicas: 3, Image: "ghcr.io/sei/sei-chain:abc123",
-	})
-	if err != nil {
-		fmt.Println(err) // all Running AND probe-passed (consensus, not just liveness)
+	if err := net.WaitReady(ctx); err != nil {
+		fmt.Println(err) // sei.IsTimeout(err) distinguishes a deadline from a Failed phase
 		return
 	}
-	defer func() { _ = fleet.Teardown(ctx) }()
+
+	// Create three RPC nodes peered to the network — the caller loops; the SDK
+	// does not fan out.
+	const rpcCount = 3
+	nodes := make([]*sei.Node, 0, rpcCount)
+	for i := range rpcCount {
+		node, err := c.CreateNode(ctx, sei.NodeSpec{
+			Name: fmt.Sprintf("rpc-%d", i), Network: net.Name(),
+			Image: "ghcr.io/sei/sei-chain:abc123",
+		})
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		defer func() { _ = node.Delete(ctx) }()
+		nodes = append(nodes, node)
+	}
+	for _, node := range nodes {
+		if err := node.WaitReady(ctx); err != nil {
+			fmt.Println(err)
+			return
+		}
+	}
 
 	// Typed endpoints straight off .status — no jq, no <name>.<ns>.svc rebuild.
-	rpcs := fleet.Endpoints().EVMRPCList()
-	if len(rpcs) == 0 {
-		fmt.Println("no rpc endpoints")
-		return
-	}
-
-	// A harness's own load/assert helpers live in the same package, sharing ctx
-	// and the SDK's structured errors — the in-Go-test path the SDK enables.
-	if err := assertLiveness(ctx, rpcs[0]); err != nil {
+	if err := assertLiveness(ctx, nodes[0].EVMRPC()); err != nil {
 		fmt.Println(err)
 	}
 }

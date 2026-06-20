@@ -13,22 +13,18 @@ import (
 )
 
 // TestSyncInfo_EnvelopeDecode covers the Sei CometBFT unwrapped-envelope
-// handling: the canonical probe must resolve sync_info from both the JSON-RPC
-// envelope and the bare shape, and surface catching_up from whichever carried
-// the height.
+// handling: the probe must resolve sync_info from both the JSON-RPC envelope and
+// the bare shape.
 func TestSyncInfo_EnvelopeDecode(t *testing.T) {
 	cases := []struct {
-		name           string
-		body           string
-		wantHeight     string
-		wantCatchingUp bool
+		name       string
+		body       string
+		wantHeight string
 	}{
-		{"jsonrpc envelope, caught up", `{"result":{"sync_info":{"latest_block_height":"42","catching_up":false}}}`, "42", false},
-		{"jsonrpc envelope, catching up", `{"result":{"sync_info":{"latest_block_height":"42","catching_up":true}}}`, "42", true},
-		{"bare envelope, caught up", `{"sync_info":{"latest_block_height":"7","catching_up":false}}`, "7", false},
-		{"bare envelope, catching up", `{"sync_info":{"latest_block_height":"7","catching_up":true}}`, "7", true},
-		{"empty", `{}`, "", false},
-		{"envelope present but height empty falls back to bare", `{"result":{"sync_info":{}},"sync_info":{"latest_block_height":"9","catching_up":false}}`, "9", false},
+		{"jsonrpc envelope", `{"result":{"sync_info":{"latest_block_height":"42"}}}`, "42"},
+		{"bare envelope", `{"sync_info":{"latest_block_height":"7"}}`, "7"},
+		{"empty", `{}`, ""},
+		{"envelope present but height empty falls back to bare", `{"result":{"sync_info":{}},"sync_info":{"latest_block_height":"9"}}`, "9"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -36,21 +32,16 @@ func TestSyncInfo_EnvelopeDecode(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.body), &r); err != nil {
 				t.Fatal(err)
 			}
-			si := r.syncInfo()
-			if si.LatestBlockHeight != tc.wantHeight {
-				t.Errorf("height = %q, want %q", si.LatestBlockHeight, tc.wantHeight)
-			}
-			if si.CatchingUp != tc.wantCatchingUp {
-				t.Errorf("catchingUp = %v, want %v", si.CatchingUp, tc.wantCatchingUp)
+			if got := r.syncInfo().LatestBlockHeight; got != tc.wantHeight {
+				t.Errorf("height = %q, want %q", got, tc.wantHeight)
 			}
 		})
 	}
 }
 
-// statusFixture returns a /status JSON body for the given height and catching_up
-// flag, in either envelope shape.
-func statusFixture(height string, catchingUp, enveloped bool) string {
-	si := map[string]any{"latest_block_height": height, "catching_up": catchingUp}
+// statusFixture returns a /status JSON body in either envelope shape.
+func statusFixture(height string, enveloped bool) string {
+	si := map[string]any{"latest_block_height": height}
 	if enveloped {
 		b, _ := json.Marshal(map[string]any{resultKey: map[string]any{"sync_info": si}})
 		return string(b)
@@ -59,142 +50,59 @@ func statusFixture(height string, catchingUp, enveloped bool) string {
 	return string(b)
 }
 
-func TestWaitForCaughtUp_Gate(t *testing.T) {
-	cases := []struct {
-		name       string
-		height     string
-		catchingUp bool
-		enveloped  bool
-		wantPass   bool
-	}{
-		{"caught up, height 42, envelope", "42", false, true, true},
-		{"caught up, height 42, bare", "42", false, false, true},
-		{"catching up blocks even at high height", "999", true, true, false},
-		{"height 1 blocks (genesis not advanced)", "1", false, true, false},
-		{"height 0 blocks", "0", false, true, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = w.Write([]byte(statusFixture(tc.height, tc.catchingUp, tc.enveloped)))
-			}))
-			defer srv.Close()
-
-			err := waitForCaughtUp(context.Background(), srv.Client(), srv.URL, 120*time.Millisecond, 20*time.Millisecond)
-			if tc.wantPass && err != nil {
-				t.Fatalf("gate should pass, got %v", err)
-			}
-			if !tc.wantPass && err == nil {
-				t.Fatalf("gate should NOT pass (height=%s catchingUp=%v)", tc.height, tc.catchingUp)
-			}
-		})
-	}
-}
-
-// TestWaitForCaughtUp_ConvergesAfterCatchup proves a node that starts catching
-// up and then converges passes the gate (the gate polls, it doesn't latch).
-func TestWaitForCaughtUp_ConvergesAfterCatchup(t *testing.T) {
-	var hits atomic.Int32
+func TestProbeTendermint_Liveness(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		catchingUp := hits.Add(1) < 3 // first two polls catching up, then caught up
-		_, _ = w.Write([]byte(statusFixture("100", catchingUp, true)))
+		_, _ = w.Write([]byte(statusFixture("42", true)))
 	}))
 	defer srv.Close()
-
-	if err := waitForCaughtUp(context.Background(), srv.Client(), srv.URL, time.Second, 10*time.Millisecond); err != nil {
-		t.Fatalf("gate should pass once the node converges: %v", err)
+	if err := probeTendermint(context.Background(), srv.Client(), srv.URL, "SeiNetwork ns/net"); err != nil {
+		t.Fatalf("probeTendermint should pass once /status answers: %v", err)
 	}
 }
 
-func TestWaitForEVMReady_BoundListener(t *testing.T) {
+// TestProbeTendermint_PollsUntilBound proves the probe polls — a listener that is
+// down for the first few hits, then binds, passes.
+func TestProbeTendermint_PollsUntilBound(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(statusFixture("42", false)))
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := probeTendermint(ctx, srv.Client(), srv.URL, "SeiNetwork ns/net"); err != nil {
+		t.Fatalf("probe should pass once the listener binds: %v", err)
+	}
+}
+
+func TestProbeEVM_BoundListener(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, resultKey: "0x10"})
 	}))
 	defer srv.Close()
-	if err := waitForEVMReady(context.Background(), srv.Client(), srv.URL, time.Second, 10*time.Millisecond); err != nil {
-		t.Fatalf("waitForEVMReady: %v", err)
+	if err := probeEVM(context.Background(), srv.Client(), srv.URL, "SeiNode ns/rpc-0"); err != nil {
+		t.Fatalf("probeEVM: %v", err)
 	}
 }
 
-func TestWaitForEVMReady_NeverBound_TimesOut(t *testing.T) {
+// TestProbeEVM_DeadlineIsTimeout proves a never-bound listener under an elapsed
+// deadline surfaces as sei.IsTimeout (context.DeadlineExceeded).
+func TestProbeEVM_DeadlineIsTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable) // listener not up
+		w.WriteHeader(http.StatusServiceUnavailable) // never binds
 	}))
 	defer srv.Close()
-	if err := waitForEVMReady(context.Background(), srv.Client(), srv.URL, 120*time.Millisecond, 20*time.Millisecond); err == nil {
-		t.Fatal("expected timeout when EVM never binds")
-	}
-}
-
-// TestProbeReady_EVMGateBlocksOnCaughtUpButUnboundEVM is the readiness-vs-
-// discoverability gate: TM is caught up but the EVM listener never binds, so
-// probeReady must fail (ClassTimeout) rather than declaring the node ready.
-func TestProbeReady_EVMGateBlocksOnCaughtUpButUnboundEVM(t *testing.T) {
-	var tmHits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet { // TM /status — caught up
-			tmHits.Add(1)
-			_, _ = w.Write([]byte(statusFixture("50", false, true)))
-			return
-		}
-		w.WriteHeader(http.StatusServiceUnavailable) // EVM never binds
-	}))
-	defer srv.Close()
-
-	err := probeReady(context.Background(), srv.Client(), srv.URL, srv.URL, "SeiNode ns/rpc-0", 150*time.Millisecond, 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	err := probeEVM(ctx, srv.Client(), srv.URL, "SeiNode ns/rpc-0")
 	if err == nil {
-		t.Fatal("probeReady should fail when EVM never binds even though TM is caught up")
+		t.Fatal("expected error when EVM never binds")
 	}
 	if !sei.IsTimeout(err) {
-		t.Fatalf("EVM-not-ready should be ClassTimeout, got %v", err)
-	}
-	if tmHits.Load() == 0 {
-		t.Fatal("TM stage was never reached")
-	}
-}
-
-// TestProbeReady_ParentCancelIsCanceledNotTimeout proves a parent-context cancel
-// (an explicit abort) surfaces as ClassCanceled, not ClassTimeout — a chaos
-// harness branches on the two: an abort is the operator's choice, a timeout is a
-// node that failed to come ready.
-func TestProbeReady_ParentCancelIsCanceledNotTimeout(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable) // never ready
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // explicit abort before the probe runs
-
-	err := probeReady(ctx, srv.Client(), srv.URL, srv.URL, "SeiNode ns/rpc-0", time.Minute, 20*time.Millisecond)
-	if err == nil {
-		t.Fatal("probeReady should fail on a canceled parent context")
-	}
-	if !sei.IsCanceled(err) {
-		t.Fatalf("parent cancel should be ClassCanceled, got %v", err)
-	}
-	if sei.IsTimeout(err) {
-		t.Fatalf("parent cancel must NOT be ClassTimeout, got %v", err)
-	}
-}
-
-// TestProbeReady_BudgetElapsedIsTimeout is the contrast to the cancel case: when
-// the poll budget elapses (context.DeadlineExceeded) against a never-ready node,
-// the outcome stays ClassTimeout.
-func TestProbeReady_BudgetElapsedIsTimeout(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable) // never ready
-	}))
-	defer srv.Close()
-
-	err := probeReady(context.Background(), srv.Client(), srv.URL, srv.URL, "SeiNode ns/rpc-0", 120*time.Millisecond, 20*time.Millisecond)
-	if err == nil {
-		t.Fatal("probeReady should fail when the node never comes ready")
-	}
-	if !sei.IsTimeout(err) {
-		t.Fatalf("elapsed budget should be ClassTimeout, got %v", err)
-	}
-	if sei.IsCanceled(err) {
-		t.Fatalf("elapsed budget must NOT be ClassCanceled, got %v", err)
+		t.Fatalf("elapsed deadline should be sei.IsTimeout, got %v", err)
 	}
 }

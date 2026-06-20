@@ -1,8 +1,8 @@
 // Package provider is the public driver-registration façade — the database/sql
-// model for sei-sdk (WS-E LLD §4). A flavor package's init() calls Register; a
-// consumer blank-imports the flavor package for that side effect. The Provider
-// interface and handle types live in core (package sei) so flavors depend on
-// core, not vice-versa; this package re-exports them as the stable public names.
+// model for the sei SDK. A flavor package's init() calls Register; a consumer
+// blank-imports the flavor package for that side effect. The Provider interface
+// and handle types live in core (package sei) so flavors depend on core, not
+// vice-versa; this package re-exports them as the stable public names.
 package provider
 
 import "github.com/sei-protocol/sei-k8s-controller/sdk/sei"

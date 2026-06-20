@@ -1,4 +1,4 @@
-package local
+package docker
 
 import (
 	"context"
@@ -13,8 +13,8 @@ func TestStub_RegistersButVerbsNotImplemented(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if p.Name() != "local" {
-		t.Fatalf("Name = %q, want local", p.Name())
+	if p.Name() != "docker" {
+		t.Fatalf("Name = %q, want docker", p.Name())
 	}
 
 	if _, err := p.CreateNetwork(context.Background(), sei.NetworkSpec{}); !errors.Is(err, ErrNotImplemented) {

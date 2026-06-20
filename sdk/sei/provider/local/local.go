@@ -1,13 +1,13 @@
-// Package local is the registered stub for the SEI_LOCAL in-process flavor. The
-// interface is designed so an in-process provider can be added without touching
-// core or the k8s provider, but the implementation (booting connected seid
-// nodes in-process) is cut from the MVP (WS-E LLD §6.3). Every verb returns a
-// ClassUsage "not implemented" error so a harness that selects "local" by env
-// fails clearly rather than silently no-op'ing.
+// Package local is the registered stub for the SEI_LOCAL in-process mode. The
+// interface is shaped so an in-process provider can be added without touching
+// core or the k8s provider, but the implementation is not built. Every verb
+// returns a clear "mode not implemented" error so a harness that selects "local"
+// by env fails clearly rather than silently no-op'ing.
 package local
 
 import (
 	"context"
+	"errors"
 
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider"
@@ -15,28 +15,31 @@ import (
 
 func init() { provider.Register("local", New) }
 
-const notImplemented = "SEI_LOCAL not implemented in MVP — only the k8s provider ships (LLD §6.3); use SEI_NODE_CLUSTER / the k8s flavor"
+// ErrNotImplemented is returned by every local-mode verb. Callers can errors.Is
+// on it to detect the unimplemented mode.
+var ErrNotImplemented = errors.New("local mode not implemented — only the k8s mode ships; use SEI_NODE_CLUSTER / the k8s mode")
 
 // Provider is the local stub.
 type Provider struct{}
 
-// New is the registered Factory. It succeeds (so Open resolves "local") but
-// every provisioning verb fails with ClassUsage — the cut is honest, not a
-// crash.
+// New is the registered Factory. It succeeds (so Open resolves "local") but every
+// verb fails with ErrNotImplemented — the cut is honest, not a crash.
 func New(context.Context) (provider.Provider, error) { return &Provider{}, nil }
 
 func (*Provider) Name() string { return "local" }
 
-func (*Provider) Close() error { return nil }
-
-func (*Provider) ProvisionNetwork(context.Context, sei.NetworkSpec) (sei.NetworkHandle, error) {
-	return nil, &sei.Error{Class: sei.ClassUsage, Err: errNotImplemented{}}
+func (*Provider) CreateNetwork(context.Context, sei.NetworkSpec) (sei.NetworkHandle, error) {
+	return nil, ErrNotImplemented
 }
 
-func (*Provider) ProvisionFleet(context.Context, sei.NetworkHandle, sei.FleetSpec) (sei.FleetHandle, error) {
-	return nil, &sei.Error{Class: sei.ClassUsage, Err: errNotImplemented{}}
+func (*Provider) GetNetwork(context.Context, string, string) (sei.NetworkHandle, error) {
+	return nil, ErrNotImplemented
 }
 
-type errNotImplemented struct{}
+func (*Provider) CreateNode(context.Context, sei.NodeSpec) (sei.NodeHandle, error) {
+	return nil, ErrNotImplemented
+}
 
-func (errNotImplemented) Error() string { return notImplemented }
+func (*Provider) GetNode(context.Context, string, string) (sei.NodeHandle, error) {
+	return nil, ErrNotImplemented
+}
