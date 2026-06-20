@@ -37,15 +37,23 @@ func main() {
 	defer stop()
 
 	if err := up(ctx, os.Args[2:]); err != nil {
-		fmt.Fprintln(os.Stderr, "sei:", err)
+		if sei.IsCanceled(err) {
+			fmt.Fprintln(os.Stderr, "sei: aborted:", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "sei:", err)
+		}
 		os.Exit(exitCode(err))
 	}
 }
 
 // exitCode maps the SDK error Class onto a stable process exit code so a shell
-// harness can branch on cause without parsing the message.
+// harness can branch on cause without parsing the message. 130 is the
+// conventional SIGINT code and keeps an explicit abort distinct from the
+// readiness-timeout code 3.
 func exitCode(err error) int {
 	switch {
+	case sei.IsCanceled(err):
+		return 130
 	case sei.IsTimeout(err):
 		return 3
 	case sei.IsFailed(err):

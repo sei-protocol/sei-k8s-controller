@@ -59,8 +59,12 @@ that slims the external-consumer graph, not a prerequisite of this MVP.
 - **D3 — `provider.Provider` interface + `Register`/`Factory`.** The
   driver-registration contract a third-party or `local` provider compiles
   against. `database/sql`-shaped; locked.
-- **D4 — `Class` error enum.** Consumers `switch`/`IsTimeout`/`IsFailed` on it.
-  Additive-only; prefer the sentinels over the raw enum.
+- **D4 — `Class` error enum.** Consumers `switch`/`IsTimeout`/`IsFailed`/
+  `IsCanceled` on it. The classes: `ClassUsage` (bad spec), `ClassTimeout`
+  (readiness budget elapsed — `context.DeadlineExceeded`), `ClassFailed`
+  (terminal Failed phase), `ClassInfra` (apiserver/RPC transient), `ClassCanceled`
+  (explicit caller abort — `context.Canceled`, SIGINT/SIGTERM, distinct from a
+  readiness timeout). Additive-only; prefer the sentinels over the raw enum.
 - **D5 — object-label keys** `sei.io/role=node`, `sei.io/seinetwork=<net>`. The
   fleet-wide selector contract shared with seictl, seitask, and chaos selectors.
   Exact values; no new keys.

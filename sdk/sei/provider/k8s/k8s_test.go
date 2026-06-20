@@ -533,3 +533,40 @@ func TestTeardown_Idempotent(t *testing.T) {
 		t.Fatalf("rpc-0 should be deleted, got err=%v", err)
 	}
 }
+
+// TestPoll_ParentCancelIsCanceledNotTimeout proves poll distinguishes an
+// explicit caller abort (context.Canceled -> ClassCanceled) from an elapsed
+// readiness budget (context.DeadlineExceeded -> ClassTimeout): a never-true
+// condition under a canceled parent is an abort, not a timeout.
+func TestPoll_ParentCancelIsCanceledNotTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // explicit abort before the poll runs
+
+	never := func(context.Context) (bool, error) { return false, nil }
+	err := (&Provider{}).poll(ctx, time.Minute, 10*time.Millisecond, never, "SeiNode ns/rpc-0", time.Minute)
+	if err == nil {
+		t.Fatal("poll should fail on a canceled parent context")
+	}
+	if !sei.IsCanceled(err) {
+		t.Fatalf("parent cancel should be ClassCanceled, got %v", err)
+	}
+	if sei.IsTimeout(err) {
+		t.Fatalf("parent cancel must NOT be ClassTimeout, got %v", err)
+	}
+}
+
+// TestPoll_BudgetElapsedIsTimeout is the contrast: a never-true condition whose
+// poll budget elapses (context.DeadlineExceeded) stays ClassTimeout.
+func TestPoll_BudgetElapsedIsTimeout(t *testing.T) {
+	never := func(context.Context) (bool, error) { return false, nil }
+	err := (&Provider{}).poll(context.Background(), 80*time.Millisecond, 10*time.Millisecond, never, "SeiNode ns/rpc-0", 80*time.Millisecond)
+	if err == nil {
+		t.Fatal("poll should fail when the condition never becomes true")
+	}
+	if !sei.IsTimeout(err) {
+		t.Fatalf("elapsed budget should be ClassTimeout, got %v", err)
+	}
+	if sei.IsCanceled(err) {
+		t.Fatalf("elapsed budget must NOT be ClassCanceled, got %v", err)
+	}
+}

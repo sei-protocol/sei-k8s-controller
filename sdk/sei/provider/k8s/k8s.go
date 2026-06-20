@@ -315,10 +315,17 @@ func (p *Provider) poll(ctx context.Context, timeout, interval time.Duration, co
 		return nil
 	}
 	// A structured SDK error from cond (fail-fast on Failed, infra Get error)
-	// passes through unchanged; only a bare wait-timeout is relabeled.
+	// passes through unchanged; only a bare wait error is relabeled.
 	var sdkErr *sei.Error
 	if errors.As(err, &sdkErr) {
 		return err
+	}
+	// PollUntilContextTimeout returns context.Canceled on parent cancel (an
+	// explicit abort) and context.DeadlineExceeded when the poll budget elapses
+	// (a readiness timeout); a harness branches on the two.
+	if errors.Is(err, context.Canceled) {
+		return &sei.Error{Class: sei.ClassCanceled, Resource: resource,
+			Err: fmt.Errorf("aborted while waiting: %w", err)}
 	}
 	return &sei.Error{Class: sei.ClassTimeout, Resource: resource,
 		Err: fmt.Errorf("not ready within %s: %w", budget, err)}

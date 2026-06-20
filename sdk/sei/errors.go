@@ -27,6 +27,12 @@ const (
 	// ClassInfra is an apiserver/network/RPC transient or unexpected fault (the
 	// taskruntime.Infra analogue).
 	ClassInfra
+
+	// ClassCanceled is an explicit caller abort (context.Canceled — SIGINT/
+	// SIGTERM or a caller cancel), distinct from ClassTimeout's elapsed readiness
+	// budget. A chaos harness branches on it: an abort is the operator's choice,
+	// not a node that failed to come ready.
+	ClassCanceled
 )
 
 func (c Class) String() string {
@@ -39,13 +45,16 @@ func (c Class) String() string {
 		return "Failed"
 	case ClassInfra:
 		return "Infra"
+	case ClassCanceled:
+		return "Canceled"
 	default:
 		return fmt.Sprintf("Class(%d)", int(c))
 	}
 }
 
 // Error is the structured SDK error. Consumers branch on Class (via the
-// IsTimeout/IsFailed sentinels) and read Resource/Phase for diagnostics.
+// IsTimeout/IsFailed/IsCanceled sentinels) and read Resource/Phase for
+// diagnostics.
 type Error struct {
 	Class    Class
 	Resource string // "SeiNetwork foo/bar", "SeiNode foo/bar-2"; "" when not resource-scoped
@@ -93,6 +102,13 @@ func IsTimeout(err error) bool {
 func IsFailed(err error) bool {
 	c, ok := classOf(err)
 	return ok && c == ClassFailed
+}
+
+// IsCanceled reports whether err is (or wraps) a ClassCanceled SDK error — an
+// explicit caller abort, distinct from a readiness timeout (IsTimeout).
+func IsCanceled(err error) bool {
+	c, ok := classOf(err)
+	return ok && c == ClassCanceled
 }
 
 // usageErr builds a ClassUsage error not scoped to a resource.

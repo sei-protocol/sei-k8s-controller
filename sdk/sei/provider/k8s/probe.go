@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -64,14 +65,27 @@ type evmRPCResponse struct {
 // .status.endpoint URLs.
 func probeReady(ctx context.Context, hc *http.Client, tmRPC, evmRPC, resource string, timeout, interval time.Duration) error {
 	if err := waitForCaughtUp(ctx, hc, tmRPC, timeout, interval); err != nil {
-		return &sei.Error{Class: sei.ClassTimeout, Resource: resource,
-			Err: fmt.Errorf("TM /status not caught up within %s: %w", timeout, err)}
+		return classifyWaitErr(err, resource,
+			fmt.Sprintf("TM /status not caught up within %s", timeout))
 	}
 	if err := waitForEVMReady(ctx, hc, evmRPC, timeout, interval); err != nil {
-		return &sei.Error{Class: sei.ClassTimeout, Resource: resource,
-			Err: fmt.Errorf("EVM eth_blockNumber not ready within %s: %w", timeout, err)}
+		return classifyWaitErr(err, resource,
+			fmt.Sprintf("EVM eth_blockNumber not ready within %s", timeout))
 	}
 	return nil
+}
+
+// classifyWaitErr maps a terminal wait error onto a Class: a parent cancel
+// (context.Canceled) is an explicit abort (ClassCanceled), while an elapsed
+// poll budget (context.DeadlineExceeded) is a readiness timeout (ClassTimeout).
+// A chaos harness branches on the two outcomes.
+func classifyWaitErr(err error, resource, timeoutMsg string) error {
+	if errors.Is(err, context.Canceled) {
+		return &sei.Error{Class: sei.ClassCanceled, Resource: resource,
+			Err: fmt.Errorf("aborted while waiting: %w", err)}
+	}
+	return &sei.Error{Class: sei.ClassTimeout, Resource: resource,
+		Err: fmt.Errorf("%s: %w", timeoutMsg, err)}
 }
 
 // waitForCaughtUp polls Tendermint /status until height > 1 AND catching_up is

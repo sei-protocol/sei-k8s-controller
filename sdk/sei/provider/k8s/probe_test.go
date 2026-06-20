@@ -152,3 +152,49 @@ func TestProbeReady_EVMGateBlocksOnCaughtUpButUnboundEVM(t *testing.T) {
 		t.Fatal("TM stage was never reached")
 	}
 }
+
+// TestProbeReady_ParentCancelIsCanceledNotTimeout proves a parent-context cancel
+// (an explicit abort) surfaces as ClassCanceled, not ClassTimeout — a chaos
+// harness branches on the two: an abort is the operator's choice, a timeout is a
+// node that failed to come ready.
+func TestProbeReady_ParentCancelIsCanceledNotTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable) // never ready
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // explicit abort before the probe runs
+
+	err := probeReady(ctx, srv.Client(), srv.URL, srv.URL, "SeiNode ns/rpc-0", time.Minute, 20*time.Millisecond)
+	if err == nil {
+		t.Fatal("probeReady should fail on a canceled parent context")
+	}
+	if !sei.IsCanceled(err) {
+		t.Fatalf("parent cancel should be ClassCanceled, got %v", err)
+	}
+	if sei.IsTimeout(err) {
+		t.Fatalf("parent cancel must NOT be ClassTimeout, got %v", err)
+	}
+}
+
+// TestProbeReady_BudgetElapsedIsTimeout is the contrast to the cancel case: when
+// the poll budget elapses (context.DeadlineExceeded) against a never-ready node,
+// the outcome stays ClassTimeout.
+func TestProbeReady_BudgetElapsedIsTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable) // never ready
+	}))
+	defer srv.Close()
+
+	err := probeReady(context.Background(), srv.Client(), srv.URL, srv.URL, "SeiNode ns/rpc-0", 120*time.Millisecond, 20*time.Millisecond)
+	if err == nil {
+		t.Fatal("probeReady should fail when the node never comes ready")
+	}
+	if !sei.IsTimeout(err) {
+		t.Fatalf("elapsed budget should be ClassTimeout, got %v", err)
+	}
+	if sei.IsCanceled(err) {
+		t.Fatalf("elapsed budget must NOT be ClassCanceled, got %v", err)
+	}
+}
