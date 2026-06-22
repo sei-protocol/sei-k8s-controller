@@ -25,6 +25,9 @@ const minCanonicalSyncers = 2
 // the caller's single status patch flushes it. Run before the Failed/Paused
 // early-returns so StateSyncReady is seeded on every path.
 //
+// It resolves for any snapshot-bootstrap node (see planner.needsStateSyncWitnesses
+// for why witnesses are required); a genesis node (snap == nil) is NotApplicable.
+//
 // Fail-closed is enforced downstream: the planner declines to build a state-sync
 // plan whenever StateSyncReady is not True (see ResolvePlan), so this method only
 // resolves the condition. It returns blocked=true whenever state-sync is enabled
@@ -34,11 +37,12 @@ const minCanonicalSyncers = 2
 // and unblocks once GitOps provisions or fixes the syncers.
 func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (blocked bool) {
 	snap := node.Spec.SnapshotSource()
-	if snap == nil || snap.StateSync == nil {
-		// State-sync disabled: no state-sync task in the plan to gate.
+	if snap == nil {
+		// No snapshot source (e.g. genesis validator): no ConfigureStateSync task
+		// in the plan to gate.
 		node.Status.ResolvedStateSyncers = nil
 		setStateSyncReady(node, metav1.ConditionFalse, seiv1alpha1.ReasonStateSyncNotApplicable,
-			"node does not enable state sync")
+			"node does not bootstrap from a snapshot")
 		return false
 	}
 

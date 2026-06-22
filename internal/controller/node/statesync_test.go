@@ -196,32 +196,56 @@ func TestStateSyncGate_UnconfiguredSource_FailsClosed(t *testing.T) {
 	g := NewWithT(t)
 
 	node := stateSyncNode("n", testChainID)
-	r, _ := newNodeReconciler(t, node) // Platform leaves ControllerConfigFile empty.
+	r, _ := newNodeReconciler(t, node)
+	r.Platform.ControllerConfigFile = "" // unconfigured source
 
 	blocked := r.reconcileStateSyncGate(node)
 	g.Expect(blocked).To(BeTrue())
 	g.Expect(stateSyncCondition(node).Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
 }
 
-func TestStateSyncGate_Disabled_NotApplicable(t *testing.T) {
+// An s3-restore node applies its snapshot via CometBFT state-sync
+// (use-local-snapshot), so it ALSO needs canonical rpc-server witnesses to
+// verify the trust point. The gate must resolve syncers for it (Ready when >=2
+// are configured) rather than declaring NotApplicable — the latter left
+// ResolvedStateSyncers nil and the sidecar fell back to unreachable peers.
+func TestStateSyncGate_S3Restore_ResolvesSyncers(t *testing.T) {
 	g := NewWithT(t)
 
-	// S3 snapshot node: state sync not enabled.
-	node := newSnapshotNode("n", testNamespace)
+	node := newSnapshotNode("n", testNamespace) // s3 source, ChainID "sei-test"
 	r, _ := newNodeReconciler(t, node)
-	withSyncers(t, r, map[string][]string{testChainID: {syncerA, syncerB}})
+	withSyncers(t, r, map[string][]string{node.Spec.ChainID: {syncerA, syncerB}})
 
 	blocked := r.reconcileStateSyncGate(node)
 	g.Expect(blocked).To(BeFalse())
 
 	cond := stateSyncCondition(node)
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncReady))
+	g.Expect(node.Status.ResolvedStateSyncers).To(Equal([]string{syncerA, syncerB}))
+}
+
+// An s3-restore node with <2 configured syncers must fail closed — same as a
+// stateSync node. This is the bug being fixed: previously it was NotApplicable
+// and proceeded witness-less.
+func TestStateSyncGate_S3Restore_OneSyncer_FailsClosed(t *testing.T) {
+	g := NewWithT(t)
+
+	node := newSnapshotNode("n", testNamespace)
+	r, _ := newNodeReconciler(t, node)
+	withSyncers(t, r, map[string][]string{node.Spec.ChainID: {syncerSingle}})
+
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeTrue())
+
+	cond := stateSyncCondition(node)
 	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncNotApplicable))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncNoSyncersConfigured))
 	g.Expect(node.Status.ResolvedStateSyncers).To(BeNil())
 }
 
-// A node with no snapshot source at all (e.g. genesis validator) is treated as
-// state-sync-disabled: NotApplicable, never blocks the plan.
+// A node with no snapshot source at all (e.g. genesis validator) carries no
+// ConfigureStateSync task: NotApplicable, never blocks the plan.
 func TestStateSyncGate_NoSnapshotSource_NotApplicable(t *testing.T) {
 	g := NewWithT(t)
 
@@ -248,19 +272,21 @@ func TestStateSyncGate_FailClosedClearsStaleSyncers(t *testing.T) {
 
 	node := stateSyncNode("n", testChainID)
 	node.Status.ResolvedStateSyncers = []string{"old-a:26657", "old-b:26657"}
-	r, _ := newNodeReconciler(t, node) // unconfigured source → fail closed
+	r, _ := newNodeReconciler(t, node)
+	r.Platform.ControllerConfigFile = "" // unconfigured source → fail closed
 
 	blocked := r.reconcileStateSyncGate(node)
 	g.Expect(blocked).To(BeTrue())
 	g.Expect(node.Status.ResolvedStateSyncers).To(BeNil())
 }
 
-// The gate must not block (or even set ResolvedStateSyncers on) a non-state-sync
-// node — regression guard for the full reconcile path.
-func TestStateSyncGate_NonStateSyncNodeUnaffected(t *testing.T) {
+// The gate must not block (or even set ResolvedStateSyncers on) a node that
+// carries no ConfigureStateSync task — a genesis node with no snapshot source.
+// Regression guard for the full reconcile path.
+func TestStateSyncGate_GenesisNodeUnaffected(t *testing.T) {
 	g := NewWithT(t)
 
-	node := newSnapshotNode("n", testNamespace)
+	node := newGenesisNode("n", testNamespace)
 	r, _ := newNodeReconciler(t, node)
 
 	blocked := r.reconcileStateSyncGate(node)
@@ -365,8 +391,8 @@ func TestReconcile_PausedNode_StateSyncReadyStillSeeded(t *testing.T) {
 			wantReason:  seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
 		},
 		{
-			name:        "state-sync disabled",
-			node:        newSnapshotNode("paused-s3", testNamespace),
+			name:        "no snapshot source",
+			node:        newGenesisNode("paused-gen", testNamespace),
 			withSyncers: false,
 			wantReason:  seiv1alpha1.ReasonStateSyncNotApplicable,
 		},

@@ -290,24 +290,28 @@ const (
 	// ConditionSeiNodePaused mirrors spec.paused: True when paused.
 	ConditionSeiNodePaused = "Paused"
 
-	// ConditionStateSyncReady gates the state-sync-bearing plan. Always-present
-	// once reconciled. True means canonical syncers are configured and the plan
-	// may proceed; False fails closed (no state-sync plan built, and peers are
-	// never used as witnesses). It is a configured-count gate: witness
-	// reliability comes from curating the canonical-syncer set, and the sidecar
-	// establishes the trust point from them as it does today.
+	// ConditionStateSyncReady gates the ConfigureStateSync-bearing plan, which is
+	// built for any snapshot bootstrap (stateSync or s3 — both apply via CometBFT
+	// state-sync and need rpc-server witnesses). Always-present once reconciled.
+	// True means canonical syncers are configured and the plan may proceed; False
+	// fails closed (no such plan built, and peers are never used as witnesses). It
+	// is a configured-count gate: witness reliability comes from curating the
+	// canonical-syncer set, and the sidecar establishes the trust point from them
+	// as it does today.
 	ConditionStateSyncReady = "StateSyncReady"
 )
 
 // Reasons for the StateSyncReady condition.
 const (
-	// ReasonStateSyncReady: state-sync enabled and >=2 canonical syncers are
-	// configured for the chain; the state-sync-bearing plan may proceed.
+	// ReasonStateSyncReady: the node bootstraps from a snapshot (stateSync or s3)
+	// and >=2 canonical syncers are configured for the chain; the
+	// ConfigureStateSync-bearing plan may proceed.
 	ReasonStateSyncReady = "Ready"
-	// ReasonStateSyncNoSyncersConfigured: state-sync enabled but the canonical-
-	// syncer source yields <2 entries for the chain (fail closed).
+	// ReasonStateSyncNoSyncersConfigured: the node bootstraps from a snapshot but
+	// the canonical-syncer source yields <2 entries for the chain (fail closed).
 	ReasonStateSyncNoSyncersConfigured = "NoSyncersConfigured"
-	// ReasonStateSyncNotApplicable: the node does not enable state-sync.
+	// ReasonStateSyncNotApplicable: the node does not bootstrap from a snapshot
+	// (e.g. a genesis node), so it carries no ConfigureStateSync task to gate.
 	ReasonStateSyncNotApplicable = "NotApplicable"
 	// ReasonStateSyncSyncerSourceError: reading or parsing the canonical-syncer
 	// source file failed for a reason other than absence (transient). Fails

@@ -94,6 +94,13 @@
 //   - Conditions are always-present: condition state is expressed as
 //     True/False/Unknown with a stable Reason, never by removal (see
 //     CLAUDE.md "Conditions"). isConditionTrue asserts on Status, not presence.
+//   - State-sync witnesses gate every snapshot bootstrap: needsStateSyncWitnesses
+//     (snap != nil) drives both the ConfigureStateSync task insertion
+//     (buildSidecarProgression) and the fail-closed plan blocker
+//     (stateSyncBlocksPlan), so a node bootstrapping from a snapshot — s3 or
+//     stateSync — can never plan ConfigureStateSync without >=2 resolved
+//     canonical-syncer witnesses. Genesis (snap == nil) carries no such task.
+//     Guarded by TestStateSyncGate_S3Restore_OneSyncer_FailsClosed.
 //
 // # Zero-Value & Sentinel Semantics
 //

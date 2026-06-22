@@ -186,17 +186,19 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 // stateSyncBlocksPlan reports whether the fail-closed state-sync gate must
 // suppress plan construction this reconcile. It fires only on the init path
-// (pre-Running), which is the only path that builds a state-sync-bearing plan
-// via buildSidecarProgression — a Running node's update plans carry no
+// (pre-Running), which is the only path that builds a ConfigureStateSync-bearing
+// plan via buildSidecarProgression — a Running node's update plans carry no
 // state-sync task, so an image roll must not be blocked by a syncer-source
-// blip. The gate trips when state-sync is enabled and the controller-resolved
-// StateSyncReady condition is not True (NoSyncersConfigured or the transient
-// SyncerSourceError). A missing condition (not yet resolved) does not gate.
+// blip. The gate trips when the node carries a ConfigureStateSync task (any
+// snapshot source — both stateSync and s3-restore apply via CometBFT state-sync
+// and need rpc-server witnesses) and the controller-resolved StateSyncReady
+// condition is not True (NoSyncersConfigured or the transient SyncerSourceError).
+// A missing condition (not yet resolved) does not gate.
 func stateSyncBlocksPlan(node *seiv1alpha1.SeiNode) bool {
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return false
 	}
-	if !hasStateSync(node.Spec.SnapshotSource()) {
+	if !needsStateSyncWitnesses(node.Spec.SnapshotSource()) {
 		return false
 	}
 	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionStateSyncReady)
@@ -342,7 +344,7 @@ func buildSidecarProgression(snap *seiv1alpha1.SnapshotSource) ([]string, error)
 	if prog, err = insertBefore(prog, TaskConfigApply, TaskConfigureGenesis); err != nil {
 		return nil, err
 	}
-	if snap != nil {
+	if needsStateSyncWitnesses(snap) {
 		if prog, err = insertBefore(prog, TaskConfigValidate, TaskConfigureStateSync); err != nil {
 			return nil, err
 		}
@@ -475,6 +477,21 @@ func hasS3Snapshot(snap *seiv1alpha1.SnapshotSource) bool {
 
 func hasStateSync(snap *seiv1alpha1.SnapshotSource) bool {
 	return snap != nil && snap.StateSync != nil
+}
+
+// needsStateSyncWitnesses reports whether the node's plan carries a
+// ConfigureStateSync task and therefore requires canonical rpc-server witnesses.
+// Both bootstrap-from-snapshot modes apply the snapshot through CometBFT
+// state-sync — stateSync fetches chunks from peers; s3 stages a snapshot under
+// data/snapshots and applies it with use-local-snapshot=true — and both verify
+// the trust point against >=2 reachable rpc-servers. A genesis node
+// (snap == nil) carries no such task and needs no witnesses.
+//
+// This is the single predicate behind both the ConfigureStateSync insertion
+// (buildSidecarProgression) and the fail-closed gate (stateSyncBlocksPlan),
+// keeping plan-insertion and witness-resolution in lockstep.
+func needsStateSyncWitnesses(snap *seiv1alpha1.SnapshotSource) bool {
+	return snap != nil
 }
 
 func bootstrapMode(snap *seiv1alpha1.SnapshotSource) string {
