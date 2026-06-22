@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func init() { ProbeInterval = 5 * time.Millisecond } // keep readiness tests fast
+func init() { probeInterval = 5 * time.Millisecond } // keep readiness tests fast
 
 func TestWaitCaughtUp_GatesOnHeightAndCatchingUp(t *testing.T) {
 	// Server: catching_up=true for the first 2 polls, then caught up at height 5.

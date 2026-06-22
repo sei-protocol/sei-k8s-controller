@@ -95,11 +95,12 @@ type Params struct {
 	// RunningTimeout bounds the wait for all N SeiNodes to reach PhaseRunning.
 	RunningTimeout time.Duration
 
-	// FirstBlockTimeout bounds the post-Running readiness probe (both the TM
-	// height>0 stage and the EVM eth_blockNumber stage), per node.
+	// FirstBlockTimeout bounds the post-Running readiness probe (the TM caught-up
+	// stage and the EVM eth_blockNumber stage), per node.
 	FirstBlockTimeout time.Duration
 
-	// PollInterval is the interval between status reads and RPC reads.
+	// PollInterval is the interval between SeiNode status reads (waitForRunning).
+	// The readiness RPC probes are paced by the SDK's own cadence.
 	PollInterval time.Duration
 
 	// HTTPClient overrides the RPC client; nil means http.DefaultClient.

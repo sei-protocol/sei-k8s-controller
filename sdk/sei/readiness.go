@@ -18,8 +18,9 @@ import (
 // harnesses all share one implementation. Kept stdlib-only (no apimachinery) so
 // the core package stays dependency-free for lightweight external consumers.
 
-// ProbeInterval is the readiness poll cadence. A var so tests can shrink it.
-var ProbeInterval = 2 * time.Second
+// probeInterval is the readiness poll cadence; a var so tests can shrink it
+// (matching provider/k8s/probe.go's unexported probeInterval).
+var probeInterval = 2 * time.Second
 
 // tendermintStatus models just enough of CometBFT /status to gate readiness. The
 // Sei fork sometimes returns the body unwrapped (no JSON-RPC envelope), so both
@@ -90,10 +91,10 @@ func WaitEVMServing(ctx context.Context, hc *http.Client, evmRPC string) error {
 	})
 }
 
-// pollUntil ticks done() every ProbeInterval until it returns true or ctx fires,
+// pollUntil ticks done() every probeInterval until it returns true or ctx fires,
 // running once immediately. A stdlib poll loop — no apimachinery in core.
 func pollUntil(ctx context.Context, what string, done func(context.Context) bool) error {
-	tick := time.NewTicker(ProbeInterval)
+	tick := time.NewTicker(probeInterval)
 	defer tick.Stop()
 	for {
 		if done(ctx) {
