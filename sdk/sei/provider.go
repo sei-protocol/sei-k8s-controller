@@ -97,3 +97,7 @@ func registeredNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// RegisteredProviders returns the names providers have registered under, sorted —
+// the public mirror of sql.Drivers().
+func RegisteredProviders() []string { return registeredNames() }
