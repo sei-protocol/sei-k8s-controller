@@ -35,11 +35,13 @@ import (
 	_ "github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider/k8s"
 )
 
-// runLabelKey is stamped on every resource a suite creates (network, nodes,
-// and — in chaos scenarios — fault CRs and the seiload Job) so the nightly
-// label-GC can reap an abnormally-exited run. Under the shared-namespace model
-// (decision D2) this label sweep is the SOLE abnormal-exit reaper; t.Cleanup
-// teardown is only the normal-exit fast path, and does not run on SIGKILL.
+// runLabelKey identifies a run's resources for the nightly label-GC sweep — the
+// SOLE abnormal-exit reaper under the shared-namespace model (D2), since
+// t.Cleanup does NOT run on SIGKILL or a -test.timeout breach. provision stamps
+// it (via the SDK NetworkSpec/NodeSpec Labels) on the network + every node; the
+// seiload Job and fault CRs a suite applies directly must stamp it too (load /
+// chaos increments). The sweep must be proven against an orphaned run before the
+// Workflow ownerRef cascade is removed (WS-I step 2).
 const runLabelKey = "sei.io/harness-run"
 
 // spec is the typed input shared by the suites — the local-Go-state replacement
@@ -85,14 +87,20 @@ func rpcNodeName(chainID string, ordinal int) string {
 // to Running + caught-up + EVM-serving before returning. The returned chain is
 // non-nil even on error so the caller can still tear down whatever was created
 // (pair every provision with a t.Cleanup(teardown)).
-func provision(ctx context.Context, c *sei.Client, s spec) (*chain, error) {
+func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain, error) {
+	t.Helper()
 	ch := &chain{}
+
+	// Stamped on the network + every node so the label-GC sweep can reap this
+	// run's resources on an abnormal exit t.Cleanup can't cover.
+	runLabels := map[string]string{runLabelKey: s.runID}
 
 	net, err := c.CreateNetwork(ctx, sei.NetworkSpec{
 		Name:       s.chainID,
 		Namespace:  s.namespace,
 		Image:      s.seidImage,
 		Validators: s.validators,
+		Labels:     runLabels,
 	})
 	if err != nil {
 		return ch, fmt.Errorf("create network %q: %w", s.chainID, err)
@@ -101,30 +109,37 @@ func provision(ctx context.Context, c *sei.Client, s spec) (*chain, error) {
 	if err := net.WaitReady(ctx); err != nil {
 		return ch, fmt.Errorf("network %q ready: %w", s.chainID, err)
 	}
+	t.Logf("network %s: ready", s.chainID)
 
 	hc := &http.Client{Timeout: 10 * time.Second}
-	for i := 0; i < s.rpcNodes; i++ {
+	for i := range s.rpcNodes {
 		name := rpcNodeName(s.chainID, i)
 		node, err := c.CreateNode(ctx, sei.NodeSpec{
 			Name:      name,
 			Network:   s.chainID,
 			Namespace: s.namespace,
 			Image:     s.seidImage,
+			Labels:    runLabels,
 		})
 		if err != nil {
 			return ch, fmt.Errorf("create rpc node %q: %w", name, err)
 		}
 		ch.rpcNodes = append(ch.rpcNodes, node)
 
+		// Per-gate progress so a stall is localizable in real time from the pod
+		// log (which node, which gate) rather than a single terminal error.
 		if err := node.WaitReady(ctx); err != nil {
 			return ch, fmt.Errorf("rpc node %q running: %w", name, err)
 		}
+		t.Logf("rpc node %s: running", name)
 		if err := sei.WaitCaughtUp(ctx, hc, node.TendermintRPC()); err != nil {
 			return ch, fmt.Errorf("rpc node %q caught up: %w", name, err)
 		}
+		t.Logf("rpc node %s: caught up", name)
 		if err := sei.WaitEVMServing(ctx, hc, node.EVMRPC()); err != nil {
 			return ch, fmt.Errorf("rpc node %q EVM serving: %w", name, err)
 		}
+		t.Logf("rpc node %s: EVM serving", name)
 	}
 	return ch, nil
 }
@@ -186,8 +201,8 @@ func openClient(ctx context.Context, t *testing.T) *sei.Client {
 	return c
 }
 
-// env returns the env var or a fallback (for local runs).
-func env(key, fallback string) string {
+// envOr returns the env var or a fallback (for local runs).
+func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}

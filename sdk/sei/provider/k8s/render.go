@@ -20,8 +20,9 @@ const fieldOwner client.FieldOwner = sei.FieldOwner
 // renderNetwork builds the SeiNetwork from a NetworkSpec. ChainID is not a spec
 // field: it defaults to Name (chain ID == network name) and maps to
 // spec.genesis.chainId. Genesis maps to spec.genesis.overrides; Config maps to
-// spec.configOverrides. The network object is NOT label-stamped — nodes match on
-// its name, not a label on it.
+// spec.configOverrides. Nodes peer by the network's name, not a label on it, so
+// the object carries no canonical labels — but spec.Labels (e.g. a caller GC
+// selector) are stamped when provided.
 func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwork {
 	net := &seiv1alpha1.SeiNetwork{
 		TypeMeta: metav1.TypeMeta{
@@ -31,6 +32,7 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      spec.Name,
 			Namespace: namespace,
+			Labels:    maps.Clone(spec.Labels), // nil-safe; caller GC/run-id selector
 		},
 		Spec: seiv1alpha1.SeiNetworkSpec{
 			Image:    spec.Image,
@@ -66,6 +68,16 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 // the peer selector searches networkNS, where the genesis validators live (equal
 // to namespace when co-located). ChainID defaults to spec.Network.
 func renderNode(spec sei.NodeSpec, namespace, networkNS string) *seiv1alpha1.SeiNode {
+	// Caller labels first, then the canonical labels on top — the canonical
+	// sei.io/role + sei.io/seinetwork are load-bearing (peer wiring, chaos
+	// selectors) and must win on any key collision.
+	labels := maps.Clone(spec.Labels)
+	if labels == nil {
+		labels = make(map[string]string, 2)
+	}
+	labels[sei.LabelRole] = sei.RoleNode
+	labels[sei.LabelSeiNetwork] = spec.Network
+
 	node := &seiv1alpha1.SeiNode{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: seiv1alpha1.GroupVersion.String(),
@@ -74,10 +86,7 @@ func renderNode(spec sei.NodeSpec, namespace, networkNS string) *seiv1alpha1.Sei
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      spec.Name,
 			Namespace: namespace,
-			Labels: map[string]string{
-				sei.LabelRole:       sei.RoleNode,
-				sei.LabelSeiNetwork: spec.Network,
-			},
+			Labels:    labels,
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID:  spec.Network,

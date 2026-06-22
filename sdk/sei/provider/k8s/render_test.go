@@ -12,6 +12,7 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 		Genesis:  map[string]string{"staking.params.unbonding_time": "60s"},
 		Config:   map[string]string{"app.pruning": "nothing"},
 		Accounts: []sei.GenesisAccount{{Address: "sei1abc", Balance: "100usei"}},
+		Labels:   map[string]string{"sei.io/harness-run": "run-xyz"},
 	}
 	net := renderNetwork(spec, testNS)
 
@@ -34,7 +35,11 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	if len(net.Spec.Genesis.Accounts) != 1 || net.Spec.Genesis.Accounts[0].Address != "sei1abc" {
 		t.Errorf("genesis accounts = %+v", net.Spec.Genesis.Accounts)
 	}
-	// The network object is NOT label-stamped (nodes match on its name).
+	// The network carries caller labels (e.g. a GC/run-id selector) but NOT the
+	// canonical sei.io/seinetwork (nodes peer by its name, not a label on it).
+	if got := net.Labels["sei.io/harness-run"]; got != "run-xyz" {
+		t.Errorf("caller label sei.io/harness-run = %q, want run-xyz", got)
+	}
 	if _, ok := net.Labels[sei.LabelSeiNetwork]; ok {
 		t.Errorf("network object must not carry sei.io/seinetwork label")
 	}
@@ -76,6 +81,29 @@ func TestRenderNode_LabelsAndPeerWiring(t *testing.T) {
 	}
 	if node.Spec.ChainID != testNet {
 		t.Errorf("chainId = %q, want %q (defaults to Network)", node.Spec.ChainID, testNet)
+	}
+}
+
+func TestRenderNode_CallerLabelsMergeUnderCanonical(t *testing.T) {
+	spec := sei.NodeSpec{
+		Name: rpc0Name, Network: testNet, Image: testImage,
+		Labels: map[string]string{
+			"sei.io/harness-run": "run-xyz",   // caller GC selector — must land
+			sei.LabelRole:        "validator", // collides with canonical — must NOT win
+		},
+	}
+	node := renderNode(spec, testNS, testNS)
+
+	if got := node.Labels["sei.io/harness-run"]; got != "run-xyz" {
+		t.Errorf("caller label sei.io/harness-run = %q, want run-xyz", got)
+	}
+	// Canonical labels are load-bearing (peer wiring, chaos selectors) and win
+	// on any key collision with caller labels.
+	if got := node.Labels[sei.LabelRole]; got != sei.RoleNode {
+		t.Errorf("canonical %s = %q, want %q (must override caller)", sei.LabelRole, got, sei.RoleNode)
+	}
+	if got := node.Labels[sei.LabelSeiNetwork]; got != testNet {
+		t.Errorf("canonical %s = %q, want %s", sei.LabelSeiNetwork, got, testNet)
 	}
 }
 
