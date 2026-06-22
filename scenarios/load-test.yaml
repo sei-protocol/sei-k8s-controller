@@ -77,20 +77,29 @@ spec:
                   fieldPath: metadata.namespace
 
     - name: provision-rpc-fleet
+      # 42m covers worst-case sequential readiness: running-timeout 18m +
+      # N×(WaitCaughtUp + WaitEVMServing) at first-block-timeout 5m each
+      # (N=2 → 18m + 4×5m = 38m), plus 4m headroom. The Chaos-Mesh deadline
+      # clock starts at Task admission, so the headroom must also absorb pod
+      # scheduling + a cold $SEITASK_IMAGE pull (both outside the inner 38m) —
+      # else a slow-but-genuine readiness is killed opaquely before its typed
+      # exit lands, inverting the very invariant this budget protects.
       templateType: Task
-      deadline: 25m
+      deadline: 42m
       task:
         container:
           name: seitask
           image: $SEITASK_IMAGE
           args:
-            - provision-snd
+            - provision-node                     # rpc followers are standalone SeiNodes, not a SeiNetwork
             - --role=rpc
-            - --name=$SEI_CHAIN_ID-rpc
+            - --name=$SEI_CHAIN_ID-rpc           # BASE name; followers are <base>-0..N-1
+            - --replicas=2                       # seiload drives all N via RPC_EVM_RPC_LIST
+            - --network=$SEI_CHAIN_ID            # peer auto-wire to the genesis SeiNetwork (sei.io/seinetwork=<chain>)
             - --template=/scenarios/load-test/rpc.yaml.tmpl
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=IMAGE=$SEID_IMAGE
-            - --ready-timeout=18m
+            - --running-timeout=18m              # was --ready-timeout; SeiNode has no Ready phase (default --first-block-timeout=5m)
           env:
             - name: SEI_WORKFLOW_NAME
               valueFrom:
@@ -101,13 +110,11 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
 
-    # PodReady != caught up. SeiNetwork phase=Ready means the controller's
-    # reconciliation finished; seid may still be applying historical
-    # blocks behind a Ready RPC pod. Poll Tendermint /status until
-    # catching_up=false before pointing seiload at the fleet. Hits the
-    # aggregate RPC_TM_RPC URL (load-balanced across the fleet); jq's
-    # `.result // .` handles Sei CometBFT's envelope-or-bare shape
-    # tolerance (matches provision-snd's waitForFirstBlock parser).
+    # Redundant secondary gate: provision-node already waited every follower
+    # caught-up (height>1 && catching_up==false) before publishing endpoints —
+    # this re-confirms node-0 (RPC_TM_RPC is node-0's URL, not an aggregate) once
+    # more right before pointing seiload at the fleet. The sed extract tolerates
+    # Sei CometBFT's envelope-or-bare /status shape.
     - name: wait-rpc-caught-up
       templateType: Task
       deadline: 10m
@@ -138,7 +145,7 @@ spec:
     # Sed-substitute the source profile (mounted via volume from the
     # seiload-profiles CM in this namespace) and create the per-run
     # rendered ConfigMap with an ownerRef to the parent Workflow.
-    # $RPC_EVM_RPC_LIST is published by provision-snd as comma-
+    # $RPC_EVM_RPC_LIST is published by provision-node as comma-
     # separated bare URLs; the profile expects `[...]` with JSON-quoted
     # entries, so we quote+join here.
     - name: render-seiload-profile
