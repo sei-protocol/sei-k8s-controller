@@ -44,6 +44,14 @@ via blank import (`_ ".../sdk/sei/provider/k8s"`).
 NOT a `catching_up`+EVM consensus gate. Bound by the caller's `ctx` — there are no
 timeout spec fields; `sei.IsTimeout(err)` reports a deadline.
 
+**`WaitCaughtUp` / `WaitEVMServing` = STRICT readiness** (`readiness.go`). The
+caught-up gate (TM `/status`: `height>1 && catching_up==false`) and the EVM serve
+gate (`eth_blockNumber` bound) — the heavier contract `WaitReady` deliberately is
+not. URL-based and stdlib-only (no apimachinery), so seictl, the seitask Task
+steps, and external integration harnesses share one readiness implementation
+instead of bespoke bash. Inputs (endpoint URLs) come from whatever produced the
+resource — e.g. the CLI create command's stdout.
+
 **Caller owns lifecycle.** `Delete` is caller-invoked and idempotent (a not-found
 is success). The SDK never auto-deletes — including on a failed `WaitReady`.
 
@@ -53,8 +61,9 @@ k8s type off the mode-agnostic surface; local/docker stubs return nil.
 
 ## Source of truth
 
-This package is the **canonical** home for the readiness serve-probe
-(`provider/k8s/probe.go`) and the label / peer-wiring constants (`labels.go`).
+This package is the **canonical** home for the readiness serve-probes
+(`provider/k8s/probe.go` = light `WaitReady`; `readiness.go` = strict
+`WaitCaughtUp`/`WaitEVMServing`) and the label / peer-wiring constants (`labels.go`).
 The controller's equivalents are `internal/`-trapped and unimportable, so the SDK
 authors them once.
 

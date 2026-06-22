@@ -341,65 +341,8 @@ func TestWaitForRunning(t *testing.T) {
 
 // --- readiness probe (stage 2 TM, stage 3 EVM) ----------------------------
 
-func TestTendermintStatusResponse_LatestHeight(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		want string
-	}{
-		{"jsonrpc envelope", `{"result":{"sync_info":{"latest_block_height":"42"}}}`, "42"},
-		{"bare", `{"sync_info":{"latest_block_height":"7"}}`, "7"},
-		{"empty", `{}`, ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var r tendermintStatusResponse
-			if err := json.Unmarshal([]byte(tc.body), &r); err != nil {
-				t.Fatal(err)
-			}
-			if got := r.latestHeight(); got != tc.want {
-				t.Fatalf("got %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestWaitForFirstBlock_HeightGtZero(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			tmSyncInfoField: map[string]any{tmHeightField: "5"},
-		})
-	}))
-	defer srv.Close()
-	if err := waitForFirstBlock(context.Background(), srv.Client(), srv.URL, time.Second, 10*time.Millisecond); err != nil {
-		t.Fatalf("waitForFirstBlock: %v", err)
-	}
-}
-
-func TestWaitForEVMReady_BoundListener(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": "0x10"})
-	}))
-	defer srv.Close()
-	if err := waitForEVMReady(context.Background(), srv.Client(), srv.URL, time.Second, 10*time.Millisecond); err != nil {
-		t.Fatalf("waitForEVMReady: %v", err)
-	}
-}
-
-func TestWaitForEVMReady_NotBound_InfraFailsAfterTimeout(t *testing.T) {
-	// 503 == listener not yet up; must keep polling, then infra-fail.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-	err := waitForEVMReady(context.Background(), srv.Client(), srv.URL, 150*time.Millisecond, 20*time.Millisecond)
-	if err == nil {
-		t.Fatalf("expected infra-fail on never-bound EVM listener")
-	}
-	if taskruntime.ExitCodeFor(err) != taskruntime.ExitInfraError {
-		t.Fatalf("EVM-not-ready should be infra-class, got exit code %d", taskruntime.ExitCodeFor(err))
-	}
-}
+// Readiness probes (TM caught-up, EVM serving) moved to the SDK
+// (sdk/sei/readiness_test.go); the Run-level tests below exercise them in situ.
 
 // TestRun_PublishBlockedWhileEVMDialFails is the finding-2 gate: TM reports
 // height>0 but the EVM listener never binds, so publish must NOT proceed and

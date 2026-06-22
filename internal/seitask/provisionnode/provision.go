@@ -22,7 +22,6 @@ package provisionnode
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
@@ -42,6 +41,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/taskruntime"
+	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
 const fieldOwner client.FieldOwner = "seitask-provision-node"
@@ -95,11 +95,12 @@ type Params struct {
 	// RunningTimeout bounds the wait for all N SeiNodes to reach PhaseRunning.
 	RunningTimeout time.Duration
 
-	// FirstBlockTimeout bounds the post-Running readiness probe (both the TM
-	// height>0 stage and the EVM eth_blockNumber stage), per node.
+	// FirstBlockTimeout bounds the post-Running readiness probe (the TM caught-up
+	// stage and the EVM eth_blockNumber stage), per node.
 	FirstBlockTimeout time.Duration
 
-	// PollInterval is the interval between status reads and RPC reads.
+	// PollInterval is the interval between SeiNode status reads (waitForRunning).
+	// The readiness RPC probes are paced by the SDK's own cadence.
 	PollInterval time.Duration
 
 	// HTTPClient overrides the RPC client; nil means http.DefaultClient.
@@ -169,16 +170,17 @@ func Run(ctx context.Context, c client.Client, p Params) (Result, error) {
 		if ep == nil || ep.TendermintRpc == "" {
 			return Result{}, taskruntime.Infra(fmt.Errorf("SeiNode %s Running but .status.endpoint.tendermintRpc empty", name))
 		}
-		// Stage 2 — TM liveness: the node has joined the chain and is syncing.
-		if err := waitForFirstBlock(ctx, httpClient, ep.TendermintRpc, p.FirstBlockTimeout, p.PollInterval); err != nil {
+		// Stage 2 — TM readiness: the follower has joined consensus and is caught
+		// up (height>1 && catching_up==false), via the SDK's shared primitive.
+		if err := waitReady(ctx, httpClient, sei.WaitCaughtUp, ep.TendermintRpc, name, p.FirstBlockTimeout); err != nil {
 			return Result{}, err
 		}
-		// Stage 3 — EVM liveness: the JSON-RPC listener is bound before its
-		// URL enters RPC_EVM_RPC_LIST. height>0 on TM does NOT prove this.
+		// Stage 3 — EVM readiness: the JSON-RPC listener is bound before its URL
+		// enters RPC_EVM_RPC_LIST. A caught-up TM does NOT prove the EVM listener serves.
 		if ep.EvmJsonRpc == "" {
 			return Result{}, taskruntime.Infra(fmt.Errorf("SeiNode %s Running but .status.endpoint.evmJsonRpc empty", name))
 		}
-		if err := waitForEVMReady(ctx, httpClient, ep.EvmJsonRpc, p.FirstBlockTimeout, p.PollInterval); err != nil {
+		if err := waitReady(ctx, httpClient, sei.WaitEVMServing, ep.EvmJsonRpc, name, p.FirstBlockTimeout); err != nil {
 			return Result{}, err
 		}
 		nodes = append(nodes, node)
@@ -345,97 +347,15 @@ func waitForRunning(ctx context.Context, c client.Client, ns string, names []str
 	})
 }
 
-// tendermintStatusResponse models the subset of Tendermint /status we need.
-// Sei's CometBFT fork sometimes returns the body unwrapped (no JSON-RPC
-// envelope), so we accept both shapes and fall back via Result/SyncInfo.
-type tendermintStatusResponse struct {
-	Result *struct {
-		SyncInfo struct {
-			LatestBlockHeight string `json:"latest_block_height"`
-		} `json:"sync_info"`
-	} `json:"result,omitempty"`
-	SyncInfo struct {
-		LatestBlockHeight string `json:"latest_block_height"`
-	} `json:"sync_info"`
-}
-
-func (r *tendermintStatusResponse) latestHeight() string {
-	if r.Result != nil && r.Result.SyncInfo.LatestBlockHeight != "" {
-		return r.Result.SyncInfo.LatestBlockHeight
-	}
-	return r.SyncInfo.LatestBlockHeight
-}
-
-// waitForFirstBlock polls a Tendermint /status until latest_block_height > 0,
-// gating a follower's TM liveness (the node has joined and is syncing).
-func waitForFirstBlock(ctx context.Context, hc *http.Client, tmRPC string, timeout, interval time.Duration) error {
-	return wait.PollUntilContextTimeout(ctx, interval, timeout, true, func(ctx context.Context) (bool, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, tmRPC+"/status", nil)
-		if err != nil {
-			return false, taskruntime.Infra(fmt.Errorf("status req: %w", err))
-		}
-		resp, err := hc.Do(req)
-		if err != nil {
-			return false, nil
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusOK {
-			return false, nil
-		}
-		var parsed tendermintStatusResponse
-		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-			return false, nil
-		}
-		h := parsed.latestHeight()
-		if h == "" || h == "0" {
-			return false, nil
-		}
-		return true, nil
-	})
-}
-
-// evmRPCResponse models a JSON-RPC envelope with a string result, used to
-// confirm eth_blockNumber returned a well-formed reply.
-type evmRPCResponse struct {
-	Result string `json:"result"`
-	Error  *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
-// waitForEVMReady POSTs eth_blockNumber to the node's EVM JSON-RPC URL and
-// requires HTTP 200 plus a non-empty, error-free result. This is the gate
-// (§5.2 stage 3) that proves the EVM listener is BOUND before its URL enters
-// RPC_EVM_RPC_LIST — TM height>0 does not prove the EVM listener accepts
-// connections (WS-A0: .status.endpoint is discoverability, not serve-readiness).
-// Non-200 / connection-refused (listener not yet up) keeps polling until the
-// timeout, then infra-fails.
-func waitForEVMReady(ctx context.Context, hc *http.Client, evmRPC string, timeout, interval time.Duration) error {
-	const body = `{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}`
-	if err := wait.PollUntilContextTimeout(ctx, interval, timeout, true, func(ctx context.Context) (bool, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, evmRPC, strings.NewReader(body))
-		if err != nil {
-			return false, taskruntime.Infra(fmt.Errorf("eth_blockNumber req: %w", err))
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := hc.Do(req)
-		if err != nil {
-			return false, nil
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusOK {
-			return false, nil
-		}
-		var parsed evmRPCResponse
-		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-			return false, nil
-		}
-		if parsed.Error != nil || parsed.Result == "" {
-			return false, nil
-		}
-		return true, nil
-	}); err != nil {
-		return taskruntime.Infra(fmt.Errorf("EVM JSON-RPC %s not ready within %s: %w", evmRPC, timeout, err))
+// waitReady runs an SDK readiness probe under a per-node deadline, mapping a
+// failure into the workflow's Infra error class. The probe logic (TM caught-up,
+// EVM serving) is the SDK's shared primitive — provisionnode no longer carries
+// its own copy.
+func waitReady(ctx context.Context, hc *http.Client, probe func(context.Context, *http.Client, string) error, url, node string, timeout time.Duration) error {
+	wctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := probe(wctx, hc, url); err != nil {
+		return taskruntime.Infra(fmt.Errorf("SeiNode %s: %w", node, err))
 	}
 	return nil
 }
