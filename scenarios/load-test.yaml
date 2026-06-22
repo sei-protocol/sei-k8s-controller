@@ -77,12 +77,15 @@ spec:
                   fieldPath: metadata.namespace
 
     - name: provision-rpc-fleet
-      # 40m covers worst-case sequential readiness: running-timeout 18m +
+      # 42m covers worst-case sequential readiness: running-timeout 18m +
       # N×(WaitCaughtUp + WaitEVMServing) at first-block-timeout 5m each
-      # (N=2 → 18m + 4×5m = 38m). Keeps provision-node's typed exit ahead of
-      # the Chaos-Mesh deadline kill so real faults surface as typed errors.
+      # (N=2 → 18m + 4×5m = 38m), plus 4m headroom. The Chaos-Mesh deadline
+      # clock starts at Task admission, so the headroom must also absorb pod
+      # scheduling + a cold $SEITASK_IMAGE pull (both outside the inner 38m) —
+      # else a slow-but-genuine readiness is killed opaquely before its typed
+      # exit lands, inverting the very invariant this budget protects.
       templateType: Task
-      deadline: 40m
+      deadline: 42m
       task:
         container:
           name: seitask

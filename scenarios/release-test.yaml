@@ -100,12 +100,15 @@ spec:
                 name: workflow-vars-release-test-$SEI_WORKFLOW_RUN_ID
 
     - name: provision-rpc-fleet
-      # 30m covers worst-case sequential readiness: running-timeout 18m +
+      # 32m covers worst-case sequential readiness: running-timeout 18m +
       # WaitCaughtUp + WaitEVMServing at first-block-timeout 5m each
-      # (N=1 → 18m + 2×5m = 28m). Keeps provision-node's typed exit ahead of
-      # the Chaos-Mesh deadline kill so real faults surface as typed errors.
+      # (N=1 → 18m + 2×5m = 28m), plus 4m headroom. The Chaos-Mesh deadline
+      # clock starts at Task admission, so the headroom must also absorb pod
+      # scheduling + a cold $SEITASK_IMAGE pull (both outside the inner 28m) —
+      # else a slow-but-genuine readiness is killed opaquely before its typed
+      # exit lands, inverting the very invariant this budget protects.
       templateType: Task
-      deadline: 30m
+      deadline: 32m
       task:
         container:
           name: seitask
