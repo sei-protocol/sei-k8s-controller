@@ -12,7 +12,7 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 		Genesis:  map[string]string{"staking.params.unbonding_time": "60s"},
 		Config:   map[string]string{"app.pruning": "nothing"},
 		Accounts: []sei.GenesisAccount{{Address: "sei1abc", Balance: "100usei"}},
-		Labels:   map[string]string{"sei.io/harness-run": "run-xyz"},
+		Labels:   map[string]string{testRunLabel: testRunID},
 	}
 	net := renderNetwork(spec, testNS)
 
@@ -37,8 +37,8 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	}
 	// The network carries caller labels (e.g. a GC/run-id selector) but NOT the
 	// canonical sei.io/seinetwork (nodes peer by its name, not a label on it).
-	if got := net.Labels["sei.io/harness-run"]; got != "run-xyz" {
-		t.Errorf("caller label sei.io/harness-run = %q, want run-xyz", got)
+	if got := net.Labels[testRunLabel]; got != testRunID {
+		t.Errorf("caller label sei.io/harness-run = %q, want run-xyz (testRunID)", got)
 	}
 	if _, ok := net.Labels[sei.LabelSeiNetwork]; ok {
 		t.Errorf("network object must not carry sei.io/seinetwork label")
@@ -88,14 +88,14 @@ func TestRenderNode_CallerLabelsMergeUnderCanonical(t *testing.T) {
 	spec := sei.NodeSpec{
 		Name: rpc0Name, Network: testNet, Image: testImage,
 		Labels: map[string]string{
-			"sei.io/harness-run": "run-xyz",   // caller GC selector — must land
-			sei.LabelRole:        "validator", // collides with canonical — must NOT win
+			testRunLabel:  testRunID,   // caller GC selector — must land
+			sei.LabelRole: "validator", // collides with canonical — must NOT win
 		},
 	}
 	node := renderNode(spec, testNS, testNS)
 
-	if got := node.Labels["sei.io/harness-run"]; got != "run-xyz" {
-		t.Errorf("caller label sei.io/harness-run = %q, want run-xyz", got)
+	if got := node.Labels[testRunLabel]; got != testRunID {
+		t.Errorf("caller label sei.io/harness-run = %q, want run-xyz (testRunID)", got)
 	}
 	// Canonical labels are load-bearing (peer wiring, chaos selectors) and win
 	// on any key collision with caller labels.
