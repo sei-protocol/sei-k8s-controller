@@ -18,10 +18,10 @@ func TestWaitCaughtUp_GatesOnHeightAndCatchingUp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		n := calls.Add(1)
 		if n < 3 {
-			fmt.Fprint(w, `{"result":{"sync_info":{"latest_block_height":"1","catching_up":true}}}`)
+			_, _ = fmt.Fprint(w, `{"result":{"sync_info":{"latest_block_height":"1","catching_up":true}}}`)
 			return
 		}
-		fmt.Fprint(w, `{"result":{"sync_info":{"latest_block_height":"5","catching_up":false}}}`)
+		_, _ = fmt.Fprint(w, `{"result":{"sync_info":{"latest_block_height":"5","catching_up":false}}}`)
 	}))
 	defer srv.Close()
 
@@ -37,7 +37,7 @@ func TestWaitCaughtUp_GatesOnHeightAndCatchingUp(t *testing.T) {
 
 func TestWaitCaughtUp_AcceptsUnwrappedEnvelope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"sync_info":{"latest_block_height":"7","catching_up":false}}`) // bare Sei shape
+		_, _ = fmt.Fprint(w, `{"sync_info":{"latest_block_height":"7","catching_up":false}}`) // bare Sei shape
 	}))
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -49,7 +49,7 @@ func TestWaitCaughtUp_AcceptsUnwrappedEnvelope(t *testing.T) {
 
 func TestWaitCaughtUp_TimesOutWhileCatchingUp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"result":{"sync_info":{"latest_block_height":"9","catching_up":true}}}`)
+		_, _ = fmt.Fprint(w, `{"result":{"sync_info":{"latest_block_height":"9","catching_up":true}}}`)
 	}))
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
@@ -70,7 +70,7 @@ func TestWaitEVMServing_GatesOnNonEmptyResult(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable) // listener not bound yet
 			return
 		}
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x10"}`)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x10"}`)
 	}))
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -82,7 +82,7 @@ func TestWaitEVMServing_GatesOnNonEmptyResult(t *testing.T) {
 
 func TestWaitEVMServing_KeepsPollingOnRPCError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"error":{"message":"not ready"}}`)
+		_, _ = fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"error":{"message":"not ready"}}`)
 	}))
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)

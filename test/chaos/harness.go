@@ -81,8 +81,11 @@ func getenvInt(t *testing.T, key string, def int) int {
 // choices (profile templating, success-gating, report shape) — wired next.
 func runSeiloadSuite(ctx context.Context, t *testing.T, cfg config, rpcEVMEndpoints []string) error {
 	t.Helper()
-	// TODO(harness): seiload Job driver + S3 report. Currently a no-op seam so
-	// the provisioning spine, caught-up gate, and teardown are exercisable on a
+	if err := ctx.Err(); err != nil {
+		return err // caller's deadline already blown before the load step
+	}
+	// TODO(harness): seiload Job driver + S3 report. Currently a near-no-op seam
+	// so the provisioning spine, caught-up gate, and teardown are exercisable on a
 	// real cluster before the load driver lands.
 	t.Logf("seiload seam (stub): suite=%s endpoints=%d duration=%s", cfg.ChainID, len(rpcEVMEndpoints), cfg.Duration)
 	return nil
