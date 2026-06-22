@@ -147,6 +147,9 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 			},
 		},
 	}
+	// Snapshot-bootstrap nodes pass through the fail-closed StateSyncReady gate;
+	// wire syncers for every fixture chain so progression tests proceed.
+	withSyncers(t, r, fixtureSyncers())
 	return r, c
 }
 

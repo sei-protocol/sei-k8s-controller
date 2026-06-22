@@ -70,7 +70,24 @@ func newNodeReconcilerWithSidecar(t *testing.T, mock *mockSidecarClient, objs ..
 			},
 		},
 	}
+	// Wire canonical syncers for every fixture chain so snapshot-bootstrap nodes
+	// (s3 and stateSync both carry ConfigureStateSync and pass through the
+	// fail-closed StateSyncReady gate). Tests asserting fail-closed override this
+	// via withSyncers/writeSyncerFile.
+	withSyncers(t, r, fixtureSyncers())
 	return r, c
+}
+
+// fixtureSyncers returns a >=2-syncer set for every chain used by node test
+// fixtures, so a snapshot-bootstrap node clears the StateSyncReady gate
+// regardless of which fixture chain it carries.
+func fixtureSyncers() map[string][]string {
+	chains := []string{defaultTestChainID, testChainID, atlantic2ChainID, pacific1ChainID, "test"}
+	out := make(map[string][]string, len(chains))
+	for _, ch := range chains {
+		out[ch] = []string{syncerA, syncerB}
+	}
+	return out
 }
 
 func nodeReqFor(name, namespace string) ctrl.Request { //nolint:unparam // test helper designed for reuse
@@ -89,6 +106,11 @@ func getSeiNode(t *testing.T, ctx context.Context, c client.Client, name, namesp
 const (
 	testImageV2  = "ghcr.io/sei-protocol/seid:v2.0.0"
 	testRevision = "rev-2"
+	// defaultTestChainID must match the chainID the snapshot/genesis fixtures
+	// hardcode in testhelpers_test.go (not enforced by the compiler).
+	defaultTestChainID = "sei-test"
+	atlantic2ChainID   = "atlantic-2"
+	pacific1ChainID    = "pacific-1"
 )
 
 func TestNodeReconcile_NotFound(t *testing.T) {
