@@ -107,13 +107,15 @@ spec:
           name: seitask
           image: $SEITASK_IMAGE
           args:
-            - provision-snd
+            - provision-node                     # rpc follower is a standalone SeiNode, not a SeiNetwork
             - --role=rpc
-            - --name=$SEI_CHAIN_ID-rpc
+            - --name=$SEI_CHAIN_ID-rpc           # BASE name; follower is <base>-0
+            - --replicas=1                       # mocha hits a single RPC (RPC_TM_RPC/EVM/REST)
+            - --network=$SEI_CHAIN_ID            # peer auto-wire to the genesis SeiNetwork (sei.io/seinetwork=<chain>)
             - --template=/scenarios/release-test/rpc.yaml.tmpl
             - --var=CHAIN_ID=$SEI_CHAIN_ID
             - --var=IMAGE=$SEID_IMAGE
-            - --ready-timeout=18m
+            - --running-timeout=18m              # was --ready-timeout; SeiNode has no Ready phase (default --first-block-timeout=5m)
           env:
             - name: SEI_WORKFLOW_NAME
               valueFrom:
@@ -127,11 +129,11 @@ spec:
             - configMapRef:
                 name: workflow-vars-release-test-$SEI_WORKFLOW_RUN_ID
 
-    # TM RPC + REST go through the aggregate ClusterIP (stateless, safe
-    # to load-balance). EVM RPC pins to rpc pod-0 via provision-snd's
-    # RoleScoped(rpc, EVM_RPC) — stateful sequences (sei_newFilter +
-    # sei_getFilterLogs, eth_sendRawTransaction + tx.wait) need a single
-    # mempool + filter-store view.
+    # With one rpc follower (replicas=1), TM RPC + REST + EVM RPC all resolve to
+    # that node via provision-node's RoleScoped(rpc, *) off node-0's
+    # .status.endpoint. A single node also gives the stateful sequences
+    # (sei_newFilter + sei_getFilterLogs, eth_sendRawTransaction + tx.wait) one
+    # consistent mempool + filter-store view.
     - name: run-release-test
       templateType: Task
       deadline: 30m
