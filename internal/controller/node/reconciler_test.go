@@ -82,7 +82,7 @@ func newNodeReconcilerWithSidecar(t *testing.T, mock *mockSidecarClient, objs ..
 // fixtures, so a snapshot-bootstrap node clears the StateSyncReady gate
 // regardless of which fixture chain it carries.
 func fixtureSyncers() map[string][]string {
-	chains := []string{defaultTestChainID, testChainID, "atlantic-2", "pacific-1", "test"}
+	chains := []string{defaultTestChainID, testChainID, atlantic2ChainID, pacific1ChainID, "test"}
 	out := make(map[string][]string, len(chains))
 	for _, ch := range chains {
 		out[ch] = []string{syncerA, syncerB}
@@ -109,6 +109,8 @@ const (
 	// defaultTestChainID must match the chainID the snapshot/genesis fixtures
 	// hardcode in testhelpers_test.go (not enforced by the compiler).
 	defaultTestChainID = "sei-test"
+	atlantic2ChainID   = "atlantic-2"
+	pacific1ChainID    = "pacific-1"
 )
 
 func TestNodeReconcile_NotFound(t *testing.T) {
