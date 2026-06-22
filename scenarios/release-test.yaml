@@ -100,8 +100,12 @@ spec:
                 name: workflow-vars-release-test-$SEI_WORKFLOW_RUN_ID
 
     - name: provision-rpc-fleet
+      # 30m covers worst-case sequential readiness: running-timeout 18m +
+      # WaitCaughtUp + WaitEVMServing at first-block-timeout 5m each
+      # (N=1 → 18m + 2×5m = 28m). Keeps provision-node's typed exit ahead of
+      # the Chaos-Mesh deadline kill so real faults surface as typed errors.
       templateType: Task
-      deadline: 25m
+      deadline: 30m
       task:
         container:
           name: seitask

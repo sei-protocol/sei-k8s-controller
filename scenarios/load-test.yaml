@@ -77,8 +77,12 @@ spec:
                   fieldPath: metadata.namespace
 
     - name: provision-rpc-fleet
+      # 40m covers worst-case sequential readiness: running-timeout 18m +
+      # N×(WaitCaughtUp + WaitEVMServing) at first-block-timeout 5m each
+      # (N=2 → 18m + 4×5m = 38m). Keeps provision-node's typed exit ahead of
+      # the Chaos-Mesh deadline kill so real faults surface as typed errors.
       templateType: Task
-      deadline: 25m
+      deadline: 40m
       task:
         container:
           name: seitask
@@ -103,13 +107,11 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
 
-    # PodReady != caught up. SeiNetwork phase=Ready means the controller's
-    # reconciliation finished; seid may still be applying historical
-    # blocks behind a Ready RPC pod. Poll Tendermint /status until
-    # catching_up=false before pointing seiload at the fleet. Hits the
-    # aggregate RPC_TM_RPC URL (load-balanced across the fleet); jq's
-    # `.result // .` handles Sei CometBFT's envelope-or-bare shape
-    # tolerance (matches provision-snd's waitForFirstBlock parser).
+    # Redundant secondary gate: provision-node already waited every follower
+    # caught-up (height>1 && catching_up==false) before publishing endpoints —
+    # this re-confirms node-0 (RPC_TM_RPC is node-0's URL, not an aggregate) once
+    # more right before pointing seiload at the fleet. The sed extract tolerates
+    # Sei CometBFT's envelope-or-bare /status shape.
     - name: wait-rpc-caught-up
       templateType: Task
       deadline: 10m
