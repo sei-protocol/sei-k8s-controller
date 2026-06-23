@@ -185,13 +185,19 @@ func waitJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns, na
 				return
 			}
 			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-				t.Fatalf("seiload job %q failed: %s\n--- seiload pod log (tail) ---\n%s",
+				t.Fatalf("job %q failed: %s\n--- pod log (tail) ---\n%s",
 					name, cond.Message, podLogTail(ctx, cs, ns, name))
 			}
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("seiload job %q did not finish before deadline: %v", name, ctx.Err())
+			// The suite ctx fired (deadline or SIGTERM) — grab the pod log on a
+			// fresh ctx (the suite ctx is already dead) so the failure carries the
+			// job's last output, not just "deadline".
+			logCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			tail := podLogTail(logCtx, cs, ns, name)
+			cancel()
+			t.Fatalf("job %q did not finish before deadline: %v\n--- pod log (tail) ---\n%s", name, ctx.Err(), tail)
 		case <-tick.C:
 		}
 	}

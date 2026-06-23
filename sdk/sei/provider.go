@@ -43,6 +43,7 @@ type NodeHandle interface {
 	Namespace() string
 	EVMRPC() string
 	TendermintRPC() string
+	REST() string
 	WaitReady(ctx context.Context) error
 	Delete(ctx context.Context) error
 	Object() any // mode-specific raw resource (k8s: *v1alpha1.SeiNode)
