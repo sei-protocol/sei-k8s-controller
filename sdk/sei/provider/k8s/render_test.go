@@ -9,10 +9,11 @@ import (
 func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	spec := sei.NetworkSpec{
 		Name: testNet, Image: testImage, Validators: 4,
-		Genesis:  map[string]string{"staking.params.unbonding_time": "60s"},
-		Config:   map[string]string{"app.pruning": "nothing"},
-		Accounts: []sei.GenesisAccount{{Address: "sei1abc", Balance: "100usei"}},
-		Labels:   map[string]string{testRunLabel: testRunID},
+		Genesis:        map[string]string{"staking.params.unbonding_time": "60s"},
+		Config:         map[string]string{"app.pruning": "nothing"},
+		Accounts:       []sei.GenesisAccount{{Address: "sei1abc", Balance: "100usei"}},
+		Labels:         map[string]string{testRunLabel: testRunID},
+		DeletionPolicy: sei.DeletionDelete,
 	}
 	net := renderNetwork(spec, testNS)
 
@@ -34,6 +35,11 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	}
 	if len(net.Spec.Genesis.Accounts) != 1 || net.Spec.Genesis.Accounts[0].Address != "sei1abc" {
 		t.Errorf("genesis accounts = %+v", net.Spec.Genesis.Accounts)
+	}
+	// DeletionPolicy threads through so an ephemeral chain cascades to its
+	// validators on teardown instead of orphaning them (the CRD default Retain).
+	if got := string(net.Spec.DeletionPolicy); got != sei.DeletionDelete {
+		t.Errorf("deletionPolicy = %q, want %q", got, sei.DeletionDelete)
 	}
 	// The network carries caller labels (e.g. a GC/run-id selector) but NOT the
 	// canonical sei.io/seinetwork (nodes peer by its name, not a label on it).

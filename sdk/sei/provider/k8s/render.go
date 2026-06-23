@@ -37,6 +37,9 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 		Spec: seiv1alpha1.SeiNetworkSpec{
 			Image:    spec.Image,
 			Replicas: int32(spec.Validators),
+			// "" leaves the CRD default (Retain); a caller sets Delete so an
+			// ephemeral chain's validators cascade-delete instead of orphaning.
+			DeletionPolicy: seiv1alpha1.DeletionPolicy(spec.DeletionPolicy),
 			Genesis: seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: spec.Name, // chain ID defaults to the network name
 			},

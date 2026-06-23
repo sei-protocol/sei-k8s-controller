@@ -1,5 +1,15 @@
 package sei
 
+// DeletionPolicy values for NetworkSpec.DeletionPolicy. They mirror the
+// SeiNetwork CRD enum (kept as plain strings so this core stays stdlib-only).
+const (
+	// DeletionDelete cascades a SeiNetwork delete to its child validators
+	// (and their PVCs) — the right choice for an ephemeral chain.
+	DeletionDelete = "Delete"
+	// DeletionRetain orphans children on delete (the CRD default).
+	DeletionRetain = "Retain"
+)
+
 // NetworkSpec is the typed input to CreateNetwork. ChainID is not a field: it
 // defaults to Name (the genesis chain ID == the network name). Genesis and
 // Config are the two override escape hatches so the typed surface need not chase
@@ -14,6 +24,13 @@ type NetworkSpec struct {
 	Genesis  map[string]string // -> spec.genesis.overrides (TOML-path keys)
 	Config   map[string]string // -> spec.configOverrides (config.toml/app.toml)
 	Labels   map[string]string // extra labels on the SeiNetwork object (e.g. a caller GC/run-id selector); the network object carries no labels otherwise
+
+	// DeletionPolicy controls whether the SeiNetwork's child validators are
+	// deleted with it. "" leaves the CRD default (Retain — orphans children,
+	// stripping their ownerRef so they keep running); set DeletionDelete for an
+	// ephemeral chain so Delete cascades to the validators (+ their PVCs) instead
+	// of leaking them. -> spec.deletionPolicy.
+	DeletionPolicy string
 }
 
 // GenesisAccount is a non-validator genesis account to fund.

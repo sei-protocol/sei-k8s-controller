@@ -101,6 +101,11 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 		Image:      s.seidImage,
 		Validators: s.validators,
 		Labels:     runLabels,
+		// Ephemeral chain: cascade-delete the controller-created validators (+
+		// their PVCs) on teardown. The CRD default Retain would orphan them —
+		// they never carry sei.io/harness-run, so neither t.Cleanup nor the
+		// label-GC sweep would reap them (Bugbot high-sev).
+		DeletionPolicy: sei.DeletionDelete,
 	})
 	if err != nil {
 		return ch, fmt.Errorf("create network %q: %w", s.chainID, err)
