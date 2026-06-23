@@ -46,6 +46,7 @@ func TestBenchmark(t *testing.T) {
 		seiloadProfile: envOr("SEILOAD_PROFILE", "nightly_evm_transfer"),
 		seiloadCommit:  envOr("SEILOAD_COMMIT_ID", ""),
 		durationMin:    envInt(t, "DURATION_MINUTES", 10),
+		storageConfig:  memiavlStorageConfig,
 		// EVM tuning the followers need to absorb the load (matches the load
 		// scenario's rpc overrides).
 		rpcConfig: map[string]string{
