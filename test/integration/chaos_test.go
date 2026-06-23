@@ -109,9 +109,27 @@ func gateInjected(ctx context.Context, t *testing.T, dc dynamic.Interface, ns st
 	if err != nil {
 		t.Fatalf("read injected count for %s/%s: %v", f.resource, f.obj.GetName(), err)
 	}
-	if n, _, _ := unstructured.NestedInt64(u.Object, "status", "experiment", "injectedCount"); n < 1 {
+	if n := faultInjectedTargets(u); n < 1 {
 		t.Fatalf("fault %s/%s injected 0 targets — selector matched nothing (false-green guard)", f.resource, f.obj.GetName())
 	}
+}
+
+// faultInjectedTargets counts the targets chaos-mesh actually injected. The
+// count lives per-target in status.experiment.containerRecords[].injectedCount
+// (there is no top-level injectedCount), so a 0-match selector yields no records.
+func faultInjectedTargets(u *unstructured.Unstructured) int {
+	recs, _, _ := unstructured.NestedSlice(u.Object, "status", "experiment", "containerRecords")
+	n := 0
+	for _, r := range recs {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		if ic, _, _ := unstructured.NestedInt64(m, "injectedCount"); ic > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // gateRecovered blocks until AllRecovered=True, catching chaos-mesh finalizers
