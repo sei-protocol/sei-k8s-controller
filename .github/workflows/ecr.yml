@@ -40,21 +40,6 @@ jobs:
           cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
 
-      # Monolithic Workflow-Task primitive binary (keygen, provision-snd,
-      # runner, ...) per https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/test-harness/test-harness-lld.md. Published to
-      # sei/seitask-runner so scenarios keep the image-name muscle memory;
-      # the runner capability moves to args: ["runner", ...].
-      - name: Build and push seitask image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: cmd/seitask/Dockerfile
-          push: true
-          platforms: linux/amd64
-          tags: ${{ steps.ecr-login.outputs.registry }}/sei/seitask-runner:${{ inputs.tag || github.sha }}
-          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
-          cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
-
       # The Go-native integration harness (go test -c -tags integration), run by
       # one CronJob per target (-test.run TestX). Replaces seitask-runner + the
       # Chaos-Mesh Workflow scenarios once the nightly CronJobs cut over.
