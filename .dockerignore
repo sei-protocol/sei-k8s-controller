@@ -24,3 +24,13 @@
 # lesson as runner/templates/**: the seitask Dockerfile COPYs each
 # scenario asset dir; without the re-include, builds fail with "not found".
 !scenarios/*/**
+
+# Re-include the integration harness suite for test/integration/Dockerfile. It is
+# entirely *_test.go (excluded above) behind the integration build tag, and its
+# fault/seiload manifests are //go:embed-ed *.tmpl (excluded by **). Without
+# these the `go test -c -tags integration ./test/integration/` build fails with
+# "directory not found". These also enter the controller + seitask build contexts
+# (both COPY . .) but are inert there — neither build compiles ./test/integration
+# nor passes the integration tag.
+!test/integration/**/*_test.go
+!test/integration/**/*.tmpl
