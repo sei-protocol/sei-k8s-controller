@@ -85,8 +85,7 @@ const (
 const (
 	// ConditionSeiNodeTaskReady reflects whether the task has reached a
 	// terminal successful state. True only when status.phase == Complete.
-	// Load-bearing for `kubectl wait --for=condition=Ready=true` in the
-	// seitask-runner.
+	// Load-bearing for `kubectl wait --for=condition=Ready=true`.
 	ConditionSeiNodeTaskReady = "Ready"
 
 	// ConditionSeiNodeTaskFailed reflects whether the task has reached a
@@ -131,7 +130,7 @@ type SeiNodeTaskSpec struct {
 
 	// Target identifies the single SeiNode this task operates on. Fan-out
 	// targeting (label selectors) is intentionally out of scope at the CRD
-	// layer — express fan-out at the seitask-runner / Chaos Workflow layer.
+	// layer — express fan-out in the orchestrating caller (one task per node).
 	Target SeiNodeTaskTarget `json:"target"`
 
 	// TimeoutSeconds bounds execution time, measured from
@@ -179,8 +178,8 @@ type SeiNodeTaskSpec struct {
 }
 
 // SeiNodeTaskTarget identifies the single SeiNode this task operates on.
-// Selector-based fan-out is intentionally out of scope for MVP — express
-// multi-node operations at the seitask-runner / Chaos Workflow layer.
+// Selector-based fan-out is intentionally out of scope — express multi-node
+// operations in the orchestrating caller (one task per node).
 type SeiNodeTaskTarget struct {
 	// NodeRef is a same-namespace reference to a SeiNode.
 	NodeRef SeiNodeTaskNodeRef `json:"nodeRef"`

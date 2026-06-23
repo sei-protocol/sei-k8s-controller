@@ -22,14 +22,12 @@ import (
 )
 
 // releaseAdminBalance funds the admin account in genesis so the release-test
-// harness can sign and pay for the txs it issues. Ported from the release-test
-// scenario's validator template.
+// harness can sign and pay for the txs it issues.
 const releaseAdminBalance = "1000000000000usei"
 
 // releaseBaseConfig is the seid config the release chain runs with: the memiavl
 // storage baseline (the nightly image rejects the cosmos_only default) plus kv tx
-// indexing (the harness queries txs) and a short mempool TTL. Ported from the
-// release-test scenario's validator + rpc configOverrides.
+// indexing (the harness queries txs) and a short mempool TTL.
 var releaseBaseConfig = mergeConfig(memiavlStorageConfig, map[string]string{
 	"tx_index.indexer":     "kv",
 	"mempool.ttl_duration": "60s",
@@ -48,7 +46,7 @@ var releaseRPCConfig = map[string]string{
 	"evm.enabled_legacy_sei_apis": releaseLegacyEVMAPIs,
 }
 
-// TestRelease drives the release-validation scenario: provision a 4-validator
+// TestRelease drives the release-validation flow: provision a 4-validator
 // chain + one EVM-serving RPC follower, generate a funded admin account, and run
 // the external release-test image against the RPC node as a Job. The release-test
 // image owns the functional assertions (TEST_TARGET=chain-agnostic); the suite's
@@ -175,8 +173,8 @@ func TestRelease(t *testing.T) {
 
 	waitJob(ctx, t, cs, net.Namespace(), job.Name)
 	// Archive the harness output even on success: exit 0 alone doesn't show which
-	// sub-cases ran, so a skip-but-pass is otherwise invisible (the scenario's
-	// upload-report served this; an S3 report is the deferred telemetry step).
+	// sub-cases ran, so a skip-but-pass is otherwise invisible. (A durable S3
+	// report is a deferred telemetry step.)
 	t.Logf("release-test job completed; harness log tail:\n%s", podLogTail(ctx, cs, net.Namespace(), job.Name))
 
 	// The chain stayed live through the release suite: the follower is still
@@ -220,9 +218,8 @@ type releaseParams struct {
 
 // releaseJob builds the release-test Job: the external harness image, fed the
 // chain endpoints + admin identity, run once (no retry) with a self-terminating
-// deadline. Resources + ttl match the scenario's run-release-test step (which the
-// nightly — an unenforced-PSS namespace — runs without a securityContext, so this
-// stays faithful rather than imposing one the harness image may not tolerate).
+// deadline. No securityContext: nightly is an unenforced-PSS namespace, so this
+// avoids imposing one the harness image may not tolerate (it writes a keyring).
 func releaseJob(p releaseParams) *batchv1.Job {
 	backoff := int32(0)
 	deadline := int64(60 * 60) // the chain-agnostic harness runs >35m against one RPC node; generous cap

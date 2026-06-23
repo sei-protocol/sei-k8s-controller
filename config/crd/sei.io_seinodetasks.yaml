@@ -349,7 +349,7 @@ spec:
                 description: |-
                   Target identifies the single SeiNode this task operates on. Fan-out
                   targeting (label selectors) is intentionally out of scope at the CRD
-                  layer — express fan-out at the seitask-runner / Chaos Workflow layer.
+                  layer — express fan-out in the orchestrating caller (one task per node).
                 properties:
                   nodeRef:
                     description: NodeRef is a same-namespace reference to a SeiNode.

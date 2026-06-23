@@ -18,9 +18,9 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
-// Gov tx parameters for the upgrade flow, ported from the major-upgrade scenario
-// (scenarios/major-upgrade.yaml). usei-only; the deposit must clear the chain's
-// min_deposit so the proposal enters voting immediately (not the deposit period).
+// Gov tx parameters for the upgrade flow. usei-only; the deposit must clear the
+// chain's min_deposit so the proposal enters voting immediately (not the deposit
+// period).
 const (
 	upgradeDeposit = "20000000usei"
 	govFees        = "10000usei"
@@ -42,9 +42,9 @@ const (
 	// haltPollMargin is how many blocks BEFORE the upgrade height the suite stops
 	// polling: it polls the (load-balanced) aggregate RPC only while the chain is
 	// still serving, then settles. At the halt itself every validator stops
-	// serving RPC simultaneously, so the halt height is unpollable (the scenario
-	// uses a fixed wait for the same reason) — polling to a pre-halt height keeps
-	// the endpoint alive while still confirming the chain is about to halt.
+	// serving RPC simultaneously, so the halt height is unpollable — polling to a
+	// pre-halt height keeps the endpoint alive while still confirming the chain is
+	// about to halt.
 	haltPollMargin = 10
 	// haltSettle bounds the wait, after the chain reaches the pre-halt height, for
 	// the remaining blocks to commit and every validator to halt at the upgrade
@@ -64,8 +64,7 @@ var votingPeriodGenesis = map[string]string{
 
 // upgradeConfig are the seid runtime overrides the upgrade flow needs: the REST
 // API serves the gov proposal queries (off by default), and kv tx-indexing lets
-// the proposal-submission tx be found. Ported from the major-upgrade scenario's
-// SeiNetwork configOverrides.
+// the proposal-submission tx be found.
 var upgradeConfig = map[string]string{
 	"api.rest.enable":  "true",
 	"tx_index.indexer": "kv",
@@ -75,10 +74,10 @@ var upgradeConfig = map[string]string{
 const restUnreachable = "REST unreachable / non-200"
 
 // TestChainUpgrade drives a Sei major software upgrade end-to-end through the SDK
-// task surface: provision a 4-validator chain on the pre-upgrade image -> submit
-// a GovSoftwareUpgrade proposal ->
-// resolve its ID from the chain's gov REST (chain-as-medium, since the controller
-// does not surface it as a task output) -> vote yes from every validator -> wait
+// task surface: provision a 4-validator chain on the pre-upgrade image -> submit a
+// GovSoftwareUpgrade proposal -> resolve its ID from the chain's gov REST
+// (chain-as-medium, since the controller does not surface it as a task output) ->
+// vote yes from every validator -> wait
 // for it to pass -> let the chain halt at the upgrade height -> bump the
 // SeiNetwork image to the post-upgrade build -> assert the upgrade handler ran
 // and every validator resumed past the upgrade height.
@@ -388,7 +387,7 @@ func taskName(chainID, step string) string {
 // govProposal models just enough of a proposal to resolve an upgrade proposal by
 // its plan name and read its status. The legacy (v1beta1) shape carries the plan
 // at content.plan.name; the v1 shape carries it under messages[].content.plan.name
-// — both are accepted, matching the scenario's resolver.
+// — both are accepted.
 type govProposal struct {
 	ProposalID string `json:"proposal_id"`
 	Status     string `json:"status"`
