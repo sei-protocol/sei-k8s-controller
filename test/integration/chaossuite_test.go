@@ -13,6 +13,14 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
+// Chaos-Mesh fault GVR resource names (the dynamic client's plural form).
+const (
+	rNetworkChaos = "networkchaos"
+	rStressChaos  = "stresschaos"
+	rTimeChaos    = "timechaos"
+	rIOChaos      = "iochaos"
+)
+
 // chaosScenario is one fault ported from the platform chaos suite: a name, the
 // fault CR's GVR resource, and its template.
 type chaosScenario struct {
@@ -24,10 +32,15 @@ type chaosScenario struct {
 // chaosScenarios is the ported fault set. Growing toward the platform suite's
 // 14; each is added once it passes in-cluster.
 var chaosScenarios = []chaosScenario{
-	{name: "network-partition", resource: "networkchaos", tmpl: networkPartitionTmpl},
-	{name: "packet-loss", resource: "networkchaos", tmpl: packetLossTmpl},
-	{name: "cpu-stress", resource: "stresschaos", tmpl: cpuStressTmpl},
-	{name: "time-skew", resource: "timechaos", tmpl: timeSkewTmpl},
+	{name: "network-partition", resource: rNetworkChaos, tmpl: networkPartitionTmpl},
+	{name: "packet-loss", resource: rNetworkChaos, tmpl: packetLossTmpl},
+	{name: "cpu-stress", resource: rStressChaos, tmpl: cpuStressTmpl},
+	{name: "time-skew", resource: rTimeChaos, tmpl: timeSkewTmpl},
+	{name: "network-latency", resource: rNetworkChaos, tmpl: networkLatencyTmpl},
+	{name: "bandwidth-limit", resource: rNetworkChaos, tmpl: bandwidthLimitTmpl},
+	{name: "memory-stress", resource: rStressChaos, tmpl: memoryStressTmpl},
+	{name: "disk-io-latency", resource: rIOChaos, tmpl: diskIOLatencyTmpl},
+	{name: "byzantine", resource: rNetworkChaos, tmpl: byzantineTmpl},
 	// dns-chaos deferred: it's a rediscovery fault (live MConnections don't
 	// re-resolve), so the under-fault progress assert can't perturb it — needs a
 	// recovery-focused assert + peer-FQDN-matching patterns.
