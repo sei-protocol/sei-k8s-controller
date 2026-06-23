@@ -22,14 +22,12 @@ import (
 )
 
 // releaseAdminBalance funds the admin account in genesis so the release-test
-// harness can sign and pay for the txs it issues. Ported from the release-test
-// scenario's validator template.
+// harness can sign and pay for the txs it issues.
 const releaseAdminBalance = "1000000000000usei"
 
 // releaseBaseConfig is the seid config the release chain runs with: the memiavl
 // storage baseline (the nightly image rejects the cosmos_only default) plus kv tx
-// indexing (the harness queries txs) and a short mempool TTL. Ported from the
-// release-test scenario's validator + rpc configOverrides.
+// indexing (the harness queries txs) and a short mempool TTL.
 var releaseBaseConfig = mergeConfig(memiavlStorageConfig, map[string]string{
 	"tx_index.indexer":     "kv",
 	"mempool.ttl_duration": "60s",
@@ -48,13 +46,12 @@ var releaseRPCConfig = map[string]string{
 	"evm.enabled_legacy_sei_apis": releaseLegacyEVMAPIs,
 }
 
-// TestRelease drives the release-validation scenario: provision a 4-validator
+// TestRelease drives the release-validation flow: provision a 4-validator
 // chain + one EVM-serving RPC follower, generate a funded admin account, and run
 // the external release-test image against the RPC node as a Job. The release-test
 // image owns the functional assertions (TEST_TARGET=chain-agnostic); the suite's
 // job is to stand up the chain, hand the harness its endpoints + admin key, and
-// gate on the Job's exit code. Replaces the Chaos-Mesh Workflow's keygen +
-// provision + run steps with statement order + the SDK.
+// gate on the Job's exit code.
 //
 // One RPC node (not the load suite's two) is deliberate: the harness runs
 // stateful EVM-filter and send-then-wait sequences that need one consistent
@@ -176,8 +173,8 @@ func TestRelease(t *testing.T) {
 
 	waitJob(ctx, t, cs, net.Namespace(), job.Name)
 	// Archive the harness output even on success: exit 0 alone doesn't show which
-	// sub-cases ran, so a skip-but-pass is otherwise invisible (the scenario's
-	// upload-report served this; an S3 report is the deferred telemetry step).
+	// sub-cases ran, so a skip-but-pass is otherwise invisible. (A durable S3
+	// report is a deferred telemetry step.)
 	t.Logf("release-test job completed; harness log tail:\n%s", podLogTail(ctx, cs, net.Namespace(), job.Name))
 
 	// The chain stayed live through the release suite: the follower is still
@@ -189,9 +186,8 @@ func TestRelease(t *testing.T) {
 }
 
 // createMnemonicSecret writes the admin mnemonic to a Secret the release-test pod
-// reads via secretKeyRef. Labeled for the GC sweep; deleted on cleanup. (The
-// seitask-runner stamps an ownerRef instead — the harness uses the run label +
-// t.Cleanup, matching how it provisions everything else.)
+// reads via secretKeyRef. Labeled for the GC sweep and deleted on cleanup,
+// matching how the suite manages everything else it creates.
 func createMnemonicSecret(
 	ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 	ns, name string, labels map[string]string, mnemonic string,
@@ -222,9 +218,8 @@ type releaseParams struct {
 
 // releaseJob builds the release-test Job: the external harness image, fed the
 // chain endpoints + admin identity, run once (no retry) with a self-terminating
-// deadline. Resources + ttl match the scenario's run-release-test step (which the
-// nightly — an unenforced-PSS namespace — runs without a securityContext, so this
-// stays faithful rather than imposing one the harness image may not tolerate).
+// deadline. No securityContext: nightly is an unenforced-PSS namespace, so this
+// avoids imposing one the harness image may not tolerate (it writes a keyring).
 func releaseJob(p releaseParams) *batchv1.Job {
 	backoff := int32(0)
 	deadline := int64(60 * 60) // the chain-agnostic harness runs >35m against one RPC node; generous cap
@@ -246,10 +241,10 @@ func releaseJob(p releaseParams) *batchv1.Job {
 					Containers: []corev1.Container{{
 						Name:  "release-test",
 						Image: p.image,
-						// The scenario projects the workflow-vars CM (RPC_*/CHAIN_ID/
-						// ADMIN_ADDRESS) via envFrom ON TOP of the explicit SEI_* list;
-						// reproduce that superset so a harness sub-case reading e.g.
-						// RPC_EVM_RPC_LIST isn't silently unset (a skip-but-exit-0).
+						// The release-test image reads both the SEI_* names and the
+						// RPC_*/CHAIN_ID/ADMIN_ADDRESS names; provide both so a
+						// sub-case reading e.g. RPC_EVM_RPC_LIST isn't silently unset
+						// (which would skip-but-exit-0).
 						Env: []corev1.EnvVar{
 							{Name: "TEST_TARGET", Value: "chain-agnostic"},
 							{Name: "SEI_CHAIN_ID", Value: p.chainID},
@@ -257,7 +252,7 @@ func releaseJob(p releaseParams) *batchv1.Job {
 							{Name: "SEI_TENDERMINT_RPC", Value: p.tmRPC},
 							{Name: "SEI_EVM_JSON_RPC", Value: p.evmRPC},
 							{Name: "SEI_REST_ENDPOINT", Value: p.rest},
-							// workflow-vars CM superset (the scenario's envFrom).
+							// The RPC_*/CHAIN_ID/ADMIN_ADDRESS aliases the image also reads.
 							{Name: "CHAIN_ID", Value: p.chainID},
 							{Name: "ADMIN_ADDRESS", Value: p.adminAddr},
 							{Name: "RPC_TM_RPC", Value: p.tmRPC},

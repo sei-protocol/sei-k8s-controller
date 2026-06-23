@@ -1,5 +1,4 @@
 IMG ?= sei-k8s-controller:latest
-RUNNER_IMG ?= seitask-runner:latest
 GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null || echo $(HOME)/go/bin/golangci-lint)
 
 # Pinned tool versions. Bump together: setup-envtest's release branch tracks
@@ -18,13 +17,10 @@ CONTROLLER_GEN_VERSION ?= v0.20.1
 LOCALBIN ?= $(CURDIR)/bin
 SETUP_ENVTEST ?= $(LOCALBIN)/setup-envtest
 
-.PHONY: build runner test test-integration test-all lint manifests generate verify-generated setup-envtest ci docker-build docker-push runner-image runner-push
+.PHONY: build test test-integration test-all lint manifests generate verify-generated setup-envtest ci docker-build docker-push
 
 build: ## Build manager binary.
 	go build -o bin/manager ./cmd/
-
-runner: ## Build seitask-runner binary.
-	go build -o bin/seitask-runner ./cmd/runner/
 
 test: ## Run tests.
 	go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
@@ -69,9 +65,3 @@ docker-build: ## Build docker image.
 
 docker-push: ## Push docker image.
 	docker push ${IMG}
-
-runner-image: ## Build seitask-runner container image.
-	docker build --platform linux/amd64 -t ${RUNNER_IMG} -f runner/Dockerfile .
-
-runner-push: ## Push seitask-runner container image.
-	docker push ${RUNNER_IMG}
