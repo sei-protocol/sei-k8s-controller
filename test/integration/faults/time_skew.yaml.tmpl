@@ -6,7 +6,9 @@ metadata:
   labels:
     sei.io/harness-run: "{{.RunID}}"
 spec:
-  # Skew one validator's clock -30s; CometBFT must tolerate it within the f=1 bound.
+  # Skew one validator's clock -30s; the chain stays live because that validator
+  # (1/4 power) is outvoted on CometBFT's median-vote block time, not because the
+  # skew is within a per-vote tolerance.
   mode: one
   selector:
     namespaces: ["{{.Namespace}}"]

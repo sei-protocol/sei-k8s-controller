@@ -28,7 +28,9 @@ var chaosScenarios = []chaosScenario{
 	{name: "packet-loss", resource: "networkchaos", tmpl: packetLossTmpl},
 	{name: "cpu-stress", resource: "stresschaos", tmpl: cpuStressTmpl},
 	{name: "time-skew", resource: "timechaos", tmpl: timeSkewTmpl},
-	{name: "dns-chaos", resource: "dnschaos", tmpl: dnsChaosTmpl},
+	// dns-chaos deferred: it's a rediscovery fault (live MConnections don't
+	// re-resolve), so the under-fault progress assert can't perturb it — needs a
+	// recovery-focused assert + peer-FQDN-matching patterns.
 }
 
 // TestChaosSuite runs each fault against its own fresh chain: provision → inject
