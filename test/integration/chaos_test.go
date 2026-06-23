@@ -46,6 +46,9 @@ var diskIOLatencyTmpl string
 //go:embed faults/byzantine.yaml.tmpl
 var byzantineTmpl string
 
+//go:embed faults/dns_chaos.yaml.tmpl
+var dnsChaosTmpl string
+
 //go:embed faults/pod_failure.yaml.tmpl
 var podFailureTmpl string
 

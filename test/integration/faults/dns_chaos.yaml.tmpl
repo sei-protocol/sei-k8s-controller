@@ -1,0 +1,23 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: DNSChaos
+metadata:
+  name: dns-chaos-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # DNS resolution errors on every validator for the chain's own names. The
+  # <chain>-* glob matches the per-pod peer FQDNs validators actually resolve
+  # (<chain>-N-0.<chain>-N.<ns>.svc.cluster.local), not just the bare service
+  # name. Established MConnections don't re-resolve, so this asserts the chain is
+  # RESILIENT to DNS failure (keeps producing) rather than that DNS halts it; the
+  # injected-targets gate proves the interceptor is actually installed.
+  action: error
+  mode: all
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+  patterns:
+    - "{{.ChainID}}-*.{{.Namespace}}.svc.cluster.local"
+  duration: "{{.Duration}}"

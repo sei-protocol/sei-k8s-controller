@@ -29,6 +29,7 @@ const (
 	rTimeChaos    = "timechaos"
 	rIOChaos      = "iochaos"
 	rPodChaos     = "podchaos"
+	rDNSChaos     = "dnschaos"
 )
 
 // chaosScenario is one fault ported from the platform chaos suite: a name, the
@@ -56,9 +57,7 @@ var chaosScenarios = []chaosScenario{
 	{name: "byzantine", resource: rNetworkChaos, tmpl: byzantineTmpl},
 	{name: "pod-failure", resource: rPodChaos, tmpl: podFailureTmpl, oneShot: true},
 	{name: "container-kill", resource: rPodChaos, tmpl: containerKillTmpl, oneShot: true},
-	// dns-chaos deferred: it's a rediscovery fault (live MConnections don't
-	// re-resolve), so the under-fault progress assert can't perturb it — needs a
-	// recovery-focused assert + peer-FQDN-matching patterns.
+	{name: "dns-chaos", resource: rDNSChaos, tmpl: dnsChaosTmpl},
 }
 
 // TestChaosSuite runs each fault against its own fresh chain: provision → inject
