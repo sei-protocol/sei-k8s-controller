@@ -146,6 +146,19 @@ func WaitEVMServing(ctx context.Context, hc *http.Client, evmRPC string) error {
 	})
 }
 
+// WaitRESTServing blocks until restURL answers the Cosmos REST node-info endpoint
+// with HTTP 200 — proof the LCD listener is bound and serving. A node's status
+// advertises its REST URL as soon as the endpoint is composed, but the LCD API
+// binds later in seid boot than the EVM listener, so a freshly-Running node can
+// advertise REST before it serves; this gates on an actual answer. hc may be nil.
+func WaitRESTServing(ctx context.Context, hc *http.Client, restURL string) error {
+	url := restURL + "/cosmos/base/tendermint/v1beta1/node_info"
+	return pollUntil(ctx, url, func(ctx context.Context) bool {
+		_, ok := getJSON(ctx, hc, http.MethodGet, url, "")
+		return ok
+	})
+}
+
 // pollUntil ticks done() every probeInterval until it returns true or ctx fires,
 // running once immediately. A stdlib poll loop — no apimachinery in core.
 func pollUntil(ctx context.Context, what string, done func(context.Context) bool) error {

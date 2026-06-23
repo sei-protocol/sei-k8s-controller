@@ -6,7 +6,7 @@
 // keyring.
 //
 // This is the general, k8s-free derivation primitive. Callers that need to stamp
-// the result into a Secret / workflow-vars layer that on top — see
+// the result into a Secret / workflow-vars layer sit on top of it — see
 // internal/seitask/keygen for the seitask-runner's Secret writer.
 package keygen
 

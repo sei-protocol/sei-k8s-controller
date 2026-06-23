@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -12,6 +13,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -69,7 +71,10 @@ func TestRelease(t *testing.T) {
 	ns := envOr("SEI_NAMESPACE", "")
 	runLabels := map[string]string{runLabelKey: chainID}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Minute)
+	// Generous envelope: the external chain-agnostic harness is a large suite
+	// (each test file re-creates + funds + associates users) and runs well past
+	// half an hour against a single RPC node; size the ctx above the Job deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Minute)
 	defer cancel()
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -92,7 +97,7 @@ func TestRelease(t *testing.T) {
 		Image:          seid,
 		Validators:     4,
 		Labels:         runLabels,
-		Config:         releaseBaseConfig,
+		Config:         maps.Clone(releaseBaseConfig), // package-global; clone before handing to the SDK
 		Accounts:       []sei.GenesisAccount{{Address: admin.Address, Balance: releaseAdminBalance}},
 		DeletionPolicy: sei.DeletionDelete,
 	})
@@ -132,6 +137,12 @@ func TestRelease(t *testing.T) {
 	if rest == "" {
 		t.Fatalf("rpc node %q exposes no REST endpoint (release-test needs SEI_REST_ENDPOINT)", rpcName)
 	}
+	// The status advertises REST as soon as the endpoint is composed, but the LCD
+	// listener binds later than the EVM one — probe it actually serves before
+	// handing the URL to the harness, so a cold REST surfaces here, not mid-test.
+	if err := sei.WaitRESTServing(ctx, hc, rest); err != nil {
+		t.Fatalf("rpc node %q REST serving: %v", rpcName, err)
+	}
 	t.Logf("rpc node %s: caught up + EVM serving + REST at %s", rpcName, rest)
 
 	// Hand the admin mnemonic to the harness via a Secret (secretKeyRef), labeled
@@ -164,7 +175,10 @@ func TestRelease(t *testing.T) {
 	t.Logf("release-test job launched (%s)", releaseImage)
 
 	waitJob(ctx, t, cs, net.Namespace(), job.Name)
-	t.Logf("release-test job completed")
+	// Archive the harness output even on success: exit 0 alone doesn't show which
+	// sub-cases ran, so a skip-but-pass is otherwise invisible (the scenario's
+	// upload-report served this; an S3 report is the deferred telemetry step).
+	t.Logf("release-test job completed; harness log tail:\n%s", podLogTail(ctx, cs, net.Namespace(), job.Name))
 
 	// The chain stayed live through the release suite: the follower is still
 	// caught up (it can't catch up to a halted chain, so this covers quorum).
@@ -208,10 +222,13 @@ type releaseParams struct {
 
 // releaseJob builds the release-test Job: the external harness image, fed the
 // chain endpoints + admin identity, run once (no retry) with a self-terminating
-// deadline. Mirrors the scenario's run-release-test step env contract.
+// deadline. Resources + ttl match the scenario's run-release-test step (which the
+// nightly — an unenforced-PSS namespace — runs without a securityContext, so this
+// stays faithful rather than imposing one the harness image may not tolerate).
 func releaseJob(p releaseParams) *batchv1.Job {
 	backoff := int32(0)
-	deadline := int64(35 * 60) // the harness's 30m budget + image-pull/flush slack
+	deadline := int64(60 * 60) // the chain-agnostic harness runs >35m against one RPC node; generous cap
+	ttl := int32(86400)        // GC the finished Job after a day (matches seiload)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      p.name,
@@ -219,8 +236,9 @@ func releaseJob(p releaseParams) *batchv1.Job {
 			Labels:    map[string]string{runLabelKey: p.runID},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:          &backoff,
-			ActiveDeadlineSeconds: &deadline,
+			BackoffLimit:            &backoff,
+			ActiveDeadlineSeconds:   &deadline,
+			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{runLabelKey: p.runID}},
 				Spec: corev1.PodSpec{
@@ -228,6 +246,10 @@ func releaseJob(p releaseParams) *batchv1.Job {
 					Containers: []corev1.Container{{
 						Name:  "release-test",
 						Image: p.image,
+						// The scenario projects the workflow-vars CM (RPC_*/CHAIN_ID/
+						// ADMIN_ADDRESS) via envFrom ON TOP of the explicit SEI_* list;
+						// reproduce that superset so a harness sub-case reading e.g.
+						// RPC_EVM_RPC_LIST isn't silently unset (a skip-but-exit-0).
 						Env: []corev1.EnvVar{
 							{Name: "TEST_TARGET", Value: "chain-agnostic"},
 							{Name: "SEI_CHAIN_ID", Value: p.chainID},
@@ -235,12 +257,26 @@ func releaseJob(p releaseParams) *batchv1.Job {
 							{Name: "SEI_TENDERMINT_RPC", Value: p.tmRPC},
 							{Name: "SEI_EVM_JSON_RPC", Value: p.evmRPC},
 							{Name: "SEI_REST_ENDPOINT", Value: p.rest},
+							// workflow-vars CM superset (the scenario's envFrom).
+							{Name: "CHAIN_ID", Value: p.chainID},
+							{Name: "ADMIN_ADDRESS", Value: p.adminAddr},
+							{Name: "RPC_TM_RPC", Value: p.tmRPC},
+							{Name: "RPC_EVM_RPC", Value: p.evmRPC},
+							{Name: "RPC_EVM_RPC_LIST", Value: p.evmRPC}, // single RPC node → one-element list
+							{Name: "RPC_REST", Value: p.rest},
 							{Name: "SEI_ADMIN_MNEMONIC", ValueFrom: &corev1.EnvVarSource{
 								SecretKeyRef: &corev1.SecretKeySelector{
 									LocalObjectReference: corev1.LocalObjectReference{Name: p.secretName},
 									Key:                  keygen.SecretMnemonicKey,
 								},
 							}},
+						},
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("500m"),
+								corev1.ResourceMemory: resource.MustParse("1Gi"),
+							},
+							Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
 						},
 					}},
 				},
