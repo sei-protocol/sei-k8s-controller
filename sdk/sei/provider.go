@@ -20,6 +20,8 @@ type Provider interface {
 	GetNetwork(ctx context.Context, name, namespace string) (NetworkHandle, error)
 	CreateNode(ctx context.Context, spec NodeSpec) (NodeHandle, error)
 	GetNode(ctx context.Context, name, namespace string) (NodeHandle, error)
+	RunTask(ctx context.Context, spec TaskSpec) (TaskHandle, error)
+	GetTask(ctx context.Context, name, namespace string) (TaskHandle, error)
 }
 
 // NetworkHandle is the provider-side state the core *Network wraps. It exposes
@@ -44,6 +46,18 @@ type NodeHandle interface {
 	WaitReady(ctx context.Context) error
 	Delete(ctx context.Context) error
 	Object() any // mode-specific raw resource (k8s: *v1alpha1.SeiNode)
+}
+
+// TaskHandle is the provider-side state the core *Task wraps. A SeiNodeTask is
+// one-shot: WaitComplete blocks to a terminal phase and returns the typed
+// outputs, rather than exposing long-lived endpoint getters like the
+// network/node handles.
+type TaskHandle interface {
+	Name() string
+	Namespace() string
+	WaitComplete(ctx context.Context) (*TaskOutputs, error)
+	Delete(ctx context.Context) error
+	Object() any // mode-specific raw resource (k8s: *v1alpha1.SeiNodeTask)
 }
 
 // Factory builds a provider. Deferred so registration (init time) does no I/O —

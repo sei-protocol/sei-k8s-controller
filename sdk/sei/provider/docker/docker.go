@@ -42,3 +42,11 @@ func (*Provider) CreateNode(context.Context, sei.NodeSpec) (sei.NodeHandle, erro
 func (*Provider) GetNode(context.Context, string, string) (sei.NodeHandle, error) {
 	return nil, ErrNotImplemented
 }
+
+func (*Provider) RunTask(context.Context, sei.TaskSpec) (sei.TaskHandle, error) {
+	return nil, ErrNotImplemented
+}
+
+func (*Provider) GetTask(context.Context, string, string) (sei.TaskHandle, error) {
+	return nil, ErrNotImplemented
+}

@@ -101,6 +101,27 @@ func (p *Provider) GetNode(ctx context.Context, name, namespace string) (sei.Nod
 	return &nodeHandle{p: p, namespace: ns, name: name, node: node}, nil
 }
 
+// RunTask SSA-applies one SeiNodeTask against spec.Node and returns a handle
+// immediately. It does not wait — the caller calls Task.WaitComplete.
+func (p *Provider) RunTask(ctx context.Context, spec sei.TaskSpec) (sei.TaskHandle, error) {
+	ns := p.ns(spec.Namespace)
+	task := renderTask(spec, ns)
+	if err := p.apply(ctx, task, fmt.Sprintf("SeiNodeTask %s/%s", ns, task.Name)); err != nil {
+		return nil, err
+	}
+	return &taskHandle{p: p, namespace: ns, name: task.Name, task: task}, nil
+}
+
+// GetTask reads an existing SeiNodeTask into a handle.
+func (p *Provider) GetTask(ctx context.Context, name, namespace string) (sei.TaskHandle, error) {
+	ns := p.ns(namespace)
+	task := &seiv1alpha1.SeiNodeTask{}
+	if err := p.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, task); err != nil {
+		return nil, err
+	}
+	return &taskHandle{p: p, namespace: ns, name: name, task: task}, nil
+}
+
 // ns returns specNS or the provider default when specNS is empty.
 func (p *Provider) ns(specNS string) string {
 	if specNS != "" {

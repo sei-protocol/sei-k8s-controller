@@ -108,3 +108,73 @@ func renderNode(spec sei.NodeSpec, namespace, networkNS string) *seiv1alpha1.Sei
 	}
 	return node
 }
+
+// renderTask builds a SeiNodeTask from a TaskSpec. Kind and the matching payload
+// are validated in core before this runs; here we translate the SDK-native
+// payload to the CRD sub-spec. An empty RequirePhase / zero RequirePhaseTimeout /
+// zero Timeout leaves the CRD defaults (Running / 5m / unbounded) in place.
+func renderTask(spec sei.TaskSpec, namespace string) *seiv1alpha1.SeiNodeTask {
+	target := seiv1alpha1.SeiNodeTaskTarget{
+		NodeRef: seiv1alpha1.SeiNodeTaskNodeRef{Name: spec.Node},
+	}
+	if spec.RequirePhase != "" {
+		target.RequirePhase = seiv1alpha1.SeiNodePhase(spec.RequirePhase)
+	}
+	if spec.RequirePhaseTimeout > 0 {
+		target.RequirePhaseTimeout = &metav1.Duration{Duration: spec.RequirePhaseTimeout}
+	}
+
+	task := &seiv1alpha1.SeiNodeTask{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: seiv1alpha1.GroupVersion.String(),
+			Kind:       "SeiNodeTask",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      spec.Name,
+			Namespace: namespace,
+		},
+		Spec: seiv1alpha1.SeiNodeTaskSpec{
+			Kind:           seiv1alpha1.SeiNodeTaskKind(spec.Kind),
+			Target:         target,
+			TimeoutSeconds: int32(spec.Timeout.Seconds()),
+		},
+	}
+
+	switch {
+	case spec.GovSoftwareUpgrade != nil:
+		p := spec.GovSoftwareUpgrade
+		task.Spec.GovSoftwareUpgrade = &seiv1alpha1.GovSoftwareUpgradePayload{
+			ChainID:        p.ChainID,
+			KeyName:        p.KeyName,
+			Title:          p.Title,
+			Description:    p.Description,
+			UpgradeName:    p.UpgradeName,
+			UpgradeHeight:  p.UpgradeHeight,
+			UpgradeInfo:    p.UpgradeInfo,
+			InitialDeposit: p.InitialDeposit,
+			Memo:           p.Memo,
+			Fees:           p.Fees,
+			Gas:            p.Gas,
+		}
+	case spec.GovVote != nil:
+		p := spec.GovVote
+		task.Spec.GovVote = &seiv1alpha1.GovVotePayload{
+			ChainID:    p.ChainID,
+			KeyName:    p.KeyName,
+			ProposalID: p.ProposalID,
+			Option:     p.Option,
+			Memo:       p.Memo,
+			Fees:       p.Fees,
+			Gas:        p.Gas,
+		}
+	case spec.AwaitNodesAtHeight != nil:
+		task.Spec.AwaitNodesAtHeight = &seiv1alpha1.AwaitNodesAtHeightPayload{
+			TargetHeight: spec.AwaitNodesAtHeight.TargetHeight,
+		}
+	case spec.UpdateNodeImage != nil:
+		task.Spec.UpdateNodeImage = &seiv1alpha1.UpdateNodeImagePayload{
+			Image: spec.UpdateNodeImage.Image,
+		}
+	}
+	return task
+}

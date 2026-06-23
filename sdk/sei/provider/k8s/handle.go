@@ -11,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+
+	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
 // pollInterval is the status re-read cadence for WaitReady. The overall budget is
@@ -168,3 +170,99 @@ func (h *nodeHandle) Delete(ctx context.Context) error {
 
 // Object returns the cached *v1alpha1.SeiNode — the k8s raw-CR escape hatch.
 func (h *nodeHandle) Object() any { return h.node }
+
+// taskHandle is the provider-side state behind a *sei.Task. It caches the
+// last-read SeiNodeTask; WaitComplete refreshes that cache as it polls and
+// returns the translated outputs from the terminal object.
+type taskHandle struct {
+	p         *Provider
+	namespace string
+	name      string
+	task      *seiv1alpha1.SeiNodeTask
+}
+
+func (h *taskHandle) Name() string      { return h.name }
+func (h *taskHandle) Namespace() string { return h.namespace }
+
+// WaitComplete blocks until the SeiNodeTask reaches Complete (returning its
+// translated outputs) or fails fast on Failed (returning the task's recorded
+// failure reason). The caller's ctx is the budget; a deadline surfaces as
+// context.DeadlineExceeded (sei.IsTimeout).
+func (h *taskHandle) WaitComplete(ctx context.Context) (*sei.TaskOutputs, error) {
+	resource := fmt.Sprintf("SeiNodeTask %s/%s", h.namespace, h.name)
+	err := wait.PollUntilContextCancel(ctx, pollInterval, true, func(ctx context.Context) (bool, error) {
+		task := &seiv1alpha1.SeiNodeTask{}
+		if err := h.p.c.Get(ctx, types.NamespacedName{Namespace: h.namespace, Name: h.name}, task); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("%s: reading status: %w", resource, err)
+		}
+		h.task = task
+		switch task.Status.Phase {
+		case seiv1alpha1.SeiNodeTaskPhaseComplete:
+			return true, nil
+		case seiv1alpha1.SeiNodeTaskPhaseFailed:
+			return false, fmt.Errorf("%s: failed: %s", resource, taskFailureReason(task))
+		default:
+			return false, nil
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return translateTaskOutputs(h.task.Status.Outputs), nil
+}
+
+// Delete removes the SeiNodeTask. Idempotent: a NotFound is success.
+func (h *taskHandle) Delete(ctx context.Context) error {
+	obj := &seiv1alpha1.SeiNodeTask{ObjectMeta: metav1.ObjectMeta{Name: h.name, Namespace: h.namespace}}
+	if err := h.p.c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("SeiNodeTask %s/%s: delete: %w", h.namespace, h.name, err)
+	}
+	return nil
+}
+
+// Object returns the cached *v1alpha1.SeiNodeTask — the k8s raw-CR escape hatch.
+func (h *taskHandle) Object() any { return h.task }
+
+// taskFailureReason extracts a human reason from a failed task: the execution's
+// recorded error, else the message of any Ready=False condition, else a generic
+// note so the error is never empty.
+func taskFailureReason(task *seiv1alpha1.SeiNodeTask) string {
+	if task.Status.Task != nil && task.Status.Task.Err != "" {
+		return task.Status.Task.Err
+	}
+	for _, c := range task.Status.Conditions {
+		if c.Status == metav1.ConditionFalse && c.Message != "" {
+			return c.Message
+		}
+	}
+	return "no failure reason recorded"
+}
+
+// translateTaskOutputs maps the CRD outputs to the SDK-native shape. Returns nil
+// when the task recorded no outputs (e.g. a kind that produces none).
+func translateTaskOutputs(out *seiv1alpha1.SeiNodeTaskOutputs) *sei.TaskOutputs {
+	if out == nil {
+		return nil
+	}
+	o := &sei.TaskOutputs{}
+	if u := out.GovSoftwareUpgrade; u != nil {
+		o.GovSoftwareUpgrade = &sei.GovSoftwareUpgradeOutputs{
+			ProposalID: u.ProposalID,
+			TxHash:     u.TxHash,
+			Height:     u.Height,
+		}
+	}
+	if v := out.GovVote; v != nil {
+		o.GovVote = &sei.GovVoteOutputs{TxHash: v.TxHash, Height: v.Height}
+	}
+	if a := out.AwaitNodesAtHeight; a != nil {
+		o.AwaitNodesAtHeight = &sei.AwaitNodesAtHeightOutputs{CurrentHeight: a.CurrentHeight}
+	}
+	if i := out.UpdateNodeImage; i != nil {
+		o.UpdateNodeImage = &sei.UpdateNodeImageOutputs{AppliedImage: i.AppliedImage}
+	}
+	return o
+}
