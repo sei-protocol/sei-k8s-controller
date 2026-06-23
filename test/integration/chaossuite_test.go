@@ -19,14 +19,18 @@ const (
 	rStressChaos  = "stresschaos"
 	rTimeChaos    = "timechaos"
 	rIOChaos      = "iochaos"
+	rPodChaos     = "podchaos"
 )
 
 // chaosScenario is one fault ported from the platform chaos suite: a name, the
-// fault CR's GVR resource, and its template.
+// fault CR's GVR resource, and its template. oneShot marks a kill fault
+// (pod-kill / container-kill) — no spec.duration and no AllRecovered, so it
+// skips the self-expiry tripwire and the recovery gate.
 type chaosScenario struct {
 	name     string
 	resource string
 	tmpl     string
+	oneShot  bool
 }
 
 // chaosScenarios is the ported fault set. Growing toward the platform suite's
@@ -41,6 +45,8 @@ var chaosScenarios = []chaosScenario{
 	{name: "memory-stress", resource: rStressChaos, tmpl: memoryStressTmpl},
 	{name: "disk-io-latency", resource: rIOChaos, tmpl: diskIOLatencyTmpl},
 	{name: "byzantine", resource: rNetworkChaos, tmpl: byzantineTmpl},
+	{name: "pod-failure", resource: rPodChaos, tmpl: podFailureTmpl, oneShot: true},
+	{name: "container-kill", resource: rPodChaos, tmpl: containerKillTmpl, oneShot: true},
 	// dns-chaos deferred: it's a rediscovery fault (live MConnections don't
 	// re-resolve), so the under-fault progress assert can't perturb it — needs a
 	// recovery-focused assert + peer-FQDN-matching patterns.
@@ -106,7 +112,9 @@ func TestChaosSuite(t *testing.T) {
 				Namespace: faultNS,
 				Duration:  duration,
 			})
-			if !f.hasDuration() {
+			// Duration-bearing faults must self-expire (else gateRecovered hangs
+			// to the deadline). One-shot kills carry no duration by design.
+			if !sc.oneShot && !f.hasDuration() {
 				t.Fatalf("fault %s has no spec.duration — gateRecovered would hang until the deadline", sc.name)
 			}
 			applyFault(ctx, t, dc, faultNS, f)
@@ -117,21 +125,27 @@ func TestChaosSuite(t *testing.T) {
 			follower := ch.rpcNodes[0]
 			// Live under fault: the chain must keep producing blocks while the
 			// fault is active (f=1 holds 2/3 quorum). Assert the follower's height
-			// advances within a window inside the fault duration, so the progress
-			// is observed while the fault is programmed — not after it expires.
-			// catching_up==false alone is insufficient: a stalled node reports it
-			// at a frozen height.
-			underFault, cancelUF := context.WithTimeout(ctx, faultDur*2/3)
+			// advances within a window — observed while the fault is in effect, not
+			// after it lifts. catching_up==false alone is insufficient: a stalled
+			// node reports it at a frozen height.
+			window := faultDur * 2 / 3
+			if sc.oneShot {
+				window = 90 * time.Second // no duration; bound the kill + restart observation
+			}
+			underFault, cancelUF := context.WithTimeout(ctx, window)
 			err = sei.WaitHeightAdvances(underFault, hc, follower.TendermintRPC(), 3)
 			cancelUF()
 			if err != nil {
 				t.Errorf("under-fault %s height did not advance: %v", follower.Name(), err)
 			}
 
-			// The fault self-expires after its duration; gate recovery (catches
-			// stuck finalizers) then confirm the chain reconverged.
-			gateRecovered(ctx, t, dc, faultNS, f)
-			t.Logf("%s: fault recovered", sc.name)
+			// Duration-bearing faults self-expire; gate recovery (catches stuck
+			// finalizers). One-shot kills have no AllRecovered — recovery is the
+			// killed pod rejoining, covered by the caught-up check.
+			if !sc.oneShot {
+				gateRecovered(ctx, t, dc, faultNS, f)
+				t.Logf("%s: fault recovered", sc.name)
+			}
 			if err := sei.WaitCaughtUp(ctx, hc, follower.TendermintRPC()); err != nil {
 				t.Errorf("post-fault %s not caught up: %v", follower.Name(), err)
 			}

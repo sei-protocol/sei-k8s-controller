@@ -1,0 +1,19 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-failure-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # One-shot: kill one validator pod outright; the StatefulSet recreates it
+  # while the chain keeps producing on the other 3 (f=1). No duration, so no
+  # AllRecovered — recovery is the killed pod rejoining, observed via the
+  # follower staying live.
+  action: pod-kill
+  mode: one
+  gracePeriod: 0
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
