@@ -53,8 +53,7 @@ var releaseRPCConfig = map[string]string{
 // the external release-test image against the RPC node as a Job. The release-test
 // image owns the functional assertions (TEST_TARGET=chain-agnostic); the suite's
 // job is to stand up the chain, hand the harness its endpoints + admin key, and
-// gate on the Job's exit code. Replaces the Chaos-Mesh Workflow's keygen +
-// provision + run steps with statement order + the SDK.
+// gate on the Job's exit code.
 //
 // One RPC node (not the load suite's two) is deliberate: the harness runs
 // stateful EVM-filter and send-then-wait sequences that need one consistent
@@ -189,9 +188,8 @@ func TestRelease(t *testing.T) {
 }
 
 // createMnemonicSecret writes the admin mnemonic to a Secret the release-test pod
-// reads via secretKeyRef. Labeled for the GC sweep; deleted on cleanup. (The
-// seitask-runner stamps an ownerRef instead — the harness uses the run label +
-// t.Cleanup, matching how it provisions everything else.)
+// reads via secretKeyRef. Labeled for the GC sweep and deleted on cleanup,
+// matching how the suite manages everything else it creates.
 func createMnemonicSecret(
 	ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 	ns, name string, labels map[string]string, mnemonic string,
@@ -246,10 +244,10 @@ func releaseJob(p releaseParams) *batchv1.Job {
 					Containers: []corev1.Container{{
 						Name:  "release-test",
 						Image: p.image,
-						// The scenario projects the workflow-vars CM (RPC_*/CHAIN_ID/
-						// ADMIN_ADDRESS) via envFrom ON TOP of the explicit SEI_* list;
-						// reproduce that superset so a harness sub-case reading e.g.
-						// RPC_EVM_RPC_LIST isn't silently unset (a skip-but-exit-0).
+						// The release-test image reads both the SEI_* names and the
+						// RPC_*/CHAIN_ID/ADMIN_ADDRESS names; provide both so a
+						// sub-case reading e.g. RPC_EVM_RPC_LIST isn't silently unset
+						// (which would skip-but-exit-0).
 						Env: []corev1.EnvVar{
 							{Name: "TEST_TARGET", Value: "chain-agnostic"},
 							{Name: "SEI_CHAIN_ID", Value: p.chainID},
@@ -257,7 +255,7 @@ func releaseJob(p releaseParams) *batchv1.Job {
 							{Name: "SEI_TENDERMINT_RPC", Value: p.tmRPC},
 							{Name: "SEI_EVM_JSON_RPC", Value: p.evmRPC},
 							{Name: "SEI_REST_ENDPOINT", Value: p.rest},
-							// workflow-vars CM superset (the scenario's envFrom).
+							// The RPC_*/CHAIN_ID/ADMIN_ADDRESS aliases the image also reads.
 							{Name: "CHAIN_ID", Value: p.chainID},
 							{Name: "ADMIN_ADDRESS", Value: p.adminAddr},
 							{Name: "RPC_TM_RPC", Value: p.tmRPC},

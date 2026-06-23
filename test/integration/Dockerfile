@@ -1,8 +1,7 @@
-# The integration harness image: the build-tagged test binary, compiled once and
-# run by one in-cluster CronJob per target (args: -test.run TestX). It replaces
-# the seitask-runner image + the Chaos-Mesh Workflow scenarios — the suites carry
-# their fault/seiload templates via //go:embed, so the binary is self-contained
-# (no scenario files to COPY).
+# The integration test suite compiled to an image: the build-tagged test binary,
+# run by one in-cluster CronJob per target (args: -test.run TestX). The suites
+# carry their fault/seiload templates via //go:embed, so the binary is
+# self-contained (no extra files to COPY).
 FROM golang:1.26 AS builder
 ARG TARGETOS
 ARG TARGETARCH

@@ -8,9 +8,8 @@ import (
 
 // Task support. A SeiNodeTask is a one-shot, typed operation against a single
 // SeiNode — submit a gov upgrade proposal, vote, wait for a height, swap the
-// node image. The harness drives a major-upgrade or release scenario by running
-// these in statement order. This replaces the Chaos-Mesh Workflow DAG + env-file
-// handoffs the seitask-runner used.
+// node image. A caller drives a major-upgrade or release flow by running these
+// in statement order.
 //
 // Cross-task coordination is chain-as-medium, NOT task-to-task output currying:
 // the controller surfaces typed Outputs only for UpdateNodeImage today (the gov
@@ -190,7 +189,7 @@ func (c *Client) GetTask(ctx context.Context, name, namespace string) (*Task, er
 	return &Task{handle: h}, nil
 }
 
-// Task is a Go-native handle to a SeiNodeTask.
+// Task is a handle to a SeiNodeTask.
 type Task struct{ handle TaskHandle }
 
 // Name is the SeiNodeTask resource name.

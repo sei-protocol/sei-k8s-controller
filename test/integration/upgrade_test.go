@@ -75,8 +75,8 @@ var upgradeConfig = map[string]string{
 const restUnreachable = "REST unreachable / non-200"
 
 // TestChainUpgrade drives a Sei major software upgrade end-to-end through the SDK
-// task surface, replacing the Chaos-Mesh Workflow DAG: provision a 4-validator
-// chain on the pre-upgrade image -> submit a GovSoftwareUpgrade proposal ->
+// task surface: provision a 4-validator chain on the pre-upgrade image -> submit
+// a GovSoftwareUpgrade proposal ->
 // resolve its ID from the chain's gov REST (chain-as-medium, since the controller
 // does not surface it as a task output) -> vote yes from every validator -> wait
 // for it to pass -> let the chain halt at the upgrade height -> bump the

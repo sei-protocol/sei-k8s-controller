@@ -1,4 +1,4 @@
-// Package sei is a thin, typed, stateless, multi-mode Go-native API for
+// Package sei is a thin, typed, stateless, multi-mode API for
 // SeiNetwork/SeiNode lifecycle. It mirrors database/sql: a provider registers in
 // init(), the consumer blank-imports it, and Open selects the mode by name.
 //
@@ -130,7 +130,7 @@ func (c *Client) GetNode(ctx context.Context, name, namespace string) (*Node, er
 	return &Node{handle: h}, nil
 }
 
-// Network is a Go-native handle to a SeiNetwork. Endpoint getters read the
+// Network is a handle to a SeiNetwork. Endpoint getters read the
 // runtime's status verbatim — never reconstructed.
 type Network struct{ handle NetworkHandle }
 
@@ -159,7 +159,7 @@ func (n *Network) Delete(ctx context.Context) error { return n.handle.Delete(ctx
 // type-asserts; local/docker stubs return nil.
 func (n *Network) Object() any { return n.handle.Object() }
 
-// Node is a Go-native handle to a SeiNode.
+// Node is a handle to a SeiNode.
 type Node struct{ handle NodeHandle }
 
 // Name is the SeiNode resource name.
