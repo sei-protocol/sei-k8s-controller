@@ -1,0 +1,66 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seiload-{{.RunID}}
+  labels:
+    app.kubernetes.io/name: seiload
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        # podMonitor selects this for Prometheus scrape (metrics continuity).
+        app.kubernetes.io/name: seiload
+        sei.io/harness-run: "{{.RunID}}"
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: seiload
+          image: {{.Image}}
+          args:
+            - --config
+            - /etc/seiload/profile.json
+            - --duration={{.DurationMinutes}}m
+            - --post-summary-flush-delay=45s
+            - --track-receipts=true
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          env:
+            - name: SEILOAD_RUN_ID
+              value: "{{.RunID}}"
+            - name: SEILOAD_CHAIN_ID
+              value: "{{.ChainID}}"
+            - name: SEILOAD_COMMIT_ID
+              value: "{{.Commit}}"
+            - name: SEILOAD_WORKLOAD
+              value: nightly
+          volumeMounts:
+            - name: profile
+              mountPath: /etc/seiload
+              readOnly: true
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+      volumes:
+        - name: profile
+          configMap:
+            name: {{.ProfileCM}}

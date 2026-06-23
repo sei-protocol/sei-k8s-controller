@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -46,6 +47,12 @@ type spec struct {
 	validators int           // genesis validator count (>= 1)
 	rpcNodes   int           // standalone RPC followers; named <chain>-rpc-0..N-1
 	timeout    time.Duration // overall scenario deadline (drives ctx, kept < CronJob activeDeadlineSeconds)
+
+	// seiload inputs (load suite)
+	seiloadImage   string // sei-load benchmark image
+	seiloadProfile string // profile name in the seiload-profiles ConfigMap
+	seiloadCommit  string // sei-chain commit label for the run's metrics
+	durationMin    int    // seiload run length, minutes
 }
 
 // chain is the live provisioned topology a suite runs load against and asserts
@@ -213,4 +220,18 @@ func mustEnv(t *testing.T, key string) string {
 		t.Fatalf("integration suite: required env %s is unset", key)
 	}
 	return v
+}
+
+// envInt reads an integer env var or a fallback; a non-integer value fails fast.
+func envInt(t *testing.T, key string, fallback int) int {
+	t.Helper()
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		t.Fatalf("integration suite: env %s=%q is not an integer: %v", key, v, err)
+	}
+	return n
 }

@@ -10,15 +10,20 @@ import (
 	"time"
 )
 
-// TestBenchmark provisions a validator chain + RPC fleet for the load suite.
-// seiload drive + report upload are not yet wired (see TODO below).
+// TestBenchmark provisions a validator chain + RPC fleet, drives seiload against
+// the fleet for the configured duration, and asserts the chain stayed live under
+// load. The load suite.
 //
 // Inputs (env, mirroring k8s_nightly.yml):
 //
-//	SEI_CHAIN_ID   per-run chain id (e.g. bench-<run-id>)   [required]
-//	SEID_IMAGE     seid image under test                    [required]
-//	SEI_RUN_ID     unique run id (sei.io/harness-run)       [default: SEI_CHAIN_ID]
-//	SEI_NAMESPACE  shared nightly namespace                 [default: SDK default]
+//	SEI_CHAIN_ID     per-run chain id (e.g. bench-<run-id>)   [required]
+//	SEID_IMAGE       seid image under test                    [required]
+//	SEILOAD_IMAGE    sei-load benchmark image                 [required]
+//	SEI_RUN_ID       unique run id (sei.io/harness-run)       [default: SEI_CHAIN_ID]
+//	SEI_NAMESPACE    shared nightly namespace                 [default: SDK default]
+//	SEILOAD_PROFILE  profile name in seiload-profiles         [default: nightly_evm_transfer]
+//	DURATION_MINUTES seiload run length                       [default: 10]
+//	SEILOAD_COMMIT_ID sei-chain commit label for metrics      [default: ""]
 //
 // Deadlines: the CronJob MUST run this with `-test.timeout 0` (or safely above
 // the scenario timeout). A -test.timeout breach panics and bypasses t.Cleanup,
@@ -30,13 +35,17 @@ func TestBenchmark(t *testing.T) {
 
 	chainID := mustEnv(t, "SEI_CHAIN_ID")
 	s := spec{
-		chainID:    chainID,
-		runID:      envOr("SEI_RUN_ID", chainID),
-		namespace:  envOr("SEI_NAMESPACE", ""),
-		seidImage:  mustEnv(t, "SEID_IMAGE"),
-		validators: 4,
-		rpcNodes:   2, // seiload fans across both via the EVM endpoint list
-		timeout:    90 * time.Minute,
+		chainID:        chainID,
+		runID:          envOr("SEI_RUN_ID", chainID),
+		namespace:      envOr("SEI_NAMESPACE", ""),
+		seidImage:      mustEnv(t, "SEID_IMAGE"),
+		validators:     4,
+		rpcNodes:       2, // seiload fans across both via the EVM endpoint list
+		timeout:        90 * time.Minute,
+		seiloadImage:   mustEnv(t, "SEILOAD_IMAGE"),
+		seiloadProfile: envOr("SEILOAD_PROFILE", "nightly_evm_transfer"),
+		seiloadCommit:  envOr("SEILOAD_COMMIT_ID", ""),
+		durationMin:    envInt(t, "DURATION_MINUTES", 10),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
@@ -49,20 +58,15 @@ func TestBenchmark(t *testing.T) {
 	defer stopSignals()
 
 	c := openClient(ctx, t)
+	cs := clientset(t)
 
 	ch, err := provision(ctx, t, c, s)
 	cleanupChain(t, ch)
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
-
 	t.Logf("provisioned %s: %d validators + %d RPC followers; EVM endpoints=%v",
 		s.chainID, s.validators, len(ch.rpcNodes), ch.evmEndpoints())
 
-	// TODO: drive seiload as a decoupled unit — apply its own manifest
-	// parameterized with ch.evmEndpoints(), stamped sei.io/harness-run; wait,
-	// read the report from S3, assert TPS/receipts. seiload's Job spec is not
-	// constructed here.
-	t.Skipf("provisioned %s (%d validators + %d followers); seiload drive + report not yet wired — tearing down",
-		s.chainID, s.validators, len(ch.rpcNodes))
+	runSeiload(ctx, t, cs, ch, s)
 }
