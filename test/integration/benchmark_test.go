@@ -46,6 +46,14 @@ func TestBenchmark(t *testing.T) {
 		seiloadProfile: envOr("SEILOAD_PROFILE", "nightly_evm_transfer"),
 		seiloadCommit:  envOr("SEILOAD_COMMIT_ID", ""),
 		durationMin:    envInt(t, "DURATION_MINUTES", 10),
+		storageConfig:  memiavlStorageConfig,
+		// EVM tuning the followers need to absorb the load (matches the load
+		// scenario's rpc overrides).
+		rpcConfig: map[string]string{
+			"evm.worker_pool_size":  "32",
+			"evm.worker_queue_size": "4000",
+			"evm.max_tx_pool_txs":   "10000",
+		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
