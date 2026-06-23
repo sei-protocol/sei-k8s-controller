@@ -68,14 +68,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - chaos-mesh.org
-  resources:
-  - workflownodes
-  - workflows
-  verbs:
-  - get
-  - list
-- apiGroups:
   - sei.io
   resources:
   - seinetworks
