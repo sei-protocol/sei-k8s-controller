@@ -1,0 +1,26 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-partition-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # Isolate validator-0 from validators 1-3 (f=1, the chain keeps 2/3 quorum
+  # and must stay live). The RPC follower is unaffected and observes recovery.
+  action: partition
+  mode: all
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+      - {key: sei.io/node, operator: In, values: ["{{.ChainID}}-0"]}
+  direction: both
+  target:
+    mode: all
+    selector:
+      namespaces: ["{{.Namespace}}"]
+      expressionSelectors:
+        - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+        - {key: sei.io/node, operator: NotIn, values: ["{{.ChainID}}-0"]}
+  duration: "{{.Duration}}"
