@@ -28,6 +28,10 @@ func (stubProvider) CreateNode(context.Context, NodeSpec) (NodeHandle, error) { 
 func (stubProvider) GetNode(context.Context, string, string) (NodeHandle, error) {
 	return nil, nil
 }
+func (stubProvider) RunTask(context.Context, TaskSpec) (TaskHandle, error) { return nil, nil }
+func (stubProvider) GetTask(context.Context, string, string) (TaskHandle, error) {
+	return nil, nil
+}
 
 // resetRegistry clears the package registry so each test starts clean. Tests in
 // this file run sequentially (no t.Parallel) because they mutate global state.
