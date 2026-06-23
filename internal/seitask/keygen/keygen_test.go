@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	keyderive "github.com/sei-protocol/sei-k8s-controller/internal/keygen"
 	"github.com/sei-protocol/sei-k8s-controller/internal/taskruntime"
 )
 
@@ -58,7 +59,7 @@ func TestRun_CreatesSecretAndWorkflowVars(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: testSecretName}, secret); err != nil {
 		t.Fatalf("Get Secret: %v", err)
 	}
-	mnemonic, ok := secret.Data[SecretMnemonicKey]
+	mnemonic, ok := secret.Data[keyderive.SecretMnemonicKey]
 	if !ok || len(mnemonic) == 0 {
 		t.Fatalf("mnemonic missing from Secret")
 	}
