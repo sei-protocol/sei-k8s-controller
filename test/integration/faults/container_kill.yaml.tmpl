@@ -1,0 +1,19 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: container-kill-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # One-shot: kill the seid container in one validator pod; the kubelet restarts
+  # it in place while the chain holds on the other 3 (f=1). No duration / no
+  # AllRecovered — same one-shot handling as pod-failure.
+  action: container-kill
+  mode: one
+  containerNames: ["seid"]
+  gracePeriod: 0
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}

@@ -46,6 +46,12 @@ var diskIOLatencyTmpl string
 //go:embed faults/byzantine.yaml.tmpl
 var byzantineTmpl string
 
+//go:embed faults/pod_failure.yaml.tmpl
+var podFailureTmpl string
+
+//go:embed faults/container_kill.yaml.tmpl
+var containerKillTmpl string
+
 // chaosGVR is the GroupVersionResource for a Chaos-Mesh fault kind. Faults are
 // applied unstructured so the chaos-mesh API stays out of the module's deps.
 func chaosGVR(resource string) schema.GroupVersionResource {
@@ -119,23 +125,26 @@ func applyFault(ctx context.Context, t *testing.T, dc dynamic.Interface, ns stri
 	})
 }
 
-// gateInjected blocks until the fault reports status.conditions[AllInjected]=True
-// — the anti-false-green guard. Creating a fault CR is async (chaos-mesh must
-// program tc/tproxy/cgroups); asserting before it lands tests an undisturbed
-// chain.
-func gateInjected(ctx context.Context, t *testing.T, dc dynamic.Interface, ns string, f fault) {
+// gateInjected blocks until AllInjected, then asserts the fault hit the right
+// number of targets. AllInjected is set after chaos-mesh writes the per-target
+// records to the (durable) CR status, so a single read here doesn't race the
+// injection. oneShot kills must hit EXACTLY one validator (mode:one): ≥1 alone
+// wouldn't catch a future selector edit that killed 2/4 and halted the chain.
+func gateInjected(ctx context.Context, t *testing.T, dc dynamic.Interface, ns string, f fault, oneShot bool) {
 	t.Helper()
 	waitFaultCondition(ctx, t, dc, ns, f, "AllInjected")
-	// AllInjected is vacuously true for an empty target set, so a selector that
-	// matched 0 pods would pass against an undisturbed chain. Assert chaos-mesh
-	// actually injected at least one target.
 	u, err := dc.Resource(chaosGVR(f.resource)).Namespace(ns).Get(ctx, f.obj.GetName(), metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("read injected count for %s/%s: %v", f.resource, f.obj.GetName(), err)
+		t.Fatalf("read injected targets for %s/%s: %v", f.resource, f.obj.GetName(), err)
 	}
-	if n := faultInjectedTargets(u); n < 1 {
+	n := faultInjectedTargets(u)
+	if n < 1 {
 		t.Fatalf("fault %s/%s injected 0 targets — selector matched nothing (false-green guard)", f.resource, f.obj.GetName())
 	}
+	if oneShot && n != 1 {
+		t.Fatalf("one-shot fault %s/%s injected %d targets, want exactly 1 — quorum risk", f.resource, f.obj.GetName(), n)
+	}
+	t.Logf("%s/%s injected %d target(s)", f.resource, f.obj.GetName(), n)
 }
 
 // faultInjectedTargets counts the targets chaos-mesh actually injected. The
