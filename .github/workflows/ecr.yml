@@ -54,3 +54,17 @@ jobs:
           tags: ${{ steps.ecr-login.outputs.registry }}/sei/seitask-runner:${{ inputs.tag || github.sha }}
           cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
+
+      # The Go-native integration harness (go test -c -tags integration), run by
+      # one CronJob per target (-test.run TestX). Replaces seitask-runner + the
+      # Chaos-Mesh Workflow scenarios once the nightly CronJobs cut over.
+      - name: Build and push integration-harness image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: test/integration/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.ecr-login.outputs.registry }}/sei/integration-harness:${{ inputs.tag || github.sha }}
+          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
+          cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
