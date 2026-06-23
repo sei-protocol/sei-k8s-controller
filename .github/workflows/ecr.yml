@@ -66,5 +66,9 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ${{ steps.ecr-login.outputs.registry }}/sei/integration-harness:${{ inputs.tag || github.sha }}
-          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared
-          cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:shared,mode=max
+          # Dedicated cache ref (NOT the shared one the controller image uses):
+          # this is a test-image build over the whole test tree, so isolating its
+          # cache keeps a poisoned test-build layer out of the production
+          # controller image's build.
+          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:integration-harness
+          cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:integration-harness,mode=max
