@@ -64,7 +64,7 @@ setCondition(obj, ConditionNetworkingReady, metav1.ConditionFalse,
 The narrow exceptions to the always-present rule:
 
 - **`*Needed`-style conditions** where `True` is the exception and `False` would be tautological with the absence of the feature. No current instances in this codebase; the exception is retained for future conditions where it genuinely fits.
-- **`kubectl wait` consumer conditions** where present-vs-absent semantics are explicitly load-bearing. `SeiNodeTask.Status.Conditions[Ready|Failed]` is documented as latch-on-terminal-state because the seitask-runner depends on `kubectl wait --for=condition=Ready=true` (which matches `True` only) and `--for=condition=Failed=true` as the dual exit signal. The Ready+Failed pair is the documented exception to the "no mixed polarities for the same subject" rule below — both latch independently on terminal state.
+- **`kubectl wait` consumer conditions** where present-vs-absent semantics are explicitly load-bearing. `SeiNodeTask.Status.Conditions[Ready|Failed]` is documented as latch-on-terminal-state because consumers wait on `kubectl wait --for=condition=Ready=true` (which matches `True` only) and `--for=condition=Failed=true` as the dual exit signal. The Ready+Failed pair is the documented exception to the "no mixed polarities for the same subject" rule below — both latch independently on terminal state.
 
 Any new condition that doesn't fit one of these exceptions defaults to always-present.
 

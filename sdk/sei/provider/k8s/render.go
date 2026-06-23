@@ -13,8 +13,7 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
-// fieldOwner is the SDK's SSA field manager. A distinct writer from
-// seictl/seitask.
+// fieldOwner is the SDK's SSA field manager. A distinct writer from seictl.
 const fieldOwner client.FieldOwner = sei.FieldOwner
 
 // renderNetwork builds the SeiNetwork from a NetworkSpec. ChainID is not a spec

@@ -47,8 +47,8 @@ timeout spec fields; `sei.IsTimeout(err)` reports a deadline.
 **`WaitCaughtUp` / `WaitEVMServing` = STRICT readiness** (`readiness.go`). The
 caught-up gate (TM `/status`: `height>1 && catching_up==false`) and the EVM serve
 gate (`eth_blockNumber` bound) — the heavier contract `WaitReady` deliberately is
-not. URL-based and stdlib-only (no apimachinery), so seictl, the seitask Task
-steps, and external integration harnesses share one readiness implementation
+not. URL-based and stdlib-only (no apimachinery), so seictl and external
+integration harnesses share one readiness implementation
 instead of bespoke bash. Inputs (endpoint URLs) come from whatever produced the
 resource — e.g. the CLI create command's stdout.
 
@@ -89,6 +89,6 @@ authors them once.
 - **`provider.Provider` interface + `Register`/`Factory`.** The handle-based CRUD
   driver-registration contract.
 - **Object-label keys** `sei.io/role=node`, `sei.io/seinetwork=<net>`. The
-  fleet-wide selector contract shared with seictl, seitask, chaos selectors.
+  fleet-wide selector contract shared with seictl + chaos selectors.
 - **SSA FieldOwner `sei-sdk`.** A distinct field manager. Renaming it orphans
   field ownership on objects the SDK already created.

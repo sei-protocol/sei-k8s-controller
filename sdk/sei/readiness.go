@@ -14,8 +14,8 @@ import (
 // Readiness probes are the generally-useful chain-provisioning lifecycle piece:
 // "the node has joined consensus and is actually serving," not merely "the pod is
 // Running." They are mode-agnostic — they take a published endpoint URL and speak
-// HTTP, so the k8s/local/docker providers, the seitask Task steps, and external
-// harnesses all share one implementation. Kept stdlib-only (no apimachinery) so
+// HTTP, so the k8s/local/docker providers and external callers all share one
+// implementation. Kept stdlib-only (no apimachinery) so
 // the core package stays dependency-free for lightweight external consumers.
 
 // probeInterval is the readiness poll cadence; a var so tests can shrink it

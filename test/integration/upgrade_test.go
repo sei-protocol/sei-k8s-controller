@@ -77,10 +77,10 @@ const restUnreachable = "REST unreachable / non-200"
 // task surface: provision a 4-validator chain on the pre-upgrade image -> submit a
 // GovSoftwareUpgrade proposal -> resolve its ID from the chain's gov REST
 // (chain-as-medium, since the controller does not surface it as a task output) ->
-// vote yes from every validator -> wait
-// for it to pass -> let the chain halt at the upgrade height -> bump the
-// SeiNetwork image to the post-upgrade build -> assert the upgrade handler ran
-// and every validator resumed past the upgrade height.
+// vote yes from every validator -> wait for it to pass -> let the chain halt at
+// the upgrade height -> bump the SeiNetwork image to the post-upgrade build ->
+// assert the upgrade handler ran and every validator resumed past the upgrade
+// height.
 //
 // The upgrade height is scheduled far enough ahead (defaultUpgradeHeightDelta)
 // that the proposal passes before the chain reaches it; the upgrade-applied check
