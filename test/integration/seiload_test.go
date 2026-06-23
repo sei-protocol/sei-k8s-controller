@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ type seiloadParams struct {
 	Image           string
 	DurationMinutes int
 	ProfileCM       string
+	DeadlineSeconds int
 }
 
 // clientset builds a client-go clientset from the ambient config — the harness
@@ -118,17 +120,16 @@ func renderJob(t *testing.T, p seiloadParams) *batchv1.Job {
 	return &job
 }
 
-// runSeiload drives seiload against the fleet as a decoupled unit: render the
-// platform profile, apply seiload's own Job manifest, wait for it to run the
-// full load, then assert the chain stayed live under it.
-//
-// The pass/fail signal is Job completion (seiload ran the load to the end
-// without erroring) plus post-load chain liveness. A throughput/regression gate
-// belongs in telemetry — a PromQL query over the run's metrics — not in this
-// harness; the Job carries the metrics scrape label so that gate can be added.
+// runSeiload renders the platform profile, applies seiload's Job manifest, waits
+// for the Job to complete, and asserts every follower is still caught up.
+// Pass/fail is Job completion plus post-load liveness; throughput gating is a
+// PromQL query over the run's metrics (the Job carries a metrics scrape label,
+// pending a podMonitor that selects it).
 func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch *chain, s spec) {
 	t.Helper()
-	ns := envOr("SEI_NAMESPACE", ch.network.Namespace())
+	// The seiload Job co-locates with the chain; the network's resolved
+	// namespace is authoritative (never re-resolve from env here).
+	ns := ch.network.Namespace()
 
 	profileCM := "seiload-profile-" + s.runID
 	profileJSON := renderProfile(ctx, t, cs, ns, s.seiloadProfile, s.chainID, ch.evmEndpoints())
@@ -141,6 +142,9 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 		Image:           s.seiloadImage,
 		DurationMinutes: s.durationMin,
 		ProfileCM:       profileCM,
+		// Self-terminating cap independent of the harness ctx: the load plus
+		// generous slack for image pull + the post-summary flush.
+		DeadlineSeconds: (s.durationMin + 15) * 60,
 	})
 	job.Namespace = ns
 	if _, err := cs.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
@@ -155,11 +159,13 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 
 	waitJob(ctx, t, cs, ns, job.Name)
 
-	// Chain survived the load: node-0 still caught up.
+	// Chain survived the load: every follower still caught up (a follower can't
+	// catch up to a halted chain, so this transitively covers validator quorum).
 	hc := &http.Client{Timeout: 10 * time.Second}
-	n0 := ch.rpcNodes[0]
-	if err := sei.WaitCaughtUp(ctx, hc, n0.TendermintRPC()); err != nil {
-		t.Errorf("post-load %s not caught up: %v", n0.Name(), err)
+	for _, n := range ch.rpcNodes {
+		if err := sei.WaitCaughtUp(ctx, hc, n.TendermintRPC()); err != nil {
+			t.Errorf("post-load %s not caught up: %v", n.Name(), err)
+		}
 	}
 }
 
@@ -179,7 +185,8 @@ func waitJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns, na
 				return
 			}
 			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-				t.Fatalf("seiload job %q failed: %s", name, cond.Message)
+				t.Fatalf("seiload job %q failed: %s\n--- seiload pod log (tail) ---\n%s",
+					name, cond.Message, podLogTail(ctx, cs, ns, name))
 			}
 		}
 		select {
@@ -188,4 +195,21 @@ func waitJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns, na
 		case <-tick.C:
 		}
 	}
+}
+
+// podLogTail returns the tail of the seiload pod's log for a Job, best-effort —
+// the failure-time signal a Job condition message alone cannot give.
+func podLogTail(ctx context.Context, cs *kubernetes.Clientset, ns, jobName string) string {
+	pods, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "batch.kubernetes.io/job-name=" + jobName,
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return fmt.Sprintf("(no pod for job %q: %v)", jobName, err)
+	}
+	lines := int64(50)
+	raw, err := cs.CoreV1().Pods(ns).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{TailLines: &lines}).DoRaw(ctx)
+	if err != nil {
+		return fmt.Sprintf("(read logs failed: %v)", err)
+	}
+	return string(raw)
 }
