@@ -65,6 +65,44 @@ func WaitCaughtUp(ctx context.Context, hc *http.Client, tmRPC string) error {
 	})
 }
 
+// latestHeight reads tmRPC's committed block height from /status. ok=false on an
+// unreachable endpoint or unparseable body (keep polling).
+func latestHeight(ctx context.Context, hc *http.Client, tmRPC string) (int64, bool) {
+	body, ok := getJSON(ctx, hc, http.MethodGet, tmRPC+"/status", "")
+	if !ok {
+		return 0, false
+	}
+	var s tendermintStatus
+	if json.Unmarshal(body, &s) != nil {
+		return 0, false
+	}
+	h, err := strconv.ParseInt(s.sync().LatestBlockHeight, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return h, true
+}
+
+// WaitHeightAdvances blocks until tmRPC's committed height has risen by at least
+// delta from the height observed on the first successful read — proof the chain
+// is producing blocks, not merely reachable. Unlike WaitCaughtUp this catches a
+// stalled node, which still reports catching_up == false at a frozen height.
+// hc may be nil. The caller's ctx bounds the wait (IsTimeout on a deadline).
+func WaitHeightAdvances(ctx context.Context, hc *http.Client, tmRPC string, delta int64) error {
+	target := int64(-1) // set to start+delta on the first successful read
+	return pollUntil(ctx, fmt.Sprintf("%s height +%d", tmRPC, delta), func(ctx context.Context) bool {
+		h, ok := latestHeight(ctx, hc, tmRPC)
+		if !ok {
+			return false
+		}
+		if target < 0 {
+			target = h + delta
+			return false
+		}
+		return h >= target
+	})
+}
+
 // evmResponse models a JSON-RPC envelope with a string result.
 type evmResponse struct {
 	Result string `json:"result"`

@@ -10,6 +10,7 @@ import (
 	"text/template"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -40,6 +41,14 @@ type faultParams struct {
 type fault struct {
 	resource string // GVR resource, e.g. "networkchaos"
 	obj      *unstructured.Unstructured
+}
+
+// hasDuration reports whether the fault self-expires (carries spec.duration). A
+// duration-less fault would block gateRecovered until the scenario deadline, so
+// every ported fault must currently carry one.
+func (f fault) hasDuration() bool {
+	_, found, _ := unstructured.NestedString(f.obj.Object, "spec", "duration")
+	return found
 }
 
 // dynClient builds a dynamic client from the ambient config — the harness
@@ -93,6 +102,16 @@ func applyFault(ctx context.Context, t *testing.T, dc dynamic.Interface, ns stri
 func gateInjected(ctx context.Context, t *testing.T, dc dynamic.Interface, ns string, f fault) {
 	t.Helper()
 	waitFaultCondition(ctx, t, dc, ns, f, "AllInjected")
+	// AllInjected is vacuously true for an empty target set, so a selector that
+	// matched 0 pods would pass against an undisturbed chain. Assert chaos-mesh
+	// actually injected at least one target.
+	u, err := dc.Resource(chaosGVR(f.resource)).Namespace(ns).Get(ctx, f.obj.GetName(), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read injected count for %s/%s: %v", f.resource, f.obj.GetName(), err)
+	}
+	if n, _, _ := unstructured.NestedInt64(u.Object, "status", "experiment", "injectedCount"); n < 1 {
+		t.Fatalf("fault %s/%s injected 0 targets — selector matched nothing (false-green guard)", f.resource, f.obj.GetName())
+	}
 }
 
 // gateRecovered blocks until AllRecovered=True, catching chaos-mesh finalizers
@@ -107,14 +126,19 @@ func waitFaultCondition(ctx context.Context, t *testing.T, dc dynamic.Interface,
 	ri := dc.Resource(chaosGVR(f.resource)).Namespace(ns)
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
+	var lastErr error // a real (non-NotFound) Get error, surfaced on timeout
 	for {
 		u, err := ri.Get(ctx, f.obj.GetName(), metav1.GetOptions{})
-		if err == nil && faultConditionTrue(u, condType) {
+		switch {
+		case err == nil && faultConditionTrue(u, condType):
 			return
+		case err != nil && !apierrors.IsNotFound(err): // NotFound is transient post-create cache lag
+			lastErr = err
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("fault %s/%s: %s not True before deadline: %v", f.resource, f.obj.GetName(), condType, ctx.Err())
+			t.Fatalf("fault %s/%s: %s not True before deadline: %v (last get: %v)",
+				f.resource, f.obj.GetName(), condType, ctx.Err(), lastErr)
 		case <-tick.C:
 		}
 	}

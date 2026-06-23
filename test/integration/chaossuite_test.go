@@ -41,10 +41,20 @@ func TestChaosSuite(t *testing.T) {
 	seid := mustEnv(t, "SEID_IMAGE")
 	ns := envOr("SEI_NAMESPACE", "")
 	duration := envOr("CHAOS_DURATION", "3m")
+	faultDur, err := time.ParseDuration(duration)
+	if err != nil {
+		t.Fatalf("CHAOS_DURATION %q: %v", duration, err)
+	}
 
 	for _, sc := range chaosScenarios {
 		t.Run(sc.name, func(t *testing.T) {
 			id := base + "-" + sc.name
+			// The validator-0 selector value sei.io/node=<id>-0 is a k8s label
+			// value (capped at 63 chars); fail loud rather than on an opaque
+			// admission rejection at fault-apply time.
+			if v := id + "-0"; len(v) > 63 {
+				t.Fatalf("chain id %q yields label value %q > 63 chars", id, v)
+			}
 			s := spec{
 				chainID:       id,
 				runID:         id,
@@ -77,16 +87,26 @@ func TestChaosSuite(t *testing.T) {
 				Namespace: faultNS,
 				Duration:  duration,
 			})
+			if !f.hasDuration() {
+				t.Fatalf("fault %s has no spec.duration — gateRecovered would hang until the deadline", sc.name)
+			}
 			applyFault(ctx, t, dc, faultNS, f)
 			gateInjected(ctx, t, dc, faultNS, f)
 			t.Logf("%s: fault injected", sc.name)
 
 			hc := &http.Client{Timeout: 10 * time.Second}
 			follower := ch.rpcNodes[0]
-			// Live under fault: with f=1 the chain keeps 2/3 quorum, so the
-			// unfaulted follower must stay caught up while the fault is active.
-			if err := sei.WaitCaughtUp(ctx, hc, follower.TendermintRPC()); err != nil {
-				t.Errorf("under-fault %s not caught up: %v", follower.Name(), err)
+			// Live under fault: the chain must keep producing blocks while the
+			// fault is active (f=1 holds 2/3 quorum). Assert the follower's height
+			// advances within a window inside the fault duration, so the progress
+			// is observed while the fault is programmed — not after it expires.
+			// catching_up==false alone is insufficient: a stalled node reports it
+			// at a frozen height.
+			underFault, cancelUF := context.WithTimeout(ctx, faultDur*2/3)
+			err = sei.WaitHeightAdvances(underFault, hc, follower.TendermintRPC(), 3)
+			cancelUF()
+			if err != nil {
+				t.Errorf("under-fault %s height did not advance: %v", follower.Name(), err)
 			}
 
 			// The fault self-expires after its duration; gate recovery (catches
