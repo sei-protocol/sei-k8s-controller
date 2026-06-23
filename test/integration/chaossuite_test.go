@@ -25,6 +25,12 @@ type chaosScenario struct {
 // 14; each is added once it passes in-cluster.
 var chaosScenarios = []chaosScenario{
 	{name: "network-partition", resource: "networkchaos", tmpl: networkPartitionTmpl},
+	{name: "packet-loss", resource: "networkchaos", tmpl: packetLossTmpl},
+	{name: "cpu-stress", resource: "stresschaos", tmpl: cpuStressTmpl},
+	{name: "time-skew", resource: "timechaos", tmpl: timeSkewTmpl},
+	// dns-chaos deferred: it's a rediscovery fault (live MConnections don't
+	// re-resolve), so the under-fault progress assert can't perturb it — needs a
+	// recovery-focused assert + peer-FQDN-matching patterns.
 }
 
 // TestChaosSuite runs each fault against its own fresh chain: provision → inject

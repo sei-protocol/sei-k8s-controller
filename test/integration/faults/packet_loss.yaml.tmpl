@@ -1,0 +1,27 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: packet-loss-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # 15% loss (correlated) between one validator and the rest — degrades, doesn't
+  # halt; f=1 quorum holds.
+  action: loss
+  mode: one
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+  loss:
+    loss: "15"
+    correlation: "25"
+  direction: both
+  target:
+    mode: all
+    selector:
+      namespaces: ["{{.Namespace}}"]
+      expressionSelectors:
+        - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+  duration: "{{.Duration}}"
