@@ -25,6 +25,10 @@ type chaosScenario struct {
 // 14; each is added once it passes in-cluster.
 var chaosScenarios = []chaosScenario{
 	{name: "network-partition", resource: "networkchaos", tmpl: networkPartitionTmpl},
+	{name: "packet-loss", resource: "networkchaos", tmpl: packetLossTmpl},
+	{name: "cpu-stress", resource: "stresschaos", tmpl: cpuStressTmpl},
+	{name: "time-skew", resource: "timechaos", tmpl: timeSkewTmpl},
+	{name: "dns-chaos", resource: "dnschaos", tmpl: dnsChaosTmpl},
 }
 
 // TestChaosSuite runs each fault against its own fresh chain: provision → inject

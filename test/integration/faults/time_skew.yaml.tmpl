@@ -1,0 +1,18 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: TimeChaos
+metadata:
+  name: time-skew-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # Skew one validator's clock -30s; CometBFT must tolerate it within the f=1 bound.
+  mode: one
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+  timeOffset: "-30s"
+  clockIds: ["CLOCK_REALTIME"]
+  containerNames: ["seid"]
+  duration: "{{.Duration}}"

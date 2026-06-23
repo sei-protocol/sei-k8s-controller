@@ -1,0 +1,21 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: DNSChaos
+metadata:
+  name: dns-chaos-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # DNS resolution errors for the chain's service names on every validator;
+  # peers already hold resolved IPs, so consensus should degrade-not-halt.
+  action: error
+  mode: all
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+  patterns:
+    - "{{.ChainID}}.{{.Namespace}}.svc.cluster.local"
+    - "{{.ChainID}}-internal.{{.Namespace}}.svc.cluster.local"
+    - "{{.ChainID}}-rpc.{{.Namespace}}.svc.cluster.local"
+  duration: "{{.Duration}}"
