@@ -25,11 +25,8 @@ type NetworkSpec struct {
 	Config   map[string]string // -> spec.configOverrides (config.toml/app.toml)
 	Labels   map[string]string // extra labels on the SeiNetwork object (e.g. a caller GC/run-id selector); the network object carries no labels otherwise
 
-	// DeletionPolicy controls whether the SeiNetwork's child validators are
-	// deleted with it. "" leaves the CRD default (Retain — orphans children,
-	// stripping their ownerRef so they keep running); set DeletionDelete for an
-	// ephemeral chain so Delete cascades to the validators (+ their PVCs) instead
-	// of leaking them. -> spec.deletionPolicy.
+	// DeletionPolicy controls child-validator deletion; "" leaves the CRD Retain
+	// default. Set DeletionDelete for ephemeral chains. -> spec.deletionPolicy.
 	DeletionPolicy string
 }
 

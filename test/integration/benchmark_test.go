@@ -10,9 +10,8 @@ import (
 	"time"
 )
 
-// TestBenchmark is the load suite: provision a validator chain + RPC fleet,
-// drive seiload against the fleet for the configured duration, and upload the
-// report. Replaces the load-test Chaos-Mesh Workflow.
+// TestBenchmark provisions a validator chain + RPC fleet for the load suite.
+// seiload drive + report upload are not yet wired (see TODO below).
 //
 // Inputs (env, mirroring k8s_nightly.yml):
 //
@@ -60,11 +59,10 @@ func TestBenchmark(t *testing.T) {
 	t.Logf("provisioned %s: %d validators + %d RPC followers; EVM endpoints=%v",
 		s.chainID, s.validators, len(ch.rpcNodes), ch.evmEndpoints())
 
-	// TODO(WS-I step 1, next increment): drive seiload as a DECOUPLED unit
-	// (decision D3) — apply seiload's own manifest parameterized with
-	// ch.evmEndpoints(), stamped sei.io/harness-run=s.runID; wait for
-	// completion; read its report from the agreed S3 path; assert TPS/receipts.
-	// seiload's Job spec is NOT constructed here.
+	// TODO: drive seiload as a decoupled unit — apply its own manifest
+	// parameterized with ch.evmEndpoints(), stamped sei.io/harness-run; wait,
+	// read the report from S3, assert TPS/receipts. seiload's Job spec is not
+	// constructed here.
 	t.Skipf("provisioned %s (%d validators + %d followers); seiload drive + report not yet wired — tearing down",
 		s.chainID, s.validators, len(ch.rpcNodes))
 }
