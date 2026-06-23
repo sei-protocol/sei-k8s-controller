@@ -62,6 +62,15 @@ var votingPeriodGenesis = map[string]string{
 	"gov.voting_params.voting_period": "60s",
 }
 
+// upgradeConfig are the seid runtime overrides the upgrade flow needs: the REST
+// API serves the gov proposal queries (off by default), and kv tx-indexing lets
+// the proposal-submission tx be found. Ported from the major-upgrade scenario's
+// SeiNetwork configOverrides.
+var upgradeConfig = map[string]string{
+	"api.rest.enable":  "true",
+	"tx_index.indexer": "kv",
+}
+
 // restUnreachable is the last-seen note when a gov REST poll gets no 200.
 const restUnreachable = "REST unreachable / non-200"
 
@@ -243,6 +252,7 @@ func networkSpec(s spec, image string, labels map[string]string) sei.NetworkSpec
 		Image:          image,
 		Validators:     s.validators,
 		Labels:         labels,
+		Config:         upgradeConfig,
 		Genesis:        votingPeriodGenesis,
 		DeletionPolicy: sei.DeletionDelete,
 	}
