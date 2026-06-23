@@ -123,6 +123,13 @@ func (h *nodeHandle) TendermintRPC() string {
 	return h.node.Status.Endpoint.TendermintRpc
 }
 
+func (h *nodeHandle) REST() string {
+	if h.node == nil || h.node.Status.Endpoint == nil {
+		return ""
+	}
+	return h.node.Status.Endpoint.TendermintRest
+}
+
 // WaitReady blocks until the SeiNode reaches PhaseRunning and a light serve-probe
 // passes, failing fast on PhaseFailed. The caller's ctx is the budget.
 func (h *nodeHandle) WaitReady(ctx context.Context) error {

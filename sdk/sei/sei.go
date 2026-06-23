@@ -174,6 +174,10 @@ func (n *Node) EVMRPC() string { return n.handle.EVMRPC() }
 // TendermintRPC is the node's Tendermint RPC URL off .status.
 func (n *Node) TendermintRPC() string { return n.handle.TendermintRPC() }
 
+// REST is the node's Cosmos REST (LCD) URL off .status; "" unless the node
+// serves REST (fullNode RPCs do; bare validators do not unless configured).
+func (n *Node) REST() string { return n.handle.REST() }
+
 // WaitReady blocks until the node reaches the Running phase and a light serve-
 // probe passes, or the caller's ctx fires (IsTimeout on a deadline).
 func (n *Node) WaitReady(ctx context.Context) error { return n.handle.WaitReady(ctx) }
