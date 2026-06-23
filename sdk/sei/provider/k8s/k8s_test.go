@@ -29,6 +29,10 @@ const (
 	rpc0Name  = "rpc-0"
 	rpc1Name  = "rpc-1"
 	resultKey = "result"
+
+	// caller-label fixtures for the GC-selector render tests
+	testRunLabel = "sei.io/harness-run"
+	testRunID    = "run-xyz"
 )
 
 // TestMain shrinks the poll cadences so phase/probe tests resolve in

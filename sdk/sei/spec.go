@@ -13,6 +13,7 @@ type NetworkSpec struct {
 	Accounts []GenesisAccount  // non-validator genesis accounts to fund
 	Genesis  map[string]string // -> spec.genesis.overrides (TOML-path keys)
 	Config   map[string]string // -> spec.configOverrides (config.toml/app.toml)
+	Labels   map[string]string // extra labels on the SeiNetwork object (e.g. a caller GC/run-id selector); the network object carries no labels otherwise
 }
 
 // GenesisAccount is a non-validator genesis account to fund.
@@ -31,4 +32,5 @@ type NodeSpec struct {
 	NetworkNamespace string            // "" => same as Namespace (co-located, the common case); set it when the SeiNetwork lives in a different namespace
 	Image            string            // -> spec.image
 	Config           map[string]string // -> spec.overrides (TOML-path keys)
+	Labels           map[string]string // extra labels on the SeiNode object, merged UNDER the canonical sei.io/role + sei.io/seinetwork (which win on key conflict)
 }
