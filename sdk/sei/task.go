@@ -53,6 +53,11 @@ type TaskSpec struct {
 	Kind      string        // -> spec.kind; one of the Task* consts
 	Timeout   time.Duration // -> spec.timeoutSeconds (truncated to whole seconds); 0 leaves the CRD unbounded default
 
+	// Labels are extra labels on the SeiNodeTask object — e.g. a caller's
+	// run-id/GC selector so a sweep can reap a run's tasks (which are not children
+	// of any provisioned resource and so are not cascade-deleted).
+	Labels map[string]string
+
 	// RequirePhase is the SeiNode phase the target must be in before the task
 	// dispatches; "" leaves the CRD default (Running). The controller gates on
 	// EXACT equality (phase == RequirePhase), not a floor — so set this only when
