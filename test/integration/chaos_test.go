@@ -31,6 +31,21 @@ var cpuStressTmpl string
 //go:embed faults/time_skew.yaml.tmpl
 var timeSkewTmpl string
 
+//go:embed faults/network_latency.yaml.tmpl
+var networkLatencyTmpl string
+
+//go:embed faults/bandwidth_limit.yaml.tmpl
+var bandwidthLimitTmpl string
+
+//go:embed faults/memory_stress.yaml.tmpl
+var memoryStressTmpl string
+
+//go:embed faults/disk_io_latency.yaml.tmpl
+var diskIOLatencyTmpl string
+
+//go:embed faults/byzantine.yaml.tmpl
+var byzantineTmpl string
+
 // chaosGVR is the GroupVersionResource for a Chaos-Mesh fault kind. Faults are
 // applied unstructured so the chaos-mesh API stays out of the module's deps.
 func chaosGVR(resource string) schema.GroupVersionResource {

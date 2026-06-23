@@ -1,0 +1,27 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: bandwidth-limit-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # Throttle one validator's links to 50mbps; the rest carry consensus.
+  action: bandwidth
+  mode: one
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+  direction: both
+  target:
+    mode: all
+    selector:
+      namespaces: ["{{.Namespace}}"]
+      expressionSelectors:
+        - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+  bandwidth:
+    rate: "50mbps"
+    limit: 20000
+    buffer: 10000
+  duration: "{{.Duration}}"
