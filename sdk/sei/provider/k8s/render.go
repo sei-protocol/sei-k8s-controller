@@ -132,6 +132,7 @@ func renderTask(spec sei.TaskSpec, namespace string) *seiv1alpha1.SeiNodeTask {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      spec.Name,
 			Namespace: namespace,
+			Labels:    maps.Clone(spec.Labels), // nil-safe; caller GC/run-id selector
 		},
 		Spec: seiv1alpha1.SeiNodeTaskSpec{
 			Kind:           seiv1alpha1.SeiNodeTaskKind(spec.Kind),

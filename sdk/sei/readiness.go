@@ -65,6 +65,14 @@ func WaitCaughtUp(ctx context.Context, hc *http.Client, tmRPC string) error {
 	})
 }
 
+// LatestHeight reads tmRPC's committed block height from /status. ok=false on an
+// unreachable endpoint or unparseable body (the caller keeps polling). It accepts
+// both the enveloped and unwrapped /status shapes the Sei fork emits, so callers
+// need not re-model that quirk — the readiness/wait family's one height reader.
+func LatestHeight(ctx context.Context, hc *http.Client, tmRPC string) (int64, bool) {
+	return latestHeight(ctx, hc, tmRPC)
+}
+
 // latestHeight reads tmRPC's committed block height from /status. ok=false on an
 // unreachable endpoint or unparseable body (keep polling).
 func latestHeight(ctx context.Context, hc *http.Client, tmRPC string) (int64, bool) {

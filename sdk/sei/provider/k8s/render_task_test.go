@@ -21,6 +21,7 @@ func TestRenderTask_GovSoftwareUpgrade(t *testing.T) {
 		Node:      testTaskNode,
 		Kind:      sei.TaskGovSoftwareUpgrade,
 		Timeout:   90 * time.Second,
+		Labels:    map[string]string{testRunLabel: testRunID},
 		GovSoftwareUpgrade: &sei.GovSoftwareUpgrade{
 			ChainID:        testNet,
 			Title:          "v2 upgrade",
@@ -36,6 +37,10 @@ func TestRenderTask_GovSoftwareUpgrade(t *testing.T) {
 
 	if task.Name != "upgrade" || task.Namespace != testNS {
 		t.Fatalf("metadata = %s/%s", task.Namespace, task.Name)
+	}
+	// Caller labels (the run-id GC selector) are stamped on the task object.
+	if got := task.Labels[testRunLabel]; got != testRunID {
+		t.Errorf("task label %s = %q, want %q", testRunLabel, got, testRunID)
 	}
 	if string(task.Spec.Kind) != sei.TaskGovSoftwareUpgrade {
 		t.Errorf("kind = %q, want %q", task.Spec.Kind, sei.TaskGovSoftwareUpgrade)
