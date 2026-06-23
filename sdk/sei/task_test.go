@@ -1,6 +1,9 @@
 package sei
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestValidateTaskSpec(t *testing.T) {
 	good := TaskSpec{
@@ -14,9 +17,9 @@ func TestValidateTaskSpec(t *testing.T) {
 		mut     func(*TaskSpec)
 		wantErr bool
 	}{
-		{"valid", func(*TaskSpec) {}, false},
-		{"missing name", func(s *TaskSpec) { s.Name = "" }, true},
-		{"missing node", func(s *TaskSpec) { s.Node = "" }, true},
+		{"ok", func(*TaskSpec) {}, false},
+		{"no name", func(s *TaskSpec) { s.Name = "" }, true},
+		{"no node", func(s *TaskSpec) { s.Node = "" }, true},
 		{"unknown kind", func(s *TaskSpec) { s.Kind = "Frobnicate" }, true},
 		{"no payload", func(s *TaskSpec) { s.GovSoftwareUpgrade = nil }, true},
 		{
@@ -40,6 +43,20 @@ func TestValidateTaskSpec(t *testing.T) {
 				s.GovVote = &GovVote{ProposalID: 1, Option: VoteYes}
 			},
 			false,
+		},
+		{
+			"vote bad option",
+			func(s *TaskSpec) {
+				s.Kind = TaskGovVote
+				s.GovSoftwareUpgrade = nil
+				s.GovVote = &GovVote{ProposalID: 1, Option: "maybe"}
+			},
+			true,
+		},
+		{
+			"sub-second timeout",
+			func(s *TaskSpec) { s.Timeout = 500 * time.Millisecond },
+			true,
 		},
 		{
 			"await valid",

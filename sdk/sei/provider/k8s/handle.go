@@ -193,7 +193,11 @@ func (h *taskHandle) WaitComplete(ctx context.Context) (*sei.TaskOutputs, error)
 	err := wait.PollUntilContextCancel(ctx, pollInterval, true, func(ctx context.Context) (bool, error) {
 		task := &seiv1alpha1.SeiNodeTask{}
 		if err := h.p.c.Get(ctx, types.NamespacedName{Namespace: h.namespace, Name: h.name}, task); err != nil {
-			if apierrors.IsNotFound(err) {
+			// A task wait spans minutes (the chain halts at the upgrade height), so
+			// a single transient read error must not collapse the whole wait — keep
+			// polling on retryable errors (and NotFound, for post-create cache lag).
+			// The caller's ctx remains the hard budget. Only a terminal error aborts.
+			if retryableGet(err) {
 				return false, nil
 			}
 			return false, fmt.Errorf("%s: reading status: %w", resource, err)
@@ -226,43 +230,56 @@ func (h *taskHandle) Delete(ctx context.Context) error {
 // Object returns the cached *v1alpha1.SeiNodeTask — the k8s raw-CR escape hatch.
 func (h *taskHandle) Object() any { return h.task }
 
+// retryableGet reports whether a Get error should be tolerated by continuing to
+// poll rather than aborting the wait: NotFound (post-create cache lag, or a task
+// briefly absent from the informer) and the transient server-side classes a
+// minutes-long wait will occasionally hit. A genuinely terminal error (Forbidden,
+// schema) is not retryable and aborts.
+func retryableGet(err error) bool {
+	return apierrors.IsNotFound(err) ||
+		apierrors.IsServerTimeout(err) ||
+		apierrors.IsTimeout(err) ||
+		apierrors.IsTooManyRequests(err) ||
+		apierrors.IsInternalError(err)
+}
+
 // taskFailureReason extracts a human reason from a failed task: the execution's
-// recorded error, else the message of any Ready=False condition, else a generic
-// note so the error is never empty.
+// recorded error, else a False condition message (preferring the terminal Ready
+// condition over others for a stable message), else the phase itself so the
+// error always carries some triage signal. The execution error is nil on a
+// failure before target resolution (e.g. a RequirePhase timeout), where the
+// condition message is the only source.
 func taskFailureReason(task *seiv1alpha1.SeiNodeTask) string {
 	if task.Status.Task != nil && task.Status.Task.Err != "" {
 		return task.Status.Task.Err
 	}
+	var firstFalse string
 	for _, c := range task.Status.Conditions {
-		if c.Status == metav1.ConditionFalse && c.Message != "" {
+		if c.Status != metav1.ConditionFalse || c.Message == "" {
+			continue
+		}
+		if c.Type == seiv1alpha1.ConditionSeiNodeTaskReady {
 			return c.Message
 		}
+		if firstFalse == "" {
+			firstFalse = c.Message
+		}
 	}
-	return "no failure reason recorded"
+	if firstFalse != "" {
+		return firstFalse
+	}
+	return fmt.Sprintf("no failure reason recorded (phase=%s)", task.Status.Phase)
 }
 
 // translateTaskOutputs maps the CRD outputs to the SDK-native shape. Returns nil
-// when the task recorded no outputs (e.g. a kind that produces none).
+// when the task recorded no outputs. Only UpdateNodeImage is surfaced — the only
+// kind the controller's populateOutputs writes; gov/await kinds coordinate via
+// chain queries (chain-as-medium), so the SDK exposes no always-empty fields.
 func translateTaskOutputs(out *seiv1alpha1.SeiNodeTaskOutputs) *sei.TaskOutputs {
-	if out == nil {
+	if out == nil || out.UpdateNodeImage == nil {
 		return nil
 	}
-	o := &sei.TaskOutputs{}
-	if u := out.GovSoftwareUpgrade; u != nil {
-		o.GovSoftwareUpgrade = &sei.GovSoftwareUpgradeOutputs{
-			ProposalID: u.ProposalID,
-			TxHash:     u.TxHash,
-			Height:     u.Height,
-		}
+	return &sei.TaskOutputs{
+		UpdateNodeImage: &sei.UpdateNodeImageOutputs{AppliedImage: out.UpdateNodeImage.AppliedImage},
 	}
-	if v := out.GovVote; v != nil {
-		o.GovVote = &sei.GovVoteOutputs{TxHash: v.TxHash, Height: v.Height}
-	}
-	if a := out.AwaitNodesAtHeight; a != nil {
-		o.AwaitNodesAtHeight = &sei.AwaitNodesAtHeightOutputs{CurrentHeight: a.CurrentHeight}
-	}
-	if i := out.UpdateNodeImage; i != nil {
-		o.UpdateNodeImage = &sei.UpdateNodeImageOutputs{AppliedImage: i.AppliedImage}
-	}
-	return o
 }

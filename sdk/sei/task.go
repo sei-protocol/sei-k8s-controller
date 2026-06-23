@@ -9,9 +9,16 @@ import (
 // Task support. A SeiNodeTask is a one-shot, typed operation against a single
 // SeiNode — submit a gov upgrade proposal, vote, wait for a height, swap the
 // node image. The harness drives a major-upgrade or release scenario by running
-// these in statement order, threading one task's outputs into the next (the
-// proposal ID a GovSoftwareUpgrade mints feeds the GovVote). This replaces the
-// Chaos-Mesh Workflow DAG + env-file handoffs the seitask-runner used.
+// these in statement order. This replaces the Chaos-Mesh Workflow DAG + env-file
+// handoffs the seitask-runner used.
+//
+// Cross-task coordination is chain-as-medium, NOT task-to-task output currying:
+// the controller surfaces typed Outputs only for UpdateNodeImage today (the gov
+// and await kinds leave them unset — surfacing the sidecar's TaskResult needs
+// typed per-task result payloads that are deferred). So a harness that needs a
+// minted proposal ID for a follow-on GovVote queries the chain for it (e.g. the
+// first proposal on a fresh chain is #1), rather than reading it off the upgrade
+// task. TaskOutputs therefore carries only the kinds the controller populates.
 //
 // SeiNodeTask is SeiNode-specific, so it belongs in the SDK. The surface mirrors
 // CreateNetwork/CreateNode: a typed spec with SDK-native payloads (core stays
@@ -47,9 +54,10 @@ type TaskSpec struct {
 	Timeout   time.Duration // -> spec.timeoutSeconds (truncated to whole seconds); 0 leaves the CRD unbounded default
 
 	// RequirePhase is the SeiNode phase the target must be in before the task
-	// dispatches; "" leaves the CRD default (Running). An UpdateNodeImage on a
-	// chain halted at an upgrade height must relax this — the target is not
-	// Running. -> spec.target.requirePhase.
+	// dispatches; "" leaves the CRD default (Running). The controller gates on
+	// EXACT equality (phase == RequirePhase), not a floor — so set this only when
+	// the target genuinely sits in a non-Running phase, never to "widen" the gate.
+	// -> spec.target.requirePhase.
 	RequirePhase string
 	// RequirePhaseTimeout bounds the requirePhase wait; 0 leaves the CRD default
 	// (5m). -> spec.target.requirePhaseTimeout.
@@ -64,18 +72,26 @@ type TaskSpec struct {
 
 // GovSoftwareUpgrade is the payload for TaskGovSoftwareUpgrade — submit an
 // on-chain software-upgrade proposal from the target validator. The minted
-// proposal ID is returned in TaskOutputs.GovSoftwareUpgrade.ProposalID for the
-// follow-on GovVote tasks. Fees/deposit are usei-only (Sei gov rejects other
-// denoms; the sidecar pre-validates).
+// proposal ID is NOT returned as a task output (chain-as-medium — see the
+// package doc); a harness reads it from the chain for the follow-on GovVote.
+//
+// Two on-chain timing invariants the SDK cannot enforce but a caller must honor:
+// InitialDeposit must clear the chain's min_deposit or the proposal sits in the
+// deposit period and never enters voting; and the proposal must PASS (voting
+// period elapsed, ≥2/3 yes, quorum) strictly before UpgradeHeight, or the plan
+// is scheduled for a height already passed and silently no-ops. On a short-
+// voting-period test chain both are easy to satisfy; size UpgradeHeight
+// accordingly. Fees/deposit are usei-only (Sei gov rejects other denoms; the
+// sidecar pre-validates).
 type GovSoftwareUpgrade struct {
 	ChainID        string // chain ID the proposal targets
 	KeyName        string // signing keyring entry; "" lets the controller derive from the target
 	Title          string
 	Description    string
 	UpgradeName    string // must match an upgrade handler registered in the target binary
-	UpgradeHeight  int64  // block height the upgrade is scheduled at; >= 1
+	UpgradeHeight  int64  // block height the upgrade is scheduled at; >= 1; must be after the proposal passes
 	UpgradeInfo    string // optional Plan.Info (e.g. binary checksums)
-	InitialDeposit string // coin notation, usei-only (e.g. "10000000usei")
+	InitialDeposit string // coin notation, usei-only (e.g. "10000000usei"); must clear min_deposit
 	Memo           string // optional; do NOT pre-tag (the sidecar appends taskID=<id>)
 	Fees           string // coin notation, usei-only (e.g. "2000usei")
 	Gas            uint64 // tx gas limit; >= 1
@@ -94,8 +110,13 @@ type GovVote struct {
 }
 
 // AwaitNodesAtHeight is the payload for TaskAwaitNodesAtHeight — block until the
-// target SeiNode's local height crosses TargetHeight. Used to wait out the
-// upgrade height (where the chain halts) before swapping binaries.
+// target SeiNode's local height reaches TargetHeight. Used to wait out the
+// upgrade height before swapping binaries.
+//
+// Boundary care at an upgrade halt: a chain that halts AT UpgradeHeight commits
+// up to UpgradeHeight-1 and stops producing UpgradeHeight, so await
+// UpgradeHeight-1 (awaiting UpgradeHeight may never clear and WaitComplete is
+// bounded only by the caller's ctx — it will hang to the deadline).
 type AwaitNodesAtHeight struct {
 	TargetHeight int64 // height the target must reach; >= 1
 }
@@ -103,37 +124,26 @@ type AwaitNodesAtHeight struct {
 // UpdateNodeImage is the payload for TaskUpdateNodeImage — patch spec.image on
 // the target SeiNode and complete when status.currentImage observes the new
 // image. No readiness check: a major upgrade expects transient CrashLoop while
-// the new binary applies the upgrade. Relax TaskSpec.RequirePhase accordingly,
-// since the halted target is not Running.
+// the new binary applies the upgrade.
+//
+// Leave TaskSpec.RequirePhase at its default: a SeiNode that has reached Running
+// stays Running across a transient halt (the controller does not demote phase on
+// a non-Running blip), so a node halted at an upgrade height still reports
+// Running — the default gate matches. Do NOT set RequirePhase to a non-Running
+// value here; the gate is exact-equality and would never match, failing the task
+// at RequirePhaseTimeout.
 type UpdateNodeImage struct {
 	Image string // desired seid image (with tag/digest)
 }
 
-// TaskOutputs carries a completed task's typed results. Exactly one field is
-// populated, matching the task's Kind; populated only on a completed task.
+// TaskOutputs carries a completed task's typed results. Only the kinds the
+// controller actually populates are surfaced — today just UpdateNodeImage; the
+// gov and await kinds coordinate via chain queries (see the package doc), so
+// their output fields are intentionally absent rather than present-but-always-
+// empty. Outputs are populated only on a completed task; a nil sub-field means
+// the task produced no typed output.
 type TaskOutputs struct {
-	GovSoftwareUpgrade *GovSoftwareUpgradeOutputs
-	GovVote            *GovVoteOutputs
-	AwaitNodesAtHeight *AwaitNodesAtHeightOutputs
-	UpdateNodeImage    *UpdateNodeImageOutputs
-}
-
-// GovSoftwareUpgradeOutputs are the results of a GovSoftwareUpgrade task.
-type GovSoftwareUpgradeOutputs struct {
-	ProposalID uint64 // on-chain proposal ID parsed from the inclusion; the GovVote input
-	TxHash     string // upper-case hex tx hash
-	Height     int64  // inclusion height
-}
-
-// GovVoteOutputs are the results of a GovVote task.
-type GovVoteOutputs struct {
-	TxHash string
-	Height int64
-}
-
-// AwaitNodesAtHeightOutputs are the results of an AwaitNodesAtHeight task.
-type AwaitNodesAtHeightOutputs struct {
-	CurrentHeight int64 // height observed on the target when the condition cleared
+	UpdateNodeImage *UpdateNodeImageOutputs
 }
 
 // UpdateNodeImageOutputs are the results of an UpdateNodeImage task.
@@ -143,6 +153,18 @@ type UpdateNodeImageOutputs struct {
 
 // RunTask creates a SeiNodeTask and returns a handle immediately — it does NOT
 // wait for completion. Call Task.WaitComplete to block on the result.
+//
+// Tasks are apply-once by name. The controller mints the execution on the first
+// reconcile and never re-reads spec, so re-running RunTask with the same Name is
+// a no-op (no double tx) — but a payload change on a same-name re-apply is
+// silently ignored (the original execution stands), and a Delete followed by a
+// RunTask with the same Name mints a NEW execution that resubmits the tx. For a
+// gov proposal that already landed on-chain, that means a duplicate proposal:
+// delete+recreate only against a disposable chain.
+//
+// The task and its target SeiNode (Node) resolve in the same namespace; set
+// Namespace to the target node's namespace (cross-namespace targeting is out of
+// scope).
 func (c *Client) RunTask(ctx context.Context, spec TaskSpec) (*Task, error) {
 	if err := validateTaskSpec(spec); err != nil {
 		return nil, err
@@ -195,6 +217,12 @@ func validateTaskSpec(s TaskSpec) error {
 	if strings.TrimSpace(s.Node) == "" {
 		return usageErr("TaskSpec.Node is required (the target SeiNode)")
 	}
+	// A sub-second non-zero Timeout truncates to 0 seconds, which the CRD reads as
+	// unbounded — the opposite of the caller's intent. Reject it rather than
+	// silently dropping the bound.
+	if s.Timeout != 0 && s.Timeout < time.Second {
+		return usageErr("TaskSpec.Timeout %s is below the 1s CRD resolution (0 means unbounded)", s.Timeout)
+	}
 	// Exactly one payload, and it must match Kind. Count set payloads so a
 	// mismatched/missing/extra payload fails here, not at apply.
 	set := 0
@@ -222,6 +250,9 @@ func validateTaskSpec(s TaskSpec) error {
 		if s.GovVote == nil {
 			return usageErr("TaskSpec.Kind %q requires GovVote payload", s.Kind)
 		}
+		if !validVoteOption(s.GovVote.Option) {
+			return usageErr("GovVote.Option %q is invalid (want one of yes/no/abstain/no_with_veto)", s.GovVote.Option)
+		}
 	case TaskAwaitNodesAtHeight:
 		if s.AwaitNodesAtHeight == nil {
 			return usageErr("TaskSpec.Kind %q requires AwaitNodesAtHeight payload", s.Kind)
@@ -234,4 +265,15 @@ func validateTaskSpec(s TaskSpec) error {
 		return usageErr("TaskSpec.Kind %q is not supported by the SDK", s.Kind)
 	}
 	return nil
+}
+
+// validVoteOption reports whether opt is an option the CRD's vote enum accepts
+// (the two no_with_veto spellings the gov v1beta1 parser allows are both valid).
+func validVoteOption(opt string) bool {
+	switch opt {
+	case VoteYes, VoteNo, VoteAbstain, VoteNoWithVeto, "no-with-veto":
+		return true
+	default:
+		return false
+	}
 }
