@@ -1,22 +1,17 @@
 //go:build integration
 
-// Package integration holds the Sei nightly integration-test suites as plain
-// `go test` targets — TestBenchmark, TestChaosSuite, TestChainUpgrade,
-// TestRelease — selected with `-run`. It replaces the Chaos-Mesh Workflow DAG +
-// seitask Task pods + workflow-vars ConfigMap (WS-I LLD): state that the
-// ConfigMap passed across pods now lives in local Go values (chain), and
-// orchestration is statement order in one process.
+// Package integration holds the Sei nightly integration suites as plain `go test`
+// targets (TestBenchmark, TestChaosSuite, TestChainUpgrade, TestRelease), selected
+// with -run. Orchestration is statement order in one process; cross-step state is
+// local Go values, not external config.
 //
-// Isolation (decisions D2/D4/D5): everything here lives in *_test.go files, so
-// Go itself guarantees it never links into a production binary (controller /
-// seid / seitask). The //go:build integration tag additionally excludes it from
-// the default `go test ./...`; the nightly compiles it once with
-// `go test -c -tags integration` and ships the standalone binary in its own
-// image, run by one in-cluster CronJob per target (`-test.run TestX`).
+// Everything lives in *_test.go behind //go:build integration, so it never links
+// into a production binary and is excluded from the default `go test ./...`. The
+// nightly compiles it once (go test -c -tags integration) and runs each target as
+// an in-cluster CronJob (-test.run TestX).
 //
-// The suite depends ONLY on sdk/sei (+ the k8s provider blank import) — never
-// internal/seitask or internal/taskruntime — so the seitask runner can be
-// removed wholesale once the four targets cover the nightly.
+// Depends only on sdk/sei (+ the k8s provider blank import); never internal/seitask
+// or internal/taskruntime.
 package integration
 
 import (
@@ -35,13 +30,10 @@ import (
 	_ "github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider/k8s"
 )
 
-// runLabelKey identifies a run's resources for the nightly label-GC sweep — the
-// SOLE abnormal-exit reaper under the shared-namespace model (D2), since
-// t.Cleanup does NOT run on SIGKILL or a -test.timeout breach. provision stamps
-// it (via the SDK NetworkSpec/NodeSpec Labels) on the network + every node; the
-// seiload Job and fault CRs a suite applies directly must stamp it too (load /
-// chaos increments). The sweep must be proven against an orphaned run before the
-// Workflow ownerRef cascade is removed (WS-I step 2).
+// runLabelKey marks a run's resources for the nightly label-GC sweep — the only
+// reaper on abnormal exit (shared namespace), since t.Cleanup is skipped on
+// SIGKILL or a -test.timeout breach. provision stamps it on the network + every
+// node; a suite's directly-applied seiload Job and fault CRs must stamp it too.
 const runLabelKey = "sei.io/harness-run"
 
 // spec is the typed input shared by the suites — the local-Go-state replacement
@@ -57,8 +49,7 @@ type spec struct {
 }
 
 // chain is the live provisioned topology a suite runs load against and asserts
-// on. Held entirely in local Go state — what the workflow-vars ConfigMap used
-// to pass between pods.
+// on, held in local Go state.
 type chain struct {
 	network  *sei.Network
 	rpcNodes []*sei.Node
@@ -83,7 +74,7 @@ func rpcNodeName(chainID string, ordinal int) string {
 }
 
 // provision stands up the genesis SeiNetwork + N standalone RPC SeiNodes via the
-// SDK in-process (decision D3 — not a seictl subprocess), waiting each follower
+// SDK in-process (not a seictl subprocess), waiting each follower
 // to Running + caught-up + EVM-serving before returning. The returned chain is
 // non-nil even on error so the caller can still tear down whatever was created
 // (pair every provision with a t.Cleanup(teardown)).
@@ -101,6 +92,11 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 		Image:      s.seidImage,
 		Validators: s.validators,
 		Labels:     runLabels,
+		// Ephemeral chain: cascade-delete the controller-created validators (+
+		// their PVCs) on teardown. The CRD default Retain would orphan them —
+		// they never carry sei.io/harness-run, so neither t.Cleanup nor the
+		// label-GC sweep would reap them.
+		DeletionPolicy: sei.DeletionDelete,
 	})
 	if err != nil {
 		return ch, fmt.Errorf("create network %q: %w", s.chainID, err)
