@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"strconv"
@@ -39,16 +40,33 @@ import (
 // DeletionPolicy cascade are the cleanup path.
 const runLabelKey = "sei.io/harness-run"
 
+// baseStorageConfig is the storage write-mode every harness-provisioned seid
+// needs to start: the controller default (cosmos_only) is rejected by the
+// nightly image. Mirrors the scenario templates' configOverrides.
+var baseStorageConfig = map[string]string{
+	"storage.state_commit.write_mode": "memiavl_only",
+	"storage.state_store.write_mode":  "memiavl_only",
+}
+
+// mergeConfig overlays extra onto a copy of base (extra wins); nil-safe.
+func mergeConfig(base, extra map[string]string) map[string]string {
+	out := make(map[string]string, len(base)+len(extra))
+	maps.Copy(out, base)
+	maps.Copy(out, extra)
+	return out
+}
+
 // spec is the typed input shared by the suites — the local-Go-state replacement
 // for the per-run workflow-vars contract.
 type spec struct {
-	chainID    string        // SeiNetwork name == genesis chain id; also the peer-selector value and per-run discriminator
-	runID      string        // unique per run; the sei.io/harness-run label value
-	namespace  string        // shared nightly namespace; "" => the SDK client's resolved default
-	seidImage  string        // seid container image under test
-	validators int           // genesis validator count (>= 1)
-	rpcNodes   int           // standalone RPC followers; named <chain>-rpc-0..N-1
-	timeout    time.Duration // overall scenario deadline (drives ctx, kept < CronJob activeDeadlineSeconds)
+	chainID    string            // SeiNetwork name == genesis chain id; also peer-selector value + run discriminator
+	runID      string            // unique per run; the sei.io/harness-run label value
+	namespace  string            // shared nightly namespace; "" => the SDK client's resolved default
+	seidImage  string            // seid container image under test
+	validators int               // genesis validator count (>= 1)
+	rpcNodes   int               // standalone RPC followers; named <chain>-rpc-0..N-1
+	timeout    time.Duration     // overall scenario deadline (drives ctx, kept < CronJob activeDeadlineSeconds)
+	rpcConfig  map[string]string // extra per-RPC-node config overlaid on the storage baseline (e.g. EVM tuning)
 
 	// seiload inputs (load suite)
 	seiloadImage   string // sei-load benchmark image
@@ -101,6 +119,7 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 		Image:      s.seidImage,
 		Validators: s.validators,
 		Labels:     runLabels,
+		Config:     mergeConfig(baseStorageConfig, nil),
 		// Ephemeral chain: cascade-delete the controller-created validators (+
 		// their PVCs) on teardown. The CRD default Retain would orphan them —
 		// they never carry sei.io/harness-run, so neither t.Cleanup nor the
@@ -125,6 +144,7 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 			Namespace: s.namespace,
 			Image:     s.seidImage,
 			Labels:    runLabels,
+			Config:    mergeConfig(baseStorageConfig, s.rpcConfig),
 		})
 		if err != nil {
 			return ch, fmt.Errorf("create rpc node %q: %w", name, err)
