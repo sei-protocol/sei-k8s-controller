@@ -89,18 +89,27 @@ func latestHeight(ctx context.Context, hc *http.Client, tmRPC string) (int64, bo
 // stalled node, which still reports catching_up == false at a frozen height.
 // hc may be nil. The caller's ctx bounds the wait (IsTimeout on a deadline).
 func WaitHeightAdvances(ctx context.Context, hc *http.Client, tmRPC string, delta int64) error {
-	target := int64(-1) // set to start+delta on the first successful read
-	return pollUntil(ctx, fmt.Sprintf("%s height +%d", tmRPC, delta), func(ctx context.Context) bool {
-		h, ok := latestHeight(ctx, hc, tmRPC)
-		if !ok {
-			return false
+	tick := time.NewTicker(probeInterval)
+	defer tick.Stop()
+	var start, last int64 = -1, -1 // baseline + most-recent height, for the timeout error
+	for {
+		if h, ok := latestHeight(ctx, hc, tmRPC); ok {
+			if start < 0 {
+				start = h
+			}
+			last = h
+			if h >= start+delta {
+				return nil
+			}
 		}
-		if target < 0 {
-			target = h + delta
-			return false
+		select {
+		case <-ctx.Done():
+			// Report start→last so a timeout distinguishes a stalled chain from a
+			// too-short window (start<0 means the endpoint never answered).
+			return fmt.Errorf("%s height did not advance +%d (start=%d last=%d): %w", tmRPC, delta, start, last, ctx.Err())
+		case <-tick.C:
 		}
-		return h >= target
-	})
+	}
 }
 
 // evmResponse models a JSON-RPC envelope with a string result.
