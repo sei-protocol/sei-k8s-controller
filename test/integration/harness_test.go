@@ -35,23 +35,29 @@ import (
 // runLabelKey marks a run's resources for the abnormal-exit reaper (t.Cleanup is
 // skipped on SIGKILL / a -test.timeout breach). provision stamps it on the
 // network + every node; a suite's directly-applied seiload Job + fault CRs stamp
-// it too. The matching nightly label-GC sweep is a pending platform deliverable;
-// until it ships, normal-exit teardown (t.Cleanup) + the SeiNetwork
-// DeletionPolicy cascade are the cleanup path.
+// it too. The nightly-gc CronJob reaps these by label (resources older than 5h —
+// above the longest suite deadline, so it never races a live run), cascading a
+// SeiNetwork delete to its validators + PVCs; normal-exit t.Cleanup is the fast
+// path.
 const runLabelKey = "sei.io/harness-run"
 
-// memiavlStorageConfig pins storage for the load/release/chaos suites (the
-// major-upgrade suite omits it — it tests the migration path). State commitment
-// stays on memiavl; the SeiDB state store is disabled because the latest image
-// defaults it on for full nodes, and enabling it on a fresh-genesis RPC follower
-// deadlocks seid at store-open before it binds listeners. Matches the validators
-// (ss-enable=false); FlatKV-migration coverage is unaffected — that's the SC
-// layer, not the historical state store. (storage.state_store.write_mode is gone:
-// the SS layer has no write-mode field on current sei-chain — EVM routing is the
-// evm-split bool — so the old key was a silently-ignored no-op.)
+// memiavlStorageConfig pins state commitment to memiavl for the load/release/chaos
+// suites (the major-upgrade suite omits it — it tests the migration path). The
+// controller default write-mode is rejected by the nightly image, so it must be
+// set explicitly; the state store is left at its image default.
 var memiavlStorageConfig = map[string]string{
 	"storage.state_commit.write_mode": "memiavl_only",
-	"storage.state_store.enable":      "false",
+}
+
+// runChainID appends a per-run token to the base chain id so every run gets a
+// fresh genesis and node keys. A static id reused across runs (e.g. "bench")
+// collides with the prior run's persisted genesis: the nodes boot with new keys
+// but the genesis — keyed by chain id — still names the prior run's validator
+// set, so the live nodes are not the validators genesis expects and consensus
+// halts at height 1. Nanosecond resolution so a same-second manual re-trigger
+// can't alias a prior run's not-yet-reaped chain.
+func runChainID(base string) string {
+	return base + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
 // mergeConfig returns base overlaid with extra; extra wins on key collision.

@@ -16,7 +16,7 @@ import (
 //
 // Inputs (env, mirroring k8s_nightly.yml):
 //
-//	SEI_CHAIN_ID     per-run chain id (e.g. bench-<run-id>)   [required]
+//	SEI_CHAIN_ID     base chain id (a per-run token is appended) [required]
 //	SEID_IMAGE       seid image under test                    [required]
 //	SEILOAD_IMAGE    sei-load benchmark image                 [required]
 //	SEI_RUN_ID       unique run id (sei.io/harness-run)       [default: SEI_CHAIN_ID]
@@ -33,7 +33,7 @@ import (
 func TestBenchmark(t *testing.T) {
 	requireCluster(t)
 
-	chainID := mustEnv(t, "SEI_CHAIN_ID")
+	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
 	s := spec{
 		chainID:        chainID,
 		runID:          envOr("SEI_RUN_ID", chainID),

@@ -71,7 +71,7 @@ var chaosScenarios = []chaosScenario{
 // CHAOS_DURATION [optional]. Run with -test.timeout 0 (see TestBenchmark).
 func TestChaosSuite(t *testing.T) {
 	requireCluster(t)
-	base := mustEnv(t, "SEI_CHAIN_ID")
+	base := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
 	seid := mustEnv(t, "SEID_IMAGE")
 	ns := envOr("SEI_NAMESPACE", "")
 	duration := envOr("CHAOS_DURATION", "3m")

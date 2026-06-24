@@ -62,7 +62,7 @@ var releaseRPCConfig = map[string]string{
 // -test.timeout 0 (see TestBenchmark).
 func TestRelease(t *testing.T) {
 	requireCluster(t)
-	chainID := mustEnv(t, "SEI_CHAIN_ID")
+	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
 	seid := mustEnv(t, "SEID_IMAGE")
 	releaseImage := mustEnv(t, "RELEASE_TEST_IMAGE")
 	ns := envOr("SEI_NAMESPACE", "")
