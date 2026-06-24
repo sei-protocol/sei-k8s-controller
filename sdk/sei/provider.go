@@ -6,10 +6,19 @@ import (
 	"sync"
 )
 
+// The Provider/*Handle interfaces, the *Spec structs (spec.go), and the registry
+// are the SDK's stable, dependency-light CONTRACT — the seam a consumer's
+// in-process harness conforms to by shape, and the boundary a future leaf module
+// would extract. This contract surface MUST stay free of controller-runtime /
+// apimachinery / CRD imports; those belong to the k8s provider package alone, the
+// concrete object surfacing only through Object() any.
+
 // Provider is the flavor contract — a thin, stateless CRUD driver. The core
-// *Client is a typed facade over exactly these methods. k8s implements it; local
-// and docker are registered stubs. It lives in core so providers depend on core,
-// not vice-versa; the public provider.Provider is an alias of this type.
+// *Client is a typed facade over exactly these methods. k8s implements it as a
+// real wire provider; docker is a registered wire stub. A consumer may register
+// its own provider (e.g. sei-chain's in-process harness) — the SDK ships none
+// beyond the wire modes. It lives in core so providers depend on core, not
+// vice-versa; the public provider.Provider is an alias of this type.
 //
 // A provider holds only the mode connection/config (kube client, etc.) — never a
 // registry, cache, or tracking of provisioned resources. The runtime owns

@@ -10,7 +10,6 @@ import (
 // Shared test constants for the sei package tests (registry/Open env selection).
 const (
 	envNodeCluster = "SEI_NODE_CLUSTER"
-	envLocal       = "SEI_LOCAL"
 	envDocker      = "SEI_DOCKER"
 )
 
@@ -101,15 +100,13 @@ func TestResolveMode_EnvSelection(t *testing.T) {
 		wantErr bool
 	}{
 		{"SEI_NODE_CLUSTER => k8s", map[string]string{envNodeCluster: "1"}, modeK8s, false},
-		{"SEI_LOCAL => local", map[string]string{envLocal: "1"}, modeLocal, false},
 		{"SEI_DOCKER => docker", map[string]string{envDocker: "1"}, modeDocker, false},
-		{"two set => ambiguous", map[string]string{envNodeCluster: "1", envLocal: "1"}, "", true},
-		{"all set => ambiguous", map[string]string{envNodeCluster: "1", envLocal: "1", envDocker: "1"}, "", true},
+		{"both set => ambiguous", map[string]string{envNodeCluster: "1", envDocker: "1"}, "", true},
 		{"none set => fail", map[string]string{}, "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, k := range []string{envNodeCluster, envLocal, envDocker} {
+			for _, k := range []string{envNodeCluster, envDocker} {
 				_ = os.Unsetenv(k)
 			}
 			for k, v := range tc.env {
@@ -128,25 +125,25 @@ func TestResolveMode_EnvSelection(t *testing.T) {
 
 func TestResolveMode_ExplicitBeatsEnv(t *testing.T) {
 	t.Setenv(envNodeCluster, "1")
-	t.Setenv(envLocal, "1") // ambiguous env...
-	got, err := resolveMode(modeDocker)
+	t.Setenv(envDocker, "1") // ambiguous env...
+	got, err := resolveMode("consumer-mode")
 	if err != nil {
 		t.Fatalf("explicit mode should bypass env ambiguity: %v", err)
 	}
-	if got != modeDocker {
-		t.Fatalf("resolved %q, want docker", got)
+	if got != "consumer-mode" {
+		t.Fatalf("resolved %q, want consumer-mode", got)
 	}
 }
 
 func TestOpen_AmbiguousEnv_FailFastThroughOpen(t *testing.T) {
 	resetRegistry(t)
 	registerStub(modeK8s)
-	registerStub(modeLocal)
-	for _, k := range []string{envNodeCluster, envLocal, envDocker} {
+	registerStub(modeDocker)
+	for _, k := range []string{envNodeCluster, envDocker} {
 		_ = os.Unsetenv(k)
 	}
 	t.Setenv(envNodeCluster, "1")
-	t.Setenv(envLocal, "1")
+	t.Setenv(envDocker, "1")
 	if _, err := Open(context.Background(), ""); err == nil {
 		t.Fatal("ambiguous env should fail fast through Open")
 	}
