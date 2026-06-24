@@ -42,11 +42,11 @@ const runLabelKey = "sei.io/harness-run"
 
 // flatkvStorageConfig pins storage write-modes for the load/release/chaos suites
 // (the major-upgrade suite omits it — exercising the migration path is what that
-// suite tests). State commitment stays on memiavl (the controller default
-// cosmos_only is rejected by the nightly image). The state store routes to
-// flatkv: the latest image builds the FlatKV state store for full nodes, and
-// memiavl_only routes all data away from that store and deadlocks its open path,
-// so RPC followers wedge before binding listeners.
+// suite tests). State commitment stays pinned to memiavl (the controller default
+// is rejected by the nightly image). The state store routes to flatkv: the latest
+// image builds the FlatKV state store for full nodes, and memiavl_only routes all
+// data away from that store and deadlocks its open path, so RPC followers wedge
+// before binding listeners.
 var flatkvStorageConfig = map[string]string{
 	"storage.state_commit.write_mode": "memiavl_only",
 	"storage.state_store.write_mode":  "flatkv_only",
