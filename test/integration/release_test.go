@@ -28,7 +28,7 @@ const releaseAdminBalance = "1000000000000usei"
 // releaseBaseConfig is the seid config the release chain runs with: the memiavl
 // storage baseline (the nightly image rejects the cosmos_only default) plus kv tx
 // indexing (the harness queries txs) and a short mempool TTL.
-var releaseBaseConfig = mergeConfig(memiavlStorageConfig, map[string]string{
+var releaseBaseConfig = mergeConfig(flatkvStorageConfig, map[string]string{
 	"tx_index.indexer":     "kv",
 	"mempool.ttl_duration": "60s",
 })

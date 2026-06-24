@@ -40,14 +40,16 @@ import (
 // DeletionPolicy cascade are the cleanup path.
 const runLabelKey = "sei.io/harness-run"
 
-// memiavlStorageConfig is the storage write-mode the load + release suites run
-// with — the controller default (cosmos_only) is rejected by the nightly image.
-// NOT universal: the major-upgrade suite deliberately omits it (the storage /
-// migration path is what that suite tests), so it's applied per-suite via
-// spec.storageConfig, never globally.
-var memiavlStorageConfig = map[string]string{
+// flatkvStorageConfig pins storage write-modes for the load/release/chaos suites
+// (the major-upgrade suite omits it — exercising the migration path is what that
+// suite tests). State commitment stays on memiavl (the controller default
+// cosmos_only is rejected by the nightly image). The state store routes to
+// flatkv: the latest image builds the FlatKV state store for full nodes, and
+// memiavl_only routes all data away from that store and deadlocks its open path,
+// so RPC followers wedge before binding listeners.
+var flatkvStorageConfig = map[string]string{
 	"storage.state_commit.write_mode": "memiavl_only",
-	"storage.state_store.write_mode":  "memiavl_only",
+	"storage.state_store.write_mode":  "flatkv_only",
 }
 
 // mergeConfig returns base overlaid with extra; extra wins on key collision.

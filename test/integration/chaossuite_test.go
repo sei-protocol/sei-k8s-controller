@@ -97,7 +97,7 @@ func TestChaosSuite(t *testing.T) {
 				validators:    4,
 				rpcNodes:      1, // an unfaulted observer of liveness + recovery
 				timeout:       40 * time.Minute,
-				storageConfig: memiavlStorageConfig,
+				storageConfig: flatkvStorageConfig,
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
