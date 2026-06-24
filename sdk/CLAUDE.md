@@ -4,6 +4,13 @@ A thin, typed, **stateless**, **multi-mode** Go-native API for SeiNetwork/SeiNod
 lifecycle. Mirrors `database/sql`: a provider registers in `init()`, the consumer
 blank-imports it, and `Open(ctx, mode)` selects the mode by name (or env).
 
+The SDK is a **wire-client product**: it ships providers that speak RPC/CRDs to an
+already-running chain (k8s, docker), so pinning it to a chain release is fine. It
+does **not** host an in-process provider — that would link sei-chain's Go source
+(uninstallable in the controller, and co-versioned with the chain). An in-process
+harness lives in sei-chain, conforms to these same handle interfaces by shape, and
+is registered/constructed consumer-side.
+
 The flow a harness drives: create network -> `WaitReady` -> create RPC nodes as
 peers -> `WaitReady` -> run tests against the returned Go handles -> `Delete`.
 
@@ -34,9 +41,11 @@ Comments and PRs are why-not-what; names carry intent. No ticket IDs in code
 `*Client` is safe for sequential use only — not goroutine-safe across calls.
 
 **Mode selection.** `Open(ctx, mode)`: explicit `mode` wins; with `""`, exactly
-one of `SEI_NODE_CLUSTER` (=> k8s), `SEI_LOCAL` (=> local), `SEI_DOCKER` (=>
-docker) must be set — more than one, or none, is an error. Providers self-register
-via blank import (`_ ".../sdk/sei/provider/k8s"`).
+one of `SEI_NODE_CLUSTER` (=> k8s), `SEI_DOCKER` (=> docker) must be set — more
+than one, or none, is an error. Env resolution covers the SDK's built-in wire
+modes only; a consumer-registered provider is selected by passing its name to
+`Open` explicitly. Providers self-register via blank import
+(`_ ".../sdk/sei/provider/k8s"`).
 
 **`WaitReady` = phase + LIGHT serve-probe.** Network: phase Ready + one TM
 `/status` liveness check. Node: phase Running + one serve-probe (EVM
@@ -57,7 +66,15 @@ is success). The SDK never auto-deletes — including on a failed `WaitReady`.
 
 **Raw-CR escape.** `Network.Object()` / `Node.Object()` return `any`; in k8s mode
 the caller type-asserts to `*v1alpha1.SeiNetwork` / `*v1alpha1.SeiNode`. Keeps the
-k8s type off the mode-agnostic surface; local/docker stubs return nil.
+k8s type off the mode-agnostic surface; a provider with no native object returns
+nil.
+
+**Contract seam.** The `Provider`/`*Handle` interfaces, the `*Spec` structs, and
+the registry are the SDK's stable, dependency-light contract — the surface a
+consumer's in-process harness conforms to by shape, and the seam a future leaf
+module would extract. It MUST stay free of controller-runtime / apimachinery / CRD
+imports; those live in the k8s provider package alone (the concrete object reaches
+callers only via `Object() any`).
 
 ## Source of truth
 
@@ -75,8 +92,13 @@ authors them once.
   endpoints. The node object lives at `NodeSpec.Namespace`; the peer selector
   searches `NodeSpec.NetworkNamespace` (where the genesis validators live),
   defaulting to the node's namespace when empty — the co-located common case.
-- **local**, **docker** — registered STUBS. `Open` resolves them, but every verb
-  returns `ErrNotImplemented` so a mode picked by env fails clearly.
+- **docker** — registered wire STUB. `Open` resolves it, but every verb returns
+  `ErrNotImplemented` so a mode picked by env fails clearly.
+
+The SDK ships no in-process ("local") provider. A consumer that needs one (e.g.
+sei-chain's in-repo harness) implements the same handle interfaces by shape and
+calls `provider.Register("local", …)` / `Open(ctx, "local")` itself — the SDK's
+generic registry permits this without hosting the adapter.
 
 ## One-way doors (need sign-off to change; additive is safe)
 
