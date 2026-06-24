@@ -93,7 +93,7 @@ const restUnreachable = "REST unreachable / non-200"
 // UPGRADE_HEIGHT_DELTA [optional]. Run with -test.timeout 0 (see TestBenchmark).
 func TestChainUpgrade(t *testing.T) {
 	requireCluster(t)
-	chainID := mustEnv(t, "SEI_CHAIN_ID")
+	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
 	preImage := mustEnv(t, "SEID_IMAGE")
 	postImage := mustEnv(t, "SEID_UPGRADE_IMAGE")
 	upgradeName := mustEnv(t, "SEI_UPGRADE_NAME")
