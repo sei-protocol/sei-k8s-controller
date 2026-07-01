@@ -16,11 +16,14 @@ Resolve these once; they recur in node names, manifests, peer strings, and the r
 | `<shard>` | a stable per-shard id you choose (e.g. `s079m`), reused in both node names, the kustomization entries, and the results prefix. |
 | `<tag>` | the sei-chain git ref/tag the image was built from (§3). |
 | `<ECR>` | `189176372795.dkr.ecr.us-east-2.amazonaws.com`. |
-| `<shard-start-height>` | the snapshot height chosen in §6.1. |
+| `<shard-start-height>` | the snapshot height chosen in §6 step 1. |
 | `<archive-node-id>@<archive-p2p-dns>` | **(external)** the full-history archive's CometBFT node-id and its p2p DNS — read from the archive's `/status` (`.node_info.id`) and its headless Service DNS (§5). |
 | `<shard-node-id>@<shard-p2p-dns>` | **(external)** a shard node's own node-id + p2p DNS — only needed for the archive-dials-shard direction (§5). |
 | `<flatkv-node>` / `<memiavl-node>` | `pacific1-flatkv-replayer-<shard>` / `pacific1-memiavl-replayer-<shard>` (§4). |
 | `<behind-node>` / `<ahead-node>` | resolved **at comparator-submit time** from live heights (§7) — not fixed. |
+| `<archive>` | the full-history archive's SeiNode name (its pod is `<archive>-0`); the block source (§5). |
+| `<you>` | the `X-Remote-User` identity the sidecar records for audit — use your `<alias>`. |
+| `<task-uuid>` | runtime output: the `id` returned by the `result-export` POST (§7). |
 | `<results-bucket>` / `<snapshot-bucket>` | the S3 results bucket and the state-sync snapshot bucket (from the sidecar's platform env). |
 
 ---
@@ -42,7 +45,7 @@ The three load-bearing facts, each of which is a trap if violated:
 
 2. **A `migrate_evm` node does not serve EVM reads from flatKV until its migration completes** (§2). It is a boundary-split router, not a pure flatKV store. Until migration completes, EVM reads fall to memIAVL — so the flatKV node and the memIAVL node both read memIAVL, and the comparison is **vacuous** (silently: it looks green). You MUST verify migration is complete (`sei_chain_seidb_migration_version == target`) before trusting any result.
 
-3. **Pre-v6.5 blocks need the `historical_replay` build tag** (§3), or the current binary's strict tx decoder rejects historically-non-canonical tx bodies (`code 2 tx parse error`), silently *skipping* their execution and diverging replayed state from history.
+3. **Pre-v6.5 blocks need the `historical_replay` build tag** (§3), or the current binary's strict tx decoder rejects historically-non-canonical tx bodies (`code 2 tx parse error`), silently *skipping* their execution and diverging replayed state from history. **This tag is not yet on sei-chain `main`** — building from `main` makes it a no-op and reintroduces this trap; you must build from the lenient-decoder branch (§3).
 
 If all three hold, a `match=false` from the comparator is a **genuine flatKV divergence** — the signal the effort exists to find.
 
@@ -97,9 +100,11 @@ The EVM keyspace grows over the chain's life. Migration must sweep whatever EVM 
 Both replay nodes in a pair run the **same** image, built from the target chain binary with **two** build tags:
 
 - **`mock_chain_validation`** — swallows the consensus app-hash divergence that re-execution produces (flatKV's committed root is schedule-dependent; a non-mock binary would halt at the first divergent block). Lets the node replay forward without halting; it keeps data/evidence-integrity halts intact. **Not `mock_balances`** — that build tag corrupts real-tx execution and must never be used for replay.
-- **`historical_replay`** — activates the lenient tx decoder (`NewTxConfigWithoutBodyBloatRejection`, skips `rejectBloatedBody`) so pre-v6.5 blocks whose protobuf tx bodies are non-canonical **decode and execute** instead of being rejected `code 2 tx parse error`. Without it the current strict decoder skips those txs, silently diverging replayed state. The default/untagged build keeps the strict decoder on all production paths — lenient is reachable *only* via this build tag.
+- **`historical_replay`** — activates the lenient tx decoder (a `NewTxConfigWithoutBodyBloatRejection` encoding-config that skips `rejectBloatedBody`) so pre-v6.5 blocks whose protobuf tx bodies are non-canonical **decode and execute** instead of being rejected `code 2 tx parse error`. Without it the current strict decoder skips those txs, silently diverging replayed state. The default/untagged build keeps the strict decoder on all production paths — lenient is reachable *only* via this build tag.
 
-Build the image via the sei-chain `ecr.yml` workflow (`workflow_dispatch`, inputs `ref` + `tag`) with `GO_BUILD_TAGS="mock_chain_validation historical_replay"`; the branch must live on **canonical `sei-protocol/sei-chain`** (the ECR OIDC is scoped there — fork builds fail AWS login). Resulting tag shape: `<ECR>/sei/sei-chain:mock_chain_validation-historical_replay-<tag>`.
+> **Build dependency — not on `main` yet (read before building).** As of this writing, `historical_replay` and its lenient encoding-config are **not on sei-chain `main`**; they land via the lenient-decoder change (sei-chain **PR #3691**). On `main` the only lenient decoder is `DefaultTxDecoderWithoutBodyBloatRejection`, wired into the `evmrpc` *trace* path — **not** the replay/DeliverTx execution path — so a `main` build ignores the tag and silently reverts to the strict decoder (trap #3). The combined-tag build target and the `GO_BUILD_TAGS` plumbing also ride on that change; `main`'s `ecr.yml` does not produce a `mock_chain_validation-historical_replay-*` image. **Until #3691 merges: build from its branch ref.** Once it merges, build from `main`.
+
+Build the image via the sei-chain `ecr.yml` workflow (`workflow_dispatch`) with `ref` = the PR #3691 branch (**not `main`**, per the dependency note above) and `GO_BUILD_TAGS="mock_chain_validation historical_replay"`. The branch **must live on canonical `sei-protocol/sei-chain`** (the ECR OIDC is scoped there — fork branches fail AWS login; push the PR branch to canonical). Resulting tag shape: `<ECR>/sei/sei-chain:mock_chain_validation-historical_replay-<tag>`. Confirm the built image is genuinely lenient before trusting a run — the §11 `code 2 tx parse error` symptom is the failure signature if it isn't.
 
 ---
 
@@ -117,7 +122,8 @@ metadata:
   labels: { sei.io/chain: pacific-1 }
   # sei.io/role is intentionally NOT set here: the controller stamps sei.io/role=replayer
   # on the pod (deriveRole) regardless, so a user value would only create a CR-vs-pod
-  # mismatch. Select runs on sei.io/seinode, not sei.io/role.
+  # mismatch. (The controller's own StatefulSet selector keys on sei.io/node; the
+  # sei.io/seinode podLabel below is our own ad-hoc label for comparator/port-forward selection.)
   annotations: { sei.io/networking-orphaned: "true" }   # signal to external networking tooling; the controller itself creates no external exposure for a SeiNode
 spec:
   chainId: pacific-1
@@ -148,7 +154,7 @@ Why each override matters (all learned the hard way):
 - **pruning off + `min_retain_blocks: 0`** — a tip-following node prunes to a ~100k-block window; the comparator then reads pruned heights and everything reads indeterminate. Archival retention is mandatory for a replay-and-compare node.
 - **`evm.max_trace_lookback_blocks: -1`** — L2 touched-key resolution runs `debug_traceBlockByNumber`, which is capped by default (a finite cap surfaces as `beyond max lookback of N`); `-1` = unlimited.
 - **`spec.sidecar` omitted** — pinning a sidecar image obscures failures and drifts from the cluster default; the controller wires the correct seictl (§7's comparator contract depends on that build). See `/harbor-dev` guardrail 7.
-- **`replayer` mode** (not `fullNode`) — the dedicated replay mode; mutually exclusive with fullNode/archive/validator and requires an S3 snapshot + peers (CEL-enforced). Config renders init-only (§10).
+- **`replayer` mode** (not `fullNode`) — the dedicated replay mode; CEL enforces mode-exclusivity (exactly one of fullNode/archive/replayer/validator) and peer presence; the S3-snapshot requirement is enforced by the controller's planner. Config renders init-only (§10).
 
 ---
 
@@ -189,14 +195,17 @@ Uses the `/harbor-dev` render→PR→Flux flow. Per pair:
 
 ## 7. Running the shadow comparator (seictl `result-export`)
 
-**Precondition (do not skip):** the flatKV node's migration must be complete before this task means anything — confirm `sei_chain_seidb_migration_version == target` (§2 / §6.5) first. Comparing before completion produces a green run that measured memIAVL against memIAVL. This §7 also requires the cluster-default seictl sidecar to carry the **layered comparator** (migrationMode + L2); if the sidecar image ever rolls to a build without it, the `migrationMode`/`shadowEvmRpc`/`canonicalEvmRpc`/`traceRpc` params degrade to a plain block-results export. (The CRD field `spec.replayer.resultExport.shadowResult` exists but is intentionally unused here — it takes only `canonicalRpc` and halts on first divergence; the manual task gives the L1/L2 + survey control this method needs.)
+**Precondition (do not skip):** the flatKV node's migration must be complete before this task means anything — confirm `sei_chain_seidb_migration_version == target` (§2 / §6 step 5) first. Comparing before completion produces a green run that measured memIAVL against memIAVL. This §7 also requires the cluster-default seictl sidecar to carry the **layered comparator** (migrationMode + L2); if the sidecar image ever rolls to a build without it, the `migrationMode`/`shadowEvmRpc`/`canonicalEvmRpc`/`traceRpc` params degrade to a plain block-results export. (The CRD field `spec.replayer.resultExport.shadowResult` exists but is intentionally unused here — it takes only `canonicalRpc` and halts on first divergence; the manual task gives the L1/L2 + survey control this method needs.)
 
-The seictl sidecar runs as a **native sidecar** (`seictl serve`, port 7777) on every SeiNode — long-running, controller-wired, with full platform env. **Determine which node is behind at submit time:** read `/status` `latest_block_height` on **both** nodes (unwrapped JSON, §6.4) immediately before submitting — they climb independently (~40 blocks/s) and which is behind can flip. Submit the `result-export` task to whichever is **currently behind**, with `canonical*` pointed at the **ahead** node — the canonical must already hold the height being compared, or its query errors on the missing height. If the two are level, wait until they diverge by at least one page (100 blocks) before submitting.
+**The invariant that decides where you submit:** `canonicalRpc` (and `canonicalEvmRpc`) MUST point at the node that already holds every height being compared — otherwise the canonical query errors on a missing height mid-run and the run is wasted. Because both nodes climb independently (~40 blocks/s) and *either* can be ahead (the roles are not fixed — §0), resolve them **at submit time**: read `/status` `latest_block_height` on **both** nodes (unwrapped JSON — `d.get('result', d)`, §6 step 4) immediately before submitting, then submit the `result-export` task to whichever is **currently behind** with `canonical*` set to the **currently ahead** node. If the two are level, wait until they diverge by at least one page (100 blocks) before submitting.
+
+The seictl sidecar runs as a **native sidecar** (`seictl serve`, port 7777) on every SeiNode — long-running, controller-wired, with full platform env.
 
 Reach the sidecar API (it binds `127.0.0.1:7777`, fronted by kube-rbac-proxy; the seid/sidecar containers are distroless — no shell):
 
 ```bash
-kubectl -n eng-<alias> port-forward pod/<behind-node>-0 7777:7777 &
+kubectl -n eng-<alias> port-forward pod/<behind-node>-0 7777:7777 &   # <behind-node> = the node you just confirmed is behind; re-check /status if any time has passed
+
 curl -s -X POST -H 'X-Remote-User: <you>' -H 'Content-Type: application/json' \
   http://localhost:7777/v0/tasks -d '{
     "type":"result-export",
@@ -211,10 +220,10 @@ curl -s -X POST -H 'X-Remote-User: <you>' -H 'Content-Type: application/json' \
       "canonicalEvmRpc":"http://<ahead-node>.eng-<alias>.svc:8545", # L2: ahead node EVM RPC
       "traceRpc":"http://localhost:8545"                            # touched-key traces (unlimited lookback set in §4)
     }}'
-# → {"id":"<task-uuid>"}   ;  GET /v0/tasks/<uuid> for status ; /v0/healthz|metrics are auth-bypass
+# → {"id":"<task-uuid>"}   ;  GET /v0/tasks/<task-uuid> for status ; /v0/healthz|metrics are auth-bypass
 ```
 
-The task compares from the node's snapshot height forward and follows as it replays, writing `{start}-{end}.compare.ndjson.gz` pages (100 blocks each). Each record carries `match`, `layer0` (AppHash/LastResultsHash — informational in migration mode), `layer1` (per-tx `code`/`gasUsed`/`log`/`events`), and `layer2` (per-touched-key `storage`/`balance`/`code`/`nonce`, each with an `indeterminate` flag).
+The task compares from the node's snapshot height forward and follows as it replays, writing `{start}-{end}.compare.ndjson.gz` pages (100 blocks each). Each record carries `match`, `layer0` (AppHash/LastResultsHash — informational in migration mode), `layer1` (per-tx `code`/`gasUsed`/`log`/`events`), and `layer2` (per-touched-key `storage`/`balance`/`code`/`nonce`, with a block-level `indeterminate` flag set when the L2 fan-out couldn't resolve).
 
 **Expected benign edge:** the first block after the snapshot (`<snapshot+1>`) is L2-indeterminate — its prestate trace needs the parent (the pre-snapshot base, absent from the blockstore). One block; not a divergence.
 
@@ -250,7 +259,7 @@ An AI agent reads the aggregated results and writes the report via its Notion MC
 - **Sampling:** ~10% of the block space between EVM genesis and tip = a stride over the available 100k-spaced snapshots. Anchor one shard at EVM genesis (free flatKV coverage); the rest need the §2 high-height treatment.
 - **Waves:** the cap is archive p2p peer budget + blocksync bandwidth (both generous), and per-node disk (~2×168G per pair, archival). Run in waves sized to the peer budget; one full-history archive serves all.
 - **Per-shard identity:** each pair writes a distinct `shadow-results/…/<shard>/` prefix; a re-run gets a fresh `<shard>` (never reuse — reused prefixes overwrite pages).
-- **Teardown:** deleting a replayer `SeiNode` **automatically deletes its controller-created data PVC** (owner-ref + finalizer) — no separate PVC-delete step for controller-managed volumes. (Only `spec.dataVolume.import` PVCs are retained — those you clean up yourself; the replay nodes here don't use import.) Re-pointing a shard to a new snapshot: delete and recreate the `SeiNode` (its data PVC is deleted with it, forcing a fresh bootstrap) — config renders init-only, so an in-place edit won't re-bootstrap.
+- **Teardown:** deleting a replayer `SeiNode` **automatically deletes its controller-created data PVC** (the controller's finalizer deletes it on SeiNode deletion) — no separate PVC-delete step for controller-managed volumes. (Only `spec.dataVolume.import` PVCs are retained — those you clean up yourself; the replay nodes here don't use import.) Re-pointing a shard to a new snapshot: delete and recreate the `SeiNode` (its data PVC is deleted with it, forcing a fresh bootstrap) — config renders init-only, so an in-place edit won't re-bootstrap.
 
 ---
 
