@@ -30,9 +30,11 @@ Resolve these once; they recur in node names, manifests, peer strings, and the r
 
 ## 1. Mental model (read this first)
 
-The goal is to prove the **flatKV** storage engine produces byte-identical execution results and logical state to **memIAVL** for the same real chain history. The method is differential replay:
+The goal is to prove the **flatKV** storage engine produces byte-identical **execution results** to **memIAVL** for the same real chain history. The method is differential replay:
 
 > For each shard of the chain's block space, run **two** replay nodes on the **same seid binary** and the **same bootstrap snapshot** — one `write_mode=migrate_evm` (flatKV), one `write_mode=memiavl_only` (memIAVL). Both fetch the identical block stream from a shared full-history **archive** over p2p and re-execute it. Compare the **two replay nodes against each other**.
+
+> **What this method does and does not validate (read before believing a green run).** The genuine flatKV signal is **L1 — per-tx execution results** (`block_results`: code/gas/log/events), produced at DeliverTx time *when flatKV was live in the execution (SC) path*. flatKV's committed **root** diverges by design (schedule-dependent) and is the separate **seidb logical-digest** track. **L2 (`eth_getStorageAt`/balance/code/nonce at a historical height) does NOT exercise flatKV** on these nodes: SeiDB serves *all historical IAVL reads from the State Store (SS/pebbledb), not the SC layer where `write_mode` chooses flatKV vs memIAVL* (`sei-cosmos/storev2/rootmulti/store.go` `CacheMultiStoreWithVersion` — "Serve from SS stores for ALL historical queries" when SS is enabled). SS is identical on both nodes (same execution history), so **a green L2 is a same-history sanity check, guaranteed by construction — never read it as flatKV parity.** To exercise the flatKV *read* path directly you must run with SS disabled and read at **latest** height (SC is only consulted for the latest version when SS is off), or rely on L1 + the seidb-digest track. §8 restates this at the point of consumption.
 
 The three load-bearing facts, each of which is a trap if violated:
 
@@ -59,7 +61,7 @@ If all three hold, a `match=false` from the comparator is a **genuine flatKV div
 - **Writes** are single-backend per key (not dual-write): migrated/newly-created keys → flatKV, un-migrated existing keys stay in memIAVL until the cursor reaches them.
 - The cursor **auto-advances** `sc-keys-to-migrate-per-block` (app.toml `[state-commit]`, default **1024**) keys/block. When it has swept the entire EVM keyspace, the persisted migration version flips from start (0) to **target (1 for migrate_evm)**, and the node comes up in passthrough: **all EVM reads route to flatKV.**
 
-**Therefore a `migrate_evm` node genuinely exercises the flatKV read path ONLY once migration is complete.** The decisive check is a metric on seid's telemetry port (`:26660`). The on-node Prometheus exposition prefixes every metric with `sei_chain_` (raw OTel names drop it); use the prefixed names:
+**Therefore a `migrate_evm` node routes *latest-version* EVM reads to flatKV ONLY once migration is complete.** (Scope caveat, ties to §1: this governs the **latest-version SC** read path. It does **not** make the comparator's L2 meaningful — L2 reads at *historical* heights, which SeiDB serves from SS regardless of `write_mode` or migration state. This gate matters for the SS-off + latest-height flatKV read test, and confirms the node's SC is genuinely flatKV; it is necessary-but-not-sufficient and cannot rescue L2 while SS is enabled.) The decisive check is a metric on seid's telemetry port (`:26660`). The on-node Prometheus exposition prefixes every metric with `sei_chain_` (raw OTel names drop it); use the prefixed names:
 
 ```bash
 kubectl -n eng-<alias> port-forward pod/<flatkv-node>-0 26660:26660 &
@@ -223,9 +225,9 @@ curl -s -X POST -H 'X-Remote-User: <you>' -H 'Content-Type: application/json' \
 # → {"id":"<task-uuid>"}   ;  GET /v0/tasks/<task-uuid> for status ; /v0/healthz|metrics are auth-bypass
 ```
 
-The task compares from the node's snapshot height forward and follows as it replays, writing `{start}-{end}.compare.ndjson.gz` pages (100 blocks each). Each record carries `match`, `layer0` (AppHash/LastResultsHash — informational in migration mode), `layer1` (per-tx `code`/`gasUsed`/`log`/`events`), and `layer2` (per-touched-key `storage`/`balance`/`code`/`nonce`, with a block-level `indeterminate` flag set when the L2 fan-out couldn't resolve).
+The task compares from the node's snapshot height forward and follows as it replays, writing `{start}-{end}.compare.ndjson.gz` pages (100 blocks each). Each record carries `match`, `layer0` (AppHash/LastResultsHash — informational in migration mode), `layer1` (per-tx `code`/`gasUsed`/`log`/`events` — the flatKV verdict, §1), and `layer2` (per-touched-key `storage`/`balance`/`code`/`nonce`; `indeterminate` is a per-layer flag on the L1/L2 result, set when that layer couldn't resolve — a same-history sanity check, not a flatKV signal, §1/§8).
 
-**Expected benign edge:** the first block after the snapshot (`<snapshot+1>`) is L2-indeterminate — its prestate trace needs the parent (the pre-snapshot base, absent from the blockstore). One block; not a divergence.
+**Expected benign edge:** the first block after the snapshot (`<snapshot+1>`) is L2-indeterminate — building its EVM query context needs the parent block's validators (`<snapshot>`, the pre-snapshot base, absent from the blockstore: `height is not available`). One block; not a divergence.
 
 ---
 
@@ -239,18 +241,19 @@ aws s3 sync s3://<results-bucket>/shadow-results/flatkv-vs-memiavl-<shard>/ ./<s
 # layer2.indeterminate (benign) vs determinate (real); cluster real divergences by height/contract/kind.
 ```
 
-Interpretation, given the gates in §1–§2 hold:
+Interpretation, given the gates in §1–§2 hold — **L1 is the verdict; L2 is not** (§1):
 
-- **`match=true` across the range** → flatKV ≡ memIAVL at L1+L2 for those blocks. Parity holds.
-- **Determinate `match=false`** (not `layer2.indeterminate`, not the boundary block) → a **genuine flatKV divergence**: record the height, the tx/receipt fields or the touched-key `{addr, kind, shadow, canonical}`. This is the finding.
+- **L1 `match=true` across the range** → flatKV ≡ memIAVL at the **execution-result** level for those blocks. This is the parity result this method delivers.
+- **Determinate L1 `match=false`** (a real per-tx `code`/`gasUsed`/`log`/`events` mismatch, not the boundary block) → a **genuine flatKV divergence**: record the height and the tx/receipt fields. This is the finding.
+- **L2 (`layer2`) is a same-history sanity check, not a flatKV signal.** On these SS-enabled nodes L2 reads the State Store on both sides (§1), so a green L2 is expected and means nothing about flatKV; a determinate L2 `match=false` here would indicate an SS/replay divergence between the two nodes, not a flatKV read-path bug. Do **not** report L2 parity as flatKV parity.
 - **`layer2.indeterminate`** beyond the boundary block → a config miss (pruning / trace-lookback — revisit §4), not a divergence.
-- Scope caveat: this validates **L1 (receipts) + L2 (touched-key logical state)**. The pure identical-state / divergent-committed-root case is the separate **seidb logical-digest** track.
+- Scope caveat: this method validates **L1 (execution results)**. The flatKV **read path** at historical heights and the **committed root** are out of scope here — the read path needs an SS-off + latest-height setup (§1), and the root is the separate **seidb logical-digest** track.
 
 ---
 
 ## 9. Generating the Notion report
 
-An AI agent reads the aggregated results and writes the report via its Notion MCP (there is no report-writer in seictl). The report should carry, per shard: the pair (images, snapshot height, `write_mode`s), the **migration-complete gate result** (proof the flatKV reads were genuine), blocks compared + match rate, and any determinate divergences clustered by attribution (contract/kind), with the raw dual-node records for each. State the L1+L2 scope caveat at the point of consumption so a green run is never read as a complete migration proof.
+An AI agent reads the aggregated results and writes the report via its Notion MCP (there is no report-writer in seictl). The report should carry, per shard: the pair (images, snapshot height, `write_mode`s), the migration-complete gate result, blocks compared, the **L1 match rate (the flatKV verdict)**, and any determinate L1 divergences clustered by attribution (contract/kind) with the raw dual-node records for each. **Report L1 as the flatKV result; report L2 explicitly as a same-history sanity check, not flatKV parity** (§1/§8) — otherwise a green L2 gets misread as proof. State that the committed-root / flatKV historical read path are out of scope (the seidb-digest track and an SS-off+latest-height run, respectively), so a green run is never read as a complete migration proof.
 
 ---
 
@@ -271,7 +274,8 @@ An AI agent reads the aggregated results and writes the report via its Notion MC
 | Comparator L2 all `indeterminate` (`beyond max lookback` / pruned) | tip-following pruning + trace-lookback cap | archival overrides + `evm.max_trace_lookback_blocks: -1` (§4) |
 | Comparator shows `code 2 tx parse error` where the archive succeeded | strict decoder rejecting pre-v6.5 non-canonical bodies | use the `historical_replay` build (§3) |
 | flatKV vs archive "divergence" (OOG both directions, auth failures) | comparing re-execution vs stored results — version drift, not flatKV | compare the two **replay nodes**, never the archive (§1) |
-| Parity looks perfect but suspiciously so | migration not complete → both sides read memIAVL (vacuous) | verify `sei_chain_seidb_migration_version == target` (§2) |
+| L2 parity always green | **historical EVM reads served from SS, not flatKV** — L2 is SS↔SS by construction, vacuous for flatKV | treat L2 as a same-history sanity check; take the flatKV verdict from L1; for the flatKV read path use SS-off + latest-height (§1/§8) |
+| L1 parity looks perfect but suspiciously so | migration not complete → execution read un-migrated EVM keys from memIAVL on the flatKV node | verify `sei_chain_seidb_migration_version == target` (§2) |
 | `evm_migrated` node: every EVM read not-found, no error | pointed at a memIAVL-history store; no runtime guard | only use `evm_migrated` on a migration-complete state (§2) |
 | `seictl serve` standalone pod errors on missing `SEI_GENESIS_BUCKET` etc. | serve validates full platform env | use the controller-wired in-pod sidecar instead of a standalone serve |
 | canonical-RPC errors mid-run on missing heights | comparator running on the *ahead* node | run it on the **behind** node, canonical = ahead (§7) |
