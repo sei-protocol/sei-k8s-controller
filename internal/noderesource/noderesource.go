@@ -39,11 +39,13 @@ const (
 
 	dataDir = platform.DataDir
 
-	// homeVarRef is the K8s VariableReference form of HOME, substituted from
-	// container.Env at pod-create. Spelled `$(HOME)` (not `$HOME`) — only the
-	// K8s syntax is expanded by kubelet; shell-style refs are passed through
-	// literally and fail at exec.
-	homeVarRef = "$(HOME)"
+	// homeMountPath is the container HOME — an emptyDir, deliberately NOT the
+	// seid data dir. Cosmos-SDK derives DefaultNodeHome = $HOME/.sei, so
+	// HOME=/.sei made a bare `seid` resolve to /.sei/.sei (nested home) and drop
+	// shell files (.bash_history) onto the data PVC. Every seid invocation now
+	// passes an explicit `--home <dataDir>`, so HOME is decoupled from the data dir.
+	homeMountPath  = "/home/nonroot"
+	homeVolumeName = "home"
 
 	// seidHomeFlag is the cosmos-sdk flag that sets seid's working dir.
 	seidHomeFlag = "--home"
@@ -437,8 +439,14 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 		Name:         sidecarTmpVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}
-	volumes := make([]corev1.Volume, 0, 3+len(signingVolumes)+len(nodeVolumes)+len(keyringVolumes))
-	volumes = append(volumes, dataVolume, sidecarTmpVolume, proxyConfigVolume)
+	// homeVolume backs the container HOME (an emptyDir off the data PVC) so
+	// shell/home writes never land on /.sei and bare `seid` never nests at $HOME/.sei.
+	homeVolume := corev1.Volume{
+		Name:         homeVolumeName,
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}
+	volumes := make([]corev1.Volume, 0, 4+len(signingVolumes)+len(nodeVolumes)+len(keyringVolumes))
+	volumes = append(volumes, dataVolume, sidecarTmpVolume, homeVolume, proxyConfigVolume)
 	volumes = append(volumes, signingVolumes...)
 	volumes = append(volumes, nodeVolumes...)
 	volumes = append(volumes, keyringVolumes...)
@@ -686,10 +694,10 @@ func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
 }
 
 func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []string) {
-	// Canonical seid invocation. "$HOME" (shell-expanded inside bash -c)
-	// resolves from the container env declared in buildNodeMainContainer.
+	// Canonical seid invocation with an explicit --home <dataDir>, decoupled
+	// from the container HOME (a non-data-dir emptyDir).
 	cmd := "seid"
-	cmdArgs := []string{seidStartSubcommand, seidHomeFlag, "$HOME"}
+	cmdArgs := []string{seidStartSubcommand, seidHomeFlag, dataDir}
 
 	var b strings.Builder
 	b.WriteString(cmd)
@@ -715,25 +723,26 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	signingMounts := signingKeyMounts(node)
 	nodeMounts := nodeKeyMounts(node)
-	mounts := make([]corev1.VolumeMount, 0, 1+len(signingMounts)+len(nodeMounts))
+	mounts := make([]corev1.VolumeMount, 0, 2+len(signingMounts)+len(nodeMounts))
 	mounts = append(mounts, corev1.VolumeMount{Name: "data", MountPath: dataDir})
+	mounts = append(mounts, corev1.VolumeMount{Name: homeVolumeName, MountPath: homeMountPath})
 	mounts = append(mounts, signingMounts...)
 	mounts = append(mounts, nodeMounts...)
-	// HOME must appear before TMPDIR so K8s VariableReference $(HOME) in
-	// args[] resolves at pod-create. K8s reads container.Env (not the
-	// process env) for variable substitution, ordered top-down.
 	container := corev1.Container{
 		Name:            containerNameSeid,
 		Image:           node.Spec.Image,
 		SecurityContext: seidNonRootSecurityContext(),
+		// HOME is a non-data-dir emptyDir; TMPDIR is the data dir's tmp. seid is
+		// invoked with an explicit --home <dataDir> (see sidecarWaitCommand), so
+		// HOME never determines seid's home — that's why it's safe off /.sei.
 		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: dataDir},
+			{Name: "HOME", Value: homeMountPath},
 			{Name: "TMPDIR", Value: dataDir + "/tmp"},
 		},
-		// Canonical invocation. $(HOME) is K8s VariableReference syntax,
-		// substituted from container.Env before exec.
+		// Explicit --home <dataDir>; overridden at the call site by
+		// sidecarWaitCommand, kept here for a coherent standalone container.
 		Command:      []string{"seid"},
-		Args:         []string{seidStartSubcommand, seidHomeFlag, homeVarRef},
+		Args:         []string{seidStartSubcommand, seidHomeFlag, dataDir},
 		VolumeMounts: mounts,
 		Ports:        ContainerPorts(),
 		StartupProbe: &corev1.Probe{
@@ -755,14 +764,14 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	return container
 }
 
-// buildSeidInitContainer materializes $HOME/config on first boot via
-// `seid init` and ensures $HOME/tmp exists. The script uses shell
-// $HOME (the script runs via /bin/sh -c) so the path stays in lock-step
-// with the HOME env var.
+// buildSeidInitContainer materializes <dataDir>/config on first boot via
+// `seid init` and ensures <dataDir>/tmp exists. Paths are the literal data
+// dir, decoupled from HOME (which is a non-data-dir emptyDir) so the guard
+// and init target the seid home regardless of $HOME.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`if [ -f "$HOME/config/genesis.json" ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home "$HOME" --overwrite; fi && mkdir -p "$HOME/tmp"`,
-		node.Spec.ChainID, node.Spec.ChainID,
+		`if [ -f "%s/config/genesis.json" ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home "%s" --overwrite; fi && mkdir -p "%s/tmp"`,
+		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
 	)
 	return corev1.Container{
 		Name:  "seid-init",
@@ -771,10 +780,11 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 			"/bin/sh", "-c", script,
 		},
 		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: dataDir},
+			{Name: "HOME", Value: homeMountPath},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
+			{Name: homeVolumeName, MountPath: homeMountPath},
 		},
 		SecurityContext: seidNonRootSecurityContext(),
 	}

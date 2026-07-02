@@ -1,6 +1,7 @@
 package noderesource
 
 import (
+	"fmt"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -194,12 +195,14 @@ func TestBuildNodePodSpec_Genesis_MountsExistingPVC(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(spec.ServiceAccountName).To(Equal(platformtest.Config().ServiceAccount))
-	g.Expect(spec.Volumes).To(HaveLen(3)) // data PVC + sidecar-tmp emptyDir + rbac-proxy-config ConfigMap
+	g.Expect(spec.Volumes).To(HaveLen(4)) // data PVC + sidecar-tmp emptyDir + home emptyDir + rbac-proxy-config ConfigMap
 	g.Expect(spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal("data-mynet-0"))
 	g.Expect(spec.Volumes[1].Name).To(Equal(sidecarTmpVolumeName))
 	g.Expect(spec.Volumes[1].EmptyDir).NotTo(BeNil())
-	g.Expect(spec.Volumes[2].Name).To(Equal(rbacProxyConfigVolumeName))
-	g.Expect(spec.Volumes[2].ConfigMap).NotTo(BeNil())
+	g.Expect(spec.Volumes[2].Name).To(Equal(homeVolumeName))
+	g.Expect(spec.Volumes[2].EmptyDir).NotTo(BeNil())
+	g.Expect(spec.Volumes[3].Name).To(Equal(rbacProxyConfigVolumeName))
+	g.Expect(spec.Volumes[3].ConfigMap).NotTo(BeNil())
 }
 
 func TestBuildNodePodSpec_Snapshot_MountsNodePVC(t *testing.T) {
@@ -265,15 +268,15 @@ func TestBuildNodeMainContainer_ImageAndEnv(t *testing.T) {
 	g.Expect(c.Name).To(Equal("seid"))
 	g.Expect(c.Image).To(Equal("ghcr.io/sei-protocol/seid:latest"))
 	g.Expect(c.Command).To(Equal([]string{"seid"}))
-	g.Expect(c.Args).To(Equal([]string{seidStartSubcommand, seidHomeFlag, homeVarRef}),
-		"controller injects canonical command; $(HOME) is K8s VariableReference, resolved from container.Env at pod-create")
+	g.Expect(c.Args).To(Equal([]string{seidStartSubcommand, seidHomeFlag, dataDir}),
+		"controller injects canonical command with an explicit --home <dataDir>, decoupled from HOME")
 
 	env := map[string]string{}
 	for _, e := range c.Env {
 		env[e.Name] = e.Value
 	}
-	g.Expect(env).To(HaveKeyWithValue("HOME", dataDir),
-		"HOME must be declared first so $(HOME) in args resolves correctly")
+	g.Expect(env).To(HaveKeyWithValue("HOME", homeMountPath),
+		"HOME is a non-data-dir emptyDir; seid home is set via explicit --home, not $HOME")
 	g.Expect(env).To(HaveKeyWithValue("TMPDIR", dataDir+"/tmp"))
 }
 
@@ -282,9 +285,11 @@ func TestBuildNodeMainContainer_DataVolumeMount(t *testing.T) {
 	node := newGenesisNode("mynet-0", "default")
 	c := buildNodeMainContainer(node)
 
-	g.Expect(c.VolumeMounts).To(HaveLen(1))
+	g.Expect(c.VolumeMounts).To(HaveLen(2))
 	g.Expect(c.VolumeMounts[0].Name).To(Equal("data"))
 	g.Expect(c.VolumeMounts[0].MountPath).To(Equal(dataDir))
+	g.Expect(c.VolumeMounts[1].Name).To(Equal(homeVolumeName))
+	g.Expect(c.VolumeMounts[1].MountPath).To(Equal(homeMountPath))
 }
 
 func TestBuildNodeMainContainer_StartupProbe_Genesis(t *testing.T) {
@@ -545,9 +550,8 @@ func TestSidecarMainContainer_WaitWrapper_DefaultsSeidStart(t *testing.T) {
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 
 	g.Expect(seid.Command).To(Equal([]string{"/bin/bash", "-c"}))
-	// "$HOME" is shell-expanded inside the bash -c script; the HOME env
-	// var on the container resolves it to dataDir at exec time.
-	g.Expect(seid.Args[0]).To(ContainSubstring(`exec seid "start" "--home" "$HOME"`))
+	// seid is started with an explicit --home <dataDir>, decoupled from HOME.
+	g.Expect(seid.Args[0]).To(ContainSubstring(fmt.Sprintf(`exec seid "start" "--home" %q`, dataDir)))
 }
 
 func TestSidecarMainContainer_NilSidecarConfig_UsesDefaults(t *testing.T) {
@@ -1136,19 +1140,21 @@ func TestSeidInitContainer_BareScript(t *testing.T) {
 	// fsGroup OnRootMismatch — not in this script.
 	g.Expect(script).NotTo(ContainSubstring("chown"))
 	g.Expect(script).NotTo(ContainSubstring("chmod"))
-	// Script uses shell $HOME (runs via /bin/sh -c) so it stays in
-	// lock-step with the HOME env var declared on the container.
-	g.Expect(script).To(ContainSubstring(`seid init sei-test --chain-id sei-test --home "$HOME" --overwrite`))
-	g.Expect(script).To(ContainSubstring(`mkdir -p "$HOME/tmp"`))
-	g.Expect(script).NotTo(ContainSubstring(dataDir),
-		"no hardcoded data dir — script must route through $HOME")
+	// Script targets the literal data dir for --home + the genesis guard + tmp,
+	// decoupled from HOME (a non-data-dir emptyDir).
+	g.Expect(script).To(ContainSubstring(fmt.Sprintf(`seid init sei-test --chain-id sei-test --home "%s" --overwrite`, dataDir)))
+	g.Expect(script).To(ContainSubstring(fmt.Sprintf(`mkdir -p "%s/tmp"`, dataDir)))
+	g.Expect(script).To(ContainSubstring(fmt.Sprintf(`[ -f "%s/config/genesis.json" ]`, dataDir)),
+		"the init skip-guard must check the data dir, not $HOME")
+	g.Expect(script).NotTo(ContainSubstring("$HOME"),
+		"script must not depend on $HOME for the seid home")
 
 	env := map[string]string{}
 	for _, e := range seidInit.Env {
 		env[e.Name] = e.Value
 	}
-	g.Expect(env).To(HaveKeyWithValue("HOME", dataDir),
-		"HOME env var must match the seid main container so shell $HOME resolves consistently")
+	g.Expect(env).To(HaveKeyWithValue("HOME", homeMountPath),
+		"HOME is a non-data-dir emptyDir; the init script targets --home <dataDir> explicitly")
 }
 
 func expectSeidNonRootSecurityContext(g Gomega, sc *corev1.SecurityContext) {

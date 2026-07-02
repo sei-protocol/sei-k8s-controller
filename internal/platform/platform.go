@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	// DataDir is the mount path for the sei data volume inside node pods.
-	// `/.sei` follows the conventional Cosmos SDK home layout (`~/.sei`),
-	// resolved against the seid container's HOME env var. Lock-step with
-	// the SEI_HOME env var injected on the sidecar container; both flow
-	// from this single constant.
+	// DataDir is the mount path for the sei data volume inside node pods, and
+	// the seid home passed explicitly via `--home <DataDir>` on every seid
+	// invocation. It is deliberately NOT the container HOME: Cosmos-SDK derives
+	// DefaultNodeHome = $HOME/.sei, so setting HOME=/.sei made a bare `seid`
+	// resolve to /.sei/.sei (nested). HOME is a separate emptyDir; the sidecar's
+	// SEI_HOME env also points here. All flow from this single constant.
 	DataDir = "/.sei"
 
 	// modeArchive matches seiconfig.ModeArchive without importing sei-config.
