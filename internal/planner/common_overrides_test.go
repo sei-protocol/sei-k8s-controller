@@ -30,8 +30,8 @@ func TestCommonOverrides_EmptyExternalAddress(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node"},
 	}
 	overrides := commonOverrides(node)
-	if _, ok := overrides["logging.level"]; ok {
-		t.Error("commonOverrides must not set logging.level; it is enforced in applyForcedOverrides")
+	if got := overrides[overrideKeyLoggingLevel]; got != defaultLoggingLevel {
+		t.Errorf("commonOverrides logging.level = %q, want default %q", got, defaultLoggingLevel)
 	}
 	if _, ok := overrides[seiconfig.KeyP2PExternalAddress]; ok {
 		t.Errorf("expected no p2p.external_address, got %q", overrides[seiconfig.KeyP2PExternalAddress])

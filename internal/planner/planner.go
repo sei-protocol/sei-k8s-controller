@@ -17,8 +17,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	ctrl "sigs.k8s.io/controller-runtime"
-
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
@@ -49,7 +47,7 @@ const (
 
 const (
 	overrideKeyLoggingLevel = "logging.level"
-	enforcedLoggingLevel    = "error"
+	defaultLoggingLevel     = "error"
 
 	// keyP2PPersistentPeers is the sei-config enrichment key for
 	// network.p2p.persistent_peers (WithHotReload). sei-config v0.0.19
@@ -716,15 +714,17 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 }
 
 // commonOverrides returns controller overrides that apply to all node modes.
-// logging.level is not set here — it is controller-enforced (not user-
-// overridable) in applyForcedOverrides.
+// logging.level defaults to defaultLoggingLevel ("error") here; because
+// mergeOverrides lets user overrides win, a spec.Overrides entry for
+// logging.level takes precedence over this default.
 //
 // persistent_peers is stamped from Status.ResolvedPeers ("" when none — a valid
 // no-peers config). On an init plan it's frozen at build time and refreshes only
 // on the next deployment: peers update on deployments, not on churn.
 func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	out := map[string]string{
-		keyP2PPersistentPeers: strings.Join(node.Status.ResolvedPeers, ","),
+		overrideKeyLoggingLevel: defaultLoggingLevel,
+		keyP2PPersistentPeers:   strings.Join(node.Status.ResolvedPeers, ","),
 	}
 	if node.Spec.ExternalAddress != "" {
 		out[seiconfig.KeyP2PExternalAddress] = node.Spec.ExternalAddress
@@ -844,26 +844,11 @@ func paramsForUpdateTask(node *seiv1alpha1.SeiNode, taskType string, patch map[s
 }
 
 // mergeOverrides combines controller-generated overrides with user-specified
-// overrides. User overrides take precedence.
+// overrides. User overrides take precedence — including logging.level, whose
+// "error" default is seeded by commonOverrides and can be overridden here.
 func mergeOverrides(controllerOverrides, userOverrides map[string]string) map[string]string {
-	merged := make(map[string]string, len(controllerOverrides)+len(userOverrides)+1)
+	merged := make(map[string]string, len(controllerOverrides)+len(userOverrides))
 	maps.Copy(merged, controllerOverrides)
 	maps.Copy(merged, userOverrides)
-	applyForcedOverrides(merged, userOverrides)
 	return merged
-}
-
-// applyForcedOverrides pins controller-enforced config keys that users may not
-// override. logging.level is forced to enforcedLoggingLevel ("error"); a user
-// attempt to set it is logged and discarded.
-func applyForcedOverrides(merged, userOverrides map[string]string) {
-	if got, ok := userOverrides[overrideKeyLoggingLevel]; ok && got != enforcedLoggingLevel {
-		ctrl.Log.WithName("planner").Info(
-			"rejecting user override",
-			"key", overrideKeyLoggingLevel,
-			"user_value", got,
-			"forced_value", enforcedLoggingLevel,
-		)
-	}
-	merged[overrideKeyLoggingLevel] = enforcedLoggingLevel
 }
