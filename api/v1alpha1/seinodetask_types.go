@@ -569,10 +569,7 @@ type GovSoftwareUpgradeOutputs struct {
 }
 
 // GovParamChangeOutputs are the typed results for a completed
-// GovParamChange task. Like the other sidecar-backed gov outputs, these
-// fields are defined for forward compatibility but are NOT populated in
-// this PR (the sidecar TaskResult has no typed-output channel; downstream
-// consumers read the proposalId from the chain — see populateOutputs).
+// GovParamChange task, parsed from the sidecar's structured task result.
 type GovParamChangeOutputs struct {
 	// TxHash is the upper-case hex-encoded transaction hash.
 	// +optional

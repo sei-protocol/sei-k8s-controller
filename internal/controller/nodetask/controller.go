@@ -282,36 +282,83 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 	defer cancel()
 	switch exec.Status(statusCtx) {
 	case task.ExecutionComplete:
-		cr.Status.Task.Status = seiv1alpha1.TaskComplete
-		populateOutputs(cr, target)
-		r.setPhase(cr, seiv1alpha1.SeiNodeTaskPhaseComplete, now)
-		setCondition(cr, metav1.Condition{
-			Type:   seiv1alpha1.ConditionSeiNodeTaskReady,
-			Status: metav1.ConditionTrue, Reason: "TaskComplete",
-		})
+		r.markComplete(cr, exec, target, now)
 	case task.ExecutionFailed:
-		msg := ""
-		if e := exec.Err(); e != nil {
-			msg = e.Error()
-		}
-		cr.Status.Task.Status = seiv1alpha1.TaskFailed
-		cr.Status.Task.Err = msg
-		r.markFailed(cr, now, "TaskFailed", msg)
+		r.handleFailure(cr, exec, now)
 	default:
-		// Still running; enforce the execution timeout against
-		// ExecutionStartedAt (not status.startedAt — keeps the requirePhase wait
-		// off the budget).
-		if timeout := effectiveTimeout(cr); timeout > 0 && cr.Status.Task.ExecutionStartedAt != nil {
-			deadline := cr.Status.Task.ExecutionStartedAt.Add(timeout)
-			if now.After(deadline) {
-				r.markFailed(cr, now, "Timeout",
-					fmt.Sprintf("task did not complete within %s", timeout))
-				cr.Status.Task.Status = seiv1alpha1.TaskFailed
-				cr.Status.Task.Err = "timeout"
-			}
+		// Still running; enforce the execution timeout against ExecutionStartedAt
+		// (not status.startedAt — keeps the requirePhase wait off the budget).
+		if r.execTimedOut(cr, now) {
+			cr.Status.Task.Status = seiv1alpha1.TaskFailed
+			cr.Status.Task.Err = "timeout"
+			r.markFailed(cr, now, "Timeout",
+				fmt.Sprintf("task did not complete within %s", effectiveTimeout(cr)))
 		}
 	}
 	return nil
+}
+
+// markComplete records a committed-ok terminal: stamp outputs and latch Ready.
+// Gov kinds latch reason Confirmed (on-chain confirmed); others keep TaskComplete.
+func (r *SeiNodeTaskReconciler) markComplete(cr *seiv1alpha1.SeiNodeTask, exec task.TaskExecution, target *seiv1alpha1.SeiNode, now time.Time) {
+	cr.Status.Task.Status = seiv1alpha1.TaskComplete
+	populateOutputs(cr, target, decodeGovResult(exec))
+	r.setPhase(cr, seiv1alpha1.SeiNodeTaskPhaseComplete, now)
+	reason := "TaskComplete"
+	if isGovKind(cr.Spec.Kind) {
+		reason = "Confirmed"
+	}
+	setCondition(cr, metav1.Condition{
+		Type:   seiv1alpha1.ConditionSeiNodeTaskReady,
+		Status: metav1.ConditionTrue, Reason: reason,
+	})
+}
+
+// handleFailure resolves an engine-Failed task. For gov kinds it decodes the
+// result to distinguish a committed-but-failed tx and an inclusion-undetermined
+// (pending) result — which is re-checked, not terminal — from a hard failure.
+func (r *SeiNodeTaskReconciler) handleFailure(cr *seiv1alpha1.SeiNodeTask, exec task.TaskExecution, now time.Time) {
+	msg := ""
+	if e := exec.Err(); e != nil {
+		msg = e.Error()
+	}
+
+	if gr := decodeGovResult(exec); gr != nil {
+		switch gr.InclusionStatus {
+		case inclusionPending:
+			// Undetermined: re-submit (same task ID → engine re-run → marker
+			// adopt re-checks) until the execution timeout, then latch Failed.
+			if r.execTimedOut(cr, now) {
+				populateGovOutputs(cr, gr)
+				cr.Status.Task.Status = seiv1alpha1.TaskFailed
+				cr.Status.Task.Err = msg
+				r.markFailed(cr, now, "InclusionUndetermined", msg)
+				return
+			}
+			cr.Status.Task.Status = seiv1alpha1.TaskPending
+			return
+		case inclusionCommittedFailed:
+			populateGovOutputs(cr, gr)
+			cr.Status.Task.Status = seiv1alpha1.TaskFailed
+			cr.Status.Task.Err = msg
+			r.markFailed(cr, now, "TxFailed", msg)
+			return
+		}
+	}
+
+	cr.Status.Task.Status = seiv1alpha1.TaskFailed
+	cr.Status.Task.Err = msg
+	r.markFailed(cr, now, "TaskFailed", msg)
+}
+
+// execTimedOut reports whether the execution budget (from ExecutionStartedAt)
+// has elapsed. 0 timeout means unbounded.
+func (r *SeiNodeTaskReconciler) execTimedOut(cr *seiv1alpha1.SeiNodeTask, now time.Time) bool {
+	timeout := effectiveTimeout(cr)
+	if timeout <= 0 || cr.Status.Task.ExecutionStartedAt == nil {
+		return false
+	}
+	return now.After(cr.Status.Task.ExecutionStartedAt.Add(timeout))
 }
 
 // effectiveTimeout returns the execution timeout (measured from
@@ -352,15 +399,10 @@ func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode)
 	return p.Type, raw, nil
 }
 
-// populateOutputs stamps the typed per-kind outputs on Complete.
-//
-// Sidecar-backed kinds (GovVote, GovSoftwareUpgrade, AwaitCondition,
-// AwaitNodesAtHeight) leave their typed output fields unset for now: surfacing
-// the values the sidecar's TaskResult carries needs typed per-task result
-// payloads on the sidecar side, which is deferred. The CRD fields stay
-// forward-compatible, and downstream consumers coordinate via chain queries
-// (chain-as-medium) rather than task-to-task currying.
-func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) {
+// populateOutputs stamps the typed per-kind outputs on the committed-ok path.
+// Gov kinds read the sidecar's structured result (gr); UpdateNodeImage reads
+// the target's observed image. gr is nil for non-gov kinds.
+func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode, gr *govResult) {
 	switch cr.Spec.Kind {
 	case seiv1alpha1.SeiNodeTaskKindUpdateNodeImage:
 		if cr.Status.Outputs == nil {
@@ -368,6 +410,10 @@ func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) {
 		}
 		cr.Status.Outputs.UpdateNodeImage = &seiv1alpha1.UpdateNodeImageOutputs{
 			AppliedImage: target.Status.CurrentImage,
+		}
+	default:
+		if isGovKind(cr.Spec.Kind) {
+			populateGovOutputs(cr, gr)
 		}
 	}
 }

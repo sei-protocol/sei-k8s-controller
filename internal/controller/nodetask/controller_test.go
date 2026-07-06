@@ -617,13 +617,11 @@ func TestReconcile_GovVote_EndToEnd(t *testing.T) {
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
 	g.Expect(got.Status.Task.Status).To(Equal(seiv1alpha1.TaskComplete))
 
-	// Regression guard: typed GovVote outputs intentionally stay nil in
-	// this PR. populateOutputs only stamps UpdateNodeImage today; flipping
-	// that without updating the LLD (chain-as-medium, no task-to-task
-	// currying) should fail this assertion loudly.
+	// This run stages no result payload, so no GovVote output is stamped.
+	// (Gov outputs are populated when the sidecar returns a result — see the
+	// dedicated completion-contract tests in controller_gov_test.go.)
 	if got.Status.Outputs != nil {
-		g.Expect(got.Status.Outputs.GovVote).To(BeNil(),
-			"populateOutputs unexpectedly populated GovVote — see PR 3 scope notes in controller.go")
+		g.Expect(got.Status.Outputs.GovVote).To(BeNil())
 	}
 }
 

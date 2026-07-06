@@ -14,7 +14,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.39.1
 	github.com/sei-protocol/sei-config v0.0.20
-	github.com/sei-protocol/seictl v0.0.58
+	github.com/sei-protocol/seictl v0.0.61
 	github.com/urfave/cli/v3 v3.6.1
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
@@ -41,6 +41,7 @@ require (
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
 	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/DataDog/zstd v1.5.7 // indirect
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
 	github.com/RaduBerinde/axisds v0.0.0-20250419182453-5135a0650657 // indirect
 	github.com/RaduBerinde/btreemap v0.0.0-20250419174037-3d62b7205d54 // indirect
@@ -91,6 +92,7 @@ require (
 	github.com/creachadair/taskgroup v0.3.2 // indirect
 	github.com/danieljoos/wincred v1.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/desertbit/timer v0.0.0-20180107155436-c41aec40b27f // indirect
 	github.com/dgraph-io/badger/v3 v3.2103.2 // indirect
@@ -109,6 +111,7 @@ require (
 	github.com/go-kit/kit v0.13.0 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
+	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v0.21.2 // indirect
 	github.com/go-openapi/jsonreference v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.1 // indirect
@@ -184,6 +187,7 @@ require (
 	github.com/sei-protocol/sei-chain v0.0.29-fix.0.20260326202429-c9b42951fef7 // indirect
 	github.com/sei-protocol/sei-tm-db v0.0.5 // indirect
 	github.com/sei-protocol/seilog v0.0.3 // indirect
+	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
@@ -203,7 +207,10 @@ require (
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tidwall/tinylru v1.1.0 // indirect
 	github.com/tidwall/wal v1.2.1 // indirect
+	github.com/tklauser/go-sysconf v0.3.15 // indirect
+	github.com/tklauser/numcpus v0.10.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zbiljic/go-filelock v0.0.0-20170914061330-1dbf7103ab7d // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	github.com/zondax/golem v0.27.0 // indirect
