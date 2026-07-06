@@ -649,6 +649,7 @@ spec:
                     description: Status is the lifecycle state of the underlying execution.
                     enum:
                     - Pending
+                    - Running
                     - Complete
                     - Failed
                     type: string
