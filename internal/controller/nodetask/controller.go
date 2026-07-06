@@ -273,6 +273,9 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 			t := metav1.NewTime(now)
 			cr.Status.Task.SubmittedAt = &t
 		}
+		// Advance off Pending so later reconciles poll instead of re-submitting
+		// every cycle.
+		cr.Status.Task.Status = seiv1alpha1.TaskRunning
 	}
 
 	statusCtx, cancel := context.WithTimeout(ctx, sidecarStatusTimeout)

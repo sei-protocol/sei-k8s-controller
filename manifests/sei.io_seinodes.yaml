@@ -972,6 +972,7 @@ spec:
                           description: Status is the current state of this task.
                           enum:
                           - Pending
+                          - Running
                           - Complete
                           - Failed
                           type: string

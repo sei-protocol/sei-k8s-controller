@@ -151,11 +151,12 @@ const (
 )
 
 // TaskStatus is the lifecycle state of a single PlannedTask.
-// +kubebuilder:validation:Enum=Pending;Complete;Failed
+// +kubebuilder:validation:Enum=Pending;Running;Complete;Failed
 type TaskStatus string
 
 const (
 	TaskPending  TaskStatus = "Pending"
+	TaskRunning  TaskStatus = "Running"
 	TaskComplete TaskStatus = "Complete"
 	TaskFailed   TaskStatus = "Failed"
 )

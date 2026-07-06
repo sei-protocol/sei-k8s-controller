@@ -271,6 +271,18 @@ func (f *fakeSidecarClient) setResult(id uuid.UUID, status sidecar.TaskResultSta
 	f.results[id] = res
 }
 
+func (f *fakeSidecarClient) submitCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.submitted)
+}
+
+func (f *fakeSidecarClient) getCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.getCalls
+}
+
 // newReconcilerWithSidecar wires a reconciler whose ExecutionConfig.BuildSidecarClient
 // returns the supplied fake. Separate from newReconciler because the 5 existing
 // non-sidecar tests do not need (and should not pay for) a sidecar fixture.
@@ -613,6 +625,37 @@ func TestReconcile_GovVote_EndToEnd(t *testing.T) {
 		g.Expect(got.Status.Outputs.GovVote).To(BeNil(),
 			"populateOutputs unexpectedly populated GovVote — see PR 3 scope notes in controller.go")
 	}
+}
+
+// TestReconcile_StopsResubmittingAfterSubmit is the PR 2a regression guard:
+// once submitted, Task.Status advances to Running so later reconciles poll
+// instead of re-invoking SubmitTask every cycle. Before the fix Task.Status
+// stayed Pending and each poll re-submitted (the double-submit window).
+func TestReconcile_StopsResubmittingAfterSubmit(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	t0 := time.Now()
+	fakeSC := newFakeSidecarClient()
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, newGovVoteTask(), newRunningNode())
+
+	// R1: synthesize (Task set, Pending — not yet submitted).
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(getTask(t, ctx, c).Status.Task.Status).To(Equal(seiv1alpha1.TaskPending))
+
+	// R2: Execute submits once; Status polls (no result staged → still Running).
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(getTask(t, ctx, c).Status.Task.Status).To(Equal(seiv1alpha1.TaskRunning))
+	g.Expect(fakeSC.submitCount()).To(Equal(1))
+
+	// R3: still no result — must poll, not re-submit.
+	getsBefore := fakeSC.getCallCount()
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(fakeSC.submitCount()).To(Equal(1), "task re-submitted on poll — stop-resubmit regressed")
+	g.Expect(getTask(t, ctx, c).Status.Task.Status).To(Equal(seiv1alpha1.TaskRunning))
+	g.Expect(fakeSC.getCallCount()).To(BeNumerically(">", getsBefore), "expected a status poll")
 }
 
 // ---------------------------------------------------------------------------
