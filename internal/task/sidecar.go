@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -23,6 +24,9 @@ type sidecarExecution[T sidecar.TaskBuilder] struct {
 	fireAndForget bool
 	status        ExecutionStatus
 	err           error
+	// result is the handler's structured output from the terminal GetTask,
+	// surfaced to the controller via Result(). Nil for tasks that emit none.
+	result json.RawMessage
 }
 
 func (e *sidecarExecution[T]) ensureClient() (SidecarClient, error) {
@@ -102,6 +106,13 @@ func (e *sidecarExecution[T]) Status(ctx context.Context) ExecutionStatus {
 		return e.status
 	}
 
+	// Capture the handler's structured result on any terminal outcome — it is
+	// stamped on both Completed and Failed (e.g. a gov submit carries txHash /
+	// inclusionStatus even when it fails).
+	if result.Result != nil {
+		e.result = *result.Result
+	}
+
 	switch result.Status {
 	case sidecar.Completed:
 		e.status = ExecutionComplete
@@ -117,3 +128,7 @@ func (e *sidecarExecution[T]) Status(ctx context.Context) ExecutionStatus {
 }
 
 func (e *sidecarExecution[T]) Err() error { return e.err }
+
+// Result returns the handler's structured output from the terminal GetTask, or
+// nil. Only sidecarExecution implements it; the controller type-asserts for it.
+func (e *sidecarExecution[T]) Result() json.RawMessage { return e.result }

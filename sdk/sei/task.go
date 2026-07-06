@@ -11,13 +11,9 @@ import (
 // node image. A caller drives a major-upgrade or release flow by running these
 // in statement order.
 //
-// Cross-task coordination is chain-as-medium, NOT task-to-task output currying:
-// the controller surfaces typed Outputs only for UpdateNodeImage today (the gov
-// and await kinds leave them unset — surfacing the sidecar's TaskResult needs
-// typed per-task result payloads that are deferred). So a harness that needs a
-// minted proposal ID for a follow-on GovVote queries the chain for it (e.g. the
-// first proposal on a fresh chain is #1), rather than reading it off the upgrade
-// task. TaskOutputs therefore carries only the kinds the controller populates.
+// Completed tasks surface typed Outputs: a gov proposal submission returns its
+// proposal ID and tx hash, so a follow-on GovVote reads the ID off the upgrade
+// task rather than querying the chain.
 //
 // SeiNodeTask is SeiNode-specific, so it belongs in the SDK. The surface mirrors
 // CreateNetwork/CreateNode: a typed spec with SDK-native payloads (core stays
@@ -140,19 +136,32 @@ type UpdateNodeImage struct {
 	Image string // desired seid image (with tag/digest)
 }
 
-// TaskOutputs carries a completed task's typed results. Only the kinds the
-// controller actually populates are surfaced — today just UpdateNodeImage; the
-// gov and await kinds coordinate via chain queries (see the package doc), so
-// their output fields are intentionally absent rather than present-but-always-
-// empty. Outputs are populated only on a completed task; a nil sub-field means
-// the task produced no typed output.
+// TaskOutputs carries a completed task's typed results. A nil sub-field means
+// that kind produced no typed output.
 type TaskOutputs struct {
-	UpdateNodeImage *UpdateNodeImageOutputs
+	UpdateNodeImage    *UpdateNodeImageOutputs
+	GovSoftwareUpgrade *GovProposalOutputs
+	GovParamChange     *GovProposalOutputs
+	GovVote            *GovVoteOutputs
 }
 
 // UpdateNodeImageOutputs are the results of an UpdateNodeImage task.
 type UpdateNodeImageOutputs struct {
 	AppliedImage string // image now observed on target.status.currentImage
+}
+
+// GovProposalOutputs are the results of a gov proposal submission
+// (software-upgrade or param-change).
+type GovProposalOutputs struct {
+	TxHash     string
+	Height     int64
+	ProposalID uint64
+}
+
+// GovVoteOutputs are the results of a gov vote (no proposal is minted).
+type GovVoteOutputs struct {
+	TxHash string
+	Height int64
 }
 
 // RunTask creates a SeiNodeTask and returns a handle immediately — it does NOT

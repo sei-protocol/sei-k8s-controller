@@ -283,10 +283,24 @@ func taskFailureReason(task *seiv1alpha1.SeiNodeTask) string {
 // kind the controller's populateOutputs writes; gov/await kinds coordinate via
 // chain queries (chain-as-medium), so the SDK exposes no always-empty fields.
 func translateTaskOutputs(out *seiv1alpha1.SeiNodeTaskOutputs) *sei.TaskOutputs {
-	if out == nil || out.UpdateNodeImage == nil {
+	if out == nil {
 		return nil
 	}
-	return &sei.TaskOutputs{
-		UpdateNodeImage: &sei.UpdateNodeImageOutputs{AppliedImage: out.UpdateNodeImage.AppliedImage},
+	t := &sei.TaskOutputs{}
+	if o := out.UpdateNodeImage; o != nil {
+		t.UpdateNodeImage = &sei.UpdateNodeImageOutputs{AppliedImage: o.AppliedImage}
 	}
+	if o := out.GovSoftwareUpgrade; o != nil {
+		t.GovSoftwareUpgrade = &sei.GovProposalOutputs{TxHash: o.TxHash, Height: o.Height, ProposalID: o.ProposalID}
+	}
+	if o := out.GovParamChange; o != nil {
+		t.GovParamChange = &sei.GovProposalOutputs{TxHash: o.TxHash, Height: o.Height, ProposalID: o.ProposalID}
+	}
+	if o := out.GovVote; o != nil {
+		t.GovVote = &sei.GovVoteOutputs{TxHash: o.TxHash, Height: o.Height}
+	}
+	if *t == (sei.TaskOutputs{}) {
+		return nil
+	}
+	return t
 }

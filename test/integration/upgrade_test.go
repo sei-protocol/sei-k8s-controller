@@ -153,9 +153,10 @@ func TestChainUpgrade(t *testing.T) {
 	upgradeHeight := cur + delta
 	t.Logf("current height %d; scheduling upgrade %q at height %d", cur, upgradeName, upgradeHeight)
 
-	// 1) Submit the upgrade proposal from validator-0.
+	// 1) Submit the upgrade proposal from validator-0 and read the minted
+	// proposal ID straight off the task output (no chain-as-medium scan).
 	proposer := validatorName(chainID, 0)
-	runTaskComplete(ctx, t, c, sei.TaskSpec{
+	out := runTaskComplete(ctx, t, c, sei.TaskSpec{
 		Name:      taskName(chainID, "propose"),
 		Namespace: ns,
 		Node:      proposer,
@@ -173,15 +174,11 @@ func TestChainUpgrade(t *testing.T) {
 			Gas:            proposeGas,
 		},
 	})
-	t.Logf("upgrade proposal submitted from %s", proposer)
-
-	// 2) Resolve the proposal ID from the chain — the controller does not surface
-	// it as a task output (chain-as-medium).
-	proposalID, err := resolveProposalID(ctx, hc, rest, upgradeName)
-	if err != nil {
-		t.Fatalf("resolve proposal id: %v", err)
+	if out == nil || out.GovSoftwareUpgrade == nil || out.GovSoftwareUpgrade.ProposalID == 0 {
+		t.Fatalf("upgrade task did not surface a proposal ID: %+v", out)
 	}
-	t.Logf("resolved proposal id %d", proposalID)
+	proposalID := out.GovSoftwareUpgrade.ProposalID
+	t.Logf("upgrade proposal submitted from %s; proposal id %d (from task output)", proposer, proposalID)
 
 	// 3) Vote yes from every validator in parallel.
 	voteAllValidators(ctx, t, c, chainID, ns, validators, proposalID, runLabels)
@@ -348,17 +345,20 @@ func awaitAllValidatorsAtHeight(
 }
 
 // runTaskComplete runs one task to completion, registering its deletion for
-// cleanup, and fails the suite if it does not complete.
-func runTaskComplete(ctx context.Context, t *testing.T, c *sei.Client, ts sei.TaskSpec) {
+// cleanup, and fails the suite if it does not complete. Returns the task's
+// typed outputs (nil for kinds that emit none).
+func runTaskComplete(ctx context.Context, t *testing.T, c *sei.Client, ts sei.TaskSpec) *sei.TaskOutputs {
 	t.Helper()
 	task, err := c.RunTask(ctx, ts)
 	if err != nil {
 		t.Fatalf("run task %s (%s): %v", ts.Name, ts.Kind, err)
 	}
 	registerTaskCleanup(t, task)
-	if _, err := task.WaitComplete(ctx); err != nil {
+	out, err := task.WaitComplete(ctx)
+	if err != nil {
 		t.Fatalf("task %s (%s): %v", ts.Name, ts.Kind, err)
 	}
+	return out
 }
 
 // registerTaskCleanup best-effort deletes a task on a fresh context at test end.
@@ -382,74 +382,7 @@ func taskName(chainID, step string) string {
 	return fmt.Sprintf("%s-%s", chainID, step)
 }
 
-// --- chain-as-medium gov queries (harness-level: Cosmos gov REST, not SDK) ---
-
-// govProposal models just enough of a proposal to resolve an upgrade proposal by
-// its plan name and read its status. The legacy (v1beta1) shape carries the plan
-// at content.plan.name; the v1 shape carries it under messages[].content.plan.name
-// — both are accepted.
-type govProposal struct {
-	ProposalID string `json:"proposal_id"`
-	Status     string `json:"status"`
-	Content    struct {
-		Plan struct {
-			Name string `json:"name"`
-		} `json:"plan"`
-	} `json:"content"`
-	Messages []struct {
-		Content struct {
-			Plan struct {
-				Name string `json:"name"`
-			} `json:"plan"`
-		} `json:"content"`
-	} `json:"messages"`
-}
-
-// planName returns the upgrade plan name from whichever shape carries it.
-func (p govProposal) planName() string {
-	if p.Content.Plan.Name != "" {
-		return p.Content.Plan.Name
-	}
-	for _, m := range p.Messages {
-		if m.Content.Plan.Name != "" {
-			return m.Content.Plan.Name
-		}
-	}
-	return ""
-}
-
-// resolveProposalID polls the gov REST endpoint for the voting-period proposal
-// whose upgrade plan name matches upgradeName and returns its ID.
-func resolveProposalID(ctx context.Context, hc *http.Client, rest, upgradeName string) (uint64, error) {
-	// proposal_status=2 is PROPOSAL_STATUS_VOTING_PERIOD.
-	endpoint := rest + "/cosmos/gov/v1beta1/proposals?proposal_status=2"
-	what := fmt.Sprintf("resolve proposal id for %q", upgradeName)
-	var found uint64
-	err := pollREST(ctx, what, func(ctx context.Context) (bool, string, error) {
-		var body struct {
-			Proposals []govProposal `json:"proposals"`
-		}
-		if !getJSONInto(ctx, hc, endpoint, &body) {
-			return false, restUnreachable, nil
-		}
-		for _, p := range body.Proposals {
-			if p.planName() != upgradeName {
-				continue
-			}
-			id, err := strconv.ParseUint(p.ProposalID, 10, 64)
-			if err != nil {
-				return false, "", fmt.Errorf("unparseable proposal id %q: %w", p.ProposalID, err)
-			}
-			found = id
-			return true, "", nil
-		}
-		// None matched: a proposal stuck in the deposit period (deposit below
-		// min_deposit) never reaches the status=2 set polled here.
-		seen := fmt.Sprintf("%d voting-period proposals, none match plan %q", len(body.Proposals), upgradeName)
-		return false, seen, nil
-	})
-	return found, err
-}
+// --- chain gov queries (harness-level: Cosmos gov REST, not SDK) ---
 
 // waitProposalPassed polls a single proposal until it reaches PASSED, failing
 // fast if it lands in a terminal non-passed state (REJECTED/FAILED).
@@ -457,7 +390,9 @@ func waitProposalPassed(ctx context.Context, hc *http.Client, rest string, id ui
 	endpoint := fmt.Sprintf("%s/cosmos/gov/v1beta1/proposals/%d", rest, id)
 	return pollREST(ctx, fmt.Sprintf("proposal %d passed", id), func(ctx context.Context) (bool, string, error) {
 		var body struct {
-			Proposal govProposal `json:"proposal"`
+			Proposal struct {
+				Status string `json:"status"`
+			} `json:"proposal"`
 		}
 		if !getJSONInto(ctx, hc, endpoint, &body) {
 			return false, restUnreachable, nil
