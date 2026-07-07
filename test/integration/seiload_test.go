@@ -121,15 +121,23 @@ func renderJob(t *testing.T, p seiloadParams) *batchv1.Job {
 }
 
 // runSeiload renders the platform profile, applies seiload's Job manifest, waits
-// for the Job to complete, and asserts every follower is still caught up.
-// Pass/fail is Job completion plus post-load liveness; throughput gating is a
-// PromQL query over the run's metrics (the Job carries a metrics scrape label,
-// pending a podMonitor that selects it).
+// for the Job to complete, and asserts (1) every follower is still caught up and
+// (2) the chain included transactions during the load window. The inclusion gate
+// is load-bearing because seiload exits 0 on its duration deadline regardless of
+// outcome: a chain that accepts every submission into mempools but includes none
+// in blocks yields a Complete Job, live followers, and a green run despite being
+// effectively write-only. Fine-grained throughput gating stays in the metrics
+// layer (podMonitor + alerts); this asserts the floor: included > 0.
 func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch *chain, s spec) {
 	t.Helper()
 	// The seiload Job co-locates with the chain; the network's resolved
 	// namespace is authoritative (never re-resolve from env here).
 	ns := ch.network.Namespace()
+
+	// The inclusion window opens at the committed height before load starts.
+	hc := &http.Client{Timeout: 10 * time.Second}
+	tmRPC := ch.rpcNodes[0].TendermintRPC()
+	startHeight := mustLatestHeight(ctx, t, hc, tmRPC, "pre-load")
 
 	profileCM := "seiload-profile-" + s.runID
 	profileJSON := renderProfile(ctx, t, cs, ns, s.seiloadProfile, s.chainID, ch.evmEndpoints())
@@ -161,12 +169,105 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 
 	// Chain survived the load: every follower still caught up (a follower can't
 	// catch up to a halted chain, so this transitively covers validator quorum).
-	hc := &http.Client{Timeout: 10 * time.Second}
 	for _, n := range ch.rpcNodes {
 		if err := sei.WaitCaughtUp(ctx, hc, n.TendermintRPC()); err != nil {
 			t.Errorf("post-load %s not caught up: %v", n.Name(), err)
 		}
 	}
+
+	// Chain included the load: at least one transaction landed in a block during
+	// the window.
+	endHeight := mustLatestHeight(ctx, t, hc, tmRPC, "post-load")
+	included := includedTxCount(ctx, t, hc, tmRPC, startHeight, endHeight)
+	if included == 0 {
+		t.Errorf("seiload ran %dm against %s but 0 transactions were included in blocks %d..%d — the chain accepted load without including any of it",
+			s.durationMin, s.chainID, startHeight, endHeight)
+		return
+	}
+	t.Logf("inclusion gate: >=%d transactions included in blocks %d..%d", included, startHeight, endHeight)
+}
+
+// mustLatestHeight reads the committed height with a bounded retry: a transient
+// blip must not discard a run whose load already completed, but an endpoint that
+// stays unreachable means inclusion cannot be verified, which fails closed.
+func mustLatestHeight(ctx context.Context, t *testing.T, hc *http.Client, tmRPC, phase string) int64 {
+	t.Helper()
+	for attempt := 0; attempt < 3; attempt++ {
+		if h, ok := sei.LatestHeight(ctx, hc, tmRPC); ok {
+			return h
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("read %s height from %s: endpoint unreachable — cannot verify inclusion", phase, tmRPC)
+	return 0
+}
+
+// blockchainPageSize is CometBFT's cap on blocks per /blockchain response.
+const blockchainPageSize = 20
+
+// blockchainInfo models just enough of CometBFT /blockchain to sum per-block tx
+// counts; like /status, the Sei fork may return it with or without the JSON-RPC
+// envelope.
+type blockchainInfo struct {
+	Result *struct {
+		BlockMetas []blockMeta `json:"block_metas"`
+	} `json:"result,omitempty"`
+	BlockMetas []blockMeta `json:"block_metas"`
+}
+
+type blockMeta struct {
+	NumTxs string `json:"num_txs"`
+}
+
+func (b *blockchainInfo) metas() []blockMeta {
+	if b.Result != nil {
+		return b.Result.BlockMetas
+	}
+	return b.BlockMetas
+}
+
+// includedTxCount sums num_txs over blocks (from, to] via /blockchain, returning
+// early once the sum is positive so a healthy chain pays for one page while only
+// the failing case walks the whole window. Pages that stay unreachable after
+// retries, or that return fewer blocks than requested (pruned range or an error
+// envelope decoding to empty), fail the test — a partial sum that reads as zero
+// would defeat the gate.
+func includedTxCount(ctx context.Context, t *testing.T, hc *http.Client, tmRPC string, from, to int64) int64 {
+	t.Helper()
+	var total int64
+	for lo := from + 1; lo <= to; lo += blockchainPageSize {
+		hi := lo + blockchainPageSize - 1
+		if hi > to {
+			hi = to
+		}
+		url := fmt.Sprintf("%s/blockchain?minHeight=%d&maxHeight=%d", tmRPC, lo, hi)
+		var page blockchainInfo
+		ok := false
+		for attempt := 0; attempt < 3 && !ok; attempt++ {
+			if attempt > 0 {
+				time.Sleep(2 * time.Second)
+			}
+			page = blockchainInfo{}
+			ok = getJSONInto(ctx, hc, url, &page)
+		}
+		if !ok {
+			t.Fatalf("read %s: unreachable, non-200, or undecodable after retries — cannot verify inclusion", url)
+		}
+		if got, want := int64(len(page.metas())), hi-lo+1; got != want {
+			t.Fatalf("%s returned %d block_metas, want %d — pruned range or error envelope; a short page cannot be trusted as zero", url, got, want)
+		}
+		for _, m := range page.metas() {
+			n, err := strconv.ParseInt(m.NumTxs, 10, 64)
+			if err != nil {
+				t.Fatalf("parse num_txs %q at %s: %v", m.NumTxs, url, err)
+			}
+			total += n
+		}
+		if total > 0 {
+			return total
+		}
+	}
+	return total
 }
 
 // waitJob blocks until the seiload Job reaches a terminal condition. A Failed
