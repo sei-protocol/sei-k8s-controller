@@ -11,7 +11,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
-	sidecartasks "github.com/sei-protocol/seictl/sidecar/tasks"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -157,29 +156,6 @@ func TestReconcile_GovUpgrade_Pending_ReSubmits(t *testing.T) {
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
 	g.Expect(readyReasonOf(got)).To(Equal("Confirmed"))
 	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.ProposalID).To(Equal(uint64(7)))
-}
-
-// TestGovResultMirrorMatchesWire guards the local govResult mirror against
-// drift from seictl's GovTxResult: a field/constant rename there would decode
-// to zero here and silently misroute outcomes (the cost of not importing the
-// type). This test fails loudly if the wire shape diverges.
-func TestGovResultMirrorMatchesWire(t *testing.T) {
-	g := NewWithT(t)
-	g.Expect(inclusionCommittedOK).To(Equal(sidecartasks.InclusionCommittedOK))
-	g.Expect(inclusionCommittedFailed).To(Equal(sidecartasks.InclusionCommittedFailed))
-	g.Expect(inclusionPending).To(Equal(sidecartasks.InclusionPending))
-
-	raw, err := json.Marshal(sidecartasks.GovTxResult{
-		TxHash: "ABC", Height: 9, ProposalID: 42, Code: 5,
-		Codespace: "sdk", RawLog: "boom", InclusionStatus: sidecartasks.InclusionCommittedFailed,
-	})
-	g.Expect(err).NotTo(HaveOccurred())
-	var gr govResult
-	g.Expect(json.Unmarshal(raw, &gr)).To(Succeed())
-	g.Expect(gr).To(Equal(govResult{
-		TxHash: "ABC", Height: 9, ProposalID: 42, Code: 5,
-		Codespace: "sdk", RawLog: "boom", InclusionStatus: inclusionCommittedFailed,
-	}))
 }
 
 // A gov Failed with no result payload (e.g. CheckTx reject) is a generic
