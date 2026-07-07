@@ -26,6 +26,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
+	"github.com/sei-protocol/seictl/sidecar/wire"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
@@ -325,7 +327,7 @@ func (r *SeiNodeTaskReconciler) handleFailure(cr *seiv1alpha1.SeiNodeTask, exec 
 
 	if gr := decodeGovResult(exec); gr != nil {
 		switch gr.InclusionStatus {
-		case inclusionPending:
+		case wire.InclusionPending:
 			// Undetermined: re-submit (same task ID → engine re-run → marker
 			// adopt re-checks) until the execution timeout, then latch Failed.
 			if r.execTimedOut(cr, now) {
@@ -337,7 +339,7 @@ func (r *SeiNodeTaskReconciler) handleFailure(cr *seiv1alpha1.SeiNodeTask, exec 
 			}
 			cr.Status.Task.Status = seiv1alpha1.TaskPending
 			return
-		case inclusionCommittedFailed:
+		case wire.InclusionCommittedFailed:
 			populateGovOutputs(cr, gr)
 			cr.Status.Task.Status = seiv1alpha1.TaskFailed
 			cr.Status.Task.Err = msg
@@ -402,7 +404,7 @@ func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode)
 // populateOutputs stamps the typed per-kind outputs on the committed-ok path.
 // Gov kinds read the sidecar's structured result (gr); UpdateNodeImage reads
 // the target's observed image. gr is nil for non-gov kinds.
-func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode, gr *govResult) {
+func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode, gr *wire.GovTxResult) {
 	switch cr.Spec.Kind {
 	case seiv1alpha1.SeiNodeTaskKindUpdateNodeImage:
 		if cr.Status.Outputs == nil {

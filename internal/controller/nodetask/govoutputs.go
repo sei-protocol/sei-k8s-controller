@@ -3,27 +3,10 @@ package nodetask
 import (
 	"encoding/json"
 
+	"github.com/sei-protocol/seictl/sidecar/wire"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
-)
-
-// govResult mirrors the sidecar's tasks.GovTxResult wire shape (decoded from
-// the task-result channel) without importing the heavy sidecar tasks package.
-type govResult struct {
-	TxHash          string `json:"txHash"`
-	Height          int64  `json:"height"`
-	ProposalID      uint64 `json:"proposalId"`
-	Code            uint32 `json:"code"`
-	Codespace       string `json:"codespace"`
-	RawLog          string `json:"rawLog"`
-	InclusionStatus string `json:"inclusionStatus"`
-}
-
-// Inclusion outcomes — the sidecar's stable wire enum (seictl tasks.Inclusion*).
-const (
-	inclusionCommittedOK     = "committed_ok"
-	inclusionCommittedFailed = "committed_failed"
-	inclusionPending         = "pending"
 )
 
 // resulter is the optional accessor sidecarExecution implements to surface the
@@ -32,7 +15,7 @@ type resulter interface{ Result() json.RawMessage }
 
 // decodeGovResult extracts the gov result from a terminal execution, or nil if
 // it carries none or doesn't parse.
-func decodeGovResult(exec task.TaskExecution) *govResult {
+func decodeGovResult(exec task.TaskExecution) *wire.GovTxResult {
 	r, ok := exec.(resulter)
 	if !ok {
 		return nil
@@ -41,7 +24,7 @@ func decodeGovResult(exec task.TaskExecution) *govResult {
 	if len(raw) == 0 {
 		return nil
 	}
-	var gr govResult
+	var gr wire.GovTxResult
 	if err := json.Unmarshal(raw, &gr); err != nil {
 		return nil
 	}
@@ -61,7 +44,7 @@ func isGovKind(k seiv1alpha1.SeiNodeTaskKind) bool {
 // populateGovOutputs maps a decoded gov result into the matching CRD Outputs
 // sub-field. Called on both the confirmed and failed terminal paths so txHash
 // (and proposalId, when known) are always surfaced.
-func populateGovOutputs(cr *seiv1alpha1.SeiNodeTask, gr *govResult) {
+func populateGovOutputs(cr *seiv1alpha1.SeiNodeTask, gr *wire.GovTxResult) {
 	if gr == nil {
 		return
 	}
