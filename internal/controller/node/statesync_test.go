@@ -128,6 +128,90 @@ func TestStateSyncGate_EnabledWithTwoSyncers_Ready(t *testing.T) {
 	}))
 }
 
+// Spec-declared rpcServers replace the registry: the gate resolves True from
+// the spec without reading the syncer file at all. The malformed-but-present
+// file proves the read is skipped (a read would yield SyncerSourceError), not
+// merely absent.
+func TestStateSyncGate_SpecRpcServers_BypassRegistry(t *testing.T) {
+	g := NewWithT(t)
+
+	node := stateSyncNode("n", testChainID)
+	node.Spec.FullNode.Snapshot.RpcServers = []string{syncerB, syncerA}
+	r, _ := newNodeReconciler(t, node)
+	writeSyncerFile(t, r, "{ this is not: valid yaml: at all") // must never be read
+
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeFalse())
+
+	cond := stateSyncCondition(node)
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncReady))
+	g.Expect(cond.Message).To(ContainSubstring("declared on spec"),
+		"condition must attribute the witness source")
+	// Normalized (sorted) like the registry path.
+	g.Expect(node.Status.ResolvedStateSyncers).To(Equal([]string{syncerA, syncerB}))
+}
+
+// Spec items are atomic: a comma inside an item (rejected at admission, but
+// possible past a schema downgrade) must not be split into fragments the way
+// comma-joined registry values are — it stays one (broken, runtime-visible)
+// witness instead of becoming several unvalidated ones.
+func TestStateSyncGate_SpecRpcServers_ItemsNotCommaSplit(t *testing.T) {
+	g := NewWithT(t)
+
+	node := stateSyncNode("n", testChainID)
+	node.Spec.FullNode.Snapshot.RpcServers = []string{"a:26657,b:26657", syncerA}
+	r, _ := newNodeReconciler(t, node)
+
+	blocked := r.reconcileStateSyncGate(node)
+	g.Expect(blocked).To(BeFalse())
+	g.Expect(node.Status.ResolvedStateSyncers).To(Equal([]string{syncerA, "a:26657,b:26657"}))
+}
+
+// Admission enforces >=2 unique rpcServers, but the gate keeps a live floor as
+// the fail-closed backstop: a set that normalizes below the floor (possible
+// only past admission, e.g. after a CRD schema downgrade) falls through to the
+// registry path — Ready when the registry satisfies the floor, fail-closed when
+// it doesn't.
+func TestStateSyncGate_SpecRpcServersBelowFloor_FallsThroughToRegistry(t *testing.T) {
+	cases := []struct {
+		name       string
+		registry   map[string][]string
+		wantReason string
+		wantStatus metav1.ConditionStatus
+	}{
+		{
+			name:       "registry satisfies floor",
+			registry:   map[string][]string{testChainID: {syncerA, syncerB}},
+			wantReason: seiv1alpha1.ReasonStateSyncReady,
+			wantStatus: metav1.ConditionTrue,
+		},
+		{
+			name:       "registry empty",
+			registry:   map[string][]string{},
+			wantReason: seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
+			wantStatus: metav1.ConditionFalse,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+
+			node := stateSyncNode("n", testChainID)
+			// Duplicates normalize to a single entry — below the floor.
+			node.Spec.FullNode.Snapshot.RpcServers = []string{syncerSingle, syncerSingle}
+			r, _ := newNodeReconciler(t, node)
+			withSyncers(t, r, tc.registry)
+
+			blocked := r.reconcileStateSyncGate(node)
+			g.Expect(blocked).To(Equal(tc.wantStatus != metav1.ConditionTrue))
+			cond := stateSyncCondition(node)
+			g.Expect(cond.Status).To(Equal(tc.wantStatus))
+			g.Expect(cond.Reason).To(Equal(tc.wantReason))
+		})
+	}
+}
+
 func TestStateSyncGate_EnabledWithOneSyncer_FailsClosed(t *testing.T) {
 	g := NewWithT(t)
 
@@ -463,10 +547,12 @@ func TestReconcile_StateSyncFailClosed_ClearsTerminalPlan(t *testing.T) {
 	}
 }
 
-// An unparseable syncer file must be transient: reconcileStatefulSet,
-// Paused/Failed handling, and the status flush still run, the reconcile
-// requeues instead of hard-aborting, and StateSyncReady reflects it via
-// Unknown/SyncerSourceError.
+// An unparseable syncer file must be transient: Paused/Failed handling and the
+// status flush still run, the reconcile requeues instead of hard-aborting, and
+// StateSyncReady reflects it via Unknown/SyncerSourceError. On a pre-Running
+// node the unresolved gate also holds initial StatefulSet creation — the init
+// plan (and with it EnsureDataPVC) is suppressed, so an STS created now would
+// strand a Pending pod on a claim nothing creates.
 func TestReconcile_StateSyncSyncerSourceError_Transient(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
@@ -486,10 +572,67 @@ func TestReconcile_StateSyncSyncerSourceError_Transient(t *testing.T) {
 	g.Expect(cond.Status).To(Equal(metav1.ConditionUnknown))
 	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonStateSyncSyncerSourceError))
 	g.Expect(fetched.Status.Plan).To(BeNil(), "no state-sync plan while the gate is unresolved")
-	// StatefulSet sync still ran despite the syncer-source error.
+	// Initial STS creation is held while the gate is unresolved on a
+	// pre-Running node.
 	sts := &appsv1.StatefulSet{}
-	g.Expect(c.Get(ctx, types.NamespacedName{Name: "ss-err", Namespace: testNamespace}, sts)).To(Succeed(),
-		"reconcileStatefulSet must run even when the syncer source read fails")
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "ss-err", Namespace: testNamespace}, sts)).NotTo(Succeed(),
+		"initial StatefulSet creation must be held while the gate is unresolved")
+	g.Expect(fetched.Status.StatefulSet).To(BeNil())
+}
+
+// A Running node's STS must keep syncing through a transient syncer-source
+// error: the blocked gate is pre-Running-only (an update plan carries no
+// state-sync task), so holding the STS here would turn a registry blip into a
+// rollout stall.
+func TestReconcile_RunningNode_SyncerSourceError_StatefulSetStillSynced(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := stateSyncNode("ss-run-err", testNamespace)
+	node.Spec.ChainID = testChainID
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	r, c := newNodeReconciler(t, node)
+	writeSyncerFile(t, r, "{ this is not: valid yaml: at all") // malformed
+
+	_, err := r.Reconcile(ctx, nodeReqFor("ss-run-err", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	sts := &appsv1.StatefulSet{}
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "ss-run-err", Namespace: testNamespace}, sts)).To(Succeed(),
+		"a Running node's StatefulSet must sync despite a syncer-source error")
+}
+
+// A blocked pre-Running node must not get its initial StatefulSet: the
+// suppressed init plan means EnsureDataPVC never runs, and the pod mounts the
+// data PVC by direct claimName — an STS created now would strand a Pending
+// pod. Once the gate opens, the same reconcile creates STS and plan together.
+func TestReconcile_StateSyncBlocked_HoldsInitialStatefulSet(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := stateSyncNode("ss-hold", testNamespace)
+	node.Spec.ChainID = testChainID
+	r, c := newNodeReconciler(t, node)
+	withSyncers(t, r, map[string][]string{testChainID: {syncerSingle}})
+
+	_, err := r.Reconcile(ctx, nodeReqFor("ss-hold", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	fetched := getSeiNode(t, ctx, c, "ss-hold", testNamespace)
+	g.Expect(fetched.Status.StatefulSet).To(BeNil())
+	sts := &appsv1.StatefulSet{}
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "ss-hold", Namespace: testNamespace}, sts)).NotTo(Succeed(),
+		"no StatefulSet while the state-sync gate blocks the init plan")
+
+	// GitOps provisions the syncers; STS and plan appear on the same reconcile.
+	withSyncers(t, r, map[string][]string{testChainID: {syncerA, syncerB}})
+	_, err = r.Reconcile(ctx, nodeReqFor("ss-hold", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	fetched = getSeiNode(t, ctx, c, "ss-hold", testNamespace)
+	g.Expect(fetched.Status.StatefulSet).NotTo(BeNil())
+	g.Expect(fetched.Status.Plan).NotTo(BeNil())
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "ss-hold", Namespace: testNamespace}, sts)).To(Succeed())
 }
 
 // The StateSyncBlocked Warning fires once on the transition into fail-closed,

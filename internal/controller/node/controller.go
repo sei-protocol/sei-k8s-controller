@@ -128,8 +128,21 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.reconcileStatefulSet(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
+	// Hold initial StatefulSet creation while the state-sync gate suppresses
+	// the init plan: the plan's EnsureDataPVC task is the only creator of the
+	// data PVC the pod mounts by claimName, so an STS created now would strand
+	// a Pending pod until the gate opens. Only initial creation is held
+	// (Status.StatefulSet == nil) — an existing STS is never touched, and
+	// StateSyncBlocksPlan is pre-Running-only, so a Running node's STS keeps
+	// syncing through transient syncer-source errors. One narrow stall is
+	// accepted: if the impostor branch just cleared Status.StatefulSet and the
+	// gate is blocked in the same window, STS re-creation waits for the gate's
+	// poll to re-resolve.
+	holdInitialSTS := planner.StateSyncBlocksPlan(node) && node.Status.StatefulSet == nil
+	if !holdInitialSTS {
+		if err := r.reconcileStatefulSet(ctx, node); err != nil {
+			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
+		}
 	}
 
 	if node.Spec.Paused {

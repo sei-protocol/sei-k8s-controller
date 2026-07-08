@@ -97,9 +97,10 @@
 //   - State-sync witnesses gate every snapshot bootstrap: needsStateSyncWitnesses
 //     (snap != nil) drives both the ConfigureStateSync task insertion
 //     (buildSidecarProgression) and the fail-closed plan blocker
-//     (stateSyncBlocksPlan), so a node bootstrapping from a snapshot — s3 or
+//     (StateSyncBlocksPlan), so a node bootstrapping from a snapshot — s3 or
 //     stateSync — can never plan ConfigureStateSync without >=2 resolved
-//     canonical-syncer witnesses. Genesis (snap == nil) carries no such task.
+//     witnesses (spec-declared rpcServers or the canonical-syncer registry).
+//     Genesis (snap == nil) carries no such task.
 //     Guarded by TestStateSyncGate_S3Restore_OneSyncer_FailsClosed.
 //
 // # Zero-Value & Sentinel Semantics

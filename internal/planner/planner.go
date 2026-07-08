@@ -153,7 +153,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 	// plans still clear) but before building: a state-sync node whose
 	// StateSyncReady condition isn't True must never get a state-sync-bearing
 	// plan (CometBFT needs >=2 rpc-servers; we never fall back to peers).
-	if stateSyncBlocksPlan(node) {
+	if StateSyncBlocksPlan(node) {
 		return nil
 	}
 
@@ -182,8 +182,12 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 	return nil
 }
 
-// stateSyncBlocksPlan reports whether the fail-closed state-sync gate must
-// suppress plan construction this reconcile. It fires only on the init path
+// StateSyncBlocksPlan reports whether the fail-closed state-sync gate must
+// suppress plan construction this reconcile. Exported because the node
+// controller uses the same predicate to hold initial StatefulSet creation: a
+// suppressed init plan means EnsureDataPVC won't run, and an STS created
+// anyway would strand a Pending pod on a claim nothing creates.
+// It fires only on the init path
 // (pre-Running), which is the only path that builds a ConfigureStateSync-bearing
 // plan via buildSidecarProgression — a Running node's update plans carry no
 // state-sync task, so an image roll must not be blocked by a syncer-source
@@ -192,7 +196,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 // and need rpc-server witnesses) and the controller-resolved StateSyncReady
 // condition is not True (NoSyncersConfigured or the transient SyncerSourceError).
 // A missing condition (not yet resolved) does not gate.
-func stateSyncBlocksPlan(node *seiv1alpha1.SeiNode) bool {
+func StateSyncBlocksPlan(node *seiv1alpha1.SeiNode) bool {
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return false
 	}
@@ -486,7 +490,7 @@ func hasStateSync(snap *seiv1alpha1.SnapshotSource) bool {
 // (snap == nil) carries no such task and needs no witnesses.
 //
 // This is the single predicate behind both the ConfigureStateSync insertion
-// (buildSidecarProgression) and the fail-closed gate (stateSyncBlocksPlan),
+// (buildSidecarProgression) and the fail-closed gate (StateSyncBlocksPlan),
 // keeping plan-insertion and witness-resolution in lockstep.
 func needsStateSyncWitnesses(snap *seiv1alpha1.SnapshotSource) bool {
 	return snap != nil
@@ -694,12 +698,13 @@ func snapshotRestoreTask(snap *seiv1alpha1.SnapshotSource) sidecar.SnapshotResto
 
 func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyncTask {
 	snap := node.Spec.SnapshotSource()
-	// RpcServers come from the controller-level canonical-syncer ConfigMap via
-	// Status.ResolvedStateSyncers (peers are no longer used as witnesses). This
-	// runs only when stateSyncBlocksPlan passed, i.e. StateSyncReady=True, which
-	// guarantees >=2 curated entries. The set is snapshotted into the task params
-	// here and never re-read at execution — so a transient ConfigMap blip on an
-	// already-active plan can't empty an in-flight witness list.
+	// RpcServers come from Status.ResolvedStateSyncers — resolved by the gate
+	// from spec-declared snapshot.rpcServers or, absent those, the
+	// controller-level canonical-syncer ConfigMap (peers are never witnesses).
+	// This runs only when StateSyncBlocksPlan passed, i.e. StateSyncReady=True,
+	// which guarantees >=2 entries. The set is snapshotted into the task params
+	// here and never re-read at execution — so neither a transient ConfigMap
+	// blip nor a spec edit can change an in-flight witness list.
 	t := sidecar.ConfigureStateSyncTask{
 		UseLocalSnapshot: hasS3Snapshot(snap),
 		RpcServers:       node.Status.ResolvedStateSyncers,
