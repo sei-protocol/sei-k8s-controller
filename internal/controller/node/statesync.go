@@ -20,10 +20,11 @@ import (
 // existing trust-pinning behavior.
 const minCanonicalSyncers = 2
 
-// reconcileStateSyncGate resolves the canonical-syncer set and sets the
-// always-present ConditionStateSyncReady. It mutates node.Status in-memory only;
-// the caller's single status patch flushes it. Run before the Failed/Paused
-// early-returns so StateSyncReady is seeded on every path.
+// reconcileStateSyncGate resolves the witness set — spec-declared
+// snapshot.rpcServers when present, otherwise the canonical-syncer registry —
+// and sets the always-present ConditionStateSyncReady. It mutates node.Status
+// in-memory only; the caller's single status patch flushes it. Run before the
+// Failed/Paused early-returns so StateSyncReady is seeded on every path.
 //
 // It resolves for any snapshot-bootstrap node (see planner.needsStateSyncWitnesses
 // for why witnesses are required); a genesis node (snap == nil) is NotApplicable.
@@ -46,6 +47,27 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (b
 		return false
 	}
 
+	// Spec-declared witnesses replace the registry: no file read, so no
+	// SyncerSourceError on this path — the declared set is taken at face value
+	// and runtime failures surface in the sidecar/seid state-sync logs.
+	// Admission enforces >=2 unique entries (MinItems + listType=set); the
+	// post-normalize floor check below is the fail-closed backstop for paths
+	// admission can't cover (e.g. a CRD schema downgrade pruning the field's
+	// validation), and it falls through to the registry so the not-ready
+	// handling stays in one place.
+	// Spec items are atomic (admission-validated shape) — normalize by
+	// sort+dedup only, never through parseSyncerList: its comma-split exists
+	// for registry values, which may be comma-joined inside one YAML entry,
+	// and would explode a list item here into unvalidated fragments.
+	if specSyncers := slices.Compact(slices.Sorted(slices.Values(snap.RpcServers))); len(specSyncers) >= minCanonicalSyncers {
+		if !slices.Equal(node.Status.ResolvedStateSyncers, specSyncers) {
+			node.Status.ResolvedStateSyncers = specSyncers
+		}
+		setStateSyncReady(node, metav1.ConditionTrue, seiv1alpha1.ReasonStateSyncReady,
+			fmt.Sprintf("%d rpc-servers declared on spec for chain %q", len(specSyncers), node.Spec.ChainID))
+		return false
+	}
+
 	syncers, err := r.canonicalSyncers(node.Spec.ChainID)
 	if err != nil {
 		// Transient read/parse error: fail closed (clear any stale set) but don't
@@ -62,8 +84,10 @@ func (r *SeiNodeReconciler) reconcileStateSyncGate(node *seiv1alpha1.SeiNode) (b
 		// into ConfigureStateSyncTask on a later reconcile.
 		node.Status.ResolvedStateSyncers = nil
 		setStateSyncReady(node, metav1.ConditionFalse, seiv1alpha1.ReasonStateSyncNoSyncersConfigured,
-			fmt.Sprintf("state sync requires >=%d canonical syncers configured for chain %q; found %d",
-				minCanonicalSyncers, node.Spec.ChainID, len(syncers)))
+			fmt.Sprintf("state sync requires >=%d canonical syncers configured for chain %q; found %d — "+
+				"register syncers for the chain in the controller config, or declare >=%d "+
+				"spec.fullNode.snapshot.rpcServers on the SeiNode",
+				minCanonicalSyncers, node.Spec.ChainID, len(syncers), minCanonicalSyncers))
 		return true
 	}
 

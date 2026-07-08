@@ -91,6 +91,21 @@ type SnapshotSource struct {
 	// +optional
 	TrustPeriod string `json:"trustPeriod,omitempty"`
 
+	// RpcServers declares the CometBFT rpc-server witnesses for this node's
+	// snapshot bootstrap, replacing the controller-level canonical-syncer
+	// registry: when set, the registry is not consulted for this node. It
+	// applies to both source variants — s3 restore verifies its trust point
+	// against the same witnesses state sync does. Endpoints are bare host:port
+	// (no scheme), matching the registry shape; unlike registry entries they
+	// are shape-validated at admission (IPv6 literals are not supported).
+	// Editing this field does not retarget an in-flight plan; it takes effect
+	// on the next plan build.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MinItems=2
+	// +kubebuilder:validation:items:Pattern=`^[^\s:/,]+:[0-9]{1,5}$`
+	RpcServers []string `json:"rpcServers,omitempty"`
+
 	// BackfillBlocks is the number of historical blocks to fetch from peers
 	// after snapshot restore.
 	// +optional
