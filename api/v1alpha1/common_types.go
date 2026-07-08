@@ -91,15 +91,23 @@ type SnapshotSource struct {
 	// +optional
 	TrustPeriod string `json:"trustPeriod,omitempty"`
 
-	// RpcServers declares the CometBFT rpc-server witnesses for this node's
-	// snapshot bootstrap, replacing the controller-level canonical-syncer
-	// registry: when set, the registry is not consulted for this node. It
-	// applies to both source variants — s3 restore verifies its trust point
-	// against the same witnesses state sync does. Endpoints are bare host:port
-	// (no scheme), matching the registry shape; unlike registry entries they
-	// are shape-validated at admission (IPv6 literals are not supported).
-	// Editing this field does not retarget an in-flight plan; it takes effect
-	// on the next plan build.
+	// RpcServers declares the CometBFT rpc-servers used as light-client
+	// witnesses (trust-point acquisition and verification), replacing the
+	// controller-level canonical-syncer registry: when set, the registry is
+	// not consulted for this node. It applies to both source variants — s3
+	// restore verifies its trust point against the same witnesses state sync
+	// does. Witnesses are not snapshot providers: snapshot chunks are
+	// delivered over p2p by snapshot-serving peers, and at least one peer must
+	// already have produced a snapshot for the bootstrap to succeed.
+	//
+	// Endpoints are bare host:port (no scheme), matching the registry shape;
+	// unlike registry entries they are shape-validated at admission (IPv6
+	// literals are not supported). Shape is the only validation: each endpoint
+	// must serve this chain's CometBFT RPC — a wrong-chain or unreachable
+	// endpoint passes admission and fails at runtime in the sidecar's
+	// state-sync configure step (a wrong-chain witness yields a wrong-chain
+	// trust point). Editing this field does not retarget an in-flight plan; it
+	// takes effect on the next plan build.
 	// +optional
 	// +listType=set
 	// +kubebuilder:validation:MinItems=2

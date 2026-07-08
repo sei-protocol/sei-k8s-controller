@@ -14,12 +14,11 @@ import (
 // identity directly.
 //
 // A nil StatefulSet with no error means the impostor branch fired:
-// SyncStatefulSet detected a UID mismatch, issued Delete, and deferred
-// the Apply to the next reconcile. Leave Status.StatefulSet untouched —
-// the stale UID still points at a now-deleted object, and the next
-// reconcile (triggered by the StatefulSet delete watch event) observes
-// NotFound and Applies a fresh STS whose new UID gets stamped onto
-// Status.StatefulSet.
+// SyncStatefulSet detected a UID mismatch, issued Delete, cleared
+// Status.StatefulSet, and deferred the Apply to the next reconcile.
+// The next reconcile (triggered by the StatefulSet delete watch event)
+// observes NotFound and Applies a fresh STS whose new UID gets stamped
+// onto Status.StatefulSet below.
 func (r *SeiNodeReconciler) reconcileStatefulSet(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	sts, err := noderesource.SyncStatefulSet(ctx, r.Client, r.Scheme, node, r.Platform)
 	if err != nil {
