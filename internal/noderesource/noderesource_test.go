@@ -722,6 +722,49 @@ func TestBuildNodePodSpec_FullNode_SchedulesOnDefaultNodepool(t *testing.T) {
 	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-node"))
 }
 
+func TestBuildNodePodSpec_NonDedicated_OnlyDefensiveAntiAffinity(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("syncer-0", "pacific-1")
+
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	terms := spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	g.Expect(terms).To(HaveLen(1))
+	g.Expect(terms[0].TopologyKey).To(Equal("kubernetes.io/hostname"))
+	g.Expect(terms[0].NamespaceSelector).NotTo(BeNil()) // empty = all namespaces
+	g.Expect(terms[0].LabelSelector.MatchExpressions[0].Key).To(Equal(DedicatedNodeKey))
+
+	// Non-exclusive pods are not labeled exclusive.
+	g.Expect(ResourceLabels(node)).NotTo(HaveKey(DedicatedNodeKey))
+}
+
+func TestBuildNodePodSpec_Dedicated_AddsRequesterTermAndLabel(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("syncer-0", "pacific-1")
+	node.Annotations = map[string]string{DedicatedNodeKey: "true"}
+
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	terms := spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	g.Expect(terms).To(HaveLen(2))
+	// Defensive term keys on the exclusive label; requester term keys on
+	// sei.io/node Exists (spans StatefulSet + bootstrap pods).
+	g.Expect(terms[0].LabelSelector.MatchExpressions[0].Key).To(Equal(DedicatedNodeKey))
+	g.Expect(terms[1].LabelSelector.MatchExpressions[0].Key).To(Equal(NodeLabel))
+	g.Expect(terms[1].LabelSelector.MatchExpressions[0].Operator).To(Equal(metav1.LabelSelectorOpExists))
+	for _, term := range terms {
+		g.Expect(term.TopologyKey).To(Equal("kubernetes.io/hostname"))
+		g.Expect(term.NamespaceSelector).NotTo(BeNil())
+	}
+
+	// The annotation is mirrored to a pod-template label so anti-affinity
+	// selectors on other pods can match it.
+	g.Expect(spec).NotTo(BeNil())
+	g.Expect(ResourceLabels(node)).To(HaveKeyWithValue(DedicatedNodeKey, "true"))
+}
+
 func TestDefaultStorageForMode_Archive(t *testing.T) {
 	g := NewWithT(t)
 	cfg := platformtest.Config()
