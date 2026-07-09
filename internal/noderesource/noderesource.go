@@ -32,6 +32,21 @@ const (
 	chainLabel = "sei.io/chain"
 	roleLabel  = "sei.io/role"
 
+	// DedicatedNodeKey is the well-known key used both as a SeiNode annotation
+	// (the opt-in) and as the pod-template label it is mirrored to. Value
+	// "true" opts the node into single-tenant scheduling: its pod refuses to
+	// share a Kubernetes node with any other Sei-managed pod, and every other
+	// Sei-managed pod refuses to share a node with it. Experimental and
+	// annotation-driven so it needs no CRD schema bump — see the dedicated-node
+	// runbook. It is mirrored to a label because pod anti-affinity selects on
+	// labels, not annotations.
+	DedicatedNodeKey   = "sei.io/dedicated-node"
+	dedicatedNodeValue = "true"
+
+	// hostnameTopologyKey is the standard per-node topology domain; anti-affinity
+	// keyed on it enforces isolation at the granularity of a single K8s node.
+	hostnameTopologyKey = "kubernetes.io/hostname"
+
 	roleValidator = "validator"
 	roleArchive   = "archive"
 	roleReplayer  = "replayer"
@@ -136,7 +151,69 @@ func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
 		labels[chainLabel] = node.Spec.ChainID
 	}
 	labels[roleLabel] = deriveRole(node)
+	if IsDedicatedNode(node) {
+		labels[DedicatedNodeKey] = dedicatedNodeValue
+	}
 	return labels
+}
+
+// IsDedicatedNode reports whether the SeiNode opts into single-tenant node
+// scheduling via the sei.io/dedicated-node annotation.
+//
+// A pod that can never be scheduled (no available single-tenant node) stays
+// Pending with no SeiNode condition reflecting it; check the pod's own
+// PodScheduled condition or events directly. See the dedicated-node runbook.
+func IsDedicatedNode(node *seiv1alpha1.SeiNode) bool {
+	return node.Annotations[DedicatedNodeKey] == dedicatedNodeValue
+}
+
+// BuildPodAntiAffinity assembles the pod anti-affinity for a Sei pod.
+//
+// The isolation guarantee is bidirectional and requires two terms because a
+// pod anti-affinity is evaluated only from the perspective of the pod being
+// scheduled — a running pod does not retroactively repel later arrivals.
+//
+//   - The defensive term is on EVERY Sei pod (dedicated or not): don't land on
+//     a node already hosting a dedicated-node pod. This is what protects a
+//     dedicated pod from a LATER pod scheduling next to it. It is near-free —
+//     its selector matches nothing unless a dedicated pod exists.
+//   - The requester term is added only when dedicated is true: don't land on a
+//     node already hosting ANY Sei-managed pod. This protects the dedicated pod
+//     at its own schedule time. It keys on sei.io/node (present on both
+//     StatefulSet and bootstrap pods) via Exists, so it catches every Sei pod,
+//     not just those with a sei.io/role value.
+//
+// Both terms match across all namespaces (an empty, non-nil NamespaceSelector)
+// because co-tenants routinely live in other namespaces (per-engineer
+// namespaces on shared benchmarking nodepools); the default same-namespace
+// scope would silently miss them.
+func BuildPodAntiAffinity(dedicated bool) *corev1.PodAntiAffinity {
+	terms := []corev1.PodAffinityTerm{{
+		TopologyKey:       hostnameTopologyKey,
+		NamespaceSelector: &metav1.LabelSelector{},
+		LabelSelector: &metav1.LabelSelector{
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      DedicatedNodeKey,
+				Operator: metav1.LabelSelectorOpIn,
+				Values:   []string{dedicatedNodeValue},
+			}},
+		},
+	}}
+	if dedicated {
+		terms = append(terms, corev1.PodAffinityTerm{
+			TopologyKey:       hostnameTopologyKey,
+			NamespaceSelector: &metav1.LabelSelector{},
+			LabelSelector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      NodeLabel,
+					Operator: metav1.LabelSelectorOpExists,
+				}},
+			},
+		})
+	}
+	return &corev1.PodAntiAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: terms,
+	}
 }
 
 // deriveRole returns the role label value for the node's mode. Stamped
@@ -476,6 +553,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 					}},
 				},
 			},
+			PodAntiAffinity: BuildPodAntiAffinity(IsDedicatedNode(node)),
 		},
 		Volumes: volumes,
 	}

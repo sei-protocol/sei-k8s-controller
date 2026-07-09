@@ -19,7 +19,6 @@ import (
 const (
 	bootstrapTerminationGracePeriod = int64(120)
 	bootstrapDataDir                = platform.DataDir
-	bootstrapNodeLabel              = "sei.io/node"
 	bootstrapComponentLabel         = "sei.io/component"
 )
 
@@ -36,7 +35,7 @@ func BootstrapJobName(node *seiv1alpha1.SeiNode) string {
 // BootstrapLabels returns labels for bootstrap Job resources.
 func BootstrapLabels(node *seiv1alpha1.SeiNode) map[string]string {
 	return map[string]string{
-		bootstrapNodeLabel:      node.Name,
+		noderesource.NodeLabel:  node.Name,
 		bootstrapComponentLabel: "bootstrap",
 	}
 }
@@ -224,6 +223,10 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 					}},
 				},
 			},
+			// Defensive term only: a bootstrap Job pod must not land on a node
+			// reserved by a dedicated-node pod. Bootstrap is not itself a
+			// requester (no exclusive term, not labeled exclusive).
+			PodAntiAffinity: noderesource.BuildPodAntiAffinity(false),
 		},
 		Volumes:        []corev1.Volume{dataVolume, proxyConfigVolume},
 		InitContainers: []corev1.Container{seidInit, sidecar, rbacProxy},
