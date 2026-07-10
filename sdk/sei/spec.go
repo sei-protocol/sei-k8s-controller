@@ -28,6 +28,10 @@ type NetworkSpec struct {
 	// DeletionPolicy controls child-validator deletion; "" leaves the CRD Retain
 	// default. Set DeletionDelete for ephemeral chains. -> spec.deletionPolicy.
 	DeletionPolicy string
+
+	// SidecarImage overrides the platform-default seictl sidecar image on this
+	// network and its children; "" => platform default. -> spec.sidecar.image.
+	SidecarImage string
 }
 
 // GenesisAccount is a non-validator genesis account to fund.

@@ -61,6 +61,12 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 		net.Spec.Genesis.Accounts = append(net.Spec.Genesis.Accounts,
 			seiv1alpha1.GenesisAccount{Address: a.Address, Balance: a.Balance})
 	}
+	if spec.SidecarImage != "" {
+		// Pin the seictl sidecar image on this network; the controller propagates
+		// spec.sidecar to the child validators. "" leaves spec.sidecar unset, so
+		// EffectiveSidecarImage falls back to the platform default.
+		net.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Image: spec.SidecarImage}
+	}
 	return net
 }
 

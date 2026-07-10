@@ -51,6 +51,19 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	}
 }
 
+func TestRenderNetwork_SidecarImage(t *testing.T) {
+	// Set: pins spec.sidecar.image, which the controller propagates to children.
+	set := renderNetwork(sei.NetworkSpec{Name: testNet, Image: testImage, Validators: 4, SidecarImage: "seictl:dev"}, testNS)
+	if set.Spec.Sidecar == nil || set.Spec.Sidecar.Image != "seictl:dev" {
+		t.Errorf("sidecar = %+v, want image seictl:dev", set.Spec.Sidecar)
+	}
+	// Empty: leaves spec.sidecar unset so the platform default resolves.
+	unset := renderNetwork(sei.NetworkSpec{Name: testNet, Image: testImage, Validators: 4}, testNS)
+	if unset.Spec.Sidecar != nil {
+		t.Errorf("sidecar = %+v, want nil (platform default)", unset.Spec.Sidecar)
+	}
+}
+
 func TestRenderNode_LabelsAndPeerWiring(t *testing.T) {
 	spec := sei.NodeSpec{Name: rpc1Name, Network: testNet, Image: testImage}
 	node := renderNode(spec, testNS, testNS)
