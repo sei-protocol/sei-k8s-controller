@@ -1046,14 +1046,63 @@ func TestOperatorKeyring_SeidMainContainerHasNoMountOrEnv(t *testing.T) {
 	g.Expect(seid).NotTo(BeNil(), "seid main container must exist")
 
 	g.Expect(findVolumeMount(seid.VolumeMounts, operatorKeyringVolumeName)).To(BeNil(),
-		"seid main container must NOT mount operator-keyring — has no business reading operator-account material")
+		"seid main container must NOT mount operator-keyring by default — ExposeToSeid is off")
 	g.Expect(envValue(seid.Env, keyringPassphraseEnvVar)).To(BeEmpty(),
-		"seid main container must not carry the keyring passphrase env")
+		"seid main container must not carry the keyring passphrase env by default")
 
 	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
 	g.Expect(seidInit).NotTo(BeNil(), "seid-init container must exist")
 	g.Expect(findVolumeMount(seidInit.VolumeMounts, operatorKeyringVolumeName)).To(BeNil(),
 		"seid-init must NOT mount operator-keyring")
+}
+
+func newValidatorNodeWithOperatorKeyringExposedToSeid(name, namespace string) *seiv1alpha1.SeiNode {
+	node := newValidatorNodeWithOperatorKeyring(name, namespace)
+	node.Spec.Validator.OperatorKeyring.Secret.ExposeToSeid = true
+	return node
+}
+
+// TestOperatorKeyring_ExposeToSeid_MountsOnSeidMain proves the opt-in path:
+// setting .secret.ExposeToSeid additionally mounts the keyring + passphrase
+// on seid, without disturbing the sidecar's own mount or seid-init.
+func TestOperatorKeyring_ExposeToSeid_MountsOnSeidMain(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithOperatorKeyringExposedToSeid("validator-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
+	g.Expect(seid).NotTo(BeNil(), "seid main container must exist")
+
+	seidMount := findVolumeMount(seid.VolumeMounts, operatorKeyringVolumeName)
+	g.Expect(seidMount).NotTo(BeNil(), "ExposeToSeid must mount operator-keyring onto seid main")
+	g.Expect(seidMount.MountPath).To(Equal(dataDir+"/"+operatorKeyringDirName),
+		"seid must use the same keyring path as the sidecar — the SDK keyring-dir convention")
+	g.Expect(seidMount.ReadOnly).To(BeTrue())
+
+	g.Expect(envValue(seid.Env, keyringBackendEnvVar)).To(Equal(keyringBackendFile))
+	g.Expect(envValue(seid.Env, keyringDirEnvVar)).To(Equal(dataDir))
+
+	var passphraseEnv *corev1.EnvVar
+	for i := range seid.Env {
+		if seid.Env[i].Name == keyringPassphraseEnvVar {
+			passphraseEnv = &seid.Env[i]
+		}
+	}
+	g.Expect(passphraseEnv).NotTo(BeNil(),
+		"seid must carry the passphrase env once exposed — the volume alone can't decrypt non-interactively")
+	g.Expect(passphraseEnv.ValueFrom).NotTo(BeNil())
+	g.Expect(passphraseEnv.ValueFrom.SecretKeyRef).NotTo(BeNil())
+	g.Expect(passphraseEnv.ValueFrom.SecretKeyRef.Name).To(Equal("validator-0-opk-passphrase"))
+
+	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
+	g.Expect(seidInit).NotTo(BeNil())
+	g.Expect(findVolumeMount(seidInit.VolumeMounts, operatorKeyringVolumeName)).To(BeNil(),
+		"seid-init must NOT mount operator-keyring even when ExposeToSeid is set — exposure is main-container only")
+
+	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+	g.Expect(sidecar).NotTo(BeNil())
+	g.Expect(findVolumeMount(sidecar.VolumeMounts, operatorKeyringVolumeName)).NotTo(BeNil(),
+		"the sidecar's own mount must be unaffected by seid's exposure")
 }
 
 func TestOperatorKeyring_Unset_NoVolumeOrMount(t *testing.T) {
@@ -1170,7 +1219,7 @@ func expectSeidNonRootSecurityContext(g Gomega, sc *corev1.SecurityContext) {
 	g.Expect(sc.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
 }
 
-// --- assertNoOperatorKeyringOnSeidContainers ---
+// --- assertOperatorKeyringContainment ---
 
 const (
 	keyringTestSeidInitName        = "seid-init"
@@ -1201,7 +1250,7 @@ func validatorNodeWithOperatorKeyring() *seiv1alpha1.SeiNode {
 	}
 }
 
-func TestAssertNoOperatorKeyringOnSeidContainers_NoKeyringConfigured(t *testing.T) {
+func TestAssertOperatorKeyringContainment_NoKeyringConfigured(t *testing.T) {
 	g := NewWithT(t)
 	node := newGenesisNode("v-0", "default")
 	// Even a deliberately mis-mounted volume must be ignored when no
@@ -1213,10 +1262,10 @@ func TestAssertNoOperatorKeyringOnSeidContainers_NoKeyringConfigured(t *testing.
 			}},
 		},
 	}
-	g.Expect(assertNoOperatorKeyringOnSeidContainers(node, spec)).To(Succeed())
+	g.Expect(assertOperatorKeyringContainment(node, spec)).To(Succeed())
 }
 
-func TestAssertNoOperatorKeyringOnSeidContainers_SidecarOnlyMount_Passes(t *testing.T) {
+func TestAssertOperatorKeyringContainment_SidecarOnlyMount_Passes(t *testing.T) {
 	g := NewWithT(t)
 	node := validatorNodeWithOperatorKeyring()
 	spec := &corev1.PodSpec{
@@ -1230,10 +1279,10 @@ func TestAssertNoOperatorKeyringOnSeidContainers_SidecarOnlyMount_Passes(t *test
 			}},
 		},
 	}
-	g.Expect(assertNoOperatorKeyringOnSeidContainers(node, spec)).To(Succeed())
+	g.Expect(assertOperatorKeyringContainment(node, spec)).To(Succeed())
 }
 
-func TestAssertNoOperatorKeyringOnSeidContainers_SeidMainMisMounted_Rejects(t *testing.T) {
+func TestAssertOperatorKeyringContainment_SeidMainMisMounted_Rejects(t *testing.T) {
 	g := NewWithT(t)
 	node := validatorNodeWithOperatorKeyring()
 	spec := &corev1.PodSpec{
@@ -1243,12 +1292,53 @@ func TestAssertNoOperatorKeyringOnSeidContainers_SeidMainMisMounted_Rejects(t *t
 			}},
 		},
 	}
-	err := assertNoOperatorKeyringOnSeidContainers(node, spec)
+	err := assertOperatorKeyringContainment(node, spec)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring(`container "seid"`))
 }
 
-func TestAssertNoOperatorKeyringOnSeidContainers_SeidInitMisMounted_Rejects(t *testing.T) {
+// TestAssertOperatorKeyringContainment_ExposedSeidMainMount_Passes proves the
+// opt-in carve-out: the identical mount that TestAssertOperatorKeyringContainment_SeidMainMisMounted_Rejects
+// rejects by default is permitted once .secret.ExposeToSeid is set.
+func TestAssertOperatorKeyringContainment_ExposedSeidMainMount_Passes(t *testing.T) {
+	g := NewWithT(t)
+	node := validatorNodeWithOperatorKeyring()
+	node.Spec.Validator.OperatorKeyring.Secret.ExposeToSeid = true
+	spec := &corev1.PodSpec{
+		Containers: []corev1.Container{
+			{Name: containerNameSeid, VolumeMounts: []corev1.VolumeMount{
+				{Name: operatorKeyringVolumeName, MountPath: keyringTestMountPath},
+			}},
+		},
+		InitContainers: []corev1.Container{
+			{Name: keyringTestSidecarName, VolumeMounts: []corev1.VolumeMount{
+				{Name: operatorKeyringVolumeName, MountPath: keyringTestMountPath},
+			}},
+		},
+	}
+	g.Expect(assertOperatorKeyringContainment(node, spec)).To(Succeed())
+}
+
+// TestAssertOperatorKeyringContainment_ExposedButSeidInitMisMounted_Rejects
+// proves the opt-in is main-container-only: ExposeToSeid never widens the
+// permit set to seid-init.
+func TestAssertOperatorKeyringContainment_ExposedButSeidInitMisMounted_Rejects(t *testing.T) {
+	g := NewWithT(t)
+	node := validatorNodeWithOperatorKeyring()
+	node.Spec.Validator.OperatorKeyring.Secret.ExposeToSeid = true
+	spec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{
+			{Name: keyringTestSeidInitName, VolumeMounts: []corev1.VolumeMount{
+				{Name: operatorKeyringVolumeName, MountPath: keyringTestMountPath},
+			}},
+		},
+	}
+	err := assertOperatorKeyringContainment(node, spec)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(`container "seid-init"`))
+}
+
+func TestAssertOperatorKeyringContainment_SeidInitMisMounted_Rejects(t *testing.T) {
 	g := NewWithT(t)
 	node := validatorNodeWithOperatorKeyring()
 	spec := &corev1.PodSpec{
@@ -1258,12 +1348,12 @@ func TestAssertNoOperatorKeyringOnSeidContainers_SeidInitMisMounted_Rejects(t *t
 			}},
 		},
 	}
-	err := assertNoOperatorKeyringOnSeidContainers(node, spec)
+	err := assertOperatorKeyringContainment(node, spec)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring(`container "seid-init"`))
 }
 
-func TestAssertNoOperatorKeyringOnSeidContainers_PassphraseEnvOnSeidMain_Rejects(t *testing.T) {
+func TestAssertOperatorKeyringContainment_PassphraseEnvOnSeidMain_Rejects(t *testing.T) {
 	g := NewWithT(t)
 	node := validatorNodeWithOperatorKeyring()
 	spec := &corev1.PodSpec{
@@ -1279,13 +1369,13 @@ func TestAssertNoOperatorKeyringOnSeidContainers_PassphraseEnvOnSeidMain_Rejects
 			}}},
 		},
 	}
-	err := assertNoOperatorKeyringOnSeidContainers(node, spec)
+	err := assertOperatorKeyringContainment(node, spec)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring(`passphrase Secret "` + keyringTestPassphraseSecret + `"`))
 	g.Expect(err.Error()).To(ContainSubstring(`container "seid"`))
 }
 
-func TestAssertNoOperatorKeyringOnSeidContainers_PassphraseEnvFromOnSeidInit_Rejects(t *testing.T) {
+func TestAssertOperatorKeyringContainment_PassphraseEnvFromOnSeidInit_Rejects(t *testing.T) {
 	g := NewWithT(t)
 	node := validatorNodeWithOperatorKeyring()
 	spec := &corev1.PodSpec{
@@ -1297,7 +1387,7 @@ func TestAssertNoOperatorKeyringOnSeidContainers_PassphraseEnvFromOnSeidInit_Rej
 			}}},
 		},
 	}
-	err := assertNoOperatorKeyringOnSeidContainers(node, spec)
+	err := assertOperatorKeyringContainment(node, spec)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring(`envFrom`))
 	g.Expect(err.Error()).To(ContainSubstring(`container "seid-init"`))
@@ -1306,6 +1396,14 @@ func TestAssertNoOperatorKeyringOnSeidContainers_PassphraseEnvFromOnSeidInit_Rej
 func TestGenerateStatefulSet_ProductionPodSpec_PassesGuard(t *testing.T) {
 	g := NewWithT(t)
 	node := validatorNodeWithOperatorKeyring()
+	_, err := GenerateStatefulSet(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
+func TestGenerateStatefulSet_ExposedToSeid_PassesGuard(t *testing.T) {
+	g := NewWithT(t)
+	node := validatorNodeWithOperatorKeyring()
+	node.Spec.Validator.OperatorKeyring.Secret.ExposeToSeid = true
 	_, err := GenerateStatefulSet(node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 }
