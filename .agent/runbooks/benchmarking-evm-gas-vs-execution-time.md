@@ -1,10 +1,10 @@
 # Benchmarking EVM Gas vs. Real Execution Time on Sei
 
 **Audience:** engineers (and their agents) on the gas-repricing project investigating whether Sei's EVM gas schedule tracks real compute cost. Covers both target functionalities: (1) replaying a real historical block against restored state and measuring gas + execution time per tx, and (2) executing arbitrary bytecode against a specific historical state and measuring the same.
-**Scope:** standing up a replayer node (functionality 1) and an archive-backed environment (functionality 2) on harbor with confirmed prod-matching hardware, the privileged-attach gate for eBPF instrumentation, concrete probe design against real `seid`/go-ethereum symbols, and the confounds that will produce a false result if ignored. **No sei-chain source changes anywhere in this procedure** — everything here is external client traffic + kernel/process-level observation of a binary you don't touch.
+**Scope:** standing up a replayer node, choosing the right binary version deliberately (§2), and using `debug_traceTransactionProfile` — a validated, existing RPC method — to get clean per-tx gas + execution-time pairs with a single call, no kernel instrumentation required for either functionality as specified. eBPF (§8) is a fallback for needs beyond what's documented here (e.g. true per-opcode dispatch timing), not the default path.
 **Not in scope:** *why* Sei's gas schedule has the specific values it does (a governance/design question — capture a resulting change proposal as a `/design` doc, not here). Running any of this against a shared/long-lived/production chain, or against the canonical shared archive node in a way that mutates its state.
 
-> **Read this whole section before running anything.** Four things make the naive version of this experiment **silently wrong**: (1) at least one opcode's gas cost (`SSTORE`) is a **governance-mutable Sei chain param that already diverges from upstream go-ethereum** — using it as your "does gas match compute" baseline tests a value that was hand-tuned away from compute cost *by design*; (2) per-opcode timing via a uprobe **is not achievable** on this binary — the interpreter's opcode dispatch is an indirect call with no per-opcode symbol; (3) attaching any eBPF probe to a `seid` pod on harbor requires a **privileged kernel capability grant on a shared EKS cluster** — nothing in harbor's current namespace configuration technically blocks this, but that is an unhardened gap, not a green light; (4) **arbitrary-bytecode-against-historical-state (functionality 2) has an unverified RPC dependency** — confirm it before you build a campaign on top of an assumption. §1, §4, §5, and §6 exist to keep you out of these holes.
+> **Read this whole section before running anything.** Six things make the naive version of this experiment **silently wrong**: (1) at least one opcode's gas cost (`SSTORE`) is a **governance-mutable Sei chain param that already diverges from upstream go-ethereum** — using it as your "does gas match compute" baseline tests a value that was hand-tuned away from compute cost *by design*; (2) **a replayer's binary version must match what actually produced the history you're replaying, or every block after the first will fail app-hash validation** — confirmed empirically this session (§2); (3) **`debug_traceTransactionProfile` and the rest of the `debug_trace*` family are capped to `MaxTraceLookbackBlocks` (default 10,000) blocks behind the node's current tip** — a fast-catching-up replayer ages a target height out of that window in minutes; trace it soon after it's produced (§4); (4) **only `Y=X-1` is supported for Functionality 1 by any tooling that exists today** — there is no code path for pinning a real historical block's transactions to an arbitrarily older base state (§4); (5) **Functionality 2's execution-time output has a real, unclosed gap** — `debug_traceCall` returns gas but no timing field for arbitrary bytecode against arbitrary `Y` (§5); (6) **attaching any eBPF probe to a shared harbor pod requires a privileged kernel capability grant** — nothing technically blocks it today, but that's an unhardened gap, not a green light (§8).
 
 ---
 
@@ -14,18 +14,16 @@
 |---|---|
 | `<alias>` | your harbor engineer alias; namespace is `eng-<alias>`. |
 | `<Y>` | the historical height whose post-block state you're restoring/executing against. |
-| `<X>` | the historical block (functionality 1 only) whose transactions you're re-executing and timing; `X > Y`. |
+| `<X>` | the historical block (Functionality 1 only) whose transactions you're re-executing and timing; in practice `X = Y+1` — see §4. |
 | `<replay-node>` | the `SeiNode` in `replayer` mode restoring to `<Y>` and replaying forward (§3). |
-| `<archive-node>` | the archive-mode `SeiNode` or existing shared archive infra used for functionality 2 (§4). |
-| `<opcode>` | the single EVM opcode under test for a given functionality-2 run (§5). |
-| `<seid-pid>` | the PID of the `seid` process inside the target pod — resolve fresh each pod restart. |
-| `<sei-chain-checkout>` | your local `sei-chain` clone, used to resolve real symbol names before writing any probe (§7). |
+| `<archive-node>` | the archive-mode `SeiNode` or existing shared archive infra used for deep historical `<Y>` reach (§5, §6). |
+| `<image-tag>` | the sei-chain image the replayer runs — chosen deliberately per §2, never left at whatever default a template suggests. |
 
 ---
 
 ## 1. Mental model — what this can and cannot prove (read first)
 
-The question: for a given opcode, does the gas charged scale with the real wall-clock cost of executing it? The honest answer requires knowing which parts of the gas schedule were **derived from measured compute** vs. **set by other means** (governance, upstream inheritance, a flat precompile fee).
+The question: for a given opcode/tx, does the gas charged scale with the real wall-clock cost of executing it? The honest answer requires knowing which parts of the gas schedule were **derived from measured compute** vs. **set by other means** (governance, upstream inheritance, a flat precompile fee).
 
 **What's a fair target vs. a confound:**
 
@@ -38,18 +36,66 @@ The question: for a given opcode, does the gas charged scale with the real wall-
 **Confounds that apply regardless of functionality:**
 
 - **Per-tx fixed overhead** (signature verification, the Cosmos ante handler, the EVM↔Cosmos StateDB bridge) is real wall-clock time attributable to *no* opcode — it dilutes a measurement unless your sample size / loop count makes it a small fraction of the total.
-- **Optimistic concurrent execution (OCC) — this breaks naive per-tx correlation for functionality 1.** Sei applies a block's transactions through a **parallel scheduler**, not a serial loop: `DeliverTxBatch` → `tasks.NewScheduler(app.ConcurrencyWorkers(), …)` → `ProcessAll` spawns up to `ConcurrencyWorkers` goroutines (localnode default `concurrency-workers = 4`, `occ-enabled = true`; verified `app/abci.go:243`, `sei-cosmos/tasks/scheduler.go`), and re-executes any tx whose read/write set conflicts. **This same block-delivery path runs during replay** — a replayed historical block is applied by the OCC scheduler, not single-stepped. Consequences you must design around:
-  - **Functionality 2** (synthetic bytecode, §5) avoids all of this by construction — one tx per block means one task, no contention, no re-execution (§5).
-  - **Functionality 1** (replaying a real multi-tx block, §3) does **not** get clean per-tx timing for free: multiple `StateTransition.Execute` calls run concurrently on different OS threads, and a conflicting tx runs `Execute` more than once. An ordinal-by-call-count bracket (which is what §7's `tid`-keyed uprobe gives you) therefore maps to *neither* a specific tx *nor* a single execution — it silently produces **block-level aggregate timing, not per-tx timing**. See §3's correlation subsection for the fix (disable OCC for the measurement run) and its limits.
-  - **Determinism:** even setting correlation aside, OCC re-execution is not a deterministic function of the tx list alone (incarnation counts depend on scheduling), so repeated replays of the same `<X>` can differ. If timing looks bimodal/inconsistent across repeated replays, suspect re-execution before suspecting your probe.
+- **OCC (optimistic concurrent execution) does not break per-tx correlation the way it used to appear to.** Sei applies a block's transactions through a parallel scheduler (`app/abci.go`, `sei-cosmos/tasks/scheduler.go`), not a serial loop — but §4's measurement primitive (`debug_traceTransactionProfile`) isolates a single tx's execution by replaying the block *up to* that tx's index and then executing just it (`evmrpc/simulate.go`'s `replayTransactionTillIndex`), independent of how the block was originally scheduled. You do **not** need to disable OCC on the replayer to get clean per-tx numbers — that was true of a raw uprobe/uretprobe bracket around `StateTransition.Execute`, it is not true of this RPC.
+- **Whole-block wall-clock time (log-line `latency_ms` on `"finalized block"`) is the wrong signal — verified empirically, not theoretically.** It's diluted by non-EVM per-block work (oracle vote tally, IBC, begin/end-blockers for every module) and, on a replayer still catching up, contention with block-fetching. A same-session sample: correlating gas against whole-block latency gave Pearson r=0.301; filtering to EVM-active blocks and using the OCC-scheduler's tx-execution-phase latency improved it to r=0.618, still with real outliers. Correlating gas against `debug_traceTransactionProfile`'s `executionNanos` on the same chain gave **r=0.9914** on a 9-tx sample. Use the RPC, not a log-derived proxy.
 
 ---
 
-## 2. Hardware parity — already automatic, verify it rather than configure it
+## 2. Version pinning — the replayer must match what actually produced the history, or every block after the first fails
 
-**You do not need to request specific hardware.** `sei-k8s-controller` picks the Karpenter NodePool per node mode automatically: `internal/platform/platform.go`'s `NodepoolForMode()` — archive-mode nodes get `c.NodepoolArchive`, every other mode (including `replayer`) gets `c.NodepoolName` — and wires the matching toleration + required node affinity onto the pod spec (`internal/task/bootstrap_resources.go:203-227`, mirrored in `internal/noderesource/noderesource.go:454-479`). Both `clusters/harbor/sei-k8s-controller/controller-config.yaml` and `clusters/prod/sei-k8s-controller/controller-config.yaml` (in `sei-protocol/platform`) set the **identical** values: `nodepoolName: sei-node`, `nodepoolArchive: sei-archive`, `tolerationKey: sei.io/workload`. Harbor's `clusters/harbor/default/nodepool-{default,archive}.yaml` carry the **same** `r6i`/`r7i` instance-family, Nitro-hypervisor, on-demand requirements as `clusters/prod/default/nodepool-{default,archive}.yaml`. Net: a replayer or archive `SeiNode` in your `eng-<alias>` namespace lands on the same instance class as its prod counterpart, with zero engineer-side configuration.
+**This is the load-bearing gotcha of the whole runbook, and it is not theoretical — it happened this session.** A replayer restores state via Tendermint state-sync (§3) and then blocksyncs forward, re-executing each real historical block against its own binary. If that binary's state-transition logic differs *at all* from what actually ran on the live chain — even one commit ahead of the released version — the resulting `AppHash` after the first replayed block will not match the real chain's recorded `AppHash` for the next block, and the node halts with `validateBlock(): wrong Block.Header.AppHash: expected X, got Y: app hash mismatch`, evicting every peer it asks for that block (they all report the same real historical data; the mismatch is your binary, not them).
 
-**Verify it anyway before trusting a timing result** — a Karpenter requirements drift between clusters would silently invalidate every measurement:
+**Confirm the live chain's actual version before choosing an image:**
+
+```sh
+kubectl get seinode <a-live-syncer-or-validator> -n <its-namespace> -o jsonpath='{.spec.image}{"\n"}'
+```
+
+Two deliberate choices, pick one per experiment — **do not default to "whatever image tag is lying around"**:
+
+### 2a. Pin to the released version matching the live chain — for a clean, zero-divergence baseline
+
+Use the exact tag the live chain runs (e.g. `ghcr.io/sei-protocol/sei:v6.5.2`). This gives you faithful replay of real history with **zero** validation errors — the right choice for "does the *currently released* gas schedule track *currently released* compute cost," which is almost certainly the baseline question the gas-repricing project needs before proposing any change.
+
+Verified this session: switching from an arbitrary dev-branch commit image to the release tag matching the live chain's actual version took the replayer from a permanent app-hash-mismatch eviction loop at the very first post-snapshot block to zero errors across tens of thousands of blocks.
+
+### 2b. `mock_chain_validation-<sha>` — for testing bleeding-edge/proposed code against real transaction load
+
+If you need to test code that **isn't released yet** (a proposed repricing change, a migration candidate) against real historical transaction patterns, sei-chain's CI builds a `mock_chain_validation` variant of essentially every commit. It's a Go build tag (`sei-tendermint/types/consensus_policy_mock_chain_validation.go`) that swallows the app-hash/results-hash/validator-set class of consensus errors (`ErrAppHash`, `ErrConsensusHash`, `ErrValidatorsHash`, `ErrUpgradeBeforeTrigger`, etc.) **while still fully verifying peer-delivered transaction data** (`ErrDataHash`/`ErrEvidenceHash` are never swallowed — a lying peer still can't inject fake transactions). It emits `sei_unsafe_validation_skipped_total` (a Prometheus counter labeled `validation_error`) every time it swallows one, so divergence is directly observable, not silent.
+
+**Find the image:**
+
+```sh
+aws ecr describe-images --repository-name sei/sei-chain --region us-east-2 | \
+  python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+imgs=[i for i in d['imageDetails'] for t in i.get('imageTags',[]) if 'mock_chain_validation' in t]
+imgs.sort(key=lambda i: i['imagePushedAt'], reverse=True)
+for i in imgs[:10]: print(i['imagePushedAt'], i.get('imageTags'))
+"
+```
+
+On-demand builds are tagged `mock_chain_validation-<git-sha>`; nightly builds are `mock_chain_validation-nightly-<date>-<sha7>`. Confirm the tag you pick actually contains the commit you care about (`git merge-base --is-ancestor <commit> <tag-sha>` in your `sei-chain` checkout) before using it.
+
+**Read the divergence rate before trusting anything measured under this mode:**
+
+```sh
+kubectl port-forward -n eng-<alias> <replay-node>-0 <local-port>:26660
+curl -s localhost:<local-port>/metrics | grep sei_chain_sei_unsafe_validation_skipped_total
+```
+
+Verified this session: running `mock_chain_validation` built from `origin/main` (447 commits ahead of the last release) against real pacific-1 history produced **thousands of `app_hash` skips within the first few hundred blocks** — i.e. essentially every block's resulting state diverges from real history once you're running meaningfully different code. **This is expected, not a bug, and it compounds**: state at height `Y+N` reflects `N` blocks of the *new* binary's execution repeatedly applied to itself, not what actually existed historically at that height. That's fine and arguably desirable if your question is "does this new code's gas track this new code's own compute cost, exercised by realistic transaction load" — it is the wrong tool if your question requires reproducing exact historical state at a specific `<Y>`. Pick §2a for the latter.
+
+---
+
+## 3. Hardware parity — already automatic, verify it rather than configure it
+
+**You do not need to request specific hardware.** `sei-k8s-controller` picks the Karpenter NodePool per node mode automatically: `internal/platform/platform.go`'s `NodepoolForMode()` — archive-mode nodes get `c.NodepoolArchive`, every other mode (including `replayer`) gets `c.NodepoolName` — and wires the matching toleration + required node affinity onto the pod spec (`internal/task/bootstrap_resources.go`, mirrored in `internal/noderesource/noderesource.go`). Both harbor's and prod's `sei-k8s-controller/controller-config.yaml` set the identical `nodepoolName`/`nodepoolArchive`/`tolerationKey` values, and both clusters' NodePool manifests carry the same `r6i`/`r7i` instance-family, Nitro-hypervisor, on-demand requirements. Net: a replayer or archive `SeiNode` in your `eng-<alias>` namespace lands on the same instance class as its prod counterpart, with zero engineer-side configuration.
+
+**Optionally**, for a throwaway single-tenant experiment node, apply the `sei.io/dedicated-node: "true"` annotation (see `sei-k8s-controller`'s dedicated-node feature) to guarantee the node isn't shared with another engineer's workload for the duration of the run — not required for correctness, but removes one source of noisy-neighbor variance from your timing numbers.
+
+**Verify hardware parity anyway before trusting a timing result:**
 
 ```sh
 NODE=$(kubectl -n eng-<alias> get pod <replay-node>-0 -o jsonpath='{.spec.nodeName}')
@@ -60,55 +106,62 @@ Expect an `r6i.*`/`r7i.*` instance type and `nodepool=sei-node` (or `sei-archive
 
 ---
 
-## 3. Functionality 1 — replay block `<X>` against state after `<Y>`, measure gas + time
+## 4. Functionality 1 — replay block `<X>` against state after `<Y>`, measure gas + time
 
-**The state-restore-and-forward-replay mechanism is real, documented tooling** — this is the same machinery behind `validating-flatkv-memiavl-parity-via-sharded-replay.md`, used here for timing instead of storage-parity comparison. You do **not** need that runbook's flatKV-vs-memIAVL differential pair; stand up a single replayer engine.
+**Scope note, confirmed by reading the actual RPC/replayer code, not by inference: only `Y=X-1` is supported today.** Every path that replays a real historical block's transactions — this replayer, `debug_traceBlockByNumber`, `debug_traceTransactionProfile` — hardcodes the base state to exactly one block before the target (`evmrpc/simulate.go`'s `initializeBlock`: `prevBlockHeight := block.Number().Int64() - 1`). There is no hook anywhere for pinning execution to an arbitrarily older `Y`. If your actual need is the general case (e.g. isolating state-size effects by holding transactions fixed while varying the base height), that is new engineering, not a config change — flag it explicitly rather than silently reporting `Y=X-1` numbers as if they answered a different question.
 
-1. **Render a `replayer`-mode `SeiNode`** targeting `<Y>`: `spec.replayer.snapshot.s3.targetHeight: <Y>` (per `validating-flatkv-memiavl-parity-via-sharded-replay.md:148`) — the seictl sidecar restores the highest snapshot `<= <Y>` and syncs forward from there, peering a shared full-history archive over p2p as its block source. Render via the `/harbor-dev` skill's PR-based flow into `harbor-engineering-workspace`, same as any other `SeiNode`.
-2. **Let it replay forward past `<X>`.** There is no documented flag to halt exactly at a target height — the tooling (and its shadow-comparator sibling) is built for continuous mass replay (~40 blocks/s/node, paged in 100-block chunks for the parity use case). You don't need a halt, but note that you **cannot reactively bracket the `<X>` window** — RPC height/logs report `<X>` only *after* it commits (§3a). Instead, attach the probe *continuously across a replay span containing `<X>`* and correlate afterward by height/tx; poll `.status`/RPC height or tail logs only to confirm `<X>` has been applied and to bound the span. Letting the node continue replaying past `<X>` is harmless.
-3. **Gas is already there per-tx** — the replayed node has genuinely applied `<X>`'s transactions; read `gasUsed` per tx the same way you would from any node (`seid query evm tx <hash>` / `eth_getTransactionReceipt`), no comparator needed for a single-block read.
-4. **Execution time is the actual gap.** Neither this replay mechanism nor its comparator captures timing anywhere — the comparator's three layers cover AppHash/`LastResultsHash`, per-tx `code`/`gasUsed`/`log`/`events`, and post-state storage/balance/code/nonce; there is no timing field in any of them. This is exactly what §7's eBPF instrumentation is for, bracketed around the height-`<X>` transition you identified in step 2.
+### Steps
 
-### 3a. Per-tx correlation inside a multi-tx block — the real constraint (read before trusting any per-tx number)
+1. **Choose and pin the image deliberately (§2)** before rendering anything.
+2. **Render a `replayer`-mode `SeiNode`** targeting `<Y>`: `spec.replayer.snapshot.s3.targetHeight: <Y>` — the seictl sidecar restores the highest snapshot `<= <Y>` and syncs forward from there, peering a shared full-history archive over p2p as its block source. Render via the `/harbor-dev` skill's PR-based flow into `harbor-engineering-workspace`, same as any other `SeiNode`.
+3. **Let it replay forward past `<X>`.** There is no documented flag to halt exactly at a target height. Poll `.status`/RPC height or tail logs to confirm `<X>` has been applied; letting the node continue replaying past it is harmless.
+4. **Get the tx hash(es) for `<X>`:** `eth_getBlockByNumber(<X>, true)` on the replayer's own EVM-RPC (port 8545) returns full transaction objects including `hash` and the block-level `gasUsed`.
+5. **For each tx, call the one RPC that gives you both numbers:**
 
-Bracketing `StateTransition.Execute` with a `tid`-keyed uprobe/uretprobe (§7) gives **block-level aggregate timing, not per-tx timing**, on any block with more than one tx — because the OCC scheduler runs several `Execute` calls concurrently on different threads and re-runs conflicting txs (§1). Two separate problems: (a) *which* invocation is *which* tx — `Execute()` takes **no arguments** (receiver-only; the tx lives in the `st.msg *Message` field), so there is no arg to read a hash from, and ordinal-by-call-count is ambiguous under concurrency + re-execution; (b) a `tid`-keyed entry/return pair can be split across threads by goroutine migration, worse under OCC's higher scheduling pressure.
+   ```sh
+   curl -s -X POST -H "Content-Type: application/json" \
+     --data '{"jsonrpc":"2.0","method":"debug_traceTransactionProfile","params":["<tx-hash>"],"id":1}' \
+     localhost:8545
+   ```
 
-**Fix — serialize the measurement run by disabling OCC.** Render the replayer with `occ-enabled = false` and `concurrency-workers = 1` (app.toml keys; wired via `baseapp.SetOccEnabled`/`SetConcurrencyWorkers`, verified). The block-delivery path then takes its non-OCC serial branch (`!ctx.IsOCCEnabled()`) — one `Execute` at a time, in tx order, no conflict re-execution — so ordinal-by-call-count *does* map cleanly to the Nth tx in `<X>`. **This does not corrupt the measurement you care about:** gas is charged per-tx independently of the parallel schedule, and a tx's own interpreter/state work is the same instruction stream serial or parallel; you are removing cross-tx cache/scheduler interference, not changing the tx's compute. Confirm the SeiNode/seictl spec actually exposes these app.toml keys before relying on it — **VERIFY**; if it doesn't, this is a `/harbor-dev` spec gap to close, not a workaround to skip.
-   - **If OCC cannot be disabled** on the replayer: state plainly that functionality 1 yields **block-level aggregate `Execute` time only** (sum over the block's txs + any re-executions), correlatable to the block's *total* `gasUsed`, not per-tx. Per-tx then requires a compiled CO-RE tool that reads `st.msg` from the receiver (pointer + resolved field offsets) and keys by goroutine id, not tid — fragile, version-pinned to the struct layout, and out of scope for a bpftrace one-liner. Don't claim per-tx numbers you can't attribute.
-   - **Determinism bonus:** serial application also removes the OCC re-execution non-determinism (§1), so repeated replays of `<X>` are directly comparable.
+   The response's `result.trace.gas` is the real gas used. `result.profile.phases.executionNanos` is the isolated, clean per-tx EVM execution time — **use this field, not `result.profile.totalNanos`**, which also includes `replayHistoricalTxsNanos` (replaying the block up to this tx's index — real cost, but not *this tx's* cost) and `traceResultNanos` (tracing-instrumentation overhead itself). `result.profile.store.modules` additionally breaks down per-Cosmos-module store-access counts and timing if you need to attribute cost below the whole-tx level.
 
-**Window detection is post-hoc, not reactive.** You cannot *react* to entering block `<X>`: at ~40 blocks/s a block's application window is ~25 ms, and RPC height / logs only report `<X>` *after* it has committed — by the time you observe it, the `Execute` calls are done. So the probe must be **attached and aggregating continuously across a replay span that contains `<X>`**, then filtered afterward by height/tx. Under the disable-OCC serial path this is clean (aggregate per-tx in order, join to the tx list of `<X>` after); with a fast continuous replay you also want to slow the arrival into `<X>` (small `concurrency-workers`, or throttle the block source) so the window isn't lost in sampling noise.
+6. **Do this promptly.** `debug_trace*` is capped to `MaxTraceLookbackBlocks` behind the node's current tip (default 10,000, `evmrpc/config/config.go`, configurable via `evm.max_trace_lookback_blocks`). A replayer still catching up can process 20-30 blocks/sec — 10,000 blocks ages out in under 10 minutes. If you collect a batch of tx hashes and then profile them later, some will fail with `"block number ... is beyond max lookback of 10000"`. Verified this session: exactly this happened mid-collection. Either profile each tx immediately after finding it, or wait until the node has fully caught up to live tip (stable height) before doing a bulk collection pass.
 
----
-
-## 4. Functionality 2 — execute arbitrary bytecode against state after `<Y>`, measure gas + time
-
-**This has an unverified dependency — confirm it before building anything on top of it.** Two paths, in preference order:
-
-### Path A (preferred) — read-only historical `eth_call` with a state override
-
-If Sei's EVM JSON-RPC supports `eth_call` with a historical `blockNumber`/`blockTag` **and** a state-override object (to simulate the bytecode as if already deployed, without a real mutating tx), this is the clean answer *for gas and correctness*: point it at an archive node's RPC, at height `<Y>`, no real mutating tx. **`operating-archive-node-byov.md` says nothing about this** — it's pure PV/EBS provisioning — so this capability is not documented anywhere in this repo's runbooks. **Confirm empirically before relying on it:** a trivial smoke test (a state-overridden `eth_call` for a known simple computation at a known historical height, checked against a hand-computed expected result).
-
-**Path A does not solve the *timing* half on the shared archive node.** Execution time here comes from §6/§7 eBPF instrumentation, and you may not attach a privileged probe to the **canonical shared archive node** — that is the §6 gate and the shared-blast-radius rule, and it is *not* your node to instrument. So Path A splits:
-- **Gas / correctness:** the state-overridden `eth_call` against the shared archive is fine (read-only, no mutation).
-- **Timing:** either (i) accept only a client-side RPC round-trip latency as a coarse, network-contaminated proxy (not eBPF-clean — state this limitation, don't dress it as compute time), or (ii) run the *same* state-overridden `eth_call` against **your own private archive/replay node** (restored to `<Y>` as in Path B step 1) which you *are* cleared to instrument. Option (ii) recovers eBPF-grade timing but forfeits Path A's "no new infrastructure" benefit — at which point Path A and Path B converge on "a private node you own," and the only difference is read-only `eth_call` vs. a real submitted tx. Choose Path A(ii) over Path B when the state-override RPC works, to avoid mutating even your private node.
-
-### Path B (fallback) — private writable fork of state-at-`<Y>`
-
-If Path A's RPC capability doesn't exist or doesn't support the injection you need, use the same state-restore mechanism as §3 but stop treating it as a passive replayer: restore a `SeiNode` to height `<Y>` (`spec.replayer.snapshot.s3.targetHeight: <Y>`, same as §3 step 1), then instead of continuing historical replay, submit your own synthetic signed EVM transactions against it (`seid tx evm deploy` / `call-contract`, §5's bytecode). This gives you real trie depth / cache-warmth from genuine historical state (unlike a from-scratch empty genesis chain) at the cost of standing up and mutating your own private copy — never do this against the canonical shared archive.
-
-Either path, **instrument the same node you're submitting to** — no cross-node clock correlation needed.
+7. **Sample size and interpretation.** A single tx pair doesn't tell you much; a same-session batch of 9 real txs (gas ranging ~31k to ~1.3M) gave Pearson r=0.9914 between gas and `executionNanos` — strong evidence the primitive is sound. Collect enough of a real range (different contracts, different gas magnitudes) before drawing a conclusion, and always re-check against §1's confounds (a divergence concentrated on `SSTORE`-heavy txs confirms the known governance gap, not a finding).
 
 ---
 
-## 5. Crafting opcode-isolated bytecode (Path B / any synthetic-tx run)
+## 5. Functionality 2 — execute arbitrary bytecode against state after `<Y>`, measure gas + time
 
-**The differential-loop technique** isolates a single opcode's marginal cost without per-opcode instrumentation: write two bytecode variants identical except for the opcode under test.
+Two paths. Prefer Path B given the current state of the RPC surface — it fully reuses §4's validated primitive and closes the timing gap that Path A cannot.
+
+### Path A — read-only `eth_call`/`debug_traceCall` (gas works, timing does not)
+
+`eth_call` and `debug_traceCall` both take a fully independent `blockNrOrHash` parameter — no `X` concept at all, so arbitrary bytecode/calldata against an arbitrary historical `Y` works structurally (`evmrpc/simulate.go`, `evmrpc/tracers.go`). But:
+
+- Plain `eth_call` returns **only return-data** — no gas, no time.
+- `debug_traceCall` with `{"tracer":"callTracer"}` returns **real gas** in the JSON result — but **no execution-time field exists anywhere in this path**. The same `phaseDurations`/`ExecutionNanos` mechanism that powers §4's `debug_traceTransactionProfile` is not wired into `TraceCall` at all (confirmed by reading the call sites — only two places populate `phaseDurations`, and `TraceCall` isn't one of them).
+- **This is a real, unclosed gap**, not a workaround-able limitation. Closing it is a small, well-scoped extension (thread the existing, already-working profiling mechanism into `TraceCall`) — but it's a sei-chain source change to a shared repo, out of scope for this runbook to make unilaterally. If Path A's read-only simulation (no real tx submitted) is a hard requirement, flag this gap to the team rather than fabricating a timing number.
+
+### Path B (preferred) — submit a real signed tx, then reuse §4's primitive
+
+Restore a `SeiNode` to height `<Y>` exactly as in §4 step 2, then instead of continuing passive historical replay, submit your own synthetic signed EVM transaction against it (deploy + call, §6's differential-bytecode technique). Once it's mined, it's an ordinary historical tx — **`debug_traceTransactionProfile` on its hash gives you gas + `executionNanos` in one call**, identical to §4, with none of Path A's timing gap. This costs standing up and mutating your own private node (never the canonical shared archive) but fully closes both halves of Functionality 2's output contract with already-validated tooling.
+
+### Historical `<Y>` reach — pruning limits, verified live
+
+Your replayer/dedicated node prunes; the canonical shared archive doesn't. Checked directly this session: a replayer running Karpenter-default config had `pruning-keep-recent=86400`, `pruning-keep-every=500` (dense access to the last 86,400 blocks it has processed, sparse beyond that), while `p1-archive-canonical` ran `pruning=nothing` (full history to genesis). **For a genuinely old `<Y>`, point your tooling at the archive node's RPC, not a fresh replayer** — a replayer only has state back to wherever its own snapshot restore started forward from. Failure mode if you ask for a pruned height is loud, not silently wrong: `CacheMultiStoreWithVersion` returns `"failed to load state at height %d; %s (latest height: %d)"` — no risk of silently getting the wrong state.
+
+---
+
+## 6. Crafting opcode-isolated bytecode (Path B / any synthetic-tx run)
+
+**The differential-loop technique** isolates a single opcode's marginal cost without per-opcode instrumentation — still necessary even with §4/§5's primitive, because `debug_traceTransactionProfile`'s timing is per-tx/per-phase, not per-opcode; its `structLogs` give per-opcode *gas*, not per-opcode *time*. Write two bytecode variants identical except for the opcode under test.
 
 - **Variant A (opcode-under-test):** a loop body of `JUMPDEST`, the target `<opcode>` (with operands pre-pushed), then loop-decrement/`JUMPI` back to `JUMPDEST`.
 - **Variant B (baseline):** identical scaffold, target opcode replaced with a cheap no-op pair (`PUSH1 0x00`/`POP`) of known cost.
 
-`(wall-clock(A) − wall-clock(B)) ÷ iteration count ≈ per-opcode marginal wall-clock cost`; the same subtraction on `gasUsed` gives the marginal gas cost to compare against it. This cancels loop-overhead opcodes and per-tx fixed overhead from both sides symmetrically.
+`(executionNanos(A) − executionNanos(B)) ÷ iteration count ≈ per-opcode marginal wall-clock cost`; the same subtraction on `gas` gives the marginal gas cost to compare against it. This cancels loop-overhead opcodes and per-tx fixed overhead from both sides symmetrically.
 
 ```sh
 seid tx evm deploy /path/to/<opcode>-loop.bin \
@@ -119,76 +172,46 @@ seid tx evm call-contract <deployed-addr> <calldata-hex> \
   --from=<key> --value=0 --chain-id=<chain-id> --evm-rpc=<target-node-evm-rpc>
 ```
 
-Pick a large-but-fixed iteration count up front (large enough that fixed overhead is a small fraction of total gas/time; loop rather than unroll past a few hundred iterations — code-size cap). Run each variant multiple times and take the distribution, not a single sample — wall-clock has real variance from GC pauses, compaction, and scheduling noise that gas is blind to.
-
-**Submission protocol (Path B only):** submit exactly one transaction, wait for its block to finalize and its receipt to confirm, before submitting the next. This sidesteps the OCC re-execution confound (§1) by construction — nothing contends for the same slot if only one tx is ever in flight. `StateTransition.Execute` (§7) runs more than once per submitted tx — once during `eth_estimateGas`/`CheckTx` simulation, again at `FinalizeBlock` delivery — expect 2-3 invocations, and disambiguate by taking the one whose timestamp falls inside the actual block-production window.
+Pick a large-but-fixed iteration count up front (large enough that fixed overhead is a small fraction of total gas/time; loop rather than unroll past a few hundred iterations — code-size cap). Run each variant multiple times and take the distribution, not a single sample — wall-clock has real variance from GC pauses, compaction, and scheduling noise that gas is blind to. Submit one tx at a time, wait for its receipt, before submitting the next — then call `debug_traceTransactionProfile` on each mined hash per §4/§5.
 
 ---
 
-## 6. The privileged-attach gate — read before running `kubectl debug`
+## 7. Reading results
 
-Any eBPF uprobe, `offcputime`, or CPU `profile` run against `seid` requires a **privileged kernel capability grant** (`CAP_BPF`/`CAP_SYS_ADMIN`/`CAP_PERFMON`) on a pod in **harbor — a shared EKS cluster** running other engineers' chains and `sei-k8s-controller` itself. This is root-on-node. The `/ebpf` skill's guardrail is unconditional here: **the gate is on the attach mechanism, not on how low-stakes the target is.** A throwaway replayer/archive-fork node does not waive it.
+For each opcode/tx under test: `gas` (Tier 0, free), `executionNanos` (§4/§5's primitive), and the live gas parameter value behind it if testing a governance-mutable opcode (§1). Report as a ratio (time-per-gas-unit) per opcode/tx, not a single aggregate.
 
-**What's actually true about `eng-<alias>` today (verified against the platform repo, not assumed):** `eng-<alias>` namespaces carry no Pod Security Standard label (`clusters/harbor/engineers/base/namespace.yaml`), and harbor has no cluster-wide PSS default either (`clusters/harbor/admission/` contains only an unrelated tenant-hostname policy) — the effective PSS level is Kubernetes' own default, `privileged`, enforced nowhere. Compare **prod**'s `walle` namespace: explicit `restricted` PSS + a `ValidatingAdmissionPolicy` blocking ephemeral containers outright. Harbor's `eng-<alias>` has no equivalent. **This is an unhardened gap, not a sanctioned path**, and shared-node blast radius is real independent of PSS — engineer workloads bin-pack onto harbor's Karpenter pools alongside other tenants' processes.
+**Before concluding anything, re-check against §1:** a divergence on `SSTORE` confirms a known governance-set gap, not a finding; the real signal is `KECCAK256`/arithmetic. Precompile numbers belong in their own table, never blended with interpreted-opcode results.
+
+---
+
+## 8. eBPF — only if §4/§7's primitive genuinely isn't enough
+
+**Don't reach for this by default — it is no longer the primary path for either functionality as specified.** `debug_traceTransactionProfile` already gives clean per-tx gas + execution time without any kernel-level instrumentation, validated this session (r=0.9914 gas-vs-`executionNanos` correlation on real replayed pacific-1 transactions). The only reason to reach for eBPF is a need genuinely beyond what §4-§7 answer — e.g. true per-opcode dispatch-level timing *within* a single tx's execution (the profiling RPC gives per-opcode *gas* via `structLogs` and per-*tx* timing, not per-opcode timing), or attributing time to something below the Go-function granularity the profiler's `phases`/`store.modules` breakdown already covers.
+
+If you do need it, the privileged-attach gate and symbol-resolution guidance below still apply.
+
+**The gate:** any eBPF uprobe, `offcputime`, or CPU `profile` run against `seid` requires a **privileged kernel capability grant** (`CAP_BPF`/`CAP_SYS_ADMIN`/`CAP_PERFMON`) on a pod in **harbor — a shared EKS cluster**. This is root-on-node. `eng-<alias>` namespaces carry no Pod Security Standard label and harbor has no cluster-wide PSS default — the effective PSS level is Kubernetes' own default, `privileged`, enforced nowhere. **This is an unhardened gap, not a sanctioned path.**
 
 **Do this, in order, before attaching anything:**
 
-1. **Get sign-off first** — surface what you're attaching, to what, on which pod, for how long, to the platform/security owner before running anything privileged.
-2. **Pin to a dedicated node** — for the duration of the experiment, don't share the node with other tenants (§2's hardware-parity node is already tainted/dedicated by `sei-node`/`sei-archive`'s own scheduling — confirm nothing else landed there).
-3. **Scope the capability grant to the minimum**, not `hostPID`: `kubectl debug --target=seid -it <target-node>-0 --image=<bpftrace-image> --profile=sysadmin` — `--target=<container>` joins only that pod's PID namespace. Prefer `CAP_BPF`+`CAP_PERFMON` over the broader `sysadmin` profile where possible.
-4. **If this becomes recurring**, that's the signal to open a platform PR for a dedicated profiling namespace with its own restricted-by-default PSS + a narrow, auditable exception (mirror `clusters/harbor/admission/tenant-hostname-policy.yaml`'s exception shape; `clusters/harbor/chaos-mesh/chaos-mesh.yaml` is harbor's existing precedent for an elevated-privilege, opt-in-gated workload) — **a platform decision, not something to self-approve.**
+1. Get sign-off first — surface what you're attaching, to what, on which pod, for how long, to the platform/security owner.
+2. Pin to a dedicated node (§3's `sei.io/dedicated-node` annotation) for the duration.
+3. Scope the capability grant to the minimum: `kubectl debug --target=seid -it <target-node>-0 --image=<bpftrace-image> --profile=sysadmin` — `--target=<container>` joins only that pod's PID namespace. Prefer `CAP_BPF`+`CAP_PERFMON` over the broader `sysadmin` profile where possible.
+4. If this becomes recurring, that's the signal to open a platform PR for a dedicated profiling namespace with its own restricted-by-default PSS + a narrow, auditable exception — a platform decision, not something to self-approve.
 
----
-
-## 7. Instrumentation — cheapest and least-privileged first
-
-Don't reach for eBPF as step one.
-
-**Tier 0 — free, no probe.** `gasUsed` from the receipt and `eth_estimateGas` are already there. Record the live gas parameters (e.g. `SeiSstoreSetGasEIP2200`, `x/evm/types/params.go:43`) and image digest before instrumenting anything — the comparison is meaningless without knowing what you're comparing against.
-
-**Tier 1 — Cosmos SDK's own pprof, no elevated privileges.** The rendered `config.toml`'s `pprof_laddr` gives `go tool pprof` access with zero Kubernetes privilege beyond what you already have. **Verify empirically whether this surfaces EVM-interpreter frames at all** on the running pod before relying on it — don't assume from a source read alone. If empty or unhelpful, move to Tier 2.
-
-**Tier 2 — eBPF (gated; §6 must be cleared first).**
-
-Resolve real symbols before writing any probe — `sei-chain`'s `go.mod` pulls go-ethereum via a `replace` directive, which **preserves the original import path in compiled symbol names**, so the binary's symbols are still `github.com/ethereum/go-ethereum/...`. Confirm on the actual binary:
+Resolve real symbols before writing any probe — `sei-chain`'s `go.mod` pulls go-ethereum via a `replace` directive, which preserves the original import path in compiled symbol names:
 
 ```sh
 kubectl -n eng-<alias> debug --target=seid -it <target-node>-0 --image=<toolbox-with-go> --profile=sysadmin -- \
   go tool nm /proc/<seid-pid>/root/usr/bin/seid | grep -E 'StateTransition\)\.Execute|EVMInterpreter\)\.Run'
 ```
 
-The two real boundaries (confirm line numbers against `<sei-chain-checkout>` before citing them to anyone):
+- **Per-tx bracket:** `github.com/ethereum/go-ethereum/core.(*StateTransition).Execute` — Sei's `x/evm/keeper/msg_server.go` (`applyEVMMessage`) calls this directly, bypassing the upstream `ApplyMessage` wrapper.
+- **Per-opcode dispatch (not individually probeable):** `github.com/ethereum/go-ethereum/core/vm.(*EVMInterpreter).Run` — indirect function-table dispatch, no stable per-opcode symbol. This is why §6 constructs isolation via bytecode rather than probing the loop.
 
-- **Per-tx bracket:** `github.com/ethereum/go-ethereum/core.(*StateTransition).Execute` (`core/state_transition.go`) — Sei's `x/evm/keeper/msg_server.go` (`applyEVMMessage`) calls this directly, bypassing the upstream `ApplyMessage` wrapper.
-- **Per-opcode dispatch (not individually probeable):** `github.com/ethereum/go-ethereum/core/vm.(*EVMInterpreter).Run` — indirect function-table dispatch, no stable per-opcode symbol. This is why §5 constructs isolation via bytecode rather than probing the loop.
+Prefer `offcputime` and a PID-filtered on-CPU `profile` over raw entry/return timing. On a replayer under heavy state I/O, `offcputime` overhead scales with context-switch rate and is no longer negligible — **A/B the replay throughput (blocks/s) with the probe attached vs. detached before trusting any number**.
 
-**Prefer `offcputime` and a PID-filtered on-CPU `profile` over raw entry/return timing** — the actual highest-value signal is whether `Execute`'s wall-clock time is CPU-bound (interpreter work, what gas is supposed to meter) or blocked on state I/O (which gas categorically does not meter). Both are map-aggregated, so overhead is event-rate-bound not drain-bound — but "near-zero" holds only for **functionality 2's low tx rate**. **On a functionality-1 replayer running ~40 blocks/s with heavy state I/O, the context-switch rate is high, and `offcputime` overhead scales with context-switch rate** (`/ebpf` skill's `pack-perf-methodology.md` §7 caveat) — it is bounded but no longer negligible, and it perturbs the very replay you're timing. Per guardrail 3 (which holds even off-prod, because a perturbing probe corrupts a *measurement*): **A/B the replay throughput (blocks/s) with the probe attached vs. detached before trusting any number**; if attaching the probe moves replay throughput, the timing is contaminated — narrow the window, drop the sampling rate, or serialize (§3a) so the rate is low. Note also that during replay there is **no `CheckTx`/`eth_estimateGas` path** (blocks arrive already-finalized over p2p), so — unlike §5's submission flow — `Execute` fires once per tx *per OCC incarnation*, not 2–3× per tx:
-
-```
-# on-CPU attribution, PID-filtered
-bpftrace -e 'profile:hz:49 /pid == <seid-pid>/ { @[ustack] = count(); }'
-
-# off-CPU (blocked) time, PID-filtered
-offcputime -p <seid-pid> -f 30
-```
-
-**Raw per-invocation duration via `uprobe`/`uretprobe` is rehearsal-only**, with two hazards to state plainly if you use it: (1) Go's stack-copying runtime and `uretprobe`'s return-address rewrite can interact badly — a known divergence, not hypothetical; (2) a goroutine can migrate OS threads mid-call on a blocking I/O read, breaking a `tid`-keyed entry/return pairing even at concurrency 1.
-
-```
-uprobe:/proc/<seid-pid>/root/usr/bin/seid:"github.com/ethereum/go-ethereum/core.(*StateTransition).Execute"
-{ @start[tid] = nsecs; }
-uretprobe:/proc/<seid-pid>/root/usr/bin/seid:"github.com/ethereum/go-ethereum/core.(*StateTransition).Execute"
-/@start[tid]/
-{ @dur = hist(nsecs - @start[tid]); delete(@start[tid]); }
-```
-
----
-
-## 8. Reading results
-
-For each opcode/block under test: the differential (functionality 2) or bracketed (functionality 1) wall-clock time at the tier reached, the `gasUsed`, and the live gas parameter value behind it (Tier 0). Report as a ratio (time-per-gas-unit) per opcode/tx, not a single aggregate.
-
-**Before concluding anything, re-check against §1:** a divergence on `SSTORE` confirms a known governance-set gap, not a finding; the real signal is `KECCAK256`/arithmetic. Precompile numbers belong in their own table, never blended with interpreted-opcode results. For functionality 1, a bimodal or inconsistent time distribution across repeated replays of the same `<X>` should raise the OCC-determinism assumption (§1) before any other explanation.
+Raw per-invocation duration via `uprobe`/`uretprobe` is rehearsal-only: Go's stack-copying runtime and `uretprobe`'s return-address rewrite can interact badly, and a goroutine can migrate OS threads mid-call, breaking a `tid`-keyed entry/return pairing.
 
 ---
 
@@ -196,41 +219,39 @@ For each opcode/block under test: the differential (functionality 2) or brackete
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| Replayer hits `wrong Block.Header.AppHash: expected X, got Y` and evicts every peer it asks | Binary version doesn't match what actually produced the history being replayed (§2) | Pin to the release tag matching the live chain (§2a), or deliberately use `mock_chain_validation` (§2b) if testing unreleased code and you accept compounding divergence from real history. |
+| `debug_traceTransactionProfile`/`debug_traceCall` returns `"block number ... is beyond max lookback of 10000"` | Collected tx hashes, then profiled them later; the replayer's rapid catch-up aged the target height out of `MaxTraceLookbackBlocks` (§4 step 6) | Profile immediately after finding each tx, or wait for the node to fully catch up to live tip before a bulk pass. |
+| Correlating gas against whole-block `latency_ms` gives a weak/inconsistent result | Whole-block wall time is diluted by non-EVM per-block work and (on a replayer) blocksync contention — verified this session (r=0.301) (§1) | Use `debug_traceTransactionProfile`'s `executionNanos`, not a log-derived block-level proxy (§4) — verified r=0.9914 on the same chain. |
 | `kubectl describe node` shows an instance type outside `r6i`/`r7i` | `controller-config.yaml` or NodePool requirements drifted between harbor and prod | Halt — the timing result won't reflect prod hardware. Diff `clusters/{harbor,prod}/sei-k8s-controller/controller-config.yaml` and `clusters/{harbor,prod}/default/nodepool-*.yaml` before proceeding. |
-| Can't get a clean read on block `<X>`'s gas/results | Tried to force the replayer to halt exactly at `<X>` instead of reading its result once the height passed | Let replay continue past `<X>`; query `<X>`'s results directly via RPC once the height has been applied (§3). |
-| `eth_call` with a state override returns an error or silently ignores the override | Path A's RPC capability (§4) isn't actually supported on this `seid` version | Fall back to Path B — restore a private writable fork of state-at-`<Y>` and submit real signed txs. |
-| Probe never fires / symbol not found | Assumed upstream go-ethereum's import path instead of resolving on the actual binary | Re-run the `go tool nm` resolution (§7) against `/proc/<seid-pid>/root/usr/bin/seid`. |
-| Wall-clock measurements wildly inconsistent run-to-run | OCC re-execution (§1) — overlapping submissions (functionality 2) or parallel/re-executed scheduling on replay (functionality 1) | Functionality 2: strictly sequential one-tx-per-block. Functionality 1: render the replayer with `occ-enabled = false`, `concurrency-workers = 1` (§3a) for serial, deterministic, per-tx-correlatable application. |
-| Functionality-1 per-tx timing doesn't line up with per-tx `gasUsed` | Bracketed a multi-tx block under OCC — got block-level aggregate, not per-tx (§1, §3a) | Disable OCC on the replayer (§3a) so ordinal-by-call-count maps to the Nth tx; if OCC can't be disabled, report block-level aggregate vs. block-total gas only. |
-| Attaching the probe changes replay throughput (blocks/s) | High context-switch rate on a 40 blocks/s replayer makes `offcputime`/probe overhead non-negligible (§7, guardrail 3) | A/B throughput probe-on vs. probe-off; narrow the window, lower sampling rate, or serialize (§3a) until throughput is unperturbed. |
-| Path A gives gas but no clean execution time | Tried to eBPF-attach the shared archive node (forbidden, §4/§6) | Run the state-overridden `eth_call` against your own private restore node (Path A(ii), §4), or fall back to Path B. |
-| `seid` pod crashes after attaching a `uretprobe` | The Go-runtime/`uretprobe` interaction hazard (§7) | Expected risk on a throwaway node — redeploy and prefer `offcputime`/`profile` beyond a one-off rehearsal. |
+| Path A (`debug_traceCall`) gives gas but no execution time | `TraceCall` was never wired to the `phaseDurations` profiling mechanism — a real, unclosed gap, not a config issue (§5) | Use Path B: submit a real signed tx against your own restored-to-`<Y>` node, then `debug_traceTransactionProfile` its mined hash. |
+| Trying to replay block `X` against a `Y` that isn't `X-1` | No existing tooling supports the general case (§4) | This is new engineering, not a config change — confirm whether `Y=X-1` actually answers the real question before treating it as a blocker. |
 | "Gas doesn't match compute" conclusion on `SSTORE` | Tested a governance-mutable param as if compute-derived (§1) | Reframe as confirming the known divergence; re-run on `KECCAK256`/arithmetic for the real test. |
-| Can't get sign-off / told to stop before attaching anything privileged | §6's gate working as intended | Platform team's call — escalate, don't self-approve a scoped-down version of the same attach. |
+| Attaching an eBPF probe changes replay throughput (blocks/s) | High context-switch rate on a fast replayer makes `offcputime`/probe overhead non-negligible (§8) | A/B throughput probe-on vs. probe-off; narrow the window or lower sampling rate. Consider whether you need eBPF at all — §4's primitive may already answer the question. |
+| Can't get sign-off / told to stop before attaching anything privileged | §8's gate working as intended | Platform team's call — escalate, don't self-approve a scoped-down version of the same attach. |
 
 ---
 
 ## 10. Pre-flight checklist
 
-- [ ] Confirmed the target node landed on `r6i`/`r7i` via `sei-node`/`sei-archive` (§2) — don't trust the default without checking.
-- [ ] Recorded live gas parameter values + image digest (§7 Tier 0).
-- [ ] **Functionality 1:** replayer node restoring to `<Y>` and replaying forward (§3); confirmed per-tx `gasUsed` for `<X>` is readable post-replay.
-- [ ] **Functionality 1 (per-tx correlation):** if `<X>` has >1 tx, replayer rendered with `occ-enabled = false` + `concurrency-workers = 1` (§3a) so serial ordinal correlation holds — or the report is explicitly scoped to block-level aggregate timing. Probe attached *continuously across a span containing `<X>`* (window detection is post-hoc, not reactive — §3a), not started reactively on the height transition.
-- [ ] **Functionality 2:** confirmed whether Path A's `eth_call` state-override capability actually exists on this `seid` version (§4) before committing to it; if not, Path B's private writable fork is staged instead.
-- [ ] (Path B only) Differential bytecode pair built (§5), fixed high-enough iteration count, sequential one-tx-per-block submission harness logging `{submit_ts, tx_hash, block_height, gasUsed}`.
-- [ ] Tier 0 and Tier 1 (pprof) tried and found insufficient before reaching for eBPF.
-- [ ] **Sign-off obtained** for any privileged attach, capabilities scoped to `--target=seid` rather than `hostPID` (§6) — before running anything in §7 Tier 2.
-- [ ] Symbols resolved against the actual running binary, not assumed from source alone (§7).
+- [ ] Confirmed the target node landed on `r6i`/`r7i` via `sei-node`/`sei-archive` (§3) — don't trust the default without checking.
+- [ ] **Chosen §2a (release-pinned) or §2b (`mock_chain_validation`) deliberately**, not defaulted to an arbitrary image tag. If §2b, confirmed `sei_unsafe_validation_skipped_total` is being watched, not ignored.
+- [ ] **Functionality 1:** replayer restoring to `<Y>` and replaying forward (§4); confirmed `Y=X-1` actually answers the intended question, or explicitly flagged that it doesn't.
+- [ ] **Functionality 1/2 measurement:** using `debug_traceTransactionProfile`'s `result.profile.phases.executionNanos` (not `totalNanos`, not a log-derived latency proxy) for timing, `result.trace.gas` for gas.
+- [ ] **Traced promptly** relative to `MaxTraceLookbackBlocks` — not collecting a large batch of tx hashes to profile long after the fact on a still-catching-up node.
+- [ ] **Functionality 2:** using Path B (real submitted tx + §4's primitive) unless a genuine read-only-simulation requirement forces Path A — in which case, the execution-time gap in `debug_traceCall` is flagged explicitly, not worked around with a fabricated number.
+- [ ] Recorded live gas parameter values (e.g. `SeiSstoreSetGasEIP2200`) + image digest before drawing conclusions.
+- [ ] Sample size covers a real range of gas magnitudes/contracts, not a single tx.
+- [ ] Re-checked results against §1 (`SSTORE`/precompile confounds) before concluding anything about whether gas tracks compute.
+- [ ] Confirmed eBPF is actually necessary (§8) before requesting sign-off for a privileged attach — §4-§7 already answer both functionalities as specified without it.
 
 ---
 
 ## References
 
 - Sei-EVM gas/precompile specifics: `/evm` skill — `kit-evm-parity-gas.md`, `kit-sei-precompiles.md`; `x/evm/types/params.go` in `sei-chain` for the governance-mutable param set.
-- eBPF method, overhead-bounding, Go-uprobe/uretprobe divergences: `/ebpf` skill, `references/pack-perf-methodology.md`.
+- Version-pinning / `mock_chain_validation`: `sei-chain` — `sei-tendermint/types/consensus_policy.go`, `consensus_policy_mock_chain_validation.go`, `consensus_policy_default.go`, `policy_metrics.go`; `.github/workflows/ecr.yml`, `.github/workflows/nightly-ecr.yml` for the image-tag scheme.
+- Measurement primitive: `sei-chain` — `evmrpc/trace_profile.go` (`debug_traceTransactionProfile`, `profiledTraceTx`, `phaseDurations`), `evmrpc/simulate.go` (`initializeBlock`, `replayTransactionTillIndex`, `StateAtBlock`, plain `Call`), `evmrpc/tracers.go` (`TraceCall`), `evmrpc/block_trace_profiled.go` (`debug_traceBlockByNumber/Hash` — profiling exists but is passed `nil` here, not surfaced), `evmrpc/config/config.go` (`MaxTraceLookbackBlocks`).
 - Harbor chain spin-up mechanics: `/harbor-dev` skill, `references/ephemeral-chain-flow.md`, `references/seictl-cli.md`, `references/harbor-cluster.md`.
-- Replay mechanism (functionality 1): `validating-flatkv-memiavl-parity-via-sharded-replay.md` (this directory) — the `replayer.snapshot.s3.targetHeight` restore, the shadow comparator's layer definitions (gas yes, timing no).
-- Archive-node provisioning: `operating-archive-node-byov.md` (this directory) — infra only; does not document RPC query semantics, hence §4's Path A verification requirement.
-- Hardware-parity mechanism: `sei-k8s-controller` — `internal/platform/platform.go` (`NodepoolForMode`), `internal/task/bootstrap_resources.go`, `internal/noderesource/noderesource.go`; `sei-protocol/platform` — `clusters/{harbor,prod}/sei-k8s-controller/controller-config.yaml`, `clusters/{harbor,prod}/default/nodepool-{default,archive}.yaml`.
+- Hardware-parity mechanism: `sei-k8s-controller` — `internal/platform/platform.go` (`NodepoolForMode`), `internal/task/bootstrap_resources.go`, `internal/noderesource/noderesource.go` (also home of the `sei.io/dedicated-node` annotation); `sei-protocol/platform` — `clusters/{harbor,prod}/sei-k8s-controller/controller-config.yaml`, `clusters/{harbor,prod}/default/nodepool-{default,archive}.yaml`.
 - Harbor `eng-<alias>` Pod Security / admission posture: `sei-protocol/platform` — `clusters/harbor/engineers/base/namespace.yaml`, `clusters/prod/walle/{namespace,podcomposition-policy}.yaml` (the posture to eventually mirror), `clusters/harbor/chaos-mesh/chaos-mesh.yaml`, `clusters/harbor/admission/tenant-hostname-policy.yaml`.
-- Execution entry points: `sei-chain` — `x/evm/keeper/msg_server.go` (`applyEVMMessage`); the vendored go-ethereum fork's `core/state_transition.go` (`StateTransition.Execute`) and `core/vm/interpreter.go` (`EVMInterpreter.Run`) — resolve the fork version via `go.mod`, don't hardcode it here.
+- Execution entry points (§8 only): `sei-chain` — `x/evm/keeper/msg_server.go` (`applyEVMMessage`); the vendored go-ethereum fork's `core/state_transition.go` (`StateTransition.Execute`) and `core/vm/interpreter.go` (`EVMInterpreter.Run`) — resolve the fork version via `go.mod`, don't hardcode it here.
