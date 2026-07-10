@@ -4,7 +4,6 @@ package integration
 
 import (
 	"context"
-	"maps"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -86,43 +85,27 @@ func TestRelease(t *testing.T) {
 	}
 
 	// Provision: 4 validators with the admin funded in genesis, + 1 RPC follower.
-	ch := &chain{}
-	cleanupChain(t, ch)
-	net, err := c.CreateNetwork(ctx, sei.NetworkSpec{
-		Name:           chainID,
-		Namespace:      ns,
-		Image:          seid,
-		Validators:     4,
-		Labels:         runLabels,
-		Config:         maps.Clone(releaseBaseConfig), // package-global; clone before handing to the SDK
-		Accounts:       []sei.GenesisAccount{{Address: admin.Address, Balance: releaseAdminBalance}},
-		DeletionPolicy: sei.DeletionDelete,
+	ch, err := provision(ctx, t, c, spec{
+		chainID:       chainID,
+		runID:         chainID,
+		namespace:     ns,
+		seidImage:     seid,
+		validators:    4,
+		rpcNodes:      1,
+		storageConfig: releaseBaseConfig,
+		rpcConfig:     releaseRPCConfig,
+		accounts:      []sei.GenesisAccount{{Address: admin.Address, Balance: releaseAdminBalance}},
 	})
+	cleanupChain(t, ch)
 	if err != nil {
-		t.Fatalf("create network %q: %v", chainID, err)
+		t.Fatalf("provision: %v", err)
 	}
-	ch.network = net
-	if err := net.WaitReady(ctx); err != nil {
-		t.Fatalf("network %q ready: %v", chainID, err)
-	}
+	node := ch.rpcNodes[0]
+	net := ch.network
+	rpcName := node.Name()
 	t.Logf("network %s: ready (4 validators, admin %s funded)", chainID, admin.Address)
 
-	rpcName := rpcNodeName(chainID, 0)
 	hc := &http.Client{Timeout: 10 * time.Second}
-	node, err := bringUpRPCNode(ctx, t, c, hc, sei.NodeSpec{
-		Name:      rpcName,
-		Network:   chainID,
-		Namespace: ns,
-		Image:     seid,
-		Labels:    runLabels,
-		Config:    mergeConfig(releaseBaseConfig, releaseRPCConfig),
-	})
-	if node != nil {
-		ch.rpcNodes = append(ch.rpcNodes, node)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
 	rest := node.REST()
 	if rest == "" {
 		t.Fatalf("rpc node %q exposes no REST endpoint (release-test needs SEI_REST_ENDPOINT)", rpcName)
