@@ -32,11 +32,14 @@ func TestSeiNetwork_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 	key := client.ObjectKeyFromObject(snd)
 
 	// 1. Initial settle — wait for Status.Plan==nil, not just children-exist.
-	//    reconcileSeiNodes creates children before reconcilePlan finishes the
-	//    genesis ceremony, so pausing while the plan is still Active freezes it
-	//    in place (paused short-circuits reconcilePlan, which never drives it to
-	//    nil) and flakes step 3's Consistently(Status.Plan==nil).
-	waitForStatus(t, key, func(s *seiv1alpha1.SeiNetwork) bool {
+	//    reconcileSeiNodes creates children before reconcilePlan drives the
+	//    genesis ceremony to Complete, so pausing while the plan is still Active
+	//    freezes it (paused short-circuits reconcilePlan) and flakes step 3's
+	//    Consistently(nil). Status.Plan clears only after the plan's
+	//    await-nodes-running task (the full genesis+boot chain), so this uses
+	//    convergeTimeout like the sibling convergence waits, not the 30s
+	//    pollTimeout that chain exceeds under CI load.
+	waitForStatusWithin(t, convergeTimeout, key, func(s *seiv1alpha1.SeiNetwork) bool {
 		return len(listChildren(t, s)) == 2 &&
 			s.Status.Plan == nil &&
 			pausedCond(s) != nil && pausedCond(s).Status == metav1.ConditionFalse
