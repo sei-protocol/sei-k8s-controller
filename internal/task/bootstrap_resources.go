@@ -187,7 +187,12 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 		Command: seidCmd,
 		Args:    seidArgs,
 		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: bootstrapDataDir},
+			// HOME is inert here. Every bootstrap seid call passes explicit
+			// --home, and the Job is short-lived and never exec'd. Kept for
+			// symmetry with the production pod, as HomeDir (never the data dir,
+			// #449). No emptyDir needed because the bootstrap rootfs is writable,
+			// so the unbacked path is harmless.
+			{Name: "HOME", Value: platform.HomeDir},
 			{Name: "TMPDIR", Value: bootstrapDataDir + "/tmp"},
 		},
 		VolumeMounts: []corev1.VolumeMount{
@@ -255,17 +260,17 @@ func bootstrapWaitCommand(port int32, haltHeight int64) (command []string, args 
 			`fi; `+
 			`sleep 5; done; `+
 			`echo "sidecar healthy, starting seid with halt-height %d"; `+
-			`seid start --home "$HOME" --halt-height %d; `+
+			`seid start --home "%s" --halt-height %d; `+
 			`rc=$?; if [ $rc -eq 130 ]; then echo "seid halted at target height (exit 130), treating as success"; exit 0; fi; exit $rc`,
-		port, haltHeight, haltHeight,
+		port, haltHeight, bootstrapDataDir, haltHeight,
 	)
 	return []string{"/bin/bash", "-c"}, []string{script}
 }
 
 func bootstrapSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
-		`if [ -f "$HOME/config/genesis.json" ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home "$HOME" --overwrite; fi && mkdir -p "$HOME/tmp"`,
-		node.Spec.ChainID, node.Spec.ChainID,
+		`if [ -f "%s/config/genesis.json" ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home "%s" --overwrite; fi && mkdir -p "%s/tmp"`,
+		bootstrapDataDir, node.Spec.ChainID, node.Spec.ChainID, bootstrapDataDir, bootstrapDataDir,
 	)
 	return corev1.Container{
 		Name:  "seid-init",
@@ -274,7 +279,9 @@ func bootstrapSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 			"/bin/sh", "-c", script,
 		},
 		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: bootstrapDataDir},
+			// Inert here (see the note on the bootstrap seid container). Explicit
+			// --home drives seid init, and HOME is kept for symmetry only.
+			{Name: "HOME", Value: platform.HomeDir},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: bootstrapDataDir},

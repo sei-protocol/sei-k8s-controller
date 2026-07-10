@@ -14,8 +14,8 @@ spec:
     namespaces: ["{{.Namespace}}"]
     expressionSelectors:
       - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
-  volumePath: /.sei
-  path: "/.sei/**"
+  volumePath: {{.DataDir}}
+  path: "{{.DataDir}}/**"
   delay: "100ms"
   percent: 50
   duration: "{{.Duration}}"

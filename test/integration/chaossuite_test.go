@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
@@ -121,6 +122,7 @@ func TestChaosSuite(t *testing.T) {
 				RunID:     s.runID,
 				Namespace: faultNS,
 				Duration:  duration,
+				DataDir:   platform.DataDir,
 			})
 			// Duration-bearing faults must self-expire (else gateRecovered hangs
 			// to the deadline). One-shot kills carry no duration by design.

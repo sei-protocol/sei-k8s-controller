@@ -171,7 +171,7 @@ One **full-history archive** (`earliest_block_height == 1`) serves blocks to *ev
 - If you must peer from the archive side instead (the reverse direction from §4 — here you need the *shard's* node-id/DNS), edit the archive's running `config.toml` persistent-peers and restart seid. The archive's seid container (release image) has a shell:
   ```bash
   kubectl -n eng-<alias> exec <archive>-0 -c seid -- sh -c \
-    "sed -i \"/^persistent-peers = /s#'\$#,<shard-node-id>@<shard-p2p-dns>:26656'#\" /.sei/config/config.toml"
+    "sed -i \"/^persistent-peers = /s#'\$#,<shard-node-id>@<shard-p2p-dns>:26656'#\" /home/nonroot/.sei/config/config.toml"
   ```
   **Then restart seid only — not the pod.** Submit a `restart-seid` task to the archive sidecar (§7). Deleting the pod re-runs init, which re-renders `config.toml` and drops your edit.
 

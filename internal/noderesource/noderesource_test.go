@@ -2,6 +2,7 @@ package noderesource
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -20,8 +21,8 @@ func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unpa
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "sei-test",
-			Image:   "ghcr.io/sei-protocol/seid:latest",
+			ChainID:   "sei-test",
+			Image:     "ghcr.io/sei-protocol/seid:latest",
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
@@ -276,7 +277,7 @@ func TestBuildNodeMainContainer_ImageAndEnv(t *testing.T) {
 		env[e.Name] = e.Value
 	}
 	g.Expect(env).To(HaveKeyWithValue("HOME", homeMountPath),
-		"HOME is a non-data-dir emptyDir; seid home is set via explicit --home, not $HOME")
+		"HOME is the parent of dataDir (emptyDir at homeMountPath); a bare seid resolves $HOME/.sei onto the data dir, while seid start keeps an explicit --home")
 	g.Expect(env).To(HaveKeyWithValue("TMPDIR", dataDir+"/tmp"))
 }
 
@@ -386,6 +387,26 @@ func TestSidecarContainer_CustomImage(t *testing.T) {
 	g.Expect(sc.Image).To(Equal("custom/seictl:v3"))
 }
 
+// The sidecar mirrors the seid containers' home setup: the `home` emptyDir at
+// homeMountPath (giving the nested data-PVC mount a writable-volume parent under
+// the RO rootfs) and HOME pointing at it. Keeps all three seid-touching
+// containers symmetric so a bare seid command resolves $HOME/.sei consistently.
+func TestSidecarContainer_HomeSymmetryWithSeid(t *testing.T) {
+	g := NewWithT(t)
+	node := newValidatorNodeWithOperatorKeyring("validator-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+	g.Expect(sc).NotTo(BeNil())
+
+	g.Expect(envValue(sc.Env, "HOME")).To(Equal(homeMountPath),
+		"sidecar HOME must mirror the seid containers")
+	homeMount := findVolumeMount(sc.VolumeMounts, homeVolumeName)
+	g.Expect(homeMount).NotTo(BeNil(),
+		"sidecar must mount the home emptyDir so the nested data mount has a writable-volume parent")
+	g.Expect(homeMount.MountPath).To(Equal(homeMountPath))
+}
+
 func TestSidecarContainer_RestartPolicyAlways(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
@@ -420,10 +441,12 @@ func TestSidecarContainer_DataVolumeMount(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 
-	g.Expect(sc.VolumeMounts).To(HaveLen(2))
-	g.Expect(sc.VolumeMounts[0].MountPath).To(Equal(dataDir))
-	g.Expect(sc.VolumeMounts[1].Name).To(Equal(sidecarTmpVolumeName))
-	g.Expect(sc.VolumeMounts[1].MountPath).To(Equal("/tmp"))
+	dataMount := findVolumeMount(sc.VolumeMounts, "data")
+	g.Expect(dataMount).NotTo(BeNil())
+	g.Expect(dataMount.MountPath).To(Equal(dataDir))
+	tmpMount := findVolumeMount(sc.VolumeMounts, sidecarTmpVolumeName)
+	g.Expect(tmpMount).NotTo(BeNil())
+	g.Expect(tmpMount.MountPath).To(Equal("/tmp"))
 }
 
 func TestSidecarContainer_CustomPort(t *testing.T) {
@@ -1246,7 +1269,79 @@ func TestSeidInitContainer_BareScript(t *testing.T) {
 		env[e.Name] = e.Value
 	}
 	g.Expect(env).To(HaveKeyWithValue("HOME", homeMountPath),
-		"HOME is a non-data-dir emptyDir; the init script targets --home <dataDir> explicitly")
+		"HOME is the parent of dataDir; the init script targets --home <dataDir> explicitly, and a bare seid would resolve $HOME/.sei onto the same data dir")
+}
+
+// TestHomeDirIsDataDirParent locks the constant relationship the whole
+// home-convergence design rests on: HOME must be the PARENT of the data dir
+// (dataDir == homeMountPath/.sei), so a bare `seid` resolving $HOME/.sei lands
+// on the data dir without nesting (#449). Both derive from platform, so this is
+// belt-and-suspenders against a future edit decoupling them.
+func TestHomeDirIsDataDirParent(t *testing.T) {
+	g := NewWithT(t)
+	g.Expect(dataDir).To(Equal(homeMountPath+"/.sei"),
+		"dataDir must be homeMountPath/.sei so a bare seid resolves $HOME/.sei onto the data dir")
+	g.Expect(dataDir).NotTo(Equal(homeMountPath),
+		"HOME must never equal the data dir itself — that is the #449 nesting bug")
+}
+
+func seidInitScript(t *testing.T, node *seiv1alpha1.SeiNode) string {
+	t.Helper()
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
+	if seidInit == nil {
+		t.Fatal("seid-init container not found")
+	}
+	return seidInit.Command[2]
+}
+
+// TestSeidInitContainer_ClientTomlKeyringBackend asserts the init script writes
+// keyring-backend into client.toml with the backend matching the node's keyring
+// decision: "test" for a stock validator (newGenesisNode is a test-backend
+// validator), "file" for a .secret validator, and absent for a non-validator.
+func TestSeidInitContainer_ClientTomlKeyringBackend(t *testing.T) {
+	clientToml := dataDir + "/config/client.toml"
+
+	t.Run("test-backend validator writes backend=test", func(t *testing.T) {
+		g := NewWithT(t)
+		script := seidInitScript(t, newGenesisNode("v-0", "default"))
+		g.Expect(script).To(ContainSubstring(clientToml))
+		g.Expect(script).To(ContainSubstring(`keyring-backend = "test"`))
+		g.Expect(script).NotTo(ContainSubstring(`keyring-backend = "file"`))
+	})
+
+	t.Run(".secret validator writes backend=file", func(t *testing.T) {
+		g := NewWithT(t)
+		script := seidInitScript(t, newValidatorNodeWithOperatorKeyring("v-0", "default"))
+		g.Expect(script).To(ContainSubstring(clientToml))
+		g.Expect(script).To(ContainSubstring(`keyring-backend = "file"`))
+		g.Expect(script).NotTo(ContainSubstring(`keyring-backend = "test"`))
+	})
+
+	t.Run("non-validator leaves client.toml stock", func(t *testing.T) {
+		g := NewWithT(t)
+		script := seidInitScript(t, newSnapshotNode("fn-0", "default"))
+		g.Expect(script).NotTo(ContainSubstring("client.toml"),
+			"non-validators have no keys; the init script must not touch client.toml")
+		g.Expect(script).NotTo(ContainSubstring("keyring-backend"))
+	})
+}
+
+// TestSeidInitContainer_ClientTomlWriteOutsideGenesisGuard asserts the
+// client.toml keyring-backend write runs on EVERY boot, not just first init —
+// it must sit after the `if [ -f genesis.json ] ... fi` skip-guard so
+// already-provisioned PVCs receive the write. A write trapped inside the guard
+// is the silent-stale-backend regression this guards against.
+func TestSeidInitContainer_ClientTomlWriteOutsideGenesisGuard(t *testing.T) {
+	g := NewWithT(t)
+	script := seidInitScript(t, newGenesisNode("v-0", "default"))
+
+	guardEnd := strings.Index(script, "fi && mkdir -p")
+	g.Expect(guardEnd).To(BeNumerically(">", 0), "genesis skip-guard must be present")
+	writeStart := strings.Index(script, "CLIENT_TOML=")
+	g.Expect(writeStart).To(BeNumerically(">", 0), "client.toml write must be present")
+	g.Expect(writeStart).To(BeNumerically(">", guardEnd),
+		"client.toml write must come after the genesis skip-guard's fi, so it runs on every boot")
 }
 
 func expectSeidNonRootSecurityContext(g Gomega, sc *corev1.SecurityContext) {
@@ -1267,7 +1362,7 @@ func expectSeidNonRootSecurityContext(g Gomega, sc *corev1.SecurityContext) {
 const (
 	keyringTestSeidInitName        = "seid-init"
 	keyringTestSidecarName         = "sei-sidecar"
-	keyringTestMountPath           = "/.sei/keyring-file"
+	keyringTestMountPath           = dataDir + "/" + operatorKeyringDirName
 	keyringTestPassphraseSecret    = "validator-0-opk-pass"
 	keyringTestPassphraseSecretKey = "passphrase"
 )
