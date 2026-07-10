@@ -31,12 +31,16 @@ func TestSeiNetwork_Paused_PropagatesAndBlocksOrchestration(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, snd)).To(Succeed())
 	key := client.ObjectKeyFromObject(snd)
 
-	// 1. Initial settle. Both children exist and the SeiNetwork has
-	//    ConditionPaused=False/NotPaused seeded.
+	// 1. Initial settle — wait for Status.Plan==nil, not just children-exist.
+	//    reconcileSeiNodes creates children before reconcilePlan finishes the
+	//    genesis ceremony, so pausing while the plan is still Active freezes it
+	//    in place (paused short-circuits reconcilePlan, which never drives it to
+	//    nil) and flakes step 3's Consistently(Status.Plan==nil).
 	waitForStatus(t, key, func(s *seiv1alpha1.SeiNetwork) bool {
 		return len(listChildren(t, s)) == 2 &&
+			s.Status.Plan == nil &&
 			pausedCond(s) != nil && pausedCond(s).Status == metav1.ConditionFalse
-	}, "two children exist and ConditionPaused=False is seeded on a fresh SeiNetwork")
+	}, "two children exist, the genesis plan has settled (Status.Plan==nil), and ConditionPaused=False is seeded")
 
 	// 2. Pause the SeiNetwork. ConditionPaused flips True, Status.Phase moves
 	//    to Paused, and children pick up Spec.Paused=true on the next
