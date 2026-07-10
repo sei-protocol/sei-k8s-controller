@@ -180,7 +180,8 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 	endHeight := mustLatestHeight(ctx, t, hc, tmRPC, "post-load")
 	included := includedTxCount(ctx, t, hc, tmRPC, startHeight, endHeight)
 	if included == 0 {
-		t.Errorf("seiload ran %dm against %s but 0 transactions were included in blocks %d..%d — the chain accepted load without including any of it",
+		t.Errorf("seiload ran %dm against %s but 0 transactions were included in blocks %d..%d — "+
+			"the chain accepted load without including any of it",
 			s.durationMin, s.chainID, startHeight, endHeight)
 		return
 	}
@@ -192,7 +193,7 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 // stays unreachable means inclusion cannot be verified, which fails closed.
 func mustLatestHeight(ctx context.Context, t *testing.T, hc *http.Client, tmRPC, phase string) int64 {
 	t.Helper()
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		if h, ok := sei.LatestHeight(ctx, hc, tmRPC); ok {
 			return h
 		}
@@ -237,9 +238,7 @@ func includedTxCount(ctx context.Context, t *testing.T, hc *http.Client, tmRPC s
 	var total int64
 	for lo := from + 1; lo <= to; lo += blockchainPageSize {
 		hi := lo + blockchainPageSize - 1
-		if hi > to {
-			hi = to
-		}
+		hi = min(hi, to)
 		url := fmt.Sprintf("%s/blockchain?minHeight=%d&maxHeight=%d", tmRPC, lo, hi)
 		var page blockchainInfo
 		ok := false
@@ -254,7 +253,8 @@ func includedTxCount(ctx context.Context, t *testing.T, hc *http.Client, tmRPC s
 			t.Fatalf("read %s: unreachable, non-200, or undecodable after retries — cannot verify inclusion", url)
 		}
 		if got, want := int64(len(page.metas())), hi-lo+1; got != want {
-			t.Fatalf("%s returned %d block_metas, want %d — pruned range or error envelope; a short page cannot be trusted as zero", url, got, want)
+			t.Fatalf("%s returned %d block_metas, want %d — pruned range or error envelope; "+
+				"a short page cannot be trusted as zero", url, got, want)
 		}
 		for _, m := range page.metas() {
 			n, err := strconv.ParseInt(m.NumTxs, 10, 64)
