@@ -299,7 +299,8 @@ func DefaultResourcesForMode(mode string, p PlatformConfig) corev1.ResourceRequi
 //
 // Returns an error if the resulting pod-spec violates the operator-keyring
 // containment invariant — only the sidecar container may mount that volume,
-// never seid main or any non-sidecar init container.
+// plus the seid main container when the node has explicitly opted in via
+// .secret.ExposeToSeid. Never a non-sidecar init container, regardless.
 func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.StatefulSet, error) {
 	if p.KubeRBACProxyImage == "" {
 		return nil, fmt.Errorf("images.kubeRBACProxy is not configured in the app-config file")
@@ -311,7 +312,7 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 		return nil, err
 	}
 
-	if err := assertNoOperatorKeyringOnSeidContainers(node, &podSpec); err != nil {
+	if err := assertOperatorKeyringContainment(node, &podSpec); err != nil {
 		return nil, err
 	}
 
@@ -344,27 +345,36 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 	}, nil
 }
 
-// assertNoOperatorKeyringOnSeidContainers fails closed if a future refactor
-// lands operator-keyring material on the seid main container or a non-sidecar
-// init container. Checks both the keyring volume mount AND env-var references
-// to the passphrase Secret — either alone is enough for a compromised seid
-// container to recover the unlocked operator key.
+// assertOperatorKeyringContainment fails closed if a pod-spec lands
+// operator-keyring material anywhere outside its permitted containers: the
+// sidecar always, and the seid main container only when the node has
+// explicitly opted in via .secret.ExposeToSeid. seid-init and every other
+// container are forbidden regardless of exposure — a future refactor
+// mis-mounting the keyring there is still a bug, not a debug convenience.
+// Checks both the keyring volume mount AND env-var references to the
+// passphrase Secret — either alone is enough to recover the unlocked
+// operator key.
 //
 // Scoped to the .secret path: the test-backend keyring shares the data PVC
 // seid already owns, so the guard has nothing to assert. Operators who need
 // keyring/seid isolation set .secret, which engages this check.
-func assertNoOperatorKeyringOnSeidContainers(node *seiv1alpha1.SeiNode, spec *corev1.PodSpec) error {
+func assertOperatorKeyringContainment(node *seiv1alpha1.SeiNode, spec *corev1.PodSpec) error {
 	src := operatorKeyringSecretSource(node)
 	if src == nil {
 		return nil
 	}
 	passphraseSecretName := src.PassphraseSecretRef.SecretName
 
+	permitted := map[string]bool{containerNameSidecar: true}
+	if src.ExposeToSeid {
+		permitted[containerNameSeid] = true
+	}
+
 	check := func(c *corev1.Container) error {
 		for _, m := range c.VolumeMounts {
 			if m.Name == operatorKeyringVolumeName {
 				return fmt.Errorf("pod-spec for %s/%s mounts operator-keyring volume on container %q; "+
-					"operator-keyring is exclusively the sidecar's — mounting on seid would collapse the sidecar/seid trust boundary",
+					"operator-keyring is exclusively the sidecar's (plus seid main when .secret.exposeToSeid is set) — mounting elsewhere would collapse containment",
 					node.Namespace, node.Name, c.Name)
 			}
 		}
@@ -372,14 +382,14 @@ func assertNoOperatorKeyringOnSeidContainers(node *seiv1alpha1.SeiNode, spec *co
 			if ev.ValueFrom != nil && ev.ValueFrom.SecretKeyRef != nil &&
 				ev.ValueFrom.SecretKeyRef.Name == passphraseSecretName {
 				return fmt.Errorf("pod-spec for %s/%s references operator-keyring passphrase Secret %q in env %q on container %q; "+
-					"the passphrase is exclusively the sidecar's",
+					"the passphrase is exclusively the sidecar's (plus seid main when .secret.exposeToSeid is set)",
 					node.Namespace, node.Name, passphraseSecretName, ev.Name, c.Name)
 			}
 		}
 		for _, ef := range c.EnvFrom {
 			if ef.SecretRef != nil && ef.SecretRef.Name == passphraseSecretName {
 				return fmt.Errorf("pod-spec for %s/%s references operator-keyring passphrase Secret %q via envFrom on container %q; "+
-					"the passphrase is exclusively the sidecar's",
+					"the passphrase is exclusively the sidecar's (plus seid main when .secret.exposeToSeid is set)",
 					node.Namespace, node.Name, passphraseSecretName, c.Name)
 			}
 		}
@@ -387,7 +397,7 @@ func assertNoOperatorKeyringOnSeidContainers(node *seiv1alpha1.SeiNode, spec *co
 	}
 
 	for i := range spec.Containers {
-		if spec.Containers[i].Name == containerNameSidecar {
+		if permitted[spec.Containers[i].Name] {
 			continue
 		}
 		if err := check(&spec.Containers[i]); err != nil {
@@ -395,7 +405,7 @@ func assertNoOperatorKeyringOnSeidContainers(node *seiv1alpha1.SeiNode, spec *co
 		}
 	}
 	for i := range spec.InitContainers {
-		if spec.InitContainers[i].Name == containerNameSidecar {
+		if permitted[spec.InitContainers[i].Name] {
 			continue
 		}
 		if err := check(&spec.InitContainers[i]); err != nil {
@@ -808,22 +818,34 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	signingMounts := signingKeyMounts(node)
 	nodeMounts := nodeKeyMounts(node)
-	mounts := make([]corev1.VolumeMount, 0, 2+len(signingMounts)+len(nodeMounts))
+	exposeKeyring := operatorKeyringExposedToSeid(node)
+	mounts := make([]corev1.VolumeMount, 0, 3+len(signingMounts)+len(nodeMounts))
 	mounts = append(mounts, corev1.VolumeMount{Name: "data", MountPath: dataDir})
 	mounts = append(mounts, corev1.VolumeMount{Name: homeVolumeName, MountPath: homeMountPath})
 	mounts = append(mounts, signingMounts...)
 	mounts = append(mounts, nodeMounts...)
+	if exposeKeyring {
+		mounts = append(mounts, operatorKeyringMounts(node)...)
+	}
+
+	// HOME is a non-data-dir emptyDir; TMPDIR is the data dir's tmp. seid is
+	// invoked with an explicit --home <dataDir> (see sidecarWaitCommand), so
+	// HOME never determines seid's home — that's why it's safe off /.sei.
+	env := []corev1.EnvVar{
+		{Name: "HOME", Value: homeMountPath},
+		{Name: "TMPDIR", Value: dataDir + "/tmp"},
+	}
+	if exposeKeyring {
+		// operator.secret.ExposeToSeid: deliberate opt-in, see
+		// operatorKeyringExposedToSeid and assertOperatorKeyringContainment.
+		env = append(env, operatorKeyringEnvVars(node)...)
+	}
+
 	container := corev1.Container{
 		Name:            containerNameSeid,
 		Image:           node.Spec.Image,
 		SecurityContext: seidNonRootSecurityContext(),
-		// HOME is a non-data-dir emptyDir; TMPDIR is the data dir's tmp. seid is
-		// invoked with an explicit --home <dataDir> (see sidecarWaitCommand), so
-		// HOME never determines seid's home — that's why it's safe off /.sei.
-		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: homeMountPath},
-			{Name: "TMPDIR", Value: dataDir + "/tmp"},
-		},
+		Env:             env,
 		// Explicit --home <dataDir>; overridden at the call site by
 		// sidecarWaitCommand, kept here for a coherent standalone container.
 		Command:      []string{"seid"},
@@ -990,8 +1012,9 @@ func nodeKeySecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretNodeKeySo
 
 // operatorKeyringVolumes projects the operator-keyring Secret as a directory
 // under $SEI_HOME/keyring-file/ — the Cosmos SDK file-backend layout.
-// Mounted on the sidecar container only; the seid main and bootstrap pods
-// never see this material.
+// Mounted on the sidecar container; the bootstrap pods never see this
+// material. The seid main container is also excluded unless the node has
+// opted in via .secret.ExposeToSeid — see operatorKeyringExposedToSeid.
 func operatorKeyringVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
 	src := operatorKeyringSecretSource(node)
 	if src == nil {
@@ -1019,7 +1042,9 @@ func operatorKeyringMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
 	}}
 }
 
-// operatorKeyringEnvVars configures the sidecar's keyring. Branches:
+// operatorKeyringEnvVars configures the keyring for whichever container
+// carries it — the sidecar always, and the seid main container too when
+// .secret.ExposeToSeid is set. Branches:
 //
 //   - Non-validator: no env vars.
 //   - Validator with .secret: file backend; passphrase from the referenced
@@ -1066,6 +1091,16 @@ func operatorKeyringSecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretO
 		return nil
 	}
 	return node.Spec.Validator.OperatorKeyring.Secret
+}
+
+// operatorKeyringExposedToSeid reports whether the node has explicitly opted
+// into mounting the operator keyring (and its passphrase) onto the seid main
+// container. Only reachable via the .secret path — the test-backend keyring
+// already lives on the data PVC that seid mounts, so there is nothing to
+// additionally expose there.
+func operatorKeyringExposedToSeid(node *seiv1alpha1.SeiNode) bool {
+	src := operatorKeyringSecretSource(node)
+	return src != nil && src.ExposeToSeid
 }
 
 // sidecarSecurityContext locks the sidecar to non-root, read-only rootfs,

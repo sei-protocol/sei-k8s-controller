@@ -82,8 +82,9 @@ type ValidatorSpec struct {
 	// operations), or as a consensus-signing validator without operatorKeyring
 	// (governance performed out-of-band).
 	//
-	// Mounted exclusively on the sidecar container; the seid main container
-	// and bootstrap pods never carry this material.
+	// Mounted on the sidecar container; the bootstrap pods never carry this
+	// material. The seid main container is also excluded by default — see
+	// SecretOperatorKeyringSource.ExposeToSeid for the explicit opt-in.
 	// +optional
 	OperatorKeyring *OperatorKeyringSource `json:"operatorKeyring,omitempty"`
 }
@@ -218,6 +219,21 @@ type SecretOperatorKeyringSource struct {
 	// PassphraseSecretRef names a separate Secret containing the keyring
 	// unlock passphrase. Required for the file backend.
 	PassphraseSecretRef PassphraseSecretRef `json:"passphraseSecretRef"`
+
+	// ExposeToSeid additionally mounts this keyring directory and its unlock
+	// passphrase onto the seid main container, in addition to the sidecar,
+	// so an operator can run `seid keys` / `seid tx sign` directly against
+	// the operator account for ad-hoc debugging (e.g. `seid keys list`
+	// coming back empty against a mounted data dir).
+	//
+	// This is a deliberate security trade-off, not a routine toggle: it
+	// makes the operator account key reachable from seid's larger,
+	// network-facing attack surface (P2P/RPC) instead of only the sidecar's
+	// loopback-bound one. Set per-node, at the operator's discretion — there
+	// is no chain-id or environment restriction; the node owner is trusted
+	// to make this call. Off by default.
+	// +optional
+	ExposeToSeid bool `json:"exposeToSeid,omitempty"`
 }
 
 // PassphraseSecretRef points at a single data key inside a Secret.
