@@ -75,6 +75,7 @@ type spec struct {
 	runID         string               // unique per run; the sei.io/harness-run label value
 	namespace     string               // shared nightly namespace; "" => the SDK client's resolved default
 	seidImage     string               // seid container image under test
+	sidecarImage  string               // seictl sidecar image under test; "" => platform default
 	validators    int                  // genesis validator count (>= 1)
 	rpcNodes      int                  // standalone RPC followers; named <chain>-rpc-0..N-1
 	timeout       time.Duration        // overall scenario deadline (drives ctx, kept < CronJob activeDeadlineSeconds)
@@ -128,13 +129,14 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 	runLabels := map[string]string{runLabelKey: s.runID}
 
 	net, err := c.CreateNetwork(ctx, sei.NetworkSpec{
-		Name:       s.chainID,
-		Namespace:  s.namespace,
-		Image:      s.seidImage,
-		Validators: s.validators,
-		Labels:     runLabels,
-		Config:     maps.Clone(s.storageConfig),
-		Accounts:   s.accounts,
+		Name:         s.chainID,
+		Namespace:    s.namespace,
+		Image:        s.seidImage,
+		SidecarImage: s.sidecarImage,
+		Validators:   s.validators,
+		Labels:       runLabels,
+		Config:       maps.Clone(s.storageConfig),
+		Accounts:     s.accounts,
 		// Ephemeral chain: cascade-delete the controller-created validators (+
 		// their PVCs) on teardown. The CRD default Retain would orphan them —
 		// they never carry sei.io/harness-run, so neither t.Cleanup nor the
