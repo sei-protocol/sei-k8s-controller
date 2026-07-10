@@ -20,6 +20,7 @@ import (
 
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -31,6 +32,7 @@ import (
 var (
 	testCli client.Client
 	testCtx context.Context
+	testCfg *rest.Config
 )
 
 func TestMain(m *testing.M) {
@@ -65,6 +67,7 @@ func run(m *testing.M) (int, error) {
 	if err != nil {
 		return 1, fmt.Errorf("starting envtest: %w", err)
 	}
+	testCfg = cfg
 	defer func() {
 		if stopErr := testEnv.Stop(); stopErr != nil {
 			fmt.Fprintf(os.Stderr, "envtest stop: %v\n", stopErr)

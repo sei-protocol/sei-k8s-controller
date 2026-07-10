@@ -50,3 +50,11 @@ func (*Provider) RunTask(context.Context, sei.TaskSpec) (sei.TaskHandle, error) 
 func (*Provider) GetTask(context.Context, string, string) (sei.TaskHandle, error) {
 	return nil, ErrNotImplemented
 }
+
+func (*Provider) CreateWorkflow(context.Context, sei.WorkflowSpec) (sei.WorkflowHandle, error) {
+	return nil, ErrNotImplemented
+}
+
+func (*Provider) GetWorkflow(context.Context, string, string) (sei.WorkflowHandle, error) {
+	return nil, ErrNotImplemented
+}

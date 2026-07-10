@@ -194,6 +194,26 @@ func main() {
 				}
 			},
 		},
+		// Adopted-workflow plans execute against the target node's sidecar
+		// (the reconcile's own node), so Resource and the sidecar client
+		// resolve to it — the workflow object is not itself an execution
+		// surface.
+		WorkflowConfigFor: func(
+			_ context.Context, node *seiv1alpha1.SeiNode, _ *seiv1alpha1.SeiNodeTaskWorkflow,
+		) task.ExecutionConfig {
+			return task.ExecutionConfig{
+				BuildSidecarClient: func() (task.SidecarClient, error) {
+					return buildSidecarClient(node)
+				},
+				NewSidecarClient: newSidecarClient,
+				KubeClient:       kc,
+				APIReader:        mgr.GetAPIReader(),
+				Scheme:           mgr.GetScheme(),
+				Resource:         node,
+				Platform:         platformCfg,
+				ObjectStore:      objectStore,
+			}
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "SeiNode")
 		os.Exit(1)

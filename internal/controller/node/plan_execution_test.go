@@ -123,7 +123,10 @@ func newProgressionReconciler(t *testing.T, mock *mockSidecarClient, objs ...cli
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNodeTaskWorkflow{}).
+		WithIndex(&seiv1alpha1.SeiNodeTaskWorkflow{}, workflowTargetNodeIndex, func(o client.Object) []string {
+			return []string{o.(*seiv1alpha1.SeiNodeTaskWorkflow).Spec.Target.NodeRef.Name}
+		}).
 		Build()
 	r := &SeiNodeReconciler{
 		Client:   c,
@@ -792,7 +795,10 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(node).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNodeTaskWorkflow{}).
+		WithIndex(&seiv1alpha1.SeiNodeTaskWorkflow{}, workflowTargetNodeIndex, func(o client.Object) []string {
+			return []string{o.(*seiv1alpha1.SeiNodeTaskWorkflow).Spec.Target.NodeRef.Name}
+		}).
 		Build()
 
 	r := &SeiNodeReconciler{

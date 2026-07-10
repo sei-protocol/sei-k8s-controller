@@ -75,7 +75,7 @@ func providerWith(t *testing.T, hc *http.Client, objs ...runtime.Object) *Provid
 	c := fake.NewClientBuilder().
 		WithScheme(newScheme(t)).
 		WithRuntimeObjects(objs...).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNetwork{}, &seiv1alpha1.SeiNodeTaskWorkflow{}).
 		Build()
 	return &Provider{c: c, httpClient: hc, defaultNS: testNS}
 }

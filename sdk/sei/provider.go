@@ -31,6 +31,8 @@ type Provider interface {
 	GetNode(ctx context.Context, name, namespace string) (NodeHandle, error)
 	RunTask(ctx context.Context, spec TaskSpec) (TaskHandle, error)
 	GetTask(ctx context.Context, name, namespace string) (TaskHandle, error)
+	CreateWorkflow(ctx context.Context, spec WorkflowSpec) (WorkflowHandle, error)
+	GetWorkflow(ctx context.Context, name, namespace string) (WorkflowHandle, error)
 }
 
 // NetworkHandle is the provider-side state the core *Network wraps. It exposes
@@ -68,6 +70,19 @@ type TaskHandle interface {
 	WaitComplete(ctx context.Context) (*TaskOutputs, error)
 	Delete(ctx context.Context) error
 	Object() any // mode-specific raw resource (k8s: *v1alpha1.SeiNodeTask)
+}
+
+// WorkflowHandle is the provider-side state the core *Workflow wraps. Like a
+// task it is driven to a terminal phase (WaitTerminal) rather than exposing
+// long-lived endpoint getters; Phase() is a point read of the last-observed
+// status.phase.
+type WorkflowHandle interface {
+	Name() string
+	Namespace() string
+	Phase() string
+	WaitTerminal(ctx context.Context) error
+	Delete(ctx context.Context) error
+	Object() any // mode-specific raw resource (k8s: *v1alpha1.SeiNodeTaskWorkflow)
 }
 
 // Factory builds a provider. Deferred so registration (init time) does no I/O —

@@ -87,6 +87,7 @@ rules:
   - seinetworks/finalizers
   - seinodes/finalizers
   - seinodetasks/finalizers
+  - seinodetaskworkflows/finalizers
   verbs:
   - update
 - apiGroups:
@@ -95,7 +96,18 @@ rules:
   - seinetworks/status
   - seinodes/status
   - seinodetasks/status
+  - seinodetaskworkflows/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - sei.io
+  resources:
+  - seinodetaskworkflows
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
