@@ -60,6 +60,9 @@ const (
 	// the rationale.
 	homeMountPath  = platform.HomeDir
 	homeVolumeName = "home"
+	// homeEnvVar is the container HOME; set to homeMountPath on every
+	// seid-touching container so a bare seid resolves $HOME/.sei onto the data dir.
+	homeEnvVar = "HOME"
 
 	// seidHomeFlag is the cosmos-sdk flag that sets seid's working dir.
 	seidHomeFlag = "--home"
@@ -636,7 +639,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 		// symmetry (the home mount below is load-bearing, not cosmetic — see
 		// there). It also lets a bare seid exec'd in the sidecar resolve
 		// $HOME/.sei onto the data dir, with $HOME writable under the RO rootfs.
-		corev1.EnvVar{Name: "HOME", Value: homeMountPath},
+		corev1.EnvVar{Name: homeEnvVar, Value: homeMountPath},
 		corev1.EnvVar{Name: "SEI_GENESIS_BUCKET", Value: p.GenesisBucket},
 		corev1.EnvVar{Name: "SEI_GENESIS_REGION", Value: p.GenesisRegion},
 		corev1.EnvVar{Name: "SEI_SNAPSHOT_BUCKET", Value: p.SnapshotBucket},
@@ -844,7 +847,7 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	// sidecarWaitCommand); HOME=homeMountPath additionally makes a bare
 	// `seid keys list`/`seid tx sign` resolve $HOME/.sei onto the data dir.
 	env := []corev1.EnvVar{
-		{Name: "HOME", Value: homeMountPath},
+		{Name: homeEnvVar, Value: homeMountPath},
 		{Name: "TMPDIR", Value: dataDir + "/tmp"},
 	}
 	if seidMountEnabled {
@@ -906,7 +909,7 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 			"/bin/sh", "-c", script,
 		},
 		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: homeMountPath},
+			{Name: homeEnvVar, Value: homeMountPath},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},

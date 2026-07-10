@@ -250,7 +250,7 @@ func bootstrapEnv(c *corev1.Container, name string) string {
 // nesting bug and, mid-migration, risks a validator-data wipe.
 func TestBootstrapJob_HomeAndDataDir(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "v-0", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "v-0", Namespace: testReplaceNs},
 		Spec: seiv1alpha1.SeiNodeSpec{
 			ChainID:   "sei-test",
 			Image:     "ghcr.io/sei-protocol/seid:latest",
