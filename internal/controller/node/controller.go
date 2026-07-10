@@ -29,6 +29,7 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/peering"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 const (
@@ -53,11 +54,19 @@ type SeiNodeReconciler struct {
 	// tolerated: an EC2Tags source declared with no resolver preserves the
 	// prior peer set rather than erroring (EC2Tags is vestigial today).
 	EC2Peers peering.EC2Resolver
+	// WorkflowConfigFor builds the task.ExecutionConfig for an adopted
+	// workflow's plan execution. The target node (this reconcile's node) is
+	// passed so the sidecar client and Resource resolve to it. Wired by
+	// cmd/main.go with the same factories as the node plan executor.
+	WorkflowConfigFor func(ctx context.Context, node *seiv1alpha1.SeiNode, wf *seiv1alpha1.SeiNodeTaskWorkflow) task.ExecutionConfig
 }
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=sei.io,resources=seinodetaskworkflows,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=sei.io,resources=seinodetaskworkflows/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=sei.io,resources=seinodetaskworkflows/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -139,7 +148,16 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// gate is blocked in the same window, STS re-creation waits for the gate's
 	// poll to re-resolve.
 	holdInitialSTS := planner.StateSyncBlocksPlan(node) && node.Status.StatefulSet == nil
-	if !holdInitialSTS {
+	// No roll mid-hold: a workflow ACTIVELY executing may have seid gated and its
+	// data directory mid-wipe. reconcileStatefulSet's unconditional SSA would
+	// push a spec.image template change immediately, defeating the drift
+	// suppression below (which only gates plan-driven replace-pod, not the direct
+	// apply). Skip the apply only while the adopted workflow is executing; a
+	// parked-Failed hold releases the skip so sidecar hotfixes and impostor-STS
+	// recovery aren't suspended indefinitely (the readiness gate keeps seid held,
+	// and a pod replacement of a parked node is in the safe interrupt class).
+	holdForWorkflow := node.Status.AdoptedWorkflow != nil && !adoptedWorkflowParkedFailed(node)
+	if !holdInitialSTS && !holdForWorkflow {
 		if err := r.reconcileStatefulSet(ctx, node); err != nil {
 			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
 		}
@@ -156,33 +174,29 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
 
-	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
-	// ResolvePlan runs unconditionally: it clears terminal plans and drives
-	// non-state-sync work. Its internal fail-closed gate declines to build a
-	// state-sync plan when StateSyncReady isn't True.
-	if err := r.Planner.ResolvePlan(ctx, node); err != nil {
-		return ctrl.Result{}, fmt.Errorf("resolving plan: %w", err)
+	// Workflow adoption/execution occupies the node's single plan slot. When a
+	// workflow occupies the node (driving or parked-held), drift planning and
+	// sidecar reapproval are suppressed so an image roll or mark-ready cannot
+	// disturb the recipe. The adopting reconcile is self-contained (node-first
+	// pointer patch) and returns handled.
+	suppressDrift, wfResult, handled, wfErr := r.reconcileWorkflow(ctx, node, before, statusBase)
+	if wfErr != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling workflow: %w", wfErr)
 	}
-
-	r.emitSidecarReadinessEvent(node, prevSidecar)
-	r.emitStateSyncBlockedEvent(node, prevStateSync)
+	if handled {
+		return wfResult, nil
+	}
 
 	var result ctrl.Result
 	var execErr error
 
-	if !planAlreadyActive && node.Status.Plan != nil {
-		// Requeue immediately so the plan is persisted and visible to
-		// observers before execution begins on the next tick.
-		result = planner.ResultRequeueImmediate
-	} else if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
-		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
-	}
-
-	// Set only when Running and never cleared on a transient non-Running: the
-	// URLs are identity-derived, so a Running->update->Running cycle keeps them
-	// stable and clearing would flap .status.endpoint for consumers.
-	if node.Status.Phase == seiv1alpha1.PhaseRunning {
-		node.Status.Endpoint = composeNodeEndpoints(node)
+	if suppressDrift {
+		result = wfResult
+	} else {
+		var fatal error
+		if result, execErr, fatal = r.resolveDriftPlan(ctx, node, prevSidecar, prevStateSync); fatal != nil {
+			return ctrl.Result{}, fatal
+		}
 	}
 
 	if !apiequality.Semantic.DeepEqual(before.Status, node.Status) {
@@ -200,22 +214,65 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	r.emitPhaseTransition(ctx, node, observedPhase)
 
-	// Running nodes with no active plan requeue on a steady-state interval.
-	// Spec changes trigger immediate reconciles via GenerationChangedPredicate.
-	if node.Status.Phase == seiv1alpha1.PhaseRunning && (node.Status.Plan == nil || node.Status.Plan.Phase != seiv1alpha1.TaskPlanActive) {
-		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
-	}
+	return steadyStateRequeue(node, result, suppressDrift, stateSyncBlocked), nil
+}
 
-	// A blocked state-sync node (fail-closed or transient) builds no plan to
-	// drive a requeue, and the syncer file is a mounted volume with no watch.
-	// Poll so the gate re-resolves and unblocks once GitOps provisions or fixes
-	// the syncers. IsZero defers to any stronger requeue above (running-node
-	// poll, plan execution), so an active-plan node is unaffected.
+// steadyStateRequeue picks the requeue cadence once plan work is done: a
+// Running node with no active plan (and a blocked state-sync node, whose syncer
+// file is a mounted volume with no watch) polls on statusPollInterval so the
+// gate re-resolves. A workflow-occupied node keeps result (its executor
+// cadence). IsZero defers to any stronger requeue already set.
+func steadyStateRequeue(node *seiv1alpha1.SeiNode, result ctrl.Result, suppressDrift, stateSyncBlocked bool) ctrl.Result {
+	if suppressDrift {
+		return result
+	}
+	if node.Status.Phase == seiv1alpha1.PhaseRunning &&
+		(node.Status.Plan == nil || node.Status.Plan.Phase != seiv1alpha1.TaskPlanActive) {
+		return ctrl.Result{RequeueAfter: statusPollInterval}
+	}
 	if stateSyncBlocked && result.IsZero() {
-		return ctrl.Result{RequeueAfter: statusPollInterval}, nil
+		return ctrl.Result{RequeueAfter: statusPollInterval}
+	}
+	return result
+}
+
+// resolveDriftPlan runs the spec-drift plan lifecycle for a node not occupied
+// by a workflow: resolve (clearing terminal plans, building drift plans),
+// then execute the active plan. It mutates node.Status in-memory and returns
+// (requeue result, execErr from the executor, fatal error). A fatal error
+// aborts the reconcile before the status flush, matching the prior inline
+// behavior; execErr rides the flush and is returned to controller-runtime.
+func (r *SeiNodeReconciler) resolveDriftPlan(
+	ctx context.Context,
+	node *seiv1alpha1.SeiNode,
+	prevSidecar, prevStateSync *metav1.Condition,
+) (result ctrl.Result, execErr, fatal error) {
+	planAlreadyActive := node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive
+	// ResolvePlan runs unconditionally: it clears terminal plans and drives
+	// non-state-sync work. Its internal fail-closed gate declines to build a
+	// state-sync plan when StateSyncReady isn't True.
+	if err := r.Planner.ResolvePlan(ctx, node); err != nil {
+		return ctrl.Result{}, nil, fmt.Errorf("resolving plan: %w", err)
 	}
 
-	return result, nil
+	r.emitSidecarReadinessEvent(node, prevSidecar)
+	r.emitStateSyncBlockedEvent(node, prevStateSync)
+
+	if !planAlreadyActive && node.Status.Plan != nil {
+		// Requeue immediately so the plan is persisted and visible to observers
+		// before execution begins on the next tick.
+		result = planner.ResultRequeueImmediate
+	} else if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
+		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
+	}
+
+	// Set only when Running and never cleared on a transient non-Running: the
+	// URLs are identity-derived, so a Running->update->Running cycle keeps them
+	// stable and clearing would flap .status.endpoint for consumers.
+	if node.Status.Phase == seiv1alpha1.PhaseRunning {
+		node.Status.Endpoint = composeNodeEndpoints(node)
+	}
+	return result, execErr, nil
 }
 
 // emitPhaseTransition records phase-transition metrics and a PhaseTransition
@@ -251,14 +308,30 @@ func (r *SeiNodeReconciler) emitPhaseTransition(ctx context.Context, node *seiv1
 	}
 }
 
-// SetupWithManager sets up the controller with the Manager.
+// SetupWithManager sets up the controller with the Manager. It indexes
+// SeiNodeTaskWorkflows by target node and watches them so a node wakes to
+// adopt, drive, or finalize a workflow aimed at it (no GenerationChanged
+// predicate: status and deletion transitions must wake the node too).
 func (r *SeiNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(),
+		&seiv1alpha1.SeiNodeTaskWorkflow{}, workflowTargetNodeIndex,
+		func(o client.Object) []string {
+			wf, ok := o.(*seiv1alpha1.SeiNodeTaskWorkflow)
+			if !ok {
+				return nil
+			}
+			return []string{wf.Spec.Target.NodeRef.Name}
+		}); err != nil {
+		return fmt.Errorf("indexing workflows by target node: %w", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&seiv1alpha1.SeiNode{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&batchv1.Job{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Watches(&seiv1alpha1.SeiNodeTaskWorkflow{}, &workflowTargetHandler{}).
 		Named(seiNodeControllerName).
 		Complete(r)
 }
@@ -286,6 +359,13 @@ func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1a
 
 	if err := r.deleteNodeDataPVC(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("deleting data PVC: %w", err)
+	}
+
+	// Release the deletion gate on every workflow targeting this node: a gone
+	// node has no seid to hold, so the hold finalizer would otherwise deadlock
+	// those workflows permanently.
+	if err := r.releaseWorkflowFinalizersForNode(ctx, node); err != nil {
+		return ctrl.Result{}, fmt.Errorf("releasing workflow finalizers: %w", err)
 	}
 
 	cleanupNodeMetrics(node.Namespace, node.Name)

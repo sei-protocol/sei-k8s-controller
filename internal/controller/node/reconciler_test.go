@@ -46,7 +46,11 @@ func newNodeReconcilerWithSidecar(t *testing.T, mock *mockSidecarClient, objs ..
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}, &seiv1alpha1.SeiNodeTaskWorkflow{}).
+		WithIndex(&seiv1alpha1.SeiNodeTaskWorkflow{}, workflowTargetNodeIndex, func(o client.Object) []string {
+			wf := o.(*seiv1alpha1.SeiNodeTaskWorkflow)
+			return []string{wf.Spec.Target.NodeRef.Name}
+		}).
 		Build()
 	r := &SeiNodeReconciler{
 		Client:   c,

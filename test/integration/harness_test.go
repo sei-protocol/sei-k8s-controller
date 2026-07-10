@@ -1,9 +1,9 @@
 //go:build integration
 
 // Package integration holds the Sei nightly integration suites as plain `go test`
-// targets (TestBenchmark, TestChaosSuite, TestChainUpgrade, TestRelease), selected
-// with -run. Orchestration is statement order in one process; cross-step state is
-// local Go values, not external config.
+// targets (TestBenchmark, TestChaosSuite, TestChainUpgrade, TestRelease,
+// TestWorkflowStateSync), selected with -run. Orchestration is statement order in
+// one process; cross-step state is local Go values, not external config.
 //
 // Everything lives in *_test.go behind //go:build integration, so it never links
 // into a production binary and is excluded from the default `go test ./...`. The

@@ -200,15 +200,25 @@ func sidecarTask[T sidecar.TaskBuilder](fireAndForget bool) taskDeserializer {
 // registry maps task type strings to their deserializers.
 var registry = map[string]taskDeserializer{
 	// Sidecar tasks
-	sidecar.TaskTypeSnapshotRestore:        sidecarTask[sidecar.SnapshotRestoreTask](false),
-	sidecar.TaskTypeConfigureStateSync:     sidecarTask[sidecar.ConfigureStateSyncTask](false),
-	sidecar.TaskTypeAwaitCondition:         sidecarTask[sidecar.AwaitConditionTask](false),
-	sidecar.TaskTypeConfigApply:            sidecarTask[configApplyTask](false),
-	sidecar.TaskTypeConfigPatch:            sidecarTask[ConfigPatchTask](false),
-	sidecar.TaskTypeConfigValidate:         sidecarTask[sidecar.ConfigValidateTask](true),
-	sidecar.TaskTypeConfigureGenesis:       sidecarTask[sidecar.ConfigureGenesisTask](false),
-	sidecar.TaskTypeRestartSeid:            sidecarTask[sidecar.RestartSeidTask](false),
-	sidecar.TaskTypeMarkReady:              sidecarTask[sidecar.MarkReadyTask](true),
+	sidecar.TaskTypeSnapshotRestore:    sidecarTask[sidecar.SnapshotRestoreTask](false),
+	sidecar.TaskTypeConfigureStateSync: sidecarTask[sidecar.ConfigureStateSyncTask](false),
+	sidecar.TaskTypeAwaitCondition:     sidecarTask[sidecar.AwaitConditionTask](false),
+	sidecar.TaskTypeConfigApply:        sidecarTask[configApplyTask](false),
+	sidecar.TaskTypeConfigPatch:        sidecarTask[ConfigPatchTask](false),
+	sidecar.TaskTypeConfigValidate:     sidecarTask[sidecar.ConfigValidateTask](true),
+	sidecar.TaskTypeConfigureGenesis:   sidecarTask[sidecar.ConfigureGenesisTask](false),
+	sidecar.TaskTypeRestartSeid:        sidecarTask[sidecar.RestartSeidTask](false),
+	sidecar.TaskTypeMarkReady:          sidecarTask[sidecar.MarkReadyTask](true),
+	// mark-not-ready is NOT fire-and-forget despite being mark-ready's sibling:
+	// its handler does real work (purging mark-ready records) and the engine
+	// flips readiness false only on handler success. Polling it means the
+	// executor awaits that success before advancing to stop-seid -> reset-data,
+	// which is exactly what keeps seid from booting onto a half-wiped dir. A
+	// fire-and-forget classification here would be a released-onto-wiped-data
+	// bug. stop-seid and reset-data likewise report real terminal state.
+	sidecar.TaskTypeMarkNotReady:           sidecarTask[sidecar.MarkNotReadyTask](false),
+	sidecar.TaskTypeStopSeid:               sidecarTask[sidecar.StopSeidTask](false),
+	sidecar.TaskTypeResetData:              sidecarTask[sidecar.ResetDataTask](false),
 	sidecar.TaskTypeSnapshotUpload:         sidecarTask[sidecar.SnapshotUploadTask](true),
 	sidecar.TaskTypeGenerateIdentity:       sidecarTask[sidecar.GenerateIdentityTask](false),
 	sidecar.TaskTypeGenerateGentx:          sidecarTask[sidecar.GenerateGentxTask](false),

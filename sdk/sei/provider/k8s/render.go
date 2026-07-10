@@ -178,3 +178,70 @@ func renderTask(spec sei.TaskSpec, namespace string) *seiv1alpha1.SeiNodeTask {
 	}
 	return task
 }
+
+// renderWorkflow builds the SeiNodeTaskWorkflow from a WorkflowSpec. Mirrors
+// renderTask: reuse the shared SeiNodeTaskTarget (nodeRef + requirePhase gating)
+// and translate the SDK-native recipe payload to the CRD's. The StateSync
+// ConfigPatch values arrive as Go `any` (core stays apimachinery-free) and are
+// marshaled to apiextensionsv1.JSON here, so a bool stays a JSON bool.
+func renderWorkflow(spec sei.WorkflowSpec, namespace string) (*seiv1alpha1.SeiNodeTaskWorkflow, error) {
+	target := seiv1alpha1.SeiNodeTaskTarget{
+		NodeRef: seiv1alpha1.SeiNodeTaskNodeRef{Name: spec.Node},
+	}
+	if spec.RequirePhase != "" {
+		target.RequirePhase = seiv1alpha1.SeiNodePhase(spec.RequirePhase)
+	}
+	if spec.RequirePhaseTimeout > 0 {
+		target.RequirePhaseTimeout = &metav1.Duration{Duration: spec.RequirePhaseTimeout}
+	}
+
+	wf := &seiv1alpha1.SeiNodeTaskWorkflow{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: seiv1alpha1.GroupVersion.String(),
+			Kind:       "SeiNodeTaskWorkflow",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      spec.Name,
+			Namespace: namespace,
+			Labels:    maps.Clone(spec.Labels), // nil-safe; caller GC/run-id selector
+		},
+		Spec: seiv1alpha1.SeiNodeTaskWorkflowSpec{
+			Kind:   seiv1alpha1.SeiNodeTaskWorkflowKind(spec.Kind),
+			Target: target,
+		},
+	}
+
+	if ss := spec.StateSync; ss != nil {
+		patch, err := renderConfigPatch(ss.ConfigPatch)
+		if err != nil {
+			return nil, err
+		}
+		wf.Spec.StateSync = &seiv1alpha1.StateSyncWorkflow{
+			ConfigPatch: patch,
+			RpcServers:  ss.RpcServers,
+		}
+	}
+	return wf, nil
+}
+
+// renderConfigPatch marshals the SDK's file -> key -> any config patch into the
+// CRD's file -> key -> JSON shape. Returns nil for an empty patch (the recipe
+// then omits the config-patch step entirely).
+func renderConfigPatch(in map[string]map[string]any) (map[string]map[string]apiextensionsv1.JSON, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]map[string]apiextensionsv1.JSON, len(in))
+	for file, section := range in {
+		sec := make(map[string]apiextensionsv1.JSON, len(section))
+		for key, val := range section {
+			raw, err := json.Marshal(val)
+			if err != nil {
+				return nil, err
+			}
+			sec[key] = apiextensionsv1.JSON{Raw: raw}
+		}
+		out[file] = sec
+	}
+	return out, nil
+}

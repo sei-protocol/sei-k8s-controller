@@ -122,6 +122,27 @@ func (p *Provider) GetTask(ctx context.Context, name, namespace string) (sei.Tas
 	return &taskHandle{p: p, namespace: ns, name: name, task: task}, nil
 }
 
+func (p *Provider) CreateWorkflow(ctx context.Context, spec sei.WorkflowSpec) (sei.WorkflowHandle, error) {
+	ns := p.ns(spec.Namespace)
+	wf, err := renderWorkflow(spec, ns)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.apply(ctx, wf, fmt.Sprintf("SeiNodeTaskWorkflow %s/%s", ns, wf.Name)); err != nil {
+		return nil, err
+	}
+	return &workflowHandle{p: p, namespace: ns, name: wf.Name, wf: wf}, nil
+}
+
+func (p *Provider) GetWorkflow(ctx context.Context, name, namespace string) (sei.WorkflowHandle, error) {
+	ns := p.ns(namespace)
+	wf := &seiv1alpha1.SeiNodeTaskWorkflow{}
+	if err := p.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, wf); err != nil {
+		return nil, err
+	}
+	return &workflowHandle{p: p, namespace: ns, name: name, wf: wf}, nil
+}
+
 // ns returns specNS or the provider default when specNS is empty.
 func (p *Provider) ns(specNS string) string {
 	if specNS != "" {

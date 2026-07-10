@@ -37,6 +37,15 @@
 //	Phase, the ordered Tasks, TargetPhase, FailedPhase, and on failure
 //	FailedTaskIndex/FailedTaskDetail.
 //
+//	A third owner is SeiNodeTaskWorkflow: the WorkflowPlanner (workflow.go)
+//	builds a workflow's plan, which the SeiNode controller persists into and
+//	drives from the WORKFLOW's .status.plan via the same generic Executor
+//	(the target node is the reconcile's own node). Workflow plans always leave
+//	TargetPhase and FailedPhase empty — a workflow never drives a node phase (a
+//	failure parks the node held; it does not fail the node). The node
+//	controller, not the planner, owns the workflow's conditions and the
+//	SeiNode WorkflowInProgress condition.
+//
 // PlannedTask: one step of a TaskPlan. Built by buildPlannedTask with a
 //
 //	deterministic ID (task.DeterministicTaskID), serialized params, and a

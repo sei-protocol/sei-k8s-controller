@@ -237,6 +237,86 @@ func (h *taskHandle) Delete(ctx context.Context) error {
 // Object returns the cached *v1alpha1.SeiNodeTask — the k8s raw-CR escape hatch.
 func (h *taskHandle) Object() any { return h.task }
 
+// workflowHandle is the provider-side state behind a *sei.Workflow. It caches
+// the last-read SeiNodeTaskWorkflow; WaitTerminal refreshes that cache as it
+// polls to a terminal phase.
+type workflowHandle struct {
+	p         *Provider
+	namespace string
+	name      string
+	wf        *seiv1alpha1.SeiNodeTaskWorkflow
+}
+
+func (h *workflowHandle) Name() string      { return h.name }
+func (h *workflowHandle) Namespace() string { return h.namespace }
+
+// Phase is the last-observed status.phase; "" before the controller writes it.
+func (h *workflowHandle) Phase() string {
+	if h.wf == nil {
+		return ""
+	}
+	return string(h.wf.Status.Phase)
+}
+
+// WaitTerminal blocks until the workflow reaches Complete (nil) or fails fast on
+// Failed (returning the recorded failure reason). The caller's ctx is the
+// budget; a deadline surfaces as context.DeadlineExceeded (sei.IsTimeout). A
+// resync recipe runs for minutes, so transient read errors are tolerated (the
+// wait keeps polling) — only a terminal read error aborts.
+func (h *workflowHandle) WaitTerminal(ctx context.Context) error {
+	resource := fmt.Sprintf("SeiNodeTaskWorkflow %s/%s", h.namespace, h.name)
+	return wait.PollUntilContextCancel(ctx, pollInterval, true, func(ctx context.Context) (bool, error) {
+		wf := &seiv1alpha1.SeiNodeTaskWorkflow{}
+		if err := h.p.c.Get(ctx, types.NamespacedName{Namespace: h.namespace, Name: h.name}, wf); err != nil {
+			if retryableGet(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("%s: reading status: %w", resource, err)
+		}
+		h.wf = wf
+		switch wf.Status.Phase {
+		case seiv1alpha1.SeiNodeTaskWorkflowPhaseComplete:
+			return true, nil
+		case seiv1alpha1.SeiNodeTaskWorkflowPhaseFailed:
+			return false, fmt.Errorf("%s: failed: %s", resource, workflowFailureReason(wf))
+		default:
+			return false, nil
+		}
+	})
+}
+
+// Delete removes the SeiNodeTaskWorkflow. Idempotent: a NotFound is success. A
+// workflow that placed a durable hold carries the controller's finalizer, so the
+// object may linger Terminating until the controller clears it (or an operator
+// force-annotates) — the delete call still returns success.
+func (h *workflowHandle) Delete(ctx context.Context) error {
+	obj := &seiv1alpha1.SeiNodeTaskWorkflow{ObjectMeta: metav1.ObjectMeta{Name: h.name, Namespace: h.namespace}}
+	if err := h.p.c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("SeiNodeTaskWorkflow %s/%s: delete: %w", h.namespace, h.name, err)
+	}
+	return nil
+}
+
+// Object returns the cached *v1alpha1.SeiNodeTaskWorkflow — the k8s raw-CR escape.
+func (h *workflowHandle) Object() any { return h.wf }
+
+// workflowFailureReason extracts a human reason from a failed workflow: the
+// Failed condition message (the controller's stable reason), else the plan's
+// recorded task-failure detail, else the phase so the error always carries some
+// triage signal.
+func workflowFailureReason(wf *seiv1alpha1.SeiNodeTaskWorkflow) string {
+	for _, c := range wf.Status.Conditions {
+		if c.Type == seiv1alpha1.ConditionSeiNodeTaskWorkflowFailed &&
+			c.Status == metav1.ConditionTrue && c.Message != "" {
+			return c.Message
+		}
+	}
+	if p := wf.Status.Plan; p != nil && p.FailedTaskDetail != nil {
+		return fmt.Sprintf("task %s: %s", p.FailedTaskDetail.Type, p.FailedTaskDetail.Error)
+	}
+	return fmt.Sprintf("no failure reason recorded (phase=%s)", wf.Status.Phase)
+}
+
 // retryableGet reports whether a Get error should be tolerated by continuing to
 // poll rather than aborting the wait: NotFound (post-create cache lag, or a task
 // briefly absent from the informer) and the transient server-side classes a

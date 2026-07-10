@@ -1,0 +1,374 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: seinodetaskworkflows.sei.io
+spec:
+  group: sei.io
+  names:
+    kind: SeiNodeTaskWorkflow
+    listKind: SeiNodeTaskWorkflowList
+    plural: seinodetaskworkflows
+    shortNames:
+    - sntw
+    singular: seinodetaskworkflow
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.kind
+      name: Kind
+      type: string
+    - jsonPath: .spec.target.nodeRef.name
+      name: Target
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SeiNodeTaskWorkflow composes existing node tasks into a named, multi-step
+          recipe against a single SeiNode. It is a request object with no controller
+          of its own; the SeiNode controller adopts and executes it.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SeiNodeTaskWorkflowSpec is the desired state of a SeiNodeTaskWorkflow: a
+              discriminated union selecting one reviewed recipe against one target node.
+
+              The spec is a one-way door: field names are locked at v1alpha1 and the
+              recipe is immutable after creation. Its typed parameters are snapshotted
+              into the compiled plan at adoption and never re-read, so a workflow behaves
+              as a pure request.
+            properties:
+              kind:
+                description: Kind selects the recipe. Immutable after creation.
+                enum:
+                - StateSync
+                type: string
+              stateSync:
+                description: StateSync is the payload for kind=StateSync. Immutable
+                  after creation.
+                properties:
+                  configPatch:
+                    additionalProperties:
+                      additionalProperties:
+                        x-kubernetes-preserve-unknown-fields: true
+                      type: object
+                    description: |-
+                      ConfigPatch is merged into the node's seid config files before the
+                      resync, keyed file -> section-or-key -> value (the config-patch task's
+                      wire shape). For STO-624 this carries app.toml [state-store]
+                      evm-ss-split = true.
+                    type: object
+                  rpcServers:
+                    description: |-
+                      RpcServers overrides witness resolution. When empty, the node's resolved
+                      state-syncers are used and the two-witness fail-closed floor holds. When
+                      set, it must itself carry >= 2 entries or the plan refuses to compile.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              target:
+                description: |-
+                  Target identifies the single SeiNode this workflow operates on, with the
+                  same requirePhase gating SeiNodeTask uses. Immutable after creation.
+                properties:
+                  nodeRef:
+                    description: NodeRef is a same-namespace reference to a SeiNode.
+                    properties:
+                      name:
+                        description: Name of the SeiNode in the same namespace as
+                          the SeiNodeTask.
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  requirePhase:
+                    default: Running
+                    description: |-
+                      RequirePhase is the SeiNode phase that must be observed on the target
+                      before the task is dispatched. When the target is not in this phase
+                      within RequirePhaseTimeout, the task is failed terminally.
+                    enum:
+                    - Pending
+                    - Initializing
+                    - Running
+                    - Failed
+                    - Terminating
+                    type: string
+                  requirePhaseTimeout:
+                    default: 5m
+                    description: |-
+                      RequirePhaseTimeout bounds how long the reconciler waits for the
+                      target to reach RequirePhase before failing the task. Default 5m.
+                    type: string
+                required:
+                - nodeRef
+                type: object
+            required:
+            - kind
+            - target
+            type: object
+            x-kubernetes-validations:
+            - message: exactly one recipe (stateSync) must be set
+              rule: '(has(self.stateSync) ? 1 : 0) == 1'
+            - message: spec.stateSync is required when kind=StateSync
+              rule: self.kind != 'StateSync' || has(self.stateSync)
+            - message: spec.kind is immutable
+              rule: self.kind == oldSelf.kind
+            - message: spec.target is immutable
+              rule: self.target == oldSelf.target
+            - message: spec.stateSync is immutable
+              rule: self.stateSync == oldSelf.stateSync
+          status:
+            description: |-
+              SeiNodeTaskWorkflowStatus is the observed state, written solely by the
+              SeiNode controller (single writer). Plan is authoritative for how far the
+              recipe has progressed; the node's status.adoptedWorkflow pointer is
+              authoritative for which node owns it — orthogonal facts, so nothing mirrors
+              and nothing diverges.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the spec generation the controller last acted on.
+                  Stamped explicitly by the node controller (the plan executor does not
+                  touch it).
+                format: int64
+                type: integer
+              phase:
+                description: Phase is the high-level lifecycle state.
+                enum:
+                - Pending
+                - Running
+                - Complete
+                - Failed
+                type: string
+              plan:
+                description: |-
+                  Plan is the compiled recipe — the same TaskPlan the node/network
+                  controllers persist, driven by the generic plan executor. TargetPhase
+                  and FailedPhase are always empty: a workflow never drives a node phase.
+                properties:
+                  failedPhase:
+                    description: |-
+                      FailedPhase is the SeiNodePhase the executor sets on the owning
+                      resource when the plan fails terminally. When empty, the executor
+                      does not perform a phase transition on failure.
+                    enum:
+                    - Pending
+                    - Initializing
+                    - Running
+                    - Failed
+                    - Terminating
+                    type: string
+                  failedTaskDetail:
+                    description: FailedTaskDetail records diagnostics about the task
+                      that caused the plan to fail.
+                    properties:
+                      error:
+                        description: Error is the error message from the failed execution.
+                        type: string
+                      id:
+                        description: ID is the task ID that failed.
+                        type: string
+                      maxRetries:
+                        description: MaxRetries is the configured retry limit.
+                        type: integer
+                      retryCount:
+                        description: RetryCount is the number of retries that were
+                          attempted.
+                        type: integer
+                      type:
+                        description: Type is the task type that failed.
+                        type: string
+                    required:
+                    - error
+                    - id
+                    - maxRetries
+                    - retryCount
+                    - type
+                    type: object
+                  failedTaskIndex:
+                    description: FailedTaskIndex is the index of the task that caused
+                      the plan to fail.
+                    type: integer
+                  id:
+                    description: ID is a unique identifier for this plan instance.
+                    type: string
+                  phase:
+                    description: Phase is the overall state of the plan.
+                    enum:
+                    - Active
+                    - Complete
+                    - Failed
+                    type: string
+                  targetPhase:
+                    description: |-
+                      TargetPhase is the SeiNodePhase the executor sets on the owning
+                      resource when the plan completes successfully. When empty, the
+                      executor does not perform a phase transition.
+                    enum:
+                    - Pending
+                    - Initializing
+                    - Running
+                    - Failed
+                    - Terminating
+                    type: string
+                  tasks:
+                    description: Tasks is the ordered list of tasks to execute.
+                    items:
+                      description: |-
+                        PlannedTask is a single task within a TaskPlan. Each task carries its full
+                        payload so the plan executor can deserialize and run it without needing
+                        access to the planner or sidecar client factory.
+                      properties:
+                        error:
+                          description: Error is the error message if the task failed.
+                          type: string
+                        id:
+                          description: |-
+                            ID is a deterministic UUID v5 derived from planID/taskType/planIndex.
+                            Used as the key for sidecar task submission and status polling.
+                          type: string
+                        maxRetries:
+                          description: |-
+                            MaxRetries is the maximum number of times this task can be retried after
+                            failure. When 0 (default), failures are terminal. Used for tasks like
+                            configure-genesis that may need to wait for upstream data to appear.
+                          type: integer
+                        params:
+                          description: |-
+                            Params is the opaque JSON payload for this task. Deserialized at
+                            execution time by task.Deserialize into the concrete task type.
+                          x-kubernetes-preserve-unknown-fields: true
+                        retryCount:
+                          description: RetryCount is the current retry attempt number.
+                          type: integer
+                        status:
+                          description: Status is the current state of this task.
+                          enum:
+                          - Pending
+                          - Running
+                          - Complete
+                          - Failed
+                          type: string
+                        submittedAt:
+                          description: |-
+                            SubmittedAt is when the task was first submitted to the sidecar.
+                            Nil means the task has not been submitted yet.
+                          format: date-time
+                          type: string
+                        type:
+                          description: Type identifies the task (e.g. "snapshot-restore",
+                            "config-patch").
+                          type: string
+                      required:
+                      - id
+                      - status
+                      - type
+                      type: object
+                    type: array
+                required:
+                - phase
+                - tasks
+                type: object
+              targetFirstObservedAt:
+                description: |-
+                  TargetFirstObservedAt is when the node first observed this workflow while
+                  the target was not yet in the required phase. It anchors the
+                  spec.target.requirePhaseTimeout budget; cleared once the target is met.
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -214,6 +214,21 @@ type FailedTaskInfo struct {
 	MaxRetries int `json:"maxRetries"`
 }
 
+// AdoptedWorkflowRef is a SeiNode's durable pointer to the
+// SeiNodeTaskWorkflow it is executing. Same-namespace by construction.
+type AdoptedWorkflowRef struct {
+	// Name of the adopted SeiNodeTaskWorkflow in this node's namespace.
+	Name string `json:"name"`
+
+	// UID pins the specific object. On re-adoption after a restart the
+	// controller matches by UID so a deleted-and-recreated workflow of the
+	// same name is not mistaken for the one originally adopted.
+	UID types.UID `json:"uid"`
+
+	// AdoptedAt is when the node stamped this pointer.
+	AdoptedAt metav1.Time `json:"adoptedAt"`
+}
+
 // TaskPlan tracks an ordered sequence of tasks that the controller
 // executes to drive a node toward a target state.
 type TaskPlan struct {
@@ -300,6 +315,32 @@ const (
 	// canonical-syncer set, and the sidecar establishes the trust point from them
 	// as it does today.
 	ConditionStateSyncReady = "StateSyncReady"
+
+	// ConditionWorkflowInProgress reports whether the node is currently driving
+	// an adopted SeiNodeTaskWorkflow. InProgress-style: True is the exception,
+	// False the steady state, always-present once the node is Running (seeded
+	// False/NoWorkflow on the first Running reconcile — the phase where a
+	// workflow can be adopted; a pre-Running node has none, so absence there is
+	// unambiguous). It is the alert-inhibition key for the degraded-present family
+	// a held node produces (height-lag, RPC availability, exporter staleness and
+	// restart count) — the Paused-condition precedent. Written only by the
+	// SeiNode controller (single writer).
+	ConditionWorkflowInProgress = "WorkflowInProgress"
+)
+
+// Reasons for the WorkflowInProgress condition. Stable enum (public API for
+// alerting/runbooks per CLAUDE.md "Conditions").
+const (
+	// ReasonNoWorkflow: no workflow is adopted (steady state). Seeded value.
+	ReasonNoWorkflow = "NoWorkflow"
+	// ReasonWorkflowRunning: an adopted workflow's plan is executing; seid may
+	// be intentionally held. This is a healthy mid-resync hold.
+	ReasonWorkflowRunning = "WorkflowRunning"
+	// ReasonWorkflowFailedHeld: an adopted workflow failed (or its deletion is
+	// blocked pending data-safety verification) and the node is parked held.
+	// Distinct from WorkflowRunning so paging can tell a stuck/failed hold from
+	// a healthy in-progress resync.
+	ReasonWorkflowFailedHeld = "WorkflowFailedHeld"
 )
 
 // Reasons for the StateSyncReady condition.
@@ -384,6 +425,15 @@ type SeiNodeStatus struct {
 	// the plan based on the node's current state and conditions.
 	// +optional
 	Plan *TaskPlan `json:"plan,omitempty"`
+
+	// AdoptedWorkflow points at the single SeiNodeTaskWorkflow this node is
+	// currently driving, or nil when none. It is the authoritative,
+	// UID-guarded adoption record: committed node-first so a controller
+	// restart re-adopts deterministically, and the in-process interlock that
+	// makes one-active-workflow-per-node race-free under per-key
+	// serialization. Nil is the steady state.
+	// +optional
+	AdoptedWorkflow *AdoptedWorkflowRef `json:"adoptedWorkflow,omitempty"`
 
 	// ResolvedPeers carries `<node_id>@<host>:<port>` entries resolved
 	// from label-based peer sources, ready for CometBFT's persistent_peers.

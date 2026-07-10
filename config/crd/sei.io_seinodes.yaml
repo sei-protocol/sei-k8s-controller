@@ -821,6 +821,34 @@ spec:
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:
+              adoptedWorkflow:
+                description: |-
+                  AdoptedWorkflow points at the single SeiNodeTaskWorkflow this node is
+                  currently driving, or nil when none. It is the authoritative,
+                  UID-guarded adoption record: committed node-first so a controller
+                  restart re-adopts deterministically, and the in-process interlock that
+                  makes one-active-workflow-per-node race-free under per-key
+                  serialization. Nil is the steady state.
+                properties:
+                  adoptedAt:
+                    description: AdoptedAt is when the node stamped this pointer.
+                    format: date-time
+                    type: string
+                  name:
+                    description: Name of the adopted SeiNodeTaskWorkflow in this node's
+                      namespace.
+                    type: string
+                  uid:
+                    description: |-
+                      UID pins the specific object. On re-adoption after a restart the
+                      controller matches by UID so a deleted-and-recreated workflow of the
+                      same name is not mistaken for the one originally adopted.
+                    type: string
+                required:
+                - adoptedAt
+                - name
+                - uid
+                type: object
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current

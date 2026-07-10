@@ -31,6 +31,12 @@ func (stubProvider) RunTask(context.Context, TaskSpec) (TaskHandle, error) { ret
 func (stubProvider) GetTask(context.Context, string, string) (TaskHandle, error) {
 	return nil, nil
 }
+func (stubProvider) CreateWorkflow(context.Context, WorkflowSpec) (WorkflowHandle, error) {
+	return nil, nil
+}
+func (stubProvider) GetWorkflow(context.Context, string, string) (WorkflowHandle, error) {
+	return nil, nil
+}
 
 // resetRegistry clears the package registry so each test starts clean. Tests in
 // this file run sequentially (no t.Parallel) because they mutate global state.

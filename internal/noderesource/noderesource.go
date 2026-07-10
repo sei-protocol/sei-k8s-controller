@@ -583,8 +583,15 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 	if err != nil {
 		return corev1.PodSpec{}, err
 	}
+	seidContainer := buildSidecarMainContainer(node, p)
+	// Refuse to render a gated seid container that carries an RPC-based
+	// liveness/startup probe: a held seid answers neither port, so such a probe
+	// would let the kubelet kill the held pod and release the hold.
+	if err := ValidateGatedSeidProbes(seidContainer); err != nil {
+		return corev1.PodSpec{}, err
+	}
 	spec.Containers = []corev1.Container{
-		buildSidecarMainContainer(node, p),
+		seidContainer,
 		ceContainer,
 	}
 

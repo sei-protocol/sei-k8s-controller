@@ -4,3 +4,4 @@ resources:
   - sei.io_seinodes.yaml
   - sei.io_seinetworks.yaml
   - sei.io_seinodetasks.yaml
+  - sei.io_seinodetaskworkflows.yaml
