@@ -75,8 +75,7 @@ const restUnreachable = "REST unreachable / non-200"
 
 // TestChainUpgrade drives a Sei major software upgrade end-to-end through the SDK
 // task surface: provision a 4-validator chain on the pre-upgrade image -> submit a
-// GovSoftwareUpgrade proposal -> resolve its ID from the chain's gov REST
-// (chain-as-medium, since the controller does not surface it as a task output) ->
+// GovSoftwareUpgrade proposal and read its minted ID off the task output ->
 // vote yes from every validator -> wait for it to pass -> let the chain halt at
 // the upgrade height -> bump the SeiNetwork image to the post-upgrade build ->
 // assert the upgrade handler ran and every validator resumed past the upgrade
@@ -153,7 +152,7 @@ func TestChainUpgrade(t *testing.T) {
 	upgradeHeight := cur + delta
 	t.Logf("current height %d; scheduling upgrade %q at height %d", cur, upgradeName, upgradeHeight)
 
-	// 1) Submit the upgrade proposal from validator-0 and read the minted
+	// Submit the upgrade proposal from validator-0 and read the minted
 	// proposal ID straight off the task output (no chain-as-medium scan).
 	proposer := validatorName(chainID, 0)
 	out := runTaskComplete(ctx, t, c, sei.TaskSpec{
@@ -180,17 +179,17 @@ func TestChainUpgrade(t *testing.T) {
 	proposalID := out.GovSoftwareUpgrade.ProposalID
 	t.Logf("upgrade proposal submitted from %s; proposal id %d (from task output)", proposer, proposalID)
 
-	// 3) Vote yes from every validator in parallel.
+	// Vote yes from every validator in parallel.
 	voteAllValidators(ctx, t, c, chainID, ns, validators, proposalID, runLabels)
 	t.Logf("all %d validators voted yes on proposal %d", validators, proposalID)
 
-	// 4) Wait for the proposal to pass.
+	// Wait for the proposal to pass.
 	if err := waitProposalPassed(ctx, hc, rest, proposalID); err != nil {
 		t.Fatalf("proposal %d did not pass: %v", proposalID, err)
 	}
 	t.Logf("proposal %d passed", proposalID)
 
-	// 5) Wait for the chain to approach the upgrade height, then settle for the
+	// Wait for the chain to approach the upgrade height, then settle for the
 	// halt. The halt height itself is unpollable (all validators stop serving RPC
 	// at once), so poll the aggregate only to a pre-halt height (still serving),
 	// then settle a bounded time for the final blocks + halt. The image bump must
@@ -210,7 +209,7 @@ func TestChainUpgrade(t *testing.T) {
 		t.Fatalf("interrupted while settling for the halt: %v", ctx.Err())
 	}
 
-	// 6) Bump the image by re-applying the SeiNetwork with the post-upgrade build.
+	// Bump the image by re-applying the SeiNetwork with the post-upgrade build.
 	// A SeiNetwork re-apply (not per-node UpdateNodeImage) lets the controller
 	// cascade the new binary to every validator; the controller never writes the
 	// parent spec itself, so the SDK's server-side apply does not conflict and the
@@ -220,7 +219,7 @@ func TestChainUpgrade(t *testing.T) {
 	}
 	t.Logf("SeiNetwork %s image bumped to %s", chainID, postImage)
 
-	// 7) Assert the upgrade actually executed: the x/upgrade module records the
+	// Assert the upgrade actually executed: the x/upgrade module records the
 	// applied plan only when the handler ran at the scheduled height. This fails
 	// loud if a too-fast chain sailed past the upgrade height while still voting
 	// (no plan scheduled), which a liveness-only check would green.
@@ -229,7 +228,7 @@ func TestChainUpgrade(t *testing.T) {
 	}
 	t.Logf("upgrade %q applied on-chain", upgradeName)
 
-	// 8) Recovery: every validator resumed on the new binary and advanced past the
+	// Recovery: every validator resumed on the new binary and advanced past the
 	// upgrade height. AwaitNodesAtHeight polls each validator's own sidecar
 	// (co-located, not the aggregate RPC), so it is immune to the halt black-hole
 	// and proves each validator individually — not merely "a pod is Ready".
@@ -263,42 +262,23 @@ func voteAllValidators(
 	validators int, proposalID uint64, labels map[string]string,
 ) {
 	t.Helper()
-	var wg sync.WaitGroup
-	errs := make([]error, validators)
-	for i := range validators {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			node := validatorName(chainID, i)
-			task, err := c.RunTask(ctx, sei.TaskSpec{
-				Name:      taskName(chainID, fmt.Sprintf("vote-%d", i)),
-				Namespace: ns,
-				Node:      node,
-				Kind:      sei.TaskGovVote,
-				Timeout:   8 * time.Minute,
-				Labels:    labels,
-				GovVote: &sei.GovVote{
-					ChainID:    chainID,
-					ProposalID: proposalID,
-					Option:     sei.VoteYes,
-					Fees:       govFees,
-					Gas:        voteGas,
-				},
-			})
-			if err != nil {
-				errs[i] = fmt.Errorf("%s: run vote: %w", node, err)
-				return
-			}
-			registerTaskCleanup(t, task)
-			if _, err := task.WaitComplete(ctx); err != nil {
-				errs[i] = fmt.Errorf("%s: vote: %w", node, err)
-			}
-		}(i)
-	}
-	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		t.Fatalf("votes: %v", err)
-	}
+	runTasksAcrossValidators(ctx, t, c, validators, "votes", func(i int) sei.TaskSpec {
+		return sei.TaskSpec{
+			Name:      taskName(chainID, fmt.Sprintf("vote-%d", i)),
+			Namespace: ns,
+			Node:      validatorName(chainID, i),
+			Kind:      sei.TaskGovVote,
+			Timeout:   8 * time.Minute,
+			Labels:    labels,
+			GovVote: &sei.GovVote{
+				ChainID:    chainID,
+				ProposalID: proposalID,
+				Option:     sei.VoteYes,
+				Fees:       govFees,
+				Gas:        voteGas,
+			},
+		}
+	})
 }
 
 // awaitAllValidatorsAtHeight runs an AwaitNodesAtHeight task against each
@@ -309,56 +289,73 @@ func awaitAllValidatorsAtHeight(
 	validators int, target int64, labels map[string]string,
 ) {
 	t.Helper()
-	var wg sync.WaitGroup
-	errs := make([]error, validators)
-	for i := range validators {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			node := validatorName(chainID, i)
-			task, err := c.RunTask(ctx, sei.TaskSpec{
-				Name:      taskName(chainID, fmt.Sprintf("await-%d", i)),
-				Namespace: ns,
-				Node:      node,
-				Kind:      sei.TaskAwaitNodesAtHeight,
-				Timeout:   12 * time.Minute,
-				Labels:    labels,
-				// A validator halted at the upgrade height is still phase=Running
-				// (the controller does not demote phase on a transient halt), so the
-				// default RequirePhase=Running is correct here.
-				AwaitNodesAtHeight: &sei.AwaitNodesAtHeight{TargetHeight: target},
-			})
-			if err != nil {
-				errs[i] = fmt.Errorf("%s: run await: %w", node, err)
-				return
-			}
-			registerTaskCleanup(t, task)
-			if _, err := task.WaitComplete(ctx); err != nil {
-				errs[i] = fmt.Errorf("%s: await height %d: %w", node, target, err)
-			}
-		}(i)
-	}
-	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		t.Fatalf("post-upgrade progress: %v", err)
-	}
+	what := fmt.Sprintf("post-upgrade progress to %d", target)
+	runTasksAcrossValidators(ctx, t, c, validators, what, func(i int) sei.TaskSpec {
+		return sei.TaskSpec{
+			Name:      taskName(chainID, fmt.Sprintf("await-%d", i)),
+			Namespace: ns,
+			Node:      validatorName(chainID, i),
+			Kind:      sei.TaskAwaitNodesAtHeight,
+			Timeout:   12 * time.Minute,
+			Labels:    labels,
+			// A validator halted at the upgrade height is still phase=Running
+			// (the controller does not demote phase on a transient halt), so the
+			// default RequirePhase=Running is correct here.
+			AwaitNodesAtHeight: &sei.AwaitNodesAtHeight{TargetHeight: target},
+		}
+	})
 }
 
-// runTaskComplete runs one task to completion, registering its deletion for
-// cleanup, and fails the suite if it does not complete. Returns the task's
-// typed outputs (nil for kinds that emit none).
-func runTaskComplete(ctx context.Context, t *testing.T, c *sei.Client, ts sei.TaskSpec) *sei.TaskOutputs {
+// runTaskWait runs one task to completion, registering its deletion for cleanup,
+// and returns its typed outputs (nil for kinds that emit none) or an error. It
+// never calls t.Fatal, so it is safe from a spawned goroutine — the sole owner of
+// the run -> cleanup -> wait sequence.
+func runTaskWait(ctx context.Context, t *testing.T, c *sei.Client, ts sei.TaskSpec) (*sei.TaskOutputs, error) {
 	t.Helper()
 	task, err := c.RunTask(ctx, ts)
 	if err != nil {
-		t.Fatalf("run task %s (%s): %v", ts.Name, ts.Kind, err)
+		return nil, fmt.Errorf("run task %s (%s): %w", ts.Name, ts.Kind, err)
 	}
 	registerTaskCleanup(t, task)
 	out, err := task.WaitComplete(ctx)
 	if err != nil {
-		t.Fatalf("task %s (%s): %v", ts.Name, ts.Kind, err)
+		return nil, fmt.Errorf("task %s (%s): %w", ts.Name, ts.Kind, err)
+	}
+	return out, nil
+}
+
+// runTaskComplete runs one task to completion and fails the suite if it does not
+// complete. Main-goroutine only (it calls t.Fatal). Returns the task's typed
+// outputs (nil for kinds that emit none).
+func runTaskComplete(ctx context.Context, t *testing.T, c *sei.Client, ts sei.TaskSpec) *sei.TaskOutputs {
+	t.Helper()
+	out, err := runTaskWait(ctx, t, c, ts)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return out
+}
+
+// runTasksAcrossValidators runs one task per validator in parallel, building each
+// spec via specFn(i), and fails the suite (surfacing every failure via
+// errors.Join) if any does not complete. The single t.Fatalf runs on the main
+// goroutine after Wait — Fatal from a spawned goroutine would not fail the test.
+func runTasksAcrossValidators(
+	ctx context.Context, t *testing.T, c *sei.Client,
+	validators int, what string, specFn func(i int) sei.TaskSpec,
+) {
+	t.Helper()
+	var wg sync.WaitGroup
+	errs := make([]error, validators)
+	for i := range validators {
+		wg.Go(func() {
+			_, errs[i] = runTaskWait(ctx, t, c, specFn(i))
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
 }
 
 // registerTaskCleanup best-effort deletes a task on a fresh context at test end.
