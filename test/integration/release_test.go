@@ -108,7 +108,8 @@ func TestRelease(t *testing.T) {
 	t.Logf("network %s: ready (4 validators, admin %s funded)", chainID, admin.Address)
 
 	rpcName := rpcNodeName(chainID, 0)
-	node, err := c.CreateNode(ctx, sei.NodeSpec{
+	hc := &http.Client{Timeout: 10 * time.Second}
+	node, err := bringUpRPCNode(ctx, t, c, hc, sei.NodeSpec{
 		Name:      rpcName,
 		Network:   chainID,
 		Namespace: ns,
@@ -116,19 +117,11 @@ func TestRelease(t *testing.T) {
 		Labels:    runLabels,
 		Config:    mergeConfig(releaseBaseConfig, releaseRPCConfig),
 	})
+	if node != nil {
+		ch.rpcNodes = append(ch.rpcNodes, node)
+	}
 	if err != nil {
-		t.Fatalf("create rpc node %q: %v", rpcName, err)
-	}
-	ch.rpcNodes = append(ch.rpcNodes, node)
-	if err := node.WaitReady(ctx); err != nil {
-		t.Fatalf("rpc node %q running: %v", rpcName, err)
-	}
-	hc := &http.Client{Timeout: 10 * time.Second}
-	if err := sei.WaitCaughtUp(ctx, hc, node.TendermintRPC()); err != nil {
-		t.Fatalf("rpc node %q caught up: %v", rpcName, err)
-	}
-	if err := sei.WaitEVMServing(ctx, hc, node.EVMRPC()); err != nil {
-		t.Fatalf("rpc node %q EVM serving: %v", rpcName, err)
+		t.Fatal(err)
 	}
 	rest := node.REST()
 	if rest == "" {
@@ -140,7 +133,7 @@ func TestRelease(t *testing.T) {
 	if err := sei.WaitRESTServing(ctx, hc, rest); err != nil {
 		t.Fatalf("rpc node %q REST serving: %v", rpcName, err)
 	}
-	t.Logf("rpc node %s: caught up + EVM serving + REST at %s", rpcName, rest)
+	t.Logf("rpc node %s: REST serving at %s", rpcName, rest)
 
 	// Hand the admin mnemonic to the harness via a Secret (secretKeyRef), labeled
 	// for the GC sweep and deleted on cleanup.
