@@ -318,8 +318,10 @@ const (
 
 	// ConditionWorkflowInProgress reports whether the node is currently driving
 	// an adopted SeiNodeTaskWorkflow. InProgress-style: True is the exception,
-	// False the steady state, always-present (seeded False/NoWorkflow on first
-	// reconcile). It is the alert-inhibition key for the degraded-present family
+	// False the steady state, always-present once the node is Running (seeded
+	// False/NoWorkflow on the first Running reconcile — the phase where a
+	// workflow can be adopted; a pre-Running node has none, so absence there is
+	// unambiguous). It is the alert-inhibition key for the degraded-present family
 	// a held node produces (height-lag, RPC availability, exporter staleness and
 	// restart count) — the Paused-condition precedent. Written only by the
 	// SeiNode controller (single writer).

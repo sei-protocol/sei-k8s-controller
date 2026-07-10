@@ -59,11 +59,26 @@ func (r *SeiNodeReconciler) reconcileWorkflow(
 	before *seiv1alpha1.SeiNode,
 	statusBase client.Patch,
 ) (suppress bool, result ctrl.Result, handled bool, err error) {
-	seedWorkflowInProgress(node)
-
 	if node.Status.AdoptedWorkflow != nil {
+		// An adoption pointer is only ever stamped on a Running node;
+		// driveAdoptedWorkflow manages the WorkflowInProgress condition in every
+		// branch, so no separate seed is needed here.
 		return r.driveAdoptedWorkflow(ctx, node)
 	}
+
+	// No adoption pointer: only a Running node can adopt a workflow or carry
+	// meaningful workflow status. Skip workflow reconciliation entirely for a
+	// pre-Running node so it never adds a status write to the node's init /
+	// genesis-ceremony reconciles — that extra write widens the optimistic-lock
+	// window against a parent SeiNetwork's child-pause propagation and can slow
+	// a child to Running, and a non-Running node has no workflow to adopt or
+	// seed anyway. WorkflowInProgress is seeded False/NoWorkflow on the first
+	// Running reconcile (always-present thereafter — the phase where a workflow
+	// can exist).
+	if node.Status.Phase != seiv1alpha1.PhaseRunning {
+		return false, ctrl.Result{}, false, nil
+	}
+	seedWorkflowInProgress(node)
 	return r.maybeAdoptWorkflow(ctx, node, before, statusBase)
 }
 
