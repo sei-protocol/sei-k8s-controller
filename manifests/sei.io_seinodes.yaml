@@ -606,28 +606,13 @@ spec:
 
                       Mounted on the sidecar container; the bootstrap pods never carry this
                       material. The seid main container is also excluded by default — see
-                      SecretOperatorKeyringSource.ExposeToSeid for the explicit opt-in.
+                      SecretOperatorKeyringSource.MountToSeid for the explicit opt-in.
                     properties:
                       secret:
                         description: |-
                           Secret sources the keyring from a file-backend Secret in the SeiNode's
                           namespace, projected at $SEI_HOME/keyring-file/.
                         properties:
-                          exposeToSeid:
-                            description: |-
-                              ExposeToSeid additionally mounts this keyring directory and its unlock
-                              passphrase onto the seid main container, in addition to the sidecar,
-                              so an operator can run `seid keys` / `seid tx sign` directly against
-                              the operator account for ad-hoc debugging (e.g. `seid keys list`
-                              coming back empty against a mounted data dir).
-
-                              This is a deliberate security trade-off, not a routine toggle: it
-                              makes the operator account key reachable from seid's larger,
-                              network-facing attack surface (P2P/RPC) instead of only the sidecar's
-                              loopback-bound one. Set per-node, at the operator's discretion — there
-                              is no chain-id or environment restriction; the node owner is trusted
-                              to make this call. Off by default.
-                            type: boolean
                           keyName:
                             default: node_admin
                             description: |-
@@ -642,6 +627,21 @@ spec:
                             maxLength: 64
                             pattern: ^[a-zA-Z0-9_-]+$
                             type: string
+                          mountToSeid:
+                            description: |-
+                              MountToSeid additionally mounts this keyring directory and its unlock
+                              passphrase onto the seid main container, in addition to the sidecar,
+                              so an operator can run `seid keys` / `seid tx sign` directly against
+                              the operator account for ad-hoc debugging (e.g. `seid keys list`
+                              coming back empty against a mounted data dir).
+
+                              This is a deliberate security trade-off, not a routine toggle: it
+                              makes the operator account key reachable from seid's larger,
+                              network-facing attack surface (P2P/RPC) instead of only the sidecar's
+                              loopback-bound one. Set per-node, at the operator's discretion — there
+                              is no chain-id or environment restriction; the node owner is trusted
+                              to make this call. Off by default.
+                            type: boolean
                           passphraseSecretRef:
                             description: |-
                               PassphraseSecretRef names a separate Secret containing the keyring
