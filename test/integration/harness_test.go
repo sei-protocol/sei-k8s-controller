@@ -71,15 +71,16 @@ func mergeConfig(base, extra map[string]string) map[string]string {
 // spec is the typed input shared by the suites — the local-Go-state replacement
 // for the per-run workflow-vars contract.
 type spec struct {
-	chainID       string            // SeiNetwork name == genesis chain id; also peer-selector value + run discriminator
-	runID         string            // unique per run; the sei.io/harness-run label value
-	namespace     string            // shared nightly namespace; "" => the SDK client's resolved default
-	seidImage     string            // seid container image under test
-	validators    int               // genesis validator count (>= 1)
-	rpcNodes      int               // standalone RPC followers; named <chain>-rpc-0..N-1
-	timeout       time.Duration     // overall scenario deadline (drives ctx, kept < CronJob activeDeadlineSeconds)
-	storageConfig map[string]string // per-suite seid storage config (load/release set memiavl; upgrade leaves the default)
-	rpcConfig     map[string]string // extra per-RPC-node config overlaid on storageConfig (e.g. EVM tuning)
+	chainID       string               // SeiNetwork name == genesis chain id; also peer-selector value + run discriminator
+	runID         string               // unique per run; the sei.io/harness-run label value
+	namespace     string               // shared nightly namespace; "" => the SDK client's resolved default
+	seidImage     string               // seid container image under test
+	validators    int                  // genesis validator count (>= 1)
+	rpcNodes      int                  // standalone RPC followers; named <chain>-rpc-0..N-1
+	timeout       time.Duration        // overall scenario deadline (drives ctx, kept < CronJob activeDeadlineSeconds)
+	storageConfig map[string]string    // per-suite seid storage config (load/release set memiavl; upgrade omits it)
+	rpcConfig     map[string]string    // extra per-RPC-node config overlaid on storageConfig (e.g. EVM tuning)
+	accounts      []sei.GenesisAccount // genesis-funded non-validator accounts (release funds an admin); nil funds none
 
 	// seiload inputs (load suite)
 	seiloadImage   string // sei-load benchmark image
@@ -133,6 +134,7 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 		Validators: s.validators,
 		Labels:     runLabels,
 		Config:     maps.Clone(s.storageConfig),
+		Accounts:   s.accounts,
 		// Ephemeral chain: cascade-delete the controller-created validators (+
 		// their PVCs) on teardown. The CRD default Retain would orphan them —
 		// they never carry sei.io/harness-run, so neither t.Cleanup nor the
