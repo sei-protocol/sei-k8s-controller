@@ -17,9 +17,19 @@ import (
 // snapshots so a wiped follower can re-bootstrap from them. Overlaid on the
 // memiavl baseline for the network in this suite. Without it, the resync has
 // nothing to sync FROM and the workflow's await-caught-up step never clears.
+//
+// Keys are the sei-config storage.* overrides that sei-config.SnapshotGenerationOverrides
+// emits (storage.snapshot_interval / storage.snapshot_keep_recent, plus
+// storage.pruning=nothing — snapshotting needs unpruned state). They are
+// underscore-form enrichment keys the real sidecar validates; the earlier
+// hyphenated state-sync.* form was rejected by sei-config as unknown fields
+// (found live on harbor — see the config-intent-validation note in the CL).
+// snapshot_interval is a small test value (the sei-config default is 2000
+// blocks) so a snapshot appears early on an ephemeral chain.
 var snapshotProductionConfig = map[string]string{
-	"state-sync.snapshot-interval":    "50",
-	"state-sync.snapshot-keep-recent": "3",
+	"storage.pruning":              "nothing",
+	"storage.snapshot_interval":    "50",
+	"storage.snapshot_keep_recent": "3",
 }
 
 // TestWorkflowStateSync drives the SeiNodeTaskWorkflow StateSync recipe through
@@ -117,7 +127,7 @@ func TestWorkflowStateSync(t *testing.T) {
 	// (TestWorkflowLifecycle_ReadoptByUIDAfterRestart) and the sidecar
 	// crash-resume tests; the e2e pod-kill variant lands with that hook.
 	t.Run("InterruptResume", func(t *testing.T) {
-		t.Skip("deferred: needs a mid-recipe pod-kill injection hook; controller-restart resume is covered by the controller envtest")
+		t.Skip("deferred: needs a mid-recipe pod-kill hook; restart-resume is covered by the controller envtest")
 	})
 }
 
