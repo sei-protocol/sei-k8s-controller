@@ -1089,7 +1089,7 @@ func TestOperatorKeyring_SeidMainContainerHasNoMountOrEnv(t *testing.T) {
 	g.Expect(seid).NotTo(BeNil(), "seid main container must exist")
 
 	g.Expect(findVolumeMount(seid.VolumeMounts, operatorKeyringVolumeName)).To(BeNil(),
-		"seid main container must NOT mount operator-keyring by default — MountToSeid is off")
+		"seid main container must NOT mount operator-keyring by default — SeidMount is off")
 	g.Expect(envValue(seid.Env, keyringPassphraseEnvVar)).To(BeEmpty(),
 		"seid main container must not carry the keyring passphrase env by default")
 
@@ -1099,25 +1099,25 @@ func TestOperatorKeyring_SeidMainContainerHasNoMountOrEnv(t *testing.T) {
 		"seid-init must NOT mount operator-keyring")
 }
 
-func newValidatorNodeWithOperatorKeyringMountedToSeid(name, namespace string) *seiv1alpha1.SeiNode {
+func newValidatorNodeWithOperatorKeyringSeidMount(name, namespace string) *seiv1alpha1.SeiNode {
 	node := newValidatorNodeWithOperatorKeyring(name, namespace)
-	node.Spec.Validator.OperatorKeyring.Secret.MountToSeid = true
+	node.Spec.Validator.OperatorKeyring.Secret.SeidMount = true
 	return node
 }
 
-// TestOperatorKeyring_MountToSeid_MountsOnSeidMain proves the opt-in path:
-// setting .secret.MountToSeid additionally mounts the keyring + passphrase
+// TestOperatorKeyring_SeidMount_MountsOnSeidMain proves the opt-in path:
+// setting .secret.SeidMount additionally mounts the keyring + passphrase
 // on seid, without disturbing the sidecar's own mount or seid-init.
-func TestOperatorKeyring_MountToSeid_MountsOnSeidMain(t *testing.T) {
+func TestOperatorKeyring_SeidMount_MountsOnSeidMain(t *testing.T) {
 	g := NewWithT(t)
-	node := newValidatorNodeWithOperatorKeyringMountedToSeid("validator-0", "default")
+	node := newValidatorNodeWithOperatorKeyringSeidMount("validator-0", "default")
 
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, "seid")
 	g.Expect(seid).NotTo(BeNil(), "seid main container must exist")
 
 	seidMount := findVolumeMount(seid.VolumeMounts, operatorKeyringVolumeName)
-	g.Expect(seidMount).NotTo(BeNil(), "MountToSeid must mount operator-keyring onto seid main")
+	g.Expect(seidMount).NotTo(BeNil(), "SeidMount must mount operator-keyring onto seid main")
 	g.Expect(seidMount.MountPath).To(Equal(dataDir+"/"+operatorKeyringDirName),
 		"seid must use the same keyring path as the sidecar — the SDK keyring-dir convention")
 	g.Expect(seidMount.ReadOnly).To(BeTrue())
@@ -1140,7 +1140,7 @@ func TestOperatorKeyring_MountToSeid_MountsOnSeidMain(t *testing.T) {
 	seidInit := findInitContainer(sts.Spec.Template.Spec.InitContainers, "seid-init")
 	g.Expect(seidInit).NotTo(BeNil())
 	g.Expect(findVolumeMount(seidInit.VolumeMounts, operatorKeyringVolumeName)).To(BeNil(),
-		"seid-init must NOT mount operator-keyring even when MountToSeid is set — exposure is main-container only")
+		"seid-init must NOT mount operator-keyring even when SeidMount is set — exposure is main-container only")
 
 	sidecar := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
 	g.Expect(sidecar).NotTo(BeNil())
@@ -1340,13 +1340,13 @@ func TestAssertOperatorKeyringContainment_SeidMainMisMounted_Rejects(t *testing.
 	g.Expect(err.Error()).To(ContainSubstring(`container "seid"`))
 }
 
-// TestAssertOperatorKeyringContainment_MountedSeidMainMount_Passes proves the
+// TestAssertOperatorKeyringContainment_SeidMountOnSeidMain_Passes proves the
 // opt-in carve-out: the identical mount that TestAssertOperatorKeyringContainment_SeidMainMisMounted_Rejects
-// rejects by default is permitted once .secret.MountToSeid is set.
-func TestAssertOperatorKeyringContainment_MountedSeidMainMount_Passes(t *testing.T) {
+// rejects by default is permitted once .secret.SeidMount is set.
+func TestAssertOperatorKeyringContainment_SeidMountOnSeidMain_Passes(t *testing.T) {
 	g := NewWithT(t)
 	node := validatorNodeWithOperatorKeyring()
-	node.Spec.Validator.OperatorKeyring.Secret.MountToSeid = true
+	node.Spec.Validator.OperatorKeyring.Secret.SeidMount = true
 	spec := &corev1.PodSpec{
 		Containers: []corev1.Container{
 			{Name: containerNameSeid, VolumeMounts: []corev1.VolumeMount{
@@ -1362,13 +1362,13 @@ func TestAssertOperatorKeyringContainment_MountedSeidMainMount_Passes(t *testing
 	g.Expect(assertOperatorKeyringContainment(node, spec)).To(Succeed())
 }
 
-// TestAssertOperatorKeyringContainment_MountedButSeidInitMisMounted_Rejects
-// proves the opt-in is main-container-only: MountToSeid never widens the
+// TestAssertOperatorKeyringContainment_SeidMountButSeidInitMisMounted_Rejects
+// proves the opt-in is main-container-only: SeidMount never widens the
 // permit set to seid-init.
-func TestAssertOperatorKeyringContainment_MountedButSeidInitMisMounted_Rejects(t *testing.T) {
+func TestAssertOperatorKeyringContainment_SeidMountButSeidInitMisMounted_Rejects(t *testing.T) {
 	g := NewWithT(t)
 	node := validatorNodeWithOperatorKeyring()
-	node.Spec.Validator.OperatorKeyring.Secret.MountToSeid = true
+	node.Spec.Validator.OperatorKeyring.Secret.SeidMount = true
 	spec := &corev1.PodSpec{
 		InitContainers: []corev1.Container{
 			{Name: keyringTestSeidInitName, VolumeMounts: []corev1.VolumeMount{
@@ -1443,10 +1443,10 @@ func TestGenerateStatefulSet_ProductionPodSpec_PassesGuard(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 }
 
-func TestGenerateStatefulSet_MountToSeid_PassesGuard(t *testing.T) {
+func TestGenerateStatefulSet_SeidMount_PassesGuard(t *testing.T) {
 	g := NewWithT(t)
 	node := validatorNodeWithOperatorKeyring()
-	node.Spec.Validator.OperatorKeyring.Secret.MountToSeid = true
+	node.Spec.Validator.OperatorKeyring.Secret.SeidMount = true
 	_, err := GenerateStatefulSet(node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 }
