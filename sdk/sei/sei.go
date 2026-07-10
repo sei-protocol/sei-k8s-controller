@@ -218,6 +218,8 @@ func validateNodeSpec(s NodeSpec) error {
 		return usageErr("NodeSpec.Network is required (the peer-wire target)")
 	case strings.TrimSpace(s.Image) == "":
 		return usageErr("NodeSpec.Image is required")
+	case s.StateSync != nil && len(s.StateSync.RpcServers) < 2:
+		return usageErr("NodeSpec.StateSync.RpcServers must have >= 2 entries (the state-sync witness floor), got %d", len(s.StateSync.RpcServers))
 	}
 	return nil
 }

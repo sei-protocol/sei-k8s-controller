@@ -51,4 +51,20 @@ type NodeSpec struct {
 	Image            string            // -> spec.image
 	Config           map[string]string // -> spec.overrides (TOML-path keys)
 	Labels           map[string]string // extra labels on the SeiNode object, merged UNDER the canonical sei.io/role + sei.io/seinetwork (which win on key conflict)
+
+	// StateSync bootstraps the node through CometBFT state sync instead of
+	// genesis block-sync; nil => genesis block-sync (unchanged). Set it to bring
+	// a follower up from a peer-served snapshot rather than replaying from height
+	// 1. -> spec.fullNode.snapshot{stateSync{}, rpcServers}.
+	StateSync *NodeStateSync
+}
+
+// NodeStateSync configures a SeiNode to bootstrap via CometBFT state sync.
+type NodeStateSync struct {
+	// RpcServers are the light-client witnesses used for trust-point acquisition
+	// and verification. Entries are BARE host:port (no scheme) and there must be
+	// >= 2 (the CRD's fail-closed floor; CometBFT dedups identical entries).
+	// Network.TendermintRPC() returns a URL, so a caller deriving a witness from
+	// it must url.Parse(...).Host to strip the scheme. -> spec.fullNode.snapshot.rpcServers.
+	RpcServers []string
 }

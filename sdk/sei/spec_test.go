@@ -36,6 +36,8 @@ func TestValidateNodeSpec(t *testing.T) {
 		{"missing name", func(s *NodeSpec) { s.Name = "" }, true},
 		{"missing network", func(s *NodeSpec) { s.Network = "" }, true},
 		{"missing image", func(s *NodeSpec) { s.Image = "" }, true},
+		{"statesync one witness", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{"a:26657"}} }, true},
+		{"statesync two witnesses", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{"a:26657", "b:26657"}} }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
