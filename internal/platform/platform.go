@@ -9,13 +9,23 @@ import (
 )
 
 const (
+	// HomeDir is the container HOME for seid pods and the parent of the seid
+	// data dir. It is an emptyDir mount; the data PVC nests inside it at
+	// HomeDir/.sei (kubelet creates the nested mountpoint). Cosmos-SDK derives
+	// DefaultNodeHome = $HOME/.sei, so with HOME=HomeDir a bare `seid keys list`
+	// / `seid tx sign` resolves to HomeDir/.sei (== DataDir, the data PVC) with
+	// no --home flag, matching the org's EC2 fleet convention. DataDir must stay
+	// a child of HomeDir, never equal it: HOME == the data dir makes a bare seid
+	// nest into DataDir/.sei and leak shell files onto the PVC (locked by
+	// TestHomeDirIsDataDirParent; #449).
+	HomeDir = "/home/nonroot"
+
 	// DataDir is the mount path for the sei data volume inside node pods, and
 	// the seid home passed explicitly via `--home <DataDir>` on every seid
-	// invocation. It is deliberately NOT the container HOME: Cosmos-SDK derives
-	// DefaultNodeHome = $HOME/.sei, so setting HOME=/.sei made a bare `seid`
-	// resolve to /.sei/.sei (nested). HOME is a separate emptyDir; the sidecar's
-	// SEI_HOME env also points here. All flow from this single constant.
-	DataDir = "/.sei"
+	// invocation. Derived as HomeDir/.sei so a flagless seid CLI (which resolves
+	// $HOME/.sei) converges on the same directory. See HomeDir for the
+	// parent/child rationale.
+	DataDir = HomeDir + "/.sei"
 
 	// modeArchive matches seiconfig.ModeArchive without importing sei-config.
 	modeArchive = "archive"

@@ -54,13 +54,15 @@ const (
 
 	dataDir = platform.DataDir
 
-	// homeMountPath is the container HOME — an emptyDir, deliberately NOT the
-	// seid data dir. Cosmos-SDK derives DefaultNodeHome = $HOME/.sei, so
-	// HOME=/.sei made a bare `seid` resolve to /.sei/.sei (nested home) and drop
-	// shell files (.bash_history) onto the data PVC. Every seid invocation now
-	// passes an explicit `--home <dataDir>`, so HOME is decoupled from the data dir.
-	homeMountPath  = "/home/nonroot"
+	// homeMountPath aliases platform.HomeDir (the container HOME). dataDir must
+	// be homeMountPath + "/.sei" (TestHomeDirIsDataDirParent locks it) so a bare
+	// seid resolving $HOME/.sei lands on the data dir. See platform.HomeDir for
+	// the rationale.
+	homeMountPath  = platform.HomeDir
 	homeVolumeName = "home"
+	// homeEnvVar is the container HOME; set to homeMountPath on every
+	// seid-touching container so a bare seid resolves $HOME/.sei onto the data dir.
+	homeEnvVar = "HOME"
 
 	// seidHomeFlag is the cosmos-sdk flag that sets seid's working dir.
 	seidHomeFlag = "--home"
@@ -526,8 +528,9 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 		Name:         sidecarTmpVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}
-	// homeVolume backs the container HOME (an emptyDir off the data PVC) so
-	// shell/home writes never land on /.sei and bare `seid` never nests at $HOME/.sei.
+	// homeVolume is the writable emptyDir backing HOME at homeMountPath. Shell
+	// and home writes land here, not on the data PVC (which nests at
+	// homeMountPath/.sei). See platform.HomeDir for the rationale.
 	homeVolume := corev1.Volume{
 		Name:         homeVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
@@ -626,11 +629,17 @@ func SidecarPort(node *seiv1alpha1.SeiNode) int32 {
 func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.Container {
 	port := SidecarPort(node)
 	keyringEnv := operatorKeyringEnvVars(node)
-	env := make([]corev1.EnvVar, 0, 8+len(keyringEnv))
+	env := make([]corev1.EnvVar, 0, 9+len(keyringEnv))
 	env = append(env,
 		corev1.EnvVar{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},
 		corev1.EnvVar{Name: "SEI_SIDECAR_PORT", Value: fmt.Sprintf("%d", port)},
 		corev1.EnvVar{Name: "SEI_HOME", Value: dataDir},
+		// HOME mirrors the seid containers (the writable `home` emptyDir, parent
+		// of the data dir). seictl signs via SEI_HOME, so this env is only for
+		// symmetry (the home mount below is load-bearing, not cosmetic — see
+		// there). It also lets a bare seid exec'd in the sidecar resolve
+		// $HOME/.sei onto the data dir, with $HOME writable under the RO rootfs.
+		corev1.EnvVar{Name: homeEnvVar, Value: homeMountPath},
 		corev1.EnvVar{Name: "SEI_GENESIS_BUCKET", Value: p.GenesisBucket},
 		corev1.EnvVar{Name: "SEI_GENESIS_REGION", Value: p.GenesisRegion},
 		corev1.EnvVar{Name: "SEI_SNAPSHOT_BUCKET", Value: p.SnapshotBucket},
@@ -643,8 +652,12 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 	env = append(env, keyringEnv...)
 
 	keyringMounts := operatorKeyringMounts(node)
-	mounts := make([]corev1.VolumeMount, 0, 2+len(keyringMounts))
+	mounts := make([]corev1.VolumeMount, 0, 3+len(keyringMounts))
 	mounts = append(mounts,
+		// The `home` emptyDir backs homeMountPath so the nested data-PVC mount
+		// has a writable-volume parent, rather than depending on the RO rootfs
+		// shipping /home/nonroot. Mirrors the seid containers.
+		corev1.VolumeMount{Name: homeVolumeName, MountPath: homeMountPath},
 		// Mounted RW so generate-gentx can write the operator key the sidecar later reads.
 		corev1.VolumeMount{Name: "data", MountPath: dataDir},
 		corev1.VolumeMount{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
@@ -789,8 +802,9 @@ func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
 }
 
 func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []string) {
-	// Canonical seid invocation with an explicit --home <dataDir>, decoupled
-	// from the container HOME (a non-data-dir emptyDir).
+	// Canonical seid invocation with an explicit --home <dataDir>. HOME is the
+	// parent of dataDir, so a bare seid would also resolve here; --home is kept
+	// explicit so the server's home is unambiguous regardless of $HOME.
 	cmd := "seid"
 	cmdArgs := []string{seidStartSubcommand, seidHomeFlag, dataDir}
 
@@ -828,11 +842,12 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		mounts = append(mounts, operatorKeyringMounts(node)...)
 	}
 
-	// HOME is a non-data-dir emptyDir; TMPDIR is the data dir's tmp. seid is
-	// invoked with an explicit --home <dataDir> (see sidecarWaitCommand), so
-	// HOME never determines seid's home — that's why it's safe off /.sei.
+	// HOME is homeMountPath (the emptyDir parent of dataDir); TMPDIR is the data
+	// dir's tmp. seid start is invoked with an explicit --home <dataDir> (see
+	// sidecarWaitCommand); HOME=homeMountPath additionally makes a bare
+	// `seid keys list`/`seid tx sign` resolve $HOME/.sei onto the data dir.
 	env := []corev1.EnvVar{
-		{Name: "HOME", Value: homeMountPath},
+		{Name: homeEnvVar, Value: homeMountPath},
 		{Name: "TMPDIR", Value: dataDir + "/tmp"},
 	}
 	if seidMountEnabled {
@@ -873,13 +888,20 @@ func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 
 // buildSeidInitContainer materializes <dataDir>/config on first boot via
 // `seid init` and ensures <dataDir>/tmp exists. Paths are the literal data
-// dir, decoupled from HOME (which is a non-data-dir emptyDir) so the guard
-// and init target the seid home regardless of $HOME.
+// dir so the guard and init target the seid home explicitly (HOME is the
+// parent emptyDir; --home makes it unambiguous). For validator nodes it also
+// writes keyring-backend into <dataDir>/config/client.toml on EVERY boot
+// (outside the init skip-guard) so a bare `seid keys list`/`seid tx sign`
+// resolves the right backend — and so already-provisioned PVCs get the write
+// too. See clientTomlKeyringBackendWrite.
 func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	script := fmt.Sprintf(
 		`if [ -f "%s/config/genesis.json" ]; then echo "data directory already initialized, skipping seid init"; else seid init %s --chain-id %s --home "%s" --overwrite; fi && mkdir -p "%s/tmp"`,
 		dataDir, node.Spec.ChainID, node.Spec.ChainID, dataDir, dataDir,
 	)
+	if node.Spec.Validator != nil {
+		script += " && " + clientTomlKeyringBackendWrite(dataDir, validatorKeyringBackend(node))
+	}
 	return corev1.Container{
 		Name:  "seid-init",
 		Image: node.Spec.Image,
@@ -887,7 +909,7 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 			"/bin/sh", "-c", script,
 		},
 		Env: []corev1.EnvVar{
-			{Name: "HOME", Value: homeMountPath},
+			{Name: homeEnvVar, Value: homeMountPath},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: dataDir},
@@ -895,6 +917,48 @@ func buildSeidInitContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 		},
 		SecurityContext: seidNonRootSecurityContext(),
 	}
+}
+
+// validatorKeyringBackend returns the client.toml keyring-backend value for a
+// validator node: "file" when an operator keyring .secret is configured (the
+// encrypted file keyring the sidecar mounts), "test" otherwise (the
+// unencrypted keyring generate-gentx writes onto the data PVC). Mirrors the
+// SEI_KEYRING_BACKEND decision in operatorKeyringEnvVars. Caller guards for
+// node.Spec.Validator != nil.
+func validatorKeyringBackend(node *seiv1alpha1.SeiNode) string {
+	if operatorKeyringSecretSource(node) != nil {
+		return keyringBackendFile
+	}
+	return keyringBackendTest
+}
+
+// clientTomlKeyringBackendWrite renders a POSIX-sh snippet (no bashisms; the
+// init container runs /bin/sh) that idempotently sets keyring-backend in
+// <dir>/config/client.toml to backend. It anchored-replaces an existing
+// `keyring-backend = ...` line and appends one (creating the file) if absent,
+// touching no other field or comment.
+//
+// A pure sed/echo write is used rather than `seid config keyring-backend`
+// because that subcommand (a) round-trips the whole file through a Go template,
+// dropping comments and any non-standard field rather than doing a field-
+// targeted edit, and (b) runs through seid's root PersistentPreRunE, which
+// calls config.ReadFromClientConfig -> NewKeyringFromBackend on the file's
+// current (possibly "os") backend — a step with no distroless analogue that can
+// fail the command before the set ever runs. Plain text edit is boot-safe.
+//
+// In practice client.toml always exists here: seid's PersistentPreRunE creates
+// it (with the "os" default) on the preceding `seid init`, and on an
+// already-provisioned PVC it was created on the original init — which is why
+// this write runs on every boot to correct the stale backend.
+func clientTomlKeyringBackendWrite(dir, backend string) string {
+	clientToml := dir + "/config/client.toml"
+	line := fmt.Sprintf(`keyring-backend = %q`, backend)
+	return fmt.Sprintf(
+		`CLIENT_TOML=%q && if [ -f "$CLIENT_TOML" ] && grep -q '^keyring-backend[[:space:]]*=' "$CLIENT_TOML"; then `+
+			`sed -i 's#^keyring-backend[[:space:]]*=.*#%s#' "$CLIENT_TOML"; else `+
+			`mkdir -p %q && echo '%s' >> "$CLIENT_TOML"; fi`,
+		clientToml, line, dir+"/config", line,
+	)
 }
 
 // seidNonRootSecurityContext is shared by seid main and seid-init (same

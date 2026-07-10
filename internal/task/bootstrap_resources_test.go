@@ -8,6 +8,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
 
 const (
@@ -216,5 +218,86 @@ func TestAssertNoValidatorSecretsOnBootstrapPod_NodeKeyExcluded(t *testing.T) {
 	}
 	if err := assertNoValidatorSecretsOnBootstrapPod(node, spec); err != nil {
 		t.Fatalf("node-key is deliberately not part of the assertion, got: %v", err)
+	}
+}
+
+// findBootstrapContainer returns the container/init-container with the given
+// name from a bootstrap pod-spec, or nil.
+func findBootstrapContainer(spec corev1.PodSpec, name string) *corev1.Container {
+	all := append(append([]corev1.Container{}, spec.InitContainers...), spec.Containers...)
+	for i := range all {
+		if all[i].Name == name {
+			return &all[i]
+		}
+	}
+	return nil
+}
+
+func bootstrapEnv(c *corev1.Container, name string) string {
+	for _, e := range c.Env {
+		if e.Name == name {
+			return e.Value
+		}
+	}
+	return ""
+}
+
+// TestBootstrapJob_HomeAndDataDir asserts the #449 fix shape holds on the
+// bootstrap pod: seid start and seid init target an explicit --home
+// <bootstrapDataDir> (never $HOME), and HOME is set to the data dir's PARENT
+// (platform.HomeDir), never the data dir itself. A regression here — HOME left
+// equal to the data dir, or a lingering `--home "$HOME"` — reintroduces the
+// nesting bug and, mid-migration, risks a validator-data wipe.
+func TestBootstrapJob_HomeAndDataDir(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "v-0", Namespace: testReplaceNs},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID:   "sei-test",
+			Image:     "ghcr.io/sei-protocol/seid:latest",
+			Validator: &seiv1alpha1.ValidatorSpec{},
+		},
+	}
+	snap := &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 12345}}
+
+	job, err := GenerateBootstrapJob(node, snap, platformtest.Config())
+	if err != nil {
+		t.Fatalf("GenerateBootstrapJob error: %v", err)
+	}
+	spec := job.Spec.Template.Spec
+
+	seid := findBootstrapContainer(spec, "seid")
+	if seid == nil {
+		t.Fatal("seid container not found")
+	}
+	seidScript := strings.Join(seid.Args, " ")
+	if !strings.Contains(seidScript, `seid start --home "`+bootstrapDataDir+`" --halt-height`) {
+		t.Errorf("seid start must use explicit --home %q; got: %s", bootstrapDataDir, seidScript)
+	}
+	if strings.Contains(seidScript, "$HOME") {
+		t.Errorf("seid start script must not reference $HOME; got: %s", seidScript)
+	}
+	if got := bootstrapEnv(seid, "HOME"); got != platform.HomeDir {
+		t.Errorf("seid HOME = %q, want %q (parent of data dir)", got, platform.HomeDir)
+	}
+	if platform.HomeDir == bootstrapDataDir {
+		t.Fatalf("HOME must never equal the data dir (#449)")
+	}
+
+	seidInit := findBootstrapContainer(spec, "seid-init")
+	if seidInit == nil {
+		t.Fatal("seid-init container not found")
+	}
+	initScript := seidInit.Command[2]
+	if !strings.Contains(initScript, `--home "`+bootstrapDataDir+`"`) {
+		t.Errorf("seid init must use explicit --home %q; got: %s", bootstrapDataDir, initScript)
+	}
+	if !strings.Contains(initScript, `[ -f "`+bootstrapDataDir+`/config/genesis.json" ]`) {
+		t.Errorf("genesis guard must check the data dir, not $HOME; got: %s", initScript)
+	}
+	if strings.Contains(initScript, "$HOME") {
+		t.Errorf("seid-init script must not reference $HOME; got: %s", initScript)
+	}
+	if got := bootstrapEnv(seidInit, "HOME"); got != platform.HomeDir {
+		t.Errorf("seid-init HOME = %q, want %q", got, platform.HomeDir)
 	}
 }
