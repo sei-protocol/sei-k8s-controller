@@ -151,7 +151,7 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 	hc := &http.Client{Timeout: 10 * time.Second}
 	for i := range s.rpcNodes {
 		name := rpcNodeName(s.chainID, i)
-		node, err := c.CreateNode(ctx, sei.NodeSpec{
+		node, err := bringUpRPCNode(ctx, t, c, hc, sei.NodeSpec{
 			Name:      name,
 			Network:   s.chainID,
 			Namespace: s.namespace,
@@ -159,27 +159,43 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 			Labels:    runLabels,
 			Config:    mergeConfig(s.storageConfig, s.rpcConfig),
 		})
+		if node != nil {
+			ch.rpcNodes = append(ch.rpcNodes, node)
+		}
 		if err != nil {
-			return ch, fmt.Errorf("create rpc node %q: %w", name, err)
+			return ch, err
 		}
-		ch.rpcNodes = append(ch.rpcNodes, node)
-
-		// Per-gate progress so a stall is localizable in real time from the pod
-		// log (which node, which gate) rather than a single terminal error.
-		if err := node.WaitReady(ctx); err != nil {
-			return ch, fmt.Errorf("rpc node %q running: %w", name, err)
-		}
-		t.Logf("rpc node %s: running", name)
-		if err := sei.WaitCaughtUp(ctx, hc, node.TendermintRPC()); err != nil {
-			return ch, fmt.Errorf("rpc node %q caught up: %w", name, err)
-		}
-		t.Logf("rpc node %s: caught up", name)
-		if err := sei.WaitEVMServing(ctx, hc, node.EVMRPC()); err != nil {
-			return ch, fmt.Errorf("rpc node %q EVM serving: %w", name, err)
-		}
-		t.Logf("rpc node %s: EVM serving", name)
 	}
 	return ch, nil
+}
+
+// bringUpRPCNode creates an RPC SeiNode and blocks until it is fully serving:
+// running, caught up to the chain, then answering EVM RPC. Each gate is logged
+// as it passes so a stall is localizable in real time from the pod log (which
+// node, which gate) rather than a single terminal error. Returns the node
+// non-nil once created — even if a later gate fails — so the caller can still
+// register it for teardown; nil only when creation itself fails.
+func bringUpRPCNode(
+	ctx context.Context, t *testing.T, c *sei.Client, hc *http.Client, nodeSpec sei.NodeSpec,
+) (*sei.Node, error) {
+	t.Helper()
+	node, err := c.CreateNode(ctx, nodeSpec)
+	if err != nil {
+		return nil, fmt.Errorf("create rpc node %q: %w", nodeSpec.Name, err)
+	}
+	if err := node.WaitReady(ctx); err != nil {
+		return node, fmt.Errorf("rpc node %q running: %w", nodeSpec.Name, err)
+	}
+	t.Logf("rpc node %s: running", nodeSpec.Name)
+	if err := sei.WaitCaughtUp(ctx, hc, node.TendermintRPC()); err != nil {
+		return node, fmt.Errorf("rpc node %q caught up: %w", nodeSpec.Name, err)
+	}
+	t.Logf("rpc node %s: caught up", nodeSpec.Name)
+	if err := sei.WaitEVMServing(ctx, hc, node.EVMRPC()); err != nil {
+		return node, fmt.Errorf("rpc node %q EVM serving: %w", nodeSpec.Name, err)
+	}
+	t.Logf("rpc node %s: EVM serving", nodeSpec.Name)
+	return node, nil
 }
 
 // teardown deletes the provisioned resources — the normal-exit fast path, wired
