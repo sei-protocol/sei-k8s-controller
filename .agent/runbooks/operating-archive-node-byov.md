@@ -26,18 +26,18 @@ If `ImportPVCReady=False` with `Reason=PVCInvalid`, the plan is in a terminal fa
 
 ## 2. Volume filesystem layout
 
-The PV is mounted into the pod at `/sei` (see `internal/platform/platform.go` — `DataDir = "/sei"`). The init container's "already initialized" gate is a single-file existence check:
+The PV is mounted into the pod at `/home/nonroot/.sei` (see `internal/platform/platform.go` — `DataDir = HomeDir + "/.sei"` with `HomeDir = "/home/nonroot"`). The data dir is a child of the container's `$HOME`, so an ad-hoc bare `seid` (e.g. `kubectl exec ... seid status`) resolves it with no `--home` flag; the controller-built start command still passes `--home /home/nonroot/.sei` explicitly. The init container's "already initialized" gate is a single-file existence check:
 
 ```bash
 # from internal/noderesource/noderesource.go
-if [ -f /sei/config/genesis.json ]; then
+if [ -f /home/nonroot/.sei/config/genesis.json ]; then
     echo "data directory already initialized, skipping seid init"
 else
-    seid init <chain-id> --chain-id <chain-id> --home /sei --overwrite   # DESTROYS DATA
-fi && mkdir -p /sei/tmp
+    seid init <chain-id> --chain-id <chain-id> --home /home/nonroot/.sei --overwrite   # DESTROYS DATA
+fi && mkdir -p /home/nonroot/.sei/tmp
 ```
 
-That gate is everything. **Without `/sei/config/genesis.json` on the volume, the init container clobbers the chain data on first boot.**
+That gate is everything. **Without `/home/nonroot/.sei/config/genesis.json` on the volume, the init container clobbers the chain data on first boot.**
 
 The required tree at the root of the formatted EBS volume:
 
@@ -66,8 +66,8 @@ Files **not** included on the volume: `config/app.toml`, `config/config.toml`, `
 ### Filesystem requirements
 
 - xfs is the supported fsType (matches `csi.fsType: xfs` on the PV).
-- Mount path inside pod: `/sei` — do **not** put a `.sei/` subdirectory at the volume root.
-- Permissions: writable by the seid container's runAsUser. xfs's default ownership preservation from the populating instance is usually correct (`root:root`), since the pod runs as root by default.
+- Mount path inside pod: `/home/nonroot/.sei` (the container's `$HOME/.sei`) — populate `config/`, `data/`, `wasm/` directly at the EBS volume root; do **not** nest a further `.sei/` subdirectory.
+- Permissions: seid runs **nonroot** (UID/GID 65532), not root. A `root:root` volume from the populating instance is fine — the pod sets `fsGroup=65532` with `fsGroupChangePolicy: OnRootMismatch`, so on first mount the kubelet recursively `chown`s the root-owned tree to GID 65532 and adds group-write (`chmod g+rwX`), giving the nonroot seid process write access. On a multi-TB archive that first-mount walk is slow, but — unlike §6.4's SELinux relabel, which recurs on every pod move under RWO — it is genuinely one-time: later mounts find GID 65532 and skip it.
 
 ---
 
@@ -140,11 +140,9 @@ spec:
 
 ---
 
-## 4. Required SeiNode / SeiNetwork spec
+## 4. Required SeiNode spec
 
-`dataVolume.import.pvcName` is the only new field. Names a PVC in the SeiNode's namespace; everything else about how the volume is sourced is the operator's responsibility.
-
-### Single SeiNode
+An archive is always a **single, standalone SeiNode**. `dataVolume.import.pvcName` is the only new field — it names a PVC in the SeiNode's namespace; everything else about how the volume is sourced is the operator's responsibility. (A SeiNetwork is *not* an archive path — see "What the spec deliberately does not contain" below.)
 
 ```yaml
 apiVersion: sei.io/v1alpha1
@@ -160,50 +158,20 @@ spec:
     import:
       pvcName: <pvc-name>                    # the PVC from §3, same namespace
 
-  entrypoint:
-    command: ["seid"]
-    args: ["start", "--home", "/sei"]
-
   archive: {}                                # selects archive mode (see §6)
-```
-
-### SeiNetwork (typical for prod)
-
-```yaml
-apiVersion: sei.io/v1alpha1
-kind: SeiNetwork
-metadata:
-  name: archive-0
-  namespace: <chain-namespace>
-spec:
-  replicas: 1                                # archive nodes are single-instance per ordinal
-  deletionPolicy: Retain                     # do not delete the imported PVC on SeiNetwork deletion
-
-  template:
-    spec:
-      chainId: <chain-id>
-      image: ghcr.io/sei-protocol/sei:<tag>
-
-      dataVolume:
-        import:
-          pvcName: <pvc-name>
-
-      entrypoint:
-        command: ["seid"]
-        args: ["start", "--home", "/sei"]
-
-      archive: {}
 ```
 
 ### What the spec deliberately does not contain
 
+- `entrypoint` / `command` / `args` — there is no such field on the SeiNode CRD. The controller builds the seid command itself (`seid start --home /home/nonroot/.sei`, in `internal/noderesource/noderesource.go`), so the container args and `--home` are not operator-settable and must not be pinned in the spec.
 - `dataVolume.size`, `dataVolume.storageClassName` — there is no such field. Storage spec is on the PV/PVC.
 - `dataVolume.import.namespace` — the PVC must be in the SeiNode's namespace, no cross-namespace imports.
 - A snapshot-restore field — archive mode doesn't take snapshots from S3; it ingests history from the imported volume and continues from there. (`SnapshotSource()` in `seinode_types.go` returns `nil` for archive nodes.)
+- A **SeiNetwork** — a SeiNetwork bootstraps a *genesis* validator pool (it mints new genesis state) and structurally has no `template`/`archive` field, so it cannot run an archive node, which joins an existing chain. Archive BYOV is always a standalone SeiNode. (`api/v1alpha1/seinetwork_types.go`)
 
 ### Immutability
 
-`spec.dataVolume.import.pvcName` is immutable on a SeiNode (CEL: `self == oldSelf`). To re-point at a different PVC, delete and recreate the SeiNode (or, for a SeiNetwork, scale to 0, edit the template, scale up — the underlying StatefulSet picks up the new spec on creation).
+`spec.dataVolume.import.pvcName` is immutable on a SeiNode (CEL: `self == oldSelf`). To re-point at a different PVC, delete and recreate the SeiNode.
 
 ---
 
@@ -292,7 +260,7 @@ What stays the same across the migration:
 
 - **EBS volume** — never touched; `Retain` reclaim + the PV's `volumeHandle` re-references the same AWS volume.
 - **Names** — PV name, PVC name, EBS volume id all preserved. SeiNode → PVC → PV → EBS chain re-resolves automatically.
-- **SeiNode/SeiNetwork spec** — no change; references PVC by name.
+- **SeiNode spec** — no change; references PVC by name.
 
 Verification after the new pod is Running:
 
@@ -303,7 +271,7 @@ kubectl get pvc -n <ns> <pvc-name> -o jsonpath='{.spec.accessModes}'  # expect [
 
 # Confirm the kernel applied SELinux as a mount option (not via recursive walk)
 kubectl debug <pod-name> -c slx-check --target=seid --image=alpine:3.20 --profile=netadmin -- \
-  sh -c 'mount | grep "/sei "'
+  sh -c 'mount | grep "/home/nonroot/.sei "'
 # expect output to include  context=system_u:object_r:container_file_t:s0:c<N>,c<M>
 ```
 
@@ -316,13 +284,13 @@ If the `mount` line shows a `context=...` parameter, per-mount labeling is activ
 `PV.spec.csi.volumeHandle` is **immutable** on a bound PV. To re-point an archive at a freshly populated EBS, the PV must be deleted and recreated.
 
 ```text
-1. Scale SeiNetwork to 0 replicas (or delete the SeiNode)
+1. Delete the SeiNode (its pod terminates; the imported PVC is preserved — see §5)
 2. Wait for the pod to terminate; CSI auto-detaches the EBS
 3. Detach the new EBS from the EC2 instance that populated it
 4. Delete the PV (Retain reclaim → both old and new EBS volumes survive)
 5. Update the PV manifest's volumeHandle to the new EBS volume id
 6. Apply the manifest (PV recreated; PVC re-binds via volumeName)
-7. Scale the SeiNetwork back up
+7. Recreate the SeiNode
 8. Watch init container — must log "data directory already initialized"
 9. Watch seid — height should climb past the seeded height within minutes
 ```
@@ -341,7 +309,7 @@ Either way, no kubectl-side surgery on the PV is required; the immutability cons
 
 | Symptom | Root cause | Fix |
 |---|---|---|
-| Pod logs `seid init pacific-1 ...` then chain data is gone | `/sei/config/genesis.json` missing on volume | Re-stage volume with the gate file present |
+| Pod logs `seid init pacific-1 ...` then chain data is gone | `/home/nonroot/.sei/config/genesis.json` missing on volume | Re-stage volume with the gate file present |
 | Pod `Pending`, events show `failed to attach: VolumeBinding ... AZ mismatch` | PV `nodeAffinity` AZ does not match an available node | Ensure EBS, PV `nodeAffinity`, and target node pool are all in the same AZ |
 | Pod `Pending`, events show `multi-attach error` | EBS still attached to the EC2 instance that populated it | `aws ec2 detach-volume` from the source instance, wait for `available` |
 | `ImportPVCReady=False, Reason=PVCInvalid, msg=capacity X < required Y` | EBS volume undersized for archive mode | Recreate EBS at required size, fpsync, swap |
