@@ -19,6 +19,14 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// injectDeadline bounds fault injection independently of the per-scenario
+// timeout. A fault that has not reached AllInjected within this window is stuck
+// (a chaos-daemon apply erroring on every retry), not slow — fail fast rather
+// than poll the never-flipping condition until the scenario budget expires. Set
+// well above chaos-mesh's observed inject latency (seconds), with margin for
+// selector settling and daemon apply retries.
+const injectDeadline = 5 * time.Minute
+
 //go:embed faults/network_partition.yaml.tmpl
 var networkPartitionTmpl string
 
@@ -136,7 +144,16 @@ func applyFault(ctx context.Context, t *testing.T, dc dynamic.Interface, ns stri
 // wouldn't catch a future selector edit that killed 2/4 and halted the chain.
 func gateInjected(ctx context.Context, t *testing.T, dc dynamic.Interface, ns string, f fault, oneShot bool) {
 	t.Helper()
-	waitFaultCondition(ctx, t, dc, ns, f, "AllInjected")
+	// Bound injection independently of the scenario deadline: a fault that has
+	// not reached AllInjected within injectDeadline is stuck (e.g. a chaos-daemon
+	// apply erroring on every retry), not merely slow. Without this it would poll
+	// the never-flipping condition until the full scenario timeout, turning a
+	// single stuck injection into a ~40m run that reds the suite with an opaque
+	// "before deadline" at the very end. Recovery keeps the scenario ctx — it is
+	// gated on the fault's own spec.duration, not a fixed budget.
+	injectCtx, cancel := context.WithTimeout(ctx, injectDeadline)
+	defer cancel()
+	waitFaultCondition(injectCtx, t, dc, ns, f, "AllInjected")
 	u, err := dc.Resource(chaosGVR(f.resource)).Namespace(ns).Get(ctx, f.obj.GetName(), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("read injected targets for %s/%s: %v", f.resource, f.obj.GetName(), err)
