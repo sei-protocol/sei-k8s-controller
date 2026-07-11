@@ -128,7 +128,9 @@ func TestRenderNode_CallerLabelsMergeUnderCanonical(t *testing.T) {
 }
 
 func TestRenderNode_StateSync(t *testing.T) {
-	witnesses := []string{"validator:26657", "validator:26657"}
+	// Two DISTINCT witnesses: the served CRD field is a MinItems=2 listType=set,
+	// so a duplicated set is not what render carries end to end.
+	witnesses := []string{"validator-0:26657", "validator-1:26657"}
 	spec := sei.NodeSpec{
 		Name: rpc0Name, Network: testNet, Image: testImage,
 		StateSync: &sei.NodeStateSync{RpcServers: witnesses},

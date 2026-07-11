@@ -2,6 +2,16 @@ package sei
 
 import "testing"
 
+// witnessA and witnessB are the two distinct bare host:port light-client
+// witnesses reused across the state-sync validation tests in this package.
+// Named consts (mirroring sdk/sei/provider/k8s) keep the literal below the
+// goconst threshold. The values are placeholders — the shape (host:port), not
+// the address, is what these tests exercise.
+const (
+	witnessA = "a:26657"
+	witnessB = "b:26657"
+)
+
 func TestValidateNetworkSpec(t *testing.T) {
 	good := NetworkSpec{Name: "net", Image: "img", Validators: 1}
 	cases := []struct {
@@ -36,8 +46,9 @@ func TestValidateNodeSpec(t *testing.T) {
 		{"missing name", func(s *NodeSpec) { s.Name = "" }, true},
 		{"missing network", func(s *NodeSpec) { s.Network = "" }, true},
 		{"missing image", func(s *NodeSpec) { s.Image = "" }, true},
-		{"statesync one witness", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{"a:26657"}} }, true},
-		{"statesync two witnesses", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{"a:26657", "b:26657"}} }, false},
+		{"statesync one witness", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{witnessA}} }, true},
+		{"statesync two identical witnesses", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{witnessA, witnessA}} }, true},
+		{"statesync two distinct witnesses", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{witnessA, witnessB}} }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
