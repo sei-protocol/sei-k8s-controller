@@ -14,7 +14,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
@@ -28,7 +27,6 @@ const (
 	rNetworkChaos = "networkchaos"
 	rStressChaos  = "stresschaos"
 	rTimeChaos    = "timechaos"
-	rIOChaos      = "iochaos"
 	rPodChaos     = "podchaos"
 )
 
@@ -41,12 +39,6 @@ type chaosScenario struct {
 	resource string
 	tmpl     string
 	oneShot  bool
-	// quarantine, when non-empty, skips the scenario with this reason instead of
-	// running it. For a fault whose injection is broken by an environment change
-	// outside this suite's control (tracked separately) — keeps the scenario
-	// visible as SKIP with its reason and un-quarantine condition, rather than
-	// deleting coverage or letting it red every nightly.
-	quarantine string
 }
 
 // chaosScenarios is the ported fault set. Growing toward the platform suite's
@@ -59,21 +51,11 @@ var chaosScenarios = []chaosScenario{
 	{name: "network-latency", resource: rNetworkChaos, tmpl: networkLatencyTmpl},
 	{name: "bandwidth-limit", resource: rNetworkChaos, tmpl: bandwidthLimitTmpl},
 	{name: "memory-stress", resource: rStressChaos, tmpl: memoryStressTmpl},
-	{name: "disk-io-latency", resource: rIOChaos, tmpl: diskIOLatencyTmpl,
-		// chaos-mesh IOChaos toda cannot mount over the seid data dir while it is a
-		// PVC nested inside the $HOME emptyDir (platform.DataDir = HomeDir + "/.sei",
-		// nested under the HomeDir emptyDir): every chaos-daemon apply fails
-		// "toda startup ... No such file or directory (os error 2)". The layout is
-		// intentional and test-locked, so the fix is chaos-side, not a layout revert.
-		// Un-quarantine once IOChaos injects against the nested mount again (a green
-		// disk-io-latency run).
-		quarantine: "disk-io-latency: IOChaos toda injection fails on the nested $HOME/.sei data mount"},
 	{name: "byzantine", resource: rNetworkChaos, tmpl: byzantineTmpl},
 	{name: "pod-failure", resource: rPodChaos, tmpl: podFailureTmpl, oneShot: true},
 	{name: "container-kill", resource: rPodChaos, tmpl: containerKillTmpl, oneShot: true},
-	// dns-chaos deferred: it's a rediscovery fault (live MConnections don't
-	// re-resolve), so the under-fault progress assert can't perturb it — needs a
-	// recovery-focused assert + peer-FQDN-matching patterns.
+	// dns-chaos and disk-io-latency are deferred — see deferredChaosScenarios
+	// in chaos_deferred_test.go for why and the re-add condition.
 }
 
 // TestChaosSuite runs each fault against its own fresh chain: provision → inject
@@ -97,9 +79,6 @@ func TestChaosSuite(t *testing.T) {
 
 	for _, sc := range chaosScenarios {
 		t.Run(sc.name, func(t *testing.T) {
-			if sc.quarantine != "" {
-				t.Skip(sc.quarantine)
-			}
 			id := base + "-" + sc.name
 			// The validator-0 selector value sei.io/node=<id>-0 is a k8s label
 			// value (capped at 63 chars); fail loud rather than on an opaque
@@ -139,7 +118,6 @@ func TestChaosSuite(t *testing.T) {
 				RunID:     s.runID,
 				Namespace: faultNS,
 				Duration:  duration,
-				DataDir:   platform.DataDir,
 			})
 			// Duration-bearing faults must self-expire (else gateRecovered hangs
 			// to the deadline). One-shot kills carry no duration by design.
