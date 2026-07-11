@@ -38,7 +38,8 @@ const (
 	// the signal, matching the CRD's presence-as-toggle pattern. The external
 	// snapshot-upload CronJob discovers publish-enabled pods by selector
 	// sei.io/snapshot-publish=true + sei.io/chain=<chainID> (seictl
-	// task/client.go). Pod-template only, never in the StatefulSet selector.
+	// task/client.go). Never appears in the immutable StatefulSet/Service
+	// selectors (which carry only sei.io/node).
 	snapshotPublishLabel = "sei.io/snapshot-publish"
 	snapshotPublishValue = "true"
 

@@ -227,12 +227,10 @@ func TestArchivePlanner_Validate(t *testing.T) {
 	}
 }
 
-// TestArchivePlanner_NoSnapshotUploadInProgression pins the Phase B behavior:
-// snapshot publishing is now an external CronJob submitting one-shot
-// snapshot-upload-once tasks, so the controller must NOT insert the old
-// forever-loop snapshot-upload task into any progression — even when publish
-// is set. Publish presence is projected as the sei.io/snapshot-publish pod
-// label (see noderesource), not as a plan task.
+// TestArchivePlanner_NoSnapshotUploadInProgression asserts the planner never
+// inserts a snapshot-upload task into any progression — even when publish is
+// set. Publish presence is projected as the sei.io/snapshot-publish pod label
+// (see noderesource), not as a plan task.
 func TestArchivePlanner_NoSnapshotUploadInProgression(t *testing.T) {
 	cases := []struct {
 		name string

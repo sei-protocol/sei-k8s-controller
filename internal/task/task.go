@@ -216,9 +216,13 @@ var registry = map[string]taskDeserializer{
 	// which is exactly what keeps seid from booting onto a half-wiped dir. A
 	// fire-and-forget classification here would be a released-onto-wiped-data
 	// bug. stop-seid and reset-data likewise report real terminal state.
-	sidecar.TaskTypeMarkNotReady:           sidecarTask[sidecar.MarkNotReadyTask](false),
-	sidecar.TaskTypeStopSeid:               sidecarTask[sidecar.StopSeidTask](false),
-	sidecar.TaskTypeResetData:              sidecarTask[sidecar.ResetDataTask](false),
+	sidecar.TaskTypeMarkNotReady: sidecarTask[sidecar.MarkNotReadyTask](false),
+	sidecar.TaskTypeStopSeid:     sidecarTask[sidecar.StopSeidTask](false),
+	sidecar.TaskTypeResetData:    sidecarTask[sidecar.ResetDataTask](false),
+	// snapshot-upload is a tombstone (see snapshotUploadTombstone): the planner
+	// no longer emits it, but stored plans that still carry it must drain past
+	// it without any sidecar interaction.
+	sidecar.TaskTypeSnapshotUpload:         deserializeSnapshotUploadTombstone,
 	sidecar.TaskTypeGenerateIdentity:       sidecarTask[sidecar.GenerateIdentityTask](false),
 	sidecar.TaskTypeGenerateGentx:          sidecarTask[sidecar.GenerateGentxTask](false),
 	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[sidecar.UploadGenesisArtifactsTask](false),
