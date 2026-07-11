@@ -11,8 +11,8 @@ import (
 // Invariant: a stored plan carrying a snapshot-upload task advances past it as
 // if the task had completed, with zero sidecar interaction — Execute submits
 // nothing and Status reports Complete. The planner does not emit this task
-// type into any new plan; the registry entry exists solely so that plans
-// persisted while the type was still emitted drain past it instead of hitting
+// type into any new plan; the registry entry exists solely so that stored
+// plans that still carry this type drain past it instead of hitting
 // UnknownTaskTypeError and failing the plan.
 //
 // This type deliberately holds no SidecarClient and no submit path: it cannot

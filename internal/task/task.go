@@ -220,8 +220,8 @@ var registry = map[string]taskDeserializer{
 	sidecar.TaskTypeStopSeid:     sidecarTask[sidecar.StopSeidTask](false),
 	sidecar.TaskTypeResetData:    sidecarTask[sidecar.ResetDataTask](false),
 	// snapshot-upload is a tombstone (see snapshotUploadTombstone): the planner
-	// no longer emits it, but stored plans that still carry it must drain past
-	// it without any sidecar interaction.
+	// does not emit it; stored plans that still carry it must drain past it
+	// without any sidecar interaction.
 	sidecar.TaskTypeSnapshotUpload:         deserializeSnapshotUploadTombstone,
 	sidecar.TaskTypeGenerateIdentity:       sidecarTask[sidecar.GenerateIdentityTask](false),
 	sidecar.TaskTypeGenerateGentx:          sidecarTask[sidecar.GenerateGentxTask](false),
