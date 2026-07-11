@@ -48,9 +48,6 @@ var bandwidthLimitTmpl string
 //go:embed faults/memory_stress.yaml.tmpl
 var memoryStressTmpl string
 
-//go:embed faults/disk_io_latency.yaml.tmpl
-var diskIOLatencyTmpl string
-
 //go:embed faults/byzantine.yaml.tmpl
 var byzantineTmpl string
 
@@ -72,10 +69,6 @@ type faultParams struct {
 	RunID     string
 	Namespace string
 	Duration  string
-	// DataDir is the seid data-dir mount path (platform.DataDir), templated
-	// into volume-targeting faults (e.g. disk_io_latency) so they track the
-	// controller's real mount path rather than a hardcoded literal.
-	DataDir string
 }
 
 // fault is a rendered Chaos-Mesh fault CR plus the resource name its dynamic
