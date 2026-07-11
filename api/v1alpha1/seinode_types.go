@@ -122,7 +122,9 @@ type DataVolumeImport struct {
 
 // SnapshotSource returns the SnapshotSource from whichever mode sub-spec is
 // populated, or nil if no snapshot is configured. Archive nodes always return
-// nil because they use state sync (configured internally by the planner).
+// nil: they bootstrap via block sync from peers (or an imported volume), never
+// by restoring from a snapshot, so ArchiveSpec carries no snapshot source — its
+// SnapshotGeneration knob only produces snapshots for other nodes to restore from.
 func (s *SeiNodeSpec) SnapshotSource() *SnapshotSource {
 	switch {
 	case s.FullNode != nil:
