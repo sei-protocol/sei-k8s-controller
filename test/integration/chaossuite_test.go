@@ -59,16 +59,20 @@ var chaosScenarios = []chaosScenario{
 	// recovery-focused assert + peer-FQDN-matching patterns.
 	//
 	// disk-io-latency deferred: chaos-mesh IOChaos's toda injector reopens each
-	// target fd by pathname while the process is ptrace-paused. seid's SeiDB
-	// store (memIAVL/pebbledb) holds deleted-but-still-open files as steady-state
-	// behavior during compaction (unlinked the moment a new SST is durable, still
-	// read via the old fd) — a path-based reopen against those is a structural
-	// ENOENT, not a rare race, independent of the current $HOME/.sei mount
-	// nesting. Confirmed the harness itself isn't the problem: volumePath is
-	// correctly templated at platform.DataDir (the real, current mount root), not
-	// a stale or parent path. Re-add if chaos-mesh ships an injector that doesn't
-	// reopen-by-path over a live LSM tree, or a non-chaos-mesh mechanism (cgroup
-	// v2 io.max, dm-delay) is validated as a replacement.
+	// target fd by pathname while the process is ptrace-paused — the pause
+	// freezes the process, not the filesystem, so an already-removed path stays
+	// removed. Both of SeiDB's storage engines remove old on-disk files while a
+	// live reader can still hold them: pebbledb (an LSM-tree store) unlinks an
+	// old SST the instant compaction makes a new one durable, still readable via
+	// the old fd; memIAVL prunes old snapshot directories by path in the
+	// background while a live reader can still hold one mmap'd via refcount.
+	// Either way, a path-based reopen against the now-removed path is a
+	// structural ENOENT, not a rare race, independent of the current $HOME/.sei
+	// mount nesting. Confirmed the harness itself wasn't the problem: volumePath
+	// was correctly templated at platform.DataDir (the real, current mount
+	// root), not a stale or parent path. Re-add if chaos-mesh ships an injector
+	// that doesn't reopen-by-path over a live store, or a non-chaos-mesh
+	// mechanism (cgroup v2 io.max, dm-delay) is validated as a replacement.
 }
 
 // TestChaosSuite runs each fault against its own fresh chain: provision → inject
