@@ -34,7 +34,6 @@ const (
 	TaskConfigPatch        = sidecar.TaskTypeConfigPatch
 	TaskConfigValidate     = sidecar.TaskTypeConfigValidate
 	TaskMarkReady          = sidecar.TaskTypeMarkReady
-	TaskSnapshotUpload     = sidecar.TaskTypeSnapshotUpload
 	TaskAwaitCondition     = sidecar.TaskTypeAwaitCondition
 
 	TaskGenerateIdentity       = sidecar.TaskTypeGenerateIdentity
@@ -432,20 +431,6 @@ func isGenesisCeremonyNode(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Validator != nil && node.Spec.Validator.GenesisCeremony != nil
 }
 
-// SnapshotGeneration extracts the SnapshotGenerationConfig from the populated
-// mode sub-spec. Callers reach through .Tendermint for mode-specific fields
-// (KeepRecent, Publish).
-func SnapshotGeneration(node *seiv1alpha1.SeiNode) *seiv1alpha1.SnapshotGenerationConfig {
-	switch {
-	case node.Spec.FullNode != nil:
-		return node.Spec.FullNode.SnapshotGeneration
-	case node.Spec.Archive != nil:
-		return node.Spec.Archive.SnapshotGeneration
-	default:
-		return nil
-	}
-}
-
 // validateSnapshotGeneration returns errors without a mode prefix; callers
 // wrap with their own (e.g., fmt.Errorf("fullNode: %w", err)).
 func validateSnapshotGeneration(sg *seiv1alpha1.SnapshotGenerationConfig) error {
@@ -564,12 +549,6 @@ func buildBasePlan(
 	if err != nil {
 		return nil, err
 	}
-	if sg := SnapshotGeneration(node); sg != nil && sg.Tendermint != nil && sg.Tendermint.Publish != nil {
-		sidecarProg, err = insertBefore(sidecarProg, TaskMarkReady, TaskSnapshotUpload)
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	// Infrastructure tasks run before sidecar tasks.
 	prog := make([]string, 0, 4+len(sidecarProg))
@@ -654,8 +633,6 @@ func paramsForTaskType(
 		return sidecar.ConfigValidateTask{}
 	case TaskMarkReady:
 		return sidecar.MarkReadyTask{}
-	case TaskSnapshotUpload:
-		return sidecar.SnapshotUploadTask{}
 
 	// Genesis ceremony tasks — only valid when Validator.GenesisCeremony is set.
 	case TaskGenerateIdentity, TaskGenerateGentx, TaskUploadGenesisArtifacts, TaskSetGenesisPeers:
