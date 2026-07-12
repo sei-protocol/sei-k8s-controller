@@ -34,8 +34,9 @@ type tendermintStatus struct {
 }
 
 type syncInfo struct {
-	LatestBlockHeight string `json:"latest_block_height"`
-	CatchingUp        bool   `json:"catching_up"`
+	LatestBlockHeight   string `json:"latest_block_height"`
+	EarliestBlockHeight string `json:"earliest_block_height"`
+	CatchingUp          bool   `json:"catching_up"`
 }
 
 func (s *tendermintStatus) sync() syncInfo {
@@ -86,6 +87,28 @@ func latestHeight(ctx context.Context, hc *http.Client, tmRPC string) (int64, bo
 		return 0, false
 	}
 	h, err := strconv.ParseInt(s.sync().LatestBlockHeight, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return h, true
+}
+
+// EarliestHeight reads tmRPC's earliest retained block height from /status.
+// ok=false on an unreachable endpoint or unparseable body. A state-synced node
+// reports an earliest > 1 (it started from a snapshot); a genesis-replayed node
+// reports 1 — so this is the point read that distinguishes the two. It accepts
+// both the enveloped and unwrapped /status shapes the Sei fork emits. Point read
+// only; there is no Wait wrapper.
+func EarliestHeight(ctx context.Context, hc *http.Client, tmRPC string) (int64, bool) {
+	body, ok := getJSON(ctx, hc, http.MethodGet, tmRPC+"/status", "")
+	if !ok {
+		return 0, false
+	}
+	var s tendermintStatus
+	if json.Unmarshal(body, &s) != nil {
+		return 0, false
+	}
+	h, err := strconv.ParseInt(s.sync().EarliestBlockHeight, 10, 64)
 	if err != nil {
 		return 0, false
 	}

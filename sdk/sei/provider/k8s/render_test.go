@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
@@ -123,6 +124,33 @@ func TestRenderNode_CallerLabelsMergeUnderCanonical(t *testing.T) {
 	}
 	if got := node.Labels[sei.LabelSeiNetwork]; got != testNet {
 		t.Errorf("canonical %s = %q, want %s", sei.LabelSeiNetwork, got, testNet)
+	}
+}
+
+func TestRenderNode_StateSync(t *testing.T) {
+	// Two DISTINCT witnesses: the served CRD field is a MinItems=2 listType=set,
+	// so a duplicated set is not what render carries end to end.
+	witnesses := []string{"validator-0:26657", "validator-1:26657"}
+	spec := sei.NodeSpec{
+		Name: rpc0Name, Network: testNet, Image: testImage,
+		StateSync: &sei.NodeStateSync{RpcServers: witnesses},
+	}
+	node := renderNode(spec, testNS, testNS)
+
+	// StateSync maps to spec.fullNode.snapshot with the stateSync variant and the
+	// caller's bare host:port witnesses.
+	snap := node.Spec.FullNode.Snapshot
+	if snap == nil || snap.StateSync == nil {
+		t.Fatalf("state-sync node must render fullNode.snapshot.stateSync: %+v", node.Spec.FullNode)
+	}
+	if !slices.Equal(snap.RpcServers, witnesses) {
+		t.Errorf("snapshot.rpcServers = %v, want %v", snap.RpcServers, witnesses)
+	}
+
+	// Genesis block-sync (nil StateSync) leaves Snapshot unset — the unchanged path.
+	genesis := renderNode(sei.NodeSpec{Name: rpc0Name, Network: testNet, Image: testImage}, testNS, testNS)
+	if genesis.Spec.FullNode.Snapshot != nil {
+		t.Errorf("genesis node must leave snapshot nil, got %+v", genesis.Spec.FullNode.Snapshot)
 	}
 }
 

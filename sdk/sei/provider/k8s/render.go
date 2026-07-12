@@ -111,6 +111,14 @@ func renderNode(spec sei.NodeSpec, namespace, networkNS string) *seiv1alpha1.Sei
 	if len(spec.Config) > 0 {
 		node.Spec.Overrides = maps.Clone(spec.Config)
 	}
+	if ss := spec.StateSync; ss != nil {
+		// Bootstrap via CometBFT state sync: the witnesses are the caller's bare
+		// host:port RpcServers; genesis block-sync leaves Snapshot nil (unchanged).
+		node.Spec.FullNode.Snapshot = &seiv1alpha1.SnapshotSource{
+			StateSync:  &seiv1alpha1.StateSyncSource{},
+			RpcServers: ss.RpcServers,
+		}
+	}
 	return node
 }
 

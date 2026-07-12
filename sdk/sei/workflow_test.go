@@ -31,7 +31,7 @@ func TestValidateWorkflowSpec(t *testing.T) {
 			func(s *WorkflowSpec) {
 				s.StateSync = &StateSyncWorkflow{
 					ConfigPatch: map[string]map[string]any{"app.toml": {"state-store.evm-ss-split": true}},
-					RpcServers:  []string{"a:26657", "b:26657"},
+					RpcServers:  []string{witnessA, witnessB},
 				}
 			},
 			false,

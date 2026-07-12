@@ -21,6 +21,7 @@ package sei
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -218,6 +219,19 @@ func validateNodeSpec(s NodeSpec) error {
 		return usageErr("NodeSpec.Network is required (the peer-wire target)")
 	case strings.TrimSpace(s.Image) == "":
 		return usageErr("NodeSpec.Image is required")
+	case s.StateSync != nil:
+		// Count DISTINCT entries, not the raw length: the served CRD field is a
+		// MinItems=2 listType=set, and the controller normalizes it with the same
+		// sort+Compact before its canonical-syncer floor — so a duplicated witness
+		// set collapses below the floor and never produces a state-sync plan.
+		// Mirror that here rather than green-lighting a set the apiserver/controller
+		// will reject. Witnesses must be distinct light-client sources.
+		if distinct := len(slices.Compact(slices.Sorted(slices.Values(s.StateSync.RpcServers)))); distinct < 2 {
+			// Report the DISTINCT count, not the raw len: the floor is on distinct
+			// entries, so a two-element set of identical witnesses fails with
+			// distinct=1 — reporting len=2 would misdescribe the failure.
+			return usageErr("NodeSpec.StateSync.RpcServers must have >= 2 DISTINCT entries (the state-sync witness floor: served CRD MinItems=2 listType=set + the controller's canonical-syncer floor), got %d distinct", distinct)
+		}
 	}
 	return nil
 }
