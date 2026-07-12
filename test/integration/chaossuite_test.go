@@ -76,6 +76,14 @@ func TestChaosSuite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CHAOS_DURATION %q: %v", duration, err)
 	}
+	// injectWindow must stay below faultDur: a fault that injects late but
+	// successfully needs real time left on its own duration for the
+	// under-fault liveness check, or that check silently passes against a
+	// fault that already self-expired (false-green). Fail loud here rather
+	// than let a smaller CHAOS_DURATION quietly produce that false green.
+	if injectWindow >= faultDur {
+		t.Fatalf("injectWindow (%s) must be below CHAOS_DURATION (%s)", injectWindow, faultDur)
+	}
 
 	for _, sc := range chaosScenarios {
 		t.Run(sc.name, func(t *testing.T) {

@@ -19,13 +19,19 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// injectDeadline bounds fault injection independently of the per-scenario
-// timeout. A fault that has not reached AllInjected within this window is stuck
-// (a chaos-daemon apply erroring on every retry), not slow — fail fast rather
-// than poll the never-flipping condition until the scenario budget expires. Set
-// well above chaos-mesh's observed inject latency (seconds), with margin for
-// selector settling and daemon apply retries.
-const injectDeadline = 5 * time.Minute
+// injectWindow bounds fault injection independently of the per-scenario
+// timeout: if a fault hasn't reached AllInjected within this window, fail fast
+// rather than poll the never-flipping condition until the scenario budget
+// expires (a stuck chaos-daemon retry loop would otherwise silently eat the
+// full 40m scenario timeout). This is a blast-radius bound, not a
+// stuck-vs-slow classifier: chaos-mesh's own retry backoff and a cold-starting
+// daemon on a freshly scaled node can legitimately take a while, so an expiry
+// here isn't proof of a stuck daemon, just a signal to stop waiting. Sized
+// well above steady-state inject latency (seconds) while staying below
+// CHAOS_DURATION's default (3m) — see TestChaosSuite's injectWindow-vs-faultDur
+// guard, which exists so a late-but-successful injection still leaves real
+// time for the under-fault liveness check.
+const injectWindow = 90 * time.Second
 
 //go:embed faults/network_partition.yaml.tmpl
 var networkPartitionTmpl string
@@ -137,16 +143,13 @@ func applyFault(ctx context.Context, t *testing.T, dc dynamic.Interface, ns stri
 // wouldn't catch a future selector edit that killed 2/4 and halted the chain.
 func gateInjected(ctx context.Context, t *testing.T, dc dynamic.Interface, ns string, f fault, oneShot bool) {
 	t.Helper()
-	// Bound injection independently of the scenario deadline: a fault that has
-	// not reached AllInjected within injectDeadline is stuck (e.g. a chaos-daemon
-	// apply erroring on every retry), not merely slow. Without this it would poll
-	// the never-flipping condition until the full scenario timeout, turning a
-	// single stuck injection into a ~40m run that reds the suite with an opaque
-	// "before deadline" at the very end. Recovery keeps the scenario ctx — it is
-	// gated on the fault's own spec.duration, not a fixed budget.
-	injectCtx, cancel := context.WithTimeout(ctx, injectDeadline)
+	injectCtx, cancel := context.WithTimeout(ctx, injectWindow)
 	defer cancel()
 	waitFaultCondition(injectCtx, t, dc, ns, f, "AllInjected")
+	// Deliberately ctx here, not injectCtx: a fault that injects near the
+	// injectWindow boundary can leave injectCtx with almost no time left, and
+	// this single fast read shouldn't spuriously fail on that race — only the
+	// poll loop above is time-boxed.
 	u, err := dc.Resource(chaosGVR(f.resource)).Namespace(ns).Get(ctx, f.obj.GetName(), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("read injected targets for %s/%s: %v", f.resource, f.obj.GetName(), err)
@@ -180,7 +183,12 @@ func faultInjectedTargets(u *unstructured.Unstructured) int {
 }
 
 // gateRecovered blocks until AllRecovered=True, catching chaos-mesh finalizers
-// stuck on leftover tc/tproxy rules before teardown.
+// stuck on leftover tc/tproxy rules before teardown. Runs on the scenario ctx
+// (gated on the fault's own spec.duration, not a fixed budget) — unlike
+// gateInjected, there's no separate fail-fast window here. If gateInjected
+// fails fast instead, this never runs, so a stuck-daemon abort skips this
+// teardown assertion; cleanupChain still tears down the ephemeral namespace
+// regardless.
 func gateRecovered(ctx context.Context, t *testing.T, dc dynamic.Interface, ns string, f fault) {
 	t.Helper()
 	waitFaultCondition(ctx, t, dc, ns, f, "AllRecovered")
