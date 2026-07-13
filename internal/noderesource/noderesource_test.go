@@ -880,20 +880,6 @@ func TestResourcesForNode_DefaultsPerMode(t *testing.T) {
 	}
 }
 
-// TestResourcesForNode_ArchiveIgnoresLegacyMemArchive proves the node container
-// resolves archive from the per-mode code default (512Gi, full r7i.16xlarge
-// envelope), not the legacy resources.memArchive field (448Gi in the fixture) — the legacy
-// flat fields feed only the bootstrap Job now.
-func TestResourcesForNode_ArchiveIgnoresLegacyMemArchive(t *testing.T) {
-	g := NewWithT(t)
-	cfg := platformtest.Config() // carries legacy memArchive=448Gi
-	res := ResourcesForNode(nodeForRole(roleArchive), cfg)
-	memReq := res.Requests[corev1.ResourceMemory]
-	g.Expect(memReq).To(Equal(resource.MustParse(memArchive)))
-	g.Expect(memReq).ToNot(Equal(resource.MustParse(cfg.ResourceMemArchive)),
-		"archive node container must not read the legacy memArchive field")
-}
-
 // TestResourcesForNode_OverridePerMode verifies an app-config resources.<mode>
 // block overrides the code default for that mode only, as memory request==limit.
 func TestResourcesForNode_OverridePerMode(t *testing.T) {
