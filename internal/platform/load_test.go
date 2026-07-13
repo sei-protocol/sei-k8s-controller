@@ -12,6 +12,7 @@ const fullConfig = `
 scheduling:
   nodepoolName: file-nodepool
   nodepoolArchive: file-nodepool-archive
+  nodepoolValidator: file-nodepool-validator
   tolerationKey: file-toleration
   serviceAccount: file-sa
 storage:
@@ -75,6 +76,9 @@ func TestLoad_InfraFromFile_GatewayFromEnv(t *testing.T) {
 	if cfg.NodepoolName != "file-nodepool" {
 		t.Errorf("NodepoolName = %q, want file-nodepool (infra env must be ignored)", cfg.NodepoolName)
 	}
+	if cfg.NodepoolValidator != "file-nodepool-validator" {
+		t.Errorf("NodepoolValidator = %q, want file-nodepool-validator", cfg.NodepoolValidator)
+	}
 	if cfg.CosmosExporterImage != "file-cosmos-exporter" {
 		t.Errorf("CosmosExporterImage = %q, want file-cosmos-exporter", cfg.CosmosExporterImage)
 	}
@@ -123,6 +127,25 @@ func TestLoad_MissingField_FailsValidate(t *testing.T) {
 	}
 }
 
+// scheduling.nodepoolValidator is required (mirrors nodepoolArchive): a file
+// omitting it fails Validate at startup, naming the file key. This is the
+// fail-closed guard that keeps validators from silently falling back to the
+// shared pool when the validator pool key is missing.
+func TestLoad_MissingNodepoolValidator_FailsValidate(t *testing.T) {
+	setGatewayEnv(t)
+	body := strings.Replace(fullConfig, "  nodepoolValidator: file-nodepool-validator\n", "", 1)
+	path := writeConfig(t, body)
+	t.Setenv(envControllerConfig, path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "scheduling.nodepoolValidator") {
+		t.Fatalf("want Validate error naming scheduling.nodepoolValidator, got %v", err)
+	}
+}
+
 // A missing gateway env var fails Validate, naming the env var (gateway is still
 // env-sourced pending PLT-451).
 func TestLoad_MissingGateway_FailsValidate(t *testing.T) {
@@ -147,6 +170,67 @@ func TestLoad_MalformedFile_Errors(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for malformed config file, got nil")
+	}
+}
+
+// Backward compat: an app-config file with no resources.<role> blocks loads
+// and validates, leaving the per-role overrides empty (the node container then
+// falls back to the code defaults).
+func TestLoad_NoResourceOverrides_ValidatesEmpty(t *testing.T) {
+	setGatewayEnv(t)
+	path := writeConfig(t, fullConfig)
+	t.Setenv(envControllerConfig, path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if cfg.NodeResourcesValidator != (ResourceOverride{}) || cfg.NodeResourcesArchive != (ResourceOverride{}) {
+		t.Errorf("expected empty per-role overrides, got validator=%+v archive=%+v",
+			cfg.NodeResourcesValidator, cfg.NodeResourcesArchive)
+	}
+}
+
+// A resources.<mode> block is parsed onto the matching per-mode Config field.
+func TestLoad_ResourceOverrides_FromFile(t *testing.T) {
+	setGatewayEnv(t)
+	body := strings.Replace(fullConfig,
+		"  memDefault: file-mem-default\n",
+		"  memDefault: file-mem-default\n"+
+			"  validator:\n    cpuRequest: \"8\"\n    memory: 120Gi\n",
+		1)
+	path := writeConfig(t, body)
+	t.Setenv(envControllerConfig, path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	want := ResourceOverride{CPURequest: "8", Memory: "120Gi"}
+	if cfg.NodeResourcesValidator != want {
+		t.Errorf("NodeResourcesValidator = %+v, want %+v", cfg.NodeResourcesValidator, want)
+	}
+}
+
+// An empty override is valid (all sub-fields fall back to code defaults).
+func TestResourceOverride_Validate(t *testing.T) {
+	if err := (ResourceOverride{}).validate("resources.node"); err != nil {
+		t.Fatalf("empty override should validate, got %v", err)
+	}
+	if err := (ResourceOverride{CPURequest: "8", Memory: "120Gi"}).validate("resources.validator"); err != nil {
+		t.Fatalf("valid override should validate, got %v", err)
+	}
+
+	// An unparseable quantity fails, naming the field.
+	err := ResourceOverride{Memory: "not-a-quantity"}.validate("resources.archive")
+	if err == nil || !strings.Contains(err.Error(), "resources.archive.memory") {
+		t.Fatalf("want error naming resources.archive.memory, got %v", err)
 	}
 }
 

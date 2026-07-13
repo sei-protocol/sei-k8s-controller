@@ -6,6 +6,8 @@ package platform
 import (
 	"fmt"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -29,6 +31,9 @@ const (
 
 	// modeArchive matches seiconfig.ModeArchive without importing sei-config.
 	modeArchive = "archive"
+
+	// modeValidator matches seiconfig.ModeValidator without importing sei-config.
+	modeValidator = "validator"
 )
 
 // Config holds infrastructure-level settings that vary per deployment
@@ -40,6 +45,7 @@ const (
 type Config struct {
 	NodepoolName        string
 	NodepoolArchive     string
+	NodepoolValidator   string
 	TolerationKey       string
 	ServiceAccount      string
 	StorageClassPerf    string
@@ -51,8 +57,19 @@ type Config struct {
 	ResourceMemArchive  string
 	ResourceCPUDefault  string
 	ResourceMemDefault  string
-	SnapshotBucket      string
-	SnapshotRegion      string
+
+	// Per-role seid-container resource overrides, keyed by sei.io/role. Each is
+	// optional: an unset field (or unset sub-field) falls back to the
+	// code-authoritative, prod-safe defaults in internal/noderesource. The
+	// legacy flat fields above are NOT consulted for the node container — they
+	// remain only for the genesis-bootstrap Job. See ResourcesConfig.
+	NodeResourcesValidator ResourceOverride
+	NodeResourcesNode      ResourceOverride
+	NodeResourcesReplayer  ResourceOverride
+	NodeResourcesArchive   ResourceOverride
+
+	SnapshotBucket string
+	SnapshotRegion string
 
 	ResultExportBucket string
 	ResultExportRegion string
@@ -115,10 +132,11 @@ type StateSyncConfig struct {
 
 // SchedulingConfig places node pods onto Karpenter pools and the seid service account.
 type SchedulingConfig struct {
-	NodepoolName    string `json:"nodepoolName"`
-	NodepoolArchive string `json:"nodepoolArchive"`
-	TolerationKey   string `json:"tolerationKey"`
-	ServiceAccount  string `json:"serviceAccount"`
+	NodepoolName      string `json:"nodepoolName"`
+	NodepoolArchive   string `json:"nodepoolArchive"`
+	NodepoolValidator string `json:"nodepoolValidator"`
+	TolerationKey     string `json:"tolerationKey"`
+	ServiceAccount    string `json:"serviceAccount"`
 }
 
 // StorageConfig holds the PVC storage classes and sizes for default and archive nodes.
@@ -130,12 +148,41 @@ type StorageConfig struct {
 	SizeArchive  string `json:"sizeArchive"`
 }
 
-// ResourcesConfig holds the CPU/memory requests for default and archive nodes.
+// ResourcesConfig holds seid-container resource sizing.
+//
+// The per-role blocks (below) size the seid container: each is optional and
+// falls back to the code-authoritative default for that role in
+// internal/noderesource. Both the long-running node container and the transient
+// genesis-bootstrap Job take this per-role footprint (the Job via
+// noderesource.ResourcesForNode).
+//
+// The flat fields (cpuArchive/memArchive/cpuDefault/memDefault) are legacy and
+// no longer size any container; they remain required for backward compatibility
+// with existing app-config files, pending removal.
 type ResourcesConfig struct {
 	CPUArchive string `json:"cpuArchive"`
 	MemArchive string `json:"memArchive"`
 	CPUDefault string `json:"cpuDefault"`
 	MemDefault string `json:"memDefault"`
+
+	// Per-role overrides, keyed to sei.io/role.
+	Validator ResourceOverride `json:"validator"`
+	Node      ResourceOverride `json:"node"`
+	Replayer  ResourceOverride `json:"replayer"`
+	Archive   ResourceOverride `json:"archive"`
+}
+
+// ResourceOverride is a per-mode seid-container resource override. Both fields
+// are optional and, when set, must be valid Kubernetes quantity strings.
+//
+// Memory is a single value used as BOTH the memory request and the memory limit
+// (memory-Guaranteed: the mode's footprint is hard-reserved and hard-capped).
+// CPU is request-only by design: seid is work-conserving and CPU is
+// compressible, so a CPU limit would only throttle seid's measured 10–12 core
+// consensus/replay bursts — there is deliberately no CPU-limit field.
+type ResourceOverride struct {
+	CPURequest string `json:"cpuRequest"`
+	Memory     string `json:"memory"`
 }
 
 // BucketConfig is an S3 bucket + region pair (snapshot, genesis).
@@ -159,13 +206,17 @@ type ImagesConfig struct {
 }
 
 // NodepoolForMode returns the Karpenter NodePool name for the given
-// sei-config mode string. Archive nodes use a dedicated pool; all
-// other modes share the default pool.
+// sei-config mode string. Archive and validator nodes each use a
+// dedicated pool; all other modes share the default pool.
 func (c Config) NodepoolForMode(mode string) string {
-	if mode == modeArchive {
+	switch mode {
+	case modeArchive:
 		return c.NodepoolArchive
+	case modeValidator:
+		return c.NodepoolValidator
+	default:
+		return c.NodepoolName
 	}
-	return c.NodepoolName
 }
 
 // Validate returns an error if a required field is unset. name is the field's
@@ -179,6 +230,7 @@ func (c Config) Validate() error {
 	}{
 		{"scheduling.nodepoolName", c.NodepoolName},
 		{"scheduling.nodepoolArchive", c.NodepoolArchive},
+		{"scheduling.nodepoolValidator", c.NodepoolValidator},
 		{"scheduling.tolerationKey", c.TolerationKey},
 		{"scheduling.serviceAccount", c.ServiceAccount},
 		{"storage.classPerf", c.StorageClassPerf},
@@ -207,6 +259,43 @@ func (c Config) Validate() error {
 	for _, f := range required {
 		if strings.TrimSpace(f.val) == "" {
 			return fmt.Errorf("%s is required", f.name)
+		}
+	}
+
+	overrides := []struct {
+		key string
+		val ResourceOverride
+	}{
+		{"resources.validator", c.NodeResourcesValidator},
+		{"resources.node", c.NodeResourcesNode},
+		{"resources.replayer", c.NodeResourcesReplayer},
+		{"resources.archive", c.NodeResourcesArchive},
+	}
+	for _, o := range overrides {
+		if err := o.val.validate(o.key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate parse-checks the override's quantity strings (fail-fast at startup so
+// the reconcile path can MustParse them). Empty sub-fields are skipped: they
+// fall back to the per-mode code default.
+func (o ResourceOverride) validate(key string) error {
+	fields := []struct {
+		name string
+		val  string
+	}{
+		{"cpuRequest", o.CPURequest},
+		{"memory", o.Memory},
+	}
+	for _, f := range fields {
+		if strings.TrimSpace(f.val) == "" {
+			continue
+		}
+		if _, err := resource.ParseQuantity(f.val); err != nil {
+			return fmt.Errorf("%s.%s: invalid quantity %q: %w", key, f.name, f.val, err)
 		}
 	}
 	return nil

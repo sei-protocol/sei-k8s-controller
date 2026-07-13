@@ -38,10 +38,11 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		NodepoolName:    file.Scheduling.NodepoolName,
-		NodepoolArchive: file.Scheduling.NodepoolArchive,
-		TolerationKey:   file.Scheduling.TolerationKey,
-		ServiceAccount:  file.Scheduling.ServiceAccount,
+		NodepoolName:      file.Scheduling.NodepoolName,
+		NodepoolArchive:   file.Scheduling.NodepoolArchive,
+		NodepoolValidator: file.Scheduling.NodepoolValidator,
+		TolerationKey:     file.Scheduling.TolerationKey,
+		ServiceAccount:    file.Scheduling.ServiceAccount,
 
 		StorageClassPerf:    file.Storage.ClassPerf,
 		StorageClassDefault: file.Storage.ClassDefault,
@@ -53,6 +54,11 @@ func Load() (Config, error) {
 		ResourceMemArchive: file.Resources.MemArchive,
 		ResourceCPUDefault: file.Resources.CPUDefault,
 		ResourceMemDefault: file.Resources.MemDefault,
+
+		NodeResourcesValidator: file.Resources.Validator,
+		NodeResourcesNode:      file.Resources.Node,
+		NodeResourcesReplayer:  file.Resources.Replayer,
+		NodeResourcesArchive:   file.Resources.Archive,
 
 		SnapshotBucket: file.Snapshot.Bucket,
 		SnapshotRegion: file.Snapshot.Region,
