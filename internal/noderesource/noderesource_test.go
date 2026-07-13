@@ -14,6 +14,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 )
 
@@ -737,6 +738,24 @@ func TestBuildNodePodSpec_Archive_SchedulesOnArchiveNodepool(t *testing.T) {
 	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-archive"))
 }
 
+func TestBuildNodePodSpec_Validator_SchedulesOnValidatorNodepool(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("validator-0", "pacific-1")
+
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(spec.Tolerations).To(HaveLen(1))
+	g.Expect(spec.Tolerations[0].Key).To(Equal("sei.io/workload"))
+	g.Expect(spec.Tolerations[0].Value).To(Equal("sei-validator"))
+
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	g.Expect(terms).To(HaveLen(1))
+	g.Expect(terms[0].MatchExpressions).To(HaveLen(1))
+	g.Expect(terms[0].MatchExpressions[0].Key).To(Equal("karpenter.sh/nodepool"))
+	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-validator"))
+}
+
 func TestBuildNodePodSpec_FullNode_SchedulesOnDefaultNodepool(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("syncer-0", "pacific-1")
@@ -811,13 +830,100 @@ func TestDefaultStorageForMode_FullNode(t *testing.T) {
 	g.Expect(size).To(Equal("2000Gi"))
 }
 
-func TestDefaultResourcesForMode_Archive(t *testing.T) {
+// nodeForRole builds a minimal SeiNode whose populated sub-spec selects the
+// given sei.io/role. An empty role string yields a full node (no sub-spec).
+func nodeForRole(role string) *seiv1alpha1.SeiNode {
+	spec := seiv1alpha1.SeiNodeSpec{ChainID: testChainID, Image: testNodeImage}
+	switch role {
+	case roleValidator:
+		spec.Validator = &seiv1alpha1.ValidatorSpec{}
+	case roleArchive:
+		spec.Archive = &seiv1alpha1.ArchiveSpec{}
+	case roleReplayer:
+		spec.Replayer = &seiv1alpha1.ReplayerSpec{}
+	default:
+		spec.FullNode = &seiv1alpha1.FullNodeSpec{}
+	}
+	return &seiv1alpha1.SeiNode{ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "ns"}, Spec: spec}
+}
+
+// TestResourcesForNode_DefaultsPerMode locks the code-authoritative per-mode
+// footprint: memory request==limit per mode (the blast-radius fix) and never a
+// CPU limit.
+func TestResourcesForNode_DefaultsPerMode(t *testing.T) {
+	cfg := platformtest.Config()
+	cases := []struct {
+		role   string
+		cpuReq string
+		memory string
+	}{
+		{roleValidator, cpuValidator, memValidator},
+		{"", cpuRPCClass, memRPCClass}, // fullNode / rpc
+		{roleReplayer, cpuRPCClass, memRPCClass},
+		{roleArchive, cpuArchive, memArchive},
+	}
+	for _, tc := range cases {
+		t.Run("mode="+tc.role, func(t *testing.T) {
+			g := NewWithT(t)
+			res := ResourcesForNode(nodeForRole(tc.role), cfg)
+
+			mem := resource.MustParse(tc.memory)
+			g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse(tc.cpuReq)))
+			g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(mem))
+			// Memory request == limit (memory-Guaranteed) for every mode.
+			g.Expect(res.Limits[corev1.ResourceMemory]).To(Equal(mem))
+
+			// CPU is request-only by design — a CPU limit would throttle seid.
+			_, hasCPULimit := res.Limits[corev1.ResourceCPU]
+			g.Expect(hasCPULimit).To(BeFalse(), "seid must never carry a CPU limit")
+		})
+	}
+}
+
+// TestResourcesForNode_ArchiveIgnoresLegacyMemArchive proves the node container
+// resolves archive from the per-mode code default (512Gi, full r7i.16xlarge
+// envelope), not the legacy resources.memArchive field (448Gi in the fixture) — the legacy
+// flat fields feed only the bootstrap Job now.
+func TestResourcesForNode_ArchiveIgnoresLegacyMemArchive(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config() // carries legacy memArchive=448Gi
+	res := ResourcesForNode(nodeForRole(roleArchive), cfg)
+	memReq := res.Requests[corev1.ResourceMemory]
+	g.Expect(memReq).To(Equal(resource.MustParse(memArchive)))
+	g.Expect(memReq).ToNot(Equal(resource.MustParse(cfg.ResourceMemArchive)),
+		"archive node container must not read the legacy memArchive field")
+}
+
+// TestResourcesForNode_OverridePerMode verifies an app-config resources.<mode>
+// block overrides the code default for that mode only, as memory request==limit.
+func TestResourcesForNode_OverridePerMode(t *testing.T) {
 	g := NewWithT(t)
 	cfg := platformtest.Config()
+	cfg.NodeResourcesReplayer = platform.ResourceOverride{CPURequest: "12", Memory: "180Gi"}
 
-	res := DefaultResourcesForMode(string(seiconfig.ModeArchive), cfg)
-	g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("48")))
-	g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse("448Gi")))
+	res := ResourcesForNode(nodeForRole(roleReplayer), cfg)
+	mem := resource.MustParse("180Gi")
+	g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("12")))
+	g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(mem))
+	g.Expect(res.Limits[corev1.ResourceMemory]).To(Equal(mem))
+
+	// A different mode is unaffected (still on its code default).
+	fn := ResourcesForNode(nodeForRole(""), cfg)
+	g.Expect(fn.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse(memRPCClass)))
+}
+
+// TestResourcesForNode_PartialOverride verifies a memory-only override still
+// yields request==limit and leaves the CPU request on the code default.
+func TestResourcesForNode_PartialOverride(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+	cfg.NodeResourcesNode = platform.ResourceOverride{Memory: "200Gi"}
+
+	res := ResourcesForNode(nodeForRole(""), cfg)
+	mem := resource.MustParse("200Gi")
+	g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(mem))
+	g.Expect(res.Limits[corev1.ResourceMemory]).To(Equal(mem))
+	g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse(cpuRPCClass)))
 }
 
 // --- Signing key (validator) ---

@@ -9,6 +9,7 @@ func Config() platform.Config {
 	return platform.Config{
 		NodepoolName:        "sei-node",
 		NodepoolArchive:     "sei-archive",
+		NodepoolValidator:   "sei-validator",
 		TolerationKey:       "sei.io/workload",
 		ServiceAccount:      "seid-node",
 		StorageClassPerf:    "gp3-10k-750",

@@ -52,6 +52,17 @@ const (
 	roleReplayer  = "replayer"
 	roleFullNode  = "node"
 
+	// Per-mode seid-container footprint: memory and CPU request are both set to
+	// the full sei-infra / verified-prod instance envelope for the role (memory
+	// is also the limit; CPU has no limit). See defaultNodeResourceProfiles for
+	// the full rationale.
+	memValidator = "128Gi" // full r5.4xlarge envelope; provisioned on the next size up (r5.8xlarge)
+	memRPCClass  = "256Gi" // full r7i.8xlarge envelope (fullNode + replayer); provisioned on r7i.12xlarge
+	memArchive   = "512Gi" // full r7i.16xlarge envelope (verified live prod); provisioned on r7i.24xlarge
+	cpuValidator = "16"    // r5.4xlarge vCPU; request-only, no CPU limit
+	cpuRPCClass  = "32"    // r7i.8xlarge vCPU (fullNode + replayer); request-only, no CPU limit
+	cpuArchive   = "64"    // r7i.16xlarge vCPU; request-only, no CPU limit
+
 	dataDir = platform.DataDir
 
 	// homeMountPath aliases platform.HomeDir (the container HOME). dataDir must
@@ -282,15 +293,130 @@ func DefaultStorageForMode(mode string, p PlatformConfig) (storageClass string, 
 	}
 }
 
-// DefaultResourcesForMode returns CPU and memory requests for the seid
-// container based on the node's operating mode.
-func DefaultResourcesForMode(mode string, p PlatformConfig) corev1.ResourceRequirements {
-	switch mode {
-	case string(seiconfig.ModeArchive):
-		return makeResources(p.ResourceCPUArchive, p.ResourceMemArchive)
+// nodeResourceProfile is a resolved per-mode seid-container footprint: a CPU
+// request and a single memory value used as BOTH request and limit. CPU is
+// request-only by design — seid is work-conserving and CPU is compressible, so
+// a CPU limit would only throttle seid's measured 10–12 core consensus/replay
+// bursts (capacity and systems both confirmed leaving it off); there is no
+// CPU-limit field.
+type nodeResourceProfile struct {
+	cpuRequest string
+	// memory is set as both the memory request and the memory limit
+	// (memory-Guaranteed: the mode's footprint is hard-reserved and hard-capped).
+	memory string
+}
+
+// defaultNodeResourceProfiles is the code-authoritative, prod-safe per-mode
+// footprint. It applies on every cluster even when the app-config file sets no
+// override, so the memory-limit blast-radius fix (unbounded seid OOM-wedging
+// its node) reaches every cluster from the controller image alone.
+//
+// ROLLOUT: this sizes the StatefulSet pod template. Because the SeiNode
+// StatefulSets use UpdateStrategy: OnDelete, a controller upgrade does NOT
+// restart running pods — an existing pod keeps its old (unbounded) spec until
+// it is next recreated (a NodeUpdate replace-pod, drain, eviction, or OOM). So
+// a controller upgrade arms the fix for future pods; the running fleet adopts
+// the request==limit footprint one pod at a time as pods cycle. A same-instance
+// re-create is required to move a live pod under the cap.
+//
+// One uniform profile per CRD mode (validator / fullNode / replayer / archive);
+// every node within a mode is identical. Modes are keyed off the CRD sub-spec
+// (deriveRole), NOT the 3-way seiconfig mode — that mode collapses replayer and
+// fullNode into "full", and they need distinct footprints.
+//
+// Sizing — sei-infra parity. Each mode requests the FULL legacy instance
+// envelope (request==limit, memory-Guaranteed), and the Phase-2 Karpenter pool
+// provisions the NEXT instance size up so the node's allocatable (~95% of
+// advertised, minus DaemonSets/sidecars) comfortably holds that full envelope:
+//   - MEMORY request==limit, hard-reserved and hard-capped per mode. This is
+//     true parity — the pod can actually use the entire legacy amount, which an
+//     allocatable-fit value on the exact instance (~90% of advertised, a K8s
+//     node's allocatable) cannot. The surplus above the request on the bigger
+//     node becomes seid page cache (state reads), reproducing the legacy
+//     big-box performance profile.
+//   - CPU request == the legacy instance vCPU count for the role (16 / 32 / 64),
+//     request-only, no CPU limit (CPU is compressible; a limit would throttle
+//     seid's 10–12 core consensus/replay bursts). One-per-node plus no CPU limit
+//     means seid bursts across the bigger node's full core count regardless; the
+//     request matches the legacy allocation for parity and honest accounting.
+//
+// Envelope → provisioned instance (the Phase-2 NodePool pins these, platform
+// side — the controller REQUESTS, the pool PROVISIONS):
+//   - validator:           r5.4xlarge   (128 GiB) → request 128Gi, node r*.8xlarge  (256 GiB)
+//   - fullNode / replayer: r7i.8xlarge  (256 GiB) → request 256Gi, node r*.12xlarge (384 GiB)
+//   - archive:             r7i.16xlarge (512 GiB) → request 512Gi, node r*.24xlarge (768 GiB)
+//
+// Bumping one size means no Karpenter reserve tuning: a full-envelope request
+// sits well below the next-size-up node's default provisioning estimate
+// (advertised × (1 − VM_MEMORY_OVERHEAD_PERCENT=0.075)), so stock Karpenter
+// schedules it (e.g. 256Gi ≤ 384×0.925 = 355Gi). The request and the pool's
+// instance size are a provider/consumer contract: keep the request ≤ the
+// provisioned node's allocatable when either side changes.
+//
+// Every deriveRole output MUST have an entry here (a missing key yields a
+// zero-value profile → firstNonEmpty("","") → resource.MustParse("") panics in
+// reconcile). A new role means a new entry AND a case in
+// TestResourcesForNode_DefaultsPerMode.
+var defaultNodeResourceProfiles = map[string]nodeResourceProfile{
+	// Legacy validator: r5.4xlarge (128 GiB) → 112Gi allocatable-fit. Hard cap
+	// → OOM = missed blocks / slashing, so sized to the full instance capacity
+	// the node needs under heavy load, not to lightly-loaded observed usage.
+	roleValidator: {cpuRequest: cpuValidator, memory: memValidator},
+	// fullNode absorbs public-RPC + snapshotter + state-syncer. Legacy
+	// standalone/public-RPC: r7i.8xlarge (256 GiB) → 236Gi allocatable-fit.
+	roleFullNode: {cpuRequest: cpuRPCClass, memory: memRPCClass},
+	// Shadow-replay: legacy replayer ran r7i.8xlarge (256 GiB) → 236Gi, same
+	// profile as fullNode.
+	roleReplayer: {cpuRequest: cpuRPCClass, memory: memRPCClass},
+	// Archive: verified live prod runs r7i.16xlarge (512 GiB) → 476Gi
+	// allocatable-fit. (The sei-infra TF hardcodes a stale m7i.8xlarge/128Gi;
+	// the live fleet is ground truth.)
+	roleArchive: {cpuRequest: cpuArchive, memory: memArchive},
+}
+
+// overrideForRole returns the app-config resource override for a node's mode.
+func overrideForRole(role string, p PlatformConfig) platform.ResourceOverride {
+	switch role {
+	case roleValidator:
+		return p.NodeResourcesValidator
+	case roleArchive:
+		return p.NodeResourcesArchive
+	case roleReplayer:
+		return p.NodeResourcesReplayer
 	default:
-		return makeResources(p.ResourceCPUDefault, p.ResourceMemDefault)
+		return p.NodeResourcesNode
 	}
+}
+
+// ResourcesForNode returns the seid-container resource requirements for a node:
+// a CPU request and a memory request==limit (no CPU limit — see
+// nodeResourceProfile). Values come from the app-config resources.<mode>
+// override when set, otherwise the per-mode code default.
+func ResourcesForNode(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.ResourceRequirements {
+	role := deriveRole(node)
+	d := defaultNodeResourceProfiles[role]
+	o := overrideForRole(role, p)
+
+	cpuReq := resource.MustParse(firstNonEmpty(o.CPURequest, d.cpuRequest))
+	mem := resource.MustParse(firstNonEmpty(o.Memory, d.memory))
+
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    cpuReq,
+			corev1.ResourceMemory: mem,
+		},
+		Limits: corev1.ResourceList{
+			// Memory limit == request: hard-reserved and hard-capped per mode.
+			corev1.ResourceMemory: mem,
+		},
+	}
+}
+
+func firstNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
 }
 
 // ---------------------------------------------------------------------------
@@ -685,7 +811,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.Container {
 	container := buildNodeMainContainer(node)
 	container.Command, container.Args = sidecarWaitCommand(node)
-	container.Resources = DefaultResourcesForMode(NodeMode(node), p)
+	container.Resources = ResourcesForNode(node, p)
 	// Sidecar binds loopback; gate startup on the proxy's /v0/healthz
 	// (a bypass path that forwards through to the sidecar).
 	container.StartupProbe = &corev1.Probe{
@@ -973,15 +1099,6 @@ func seidNonRootSecurityContext() *corev1.SecurityContext {
 		AllowPrivilegeEscalation: ptr.To(false),             //nolint:modernize // ptr.To(false) is idiomatic; new(false) is invalid Go
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
-	}
-}
-
-func makeResources(cpu, memory string) corev1.ResourceRequirements {
-	return corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse(cpu),
-			corev1.ResourceMemory: resource.MustParse(memory),
-		},
 	}
 }
 
