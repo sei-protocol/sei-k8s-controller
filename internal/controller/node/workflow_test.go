@@ -116,7 +116,7 @@ func TestReconcileWorkflow_AdoptsOldestPending(t *testing.T) {
 	adopted := getWorkflow(t, c, "ss-0")
 	g.Expect(adopted.Finalizers).To(ContainElement(seiv1alpha1.SeiNodeTaskWorkflowFinalizer))
 	g.Expect(adopted.Status.Plan).NotTo(BeNil())
-	g.Expect(adopted.Status.Plan.Tasks).To(HaveLen(6)) // config-patch omitted (no Migration in fixture)
+	g.Expect(adopted.Status.Plan.Tasks).To(HaveLen(5)) // config-patch omitted (no Migration in fixture); mark-ready is terminal
 	g.Expect(adopted.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskWorkflowPhaseRunning))
 }
 
@@ -265,7 +265,7 @@ func TestReconcileWorkflow_ReadoptsByUIDAfterRestart(t *testing.T) {
 	// The interrupted plan is rebuilt and persisted deterministically.
 	resumed := getWorkflow(t, c, "ss-0")
 	g.Expect(resumed.Status.Plan).NotTo(BeNil())
-	g.Expect(resumed.Status.Plan.Tasks).To(HaveLen(6))
+	g.Expect(resumed.Status.Plan.Tasks).To(HaveLen(5))
 	// The deletion gate is (re-)ensured on the drive step, not just at adoption:
 	// an adoption interrupted before the finalizer add must not resume into
 	// destructive execution ungated (guards the 1a regression).

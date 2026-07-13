@@ -14,8 +14,12 @@ type SeiNodeTaskWorkflowKind string
 const (
 	// SeiNodeTaskWorkflowKindStateSync re-bootstraps the target node through
 	// CometBFT state sync: mark-not-ready -> stop-seid -> reset-data ->
-	// config-patch -> configure-state-sync -> mark-ready ->
-	// await-condition(catchingUp). It is the paved road for STO-624.
+	// config-patch -> configure-state-sync -> mark-ready. The recipe ends at
+	// mark-ready, so Complete means every mutation was performed and the node
+	// was released to re-bootstrap, NOT that it caught up; catch-up is
+	// verified node-side (sdk WaitCaughtUp, RPC, alerts) by whoever triggered
+	// the workflow. The clean consequence: Failed always means the node is
+	// still held. It is the paved road for STO-624.
 	SeiNodeTaskWorkflowKindStateSync SeiNodeTaskWorkflowKind = "StateSync"
 )
 

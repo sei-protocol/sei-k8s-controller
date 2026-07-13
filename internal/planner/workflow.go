@@ -65,7 +65,13 @@ func (p *stateSyncWorkflowPlanner) Validate(node *seiv1alpha1.SeiNode, wf *seiv1
 // BuildPlan compiles the StateSync progression:
 //
 //	mark-not-ready -> stop-seid -> reset-data -> config-patch ->
-//	configure-state-sync -> mark-ready -> await-condition(catchingUp)
+//	configure-state-sync -> mark-ready
+//
+// The recipe ends at mark-ready: Complete means every mutation was performed
+// and the node was released to re-bootstrap. Catch-up is verified node-side
+// (sdk WaitCaughtUp, RPC, alerts) by whoever triggered the workflow. Because
+// mark-ready is the terminal step, a Failed workflow always leaves the node
+// held, and the adoption slot frees at release.
 //
 // TargetPhase and FailedPhase are left empty: a workflow never drives the
 // node's phase (a failure parks the node held, it does not fail the node).
@@ -104,8 +110,8 @@ func (p *stateSyncWorkflowPlanner) BuildPlan(node *seiv1alpha1.SeiNode, wf *seiv
 	// gate and purges mark-ready records; stop-seid brings seid down; only then
 	// does reset-data run (it refuses if seid's RPC still answers). The release
 	// step's mark-ready always executes fresh because mark-not-ready purged the
-	// prior record. The final catchingUp await-condition carries no
-	// targetHeight (the live head is unknown at plan-build time).
+	// prior record, and it is the terminal step, so the workflow completes at
+	// release.
 	type step struct {
 		taskType string
 		params   any
@@ -125,7 +131,6 @@ func (p *stateSyncWorkflowPlanner) BuildPlan(node *seiv1alpha1.SeiNode, wf *seiv
 	steps = append(steps,
 		step{TaskConfigureStateSync, cfgSS},
 		step{TaskMarkReady, sidecar.MarkReadyTask{}},
-		step{TaskAwaitCondition, sidecar.AwaitConditionTask{Condition: sidecar.ConditionCatchingUp}},
 	)
 
 	tasks := make([]seiv1alpha1.PlannedTask, 0, len(steps))

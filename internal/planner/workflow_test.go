@@ -87,8 +87,10 @@ func TestStateSyncWorkflow_Progression(t *testing.T) {
 		TaskConfigPatch,
 		TaskConfigureStateSync,
 		TaskMarkReady,
-		TaskAwaitCondition,
 	}))
+	// mark-ready is the terminal step: Complete means the node was released,
+	// and catch-up is verified node-side, never by the recipe (STO-624).
+	g.Expect(gotTypes).NotTo(ContainElement(TaskAwaitCondition))
 	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
 
 	// A workflow never drives the node's phase.
@@ -119,7 +121,6 @@ func TestStateSyncWorkflow_OmitsConfigPatchWhenEmpty(t *testing.T) {
 		taskTypeResetData,
 		TaskConfigureStateSync,
 		TaskMarkReady,
-		TaskAwaitCondition,
 	}))
 	g.Expect(gotTypes).NotTo(ContainElement(TaskConfigPatch))
 }
