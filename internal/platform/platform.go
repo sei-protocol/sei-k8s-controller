@@ -150,17 +150,15 @@ type StorageConfig struct {
 
 // ResourcesConfig holds seid-container resource sizing.
 //
-// The legacy flat fields (cpuArchive/memArchive/cpuDefault/memDefault) are
-// requests-only, retained for backward compatibility. They no longer size the
-// long-running node container — that now comes from the per-role code defaults
-// in internal/noderesource, overridable per role below — but they still size
-// the transient genesis-bootstrap Job (internal/task/bootstrap_resources.go).
+// The per-role blocks (below) size the seid container: each is optional and
+// falls back to the code-authoritative default for that role in
+// internal/noderesource. Both the long-running node container and the transient
+// genesis-bootstrap Job take this per-role footprint (the Job via
+// noderesource.ResourcesForNode).
 //
-// The per-role blocks are optional. Any unset block, or unset sub-field within
-// a block, falls back to the code-authoritative default for that role. This
-// keeps existing app-config files loading and validating unchanged while every
-// node container gains a memory limit (the blast-radius fix for unbounded seid
-// OOM-wedging nodes).
+// The flat fields (cpuArchive/memArchive/cpuDefault/memDefault) are legacy and
+// no longer size any container; they remain required for backward compatibility
+// with existing app-config files, pending removal.
 type ResourcesConfig struct {
 	CPUArchive string `json:"cpuArchive"`
 	MemArchive string `json:"memArchive"`

@@ -6,7 +6,6 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -198,7 +197,11 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: bootstrapDataDir},
 		},
-		Resources: bootstrapResourcesForMode(bootstrapNodeMode(node), platformCfg),
+		// Same footprint as the node this Job warms: snapshot bootstrap runs
+		// seid to --halt-height, so its working set matches a running node of
+		// this mode. Memory is request==limit (bounded on the isolated
+		// sei-validator pool), CPU request-only — identical to the node container.
+		Resources: noderesource.ResourcesForNode(node, platformCfg),
 	}
 
 	seidInit := bootstrapSeidInitContainer(node)
@@ -318,31 +321,6 @@ func bootstrapNodeMode(node *seiv1alpha1.SeiNode) string {
 		return string(seiconfig.ModeFull)
 	default:
 		return string(seiconfig.ModeFull)
-	}
-}
-
-func bootstrapResourcesForMode(mode string, platformCfg platform.Config) corev1.ResourceRequirements {
-	var cpu, mem string
-	switch mode {
-	case string(seiconfig.ModeArchive):
-		cpu, mem = platformCfg.ResourceCPUArchive, platformCfg.ResourceMemArchive
-	default:
-		cpu, mem = platformCfg.ResourceCPUDefault, platformCfg.ResourceMemDefault
-	}
-	memQ := resource.MustParse(mem)
-	return corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse(cpu),
-			corev1.ResourceMemory: memQ,
-		},
-		// Memory limit == request (memory-Guaranteed), matching the node
-		// container. A bootstrap Job shares a node with the SeiNode it warms and
-		// lands on the same pool via NodepoolForMode — including the
-		// disruption-isolated sei-validator pool — so it must be bounded and
-		// cannot grow uncapped beside a Guaranteed validator.
-		Limits: corev1.ResourceList{
-			corev1.ResourceMemory: memQ,
-		},
 	}
 }
 
