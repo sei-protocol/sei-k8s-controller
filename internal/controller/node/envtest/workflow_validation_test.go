@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,8 +20,9 @@ func newStateSyncWorkflow(name string) *seiv1alpha1.SeiNodeTaskWorkflow {
 			Kind:   seiv1alpha1.SeiNodeTaskWorkflowKindStateSync,
 			Target: seiv1alpha1.SeiNodeTaskTarget{NodeRef: seiv1alpha1.SeiNodeTaskNodeRef{Name: "rpc-0"}},
 			StateSync: &seiv1alpha1.StateSyncWorkflow{
-				ConfigPatch: map[string]map[string]apiextensionsv1.JSON{
-					"app.toml": {"state-store.evm-ss-split": {Raw: []byte(`true`)}},
+				Migration: &seiv1alpha1.ConfigMigration{
+					Kind:      seiv1alpha1.ConfigMigrationGigaStore,
+					GigaStore: &seiv1alpha1.GigaStoreMigration{Backend: "pebbledb"},
 				},
 			},
 		},
@@ -78,8 +78,7 @@ func TestWorkflowCRD_StateSyncLeafImmutable(t *testing.T) {
 	t.Cleanup(func() { _ = testCli.Delete(testCtx, wf) })
 
 	// Mutating a leaf inside stateSync (the pre-adoption param-tamper attack) is
-	// rejected by the deep self.stateSync == oldSelf.stateSync rule, even though
-	// configPatch values are x-kubernetes-preserve-unknown-fields.
+	// rejected by the deep self.stateSync == oldSelf.stateSync rule.
 	patch := client.MergeFrom(wf.DeepCopy())
 	wf.Spec.StateSync.RpcServers = []string{"tampered:26657", "other:26657"}
 	err := testCli.Patch(testCtx, wf, patch)
@@ -87,7 +86,7 @@ func TestWorkflowCRD_StateSyncLeafImmutable(t *testing.T) {
 	g.Expect(apierrors.IsInvalid(err)).To(BeTrue())
 
 	patch = client.MergeFrom(wf.DeepCopy())
-	wf.Spec.StateSync.ConfigPatch["app.toml"]["state-store.evm-ss-split"] = apiextensionsv1.JSON{Raw: []byte(`false`)}
+	wf.Spec.StateSync.Migration.GigaStore.Backend = "rocksdb"
 	err = testCli.Patch(testCtx, wf, patch)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(apierrors.IsInvalid(err)).To(BeTrue())

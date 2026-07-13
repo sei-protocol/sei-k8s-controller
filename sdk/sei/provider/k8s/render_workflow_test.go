@@ -19,16 +19,14 @@ func TestRenderWorkflow_StateSync(t *testing.T) {
 		RequirePhase:        "Running",
 		RequirePhaseTimeout: 10 * time.Minute,
 		StateSync: &sei.StateSyncWorkflow{
-			ConfigPatch: map[string]map[string]any{
-				"app.toml": {"state-store.evm-ss-split": true},
+			Migration: &sei.ConfigMigration{
+				Kind:      sei.ConfigMigrationGigaStore,
+				GigaStore: &sei.GigaStoreMigration{Backend: "rocksdb"},
 			},
 			RpcServers: []string{witnessA, witnessB},
 		},
 	}
-	wf, err := renderWorkflow(spec, testNS)
-	if err != nil {
-		t.Fatalf("renderWorkflow: %v", err)
-	}
+	wf := renderWorkflow(spec, testNS)
 
 	if wf.Name != renderWFName || wf.Namespace != testNS {
 		t.Fatalf("metadata = %s/%s", wf.Namespace, wf.Name)
@@ -51,25 +49,29 @@ func TestRenderWorkflow_StateSync(t *testing.T) {
 	if wf.Spec.StateSync == nil {
 		t.Fatal("stateSync payload is nil")
 	}
-	// A bool config value must render as a JSON bool, not the string "true".
-	got := string(wf.Spec.StateSync.ConfigPatch["app.toml"]["state-store.evm-ss-split"].Raw)
-	if got != "true" {
-		t.Errorf("configPatch value = %q, want JSON bool true", got)
+	// The typed migration renders onto spec.stateSync.migration; the controller
+	// materializes its fixed flags into the config-patch step.
+	m := wf.Spec.StateSync.Migration
+	if m == nil {
+		t.Fatal("migration is nil")
+	}
+	if m.Kind != seiv1alpha1.ConfigMigrationGigaStore {
+		t.Errorf("migration.kind = %q, want GigaStore", m.Kind)
+	}
+	if m.GigaStore == nil || m.GigaStore.Backend != "rocksdb" {
+		t.Errorf("migration.gigaStore = %+v, want backend rocksdb", m.GigaStore)
 	}
 	if len(wf.Spec.StateSync.RpcServers) != 2 {
 		t.Errorf("rpcServers = %v", wf.Spec.StateSync.RpcServers)
 	}
 }
 
-func TestRenderWorkflow_EmptyConfigPatchIsNil(t *testing.T) {
-	wf, err := renderWorkflow(sei.WorkflowSpec{
+func TestRenderWorkflow_NilMigrationRendersNil(t *testing.T) {
+	wf := renderWorkflow(sei.WorkflowSpec{
 		Name: renderWFName, Namespace: testNS, Node: testTaskNode, Kind: sei.WorkflowStateSync,
 		StateSync: &sei.StateSyncWorkflow{RpcServers: []string{witnessA, witnessB}},
 	}, testNS)
-	if err != nil {
-		t.Fatalf("renderWorkflow: %v", err)
-	}
-	if wf.Spec.StateSync.ConfigPatch != nil {
-		t.Errorf("empty ConfigPatch should render nil, got %v", wf.Spec.StateSync.ConfigPatch)
+	if wf.Spec.StateSync.Migration != nil {
+		t.Errorf("nil migration should render nil, got %v", wf.Spec.StateSync.Migration)
 	}
 }

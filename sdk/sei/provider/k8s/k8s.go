@@ -124,10 +124,7 @@ func (p *Provider) GetTask(ctx context.Context, name, namespace string) (sei.Tas
 
 func (p *Provider) CreateWorkflow(ctx context.Context, spec sei.WorkflowSpec) (sei.WorkflowHandle, error) {
 	ns := p.ns(spec.Namespace)
-	wf, err := renderWorkflow(spec, ns)
-	if err != nil {
-		return nil, err
-	}
+	wf := renderWorkflow(spec, ns)
 	if err := p.apply(ctx, wf, fmt.Sprintf("SeiNodeTaskWorkflow %s/%s", ns, wf.Name)); err != nil {
 		return nil, err
 	}
