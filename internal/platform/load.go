@@ -50,11 +50,6 @@ func Load() (Config, error) {
 		StorageSizeDefault:  file.Storage.SizeDefault,
 		StorageSizeArchive:  file.Storage.SizeArchive,
 
-		ResourceCPUArchive: file.Resources.CPUArchive,
-		ResourceMemArchive: file.Resources.MemArchive,
-		ResourceCPUDefault: file.Resources.CPUDefault,
-		ResourceMemDefault: file.Resources.MemDefault,
-
 		NodeResourcesValidator: file.Resources.Validator,
 		NodeResourcesNode:      file.Resources.Node,
 		NodeResourcesReplayer:  file.Resources.Replayer,

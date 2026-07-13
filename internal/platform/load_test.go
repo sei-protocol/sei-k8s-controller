@@ -22,10 +22,6 @@ storage:
   sizeDefault: file-size-default
   sizeArchive: file-size-archive
 resources:
-  cpuArchive: file-cpu-archive
-  memArchive: file-mem-archive
-  cpuDefault: file-cpu-default
-  memDefault: file-mem-default
 snapshot:
   bucket: file-snap-bucket
   region: file-snap-region
@@ -198,9 +194,8 @@ func TestLoad_NoResourceOverrides_ValidatesEmpty(t *testing.T) {
 func TestLoad_ResourceOverrides_FromFile(t *testing.T) {
 	setGatewayEnv(t)
 	body := strings.Replace(fullConfig,
-		"  memDefault: file-mem-default\n",
-		"  memDefault: file-mem-default\n"+
-			"  validator:\n    cpuRequest: \"8\"\n    memory: 120Gi\n",
+		"resources:\n",
+		"resources:\n  validator:\n    cpuRequest: \"8\"\n    memory: 120Gi\n",
 		1)
 	path := writeConfig(t, body)
 	t.Setenv(envControllerConfig, path)

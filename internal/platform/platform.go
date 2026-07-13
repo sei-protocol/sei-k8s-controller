@@ -53,16 +53,11 @@ type Config struct {
 	StorageClassArchive string
 	StorageSizeDefault  string
 	StorageSizeArchive  string
-	ResourceCPUArchive  string
-	ResourceMemArchive  string
-	ResourceCPUDefault  string
-	ResourceMemDefault  string
 
 	// Per-role seid-container resource overrides, keyed by sei.io/role. Each is
 	// optional: an unset field (or unset sub-field) falls back to the
-	// code-authoritative, prod-safe defaults in internal/noderesource. The
-	// legacy flat fields above are NOT consulted for the node container — they
-	// remain only for the genesis-bootstrap Job. See ResourcesConfig.
+	// code-authoritative, prod-safe default for that role in internal/noderesource.
+	// See ResourcesConfig.
 	NodeResourcesValidator ResourceOverride
 	NodeResourcesNode      ResourceOverride
 	NodeResourcesReplayer  ResourceOverride
@@ -150,21 +145,11 @@ type StorageConfig struct {
 
 // ResourcesConfig holds seid-container resource sizing.
 //
-// The per-role blocks (below) size the seid container: each is optional and
-// falls back to the code-authoritative default for that role in
-// internal/noderesource. Both the long-running node container and the transient
-// genesis-bootstrap Job take this per-role footprint (the Job via
-// noderesource.ResourcesForNode).
-//
-// The flat fields (cpuArchive/memArchive/cpuDefault/memDefault) are legacy and
-// no longer size any container; they remain required for backward compatibility
-// with existing app-config files, pending removal.
+// The per-role blocks size the seid container: each is optional and falls back
+// to the code-authoritative default for that role in internal/noderesource.
+// Both the long-running node container and the transient genesis-bootstrap Job
+// take this per-role footprint (the Job via noderesource.ResourcesForNode).
 type ResourcesConfig struct {
-	CPUArchive string `json:"cpuArchive"`
-	MemArchive string `json:"memArchive"`
-	CPUDefault string `json:"cpuDefault"`
-	MemDefault string `json:"memDefault"`
-
 	// Per-role overrides, keyed to sei.io/role.
 	Validator ResourceOverride `json:"validator"`
 	Node      ResourceOverride `json:"node"`
@@ -238,10 +223,6 @@ func (c Config) Validate() error {
 		{"storage.classArchive", c.StorageClassArchive},
 		{"storage.sizeDefault", c.StorageSizeDefault},
 		{"storage.sizeArchive", c.StorageSizeArchive},
-		{"resources.cpuArchive", c.ResourceCPUArchive},
-		{"resources.memArchive", c.ResourceMemArchive},
-		{"resources.cpuDefault", c.ResourceCPUDefault},
-		{"resources.memDefault", c.ResourceMemDefault},
 		{"snapshot.bucket", c.SnapshotBucket},
 		{"snapshot.region", c.SnapshotRegion},
 		{"resultExport.bucket", c.ResultExportBucket},
