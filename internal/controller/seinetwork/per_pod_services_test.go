@@ -19,8 +19,8 @@ func nodeWithOrdinal(name, ordinal string) seiv1alpha1.SeiNode {
 			Name:      name,
 			Namespace: testNamespace,
 			Labels: map[string]string{
-				groupLabel:        testGroupLabelValue,
-				groupOrdinalLabel: ordinal,
+				seinetworkLabel:        testGroupLabelValue,
+				seinetworkOrdinalLabel: ordinal,
 			},
 		},
 	}
@@ -78,7 +78,7 @@ func TestPopulatePerPodServices_MissingOrdinalLabelSkipped(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pacific-1-wave-99",
 			Namespace: testNamespace,
-			Labels:    map[string]string{groupLabel: testGroupLabelValue},
+			Labels:    map[string]string{seinetworkLabel: testGroupLabelValue},
 		},
 	}
 	nodes := []seiv1alpha1.SeiNode{
