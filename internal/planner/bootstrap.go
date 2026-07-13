@@ -27,10 +27,7 @@ func buildBootstrapPlan(
 	if err != nil {
 		return nil, err
 	}
-	postProg, err := buildPostBootstrapProgression(node)
-	if err != nil {
-		return nil, err
-	}
+	postProg := buildPostBootstrapProgression()
 	tasks := make([]seiv1alpha1.PlannedTask, 0, 2+len(bootstrapProg)+2+len(postProg))
 
 	appendTask := func(taskType string, params any) error {
@@ -131,12 +128,8 @@ func buildBootstrapPlan(
 // a separate, hand-written progression — it runs on the production pod
 // after bootstrap teardown and only includes the config tasks needed to
 // prepare the already-restored data directory for production use.
-func buildPostBootstrapProgression(node *seiv1alpha1.SeiNode) ([]string, error) {
-	prog := []string{TaskConfigureGenesis, TaskConfigApply, TaskConfigValidate, TaskMarkReady}
-	if sg := SnapshotGeneration(node); sg != nil && sg.Tendermint != nil && sg.Tendermint.Publish != nil {
-		return insertBefore(prog, TaskMarkReady, TaskSnapshotUpload)
-	}
-	return prog, nil
+func buildPostBootstrapProgression() []string {
+	return []string{TaskConfigureGenesis, TaskConfigApply, TaskConfigValidate, TaskMarkReady}
 }
 
 // IsBootstrapComplete checks whether the teardown-bootstrap task in a plan

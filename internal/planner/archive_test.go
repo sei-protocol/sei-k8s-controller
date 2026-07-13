@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	seiconfig "github.com/sei-protocol/sei-config"
+	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -226,33 +227,33 @@ func TestArchivePlanner_Validate(t *testing.T) {
 	}
 }
 
-func TestArchivePlanner_SnapshotUploadInProgression(t *testing.T) {
+// TestArchivePlanner_NoSnapshotUploadInProgression asserts the planner never
+// inserts a snapshot-upload task into any progression — even when publish is
+// set. Publish presence is projected as the sei.io/snapshot-publish pod label
+// (see noderesource), not as a plan task.
+func TestArchivePlanner_NoSnapshotUploadInProgression(t *testing.T) {
 	cases := []struct {
-		name       string
-		sg         *seiv1alpha1.SnapshotGenerationConfig
-		wantUpload bool
+		name string
+		sg   *seiv1alpha1.SnapshotGenerationConfig
 	}{
 		{
-			name:       "no snapshotGeneration omits upload",
-			sg:         nil,
-			wantUpload: false,
+			name: "no snapshotGeneration omits upload",
+			sg:   nil,
 		},
 		{
 			name: "tendermint without publish omits upload",
 			sg: &seiv1alpha1.SnapshotGenerationConfig{
 				Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{KeepRecent: 3},
 			},
-			wantUpload: false,
 		},
 		{
-			name: "tendermint with publish includes upload before mark-ready",
+			name: "tendermint with publish still omits upload (external CronJob owns it)",
 			sg: &seiv1alpha1.SnapshotGenerationConfig{
 				Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{
 					KeepRecent: 5,
 					Publish:    &seiv1alpha1.TendermintSnapshotPublishConfig{},
 				},
 			},
-			wantUpload: true,
 		},
 	}
 
@@ -275,21 +276,8 @@ func TestArchivePlanner_SnapshotUploadInProgression(t *testing.T) {
 				types = append(types, pt.Type)
 			}
 
-			hasUpload := slices.Contains(types, TaskSnapshotUpload)
-			if hasUpload != tc.wantUpload {
-				t.Fatalf("snapshot-upload present = %v, want %v; progression = %v", hasUpload, tc.wantUpload, types)
-			}
-			if !tc.wantUpload {
-				return
-			}
-			uploadIdx := slices.Index(types, TaskSnapshotUpload)
-			readyIdx := slices.Index(types, TaskMarkReady)
-			if uploadIdx < 0 || readyIdx < 0 || uploadIdx >= readyIdx {
-				t.Fatalf("snapshot-upload (%d) must precede mark-ready (%d); progression = %v", uploadIdx, readyIdx, types)
-			}
-			validateIdx := slices.Index(types, TaskConfigValidate)
-			if validateIdx >= 0 && validateIdx > uploadIdx {
-				t.Fatalf("config-validate (%d) must precede snapshot-upload (%d); progression = %v", validateIdx, uploadIdx, types)
+			if slices.Contains(types, sidecar.TaskTypeSnapshotUpload) {
+				t.Fatalf("snapshot-upload must never be inserted; progression = %v", types)
 			}
 		})
 	}

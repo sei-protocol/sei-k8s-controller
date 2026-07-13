@@ -1839,6 +1839,81 @@ func TestResourceLabels_ChainOmittedWhenChainIDEmpty(t *testing.T) {
 	g.Expect(labels).NotTo(HaveKey("sei.io/chain"))
 }
 
+func TestResourceLabels_SnapshotPublishLabel(t *testing.T) {
+	g := NewWithT(t)
+	publish := &seiv1alpha1.TendermintSnapshotPublishConfig{}
+	sgWithPublish := &seiv1alpha1.SnapshotGenerationConfig{
+		Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{KeepRecent: 2, Publish: publish},
+	}
+	sgNoPublish := &seiv1alpha1.SnapshotGenerationConfig{
+		Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{KeepRecent: 2},
+	}
+
+	tests := []struct {
+		name        string
+		mutate      func(*seiv1alpha1.SeiNode)
+		wantPublish bool
+	}{
+		{"fullNode publish set", func(n *seiv1alpha1.SeiNode) {
+			n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{SnapshotGeneration: sgWithPublish}
+		}, true},
+		{"fullNode publish unset", func(n *seiv1alpha1.SeiNode) {
+			n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{SnapshotGeneration: sgNoPublish}
+		}, false},
+		{"fullNode no snapshotGeneration", func(n *seiv1alpha1.SeiNode) {
+			n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
+		}, false},
+		{"archive publish set", func(n *seiv1alpha1.SeiNode) {
+			n.Spec.Archive = &seiv1alpha1.ArchiveSpec{SnapshotGeneration: sgWithPublish}
+		}, true},
+		{"archive publish unset", func(n *seiv1alpha1.SeiNode) {
+			n.Spec.Archive = &seiv1alpha1.ArchiveSpec{SnapshotGeneration: sgNoPublish}
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &seiv1alpha1.SeiNode{
+				ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "ns"},
+				Spec:       seiv1alpha1.SeiNodeSpec{ChainID: "pacific-1", Image: testNodeImage},
+			}
+			tt.mutate(node)
+
+			labels := ResourceLabels(node)
+
+			if tt.wantPublish {
+				g.Expect(labels).To(HaveKeyWithValue("sei.io/snapshot-publish", "true"))
+			} else {
+				g.Expect(labels).NotTo(HaveKey("sei.io/snapshot-publish"))
+			}
+		})
+	}
+}
+
+func TestResourceLabels_SnapshotPublishNotInSelector(t *testing.T) {
+	g := NewWithT(t)
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "snap-0", Namespace: "default"},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "pacific-1",
+			Image:   testNodeImage,
+			FullNode: &seiv1alpha1.FullNodeSpec{
+				SnapshotGeneration: &seiv1alpha1.SnapshotGenerationConfig{
+					Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{
+						KeepRecent: 2,
+						Publish:    &seiv1alpha1.TendermintSnapshotPublishConfig{},
+					},
+				},
+			},
+		},
+	}
+
+	// The publish label is mutable (toggling publish must not force a
+	// StatefulSet recreation), so it lives on the pod template only — never
+	// in the immutable selector.
+	g.Expect(SelectorLabels(node)).NotTo(HaveKey("sei.io/snapshot-publish"))
+	g.Expect(ResourceLabels(node)).To(HaveKeyWithValue("sei.io/snapshot-publish", "true"))
+}
+
 func TestResourceLabels_NotInSelector(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")

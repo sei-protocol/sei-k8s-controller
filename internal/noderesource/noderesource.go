@@ -32,6 +32,17 @@ const (
 	chainLabel = "sei.io/chain"
 	roleLabel  = "sei.io/role"
 
+	// snapshotPublishLabel marks a pod whose node publishes Tendermint
+	// snapshots to S3. Stamped (value "true") only when
+	// spec.<mode>.snapshotGeneration.tendermint.publish is set — absence is
+	// the signal, matching the CRD's presence-as-toggle pattern. The external
+	// snapshot-upload CronJob discovers publish-enabled pods by selector
+	// sei.io/snapshot-publish=true + sei.io/chain=<chainID> (seictl
+	// task/client.go). Never appears in the immutable StatefulSet/Service
+	// selectors (which carry only sei.io/node).
+	snapshotPublishLabel = "sei.io/snapshot-publish"
+	snapshotPublishValue = "true"
+
 	// DedicatedNodeKey is the well-known key used both as a SeiNode annotation
 	// (the opt-in) and as the pod-template label it is mirrored to. Value
 	// "true" opts the node into single-tenant scheduling: its pod refuses to
@@ -157,7 +168,7 @@ func SelectorLabels(node *seiv1alpha1.SeiNode) map[string]string {
 // ResourceLabels returns labels for the StatefulSet pod template.
 // User-provided podLabels are applied first; system labels win.
 func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
-	labels := make(map[string]string, len(node.Spec.PodLabels)+3)
+	labels := make(map[string]string, len(node.Spec.PodLabels)+4)
 	maps.Copy(labels, node.Spec.PodLabels)
 	labels[NodeLabel] = node.Name
 	if node.Spec.ChainID != "" {
@@ -167,7 +178,26 @@ func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
 	if IsDedicatedNode(node) {
 		labels[DedicatedNodeKey] = dedicatedNodeValue
 	}
+	if snapshotPublishEnabled(node) {
+		labels[snapshotPublishLabel] = snapshotPublishValue
+	}
 	return labels
+}
+
+// snapshotPublishEnabled reports whether the node opts into snapshot
+// publishing (spec.<mode>.snapshotGeneration.tendermint.publish set),
+// reaching through the FullNode/Archive mode sub-specs that carry a
+// SnapshotGeneration config. Drives the sei.io/snapshot-publish label so the
+// external snapshot-upload CronJob can discover publish-enabled pods.
+func snapshotPublishEnabled(node *seiv1alpha1.SeiNode) bool {
+	var sg *seiv1alpha1.SnapshotGenerationConfig
+	switch {
+	case node.Spec.FullNode != nil:
+		sg = node.Spec.FullNode.SnapshotGeneration
+	case node.Spec.Archive != nil:
+		sg = node.Spec.Archive.SnapshotGeneration
+	}
+	return sg != nil && sg.Tendermint != nil && sg.Tendermint.Publish != nil
 }
 
 // IsDedicatedNode reports whether the SeiNode opts into single-tenant node
