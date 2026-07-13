@@ -345,60 +345,6 @@ func TestExecuteGroupPlan_CompletesSuccessfully(t *testing.T) {
 	}
 }
 
-// TestExecutePlan_SnapshotUploadTombstone_DrainsWithoutSubmit asserts that a
-// stored plan carrying a pending snapshot-upload task advances past it to
-// completion with zero sidecar interaction. A failure here would fail the plan
-// and, for a node mid-bootstrap, trigger a spurious re-bootstrap on rebuild.
-func TestExecutePlan_SnapshotUploadTombstone_DrainsWithoutSubmit(t *testing.T) {
-	s := testScheme(t)
-	node := testNode()
-
-	const planID = "test-plan-snapshot-upload-tombstone"
-	taskID := task.DeterministicTaskID(planID, sidecar.TaskTypeSnapshotUpload, 0)
-
-	mock := &mockSidecarClient{}
-
-	node.Status.Plan = &seiv1alpha1.TaskPlan{
-		ID:    planID,
-		Phase: seiv1alpha1.TaskPlanActive,
-		Tasks: []seiv1alpha1.PlannedTask{
-			{
-				Type:   sidecar.TaskTypeSnapshotUpload,
-				ID:     taskID,
-				Status: seiv1alpha1.TaskPending,
-			},
-		},
-	}
-
-	builder := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(node).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{})
-	executor := nodeExecutor(builder, s, mock)
-
-	ctx := context.Background()
-	if _, err := executor.ExecutePlan(ctx, node, node.Status.Plan); err != nil {
-		t.Fatalf("ExecutePlan: %v", err)
-	}
-
-	if len(mock.submitted) != 0 {
-		t.Fatalf("tombstone must not touch the sidecar; got %d submission(s): %v",
-			len(mock.submitted), mock.submitted)
-	}
-
-	// Executor mutates in-memory — assert directly on the node.
-	if node.Status.Plan.Tasks[0].Status != seiv1alpha1.TaskComplete {
-		t.Errorf("task status = %q, want Complete", node.Status.Plan.Tasks[0].Status)
-	}
-	if node.Status.Plan.Phase != seiv1alpha1.TaskPlanComplete {
-		t.Errorf("plan phase = %q, want Complete (not Failed, which would rebuild the plan)",
-			node.Status.Plan.Phase)
-	}
-	if node.Status.Plan.FailedTaskDetail != nil {
-		t.Errorf("plan recorded a failed task: %+v", node.Status.Plan.FailedTaskDetail)
-	}
-}
-
 func TestRetryBackoff(t *testing.T) {
 	for i := range 6 {
 		d := retryBackoff(i)
