@@ -322,21 +322,27 @@ func bootstrapNodeMode(node *seiv1alpha1.SeiNode) string {
 }
 
 func bootstrapResourcesForMode(mode string, platformCfg platform.Config) corev1.ResourceRequirements {
+	var cpu, mem string
 	switch mode {
 	case string(seiconfig.ModeArchive):
-		return corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse(platformCfg.ResourceCPUArchive),
-				corev1.ResourceMemory: resource.MustParse(platformCfg.ResourceMemArchive),
-			},
-		}
+		cpu, mem = platformCfg.ResourceCPUArchive, platformCfg.ResourceMemArchive
 	default:
-		return corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse(platformCfg.ResourceCPUDefault),
-				corev1.ResourceMemory: resource.MustParse(platformCfg.ResourceMemDefault),
-			},
-		}
+		cpu, mem = platformCfg.ResourceCPUDefault, platformCfg.ResourceMemDefault
+	}
+	memQ := resource.MustParse(mem)
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(cpu),
+			corev1.ResourceMemory: memQ,
+		},
+		// Memory limit == request (memory-Guaranteed), matching the node
+		// container. A bootstrap Job shares a node with the SeiNode it warms and
+		// lands on the same pool via NodepoolForMode — including the
+		// disruption-isolated sei-validator pool — so it must be bounded and
+		// cannot grow uncapped beside a Guaranteed validator.
+		Limits: corev1.ResourceList{
+			corev1.ResourceMemory: memQ,
+		},
 	}
 }
 

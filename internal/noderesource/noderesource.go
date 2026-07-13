@@ -295,9 +295,8 @@ func DefaultStorageForMode(mode string, p PlatformConfig) (storageClass string, 
 
 // nodeResourceProfile is a resolved per-mode seid-container footprint: a CPU
 // request and a single memory value used as BOTH request and limit. CPU is
-// request-only by design — seid is work-conserving and CPU is compressible, so
-// a CPU limit would only throttle seid's measured 10–12 core consensus/replay
-// bursts (capacity and systems both confirmed leaving it off); there is no
+// request-only — seid is work-conserving and CPU is compressible, so a CPU
+// limit would only throttle its 10–12 core consensus/replay bursts; there is no
 // CPU-limit field.
 type nodeResourceProfile struct {
 	cpuRequest string
@@ -306,71 +305,47 @@ type nodeResourceProfile struct {
 	memory string
 }
 
-// defaultNodeResourceProfiles is the code-authoritative, prod-safe per-mode
-// footprint. It applies on every cluster even when the app-config file sets no
-// override, so the memory-limit blast-radius fix (unbounded seid OOM-wedging
-// its node) reaches every cluster from the controller image alone.
+// defaultNodeResourceProfiles is the per-mode seid-container footprint, applied
+// whenever the app-config file sets no resources.<mode> override. One uniform
+// profile per CRD mode, keyed off deriveRole (the CRD sub-spec) — NOT the 3-way
+// seiconfig mode, which collapses replayer and fullNode into "full" though they
+// take distinct footprints.
 //
-// ROLLOUT: this sizes the StatefulSet pod template. Because the SeiNode
-// StatefulSets use UpdateStrategy: OnDelete, a controller upgrade does NOT
-// restart running pods — an existing pod keeps its old (unbounded) spec until
-// it is next recreated (a NodeUpdate replace-pod, drain, eviction, or OOM). So
-// a controller upgrade arms the fix for future pods; the running fleet adopts
-// the request==limit footprint one pod at a time as pods cycle. A same-instance
-// re-create is required to move a live pod under the cap.
+// Each mode's memory (request==limit, memory-Guaranteed) and CPU (request-only)
+// equal the full RAM/vCPU of its sei-infra reference instance. The Karpenter
+// pool (platform side) provisions one instance size larger, so the footprint
+// fits node allocatable (~95% of advertised, less DaemonSets/sidecars) and the
+// unrequested surplus serves as seid page cache:
 //
-// One uniform profile per CRD mode (validator / fullNode / replayer / archive);
-// every node within a mode is identical. Modes are keyed off the CRD sub-spec
-// (deriveRole), NOT the 3-way seiconfig mode — that mode collapses replayer and
-// fullNode into "full", and they need distinct footprints.
+//	role                 reference instance     request      provisioned node
+//	validator            r5.4xlarge   (128/16)  128Gi / 16   r*.8xlarge  (256)
+//	fullNode / replayer  r7i.8xlarge  (256/32)  256Gi / 32   r*.12xlarge (384)
+//	archive              r7i.16xlarge (512/64)  512Gi / 64   r*.24xlarge (768)
 //
-// Sizing — sei-infra parity. Each mode requests the FULL legacy instance
-// envelope (request==limit, memory-Guaranteed), and the Phase-2 Karpenter pool
-// provisions the NEXT instance size up so the node's allocatable (~95% of
-// advertised, minus DaemonSets/sidecars) comfortably holds that full envelope:
-//   - MEMORY request==limit, hard-reserved and hard-capped per mode. This is
-//     true parity — the pod can actually use the entire legacy amount, which an
-//     allocatable-fit value on the exact instance (~90% of advertised, a K8s
-//     node's allocatable) cannot. The surplus above the request on the bigger
-//     node becomes seid page cache (state reads), reproducing the legacy
-//     big-box performance profile.
-//   - CPU request == the legacy instance vCPU count for the role (16 / 32 / 64),
-//     request-only, no CPU limit (CPU is compressible; a limit would throttle
-//     seid's 10–12 core consensus/replay bursts). One-per-node plus no CPU limit
-//     means seid bursts across the bigger node's full core count regardless; the
-//     request matches the legacy allocation for parity and honest accounting.
+// The request and the pool's instance size are a provider/consumer contract:
+// each request stays ≤ the provisioned node's allocatable and below Karpenter's
+// provisioning estimate (advertised × (1 − VM_MEMORY_OVERHEAD_PERCENT)); keep
+// both sides in sync when either changes. Memory (request==limit at ~half the
+// node) is the binding dimension, so one seid schedules per node.
 //
-// Envelope → provisioned instance (the Phase-2 NodePool pins these, platform
-// side — the controller REQUESTS, the pool PROVISIONS):
-//   - validator:           r5.4xlarge   (128 GiB) → request 128Gi, node r*.8xlarge  (256 GiB)
-//   - fullNode / replayer: r7i.8xlarge  (256 GiB) → request 256Gi, node r*.12xlarge (384 GiB)
-//   - archive:             r7i.16xlarge (512 GiB) → request 512Gi, node r*.24xlarge (768 GiB)
-//
-// Bumping one size means no Karpenter reserve tuning: a full-envelope request
-// sits well below the next-size-up node's default provisioning estimate
-// (advertised × (1 − VM_MEMORY_OVERHEAD_PERCENT=0.075)), so stock Karpenter
-// schedules it (e.g. 256Gi ≤ 384×0.925 = 355Gi). The request and the pool's
-// instance size are a provider/consumer contract: keep the request ≤ the
-// provisioned node's allocatable when either side changes.
+// A value change reaches a running pod only on pod recreation: the StatefulSets
+// use UpdateStrategy: OnDelete, so the pod template updates but a live pod keeps
+// its footprint until a replace-pod, drain, or eviction.
 //
 // Every deriveRole output MUST have an entry here (a missing key yields a
 // zero-value profile → firstNonEmpty("","") → resource.MustParse("") panics in
 // reconcile). A new role means a new entry AND a case in
 // TestResourcesForNode_DefaultsPerMode.
 var defaultNodeResourceProfiles = map[string]nodeResourceProfile{
-	// Legacy validator: r5.4xlarge (128 GiB) → 112Gi allocatable-fit. Hard cap
-	// → OOM = missed blocks / slashing, so sized to the full instance capacity
-	// the node needs under heavy load, not to lightly-loaded observed usage.
+	// Signing node — OOM means missed blocks / slashing; hard-capped at the full
+	// r5.4xlarge envelope.
 	roleValidator: {cpuRequest: cpuValidator, memory: memValidator},
-	// fullNode absorbs public-RPC + snapshotter + state-syncer. Legacy
-	// standalone/public-RPC: r7i.8xlarge (256 GiB) → 236Gi allocatable-fit.
+	// Absorbs public-RPC + snapshotter + state-syncer; full r7i.8xlarge envelope.
 	roleFullNode: {cpuRequest: cpuRPCClass, memory: memRPCClass},
-	// Shadow-replay: legacy replayer ran r7i.8xlarge (256 GiB) → 236Gi, same
-	// profile as fullNode.
+	// Shadow-replay; same footprint as fullNode (r7i.8xlarge).
 	roleReplayer: {cpuRequest: cpuRPCClass, memory: memRPCClass},
-	// Archive: verified live prod runs r7i.16xlarge (512 GiB) → 476Gi
-	// allocatable-fit. (The sei-infra TF hardcodes a stale m7i.8xlarge/128Gi;
-	// the live fleet is ground truth.)
+	// Full r7i.16xlarge envelope — the live-prod snapshotter shape (the sei-infra
+	// TF's m7i.8xlarge is stale).
 	roleArchive: {cpuRequest: cpuArchive, memory: memArchive},
 }
 
