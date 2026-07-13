@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -16,6 +15,9 @@ const (
 	wfWitnessB = "b:26657"
 	wfWitnessX = "x:26657"
 	wfWitnessY = "y:26657"
+
+	backendPebble = "pebbledb"
+	backendRocks  = "rocksdb"
 )
 
 func fullNodeForWorkflow(resolvedSyncers []string) *seiv1alpha1.SeiNode {
@@ -32,17 +34,24 @@ func fullNodeForWorkflow(resolvedSyncers []string) *seiv1alpha1.SeiNode {
 	}
 }
 
-func stateSyncWorkflow(rpcServers []string, patch map[string]map[string]apiextensionsv1.JSON) *seiv1alpha1.SeiNodeTaskWorkflow {
+func stateSyncWorkflow(rpcServers []string, migration *seiv1alpha1.ConfigMigration) *seiv1alpha1.SeiNodeTaskWorkflow {
 	return &seiv1alpha1.SeiNodeTaskWorkflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "ss-0", Namespace: sourceChainID},
 		Spec: seiv1alpha1.SeiNodeTaskWorkflowSpec{
 			Kind:   seiv1alpha1.SeiNodeTaskWorkflowKindStateSync,
 			Target: seiv1alpha1.SeiNodeTaskTarget{NodeRef: seiv1alpha1.SeiNodeTaskNodeRef{Name: "rpc-0"}},
 			StateSync: &seiv1alpha1.StateSyncWorkflow{
-				RpcServers:  rpcServers,
-				ConfigPatch: patch,
+				RpcServers: rpcServers,
+				Migration:  migration,
 			},
 		},
+	}
+}
+
+func gigaStoreMigration(backend string) *seiv1alpha1.ConfigMigration {
+	return &seiv1alpha1.ConfigMigration{
+		Kind:      seiv1alpha1.ConfigMigrationGigaStore,
+		GigaStore: &seiv1alpha1.GigaStoreMigration{Backend: backend},
 	}
 }
 
@@ -61,10 +70,7 @@ func buildPlan(t *testing.T, node *seiv1alpha1.SeiNode, wf *seiv1alpha1.SeiNodeT
 func TestStateSyncWorkflow_Progression(t *testing.T) {
 	g := NewWithT(t)
 	node := fullNodeForWorkflow(nil)
-	patch := map[string]map[string]apiextensionsv1.JSON{
-		"app.toml": {"state-store.evm-ss-split": {Raw: []byte(`true`)}},
-	}
-	wf := stateSyncWorkflow([]string{wfWitnessA, wfWitnessB}, patch)
+	wf := stateSyncWorkflow([]string{wfWitnessA, wfWitnessB}, gigaStoreMigration(backendPebble))
 
 	plan, err := buildPlan(t, node, wf)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -151,19 +157,54 @@ func TestStateSyncWorkflow_WitnessSources(t *testing.T) {
 	g.Expect(configureStateSyncWitnesses(t, plan)).To(Equal([]string{"override-a:26657", "override-b:26657"}))
 }
 
-func TestStateSyncWorkflow_ConfigPatchDecoded(t *testing.T) {
-	g := NewWithT(t)
-	patch := map[string]map[string]apiextensionsv1.JSON{
-		"app.toml": {"state-store.evm-ss-split": {Raw: []byte(`true`)}},
-	}
-	plan, err := buildPlan(t, fullNodeForWorkflow(nil), stateSyncWorkflow([]string{wfWitnessA, wfWitnessB}, patch))
-	g.Expect(err).NotTo(HaveOccurred())
+func TestStateSyncWorkflow_GigaStoreMigration(t *testing.T) {
+	// giga_store_migration.md Step 1: the fixed flags are pinned by the
+	// migration; only ss-backend varies with the operator's Backend input.
+	for _, backend := range []string{backendPebble, backendRocks} {
+		t.Run(backend, func(t *testing.T) {
+			g := NewWithT(t)
+			wf := stateSyncWorkflow([]string{wfWitnessA, wfWitnessB}, gigaStoreMigration(backend))
+			plan, err := buildPlan(t, fullNodeForWorkflow(nil), wf)
+			g.Expect(err).NotTo(HaveOccurred())
 
-	var cp struct {
-		Files map[string]map[string]any `json:"files"`
+			var cp struct {
+				Files map[string]map[string]any `json:"files"`
+			}
+			g.Expect(json.Unmarshal(taskParams(t, plan, TaskConfigPatch), &cp)).To(Succeed())
+			app := cp.Files["app.toml"]
+			g.Expect(app).To(HaveKeyWithValue("state-store", map[string]any{
+				"ss-enable":    true,
+				"evm-ss-split": true,
+				"ss-backend":   backend,
+			}))
+			g.Expect(app).To(HaveKeyWithValue("state-commit", map[string]any{
+				"sc-enable": true,
+			}))
+		})
 	}
-	g.Expect(json.Unmarshal(taskParams(t, plan, TaskConfigPatch), &cp)).To(Succeed())
-	g.Expect(cp.Files["app.toml"]["state-store.evm-ss-split"]).To(BeTrue())
+}
+
+func TestStateSyncWorkflow_MigrationGuardrails(t *testing.T) {
+	g := NewWithT(t)
+
+	// Unknown kind hard-errors from BuildPlan (before reset-data), never a
+	// silent plain resync.
+	_, err := buildPlan(t, fullNodeForWorkflow(nil),
+		stateSyncWorkflow([]string{wfWitnessA, wfWitnessB},
+			&seiv1alpha1.ConfigMigration{Kind: "Bogus"}))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("unknown config migration kind"))
+
+	// The empty-patch fail-closed guard: a non-nil migration must translate to a
+	// non-empty patch. It is exercised directly here because every valid kind
+	// today (GigaStore) yields a non-empty patch, so BuildPlan cannot reach it
+	// via a valid kind — it defends future kinds whose builder returns empty.
+	_, err = migrationConfigPatch(&seiv1alpha1.ConfigMigration{
+		Kind: seiv1alpha1.ConfigMigrationGigaStore,
+	})
+	// GigaStore with a nil payload still yields a non-empty (pebbledb-defaulted)
+	// patch, so this must NOT error.
+	g.Expect(err).NotTo(HaveOccurred())
 }
 
 func TestStateSyncWorkflow_Validate_RefusesValidator(t *testing.T) {

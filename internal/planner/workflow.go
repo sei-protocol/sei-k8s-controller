@@ -1,12 +1,10 @@
 package planner
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
@@ -84,9 +82,15 @@ func (p *stateSyncWorkflowPlanner) BuildPlan(node *seiv1alpha1.SeiNode, wf *seiv
 			minStateSyncWitnesses, len(witnesses))
 	}
 
-	configPatch, err := configPatchFiles(ss.ConfigPatch)
+	// Translate the typed migration into the config-patch step's TOML tree here,
+	// in BuildPlan, so a bad migration aborts the build BEFORE any step runs
+	// (in particular before reset-data wipes the node). A non-nil migration
+	// that produces an empty patch is a hard error: silently dropping the
+	// config-patch step would give a plain resync on a wiped node while the
+	// operator believes a migration ran.
+	configPatch, err := migrationConfigPatch(ss.Migration)
 	if err != nil {
-		return nil, fmt.Errorf("stateSync workflow config patch: %w", err)
+		return nil, fmt.Errorf("stateSync workflow config migration: %w", err)
 	}
 
 	cfgSS := configureStateSyncTask(node)
@@ -111,9 +115,10 @@ func (p *stateSyncWorkflowPlanner) BuildPlan(node *seiv1alpha1.SeiNode, wf *seiv
 		{taskTypeStopSeid, sidecar.StopSeidTask{}},
 		{taskTypeResetData, sidecar.ResetDataTask{}},
 	}
-	// config-patch is included only when the recipe carries a patch: the
-	// sidecar task rejects an empty file set, so an always-present step would
-	// wedge a resync that changes no config.
+	// config-patch is included only when the recipe carries a migration (a
+	// nil Migration yields an empty patch): the sidecar task rejects an empty
+	// file set, so an always-present step would wedge a plain resync that
+	// changes no config.
 	if len(configPatch) > 0 {
 		steps = append(steps, step{TaskConfigPatch, task.ConfigPatchTask{Files: configPatch}})
 	}
@@ -140,26 +145,54 @@ func (p *stateSyncWorkflowPlanner) BuildPlan(node *seiv1alpha1.SeiNode, wf *seiv
 	}, nil
 }
 
-// configPatchFiles converts the CRD's map[string]map[string]JSON into the
-// config-patch task's map[string]map[string]any wire shape, decoding each
-// raw JSON value into its natural Go type.
-func configPatchFiles(in map[string]map[string]apiextensionsv1.JSON) (map[string]map[string]any, error) {
-	if len(in) == 0 {
+// migrationConfigPatch maps a typed ConfigMigration into the config-patch
+// task's file -> section -> value TOML tree (the same shape p2pConfigPatch
+// produces — the task deep-merges the raw tree). A nil migration returns an
+// empty patch, which the caller's `len > 0` gate turns into "no config-patch
+// step" (a plain re-bootstrap). A non-nil migration MUST yield a non-empty
+// patch, and an unknown kind is a hard error — both fail the plan build rather
+// than silently produce a plain resync on a wiped node.
+func migrationConfigPatch(m *seiv1alpha1.ConfigMigration) (map[string]map[string]any, error) {
+	if m == nil {
 		return nil, nil
 	}
-	out := make(map[string]map[string]any, len(in))
-	for file, section := range in {
-		sec := make(map[string]any, len(section))
-		for key, raw := range section {
-			var v any
-			if len(raw.Raw) > 0 {
-				if err := json.Unmarshal(raw.Raw, &v); err != nil {
-					return nil, fmt.Errorf("file %q key %q: %w", file, key, err)
-				}
-			}
-			sec[key] = v
-		}
-		out[file] = sec
+	var files map[string]map[string]any
+	switch m.Kind {
+	case seiv1alpha1.ConfigMigrationGigaStore:
+		files = gigaStoreConfigPatch(m.GigaStore)
+	default:
+		return nil, fmt.Errorf("unknown config migration kind %q", m.Kind)
 	}
-	return out, nil
+	// Fail-closed: a non-nil migration that translates to nothing would silently
+	// become a plain resync (config-patch step dropped) on a wiped node.
+	if len(files) == 0 {
+		return nil, fmt.Errorf("config migration kind %q produced an empty patch", m.Kind)
+	}
+	return files, nil
+}
+
+// gigaStoreConfigPatch builds the app.toml patch for the giga SS-store
+// migration. The section/key names and the fixed enabling flags are pinned
+// against sei-chain docs/migration/giga_store_migration.md (Step 1): a
+// chain-side key rename is a controller code change, not a CRD change. Only
+// Backend is an operator input; ss-enable/evm-ss-split/sc-enable are set by the
+// migration itself. Backend is "" only if defaulting did not run (a raw
+// controller-internal caller); the CRD default is pebbledb.
+func gigaStoreConfigPatch(g *seiv1alpha1.GigaStoreMigration) map[string]map[string]any {
+	backend := "pebbledb"
+	if g != nil && g.Backend != "" {
+		backend = g.Backend
+	}
+	return map[string]map[string]any{
+		"app.toml": {
+			"state-store": map[string]any{
+				"ss-enable":    true,
+				"evm-ss-split": true,
+				"ss-backend":   backend,
+			},
+			"state-commit": map[string]any{
+				"sc-enable": true,
+			},
+		},
+	}
 }

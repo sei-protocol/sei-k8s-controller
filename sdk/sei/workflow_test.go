@@ -2,7 +2,11 @@ package sei
 
 import "testing"
 
-const unsupportedKind = "Frobnicate"
+const (
+	unsupportedKind = "Frobnicate"
+	backendPebble   = "pebbledb"
+	backendRocks    = "rocksdb"
+)
 
 func TestValidateWorkflowSpec(t *testing.T) {
 	good := WorkflowSpec{
@@ -27,14 +31,67 @@ func TestValidateWorkflowSpec(t *testing.T) {
 			true,
 		},
 		{
-			"statesync with config patch + witnesses",
+			"statesync with gigastore migration + witnesses",
 			func(s *WorkflowSpec) {
 				s.StateSync = &StateSyncWorkflow{
-					ConfigPatch: map[string]map[string]any{"app.toml": {"state-store.evm-ss-split": true}},
-					RpcServers:  []string{witnessA, witnessB},
+					Migration: &ConfigMigration{
+						Kind:      ConfigMigrationGigaStore,
+						GigaStore: &GigaStoreMigration{Backend: backendRocks},
+					},
+					RpcServers: []string{witnessA, witnessB},
 				}
 			},
 			false,
+		},
+		{
+			"gigastore backend pebbledb ok",
+			func(s *WorkflowSpec) {
+				s.StateSync = &StateSyncWorkflow{
+					Migration:  &ConfigMigration{Kind: ConfigMigrationGigaStore, GigaStore: &GigaStoreMigration{Backend: backendPebble}},
+					RpcServers: []string{witnessA, witnessB},
+				}
+			},
+			false,
+		},
+		{
+			"gigastore backend empty defaults ok",
+			func(s *WorkflowSpec) {
+				s.StateSync = &StateSyncWorkflow{
+					Migration:  &ConfigMigration{Kind: ConfigMigrationGigaStore, GigaStore: &GigaStoreMigration{}},
+					RpcServers: []string{witnessA, witnessB},
+				}
+			},
+			false,
+		},
+		{
+			"gigastore backend invalid",
+			func(s *WorkflowSpec) {
+				s.StateSync = &StateSyncWorkflow{
+					Migration:  &ConfigMigration{Kind: ConfigMigrationGigaStore, GigaStore: &GigaStoreMigration{Backend: "badger"}},
+					RpcServers: []string{witnessA, witnessB},
+				}
+			},
+			true,
+		},
+		{
+			"statesync migration missing payload",
+			func(s *WorkflowSpec) {
+				s.StateSync = &StateSyncWorkflow{
+					Migration:  &ConfigMigration{Kind: ConfigMigrationGigaStore},
+					RpcServers: []string{witnessA, witnessB},
+				}
+			},
+			true,
+		},
+		{
+			"statesync migration unknown kind",
+			func(s *WorkflowSpec) {
+				s.StateSync = &StateSyncWorkflow{
+					Migration:  &ConfigMigration{Kind: "Bogus", GigaStore: &GigaStoreMigration{}},
+					RpcServers: []string{witnessA, witnessB},
+				}
+			},
+			true,
 		},
 	}
 	for _, tc := range cases {

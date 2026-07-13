@@ -63,18 +63,41 @@ type WorkflowSpec struct {
 // resync -> await caught-up). The recipe is a paved road; its step ordering and
 // guardrails live in the controller, not here.
 type StateSyncWorkflow struct {
-	// ConfigPatch is merged into the node's seid config files before the resync,
-	// keyed file -> section-or-key -> JSON-encodable value (the config-patch
-	// task's wire shape). For the giga-SS migration this carries
-	// app.toml [state-store] evm-ss-split = true. Values are marshaled to JSON by
-	// the k8s provider, so a bool stays a bool (not the string "true").
-	ConfigPatch map[string]map[string]any
+	// Migration, when set, runs a named seid config migration inside the
+	// re-bootstrap (the controller materializes it into the config-patch step).
+	// Nil (the common case) is a plain re-bootstrap that leaves config unchanged.
+	Migration *ConfigMigration
 
-	// RpcServers overrides witness resolution. Empty uses the node's resolved
-	// state-syncers (the two-witness fail-closed floor holds either way); when
-	// set it must itself carry >= 2 entries or the controller refuses the plan.
+	// RpcServers are the CometBFT rpc-servers used as light-client witnesses for
+	// the resync (bare host:port, not snapshot providers). Empty uses the node's
+	// resolved state-syncers; when set it must carry >= 2 distinct entries or the
+	// controller refuses the plan (the two-witness fail-closed floor holds either
+	// way).
 	RpcServers []string
 }
+
+// ConfigMigration is a typed, discriminated seid config migration executed
+// inside the StateSync re-bootstrap. Exactly one payload matching Kind must be
+// set. It mirrors the CRD's ConfigMigration; the fixed flags a migration sets
+// live in the controller, so only its operator inputs are surfaced here.
+type ConfigMigration struct {
+	// Kind selects the migration variant (currently only "GigaStore").
+	Kind string
+	// GigaStore is the payload for Kind == "GigaStore".
+	GigaStore *GigaStoreMigration
+}
+
+// GigaStoreMigration parameterizes the giga SS-store migration. Backend is the
+// only input (app.toml [state-store] ss-backend); "" leaves the CRD default
+// (pebbledb). Supported values: "pebbledb", "rocksdb".
+type GigaStoreMigration struct {
+	Backend string
+}
+
+// Config migration kinds the SDK exposes. Value strings match the CRD enum.
+const (
+	ConfigMigrationGigaStore = "GigaStore"
+)
 
 // CreateWorkflow creates a SeiNodeTaskWorkflow and returns a handle immediately —
 // it does NOT wait for terminal. Call Workflow.WaitTerminal to block on the
@@ -159,8 +182,34 @@ func validateWorkflowSpec(s WorkflowSpec) error {
 		if s.StateSync == nil {
 			return usageErr("WorkflowSpec.Kind %q requires StateSync payload", s.Kind)
 		}
+		if err := validateConfigMigration(s.StateSync.Migration); err != nil {
+			return err
+		}
 	default:
 		return usageErr("WorkflowSpec.Kind %q is not supported by the SDK", s.Kind)
+	}
+	return nil
+}
+
+// validateConfigMigration mirrors the CRD's ConfigMigration union CEL: a nil
+// migration is the valid plain-resync case; a non-nil one must carry a known
+// kind with its matching payload set.
+func validateConfigMigration(m *ConfigMigration) error {
+	if m == nil {
+		return nil
+	}
+	switch m.Kind {
+	case ConfigMigrationGigaStore:
+		if m.GigaStore == nil {
+			return usageErr("ConfigMigration.Kind %q requires GigaStore payload", m.Kind)
+		}
+		switch m.GigaStore.Backend {
+		case "", "pebbledb", "rocksdb":
+		default:
+			return usageErr("GigaStoreMigration.Backend %q is not one of \"\", \"pebbledb\", \"rocksdb\"", m.GigaStore.Backend)
+		}
+	default:
+		return usageErr("ConfigMigration.Kind %q is not supported by the SDK", m.Kind)
 	}
 	return nil
 }

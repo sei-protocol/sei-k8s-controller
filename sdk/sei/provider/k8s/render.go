@@ -196,9 +196,10 @@ func renderTask(spec sei.TaskSpec, namespace string) *seiv1alpha1.SeiNodeTask {
 // renderWorkflow builds the SeiNodeTaskWorkflow from a WorkflowSpec. Mirrors
 // renderTask: reuse the shared SeiNodeTaskTarget (nodeRef + requirePhase gating)
 // and translate the SDK-native recipe payload to the CRD's. The StateSync
-// ConfigPatch values arrive as Go `any` (core stays apimachinery-free) and are
-// marshaled to apiextensionsv1.JSON here, so a bool stays a JSON bool.
-func renderWorkflow(spec sei.WorkflowSpec, namespace string) (*seiv1alpha1.SeiNodeTaskWorkflow, error) {
+// Migration (nil for a plain re-bootstrap) is rendered onto
+// spec.stateSync.migration as a typed union; the controller materializes its
+// fixed flags into the config-patch step.
+func renderWorkflow(spec sei.WorkflowSpec, namespace string) *seiv1alpha1.SeiNodeTaskWorkflow {
 	target := seiv1alpha1.SeiNodeTaskTarget{
 		NodeRef: seiv1alpha1.SeiNodeTaskNodeRef{Name: spec.Node},
 	}
@@ -226,36 +227,26 @@ func renderWorkflow(spec sei.WorkflowSpec, namespace string) (*seiv1alpha1.SeiNo
 	}
 
 	if ss := spec.StateSync; ss != nil {
-		patch, err := renderConfigPatch(ss.ConfigPatch)
-		if err != nil {
-			return nil, err
-		}
 		wf.Spec.StateSync = &seiv1alpha1.StateSyncWorkflow{
-			ConfigPatch: patch,
-			RpcServers:  ss.RpcServers,
+			Migration:  renderConfigMigration(ss.Migration),
+			RpcServers: ss.RpcServers,
 		}
 	}
-	return wf, nil
+	return wf
 }
 
-// renderConfigPatch marshals the SDK's file -> key -> any config patch into the
-// CRD's file -> key -> JSON shape. Returns nil for an empty patch (the recipe
-// then omits the config-patch step entirely).
-func renderConfigPatch(in map[string]map[string]any) (map[string]map[string]apiextensionsv1.JSON, error) {
-	if len(in) == 0 {
-		return nil, nil
+// renderConfigMigration translates the SDK's typed migration onto the CRD's
+// ConfigMigration union. A nil migration renders nil (a plain re-bootstrap with
+// no config-patch step).
+func renderConfigMigration(m *sei.ConfigMigration) *seiv1alpha1.ConfigMigration {
+	if m == nil {
+		return nil
 	}
-	out := make(map[string]map[string]apiextensionsv1.JSON, len(in))
-	for file, section := range in {
-		sec := make(map[string]apiextensionsv1.JSON, len(section))
-		for key, val := range section {
-			raw, err := json.Marshal(val)
-			if err != nil {
-				return nil, err
-			}
-			sec[key] = apiextensionsv1.JSON{Raw: raw}
-		}
-		out[file] = sec
+	out := &seiv1alpha1.ConfigMigration{
+		Kind: seiv1alpha1.ConfigMigrationKind(m.Kind),
 	}
-	return out, nil
+	if g := m.GigaStore; g != nil {
+		out.GigaStore = &seiv1alpha1.GigaStoreMigration{Backend: g.Backend}
+	}
+	return out
 }

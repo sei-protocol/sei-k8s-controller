@@ -1,7 +1,6 @@
 package v1alpha1
 
 import (
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -127,18 +126,84 @@ type SeiNodeTaskWorkflowSpec struct {
 
 // StateSyncWorkflow parameterizes the StateSync recipe.
 type StateSyncWorkflow struct {
-	// ConfigPatch is merged into the node's seid config files before the
-	// resync, keyed file -> section-or-key -> value (the config-patch task's
-	// wire shape). For STO-624 this carries app.toml [state-store]
-	// evm-ss-split = true.
+	// Migration, when set, runs a named seid config migration inside this
+	// destructive re-bootstrap: the planner materializes its typed parameters
+	// into the config-patch step's TOML tree, applied after reset-data and
+	// before configure-state-sync. Nil (the common case) is a plain
+	// re-bootstrap that leaves config unchanged and omits the config-patch step
+	// entirely. A ConfigMigration always means "a migration executed inside a
+	// wipe" — a wipe-less migration belongs in a different workflow kind.
 	// +optional
-	ConfigPatch map[string]map[string]apiextensionsv1.JSON `json:"configPatch,omitempty"`
+	Migration *ConfigMigration `json:"migration,omitempty"`
 
-	// RpcServers overrides witness resolution. When empty, the node's resolved
-	// state-syncers are used and the two-witness fail-closed floor holds. When
-	// set, it must itself carry >= 2 entries or the plan refuses to compile.
+	// RpcServers are the CometBFT rpc-servers used as light-client witnesses
+	// (trust-point acquisition and verification) for the resync. Witnesses are
+	// NOT snapshot providers: snapshot chunks are delivered over p2p by
+	// snapshot-serving peers; rpcServers verify the trust point only, so at
+	// least two distinct endpoints are required for the light-client
+	// cross-check. When empty, the node's resolved state-syncers
+	// (node.status.resolvedStateSyncers) are used and the two-witness
+	// fail-closed floor still holds. Endpoints are bare host:port (no scheme,
+	// no IPv6 literal), matching the CometBFT rpc_servers key and the
+	// SnapshotSource.RpcServers shape.
 	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MinItems=2
+	// +kubebuilder:validation:items:Pattern=`^[^\s:/,]+:[0-9]{1,5}$`
 	RpcServers []string `json:"rpcServers,omitempty"`
+}
+
+// ConfigMigrationKind discriminates the ConfigMigration union. Exactly one
+// matching payload sub-struct must be set. Each variant is a real, reviewed
+// seid migration (cf. sei-chain docs/migration/*), grounded against its own
+// chain-side doc; a half-specified variant is worse than an absent one.
+// +kubebuilder:validation:Enum=GigaStore
+type ConfigMigrationKind string
+
+const (
+	// ConfigMigrationGigaStore is the giga SS-store migration
+	// (sei-chain docs/migration/giga_store_migration.md): it splits hot EVM
+	// state into a dedicated state-store DB, which requires a full state-sync
+	// re-bootstrap into the new layout. RPC nodes only.
+	ConfigMigrationGigaStore ConfigMigrationKind = "GigaStore"
+)
+
+// ConfigMigration is a typed, discriminated seid config migration executed
+// inside the StateSync re-bootstrap. It enshrines the migration (a recurring
+// operation), not each config value: the fixed flags a migration sets are
+// pinned in controller code against the chain-side migration doc. Only Backend
+// (for GigaStore) is an operator input; the flags the migration flips are
+// materialized into status.plan (spec = intent, status.plan = the applied
+// TOML keys).
+//
+// The CEL rules below fire only when Migration is non-nil, so a nil migration
+// (plain re-bootstrap) bypasses them. Per-field immutability is intentionally
+// omitted: the parent's `self.stateSync == oldSelf.stateSync` already freezes
+// this whole subtree.
+//
+// +kubebuilder:validation:XValidation:rule="(has(self.gigaStore) ? 1 : 0) == 1",message="exactly one migration payload (gigaStore) must be set"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'GigaStore' || has(self.gigaStore)",message="spec.stateSync.migration.gigaStore is required when kind=GigaStore"
+type ConfigMigration struct {
+	// Kind selects the migration variant. The matching payload must be set.
+	Kind ConfigMigrationKind `json:"kind"`
+
+	// GigaStore is the payload for kind=GigaStore.
+	// +optional
+	GigaStore *GigaStoreMigration `json:"gigaStore,omitempty"`
+}
+
+// GigaStoreMigration parameterizes the giga SS-store migration. Backend is the
+// only operator input; the migration itself sets the fixed enabling flags
+// (pinned to giga_store_migration.md): app.toml [state-store] ss-enable=true,
+// evm-ss-split=true and [state-commit] sc-enable=true. Those flags are not
+// operator-visible knobs — they are observable after the fact in status.plan.
+type GigaStoreMigration struct {
+	// Backend is the DBBackend for the Cosmos SS MVCC DB and every EVM SS
+	// sub-DB, mapped to app.toml [state-store] ss-backend. rocksdb additionally
+	// requires a seid image built with -tags rocksdbBackend.
+	// +kubebuilder:default=pebbledb
+	// +kubebuilder:validation:Enum=pebbledb;rocksdb
+	Backend string `json:"backend,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
