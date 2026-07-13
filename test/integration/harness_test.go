@@ -10,8 +10,9 @@
 // nightly compiles it once (go test -c -tags integration) and runs each target as
 // an in-cluster CronJob (-test.run TestX).
 //
-// Depends only on sdk/sei (+ the k8s provider blank import); never internal/seitask
-// or internal/taskruntime.
+// Depends on sdk/sei (+ the k8s provider blank import), api/v1alpha1 (public API
+// types, for reading status.plan), and k8s.io/apimachinery/.../metav1 (for a
+// condition constant); never internal/seitask or internal/taskruntime.
 package integration
 
 import (
