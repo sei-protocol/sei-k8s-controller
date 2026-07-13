@@ -237,7 +237,7 @@ func (r *SeiNetworkReconciler) scaleDown(ctx context.Context, network *seiv1alph
 	nodeList := &seiv1alpha1.SeiNodeList{}
 	if err := r.List(ctx, nodeList,
 		client.InNamespace(network.Namespace),
-		client.MatchingLabels(groupSelector(network)),
+		client.MatchingLabels(seinetworkSelector(network)),
 	); err != nil {
 		return fmt.Errorf("listing child SeiNodes: %w", err)
 	}
@@ -247,11 +247,11 @@ func (r *SeiNetworkReconciler) scaleDown(ctx context.Context, network *seiv1alph
 		if !metav1.IsControlledBy(node, network) {
 			continue
 		}
-		if node.Labels[groupOrdinalLabel] == "" {
+		if node.Labels[seinetworkOrdinalLabel] == "" {
 			continue
 		}
 		var ord int
-		if _, err := fmt.Sscanf(node.Labels[groupOrdinalLabel], "%d", &ord); err != nil {
+		if _, err := fmt.Sscanf(node.Labels[seinetworkOrdinalLabel], "%d", &ord); err != nil {
 			continue
 		}
 		if ord >= int(network.Spec.Replicas) {
@@ -268,7 +268,7 @@ func (r *SeiNetworkReconciler) listChildSeiNodes(ctx context.Context, network *s
 	nodeList := &seiv1alpha1.SeiNodeList{}
 	if err := r.List(ctx, nodeList,
 		client.InNamespace(network.Namespace),
-		client.MatchingLabels(groupSelector(network)),
+		client.MatchingLabels(seinetworkSelector(network)),
 	); err != nil {
 		return nil, fmt.Errorf("listing child SeiNodes: %w", err)
 	}

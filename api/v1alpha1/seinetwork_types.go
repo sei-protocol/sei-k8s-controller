@@ -77,9 +77,10 @@ type SeiNetworkSpec struct {
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
 
 	// PodLabels are additional labels merged into each child SeiNode's pod
-	// template. The controller always adds the reserved group labels
-	// (sei.io/nodedeployment{,-ordinal}, frozen GitOps selector keys, plus the
-	// canonical sei.io/seinetwork{,-ordinal} keys); these are additive.
+	// template. The controller always adds the reserved group labels — the
+	// canonical sei.io/seinetwork{,-ordinal} keys, plus the frozen
+	// sei.io/nodedeployment{,-ordinal} GitOps selector keys retained for
+	// selector continuity; these are additive.
 	// +optional
 	PodLabels map[string]string `json:"podLabels,omitempty"`
 

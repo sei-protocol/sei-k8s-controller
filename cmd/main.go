@@ -231,7 +231,9 @@ func main() {
 				nodes := &seiv1alpha1.SeiNodeList{}
 				if err := kc.List(ctx, nodes,
 					client.InNamespace(network.Namespace),
-					client.MatchingLabels{"sei.io/nodedeployment": network.Name},
+					// Canonical seinetwork CR-selection key (both key families
+					// are stamped on every SeiNetwork child).
+					client.MatchingLabels{"sei.io/seinetwork": network.Name},
 				); err == nil && len(nodes.Items) > 0 {
 					sort.Slice(nodes.Items, func(i, j int) bool {
 						return nodes.Items[i].Name < nodes.Items[j].Name

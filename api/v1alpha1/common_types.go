@@ -32,10 +32,12 @@ type PeerSource struct {
 //
 // Controller-managed labels available on every SeiNode owned by a SeiNetwork:
 //   - sei.io/chain — from .spec.genesis.chainId
-//   - sei.io/nodedeployment — owning SeiNetwork name (frozen selector key)
-//   - sei.io/nodedeployment-ordinal — replica index (frozen selector key)
-//   - sei.io/seinetwork — owning SeiNetwork name (canonical key)
+//   - sei.io/seinetwork — owning SeiNetwork name (canonical key; controller
+//     CR-selection matches on this)
 //   - sei.io/seinetwork-ordinal — replica index (canonical key)
+//   - sei.io/nodedeployment — owning SeiNetwork name (frozen selector key,
+//     still stamped for selector continuity with external consumers)
+//   - sei.io/nodedeployment-ordinal — replica index (frozen selector key)
 //   - sei.io/role — always "validator" (a SeiNetwork is a validator pool)
 //
 // These reserved keys are always controller-stamped. (There is no

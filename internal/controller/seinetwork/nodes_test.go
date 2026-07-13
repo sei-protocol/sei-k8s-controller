@@ -376,7 +376,7 @@ func TestSyncPausedToChildren_IgnoresPlanInProgress(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      testNode0,
 			Namespace: testGroupNS,
-			Labels:    map[string]string{groupLabel: testNetworkName},
+			Labels:    map[string]string{seinetworkLabel: testNetworkName},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: testAPIVersion,
 				Kind:       testKind,

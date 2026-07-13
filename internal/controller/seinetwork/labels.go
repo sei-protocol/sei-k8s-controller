@@ -40,11 +40,20 @@ func seiNodeName(network *seiv1alpha1.SeiNetwork, ordinal int) string {
 	return fmt.Sprintf("%s-%d", network.Name, ordinal)
 }
 
-// groupSelector returns the label selector used by the internal Service and
-// child-node listing. Image changes update pods in place, so traffic must
-// always reach every network member.
+// groupSelector returns the FROZEN nodedeployment-keyed selector. It backs the
+// internal ClusterIP Service's pod selector only. The live Service selector
+// must match the frozen key stamped on running pods; selecting on the canonical
+// key instead strands traffic until every pod is re-stamped by a fleet roll.
+// CR-listing uses seinetworkSelector.
 func groupSelector(network *seiv1alpha1.SeiNetwork) map[string]string {
 	return map[string]string{groupLabel: network.Name}
+}
+
+// seinetworkSelector returns the canonical seinetwork-keyed selector used to
+// list/select child SeiNode CRs. Both key families are stamped on every child
+// (see seiNodeLabels), so this selects the same set as groupSelector today.
+func seinetworkSelector(network *seiv1alpha1.SeiNetwork) map[string]string {
+	return map[string]string{seinetworkLabel: network.Name}
 }
 
 // seiNodeLabels builds the metadata labels for a child SeiNode. The reserved

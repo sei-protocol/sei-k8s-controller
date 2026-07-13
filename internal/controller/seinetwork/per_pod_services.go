@@ -23,7 +23,7 @@ func populatePerPodServices(log logr.Logger, nodes []seiv1alpha1.SeiNode) []seiv
 	entries := make([]entry, 0, len(nodes))
 	for i := range nodes {
 		node := &nodes[i]
-		ordStr, ok := node.Labels[groupOrdinalLabel]
+		ordStr, ok := node.Labels[seinetworkOrdinalLabel]
 		if !ok {
 			log.V(1).Info("per-pod service: skipping node missing ordinal label", "node", node.Name)
 			continue

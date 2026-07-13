@@ -16,7 +16,8 @@ const TaskTypeAwaitNodesRunning = "await-nodes-running"
 // AwaitNodesRunningParams holds the serialized parameters for the
 // await-nodes-running task. The task polls child SeiNodes until all
 // reach PhaseRunning. When NodeNames is set, only those specific nodes
-// are checked; otherwise all nodes matching the group label are checked.
+// are checked; otherwise all SeiNode CRs matching the canonical
+// sei.io/seinetwork label (value GroupName) are checked.
 type AwaitNodesRunningParams struct {
 	GroupName string   `json:"groupName"`
 	Namespace string   `json:"namespace"`
@@ -89,7 +90,9 @@ func (e *awaitNodesRunningExecution) listTargetNodes(ctx context.Context) ([]sei
 	nodeList := &seiv1alpha1.SeiNodeList{}
 	if err := e.cfg.KubeClient.List(ctx, nodeList,
 		client.InNamespace(e.params.Namespace),
-		client.MatchingLabels{"sei.io/nodedeployment": e.params.GroupName},
+		// Lists SeiNode CRs by the canonical sei.io/seinetwork key; GroupName is
+		// the SeiNetwork name.
+		client.MatchingLabels{"sei.io/seinetwork": e.params.GroupName},
 	); err != nil {
 		return nil, err
 	}
