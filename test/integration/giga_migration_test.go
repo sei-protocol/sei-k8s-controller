@@ -70,7 +70,9 @@ func TestGigaStoreMigration(t *testing.T) {
 	defer stop()
 
 	c := openClient(ctx, t)
-	validators := envInt(t, "SEI_VALIDATORS", 1)
+	// Four validators, the harness convention — see TestWorkflowStateSync's
+	// rationale (consensus-paced production keeps the witness follower at head).
+	validators := envInt(t, "SEI_VALIDATORS", 4)
 
 	// Same fixture as the plain-resync baseline: snapshot-producing chain + a
 	// state-sync follower verified to have started FROM a snapshot (earliest > 1 —
