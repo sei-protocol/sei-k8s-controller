@@ -60,8 +60,10 @@ type WorkflowSpec struct {
 
 // StateSyncWorkflow is the payload for WorkflowStateSync — re-bootstrap the
 // target through CometBFT state sync (quiesce -> wipe data/ -> re-configure ->
-// resync -> await caught-up). The recipe is a paved road; its step ordering and
-// guardrails live in the controller, not here.
+// release). Complete means every mutation was performed and the node was
+// released to re-bootstrap; the resync runs after Complete, so callers verify
+// catch-up node-side (WaitCaughtUp). The recipe is a paved road; its step
+// ordering and guardrails live in the controller, not here.
 type StateSyncWorkflow struct {
 	// Migration, when set, runs a named seid config migration inside the
 	// re-bootstrap (the controller materializes it into the config-patch step).

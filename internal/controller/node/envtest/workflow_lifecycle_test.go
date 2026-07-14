@@ -236,6 +236,16 @@ func TestWorkflowLifecycle_AdoptAndComplete(t *testing.T) {
 		g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
 		g.Expect(w.Finalizers).NotTo(ContainElement(seiv1alpha1.SeiNodeTaskWorkflowFinalizer))
 
+		// Complete-at-release semantics pin: the recipe ends at mark-ready and
+		// carries no catch-up gate. Complete means the node was released, not
+		// that it caught up; catch-up verification is node-side (STO-624).
+		g.Expect(w.Status.Plan).NotTo(BeNil())
+		g.Expect(w.Status.Plan.Tasks).NotTo(BeEmpty())
+		g.Expect(w.Status.Plan.Tasks[len(w.Status.Plan.Tasks)-1].Type).To(Equal(sidecar.TaskTypeMarkReady))
+		for _, tk := range w.Status.Plan.Tasks {
+			g.Expect(tk.Type).NotTo(Equal(sidecar.TaskTypeAwaitCondition))
+		}
+
 		n := getNode(g, cli, "lc-complete")
 		g.Expect(n.Status.AdoptedWorkflow).To(BeNil())
 		wip := apimeta.FindStatusCondition(n.Status.Conditions, seiv1alpha1.ConditionWorkflowInProgress)
@@ -278,7 +288,7 @@ func TestWorkflowLifecycle_FailurePath(t *testing.T) {
 
 func TestWorkflowLifecycle_ReadoptByUIDAfterRestart(t *testing.T) {
 	g := NewWithT(t)
-	fake := newFakeSidecar().stallAt(sidecar.TaskTypeAwaitCondition)
+	fake := newFakeSidecar().stallAt(sidecar.TaskTypeConfigureStateSync)
 	cli, cancel := startNodeManagerC(t, fake)
 
 	node := lifecycleNode("lc-restart")
@@ -343,7 +353,7 @@ func TestWorkflowLifecycle_QueueThenSequential(t *testing.T) {
 
 func TestWorkflowLifecycle_FinalizerBlocksDeleteThenForce(t *testing.T) {
 	g := NewWithT(t)
-	fake := newFakeSidecar().stallAt(sidecar.TaskTypeAwaitCondition)
+	fake := newFakeSidecar().stallAt(sidecar.TaskTypeConfigureStateSync)
 	cli := startNodeManager(t, fake)
 
 	node := lifecycleNode("lc-final")
@@ -491,7 +501,7 @@ func forceDelete(cli client.Client, wf *seiv1alpha1.SeiNodeTaskWorkflow) {
 // takes effect.
 func TestWorkflowLifecycle_PauseFreezesForceDelete(t *testing.T) {
 	g := NewWithT(t)
-	fake := newFakeSidecar().stallAt(sidecar.TaskTypeAwaitCondition)
+	fake := newFakeSidecar().stallAt(sidecar.TaskTypeConfigureStateSync)
 	cli := startNodeManager(t, fake)
 
 	node := lifecycleNode("lc-pausedel")

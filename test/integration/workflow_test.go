@@ -25,8 +25,9 @@ import (
 // memiavl baseline for the network in this suite, it reaches BOTH witnesses: it
 // is applied to the network (so the genesis validator inherits it) and to the
 // rpc follower via provision's storageConfig, so both witnesses serve chunks.
-// Without it, the resync has nothing to sync FROM and the workflow's
-// await-caught-up step never clears.
+// Without it, the resync has nothing to sync FROM and the node-side
+// WaitCaughtUp assertion after workflow Complete never clears (the workflow
+// itself completes at mark-ready and does not gate on catch-up).
 //
 // Keys are the sei-config storage.* overrides that sei-config.SnapshotGenerationOverrides
 // emits (storage.snapshot_interval / storage.snapshot_keep_recent, plus
@@ -316,9 +317,11 @@ func bringUpStateSyncFollower(ctx context.Context, t *testing.T, c *sei.Client, 
 }
 
 // workflowWaitTimeout is the TIGHT child budget for one resync workflow's
-// WaitTerminal — well under the 60m scenario ctx so a wedged recipe (a giga boot
-// that refuses to start, or a step whose await carries no timeout) fails FAST and
-// legibly with the recorded status instead of stalling to the scenario deadline.
+// WaitTerminal — well under the 60m scenario ctx so a wedged recipe step fails
+// FAST and legibly with the recorded status instead of stalling to the scenario
+// deadline. The recipe ends at mark-ready (Complete == released, catch-up is
+// asserted node-side below), so a healthy run completes in minutes and this
+// budget bounds only the mutation steps, of which reset-data is the slowest.
 const workflowWaitTimeout = 15 * time.Minute
 
 // awaitWorkflowComplete blocks on wf.WaitTerminal under a tight child timeout and
