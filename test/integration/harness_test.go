@@ -2,7 +2,7 @@
 
 // Package integration holds the Sei nightly integration suites as plain `go test`
 // targets (TestBenchmark, TestChaosSuite, TestChainUpgrade, TestRelease,
-// TestWorkflowStateSync), selected with -run. Orchestration is statement order in
+// TestWorkflowStateSync, TestGigaStoreMigration), selected with -run. Orchestration is statement order in
 // one process; cross-step state is local Go values, not external config.
 //
 // Everything lives in *_test.go behind //go:build integration, so it never links
@@ -153,12 +153,11 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 	}
 	t.Logf("network %s: ready", s.chainID)
 
-	// Two phases: create every rpc node (so they all exist as each other's
-	// blocksync peers), then gate each on caught-up + EVM serving. Gating
-	// node i before node i+1 exists would strand a follower whose only peer
-	// is the validator — blocksync's caught-up check (sei-tendermint
-	// pool.IsCaughtUp) returns false unconditionally for a single-peer node,
-	// so its catching_up flag can never flip.
+	// Two phases: create every rpc node, then gate each on caught-up + EVM
+	// serving. blocksync's caught-up check (sei-tendermint pool.IsCaughtUp)
+	// returns false unconditionally for a single-peer node, so every peer a
+	// follower will have — validators and sibling followers alike — must
+	// exist before its gate runs.
 	hc := &http.Client{Timeout: 10 * time.Second}
 	for i := range s.rpcNodes {
 		name := rpcNodeName(s.chainID, i)
