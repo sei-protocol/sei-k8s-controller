@@ -20,11 +20,12 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
-// snapshotProductionConfig makes the witness nodes emit CometBFT state-sync
+// snapshotProductionConfig makes the genesis validator emit CometBFT state-sync
 // snapshots so a wiped follower can re-bootstrap from them. Overlaid on the
-// memiavl baseline for the network in this suite, it reaches BOTH witnesses: it
-// is applied to the network (so the genesis validator inherits it) and to the
-// rpc follower via provision's storageConfig, so both witnesses serve chunks.
+// memiavl baseline for the network, it reaches the validator only: rpc followers
+// override the interval to 0 (see bringUpStateSyncFollower) because a
+// light-client witness serves RPC trust points while snapshot chunks travel
+// over p2p from the producing validator.
 // Without it, the resync has nothing to sync FROM and the node-side
 // WaitCaughtUp assertion after workflow Complete never clears (the workflow
 // itself completes at mark-ready and does not gate on catch-up).
@@ -60,8 +61,9 @@ var snapshotProductionConfig = map[string]string{
 // baseline: it stays independent and carries no migration.
 //
 // Witnesses: the follower's RpcServers are TWO DISTINCT full-node RPC endpoints —
-// genesis validator-0 and the provisioned rpc follower (rpcNodes[0]) — each a
-// caught-up node that serves snapshot chunks (nodeRPC below). Two DISTINCT
+// genesis validator-0 and rpc follower 0 (rpcNodes[0]) — each a live node
+// serving RPC trust points (nodeRPC below); chunks come from the
+// snapshot-producing validator over p2p. Two DISTINCT
 // witnesses drawn from different nodes (rather than two equal validators) keeps
 // liveness robust: the chain needs only its single validator online, and there is
 // no 2-validator genesis blocksync-bootstrap deadlock to stall on. The
@@ -77,8 +79,9 @@ var snapshotProductionConfig = map[string]string{
 // Cluster dependencies the CronJob wiring owns (documented, not asserted here):
 //   - the deployed controller + seid image carry the hold-aware start gate and
 //     the mark-not-ready/stop-seid/reset-data sidecar tasks;
-//   - both witnesses (validator-0 and the rpc follower) produce state-sync
-//     snapshots (snapshotProductionConfig, applied to both — see above).
+//   - validator-0 produces state-sync snapshots (snapshotProductionConfig);
+//     the rpc-follower witness serves RPC trust points only, chunks arrive
+//     over p2p from the validator.
 //
 // Inputs (env): SEI_CHAIN_ID, SEID_IMAGE [required]; SEI_NAMESPACE,
 // SEI_VALIDATORS [optional]. Run as the nightly CronJob:
@@ -99,7 +102,8 @@ func TestWorkflowStateSync(t *testing.T) {
 
 	// State-sync needs >=2 DISTINCT light-client witnesses (nodeRPC below). This
 	// suite draws them from TWO DIFFERENT nodes — the single genesis validator and
-	// the one provisioned rpc follower — so a single validator suffices. A second
+	// rpc follower 0 (of two; the sibling exists as a blocksync peer) — so a
+	// single validator suffices. A second
 	// equal validator would be strictly more fragile (both must stay online for
 	// 2/3, and some seid images stall a 2-validator genesis in a blocksync
 	// bootstrap deadlock), so keep the default at one.
@@ -193,15 +197,16 @@ type stateSyncFollower struct {
 }
 
 // bringUpStateSyncFollower provisions the snapshot-producing chain (1 validator +
-// N rpc followers, all memiavl + snapshot-producing) and brings up a plain
-// state-sync RPC follower against TWO DISTINCT witnesses, blocking until it is
-// running + caught up and verified to have started FROM a snapshot (earliest > 1).
+// two plain rpc followers, memiavl everywhere; only the validator produces
+// snapshots) and brings up a plain state-sync RPC follower against TWO DISTINCT
+// witnesses, blocking until it is running + caught up and verified to have
+// started FROM a snapshot (earliest > 1).
 // It registers teardown for everything it creates and t.Fatalf's on any failure,
 // so the caller gets a ready fixture or a failed test — never a half-built one.
 //
 // The two DISTINCT full-node RPC endpoints (bare host:port, the CRD
 // SnapshotSource.RpcServers shape) are genesis validator-0 (service <chainID>-0)
-// and the provisioned rpc follower (rpcNodeName(chainID,0) = <chainID>-rpc-0).
+// and the first provisioned rpc follower (rpcNodeName(chainID,0) = <chainID>-rpc-0).
 // The witness namespace is derived from the aggregate RPC host rather than the ns
 // input, which may be "" — the SDK resolves an empty namespace to a
 // kubeconfig/SA default that only the served endpoint reflects. The aggregate
@@ -210,14 +215,20 @@ type stateSyncFollower struct {
 func bringUpStateSyncFollower(ctx context.Context, t *testing.T, c *sei.Client, chainID, ns, seid string, validators int) stateSyncFollower {
 	t.Helper()
 
+	// Two followers: blocksync's caught-up check needs >1 peer (sei-tendermint
+	// pool.IsCaughtUp), so a lone follower peered only with the validator never
+	// reports caught up. Followers produce no snapshots (rpcConfig zeroes the
+	// interval): a witness serves RPC trust points; chunks come from the
+	// validator over p2p.
 	ch, err := provision(ctx, t, c, spec{
 		chainID:       chainID,
 		runID:         chainID,
 		namespace:     ns,
 		seidImage:     seid,
 		validators:    validators,
-		rpcNodes:      1,
+		rpcNodes:      2,
 		storageConfig: mergeConfig(memiavlStorageConfig, snapshotProductionConfig),
+		rpcConfig:     map[string]string{"storage.snapshot_interval": "0"},
 	})
 	cleanupChain(t, ch)
 	if err != nil {
@@ -250,7 +261,7 @@ func bringUpStateSyncFollower(ctx context.Context, t *testing.T, c *sei.Client, 
 	witnessNS := hostLabels[1]
 	witnesses := []string{
 		nodeRPC(fmt.Sprintf("%s-0", chainID), witnessNS), // genesis validator-0
-		nodeRPC(rpcNodeName(chainID, 0), witnessNS),      // the provisioned rpc follower
+		nodeRPC(rpcNodeName(chainID, 0), witnessNS),      // rpc follower 0
 	}
 
 	// Bring up a state-sync-bootstrapped follower: it must fetch a snapshot from a
