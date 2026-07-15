@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// TestBenchmark provisions a validator chain + RPC fleet, drives seiload against
+// TestNightlyBenchmark provisions a validator chain + RPC fleet, drives seiload against
 // the fleet for the configured duration, and asserts the chain stayed live under
 // load. The load suite.
 //
@@ -30,7 +30,7 @@ import (
 // so the scenario ctx below — not the test-runner alarm — must own the deadline,
 // nested inside the CronJob activeDeadlineSeconds (the SIGKILL backstop the
 // label-GC sweep covers).
-func TestBenchmark(t *testing.T) {
+func TestNightlyBenchmark(t *testing.T) {
 	requireCluster(t)
 
 	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))

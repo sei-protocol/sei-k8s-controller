@@ -1,17 +1,22 @@
 //go:build integration
 
 // Package integration holds the Sei nightly integration suites as plain `go test`
-// targets (TestBenchmark, TestChaosSuite, TestChainUpgrade, TestRelease,
-// TestWorkflowStateSync, TestGigaStoreMigration, TestGigaMixedRelease), selected
-// with -run. Orchestration is statement order in one process; cross-step state is
-// local Go values, not external config. A suite whose required image can't be the
-// shared SEID_IMAGE default (a different flavor, or a pinned version pair) reads
-// its own env var name, since one process has one environment.
+// targets. Every suite the nightly schedule runs is named TestNightly<Suite>
+// (TestNightlyBenchmark, TestNightlyChaosSuite, TestNightlyChainUpgrade,
+// TestNightlyRelease, TestNightlyWorkflowStateSync, TestNightlyGigaStoreMigration,
+// TestNightlyGigaMixedRelease); a new suite joins the nightly schedule by taking
+// that name, with no other wiring required. TestGenesisCeremonyProducesBlocks is
+// the one suite deliberately outside the prefix — an onboarding-validation check,
+// run standalone, never nightly. Orchestration within one run is statement order
+// in one process; cross-step state is local Go values, not external config. A
+// suite whose required image can't be the shared SEID_IMAGE default (a different
+// flavor, or a pinned version pair) reads its own env var name, since one process
+// has one environment.
 //
 // Everything lives in *_test.go behind //go:build integration, so it never links
 // into a production binary and is excluded from the default `go test ./...`. The
-// nightly compiles it once (go test -c -tags integration) and runs every target
-// in one in-cluster CronJob (-test.run selects the combined set).
+// nightly compiles it once (go test -c -tags integration) and runs the whole set
+// in one in-cluster CronJob (-test.run '^TestNightly').
 //
 // Depends on sdk/sei (+ the k8s provider blank import), api/v1alpha1 (public API
 // types, for reading status.plan), and k8s.io/apimachinery/.../metav1 (for a

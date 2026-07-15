@@ -23,11 +23,11 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
-// TestGigaMixedRelease proves giga_store_migration.md's central safety claim —
+// TestNightlyGigaMixedRelease proves giga_store_migration.md's central safety claim —
 // "Giga SS Store is a per-node SS change that is invisible to the network" —
 // under real conformance load, not just a healthy-boot check. It provisions one
 // 4-validator chain with two plain RPC followers, migrates ONE follower to giga
-// (evm-ss-split=true) via the same StateSync recipe TestGigaStoreMigration
+// (evm-ss-split=true) via the same StateSync recipe TestNightlyGigaStoreMigration
 // drives, leaves the other at the shipped default (every node ships with
 // ss-enable=true already; evm-ss-split=false is the only thing distinguishing a
 // "giga" node from a plain one), then runs the external release-test conformance
@@ -47,7 +47,7 @@ import (
 //
 // Inputs (env): SEI_CHAIN_ID, SEID_IMAGE, RELEASE_TEST_IMAGE [required];
 // SEI_NAMESPACE [optional]. Run with -test.timeout 0.
-func TestGigaMixedRelease(t *testing.T) {
+func TestNightlyGigaMixedRelease(t *testing.T) {
 	requireCluster(t)
 	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
 	seid := mustEnv(t, "SEID_IMAGE")
@@ -117,7 +117,7 @@ func TestGigaMixedRelease(t *testing.T) {
 	}
 
 	// Namespace for witness service hostnames, derived from the aggregate RPC
-	// host the same way TestWorkflowStateSync does (ns may be "").
+	// host the same way TestNightlyWorkflowStateSync does (ns may be "").
 	u, err := url.Parse(net.TendermintRPC())
 	if err != nil {
 		t.Fatalf("parse network TM RPC %q: %v", net.TendermintRPC(), err)
@@ -279,7 +279,7 @@ func TestGigaMixedRelease(t *testing.T) {
 	if err := sei.WaitCaughtUp(ctx, hc, gigaNode.TendermintRPC()); err != nil {
 		t.Errorf("post-release giga node %s not caught up: %v", gigaNode.Name(), err)
 	}
-	t.Logf("release-test PASSED against both v2 and giga followers — parity confirmed, TestGigaMixedRelease OK")
+	t.Logf("release-test PASSED against both v2 and giga followers — parity confirmed, TestNightlyGigaMixedRelease OK")
 }
 
 // waitJobErr mirrors waitJob's polling logic but returns an error instead of

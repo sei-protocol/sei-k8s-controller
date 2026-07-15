@@ -34,7 +34,7 @@ const (
 	// voting period and passes before the chain reaches it. At Sei's ~600ms-1s
 	// blocks, 200 blocks comfortably outlasts the 60s voting period + tally;
 	// env-overridable for faster/slower chains. The whole flow's safety rests on
-	// this margin, so it must stay generous (see TestChainUpgrade).
+	// this margin, so it must stay generous (see TestNightlyChainUpgrade).
 	defaultUpgradeHeightDelta = 200
 	// minUpgradeHeightDelta guards against a misconfigured delta too small for the
 	// pre-halt poll margin below.
@@ -73,7 +73,7 @@ var upgradeConfig = map[string]string{
 // restUnreachable is the last-seen note when a gov REST poll gets no 200.
 const restUnreachable = "REST unreachable / non-200"
 
-// TestChainUpgrade drives a Sei major software upgrade end-to-end through the SDK
+// TestNightlyChainUpgrade drives a Sei major software upgrade end-to-end through the SDK
 // task surface: provision a 4-validator chain on the pre-upgrade image -> submit a
 // GovSoftwareUpgrade proposal and read its minted ID off the task output ->
 // vote yes from every validator -> wait for it to pass -> let the chain halt at
@@ -90,8 +90,8 @@ const restUnreachable = "REST unreachable / non-200"
 // [required], SEID_UPGRADE_TO_IMAGE (post-upgrade) [required], SEI_UPGRADE_NAME
 // (the upgrade handler name registered in the post image) [required];
 // SEI_NAMESPACE, UPGRADE_HEIGHT_DELTA [optional]. Run with -test.timeout 0 (see
-// TestBenchmark).
-func TestChainUpgrade(t *testing.T) {
+// TestNightlyBenchmark).
+func TestNightlyChainUpgrade(t *testing.T) {
 	requireCluster(t)
 	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
 	preImage := mustEnv(t, "SEID_UPGRADE_FROM_IMAGE")
@@ -235,7 +235,7 @@ func TestChainUpgrade(t *testing.T) {
 	// and proves each validator individually — not merely "a pod is Ready".
 	target := upgradeHeight + postUpgradeProgress
 	awaitAllValidatorsAtHeight(ctx, t, c, chainID, ns, validators, target, runLabels)
-	t.Logf("all %d validators advanced past the upgrade to height %d — TestChainUpgrade OK", validators, target)
+	t.Logf("all %d validators advanced past the upgrade to height %d — TestNightlyChainUpgrade OK", validators, target)
 }
 
 // networkSpec builds the SeiNetwork spec for the upgrade chain. provision and the

@@ -60,7 +60,7 @@ import (
 // appended) [default: genesis-ceremony]; SEI_NAMESPACE [default: SDK default];
 // SEI_VALIDATORS (>= 2) [default: 2]; SEI_SIDECAR_IMAGE (pin the seictl sidecar
 // build under test) [default: platform default]. Run as the nightly CronJob with
-// -test.timeout 0 (see TestBenchmark for why the scenario ctx, not the test-runner
+// -test.timeout 0 (see TestNightlyBenchmark for why the scenario ctx, not the test-runner
 // alarm, owns the deadline):
 //
 //	["-test.run", "TestGenesisCeremonyProducesBlocks", "-test.v", "-test.timeout", "0"]

@@ -28,7 +28,7 @@ import (
 // daemon on a freshly scaled node can legitimately take a while, so an expiry
 // here isn't proof of a stuck daemon, just a signal to stop waiting. Sized
 // well above steady-state inject latency (seconds) while staying below
-// CHAOS_DURATION's default (3m) — see TestChaosSuite's injectWindow-vs-faultDur
+// CHAOS_DURATION's default (3m) — see TestNightlyChaosSuite's injectWindow-vs-faultDur
 // guard, which exists so a late-but-successful injection still leaves real
 // time for the under-fault liveness check.
 const injectWindow = 90 * time.Second

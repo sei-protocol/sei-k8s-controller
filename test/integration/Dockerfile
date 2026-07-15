@@ -1,7 +1,7 @@
 # The integration test suite compiled to an image: the build-tagged test binary,
-# run by one in-cluster CronJob per target (args: -test.run TestX). The suites
-# carry their fault/seiload templates via //go:embed, so the binary is
-# self-contained (no extra files to COPY).
+# run by one in-cluster CronJob as the whole nightly set (args: -test.run
+# '^TestNightly'). The suites carry their fault/seiload templates via //go:embed,
+# so the binary is self-contained (no extra files to COPY).
 FROM golang:1.26 AS builder
 ARG TARGETOS
 ARG TARGETARCH
@@ -23,6 +23,6 @@ WORKDIR /
 COPY --from=builder /workspace/harness.test /harness.test
 USER 65532:65532
 
-# A CronJob selects a suite + budget via args, e.g.
-#   ["-test.run", "TestBenchmark", "-test.v", "-test.timeout", "0"]
+# The CronJob passes the selection + budget via args, e.g.
+#   ["-test.run", "^TestNightly", "-test.v", "-test.timeout", "0"]
 ENTRYPOINT ["/harness.test"]
