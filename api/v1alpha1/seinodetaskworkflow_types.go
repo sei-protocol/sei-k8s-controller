@@ -68,8 +68,9 @@ const (
 	// ReasonWorkflowTargetNotReady: the target node is not yet adoptable
 	// (missing, not Running, or Paused).
 	ReasonWorkflowTargetNotReady = "TargetNotReady"
-	// ReasonWorkflowTargetRejected: the target node is structurally ineligible
-	// (validator mode) and can never adopt this workflow.
+	// ReasonWorkflowTargetRejected: the target node is structurally ineligible —
+	// not a full/RPC node (e.g. validator, archive, or replayer mode) — and can
+	// never adopt this workflow.
 	ReasonWorkflowTargetRejected = "TargetRejected"
 	// ReasonWorkflowTargetPhaseTimeout: the target did not reach the required
 	// phase within spec.target.requirePhaseTimeout; the workflow is failed.

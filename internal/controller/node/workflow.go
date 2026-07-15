@@ -246,13 +246,14 @@ func (r *SeiNodeReconciler) maybeAdoptWorkflow(
 		return false, ctrl.Result{}, false, nil
 	}
 
-	// Validators are structurally ineligible (CEL cannot see the target). Fail
-	// terminally so `kubectl wait --for=condition=Failed` resolves rather than
-	// parking Pending forever.
-	if node.Spec.Validator != nil {
+	// Only a full/RPC node is an eligible target; every other role is structurally
+	// ineligible (CEL cannot see the target). Fail terminally so
+	// `kubectl wait --for=condition=Failed` resolves rather than parking Pending
+	// forever. See ineligibleWorkflowRole for the per-role rationale.
+	if role := ineligibleWorkflowRole(node); role != "" {
 		for i := range candidates {
 			r.failWorkflow(ctx, &candidates[i], seiv1alpha1.ReasonWorkflowTargetRejected,
-				"target is a validator; workflows refuse validator nodes")
+				fmt.Sprintf("%s target is ineligible; workflows target full/RPC nodes only", role))
 		}
 		return false, ctrl.Result{}, false, nil
 	}
@@ -598,6 +599,32 @@ func (r *SeiNodeReconciler) persistWorkflowPlan(
 			metav1.ConditionTrue, seiv1alpha1.ReasonWorkflowAdopted, "plan compiled and persisted")
 		seedWorkflowTerminalConditions(w)
 	})
+}
+
+// ineligibleWorkflowRole returns the target's role name when it may not be a
+// state-sync / giga-migration workflow target, or "" when it is eligible. Only a
+// full/RPC node (spec.fullNode, which absorbs the RPC role) is eligible; every
+// other role is refused: validators and archive nodes block-sync and never restore
+// from a snapshot, and a replayer is an ephemeral restore workload a re-bootstrap
+// recipe would destroy. It is an allowlist by design — a node mode added later is
+// refused until explicitly permitted here, rather than silently becoming eligible.
+// The role is read from the typed spec sub-struct, the authoritative source
+// deriveRole classifies from, so the check holds even when a CR's derived
+// sei.io/role label is absent or stale.
+func ineligibleWorkflowRole(node *seiv1alpha1.SeiNode) string {
+	if node.Spec.FullNode != nil {
+		return "" // full/RPC node — the only eligible target
+	}
+	switch {
+	case node.Spec.Validator != nil:
+		return "validator"
+	case node.Spec.Archive != nil:
+		return "archive"
+	case node.Spec.Replayer != nil:
+		return "replayer"
+	default:
+		return "non-full" // unset/unknown mode — refused by the allowlist
+	}
 }
 
 // failWorkflow marks a workflow terminally Failed. It does not touch the node.

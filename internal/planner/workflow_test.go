@@ -208,15 +208,26 @@ func TestStateSyncWorkflow_MigrationGuardrails(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 }
 
-func TestStateSyncWorkflow_Validate_RefusesValidator(t *testing.T) {
-	g := NewWithT(t)
-	node := fullNodeForWorkflow([]string{wfWitnessA, wfWitnessB})
-	node.Spec.FullNode = nil
-	node.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+func TestStateSyncWorkflow_Validate_RefusesNonFullTargets(t *testing.T) {
+	// Only a full/RPC node is a valid stateSync target; validator, archive, and
+	// replayer are refused at compile time (lockstep with the adoption-time gate).
+	cases := map[string]func(*seiv1alpha1.SeiNode){
+		"validator": func(n *seiv1alpha1.SeiNode) { n.Spec.Validator = &seiv1alpha1.ValidatorSpec{} },
+		"archive":   func(n *seiv1alpha1.SeiNode) { n.Spec.Archive = &seiv1alpha1.ArchiveSpec{} },
+		"replayer":  func(n *seiv1alpha1.SeiNode) { n.Spec.Replayer = &seiv1alpha1.ReplayerSpec{} },
+	}
+	for role, setMode := range cases {
+		t.Run(role, func(t *testing.T) {
+			g := NewWithT(t)
+			node := fullNodeForWorkflow([]string{wfWitnessA, wfWitnessB})
+			node.Spec.FullNode = nil
+			setMode(node)
 
-	_, err := buildPlan(t, node, stateSyncWorkflow(nil, nil))
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("validator"))
+			_, err := buildPlan(t, node, stateSyncWorkflow(nil, nil))
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(err.Error()).To(ContainSubstring("non-full/RPC"))
+		})
+	}
 }
 
 // configureStateSyncWitnesses extracts the RpcServers from the plan's

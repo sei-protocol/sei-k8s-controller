@@ -162,6 +162,51 @@ func TestReconcileWorkflow_RefusesValidatorTarget(t *testing.T) {
 	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonWorkflowTargetRejected))
 }
 
+func TestReconcileWorkflow_RefusesArchiveTarget(t *testing.T) {
+	g := NewWithT(t)
+	node := idleRunningNode("arch-0")
+	node.Spec.FullNode = nil
+	node.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
+	wf := workflowFor("ss-0", "arch-0", time.Now())
+	r, c := newWorkflowReconciler(t, node, wf)
+
+	got, _, handled := callReconcileWorkflow(t, r, c, "arch-0")
+
+	g.Expect(handled).To(BeFalse())
+	g.Expect(got.Status.AdoptedWorkflow).To(BeNil(), "an archive node never adopts")
+	// Archive block-syncs rather than restoring from a snapshot, so it is not an
+	// eligible state-sync target and is refused terminally, same as a validator.
+	refused := getWorkflow(t, c, "ss-0")
+	g.Expect(refused.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskWorkflowPhaseFailed))
+	cond := apimeta.FindStatusCondition(refused.Status.Conditions, seiv1alpha1.ConditionSeiNodeTaskWorkflowFailed)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonWorkflowTargetRejected))
+	g.Expect(cond.Message).To(ContainSubstring("archive"))
+}
+
+func TestReconcileWorkflow_RefusesReplayerTarget(t *testing.T) {
+	g := NewWithT(t)
+	node := idleRunningNode("replay-0")
+	node.Spec.FullNode = nil
+	node.Spec.Replayer = &seiv1alpha1.ReplayerSpec{}
+	wf := workflowFor("ss-0", "replay-0", time.Now())
+	r, c := newWorkflowReconciler(t, node, wf)
+
+	got, _, handled := callReconcileWorkflow(t, r, c, "replay-0")
+
+	g.Expect(handled).To(BeFalse())
+	g.Expect(got.Status.AdoptedWorkflow).To(BeNil(), "a replayer never adopts")
+	// A replayer is an ephemeral restore workload the wipe-and-resync recipe would
+	// destroy — the allowlist admits only full/RPC nodes, so it is refused.
+	refused := getWorkflow(t, c, "ss-0")
+	g.Expect(refused.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskWorkflowPhaseFailed))
+	cond := apimeta.FindStatusCondition(refused.Status.Conditions, seiv1alpha1.ConditionSeiNodeTaskWorkflowFailed)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonWorkflowTargetRejected))
+	g.Expect(cond.Message).To(ContainSubstring("replayer"))
+}
+
 func TestReconcileWorkflow_RefusesPausedTarget(t *testing.T) {
 	g := NewWithT(t)
 	node := idleRunningNode("rpc-0")
