@@ -106,52 +106,18 @@ func TestNightlyRelease(t *testing.T) {
 	t.Logf("network %s: ready (4 validators, admin %s funded)", chainID, admin.Address)
 
 	hc := &http.Client{Timeout: 10 * time.Second}
-	rest := node.REST()
-	if rest == "" {
-		t.Fatalf("rpc node %q exposes no REST endpoint (release-test needs SEI_REST_ENDPOINT)", rpcName)
-	}
-	// The status advertises REST as soon as the endpoint is composed, but the LCD
-	// listener binds later than the EVM one — probe it actually serves before
-	// handing the URL to the harness, so a cold REST surfaces here, not mid-test.
-	if err := sei.WaitRESTServing(ctx, hc, rest); err != nil {
-		t.Fatalf("rpc node %q REST serving: %v", rpcName, err)
-	}
-	t.Logf("rpc node %s: REST serving at %s", rpcName, rest)
 
-	// Hand the admin mnemonic to the harness via a Secret (secretKeyRef), labeled
-	// for the GC sweep and deleted on cleanup.
-	secretName := "admin-" + chainID
-	createMnemonicSecret(ctx, t, cs, net.Namespace(), secretName, runLabels, admin.Mnemonic)
-
-	// Run the external release-test image as a Job; its exit code is the verdict.
-	job := releaseJob(releaseParams{
-		name:       "release-test-" + chainID,
-		namespace:  net.Namespace(),
-		image:      releaseImage,
-		runID:      chainID,
-		chainID:    chainID,
-		adminAddr:  admin.Address,
-		secretName: secretName,
-		tmRPC:      node.TendermintRPC(),
-		evmRPC:     node.EVMRPC(),
-		rest:       rest,
+	// Run the external release-test image once against the RPC node; its exit code
+	// is the functional verdict.
+	runReleaseTest(ctx, t, cs, releaseRunParams{
+		hc:        hc,
+		net:       net,
+		node:      node,
+		admin:     admin,
+		image:     releaseImage,
+		runLabels: runLabels,
+		label:     "",
 	})
-	if _, err := cs.BatchV1().Jobs(net.Namespace()).Create(ctx, job, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create release-test job: %v", err)
-	}
-	t.Cleanup(func() {
-		delCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		bg := metav1.DeletePropagationBackground
-		_ = cs.BatchV1().Jobs(net.Namespace()).Delete(delCtx, job.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
-	})
-	t.Logf("release-test job launched (%s)", releaseImage)
-
-	waitJob(ctx, t, cs, net.Namespace(), job.Name)
-	// Archive the harness output even on success: exit 0 alone doesn't show which
-	// sub-cases ran, so a skip-but-pass is otherwise invisible. (A durable S3
-	// report is a deferred telemetry step.)
-	t.Logf("release-test job completed; harness log tail:\n%s", podLogTail(ctx, cs, net.Namespace(), job.Name))
 
 	// The chain stayed live through the release suite: the follower is still
 	// caught up (it can't catch up to a halted chain, so this covers quorum).
@@ -159,6 +125,88 @@ func TestNightlyRelease(t *testing.T) {
 		t.Errorf("post-release %s not caught up: %v", rpcName, err)
 	}
 	t.Logf("chain live post-release — TestNightlyRelease OK")
+}
+
+// releaseRunParams selects a single conformance run: the RPC node the external
+// harness drives, the funded admin identity it signs with, and a DNS-safe label
+// distinguishing this run's resources ("" for TestNightlyRelease's lone run, "v2"
+// for the mixed-release suite's run against its v2 follower). The chain id and
+// namespace are read from net, which is authoritative (provision names the network
+// after the chain id; env may leave the namespace "" for the SDK to resolve).
+type releaseRunParams struct {
+	hc        *http.Client
+	net       *sei.Network
+	node      *sei.Node
+	admin     keygen.Identity
+	image     string
+	runLabels map[string]string
+	label     string
+}
+
+// runReleaseTest runs the external release-test conformance harness once against a
+// single RPC node and gates on its exit code. In order it: probes REST actually
+// serves (the status advertises REST as soon as the endpoint is composed, but the
+// LCD listener binds later than the EVM one, so a cold REST surfaces here, not
+// mid-test), hands the admin mnemonic to the pod via a labeled Secret, launches the
+// harness as a one-shot Job wired to the node's endpoints, waits for the Job's
+// verdict, and archives the harness log tail — even on success, since exit 0 alone
+// doesn't show which sub-cases ran, so a skip-but-pass is otherwise invisible. The
+// caller owns all pre/post chain-health assertions.
+//
+// Exactly one node with exclusive chain access is deliberate: the harness runs
+// stateful EVM-filter and send-then-wait sequences that need one consistent mempool
+// + filter-store view.
+func runReleaseTest(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, p releaseRunParams) {
+	t.Helper()
+	chainID := p.net.Name()
+	ns := p.net.Namespace()
+
+	rest := p.node.REST()
+	if rest == "" {
+		t.Fatalf("rpc node %q exposes no REST endpoint (release-test needs SEI_REST_ENDPOINT)", p.node.Name())
+	}
+	if err := sei.WaitRESTServing(ctx, p.hc, rest); err != nil {
+		t.Fatalf("rpc node %q REST serving: %v", p.node.Name(), err)
+	}
+	t.Logf("rpc node %s: REST serving at %s", p.node.Name(), rest)
+
+	// DNS-safe per-run resource names: "admin-<chain>" / "release-test-<chain>" for
+	// the lone run, "…-<label>-<chain>" when a suite runs more than one.
+	namePart := chainID
+	if p.label != "" {
+		namePart = p.label + "-" + chainID
+	}
+	secretName := "admin-" + namePart
+
+	// Hand the admin mnemonic to the harness via a Secret (secretKeyRef), labeled
+	// for the GC sweep and deleted on cleanup.
+	createMnemonicSecret(ctx, t, cs, ns, secretName, p.runLabels, p.admin.Mnemonic)
+
+	job := releaseJob(releaseParams{
+		name:       "release-test-" + namePart,
+		namespace:  ns,
+		image:      p.image,
+		runID:      chainID,
+		chainID:    chainID,
+		adminAddr:  p.admin.Address,
+		secretName: secretName,
+		tmRPC:      p.node.TendermintRPC(),
+		evmRPC:     p.node.EVMRPC(),
+		rest:       rest,
+	})
+	if _, err := cs.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create release-test job %q: %v", job.Name, err)
+	}
+	t.Cleanup(func() {
+		delCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		bg := metav1.DeletePropagationBackground
+		_ = cs.BatchV1().Jobs(ns).Delete(delCtx, job.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
+	})
+	t.Logf("release-test job %s launched (%s)", job.Name, p.image)
+
+	waitJob(ctx, t, cs, ns, job.Name)
+	t.Logf("release-test job %s completed; harness log tail:\n%s", job.Name, podLogTail(ctx, cs, ns, job.Name))
 }
 
 // createMnemonicSecret writes the admin mnemonic to a Secret the release-test pod
