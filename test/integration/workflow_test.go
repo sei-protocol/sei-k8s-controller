@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -247,33 +246,12 @@ func bringUpStateSyncFollower(ctx context.Context, t *testing.T, c *sei.Client, 
 		t.Fatalf("network did not advance past the snapshot interval: %v", err)
 	}
 
-	u, err := url.Parse(ch.network.TendermintRPC())
-	if err != nil {
-		t.Fatalf("parse network TM RPC %q: %v", ch.network.TendermintRPC(), err)
-	}
-	hostLabels := strings.Split(u.Hostname(), ".")
-	if len(hostLabels) < 2 || hostLabels[1] == "" {
-		t.Fatalf("cannot derive namespace from aggregate RPC host %q", u.Host)
-	}
-	witnessNS := hostLabels[1]
+	witnessNS := witnessNamespace(t, ch.network)
 	witnesses := []string{
 		nodeRPC(fmt.Sprintf("%s-0", chainID), witnessNS), // genesis validator-0
 		nodeRPC(rpcNodeName(chainID, 0), witnessNS),      // rpc follower 0
 	}
-
-	// A witness must be at head to serve light blocks at the snapshot height
-	// the bootstrap cross-checks. catching_up cannot certify that (it is a
-	// one-way latch meaning "left blocksync once", never "at head now"), so
-	// assert freshness directly: the follower witness sits within one
-	// snapshot interval of the validator head.
-	vHeight, vOK := sei.LatestHeight(ctx, hc, "http://"+witnesses[0])
-	wHeight, wOK := sei.LatestHeight(ctx, hc, "http://"+witnesses[1])
-	if !vOK || !wOK {
-		t.Fatalf("witness freshness read: validator ok=%v, follower ok=%v", vOK, wOK)
-	}
-	if gap := vHeight - wHeight; gap > int64(interval) {
-		t.Fatalf("witness %s lags validator head by %d blocks (> interval %d): a diverging follower cannot serve state-sync light blocks", witnesses[1], gap, interval)
-	}
+	assertWitnessFresh(ctx, t, hc, witnesses[0], witnesses[1], interval)
 
 	// Bring up a state-sync-bootstrapped follower: it must fetch a snapshot from a
 	// peer rather than replay from genesis. Appended to ch.rpcNodes so cleanupChain
