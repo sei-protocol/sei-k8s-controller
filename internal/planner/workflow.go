@@ -53,11 +53,14 @@ func (p *stateSyncWorkflowPlanner) Validate(node *seiv1alpha1.SeiNode, wf *seiv1
 	if wf.Spec.StateSync == nil {
 		return fmt.Errorf("stateSync recipe params are nil")
 	}
-	// Validators are excluded (wipe-and-resync is double-sign-adjacent). CEL
-	// cannot see the target, so this is the belt-and-braces check behind the
-	// adoption-time refusal.
-	if node.Spec.Validator != nil {
-		return fmt.Errorf("stateSync workflow refuses validator target %s/%s", node.Namespace, node.Name)
+	// Only a full/RPC node is a valid stateSync target; the recipe wipes and
+	// resyncs, which is invalid for a validator (double-sign-adjacent), an archive
+	// (block-syncs, never restores from a snapshot), or a replayer (ephemeral
+	// restore workload). CEL cannot see the target, so this allowlist is the
+	// belt-and-braces check behind the adoption-time refusal
+	// (SeiNodeReconciler.ineligibleWorkflowRole), kept in lockstep with it.
+	if node.Spec.FullNode == nil {
+		return fmt.Errorf("stateSync workflow refuses non-full/RPC target %s/%s", node.Namespace, node.Name)
 	}
 	return nil
 }
