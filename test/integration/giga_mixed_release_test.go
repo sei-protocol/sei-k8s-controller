@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -63,6 +64,7 @@ func TestGigaMixedRelease(t *testing.T) {
 
 	c := openClient(ctx, t)
 	cs := clientset(t)
+	hc := &http.Client{Timeout: 10 * time.Second}
 
 	// Two independent admin accounts, one per target node, so the two concurrent
 	// harness runs never race a shared account's tx sequence.
@@ -75,10 +77,11 @@ func TestGigaMixedRelease(t *testing.T) {
 		t.Fatalf("derive giga admin key: %v", err)
 	}
 
-	// Provision: 4 validators (default config — ss-enable=true/evm-ss-split=false
-	// ships on every node; nothing to override for the v2 side) + 2 plain RPC
-	// followers. rpcNodes[0] stays at that default (the v2 control); rpcNodes[1]
-	// is migrated to giga below.
+	// Provision: 4 validators, snapshot-producing (the migration below
+	// state-syncs rpcNodes[1] from a network snapshot); 2 plain RPC followers,
+	// non-producing (rpcConfig zeroes the interval — a follower is a witness,
+	// not a snapshot source). rpcNodes[0] stays at the shipped default (the v2
+	// control); rpcNodes[1] is migrated to giga below.
 	ch, err := provision(ctx, t, c, spec{
 		chainID:       chainID,
 		runID:         chainID,
@@ -86,8 +89,8 @@ func TestGigaMixedRelease(t *testing.T) {
 		seidImage:     seid,
 		validators:    4,
 		rpcNodes:      2,
-		storageConfig: releaseBaseConfig,
-		rpcConfig:     releaseRPCConfig,
+		storageConfig: mergeConfig(releaseBaseConfig, snapshotProductionConfig),
+		rpcConfig:     mergeConfig(releaseRPCConfig, map[string]string{"storage.snapshot_interval": "0"}),
 		accounts: []sei.GenesisAccount{
 			{Address: adminV2.Address, Balance: releaseAdminBalance},
 			{Address: adminGiga.Address, Balance: releaseAdminBalance},
@@ -102,6 +105,17 @@ func TestGigaMixedRelease(t *testing.T) {
 	gigaNode := ch.rpcNodes[1]
 	t.Logf("network %s: ready (4 validators, 2 rpc followers, 2 admins funded)", chainID)
 
+	// A follower can only state-sync from a snapshot that already exists.
+	// Advance the network one interval + margin so the migration below has one
+	// to fetch (the same wait bringUpStateSyncFollower uses).
+	interval, err := strconv.Atoi(snapshotProductionConfig["storage.snapshot_interval"])
+	if err != nil {
+		t.Fatalf("snapshot_interval not an int: %v", err)
+	}
+	if err := sei.WaitHeightAdvances(ctx, hc, net.TendermintRPC(), int64(interval)+10); err != nil {
+		t.Fatalf("network did not advance past the snapshot interval: %v", err)
+	}
+
 	// Namespace for witness service hostnames, derived from the aggregate RPC
 	// host the same way TestWorkflowStateSync does (ns may be "").
 	u, err := url.Parse(net.TendermintRPC())
@@ -115,10 +129,25 @@ func TestGigaMixedRelease(t *testing.T) {
 	witnessNS := hostLabels[1]
 
 	// Migrate rpcNodes[1] to giga. Witnesses are explicit (validator-0 + the v2
-	// control node), not nil-inherited: a plain follower's ResolvedStateSyncers is
-	// only populated for nodes created with an explicit StateSync spec, which
-	// neither follower here has (both are plain block-sync-from-genesis
-	// followers, matching TestRelease's fixture).
+	// control node): a plain follower's ResolvedStateSyncers is populated only
+	// for nodes created with an explicit StateSync spec, which neither follower
+	// has here. A witness serves RPC trust points only; its own storage layout
+	// is not consensus-relevant to serving them, so the v2 node is a valid
+	// witness for the giga target's migration.
+	//
+	// Freshness gate: a witness must be at head to serve light blocks at the
+	// snapshot height the migration cross-checks; catching_up cannot certify that
+	// (a one-way latch), so assert it directly — same gate
+	// bringUpStateSyncFollower applies before its own bootstrap.
+	vHeight, vOK := sei.LatestHeight(ctx, hc, "http://"+nodeRPC(fmt.Sprintf("%s-0", chainID), witnessNS))
+	wHeight, wOK := sei.LatestHeight(ctx, hc, "http://"+nodeRPC(v2Node.Name(), witnessNS))
+	if !vOK || !wOK {
+		t.Fatalf("witness freshness read: validator ok=%v, v2 follower ok=%v", vOK, wOK)
+	}
+	if gap := vHeight - wHeight; gap > int64(interval) {
+		t.Fatalf("witness %s lags validator head by %d blocks (> interval %d): a diverging follower cannot serve state-sync light blocks", v2Node.Name(), gap, interval)
+	}
+
 	witnesses := []string{
 		nodeRPC(fmt.Sprintf("%s-0", chainID), witnessNS),
 		nodeRPC(v2Node.Name(), witnessNS),
@@ -147,7 +176,6 @@ func TestGigaMixedRelease(t *testing.T) {
 	t.Logf("workflow %s: complete", wf.Name())
 	assertGigaConfigPatch(t, wf, "pebbledb")
 
-	hc := &http.Client{Timeout: 10 * time.Second}
 	if err := gigaNode.WaitReady(ctx); err != nil {
 		t.Fatalf("giga node %s not Running after migration: %v", gigaNode.Name(), err)
 	}
@@ -244,7 +272,7 @@ func TestGigaMixedRelease(t *testing.T) {
 		t.Fatalf("release-test failed: %s", strings.Join(failed, "; "))
 	}
 
-	// Both chains stayed live through both concurrent harness runs.
+	// Both nodes stayed live through the concurrent harness runs.
 	if err := sei.WaitCaughtUp(ctx, hc, v2Node.TendermintRPC()); err != nil {
 		t.Errorf("post-release v2 node %s not caught up: %v", v2Node.Name(), err)
 	}
@@ -272,8 +300,12 @@ func waitJobErr(ctx context.Context, cs *kubernetes.Clientset, ns, name string) 
 				return nil
 			}
 			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-				return fmt.Errorf("job %q failed: %s\n--- pod log (tail) ---\n%s",
-					name, cond.Message, podLogTail(ctx, cs, ns, name))
+				// Fresh, short-lived context for the log read: ctx may be near its
+				// own deadline here, which would truncate the read that explains why.
+				logCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				tail := podLogTail(logCtx, cs, ns, name)
+				cancel()
+				return fmt.Errorf("job %q failed: %s\n--- pod log (tail) ---\n%s", name, cond.Message, tail)
 			}
 		}
 		select {
