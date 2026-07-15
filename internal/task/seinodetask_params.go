@@ -234,8 +234,8 @@ func markReadyParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
 // configPatchParams synthesizes an incremental config-apply sidecar task from
 // the payload's dotted sei-config overrides. sei-config's own resolver on the
 // node (ResolveIncrementalIntent -> registry-aware ApplyOverrides -> the legacy
-// renderer) turns the overrides into on-disk config, so the controller no longer
-// hand-renders a files tree — that path is correct-by-construction for every
+// renderer) turns the overrides into on-disk config, so the controller forwards
+// only the dotted overrides — that path is correct-by-construction for every
 // registered key. Mode is left empty: incremental resolution reads the node's
 // current on-disk config and patches it, so no mode default is needed.
 //

@@ -11,6 +11,9 @@ import (
 // produce. Wire format and validation delegate to sidecar.ConfigApplyTask —
 // the seictl wrapper wraps the same fields in a nested Intent struct,
 // which would otherwise change the on-disk shape.
+//
+// Keep this embedding-only: a non-embedded field would break the bare
+// *ConfigIntent marshal round-trip that keeps Params.Raw on the flat shape.
 type configApplyTask struct {
 	seiconfig.ConfigIntent
 }

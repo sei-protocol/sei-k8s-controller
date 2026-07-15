@@ -88,6 +88,11 @@ const (
 	// its own update plans (p2p peers/external-address, genesis/state-sync-managed
 	// keys) are rejected — a patch to those would be silently clobbered by the
 	// next SeiNode update plan.
+	//
+	// Wiring note: this kind maps to sidecar.TaskTypeConfigApply (incremental dotted
+	// intent), NOT sidecar.TaskTypeConfigPatch. The latter drives the separate
+	// ConfigPatchTask{Files} file-tree task used by the StateSync migration path; do
+	// not rewire this kind to it.
 	SeiNodeTaskKindConfigPatch SeiNodeTaskKind = "ConfigPatch"
 )
 

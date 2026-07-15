@@ -3,19 +3,28 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"os/signal"
+	"regexp"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/remotecommand"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/sei-protocol/sei-k8s-controller/internal/keygen"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
@@ -29,19 +38,30 @@ const rpcLivenessBlocks = 5
 const keySnapshotInterval = "storage.snapshot_interval"
 
 // TestNightlyGigaExecutorMixed is the CON-368 regression gate: it proves the seid
-// execution engine is a per-node concern that stays consensus-compatible across the
-// full release conformance suite. It provisions one 4-validator, snapshot-producing
-// chain whose validators run the giga executor (the shipped default), brings up a
-// single RPC follower flipped to the v2 executor — via the ConfigPatch task + a
-// standard StateSync re-bootstrap — and runs the external release-test harness
-// against that follower. The gate is: the v2 follower stays in consensus with the
-// giga-executor validator set (caught up and advancing) throughout the suite.
+// execution engine is a per-node concern that stays consensus-compatible with a
+// giga-executor validator set ACROSS THE RELEASE CONFORMANCE WORKLOAD. It provisions
+// one 4-validator, snapshot-producing chain whose validators run the giga executor
+// (the shipped default), brings up a single RPC follower flipped to the v2 executor
+// — via the ConfigPatch task + a standard StateSync re-bootstrap, then VERIFIES on
+// disk that the flip actually took (bringUpV2Follower asserts [giga_executor] is off,
+// so a silently-dropped patch cannot make the gate vacuous) — and runs the external
+// release-test harness against that follower. The gate is: the v2 follower stays in
+// consensus with the giga-executor validators (caught up and advancing) throughout
+// the suite.
 //
-// A regression that reintroduced the CON-368 executor divergence would make the v2
-// follower compute a different result than the validators committed, halting it at
-// the diverging block; the post-suite advance assertion would then fail. Storage
-// layout is deliberately out of scope (all nodes run the shipped default) so the
-// executor is the only variable under test.
+// Scope of the claim: this proves "no v2/giga divergence ON THE RELEASE WORKLOAD,"
+// not "v2 ≡ giga" in general. The gate only fires if the suite's tx mix actually
+// exercises a diverging code path; a divergence confined to a tx type the conformance
+// suite never emits would slip through. Un-defer trigger: if a v2/giga divergence
+// ever recurs in a tx type this suite does not exercise, add targeted diverging-tx
+// vectors here rather than trusting the conformance workload's coverage.
+//
+// A regression that reintroduced a CON-368-class divergence on a tx the suite emits
+// would make the v2 follower compute a different result than the validators
+// committed, halting it at the diverging block; the post-suite advance assertion
+// would then fail (and attributeStall separates that consensus halt from an unrelated
+// infra crash). Storage layout is deliberately out of scope (all nodes run the
+// shipped default) so the executor is the only variable under test.
 //
 // Inputs (env): SEI_CHAIN_ID, SEID_IMAGE, RELEASE_TEST_IMAGE [required];
 // SEI_NAMESPACE [optional]. Run with -test.timeout 0.
@@ -74,7 +94,7 @@ func TestNightlyGigaExecutorMixed(t *testing.T) {
 	runReleaseSuite(ctx, t, env, releaseImage, v2Node)
 
 	// 4. Assert the v2 follower stayed in consensus with the giga validators.
-	assertRPCHealthy(ctx, t, env.hc, v2Node)
+	assertRPCHealthy(ctx, t, env.cs, env.hc, v2Node)
 }
 
 // executorMixedEnv is the shared bring-up context the helpers draw on: the SDK +
@@ -201,8 +221,44 @@ func bringUpV2Follower(ctx context.Context, t *testing.T, env executorMixedEnv) 
 	if err := sei.WaitCaughtUp(ctx, env.hc, node.TendermintRPC()); err != nil {
 		t.Fatalf("v2 follower %s not caught up after re-bootstrap: %v", node.Name(), err)
 	}
+
+	// VERIFY the variable-under-test: giga is the shipped default AND the validators
+	// run giga, so "caught up" alone cannot prove the follower is on v2 — a silently
+	// dropped ConfigPatch would leave it on giga, in consensus, and the gate would
+	// pass while testing nothing. Read app.toml off disk and assert giga is off.
+	assertFollowerV2(ctx, t, env.cs, node)
 	t.Logf("v2 follower %s: caught up in v2 executor mode", node.Name())
 	return node
+}
+
+// assertFollowerV2 reads app.toml off the follower's seid container and asserts the
+// executor actually flipped to v2 (giga_executor off). This is the positive check
+// that closes the vacuous-pass hole: the flip is VERIFIED on disk, not inferred from
+// the follower merely staying in consensus with a giga validator set.
+func assertFollowerV2(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, node *sei.Node) {
+	t.Helper()
+	// A SeiNode's StatefulSet is replicas=1, so its sole pod is <node>-0.
+	pod := node.Name() + "-0"
+	appTomlPath := platform.DataDir + "/config/app.toml"
+	out, err := execInPod(ctx, t, cs, node.Namespace(), pod, containerSeid, "cat", appTomlPath)
+	if err != nil {
+		t.Fatalf("read %s on follower %s: %v", appTomlPath, node.Name(), err)
+	}
+	var cfg struct {
+		GigaExecutor struct {
+			Enabled    bool `toml:"enabled"`
+			OCCEnabled bool `toml:"occ_enabled"`
+		} `toml:"giga_executor"`
+	}
+	if _, err := toml.Decode(out, &cfg); err != nil {
+		t.Fatalf("parse app.toml from follower %s: %v\n--- app.toml ---\n%s", node.Name(), err, out)
+	}
+	if cfg.GigaExecutor.Enabled || cfg.GigaExecutor.OCCEnabled {
+		t.Fatalf("follower %s still running giga after ConfigPatch+re-bootstrap "+
+			"([giga_executor] enabled=%t occ_enabled=%t) — the executor flip did not survive; "+
+			"the gate would be vacuous", node.Name(), cfg.GigaExecutor.Enabled, cfg.GigaExecutor.OCCEnabled)
+	}
+	t.Logf("follower %s: verified v2 on disk ([giga_executor] enabled=false, occ_enabled=false)", node.Name())
 }
 
 // bringUpPlainFollower creates a plain RPC follower on the network with the
@@ -301,18 +357,137 @@ func runReleaseSuite(ctx context.Context, t *testing.T, env executorMixedEnv, re
 
 // assertRPCHealthy re-affirms the follower survived the release run: still caught up
 // AND advancing (not caught-up-then-frozen). Errors are collected per-follower
-// (t.Errorf, not Fatalf) so every node is always evaluated.
-func assertRPCHealthy(ctx context.Context, t *testing.T, hc *http.Client, nodes ...*sei.Node) {
+// (t.Errorf, not Fatalf) so every node is always evaluated. A stall failure carries
+// attributeStall's root-cause read so a red nightly is actionable at a glance —
+// divergence (the thing under test) vs an infra crash (a known flake source).
+func assertRPCHealthy(
+	ctx context.Context, t *testing.T, cs *kubernetes.Clientset, hc *http.Client, nodes ...*sei.Node,
+) {
 	t.Helper()
 	for _, n := range nodes {
 		if err := sei.WaitCaughtUp(ctx, hc, n.TendermintRPC()); err != nil {
-			t.Errorf("post-release follower %s not caught up: %v", n.Name(), err)
+			t.Errorf("post-release follower %s not caught up: %v\n%s", n.Name(), err, attributeStall(cs, n))
 			continue
 		}
 		if err := sei.WaitHeightAdvances(ctx, hc, n.TendermintRPC(), rpcLivenessBlocks); err != nil {
-			t.Errorf("post-release follower %s height not advancing (frozen?): %v", n.Name(), err)
+			t.Errorf("post-release follower %s height not advancing (frozen?): %v\n%s", n.Name(), err, attributeStall(cs, n))
 			continue
 		}
 		t.Logf("post-release follower %s: caught up and advancing", n.Name())
 	}
+}
+
+// containerSeid is the seid container name in a SeiNode pod
+// (noderesource.containerNameSeid); the exec/log reads below target it directly.
+const containerSeid = "seid"
+
+// consensusMismatchRe broadly matches the app-hash / results-hash / consensus-failure
+// log lines a genuine v2/giga divergence emits, WITHOUT pinning one exact
+// sei-tendermint literal (the phrasing drifts across releases). A match attributes a
+// stall to divergence; its absence — with a clean restart count — points at infra.
+var consensusMismatchRe = regexp.MustCompile(
+	`(?i)wrong app hash|app\s*hash mismatch|apphash|lastresultshash|last results hash|consensus failure`)
+
+// attributeStall turns an opaque "not advancing" into an actionable root cause. These
+// nightlies flake on infra races, so a genuine consensus halt (a divergence — the
+// variable under test) and an unrelated OOM/crash otherwise produce the IDENTICAL
+// "not advancing" red. It reports the seid container's restart count + last
+// termination reason (calling out OOMKilled explicitly as infra death, not a
+// divergence), then tails the seid log and surfaces any consensus-mismatch lines.
+// Best-effort and on a FRESH context (the suite ctx may already be drained by the
+// WaitHeightAdvances budget): a failed diagnostic read must never mask the stall.
+func attributeStall(cs *kubernetes.Clientset, node *sei.Node) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ns, pod := node.Namespace(), node.Name()+"-0"
+
+	var b strings.Builder
+	b.WriteString("--- stall attribution ---\n")
+
+	p, err := cs.CoreV1().Pods(ns).Get(ctx, pod, metav1.GetOptions{})
+	if err != nil {
+		fmt.Fprintf(&b, "(pod %s/%s status unavailable: %v)\n", ns, pod, err)
+	} else {
+		for _, st := range p.Status.ContainerStatuses {
+			if st.Name != containerSeid {
+				continue
+			}
+			fmt.Fprintf(&b, "seid restartCount=%d ready=%t\n", st.RestartCount, st.Ready)
+			if term := st.LastTerminationState.Terminated; term != nil {
+				fmt.Fprintf(&b, "seid last termination: reason=%q exitCode=%d\n", term.Reason, term.ExitCode)
+				if term.Reason == "OOMKilled" {
+					b.WriteString("=> OOMKilled: INFRA death (memory pressure), NOT an executor divergence\n")
+				}
+			}
+		}
+	}
+
+	tail := podContainerLogTail(ctx, cs, ns, pod, containerSeid, 200)
+	if hits := matchingLines(tail, consensusMismatchRe); len(hits) > 0 {
+		b.WriteString("=> consensus-mismatch pattern in seid log (points at v2/giga DIVERGENCE):\n")
+		for _, line := range hits {
+			fmt.Fprintf(&b, "  %s\n", line)
+		}
+	} else {
+		b.WriteString("(no consensus-mismatch pattern in seid log tail; with a clean restart count " +
+			"this reads as an infra stall, not a divergence)\n")
+		fmt.Fprintf(&b, "--- seid log (tail) ---\n%s\n", tail)
+	}
+	return b.String()
+}
+
+// matchingLines returns the lines of text that match re, preserving order.
+func matchingLines(text string, re *regexp.Regexp) []string {
+	var out []string
+	for line := range strings.SplitSeq(text, "\n") {
+		if re.MatchString(line) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// podContainerLogTail returns the tail of a named container's log in a pod,
+// best-effort — the diagnostic signal a stall error alone cannot carry.
+func podContainerLogTail(ctx context.Context, cs *kubernetes.Clientset, ns, pod, container string, lines int64) string {
+	raw, err := cs.CoreV1().Pods(ns).GetLogs(pod, &corev1.PodLogOptions{
+		Container: container,
+		TailLines: &lines,
+	}).DoRaw(ctx)
+	if err != nil {
+		return fmt.Sprintf("(read logs %s/%s[%s] failed: %v)", ns, pod, container, err)
+	}
+	return string(raw)
+}
+
+// execInPod runs argv (no shell) in a pod container and returns its stdout. This is
+// the harness's one reach-into-pod primitive — used only for test-time introspection
+// (reading rendered config off disk); the controller's real side-effect channel to a
+// node is the seictl sidecar HTTP task API, never exec.
+func execInPod(
+	ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns, pod, container string, argv ...string,
+) (string, error) {
+	t.Helper()
+	cfg, err := ctrl.GetConfig()
+	if err != nil {
+		return "", fmt.Errorf("load kubeconfig: %w", err)
+	}
+	req := cs.CoreV1().RESTClient().Post().
+		Resource("pods").Name(pod).Namespace(ns).SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: container,
+			Command:   argv,
+			Stdout:    true,
+			Stderr:    true,
+		}, scheme.ParameterCodec)
+	exec, err := remotecommand.NewSPDYExecutor(cfg, http.MethodPost, req.URL())
+	if err != nil {
+		return "", fmt.Errorf("new SPDY executor: %w", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &stdout, Stderr: &stderr}); err != nil {
+		return stdout.String(), fmt.Errorf(
+			"exec %v in %s/%s[%s]: %w (stderr: %s)", argv, ns, pod, container, err, stderr.String())
+	}
+	return stdout.String(), nil
 }

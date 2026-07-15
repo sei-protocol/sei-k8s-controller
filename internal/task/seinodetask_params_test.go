@@ -260,8 +260,8 @@ func TestSeiNodeTaskParamsFor_MarkReady_NilPayload_ParamsBuildFailed(t *testing.
 }
 
 // kind=ConfigPatch synthesizes an incremental config-apply task carrying the
-// dotted overrides verbatim — sei-config's resolver does the rendering on the
-// node, so the controller no longer builds a files tree.
+// dotted overrides verbatim — sei-config's resolver renders on the node, so the
+// controller forwards only the dotted overrides.
 func TestSeiNodeTaskParamsFor_ConfigPatch(t *testing.T) {
 	cr := &seiv1alpha1.SeiNodeTask{
 		Spec: seiv1alpha1.SeiNodeTaskSpec{
