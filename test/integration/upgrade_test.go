@@ -86,15 +86,16 @@ const restUnreachable = "REST unreachable / non-200"
 // (waitUpgradeApplied) is the safety net that fails loud if a too-fast chain
 // passed the height while still voting (no plan scheduled, no real upgrade).
 //
-// Inputs (env): SEI_CHAIN_ID (base), SEID_IMAGE (pre-upgrade) [required],
-// SEID_UPGRADE_IMAGE (post-upgrade) [required], SEI_UPGRADE_NAME (the upgrade
-// handler name registered in the post image) [required]; SEI_NAMESPACE,
-// UPGRADE_HEIGHT_DELTA [optional]. Run with -test.timeout 0 (see TestBenchmark).
+// Inputs (env): SEI_CHAIN_ID (base), SEID_UPGRADE_FROM_IMAGE (pre-upgrade)
+// [required], SEID_UPGRADE_TO_IMAGE (post-upgrade) [required], SEI_UPGRADE_NAME
+// (the upgrade handler name registered in the post image) [required];
+// SEI_NAMESPACE, UPGRADE_HEIGHT_DELTA [optional]. Run with -test.timeout 0 (see
+// TestBenchmark).
 func TestChainUpgrade(t *testing.T) {
 	requireCluster(t)
 	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
-	preImage := mustEnv(t, "SEID_IMAGE")
-	postImage := mustEnv(t, "SEID_UPGRADE_IMAGE")
+	preImage := mustEnv(t, "SEID_UPGRADE_FROM_IMAGE")
+	postImage := mustEnv(t, "SEID_UPGRADE_TO_IMAGE")
 	upgradeName := mustEnv(t, "SEI_UPGRADE_NAME")
 	ns := envOr("SEI_NAMESPACE", "")
 	delta := int64(envInt(t, "UPGRADE_HEIGHT_DELTA", defaultUpgradeHeightDelta))

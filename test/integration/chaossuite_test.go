@@ -64,12 +64,12 @@ var chaosScenarios = []chaosScenario{
 // chain reconverged. Each fault is a subtest so one failure doesn't abort the
 // rest (matching the platform suite's continue-on-failure).
 //
-// Inputs (env): SEI_CHAIN_ID (base), SEID_IMAGE [required]; SEI_NAMESPACE,
+// Inputs (env): SEI_CHAIN_ID (base), SEID_IMAGE_CHAOS [required]; SEI_NAMESPACE,
 // CHAOS_DURATION [optional]. Run with -test.timeout 0 (see TestBenchmark).
 func TestChaosSuite(t *testing.T) {
 	requireCluster(t)
 	base := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
-	seid := mustEnv(t, "SEID_IMAGE")
+	seid := mustEnv(t, "SEID_IMAGE_CHAOS")
 	ns := envOr("SEI_NAMESPACE", "")
 	duration := envOr("CHAOS_DURATION", "3m")
 	faultDur, err := time.ParseDuration(duration)

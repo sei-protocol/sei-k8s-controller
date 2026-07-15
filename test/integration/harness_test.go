@@ -2,13 +2,16 @@
 
 // Package integration holds the Sei nightly integration suites as plain `go test`
 // targets (TestBenchmark, TestChaosSuite, TestChainUpgrade, TestRelease,
-// TestWorkflowStateSync, TestGigaStoreMigration), selected with -run. Orchestration is statement order in
-// one process; cross-step state is local Go values, not external config.
+// TestWorkflowStateSync, TestGigaStoreMigration, TestGigaMixedRelease), selected
+// with -run. Orchestration is statement order in one process; cross-step state is
+// local Go values, not external config. A suite whose required image can't be the
+// shared SEID_IMAGE default (a different flavor, or a pinned version pair) reads
+// its own env var name, since one process has one environment.
 //
 // Everything lives in *_test.go behind //go:build integration, so it never links
 // into a production binary and is excluded from the default `go test ./...`. The
-// nightly compiles it once (go test -c -tags integration) and runs each target as
-// an in-cluster CronJob (-test.run TestX).
+// nightly compiles it once (go test -c -tags integration) and runs every target
+// in one in-cluster CronJob (-test.run selects the combined set).
 //
 // Depends on sdk/sei (+ the k8s provider blank import), api/v1alpha1 (public API
 // types, for reading status.plan), and k8s.io/apimachinery/.../metav1 (for a

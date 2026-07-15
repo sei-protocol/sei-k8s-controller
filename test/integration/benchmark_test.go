@@ -17,7 +17,7 @@ import (
 // Inputs (env, mirroring k8s_nightly.yml):
 //
 //	SEI_CHAIN_ID     base chain id (a per-run token is appended) [required]
-//	SEID_IMAGE       seid image under test                    [required]
+//	SEID_IMAGE_MOCK  seid image under test, mock_balances flavor [required]
 //	SEILOAD_IMAGE    sei-load benchmark image                 [required]
 //	SEI_RUN_ID       unique run id (sei.io/harness-run)       [default: SEI_CHAIN_ID]
 //	SEI_NAMESPACE    shared nightly namespace                 [default: SDK default]
@@ -38,7 +38,7 @@ func TestBenchmark(t *testing.T) {
 		chainID:        chainID,
 		runID:          envOr("SEI_RUN_ID", chainID),
 		namespace:      envOr("SEI_NAMESPACE", ""),
-		seidImage:      mustEnv(t, "SEID_IMAGE"),
+		seidImage:      mustEnv(t, "SEID_IMAGE_MOCK"),
 		validators:     4,
 		rpcNodes:       2, // seiload fans across both via the EVM endpoint list
 		timeout:        90 * time.Minute,
