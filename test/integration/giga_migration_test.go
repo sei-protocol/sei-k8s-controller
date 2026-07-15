@@ -23,8 +23,8 @@ import (
 // for the dependency boundary).
 const taskTypeConfigPatch = "config-patch"
 
-// TestGigaStoreMigration drives the giga SS-store migration through the SDK end
-// to end, as a sibling of TestWorkflowStateSync (it reuses that round trip's
+// TestNightlyGigaStoreMigration drives the giga SS-store migration through the SDK end
+// to end, as a sibling of TestNightlyWorkflowStateSync (it reuses that round trip's
 // provision + witness + follower bring-up verbatim via bringUpStateSyncFollower)
 // but with a ConfigMigration carried inside the StateSync recipe. Four signals,
 // in order:
@@ -55,10 +55,10 @@ const taskTypeConfigPatch = "config-patch"
 //     so a served EVM endpoint is strong (not absolute) evidence.
 //
 // Inputs (env): SEI_CHAIN_ID, SEID_IMAGE [required]; SEI_NAMESPACE,
-// SEI_VALIDATORS [optional]. Run as the nightly CronJob:
-//
-//	["-test.run", "TestGigaStoreMigration", "-test.v", "-test.timeout", "0"]
-func TestGigaStoreMigration(t *testing.T) {
+// SEI_VALIDATORS [optional]. Selected into the nightly's combined run by its
+// TestNightly prefix (harness_test.go); standalone: -test.run
+// TestNightlyGigaStoreMigration.
+func TestNightlyGigaStoreMigration(t *testing.T) {
 	requireCluster(t)
 	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
 	seid := mustEnv(t, "SEID_IMAGE")
@@ -70,7 +70,7 @@ func TestGigaStoreMigration(t *testing.T) {
 	defer stop()
 
 	c := openClient(ctx, t)
-	// Four validators, the harness convention — see TestWorkflowStateSync's
+	// Four validators, the harness convention — see TestNightlyWorkflowStateSync's
 	// rationale (consensus-paced production keeps the witness follower at head).
 	validators := envInt(t, "SEI_VALIDATORS", 4)
 
@@ -143,7 +143,7 @@ func TestGigaStoreMigration(t *testing.T) {
 	if err := sei.WaitEVMServing(ctx, f.hc, f.node.EVMRPC()); err != nil {
 		t.Fatalf("follower %s EVM not serving under evm-ss-split=true after giga resync: %v (a node with an unpopulated EVM-SS layout refuses to boot, so a non-serving EVM here means giga did not go live)", f.node.Name(), err)
 	}
-	t.Logf("follower %s: caught up + EVM serving under evm-ss-split=true, block-store base jumped %d -> %d (>= interval %d) — TestGigaStoreMigration OK", f.node.Name(), f.preEarliest, postEarliest, f.interval)
+	t.Logf("follower %s: caught up + EVM serving under evm-ss-split=true, block-store base jumped %d -> %d (>= interval %d) — TestNightlyGigaStoreMigration OK", f.node.Name(), f.preEarliest, postEarliest, f.interval)
 }
 
 // assertGigaConfigPatch is the anchor: it casts the workflow's raw CR, walks the

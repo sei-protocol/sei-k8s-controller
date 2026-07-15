@@ -45,7 +45,7 @@ var releaseRPCConfig = map[string]string{
 	"evm.enabled_legacy_sei_apis": releaseLegacyEVMAPIs,
 }
 
-// TestRelease drives the release-validation flow: provision a 4-validator
+// TestNightlyRelease drives the release-validation flow: provision a 4-validator
 // chain + one EVM-serving RPC follower, generate a funded admin account, and run
 // the external release-test image against the RPC node as a Job. The release-test
 // image owns the functional assertions (TEST_TARGET=chain-agnostic); the suite's
@@ -58,8 +58,8 @@ var releaseRPCConfig = map[string]string{
 //
 // Inputs (env): SEI_CHAIN_ID, SEID_IMAGE [required], RELEASE_TEST_IMAGE
 // (the external harness) [required]; SEI_NAMESPACE [optional]. Run with
-// -test.timeout 0 (see TestBenchmark).
-func TestRelease(t *testing.T) {
+// -test.timeout 0 (see TestNightlyBenchmark).
+func TestNightlyRelease(t *testing.T) {
 	requireCluster(t)
 	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
 	seid := mustEnv(t, "SEID_IMAGE")
@@ -158,7 +158,7 @@ func TestRelease(t *testing.T) {
 	if err := sei.WaitCaughtUp(ctx, hc, node.TendermintRPC()); err != nil {
 		t.Errorf("post-release %s not caught up: %v", rpcName, err)
 	}
-	t.Logf("chain live post-release — TestRelease OK")
+	t.Logf("chain live post-release — TestNightlyRelease OK")
 }
 
 // createMnemonicSecret writes the admin mnemonic to a Secret the release-test pod

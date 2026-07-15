@@ -58,18 +58,18 @@ var chaosScenarios = []chaosScenario{
 	// in chaos_deferred_test.go for why and the re-add condition.
 }
 
-// TestChaosSuite runs each fault against its own fresh chain: provision → inject
+// TestNightlyChaosSuite runs each fault against its own fresh chain: provision → inject
 // the Chaos-Mesh fault → gate it injected → assert the chain stays live under it
 // (faults are bounded to f=1, so 2/3 quorum holds) → gate recovery → assert the
 // chain reconverged. Each fault is a subtest so one failure doesn't abort the
 // rest (matching the platform suite's continue-on-failure).
 //
-// Inputs (env): SEI_CHAIN_ID (base), SEID_IMAGE [required]; SEI_NAMESPACE,
-// CHAOS_DURATION [optional]. Run with -test.timeout 0 (see TestBenchmark).
-func TestChaosSuite(t *testing.T) {
+// Inputs (env): SEI_CHAIN_ID (base), SEID_IMAGE_CHAOS [required]; SEI_NAMESPACE,
+// CHAOS_DURATION [optional]. Run with -test.timeout 0 (see TestNightlyBenchmark).
+func TestNightlyChaosSuite(t *testing.T) {
 	requireCluster(t)
 	base := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
-	seid := mustEnv(t, "SEID_IMAGE")
+	seid := mustEnv(t, "SEID_IMAGE_CHAOS")
 	ns := envOr("SEI_NAMESPACE", "")
 	duration := envOr("CHAOS_DURATION", "3m")
 	faultDur, err := time.ParseDuration(duration)

@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -44,7 +43,7 @@ var snapshotProductionConfig = map[string]string{
 	"storage.snapshot_keep_recent": "3",
 }
 
-// TestWorkflowStateSync drives the full state-sync procedure through the SDK end
+// TestNightlyWorkflowStateSync drives the full state-sync procedure through the SDK end
 // to end: provision a snapshot-producing chain, wait past the snapshot interval,
 // then bring up a state-sync-bootstrapped follower and assert it started FROM a
 // snapshot (earliest retained height > 1, not a genesis replay's 1). It then runs
@@ -56,7 +55,7 @@ var snapshotProductionConfig = map[string]string{
 // criterion 5.
 //
 // The provision + witness + follower bring-up is shared verbatim with
-// TestGigaStoreMigration via bringUpStateSyncFollower (that sibling reruns this
+// TestNightlyGigaStoreMigration via bringUpStateSyncFollower (that sibling reruns this
 // same round trip WITH a giga config migration). This test is the plain-resync
 // baseline: it stays independent and carries no migration.
 //
@@ -81,10 +80,10 @@ var snapshotProductionConfig = map[string]string{
 //     over p2p from the validators.
 //
 // Inputs (env): SEI_CHAIN_ID, SEID_IMAGE [required]; SEI_NAMESPACE,
-// SEI_VALIDATORS [optional]. Run as the nightly CronJob:
-//
-//	["-test.run", "TestWorkflowStateSync", "-test.v", "-test.timeout", "0"]
-func TestWorkflowStateSync(t *testing.T) {
+// SEI_VALIDATORS [optional]. Selected into the nightly's combined run by its
+// TestNightly prefix (harness_test.go); standalone: -test.run
+// TestNightlyWorkflowStateSync.
+func TestNightlyWorkflowStateSync(t *testing.T) {
 	requireCluster(t)
 	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
 	seid := mustEnv(t, "SEID_IMAGE")
@@ -167,7 +166,7 @@ func TestWorkflowStateSync(t *testing.T) {
 		t.Fatalf("follower %s earliest height %d -> %d after resync (jump %d), want a jump >= snapshot_interval %d (a genuine wipe + re-sync lands on a snapshot at least one interval higher; a smaller move is routine pruning, not a fresh restore)",
 			f.node.Name(), f.preEarliest, postEarliest, postEarliest-f.preEarliest, f.interval)
 	}
-	t.Logf("follower %s: caught up + EVM serving, block-store base jumped %d -> %d (>= interval %d) after state-sync re-bootstrap — TestWorkflowStateSync OK", f.node.Name(), f.preEarliest, postEarliest, f.interval)
+	t.Logf("follower %s: caught up + EVM serving, block-store base jumped %d -> %d (>= interval %d) after state-sync re-bootstrap — TestNightlyWorkflowStateSync OK", f.node.Name(), f.preEarliest, postEarliest, f.interval)
 
 	// Interrupt-resume variant (deferred): kill the follower pod mid-recipe and
 	// assert the workflow resumes to Complete. Deferred here — it needs a
@@ -247,33 +246,12 @@ func bringUpStateSyncFollower(ctx context.Context, t *testing.T, c *sei.Client, 
 		t.Fatalf("network did not advance past the snapshot interval: %v", err)
 	}
 
-	u, err := url.Parse(ch.network.TendermintRPC())
-	if err != nil {
-		t.Fatalf("parse network TM RPC %q: %v", ch.network.TendermintRPC(), err)
-	}
-	hostLabels := strings.Split(u.Hostname(), ".")
-	if len(hostLabels) < 2 || hostLabels[1] == "" {
-		t.Fatalf("cannot derive namespace from aggregate RPC host %q", u.Host)
-	}
-	witnessNS := hostLabels[1]
+	witnessNS := witnessNamespace(t, ch.network)
 	witnesses := []string{
 		nodeRPC(fmt.Sprintf("%s-0", chainID), witnessNS), // genesis validator-0
 		nodeRPC(rpcNodeName(chainID, 0), witnessNS),      // rpc follower 0
 	}
-
-	// A witness must be at head to serve light blocks at the snapshot height
-	// the bootstrap cross-checks. catching_up cannot certify that (it is a
-	// one-way latch meaning "left blocksync once", never "at head now"), so
-	// assert freshness directly: the follower witness sits within one
-	// snapshot interval of the validator head.
-	vHeight, vOK := sei.LatestHeight(ctx, hc, "http://"+witnesses[0])
-	wHeight, wOK := sei.LatestHeight(ctx, hc, "http://"+witnesses[1])
-	if !vOK || !wOK {
-		t.Fatalf("witness freshness read: validator ok=%v, follower ok=%v", vOK, wOK)
-	}
-	if gap := vHeight - wHeight; gap > int64(interval) {
-		t.Fatalf("witness %s lags validator head by %d blocks (> interval %d): a diverging follower cannot serve state-sync light blocks", witnesses[1], gap, interval)
-	}
+	assertWitnessFresh(ctx, t, hc, witnesses[0], witnesses[1], interval)
 
 	// Bring up a state-sync-bootstrapped follower: it must fetch a snapshot from a
 	// peer rather than replay from genesis. Appended to ch.rpcNodes so cleanupChain

@@ -1,14 +1,22 @@
 //go:build integration
 
 // Package integration holds the Sei nightly integration suites as plain `go test`
-// targets (TestBenchmark, TestChaosSuite, TestChainUpgrade, TestRelease,
-// TestWorkflowStateSync, TestGigaStoreMigration), selected with -run. Orchestration is statement order in
-// one process; cross-step state is local Go values, not external config.
+// targets. Every suite the nightly schedule runs is named TestNightly<Suite>
+// (TestNightlyBenchmark, TestNightlyChaosSuite, TestNightlyChainUpgrade,
+// TestNightlyRelease, TestNightlyWorkflowStateSync, TestNightlyGigaStoreMigration,
+// TestNightlyGigaMixedRelease); a new suite joins the nightly schedule by taking
+// that name, with no other wiring required. TestGenesisCeremonyProducesBlocks is
+// the one suite deliberately outside the prefix — an onboarding-validation check,
+// run standalone, never nightly. Orchestration within one run is statement order
+// in one process; cross-step state is local Go values, not external config. A
+// suite whose required image can't be the shared SEID_IMAGE default (a different
+// flavor, or a pinned version pair) reads its own env var name, since one process
+// has one environment.
 //
 // Everything lives in *_test.go behind //go:build integration, so it never links
 // into a production binary and is excluded from the default `go test ./...`. The
-// nightly compiles it once (go test -c -tags integration) and runs each target as
-// an in-cluster CronJob (-test.run TestX).
+// nightly compiles it once (go test -c -tags integration) and runs the whole set
+// in one in-cluster CronJob (-test.run '^TestNightly').
 //
 // Depends on sdk/sei (+ the k8s provider blank import), api/v1alpha1 (public API
 // types, for reading status.plan), and k8s.io/apimachinery/.../metav1 (for a
@@ -21,8 +29,11 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -114,6 +125,42 @@ func (ch *chain) evmEndpoints() []string {
 // <base>-<ordinal> naming the old `provision-node --replicas` produced.
 func rpcNodeName(chainID string, ordinal int) string {
 	return fmt.Sprintf("%s-rpc-%d", chainID, ordinal)
+}
+
+// witnessNamespace derives the namespace for per-node witness service hostnames
+// from a network's aggregate RPC host: <chainID>-internal.<ns>.svc[.cluster.local],
+// and chainID carries no dots, so the second label is the namespace. The
+// authoritative source is the served endpoint, not the spec namespace, which the
+// SDK may resolve to a kubeconfig/SA default only the endpoint reflects.
+func witnessNamespace(t *testing.T, network *sei.Network) string {
+	t.Helper()
+	u, err := url.Parse(network.TendermintRPC())
+	if err != nil {
+		t.Fatalf("parse network TM RPC %q: %v", network.TendermintRPC(), err)
+	}
+	labels := strings.Split(u.Hostname(), ".")
+	if len(labels) < 2 || labels[1] == "" {
+		t.Fatalf("cannot derive namespace from aggregate RPC host %q", u.Host)
+	}
+	return labels[1]
+}
+
+// assertWitnessFresh fails the suite unless the state-sync witness sits within one
+// snapshot interval of the validator head. A witness must be at head to serve
+// light blocks at the snapshot height a bootstrap cross-checks; catching_up cannot
+// certify that (a one-way latch meaning "left blocksync once", never "at head
+// now"), so freshness is asserted directly on the RPC heights. validatorRPC and
+// witnessRPC are bare host:port (nodeRPC output).
+func assertWitnessFresh(ctx context.Context, t *testing.T, hc *http.Client, validatorRPC, witnessRPC string, interval int) {
+	t.Helper()
+	vHeight, vOK := sei.LatestHeight(ctx, hc, "http://"+validatorRPC)
+	wHeight, wOK := sei.LatestHeight(ctx, hc, "http://"+witnessRPC)
+	if !vOK || !wOK {
+		t.Fatalf("witness freshness read: validator %s ok=%v, witness %s ok=%v", validatorRPC, vOK, witnessRPC, wOK)
+	}
+	if gap := vHeight - wHeight; gap > int64(interval) {
+		t.Fatalf("witness %s lags validator head by %d blocks (> interval %d): a diverging follower cannot serve state-sync light blocks", witnessRPC, gap, interval)
+	}
 }
 
 // provision stands up the genesis SeiNetwork + N standalone RPC SeiNodes via the
@@ -256,14 +303,44 @@ func cleanupChain(t *testing.T, ch *chain) {
 	})
 }
 
-// requireCluster skips a suite unless it is pointed at a real cluster. The SDK
-// selects its k8s provider on SEI_NODE_CLUSTER presence; without it there is
-// nothing to provision against.
+// suitesStarted counts suites that began executing against a live cluster
+// (incremented past requireCluster's skip). TestMain reads it to turn go test's
+// silent exit-0-on-zero-match into a hard failure — see TestMain.
+var suitesStarted atomic.Int64
+
+// TestMain runs the suites, then guards the one failure mode go test hides: a
+// -test.run pattern that matches nothing exits 0. Against a live cluster
+// (SEI_NODE_CLUSTER set — the nightly's environment) a run that started zero
+// suites means the pattern selected none of them, the classic false-healthy from
+// a harness binary built before a suite rename, or a mistyped -test.run in the
+// manifest. Fail loud instead of reporting green. Locally (SEI_NODE_CLUSTER
+// unset) every suite t.Skips, so a zero count is expected and not enforced. This
+// bounds only the zero-match case; positive proof that every expected suite ran
+// is a completion-count SLI owned by the metrics layer, not this binary.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if code == 0 && os.Getenv("SEI_NODE_CLUSTER") != "" && suitesStarted.Load() == 0 {
+		fmt.Fprintln(os.Stderr, "integration guard: -test.run selected zero suites against a live cluster — "+
+			"refusing to report green (the harness binary and the -test.run pattern are out of sync; "+
+			"an image built before a suite rename is the usual cause)")
+		code = 1
+	}
+	os.Exit(code)
+}
+
+// requireCluster skips a suite unless it is pointed at a real cluster, and
+// counts started suites for TestMain's zero-match guard. The SDK selects its
+// k8s provider on SEI_NODE_CLUSTER presence; without it there is nothing to
+// provision against.
 func requireCluster(t *testing.T) {
 	t.Helper()
 	if os.Getenv("SEI_NODE_CLUSTER") == "" {
 		t.Skip("integration suite: set SEI_NODE_CLUSTER to run against a cluster")
 	}
+	// The one universal suite entry point: every suite gates on requireCluster
+	// first, so counting here needs no per-suite wiring and upholds the
+	// "a new suite joins by taking the TestNightly prefix, nothing else" rule.
+	suitesStarted.Add(1)
 }
 
 // openClient opens the SDK in k8s mode (config resolved from the ambient
