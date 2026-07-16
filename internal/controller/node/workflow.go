@@ -724,6 +724,20 @@ func setWorkflowInProgress(node *seiv1alpha1.SeiNode, status metav1.ConditionSta
 	})
 }
 
+// adoptedWorkflowIsExecuting reports whether an adopted workflow is actively
+// occupying the node — driving execution rather than parked after failure. The
+// node holds initial-STS apply off while this is true: an actively-executing
+// workflow may have seid gated with its data directory mid-wipe, and
+// reconcileStatefulSet's unconditional SSA would push a spec.image template
+// change immediately, defeating the plan-driven drift suppression (which gates
+// only replace-pod, not the direct apply). A parked-Failed hold
+// (adoptedWorkflowParkedFailed) releases the skip so sidecar hotfixes and
+// impostor-STS recovery aren't suspended indefinitely — the readiness gate keeps
+// seid held, and replacing a parked node's pod is in the safe interrupt class.
+func adoptedWorkflowIsExecuting(node *seiv1alpha1.SeiNode) bool {
+	return node.Status.AdoptedWorkflow != nil && !adoptedWorkflowParkedFailed(node)
+}
+
 // adoptedWorkflowParkedFailed reports whether the adopted workflow has failed
 // and the node is parked held (WorkflowInProgress=True/WorkflowFailedHeld) —
 // distinct from an actively-executing hold (reason WorkflowRunning). Read from
