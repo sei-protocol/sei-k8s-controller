@@ -118,13 +118,10 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.Status().Patch(ctx, node, statusBase)
 	}
 
-	// Resolve the always-present StateSyncReady condition before the Failed and
-	// Paused early-returns so it rides the existing flush on every path (Failed
-	// flush, Paused flush, and the normal end-of-reconcile patch) — no separate
-	// status write. Fail-closed enforcement lives in ResolvePlan, which declines
-	// to build a state-sync plan when this condition isn't True; that keeps
-	// terminal-plan cleanup and non-state-sync work running. A blocked gate
-	// requeues (see end of reconcile) without aborting the steps below.
+	// Resolved before the Failed/Paused early-returns so this always-present
+	// condition's mutation rides the existing flush on every exit path — no
+	// separate status write. A blocked gate only requeues (see steadyStateRequeue);
+	// fail-closed enforcement lives in ResolvePlan, so the steps below still run.
 	stateSyncBlocked := r.reconcileStateSyncGate(node)
 
 	// Failed is terminal — flush any condition updates and exit.
@@ -137,26 +134,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	// Hold initial StatefulSet creation while the state-sync gate suppresses
-	// the init plan: the plan's EnsureDataPVC task is the only creator of the
-	// data PVC the pod mounts by claimName, so an STS created now would strand
-	// a Pending pod until the gate opens. Only initial creation is held
-	// (Status.StatefulSet == nil) — an existing STS is never touched, and
-	// StateSyncBlocksPlan is pre-Running-only, so a Running node's STS keeps
-	// syncing through transient syncer-source errors. One narrow stall is
-	// accepted: if the impostor branch just cleared Status.StatefulSet and the
-	// gate is blocked in the same window, STS re-creation waits for the gate's
-	// poll to re-resolve.
-	holdInitialSTS := planner.StateSyncBlocksPlan(node) && node.Status.StatefulSet == nil
-	// No roll mid-hold: a workflow ACTIVELY executing may have seid gated and its
-	// data directory mid-wipe. reconcileStatefulSet's unconditional SSA would
-	// push a spec.image template change immediately, defeating the drift
-	// suppression below (which only gates plan-driven replace-pod, not the direct
-	// apply). Skip the apply only while the adopted workflow is executing; a
-	// parked-Failed hold releases the skip so sidecar hotfixes and impostor-STS
-	// recovery aren't suspended indefinitely (the readiness gate keeps seid held,
-	// and a pod replacement of a parked node is in the safe interrupt class).
-	holdForWorkflow := node.Status.AdoptedWorkflow != nil && !adoptedWorkflowParkedFailed(node)
+	holdInitialSTS := shouldHoldInitialStatefulSet(node)
+	holdForWorkflow := adoptedWorkflowIsExecuting(node)
 	if !holdInitialSTS && !holdForWorkflow {
 		if err := r.reconcileStatefulSet(ctx, node); err != nil {
 			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
