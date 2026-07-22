@@ -34,7 +34,15 @@ func (p *genesisGroupPlanner) BuildPlan(
 
 	accounts := make([]sidecar.GenesisAccountEntry, len(network.Spec.Genesis.Accounts))
 	for i, a := range network.Spec.Genesis.Accounts {
-		accounts[i] = sidecar.GenesisAccountEntry{Address: a.Address, Balance: a.Balance}
+		entry := sidecar.GenesisAccountEntry{Address: a.Address, Balance: a.Balance}
+		if a.Vesting != nil {
+			entry.Vesting = &sidecar.GenesisAccountVesting{
+				Amount:  a.Vesting.Amount,
+				EndTime: a.Vesting.EndTime,
+				Delayed: a.Vesting.Delayed,
+			}
+		}
+		accounts[i] = entry
 	}
 
 	// Validate at planner-time so bech32 / shape errors hit

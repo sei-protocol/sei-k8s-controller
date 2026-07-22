@@ -7,6 +7,35 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
+func TestRenderNetwork_PropagatesVesting(t *testing.T) {
+	spec := sei.NetworkSpec{
+		Name: testNet, Image: testImage, Validators: 1,
+		Accounts: []sei.GenesisAccount{
+			{
+				Address: "sei1abc",
+				Balance: "2000000usei",
+				Vesting: &sei.GenesisAccountVesting{Amount: "1000000usei", EndTime: 1893456000, Delayed: true},
+			},
+			{Address: "sei1def", Balance: "100usei"}, // no Vesting: must stay nil, not zero-valued
+		},
+	}
+	net := renderNetwork(spec, testNS)
+
+	if len(net.Spec.Genesis.Accounts) != 2 {
+		t.Fatalf("genesis accounts = %+v", net.Spec.Genesis.Accounts)
+	}
+	v := net.Spec.Genesis.Accounts[0].Vesting
+	if v == nil {
+		t.Fatalf("Accounts[0].Vesting: got nil, want set")
+	}
+	if v.Amount != "1000000usei" || v.EndTime != 1893456000 || !v.Delayed {
+		t.Errorf("Accounts[0].Vesting = %+v", v)
+	}
+	if net.Spec.Genesis.Accounts[1].Vesting != nil {
+		t.Errorf("Accounts[1].Vesting: got %+v, want nil", net.Spec.Genesis.Accounts[1].Vesting)
+	}
+}
+
 func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	spec := sei.NetworkSpec{
 		Name: testNet, Image: testImage, Validators: 4,

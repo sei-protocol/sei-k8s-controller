@@ -167,6 +167,38 @@ spec:
                             (e.g. "1000000usei").
                           minLength: 1
                           type: string
+                        vesting:
+                          description: |-
+                            Vesting, when set, locks part of Balance under a vesting schedule
+                            instead of funding a standard account; nil produces today's plain
+                            account. The locked portion mirrors the (deprecated-for-live-tx)
+                            x/auth/vesting account types — ContinuousVestingAccount by default,
+                            or DelayedVestingAccount when Vesting.Delayed is set — constructed
+                            directly at genesis-assembly time rather than via a live
+                            MsgCreateVestingAccount tx, so it is unaffected by that deprecation.
+                          properties:
+                            amount:
+                              description: |-
+                                Amount is the vesting-locked portion of the account's Balance, in coin
+                                notation (e.g. "1000000usei"). Must not exceed Balance.
+                              minLength: 1
+                              type: string
+                            delayed:
+                              description: |-
+                                Delayed selects a DelayedVestingAccount (Amount unlocks all at once at
+                                EndTime) instead of the default ContinuousVestingAccount (Amount
+                                unlocks linearly from the network's genesis time to EndTime).
+                              type: boolean
+                            endTime:
+                              description: EndTime is the unix timestamp at which
+                                the vesting schedule completes.
+                              format: int64
+                              minimum: 1
+                              type: integer
+                          required:
+                          - amount
+                          - endTime
+                          type: object
                       required:
                       - address
                       - balance
