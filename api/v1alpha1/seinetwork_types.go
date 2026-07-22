@@ -149,32 +149,29 @@ type GenesisAccount struct {
 	// +kubebuilder:validation:MinLength=1
 	Balance string `json:"balance"`
 
-	// Vesting, when set, locks part of Balance under a vesting schedule
-	// instead of funding a standard account; nil produces today's plain
-	// account. The locked portion mirrors the (deprecated-for-live-tx)
-	// x/auth/vesting account types — ContinuousVestingAccount by default,
-	// or DelayedVestingAccount when Vesting.Delayed is set — constructed
-	// directly at genesis-assembly time rather than via a live
-	// MsgCreateVestingAccount tx, so it is unaffected by that deprecation.
+	// Vesting, when set, locks part of Balance on an unlock schedule instead
+	// of funding a fully-spendable account; nil funds a standard account.
+	// The locked coins still count toward the balance and can be staked, but
+	// cannot be transferred until they unlock.
 	// +optional
 	Vesting *GenesisAccountVesting `json:"vesting,omitempty"`
 }
 
-// GenesisAccountVesting is the vesting schedule locking part of a
-// GenesisAccount's Balance.
+// GenesisAccountVesting locks part of a GenesisAccount's Balance on an unlock
+// schedule that completes at EndTime.
 type GenesisAccountVesting struct {
 	// Amount is the vesting-locked portion of the account's Balance, in coin
 	// notation (e.g. "1000000usei"). Must not exceed Balance.
 	// +kubebuilder:validation:MinLength=1
 	Amount string `json:"amount"`
 
-	// EndTime is the unix timestamp at which the vesting schedule completes.
+	// EndTime is the unix timestamp at which the locked Amount fully unlocks.
+	// Must be after the network's genesis time.
 	// +kubebuilder:validation:Minimum=1
 	EndTime int64 `json:"endTime"`
 
-	// Delayed selects a DelayedVestingAccount (Amount unlocks all at once at
-	// EndTime) instead of the default ContinuousVestingAccount (Amount
-	// unlocks linearly from the network's genesis time to EndTime).
+	// Delayed unlocks the full Amount all at once at EndTime. The default
+	// (false) unlocks it linearly from the network's genesis time to EndTime.
 	// +optional
 	Delayed bool `json:"delayed,omitempty"`
 }
