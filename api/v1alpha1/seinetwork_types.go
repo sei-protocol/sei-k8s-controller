@@ -148,6 +148,32 @@ type GenesisAccount struct {
 	// Balance is the initial balance in coin notation (e.g. "1000000usei").
 	// +kubebuilder:validation:MinLength=1
 	Balance string `json:"balance"`
+
+	// Vesting, when set, locks part of Balance on an unlock schedule instead
+	// of funding a fully-spendable account; nil funds a standard account.
+	// The locked coins still count toward the balance and can be staked, but
+	// cannot be transferred until they unlock.
+	// +optional
+	Vesting *GenesisAccountVesting `json:"vesting,omitempty"`
+}
+
+// GenesisAccountVesting locks part of a GenesisAccount's Balance on an unlock
+// schedule that completes at EndTime.
+type GenesisAccountVesting struct {
+	// Amount is the vesting-locked portion of the account's Balance, in coin
+	// notation (e.g. "1000000usei"). Must not exceed Balance.
+	// +kubebuilder:validation:MinLength=1
+	Amount string `json:"amount"`
+
+	// EndTime is the unix timestamp at which the locked Amount fully unlocks.
+	// Must be after the network's genesis time.
+	// +kubebuilder:validation:Minimum=1
+	EndTime int64 `json:"endTime"`
+
+	// Delayed unlocks the full Amount all at once at EndTime. The default
+	// (false) unlocks it linearly from the network's genesis time to EndTime.
+	// +optional
+	Delayed bool `json:"delayed,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

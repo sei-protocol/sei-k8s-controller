@@ -58,8 +58,15 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 		net.Spec.ConfigOverrides = maps.Clone(spec.Config)
 	}
 	for _, a := range spec.Accounts {
-		net.Spec.Genesis.Accounts = append(net.Spec.Genesis.Accounts,
-			seiv1alpha1.GenesisAccount{Address: a.Address, Balance: a.Balance})
+		acc := seiv1alpha1.GenesisAccount{Address: a.Address, Balance: a.Balance}
+		if a.Vesting != nil {
+			acc.Vesting = &seiv1alpha1.GenesisAccountVesting{
+				Amount:  a.Vesting.Amount,
+				EndTime: a.Vesting.EndTime,
+				Delayed: a.Vesting.Delayed,
+			}
+		}
+		net.Spec.Genesis.Accounts = append(net.Spec.Genesis.Accounts, acc)
 	}
 	if spec.SidecarImage != "" {
 		// Pin the seictl sidecar image on this network; the controller propagates

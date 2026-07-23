@@ -167,6 +167,35 @@ spec:
                             (e.g. "1000000usei").
                           minLength: 1
                           type: string
+                        vesting:
+                          description: |-
+                            Vesting, when set, locks part of Balance on an unlock schedule instead
+                            of funding a fully-spendable account; nil funds a standard account.
+                            The locked coins still count toward the balance and can be staked, but
+                            cannot be transferred until they unlock.
+                          properties:
+                            amount:
+                              description: |-
+                                Amount is the vesting-locked portion of the account's Balance, in coin
+                                notation (e.g. "1000000usei"). Must not exceed Balance.
+                              minLength: 1
+                              type: string
+                            delayed:
+                              description: |-
+                                Delayed unlocks the full Amount all at once at EndTime. The default
+                                (false) unlocks it linearly from the network's genesis time to EndTime.
+                              type: boolean
+                            endTime:
+                              description: |-
+                                EndTime is the unix timestamp at which the locked Amount fully unlocks.
+                                Must be after the network's genesis time.
+                              format: int64
+                              minimum: 1
+                              type: integer
+                          required:
+                          - amount
+                          - endTime
+                          type: object
                       required:
                       - address
                       - balance

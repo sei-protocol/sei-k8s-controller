@@ -26,6 +26,8 @@ const (
 	testNet   = "chaos-net"
 	testImage = "img:1"
 
+	testGenesisAddr = "sei1abc" // non-validator genesis account fixture
+
 	rpc0Name  = "rpc-0"
 	rpc1Name  = "rpc-1"
 	resultKey = "result"

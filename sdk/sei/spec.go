@@ -38,6 +38,18 @@ type NetworkSpec struct {
 type GenesisAccount struct {
 	Address string
 	Balance string
+
+	// Vesting, when set, locks part of Balance under a vesting schedule
+	// instead of funding a standard account; nil produces a plain account.
+	Vesting *GenesisAccountVesting
+}
+
+// GenesisAccountVesting is the vesting schedule locking part of a
+// GenesisAccount's Balance. Mirrors seiv1alpha1.GenesisAccountVesting.
+type GenesisAccountVesting struct {
+	Amount  string // vesting-locked portion of Balance, coin notation; must not exceed Balance
+	EndTime int64  // unix timestamp the vesting schedule completes
+	Delayed bool   // DelayedVestingAccount (all-at-once at EndTime) instead of the default ContinuousVestingAccount (linear from genesis time)
 }
 
 // NodeSpec is the typed input to CreateNode — one RPC node peered to a network.

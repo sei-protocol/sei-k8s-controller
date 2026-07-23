@@ -7,12 +7,41 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
+func TestRenderNetwork_PropagatesVesting(t *testing.T) {
+	spec := sei.NetworkSpec{
+		Name: testNet, Image: testImage, Validators: 1,
+		Accounts: []sei.GenesisAccount{
+			{
+				Address: testGenesisAddr,
+				Balance: "2000000usei",
+				Vesting: &sei.GenesisAccountVesting{Amount: "1000000usei", EndTime: 1893456000, Delayed: true},
+			},
+			{Address: "sei1def", Balance: "100usei"}, // no Vesting: must stay nil, not zero-valued
+		},
+	}
+	net := renderNetwork(spec, testNS)
+
+	if len(net.Spec.Genesis.Accounts) != 2 {
+		t.Fatalf("genesis accounts = %+v", net.Spec.Genesis.Accounts)
+	}
+	v := net.Spec.Genesis.Accounts[0].Vesting
+	if v == nil {
+		t.Fatalf("Accounts[0].Vesting: got nil, want set")
+	}
+	if v.Amount != "1000000usei" || v.EndTime != 1893456000 || !v.Delayed {
+		t.Errorf("Accounts[0].Vesting = %+v", v)
+	}
+	if net.Spec.Genesis.Accounts[1].Vesting != nil {
+		t.Errorf("Accounts[1].Vesting: got %+v, want nil", net.Spec.Genesis.Accounts[1].Vesting)
+	}
+}
+
 func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	spec := sei.NetworkSpec{
 		Name: testNet, Image: testImage, Validators: 4,
 		Genesis:        map[string]string{"staking.params.unbonding_time": "60s"},
 		Config:         map[string]string{"app.pruning": "nothing"},
-		Accounts:       []sei.GenesisAccount{{Address: "sei1abc", Balance: "100usei"}},
+		Accounts:       []sei.GenesisAccount{{Address: testGenesisAddr, Balance: "100usei"}},
 		Labels:         map[string]string{testRunLabel: testRunID},
 		DeletionPolicy: sei.DeletionDelete,
 	}
@@ -34,7 +63,7 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	if got := net.Spec.ConfigOverrides["app.pruning"]; got != "nothing" {
 		t.Errorf("configOverrides = %v, want app.pruning=nothing", net.Spec.ConfigOverrides)
 	}
-	if len(net.Spec.Genesis.Accounts) != 1 || net.Spec.Genesis.Accounts[0].Address != "sei1abc" {
+	if len(net.Spec.Genesis.Accounts) != 1 || net.Spec.Genesis.Accounts[0].Address != testGenesisAddr {
 		t.Errorf("genesis accounts = %+v", net.Spec.Genesis.Accounts)
 	}
 	// DeletionPolicy threads through so an ephemeral chain cascades to its
