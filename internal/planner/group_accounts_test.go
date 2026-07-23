@@ -82,7 +82,7 @@ func TestBuildPlan_PropagatesVesting(t *testing.T) {
 			Address: validSeiAddr,
 			Balance: "2000000usei",
 			Vesting: &seiv1alpha1.GenesisAccountVesting{
-				Amount:  "1000000usei",
+				Amount:  testAccountBalance,
 				EndTime: 1893456000,
 				Delayed: true,
 			},
@@ -109,7 +109,7 @@ func TestBuildPlan_PropagatesVesting(t *testing.T) {
 	if v == nil {
 		t.Fatalf("Accounts[0].Vesting: got nil, want set")
 	}
-	if v.Amount != "1000000usei" || v.EndTime != 1893456000 || !v.Delayed {
+	if v.Amount != testAccountBalance || v.EndTime != 1893456000 || !v.Delayed {
 		t.Errorf("Accounts[0].Vesting = %+v", v)
 	}
 	if params.Accounts[1].Vesting != nil {

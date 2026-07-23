@@ -12,7 +12,7 @@ func TestRenderNetwork_PropagatesVesting(t *testing.T) {
 		Name: testNet, Image: testImage, Validators: 1,
 		Accounts: []sei.GenesisAccount{
 			{
-				Address: "sei1abc",
+				Address: testGenesisAddr,
 				Balance: "2000000usei",
 				Vesting: &sei.GenesisAccountVesting{Amount: "1000000usei", EndTime: 1893456000, Delayed: true},
 			},
@@ -41,7 +41,7 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 		Name: testNet, Image: testImage, Validators: 4,
 		Genesis:        map[string]string{"staking.params.unbonding_time": "60s"},
 		Config:         map[string]string{"app.pruning": "nothing"},
-		Accounts:       []sei.GenesisAccount{{Address: "sei1abc", Balance: "100usei"}},
+		Accounts:       []sei.GenesisAccount{{Address: testGenesisAddr, Balance: "100usei"}},
 		Labels:         map[string]string{testRunLabel: testRunID},
 		DeletionPolicy: sei.DeletionDelete,
 	}
@@ -63,7 +63,7 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	if got := net.Spec.ConfigOverrides["app.pruning"]; got != "nothing" {
 		t.Errorf("configOverrides = %v, want app.pruning=nothing", net.Spec.ConfigOverrides)
 	}
-	if len(net.Spec.Genesis.Accounts) != 1 || net.Spec.Genesis.Accounts[0].Address != "sei1abc" {
+	if len(net.Spec.Genesis.Accounts) != 1 || net.Spec.Genesis.Accounts[0].Address != testGenesisAddr {
 		t.Errorf("genesis accounts = %+v", net.Spec.Genesis.Accounts)
 	}
 	// DeletionPolicy threads through so an ephemeral chain cascades to its
