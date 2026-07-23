@@ -24,6 +24,23 @@ import (
 // harness can sign and pay for the txs it issues.
 const releaseAdminBalance = "1000000000000usei"
 
+// The release-test solo-precompile suite verifies the solo precompile cannot
+// drain a vested (locked) balance. Since sei-chain deprecated live
+// MsgCreateVestingAccount on fresh chains, that fixture can no longer be built
+// by a tx mid-test; instead the harness seeds it in genesis. vestingFixture*
+// define a continuous vesting account: vestingFixtureLocked of its
+// vestingFixtureBalance is locked on a linear schedule to vestingFixtureEndTime
+// (2030-01-01), so the locked portion stays locked for the whole run while the
+// remainder is spendable. The address + mnemonic reach the suite via the
+// SEI_VESTING_* env below.
+const (
+	vestingFixtureBalance = "2000000usei"
+	vestingFixtureLocked  = "1000000usei"
+	// vestingFixtureEndTime is 2030-01-01T00:00:00Z: far past any run, and
+	// safely > genesis time (the assembler rejects EndTime <= genesis).
+	vestingFixtureEndTime = 1893456000
+)
+
 // releaseBaseConfig is the seid config the release chain runs with: the memiavl
 // storage baseline (the nightly image rejects the cosmos_only default) plus kv tx
 // indexing (the harness queries txs) and a short mempool TTL.
@@ -84,7 +101,15 @@ func TestNightlyRelease(t *testing.T) {
 		t.Fatalf("derive admin key: %v", err)
 	}
 
-	// Provision: 4 validators with the admin funded in genesis, + 1 RPC follower.
+	// Vesting fixture: a second identity seeded with a genesis vesting schedule
+	// for the solo-precompile locked-balance test (see vestingFixture* above).
+	vesting, err := keygen.Derive()
+	if err != nil {
+		t.Fatalf("derive vesting key: %v", err)
+	}
+
+	// Provision: 4 validators with the admin + vesting fixture funded in genesis,
+	// + 1 RPC follower.
 	ch, err := provision(ctx, t, c, spec{
 		chainID:       chainID,
 		runID:         chainID,
@@ -94,7 +119,13 @@ func TestNightlyRelease(t *testing.T) {
 		rpcNodes:      1,
 		storageConfig: releaseBaseConfig,
 		rpcConfig:     releaseRPCConfig,
-		accounts:      []sei.GenesisAccount{{Address: admin.Address, Balance: releaseAdminBalance}},
+		accounts: []sei.GenesisAccount{
+			{Address: admin.Address, Balance: releaseAdminBalance},
+			{Address: vesting.Address, Balance: vestingFixtureBalance, Vesting: &sei.GenesisAccountVesting{
+				Amount:  vestingFixtureLocked,
+				EndTime: vestingFixtureEndTime,
+			}},
+		},
 	})
 	cleanupChain(t, ch)
 	if err != nil {
@@ -114,6 +145,7 @@ func TestNightlyRelease(t *testing.T) {
 		net:       net,
 		node:      node,
 		admin:     admin,
+		vesting:   vesting,
 		image:     releaseImage,
 		runLabels: runLabels,
 		label:     "",
@@ -138,6 +170,7 @@ type releaseRunParams struct {
 	net       *sei.Network
 	node      *sei.Node
 	admin     keygen.Identity
+	vesting   keygen.Identity // genesis-seeded vesting account for the locked-balance suite
 	image     string
 	runLabels map[string]string
 	label     string
@@ -177,22 +210,26 @@ func runReleaseTest(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 		namePart = p.label + "-" + chainID
 	}
 	secretName := "admin-" + namePart
+	vestingSecretName := "vesting-" + namePart
 
-	// Hand the admin mnemonic to the harness via a Secret (secretKeyRef), labeled
-	// for the GC sweep and deleted on cleanup.
+	// Hand the admin + vesting-fixture mnemonics to the harness via Secrets
+	// (secretKeyRef), labeled for the GC sweep and deleted on cleanup.
 	createMnemonicSecret(ctx, t, cs, ns, secretName, p.runLabels, p.admin.Mnemonic)
+	createMnemonicSecret(ctx, t, cs, ns, vestingSecretName, p.runLabels, p.vesting.Mnemonic)
 
 	job := releaseJob(releaseParams{
-		name:       "release-test-" + namePart,
-		namespace:  ns,
-		image:      p.image,
-		runID:      chainID,
-		chainID:    chainID,
-		adminAddr:  p.admin.Address,
-		secretName: secretName,
-		tmRPC:      p.node.TendermintRPC(),
-		evmRPC:     p.node.EVMRPC(),
-		rest:       rest,
+		name:              "release-test-" + namePart,
+		namespace:         ns,
+		image:             p.image,
+		runID:             chainID,
+		chainID:           chainID,
+		adminAddr:         p.admin.Address,
+		secretName:        secretName,
+		vestingAddr:       p.vesting.Address,
+		vestingSecretName: vestingSecretName,
+		tmRPC:             p.node.TendermintRPC(),
+		evmRPC:            p.node.EVMRPC(),
+		rest:              rest,
 	})
 	if _, err := cs.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create release-test job %q: %v", job.Name, err)
@@ -237,6 +274,8 @@ type releaseParams struct {
 	name, namespace, image, runID string
 	chainID, adminAddr            string
 	secretName                    string
+	vestingAddr                   string
+	vestingSecretName             string
 	tmRPC, evmRPC, rest           string
 }
 
@@ -273,12 +312,14 @@ func releaseJob(p releaseParams) *batchv1.Job {
 							{Name: "TEST_TARGET", Value: "chain-agnostic"},
 							{Name: "SEI_CHAIN_ID", Value: p.chainID},
 							{Name: "SEI_ADMIN_ADDRESS", Value: p.adminAddr},
+							{Name: "SEI_VESTING_ADDRESS", Value: p.vestingAddr},
 							{Name: "SEI_TENDERMINT_RPC", Value: p.tmRPC},
 							{Name: "SEI_EVM_JSON_RPC", Value: p.evmRPC},
 							{Name: "SEI_REST_ENDPOINT", Value: p.rest},
 							// The RPC_*/CHAIN_ID/ADMIN_ADDRESS aliases the image also reads.
 							{Name: "CHAIN_ID", Value: p.chainID},
 							{Name: "ADMIN_ADDRESS", Value: p.adminAddr},
+							{Name: "VESTING_ADDRESS", Value: p.vestingAddr},
 							{Name: "RPC_TM_RPC", Value: p.tmRPC},
 							{Name: "RPC_EVM_RPC", Value: p.evmRPC},
 							{Name: "RPC_EVM_RPC_LIST", Value: p.evmRPC}, // single RPC node → one-element list
@@ -286,6 +327,12 @@ func releaseJob(p releaseParams) *batchv1.Job {
 							{Name: "SEI_ADMIN_MNEMONIC", ValueFrom: &corev1.EnvVarSource{
 								SecretKeyRef: &corev1.SecretKeySelector{
 									LocalObjectReference: corev1.LocalObjectReference{Name: p.secretName},
+									Key:                  keygen.SecretMnemonicKey,
+								},
+							}},
+							{Name: "SEI_VESTING_MNEMONIC", ValueFrom: &corev1.EnvVarSource{
+								SecretKeyRef: &corev1.SecretKeySelector{
+									LocalObjectReference: corev1.LocalObjectReference{Name: p.vestingSecretName},
 									Key:                  keygen.SecretMnemonicKey,
 								},
 							}},
