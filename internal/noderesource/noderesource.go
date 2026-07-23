@@ -852,7 +852,11 @@ func defaultCosmosExporterResources() corev1.ResourceRequirements {
 			corev1.ResourceMemory: resource.MustParse("64Mi"),
 		},
 		Limits: corev1.ResourceList{
-			corev1.ResourceMemory: resource.MustParse("384Mi"),
+			// Temporary: raises the OOM ceiling to reduce restart frequency
+			// while a suspected leak in sei-cosmos-exporter (goroutine-per-
+			// event fan-out in HandleBankTransferEvent, not the eventstream
+			// reconnect path) gets fixed upstream. Does not fix the leak.
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
 		},
 	}
 }

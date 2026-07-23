@@ -1771,14 +1771,14 @@ func TestCosmosExporter_DefaultResources(t *testing.T) {
 	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
 
-	// 50m/64Mi requests, 256Mi memory limit, no CPU limit (see
+	// 50m/64Mi requests, 512Mi memory limit, no CPU limit (see
 	// defaultCosmosExporterResources — scrape pulls would throttle).
 	cpuReq := ce.Resources.Requests[corev1.ResourceCPU]
 	memReq := ce.Resources.Requests[corev1.ResourceMemory]
 	memLim := ce.Resources.Limits[corev1.ResourceMemory]
 	g.Expect(cpuReq.String()).To(Equal("50m"))
 	g.Expect(memReq.String()).To(Equal("64Mi"))
-	g.Expect(memLim.String()).To(Equal("384Mi"))
+	g.Expect(memLim.String()).To(Equal("512Mi"))
 	_, hasCPULimit := ce.Resources.Limits[corev1.ResourceCPU]
 	g.Expect(hasCPULimit).To(BeFalse())
 }
