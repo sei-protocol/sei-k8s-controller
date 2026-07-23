@@ -33,6 +33,17 @@ const releaseAdminBalance = "1000000000000usei"
 // (2030-01-01), so the locked portion stays locked for the whole run while the
 // remainder is spendable. The address + mnemonic reach the suite via the
 // SEI_VESTING_* env below.
+//
+// Two load-bearing invariants (both confirmed by xreview):
+//   - Balance MUST exceed Locked. The unlocked remainder (~1 sei here) is what
+//     the account spends to associate + pay fees in the test; if Locked == Balance
+//     the account has nothing spendable and the test fails in setup, not on its
+//     assertion.
+//   - The lock holds only because seictl's genesis assembler anchors the
+//     continuous schedule's StartTime at genesis time (not epoch 0). That lives
+//     in seictl, outside this file; if it ever changed, the fixture could be
+//     near-fully-vested and the anti-drain assertion would weaken silently. A
+//     run-time guard asserting nonzero locked balance is a tracked follow-up.
 const (
 	vestingFixtureBalance = "2000000usei"
 	vestingFixtureLocked  = "1000000usei"
