@@ -72,6 +72,13 @@ func TestNightlyGigaMixedRelease(t *testing.T) {
 		t.Fatalf("derive admin key: %v", err)
 	}
 
+	// Vesting fixture for the solo-precompile locked-balance test (see
+	// vestingFixture* in release_test.go); solo.spec.ts runs in this suite too.
+	vesting, err := keygen.Derive()
+	if err != nil {
+		t.Fatalf("derive vesting key: %v", err)
+	}
+
 	// 1. Provision one chain with two plain RPC followers. rpcNodes[0] stays at the
 	//    shipped default (the v2 control); rpcNodes[1] is migrated to giga below.
 	//    Validators are snapshot-producing so the migration can state-sync from a
@@ -85,7 +92,13 @@ func TestNightlyGigaMixedRelease(t *testing.T) {
 		rpcNodes:      2,
 		storageConfig: mergeConfig(releaseBaseConfig, snapshotProductionConfig),
 		rpcConfig:     mergeConfig(releaseRPCConfig, map[string]string{"storage.snapshot_interval": "0"}),
-		accounts:      []sei.GenesisAccount{{Address: admin.Address, Balance: releaseAdminBalance}},
+		accounts: []sei.GenesisAccount{
+			{Address: admin.Address, Balance: releaseAdminBalance},
+			{Address: vesting.Address, Balance: vestingFixtureBalance, Vesting: &sei.GenesisAccountVesting{
+				Amount:  vestingFixtureLocked,
+				EndTime: vestingFixtureEndTime,
+			}},
+		},
 	})
 	cleanupChain(t, ch)
 	if err != nil {
@@ -128,6 +141,7 @@ func TestNightlyGigaMixedRelease(t *testing.T) {
 		net:       ch.network,
 		node:      v2Node,
 		admin:     admin,
+		vesting:   vesting,
 		image:     releaseImage,
 		runLabels: runLabels,
 		label:     "v2",
