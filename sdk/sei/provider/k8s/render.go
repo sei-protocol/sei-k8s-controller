@@ -196,6 +196,10 @@ func renderTask(spec sei.TaskSpec, namespace string) *seiv1alpha1.SeiNodeTask {
 		task.Spec.UpdateNodeImage = &seiv1alpha1.UpdateNodeImagePayload{
 			Image: spec.UpdateNodeImage.Image,
 		}
+	case spec.ConfigPatch != nil:
+		task.Spec.ConfigPatch = &seiv1alpha1.ConfigPatchPayload{
+			Overrides: maps.Clone(spec.ConfigPatch.Overrides),
+		}
 	}
 	return task
 }

@@ -102,6 +102,54 @@ func TestCEL_MarkReady_MultiplePayloads_Rejected(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("exactly one"))
 }
 
+// ConfigPatch with an allowlisted key is accepted.
+func TestCEL_ConfigPatch_Accepted(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "configpatch-ok", seiv1alpha1.SeiNodeTaskKindConfigPatch)
+	snt.Spec.ConfigPatch = &seiv1alpha1.ConfigPatchPayload{
+		Overrides: map[string]string{"giga_executor.enabled": "false"},
+	}
+	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
+}
+
+// ConfigPatch with an empty overrides map is rejected (MinProperties=1).
+func TestCEL_ConfigPatch_EmptyOverrides_Rejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "configpatch-empty", seiv1alpha1.SeiNodeTaskKindConfigPatch)
+	snt.Spec.ConfigPatch = &seiv1alpha1.ConfigPatchPayload{Overrides: map[string]string{}}
+	err := testCli.Create(testCtx, snt)
+	g.Expect(err).To(HaveOccurred())
+}
+
+// ConfigPatch with an out-of-allowlist key is rejected by the family-level CEL
+// rule (before the controller's authoritative renderer ever runs).
+func TestCEL_ConfigPatch_DisallowedKey_Rejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "configpatch-disallowed", seiv1alpha1.SeiNodeTaskKindConfigPatch)
+	snt.Spec.ConfigPatch = &seiv1alpha1.ConfigPatchPayload{
+		Overrides: map[string]string{"network.p2p.persistent_peers": "a@1.2.3.4:26656"},
+	}
+	err := testCli.Create(testCtx, snt)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("runtime-safe"))
+}
+
+// kind=ConfigPatch with NO payload is rejected.
+func TestCEL_ConfigPatch_NoPayload_Rejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "configpatch-nopayload", seiv1alpha1.SeiNodeTaskKindConfigPatch)
+	err := testCli.Create(testCtx, snt)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(Or(
+		ContainSubstring("exactly one"),
+		ContainSubstring("configPatch is required"),
+	))
+}
+
 // kind=RestartSeid with NO payload is rejected.
 func TestCEL_RestartSeid_NoPayload_Rejected(t *testing.T) {
 	g := NewWithT(t)

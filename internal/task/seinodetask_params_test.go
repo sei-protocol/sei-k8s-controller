@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
@@ -12,8 +13,10 @@ import (
 )
 
 const (
-	tpKey   = "TimeoutParams"
-	baseapp = "baseapp"
+	tpKey          = "TimeoutParams"
+	baseapp        = "baseapp"
+	cpFalse        = "false"
+	keyGigaEnabled = "giga_executor.enabled"
 )
 
 func govParamChangeCR(value string) *seiv1alpha1.SeiNodeTask {
@@ -241,6 +244,86 @@ func TestSeiNodeTaskParamsFor_MarkReady(t *testing.T) {
 func TestSeiNodeTaskParamsFor_MarkReady_NilPayload_ParamsBuildFailed(t *testing.T) {
 	cr := &seiv1alpha1.SeiNodeTask{
 		Spec: seiv1alpha1.SeiNodeTaskSpec{Kind: seiv1alpha1.SeiNodeTaskKindMarkReady},
+	}
+
+	_, err := SeiNodeTaskParamsFor(cr, nil)
+	if err == nil {
+		t.Fatal("expected error for missing payload, got nil")
+	}
+	var unsupported *ErrUnsupportedKind
+	if errors.As(err, &unsupported) {
+		t.Error("missing-payload error must not be *ErrUnsupportedKind")
+	}
+	if got := FailureReason(err); got != ReasonParamsBuildFailed {
+		t.Errorf("FailureReason = %q, want %q", got, ReasonParamsBuildFailed)
+	}
+}
+
+// kind=ConfigPatch synthesizes an incremental config-apply task carrying the
+// dotted overrides verbatim — sei-config's resolver renders on the node, so the
+// controller forwards only the dotted overrides.
+func TestSeiNodeTaskParamsFor_ConfigPatch(t *testing.T) {
+	cr := &seiv1alpha1.SeiNodeTask{
+		Spec: seiv1alpha1.SeiNodeTaskSpec{
+			Kind: seiv1alpha1.SeiNodeTaskKindConfigPatch,
+			ConfigPatch: &seiv1alpha1.ConfigPatchPayload{
+				Overrides: map[string]string{keyGigaEnabled: cpFalse},
+			},
+		},
+	}
+
+	p, err := SeiNodeTaskParamsFor(cr, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Type != sidecar.TaskTypeConfigApply {
+		t.Errorf("Type = %q, want %q", p.Type, sidecar.TaskTypeConfigApply)
+	}
+	intent, ok := p.Payload.(*seiconfig.ConfigIntent)
+	if !ok {
+		t.Fatalf("Payload = %T, want *seiconfig.ConfigIntent", p.Payload)
+	}
+	if !intent.Incremental {
+		t.Error("intent.Incremental = false, want true")
+	}
+	if intent.Mode != "" {
+		t.Errorf("intent.Mode = %q, want empty (incremental patches the on-disk config)", intent.Mode)
+	}
+	if got := intent.Overrides[keyGigaEnabled]; got != cpFalse {
+		t.Errorf("intent.Overrides[%q] = %q, want %q", keyGigaEnabled, got, cpFalse)
+	}
+}
+
+// kind=ConfigPatch with an out-of-allowlist key is a ParamsBuildFailed (the
+// controller's allowlist policy rejects it), not an unsupported kind.
+func TestSeiNodeTaskParamsFor_ConfigPatch_DisallowedKey_ParamsBuildFailed(t *testing.T) {
+	cr := &seiv1alpha1.SeiNodeTask{
+		Spec: seiv1alpha1.SeiNodeTaskSpec{
+			Kind: seiv1alpha1.SeiNodeTaskKindConfigPatch,
+			ConfigPatch: &seiv1alpha1.ConfigPatchPayload{
+				Overrides: map[string]string{"network.p2p.persistent_peers": "a@1.2.3.4:26656"},
+			},
+		},
+	}
+
+	_, err := SeiNodeTaskParamsFor(cr, nil)
+	if err == nil {
+		t.Fatal("expected error for disallowed key, got nil")
+	}
+	var unsupported *ErrUnsupportedKind
+	if errors.As(err, &unsupported) {
+		t.Error("disallowed-key error must not be *ErrUnsupportedKind")
+	}
+	if got := FailureReason(err); got != ReasonParamsBuildFailed {
+		t.Errorf("FailureReason = %q, want %q", got, ReasonParamsBuildFailed)
+	}
+}
+
+// kind=ConfigPatch with a nil payload is a param-build failure, not an
+// unsupported kind (CEL normally blocks this; the guard is the backstop).
+func TestSeiNodeTaskParamsFor_ConfigPatch_NilPayload_ParamsBuildFailed(t *testing.T) {
+	cr := &seiv1alpha1.SeiNodeTask{
+		Spec: seiv1alpha1.SeiNodeTaskSpec{Kind: seiv1alpha1.SeiNodeTaskKindConfigPatch},
 	}
 
 	_, err := SeiNodeTaskParamsFor(cr, nil)

@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -94,6 +98,8 @@ func SeiNodeTaskParamsFor(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNo
 		return restartSeidParams(cr)
 	case seiv1alpha1.SeiNodeTaskKindMarkReady:
 		return markReadyParams(cr)
+	case seiv1alpha1.SeiNodeTaskKindConfigPatch:
+		return configPatchParams(cr)
 	default:
 		return SeiNodeTaskParams{}, &ErrUnsupportedKind{Kind: cr.Spec.Kind}
 	}
@@ -223,6 +229,55 @@ func markReadyParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
 		return SeiNodeTaskParams{}, paramsErr("spec.markReady is required for kind=MarkReady")
 	}
 	return SeiNodeTaskParams{sidecar.TaskTypeMarkReady, sidecar.MarkReadyTask{}}, nil
+}
+
+// configPatchParams synthesizes an incremental config-apply sidecar task from
+// the payload's dotted sei-config overrides. sei-config's own resolver on the
+// node (ResolveIncrementalIntent -> registry-aware ApplyOverrides -> the legacy
+// renderer) turns the overrides into on-disk config, so the controller forwards
+// only the dotted overrides — that path is correct-by-construction for every
+// registered key. Mode is left empty: incremental resolution reads the node's
+// current on-disk config and patches it, so no mode default is needed.
+//
+// The controller still enforces the runtime-safe ALLOWLIST as pure policy —
+// sei-config's registry only checks that a key exists and type-checks its value,
+// and would happily apply an unsafe key (e.g. network.p2p.persistent_peers) the
+// controller re-asserts on its own SeiNode update plans. A disallowed key
+// surfaces as ParamsBuildFailed (not a remote round-trip). Keys are checked in
+// sorted order so a multi-key input reports a stable first offender.
+//
+// This does NOT restart or reload seid; the caller composes RestartSeid /
+// StateSync to make the change take effect.
+func configPatchParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
+	p := cr.Spec.ConfigPatch
+	if p == nil {
+		return SeiNodeTaskParams{}, paramsErr("spec.configPatch is required for kind=ConfigPatch")
+	}
+	if len(p.Overrides) == 0 {
+		return SeiNodeTaskParams{}, paramsErr("config-patch: overrides must not be empty")
+	}
+	for _, key := range slices.Sorted(maps.Keys(p.Overrides)) {
+		if !configPatchKeyAllowed(key) {
+			return SeiNodeTaskParams{}, paramsErr(fmt.Sprintf(
+				"config-patch: key %q is not in the runtime-safe allowlist (chain.occ_enabled, giga_executor.*, mempool.*)", key))
+		}
+	}
+	return SeiNodeTaskParams{sidecar.TaskTypeConfigApply, &seiconfig.ConfigIntent{
+		Incremental: true,
+		Overrides:   p.Overrides,
+	}}, nil
+}
+
+// configPatchKeyAllowed reports whether a dotted sei-config override key is in
+// the ConfigPatch runtime-safe allowlist. It is pure allow/deny POLICY on key
+// prefixes, not a renderer: sei-config resolves and renders every registered key,
+// but the controller admits only families that are safe to patch out-of-band.
+// Keep this in sync with the CEL family rule on SeiNodeTaskSpec and
+// sdk/sei.configPatchKeyAllowed — it is a value contract across three points.
+func configPatchKeyAllowed(key string) bool {
+	return key == "chain.occ_enabled" ||
+		strings.HasPrefix(key, "giga_executor.") ||
+		strings.HasPrefix(key, "mempool.")
 }
 
 // resolveSigningUID returns explicit when set; otherwise derives from target
