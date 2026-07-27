@@ -484,12 +484,12 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 	if p.KubeRBACProxyImage == "" {
 		return nil, fmt.Errorf("images.kubeRBACProxy is not configured in the app-config file")
 	}
-	// Seeds need their own small pool. Required here rather than in
-	// Config.Validate so a cluster that runs no seeds keeps booting on an
-	// app-config file that predates the key — and so the alternative, silently
-	// scheduling a small seed onto the RPC-class default pool, is impossible.
-	if !servesSeidRPC(node) && p.NodepoolForMode(NodeMode(node)) == "" {
-		return nil, fmt.Errorf("scheduling.nodepoolSeed is not configured in the app-config file; a seed requires a dedicated small-instance nodepool")
+	// Unreachable in a running controller — Config.Validate requires
+	// scheduling.nodepoolSeed at startup. Kept for the same reason the check
+	// above is: NodepoolForMode gives a seed no fallback, so an empty value here
+	// would silently schedule it onto the RPC-class default pool.
+	if !servesSeidRPC(node) && p.NodepoolSeed == "" {
+		return nil, fmt.Errorf("scheduling.nodepoolSeed is not configured in the app-config file")
 	}
 	one := int32(1)
 	labels := ResourceLabels(node)

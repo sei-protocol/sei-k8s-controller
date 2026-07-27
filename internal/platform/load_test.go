@@ -13,6 +13,7 @@ scheduling:
   nodepoolName: file-nodepool
   nodepoolArchive: file-nodepool-archive
   nodepoolValidator: file-nodepool-validator
+  nodepoolSeed: file-nodepool-seed
   tolerationKey: file-toleration
   serviceAccount: file-sa
 storage:
@@ -139,6 +140,25 @@ func TestLoad_MissingNodepoolValidator_FailsValidate(t *testing.T) {
 	}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "scheduling.nodepoolValidator") {
 		t.Fatalf("want Validate error naming scheduling.nodepoolValidator, got %v", err)
+	}
+}
+
+// scheduling.nodepoolSeed is required on the same terms as the archive and
+// validator pools — whether or not the cluster runs seeds. NodepoolForMode gives
+// a seed no fallback, so an unset key would otherwise put a small seed on the
+// RPC-class default pool.
+func TestLoad_MissingNodepoolSeed_FailsValidate(t *testing.T) {
+	setGatewayEnv(t)
+	body := strings.Replace(fullConfig, "  nodepoolSeed: file-nodepool-seed\n", "", 1)
+	path := writeConfig(t, body)
+	t.Setenv(envControllerConfig, path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "scheduling.nodepoolSeed") {
+		t.Fatalf("want Validate error naming scheduling.nodepoolSeed, got %v", err)
 	}
 }
 

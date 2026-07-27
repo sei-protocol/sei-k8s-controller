@@ -62,13 +62,12 @@ type Config struct {
 	StorageSizeDefault  string
 	StorageSizeArchive  string
 
-	// NodepoolSeed is required only by clusters that run seeds — absent from
-	// Validate's startup list so existing app-config files stay valid, and
-	// enforced instead where a seed pod is rendered. It has no fallback: see
-	// NodepoolForMode.
+	// NodepoolSeed is required, like the archive and validator pools, whether or
+	// not the cluster runs seeds. A seed must not inherit the RPC-class default
+	// pool, so NodepoolForMode gives it no fallback.
 	//
-	// StorageSizeSeed is genuinely optional; defaultStorageSizeSeed is a correct
-	// value, not a placeholder. Read via SeedStorageSize.
+	// StorageSizeSeed is optional; defaultStorageSizeSeed is a correct value, not
+	// a placeholder. Read via SeedStorageSize.
 	NodepoolSeed    string
 	StorageSizeSeed string
 
@@ -149,10 +148,9 @@ type SchedulingConfig struct {
 	NodepoolName      string `json:"nodepoolName"`
 	NodepoolArchive   string `json:"nodepoolArchive"`
 	NodepoolValidator string `json:"nodepoolValidator"`
-	// NodepoolSeed is optional; unset routes seeds to NodepoolName.
-	NodepoolSeed   string `json:"nodepoolSeed"`
-	TolerationKey  string `json:"tolerationKey"`
-	ServiceAccount string `json:"serviceAccount"`
+	NodepoolSeed      string `json:"nodepoolSeed"`
+	TolerationKey     string `json:"tolerationKey"`
+	ServiceAccount    string `json:"serviceAccount"`
 }
 
 // StorageConfig holds the PVC storage classes and sizes for default and archive nodes.
@@ -259,6 +257,7 @@ func (c Config) Validate() error {
 		{"scheduling.nodepoolName", c.NodepoolName},
 		{"scheduling.nodepoolArchive", c.NodepoolArchive},
 		{"scheduling.nodepoolValidator", c.NodepoolValidator},
+		{"scheduling.nodepoolSeed", c.NodepoolSeed},
 		{"scheduling.tolerationKey", c.TolerationKey},
 		{"scheduling.serviceAccount", c.ServiceAccount},
 		{"storage.classPerf", c.StorageClassPerf},
