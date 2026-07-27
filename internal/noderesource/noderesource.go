@@ -62,6 +62,7 @@ const (
 	roleArchive   = "archive"
 	roleReplayer  = "replayer"
 	roleFullNode  = "node"
+	roleSeed      = "seed"
 
 	// Per-mode seid-container footprint: memory and CPU request are both set to
 	// the full sei-infra / verified-prod instance envelope for the role (memory
@@ -70,9 +71,15 @@ const (
 	memValidator = "128Gi" // full r5.4xlarge envelope; provisioned on the next size up (r5.8xlarge)
 	memRPCClass  = "256Gi" // full r7i.8xlarge envelope (fullNode + replayer); provisioned on r7i.12xlarge
 	memArchive   = "512Gi" // full r7i.16xlarge envelope (verified live prod); provisioned on r7i.24xlarge
+	memSeed      = "2Gi"   // RFC 006 Appendix A; see defaultNodeResourceProfiles
 	cpuValidator = "16"    // r5.4xlarge vCPU; request-only, no CPU limit
 	cpuRPCClass  = "32"    // r7i.8xlarge vCPU (fullNode + replayer); request-only, no CPU limit
 	cpuArchive   = "64"    // r7i.16xlarge vCPU; request-only, no CPU limit
+	cpuSeed      = "1"     // PEX gossip is light and spiky; request-only, no CPU limit
+
+	// goMemLimitPercentOfLimit is the seed's GOMEMLIMIT as a percentage of its
+	// memory limit; the remainder is the non-heap margin. See goMemLimitEnv.
+	goMemLimitPercentOfLimit = 87
 
 	dataDir = platform.DataDir
 
@@ -273,6 +280,8 @@ func deriveRole(node *seiv1alpha1.SeiNode) string {
 		return roleArchive
 	case node.Spec.Replayer != nil:
 		return roleReplayer
+	case node.Spec.Seed != nil:
+		return roleSeed
 	default:
 		return roleFullNode
 	}
@@ -286,11 +295,25 @@ func NodeMode(node *seiv1alpha1.SeiNode) string {
 		return string(seiconfig.ModeArchive)
 	case node.Spec.Validator != nil:
 		return string(seiconfig.ModeValidator)
+	case node.Spec.Seed != nil:
+		return string(seiconfig.ModeSeed)
 	case node.Spec.Replayer != nil:
 		return string(seiconfig.ModeFull)
 	default:
 		return string(seiconfig.ModeFull)
 	}
+}
+
+// servesSeidRPC reports whether seid binds its RPC and gRPC listeners. True for
+// every mode but seed, which runs the P2P transport and PEX reactor only.
+//
+// It gates the two pod-spec decisions that poll those ports — the readiness probe
+// target, and whether cosmos-exporter is attached. On a seed both wait forever:
+// readiness never passes, and cosmos-exporter's wait loop never reaches its own
+// listener, so its liveness probe kills it. Named for the property rather than
+// the mode so the call sites read as intent.
+func servesSeidRPC(node *seiv1alpha1.SeiNode) bool {
+	return node.Spec.Seed == nil
 }
 
 // NeedsLongStartup returns true when the node's bootstrap strategy involves
@@ -318,6 +341,11 @@ func DefaultStorageForMode(mode string, p PlatformConfig) (storageClass string, 
 		return p.StorageClassArchive, p.StorageSizeArchive
 	case string(seiconfig.ModeFull), string(seiconfig.ModeValidator):
 		return p.StorageClassPerf, p.StorageSizeDefault
+	case string(seiconfig.ModeSeed):
+		// A seed stores a peer store and two DBs it never writes, so it needs
+		// orders of magnitude less than StorageSizeDefault (sized for a chain's
+		// full state) and no performance class.
+		return p.StorageClassDefault, p.SeedStorageSize()
 	default:
 		return p.StorageClassDefault, p.StorageSizeDefault
 	}
@@ -377,6 +405,21 @@ var defaultNodeResourceProfiles = map[string]nodeResourceProfile{
 	// Full r7i.16xlarge envelope — the live-prod snapshotter shape (the sei-infra
 	// TF's m7i.8xlarge is stale).
 	roleArchive: {cpuRequest: cpuArchive, memory: memArchive},
+	// Peer discovery only: no block execution, no state commitment, no query
+	// surface. The exception to the "request == the reference instance's full
+	// envelope" rule above — a seed is deliberately small, and this is RFC 006
+	// Appendix A's figure, which also keeps it on the t-class instances and
+	// inside the cost line that RFC budgets.
+	//
+	// Accepted risk while PLT-850 is open: seid's pre-auth handshake read is
+	// bounded far above what a legitimate handshake needs, and the seed's
+	// connection cap scales it, so a remote unauthenticated flood can allocate
+	// well past this footprint. That memory is live, so GOMEMLIMIT cannot reclaim
+	// it and only absolute headroom would absorb it — which no figure in the RFC
+	// provides. Sizing around it would break the instance class and the budget,
+	// so the exposure is tracked upstream rather than bought off here. When
+	// PLT-850 lands this figure carries real headroom.
+	roleSeed: {cpuRequest: cpuSeed, memory: memSeed},
 }
 
 // overrideForRole returns the app-config resource override for a node's mode.
@@ -388,6 +431,8 @@ func overrideForRole(role string, p PlatformConfig) platform.ResourceOverride {
 		return p.NodeResourcesArchive
 	case roleReplayer:
 		return p.NodeResourcesReplayer
+	case roleSeed:
+		return p.NodeResourcesSeed
 	default:
 		return p.NodeResourcesNode
 	}
@@ -437,6 +482,13 @@ func firstNonEmpty(a, b string) string {
 func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.StatefulSet, error) {
 	if p.KubeRBACProxyImage == "" {
 		return nil, fmt.Errorf("images.kubeRBACProxy is not configured in the app-config file")
+	}
+	// Unreachable in a running controller — Config.Validate requires
+	// scheduling.nodepoolSeed at startup. Kept for the same reason the check
+	// above is: NodepoolForMode gives a seed no fallback, so an empty value here
+	// would silently schedule it onto the RPC-class default pool.
+	if !servesSeidRPC(node) && p.NodepoolSeed == "" {
+		return nil, fmt.Errorf("scheduling.nodepoolSeed is not configured in the app-config file")
 	}
 	one := int32(1)
 	labels := ResourceLabels(node)
@@ -622,7 +674,7 @@ func ServicePorts() []corev1.ServicePort {
 	ports := make([]corev1.ServicePort, len(np))
 	for i, p := range np {
 		ports[i] = corev1.ServicePort{Name: p.Name, Port: p.Port, TargetPort: intstr.FromInt32(p.Port), Protocol: corev1.ProtocolTCP}
-		if p.Name == "grpc" {
+		if p.Name == seiconfig.PortNameGRPC {
 			h2c := "kubernetes.io/h2c"
 			ports[i].AppProtocol = &h2c
 		}
@@ -723,10 +775,6 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 		buildSidecarContainer(node, p),
 		buildRBACProxyContainer(node, p),
 	}
-	ceContainer, err := buildCosmosExporterContainer(p)
-	if err != nil {
-		return corev1.PodSpec{}, err
-	}
 	seidContainer := buildSidecarMainContainer(node, p)
 	// Refuse to render a gated seid container that carries an RPC-based
 	// liveness/startup probe: a held seid answers neither port, so such a probe
@@ -734,9 +782,21 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 	if err := ValidateGatedSeidProbes(seidContainer); err != nil {
 		return corev1.PodSpec{}, err
 	}
-	spec.Containers = []corev1.Container{
-		seidContainer,
-		ceContainer,
+	// A seed's readiness must not depend on seid's RPC/gRPC, which it never binds.
+	if err := ValidateSeedProbes(node, seidContainer); err != nil {
+		return corev1.PodSpec{}, err
+	}
+	spec.Containers = []corev1.Container{seidContainer}
+
+	// cosmos-exporter scrapes staking and validator state over seid's gRPC. A
+	// seed serves neither, so attaching it there would leave it blocked in its
+	// wait loop until its own liveness probe killed it.
+	if servesSeidRPC(node) {
+		ceContainer, err := buildCosmosExporterContainer(p)
+		if err != nil {
+			return corev1.PodSpec{}, err
+		}
+		spec.Containers = append(spec.Containers, ceContainer)
 	}
 
 	return spec, nil
@@ -817,6 +877,9 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 	container := buildNodeMainContainer(node)
 	container.Command, container.Args = sidecarWaitCommand(node)
 	container.Resources = ResourcesForNode(node, p)
+	if env, ok := goMemLimitEnv(node, container.Resources); ok {
+		container.Env = append(container.Env, env)
+	}
 	// Sidecar binds loopback; gate startup on the proxy's /v0/healthz
 	// (a bypass path that forwards through to the sidecar).
 	container.StartupProbe = &corev1.Probe{
@@ -828,7 +891,80 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 		PeriodSeconds:       5,
 		FailureThreshold:    86400,
 	}
-	container.ReadinessProbe = &corev1.Probe{
+	container.ReadinessProbe = readinessProbeForNode(node)
+	return container
+}
+
+// goMemLimitEnv returns the GOMEMLIMIT env var for a seed's seid container.
+//
+// The Go runtime targets a heap roughly twice the live set and cannot see the
+// cgroup limit, so with memory request==limit reclaimable growth becomes an
+// OOMKill rather than a throttle. A soft limit below the hard cap makes the GC
+// spend CPU to stay resident instead.
+//
+// What it does and does not cover: it governs churn — buffers allocated and
+// freed at rate, which GOGC alone would let balloon toward twice the live set.
+// It cannot shrink memory that is genuinely live, and it does not account for
+// non-heap RSS at all: thread stacks, cgo allocations, mmap'd memIAVL pages, or
+// the kernel socket buffers a thousand connections charge to the cgroup. The
+// concurrent pre-auth handshake burst that sizes this mode is live memory, so
+// absolute headroom is what defends it — not this limit. The margin below the
+// cap exists for the non-heap share.
+//
+// Scoped to seed as a matter of caution rather than principle: GC slack is
+// proportional to the live set, so any mode with request==limit would benefit.
+// The other modes are tuned and prod-proven, and changing their runtime
+// behaviour is not this change's business.
+//
+// Derived from the resolved limit, so an app-config resources.seed override
+// keeps it consistent. Reports false when no memory limit is set, or when the
+// limit is small enough that the computed soft cap would be useless.
+func goMemLimitEnv(node *seiv1alpha1.SeiNode, res corev1.ResourceRequirements) (corev1.EnvVar, bool) {
+	if servesSeidRPC(node) {
+		return corev1.EnvVar{}, false
+	}
+	lim, ok := res.Limits[corev1.ResourceMemory]
+	if !ok {
+		return corev1.EnvVar{}, false
+	}
+	// Multiply first: the truncation from dividing first is harmless but the
+	// product cannot overflow int64 at any schedulable memory limit.
+	soft := lim.Value() * goMemLimitPercentOfLimit / 100
+	if soft <= 0 {
+		return corev1.EnvVar{}, false
+	}
+	return corev1.EnvVar{Name: "GOMEMLIMIT", Value: fmt.Sprintf("%dB", soft)}, true
+}
+
+// readinessProbeForNode returns the seid readiness probe for the node's mode.
+//
+// Chain-following modes gate on seid's /lag_status, which reports sync distance
+// — the meaningful "ready to serve" signal. A seed serves no RPC, so its only
+// in-band signal is that the P2P transport is bound: it distinguishes a crashed
+// seid or a failed bind from a live one, and nothing more.
+//
+// Two limits an operator must know. It proves nothing about EXTERNAL
+// reachability — a seed with no DNS record, no load balancer, or a closed
+// security group reads Ready while no stranger can dial it. And each probe
+// completes a TCP connect without the secret handshake, so it increments
+// tendermint_p2p_new_connections{direction="in"} and books a handshake failure
+// roughly 6/min; alerts on those series need that baseline subtracted, and
+// inbound connections alone do not prove a seed is publicly reachable.
+func readinessProbeForNode(node *seiv1alpha1.SeiNode) *corev1.Probe {
+	if !servesSeidRPC(node) {
+		return &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{
+					Port: intstr.FromInt32(seiconfig.PortP2P),
+				},
+			},
+			InitialDelaySeconds: 30,
+			PeriodSeconds:       10,
+			FailureThreshold:    3,
+			TimeoutSeconds:      5,
+		}
+	}
+	return &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: "/lag_status",
@@ -840,7 +976,6 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 		FailureThreshold:    3,
 		TimeoutSeconds:      5,
 	}
-	return container
 }
 
 // defaultCosmosExporterResources: no CPU limit — cosmos-exporter calls
@@ -1189,11 +1324,11 @@ func nodeKeyMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
 	}}
 }
 
+// nodeKeySecretSource returns the Secret holding this node's P2P identity, from
+// whichever mode sub-spec carries one (validator or seed). Mode-blind by
+// delegation, so the node-key volume and mount below serve both.
 func nodeKeySecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretNodeKeySource {
-	if node.Spec.Validator == nil || node.Spec.Validator.NodeKey == nil {
-		return nil
-	}
-	return node.Spec.Validator.NodeKey.Secret
+	return node.Spec.NodeKeySecret()
 }
 
 // operatorKeyringVolumes projects the operator-keyring Secret as a directory

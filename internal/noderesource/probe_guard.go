@@ -5,6 +5,8 @@ import (
 
 	seiconfig "github.com/sei-protocol/sei-config"
 	corev1 "k8s.io/api/core/v1"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 // ValidateGatedSeidProbes enforces the probe contract the workflow hold leans
@@ -27,6 +29,40 @@ func ValidateGatedSeidProbes(c corev1.Container) error {
 	}
 	if probeTargetsSeidRPC(c.StartupProbe) {
 		return fmt.Errorf("gated seid container %q startup probe must not target seid's RPC/gRPC port", c.Name)
+	}
+	return nil
+}
+
+// ValidateSeedProbes is the seed counterpart of the gated-seid contract: a seed's
+// seid container must carry no probe against seid's RPC or gRPC port, since seed
+// mode binds neither for the pod's whole life.
+//
+// A probe that can never pass costs the pod its Ready condition permanently. The
+// headless Service sets PublishNotReadyAddresses, so in-cluster DNS still
+// resolves — but anything that gates on readiness does not: an externally-facing
+// load-balancer target group, a rollout waiting on Ready, an operator reading
+// kubectl. A seed exists to be dialed, so silently never becoming Ready is the
+// wrong failure to ship.
+//
+// Readiness is checked here where ValidateGatedSeidProbes skips it: during a hold
+// a failing readiness is correct and temporary, on a seed it is permanent. No-op
+// for every other mode.
+func ValidateSeedProbes(node *seiv1alpha1.SeiNode, c corev1.Container) error {
+	if servesSeidRPC(node) {
+		return nil
+	}
+	probes := []struct {
+		name  string
+		probe *corev1.Probe
+	}{
+		{"readiness", c.ReadinessProbe},
+		{"liveness", c.LivenessProbe},
+		{"startup", c.StartupProbe},
+	}
+	for _, p := range probes {
+		if probeTargetsSeidRPC(p.probe) {
+			return fmt.Errorf("seed seid container %q %s probe must not target seid's RPC/gRPC port; seed mode binds neither", c.Name, p.name)
+		}
 	}
 	return nil
 }

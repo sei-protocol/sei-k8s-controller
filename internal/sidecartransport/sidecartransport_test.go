@@ -92,4 +92,3 @@ func TestNew_DefaultTokenPathConstant(t *testing.T) {
 		t.Errorf("default path drifted from K8s convention: %s", DefaultServiceAccountTokenPath)
 	}
 }
-

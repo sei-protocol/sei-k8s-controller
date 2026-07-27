@@ -622,6 +622,8 @@ func ineligibleWorkflowRole(node *seiv1alpha1.SeiNode) string {
 		return "archive"
 	case node.Spec.Replayer != nil:
 		return "replayer"
+	case node.Spec.Seed != nil:
+		return "seed" // stores no chain state to re-bootstrap
 	default:
 		return "non-full" // unset/unknown mode — refused by the allowlist
 	}

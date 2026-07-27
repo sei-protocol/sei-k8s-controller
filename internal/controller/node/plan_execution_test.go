@@ -216,6 +216,21 @@ func genesisNode() *seiv1alpha1.SeiNode {
 	}
 }
 
+func seedNode() *seiv1alpha1.SeiNode {
+	return &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-seed", Namespace: testNamespace, Generation: 1},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: testChainID,
+			Image:   testImage,
+			Seed: &seiv1alpha1.SeedSpec{
+				NodeKey: seiv1alpha1.NodeKeySource{
+					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "test-seed-node-key"},
+				},
+			},
+		},
+	}
+}
+
 func snapshotterNode() *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-node", Namespace: "default", Generation: 1},
@@ -852,6 +867,7 @@ func TestNeedsBootstrap(t *testing.T) {
 		{"replayer without bootstrap image", replayerNode(), false},
 		{"full node without bootstrap image", snapshotNode(), false},
 		{"genesis node", genesisNode(), false},
+		{"seed", seedNode(), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -859,6 +875,22 @@ func TestNeedsBootstrap(t *testing.T) {
 				t.Errorf("NeedsBootstrap() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// A seed must never reach the bootstrap-Job path. bootstrapNodeMode has no seed
+// arm and would render one as a full node — RPC probes, cosmos-exporter, and no
+// ValidateSeedProbes call — and nothing there would fail to compile. The only
+// thing preventing it is a nil SnapshotSource, so pin that rather than leave the
+// invariant to a comment.
+func TestSeedNeverBootstraps(t *testing.T) {
+	node := seedNode()
+
+	if snap := node.Spec.SnapshotSource(); snap != nil {
+		t.Fatalf("a seed must have no snapshot source, got %+v", snap)
+	}
+	if planner.NeedsBootstrap(node) {
+		t.Error("a seed must never need a bootstrap Job")
 	}
 }
 

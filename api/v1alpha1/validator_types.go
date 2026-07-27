@@ -129,8 +129,8 @@ type SecretSigningKeySource struct {
 	SecretName string `json:"secretName"`
 }
 
-// NodeKeySource declares where a validator's P2P node key
-// (node_key.json) comes from. Exactly one variant must be set.
+// NodeKeySource declares where a node's P2P node key (node_key.json) comes
+// from. Exactly one variant must be set. Used by validator and seed modes.
 //
 // +kubebuilder:validation:XValidation:rule="(has(self.secret) ? 1 : 0) == 1",message="exactly one node key source must be set"
 type NodeKeySource struct {
@@ -140,14 +140,16 @@ type NodeKeySource struct {
 	Secret *SecretNodeKeySource `json:"secret,omitempty"`
 }
 
-// SecretNodeKeySource references a Kubernetes Secret containing the
-// validator's P2P node key. The Secret must contain a data key
-// `node_key.json` holding the Tendermint node key, mounted read-only at
-// $SEI_HOME/config/node_key.json.
+// SecretNodeKeySource references a Kubernetes Secret containing a node's P2P
+// node key. The Secret must contain a data key `node_key.json` holding the
+// Tendermint node key, mounted read-only at $SEI_HOME/config/node_key.json.
 //
-// node_key.json is identity-bearing but not slashing-relevant — losing it
-// only costs the validator's accumulated peer-graph reputation, not stake.
-// Treated as Secret-grade for handling consistency with SigningKey.
+// How much the key matters depends on the mode that references it. For a
+// validator it is identity-bearing but not slashing-relevant — losing it costs
+// only accumulated peer-graph reputation, not stake — and is Secret-grade for
+// handling consistency with SigningKey. For a seed the derived NodeID is
+// published and dialed by strangers, which makes it a one-way door; see
+// SeedSpec.NodeKey before treating it as low-stakes.
 type SecretNodeKeySource struct {
 	// SecretName is the name of a Secret in the SeiNode's namespace.
 	// The controller never creates, mutates, or deletes this Secret.

@@ -159,6 +159,15 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	holdForWorkflow := node.Status.AdoptedWorkflow != nil && !adoptedWorkflowParkedFailed(node)
 	if !holdInitialSTS && !holdForWorkflow {
 		if err := r.reconcileStatefulSet(ctx, node); err != nil {
+			// This return precedes the status flush, so a render failure leaves no
+			// phase and no condition behind — the operator would see a SeiNode
+			// stuck with nothing explaining it. Emit an Event so the reason reaches
+			// `kubectl describe` rather than only the controller log. Reachable on
+			// operator-supplied app-config: infra fields load once at startup, so a
+			// seed applied before the controller restarts renders against the old
+			// config.
+			r.Recorder.Eventf(node, corev1.EventTypeWarning, "StatefulSetRenderFailed",
+				"Cannot render the StatefulSet: %v", err)
 			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
 		}
 	}

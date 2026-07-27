@@ -311,6 +311,13 @@ func bootstrapPVCClaimName(node *seiv1alpha1.SeiNode) string {
 }
 
 // bootstrapNodeMode determines the sei-config mode string from the node spec.
+//
+// Deliberately has no seed arm: NeedsBootstrap requires a snapshot source with a
+// bootstrapImage, and SeiNodeSpec.SnapshotSource() is nil for a seed, so a seed
+// never reaches the bootstrap-Job path. That invariant is what keeps the default
+// arm from rendering a seed as a full node here — with RPC probes and a
+// cosmos-exporter — and it is also why buildBootstrapPodSpec does not call
+// ValidateSeedProbes. TestSeedNeverBootstraps pins the invariant.
 func bootstrapNodeMode(node *seiv1alpha1.SeiNode) string {
 	switch {
 	case node.Spec.Archive != nil:

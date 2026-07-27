@@ -34,6 +34,14 @@ const (
 
 	// modeValidator matches seiconfig.ModeValidator without importing sei-config.
 	modeValidator = "validator"
+
+	// modeSeed matches seiconfig.ModeSeed without importing sei-config.
+	modeSeed = "seed"
+
+	// defaultStorageSizeSeed backs a seed's peer store plus the block and state
+	// DBs seid opens but never writes. Code-authoritative so a seed does not
+	// silently claim StorageSizeDefault, which is sized for a chain's full state.
+	defaultStorageSizeSeed = "20Gi"
 )
 
 // Config holds infrastructure-level settings that vary per deployment
@@ -54,6 +62,15 @@ type Config struct {
 	StorageSizeDefault  string
 	StorageSizeArchive  string
 
+	// NodepoolSeed is required, like the archive and validator pools, whether or
+	// not the cluster runs seeds. A seed must not inherit the RPC-class default
+	// pool, so NodepoolForMode gives it no fallback.
+	//
+	// StorageSizeSeed is optional; defaultStorageSizeSeed is a correct value, not
+	// a placeholder. Read via SeedStorageSize.
+	NodepoolSeed    string
+	StorageSizeSeed string
+
 	// Per-role seid-container resource overrides, keyed by sei.io/role. Each is
 	// optional: an unset field (or unset sub-field) falls back to the
 	// code-authoritative, prod-safe default for that role in internal/noderesource.
@@ -62,6 +79,7 @@ type Config struct {
 	NodeResourcesNode      ResourceOverride
 	NodeResourcesReplayer  ResourceOverride
 	NodeResourcesArchive   ResourceOverride
+	NodeResourcesSeed      ResourceOverride
 
 	SnapshotBucket string
 	SnapshotRegion string
@@ -130,6 +148,7 @@ type SchedulingConfig struct {
 	NodepoolName      string `json:"nodepoolName"`
 	NodepoolArchive   string `json:"nodepoolArchive"`
 	NodepoolValidator string `json:"nodepoolValidator"`
+	NodepoolSeed      string `json:"nodepoolSeed"`
 	TolerationKey     string `json:"tolerationKey"`
 	ServiceAccount    string `json:"serviceAccount"`
 }
@@ -141,6 +160,8 @@ type StorageConfig struct {
 	ClassArchive string `json:"classArchive"`
 	SizeDefault  string `json:"sizeDefault"`
 	SizeArchive  string `json:"sizeArchive"`
+	// SizeSeed is optional; unset falls back to defaultStorageSizeSeed.
+	SizeSeed string `json:"sizeSeed"`
 }
 
 // ResourcesConfig holds seid-container resource sizing.
@@ -155,6 +176,7 @@ type ResourcesConfig struct {
 	Node      ResourceOverride `json:"node"`
 	Replayer  ResourceOverride `json:"replayer"`
 	Archive   ResourceOverride `json:"archive"`
+	Seed      ResourceOverride `json:"seed"`
 }
 
 // ResourceOverride is a per-mode seid-container resource override. Both fields
@@ -192,16 +214,35 @@ type ImagesConfig struct {
 
 // NodepoolForMode returns the Karpenter NodePool name for the given
 // sei-config mode string. Archive and validator nodes each use a
-// dedicated pool; all other modes share the default pool.
+// dedicated pool; seed uses one when configured, since its footprint is far
+// smaller than the default pool's instance class. All other modes share the
+// default pool.
 func (c Config) NodepoolForMode(mode string) string {
 	switch mode {
 	case modeArchive:
 		return c.NodepoolArchive
 	case modeValidator:
 		return c.NodepoolValidator
+	case modeSeed:
+		// No fallback to NodepoolName: that pool is sized for RPC-class nodes, so
+		// a seed landing there costs an order of magnitude more than a seed is
+		// worth — and karpenter.sh/do-not-disrupt then pins that node against
+		// consolidation for the seed's life. Callers rendering a seed pod must
+		// reject an empty value rather than substitute one; see
+		// noderesource.GenerateStatefulSet.
+		return c.NodepoolSeed
 	default:
 		return c.NodepoolName
 	}
+}
+
+// SeedStorageSize returns the data-volume size for a seed node, falling back to
+// the code default when the app-config file omits storage.sizeSeed.
+func (c Config) SeedStorageSize() string {
+	if c.StorageSizeSeed != "" {
+		return c.StorageSizeSeed
+	}
+	return defaultStorageSizeSeed
 }
 
 // Validate returns an error if a required field is unset. name is the field's
@@ -216,6 +257,7 @@ func (c Config) Validate() error {
 		{"scheduling.nodepoolName", c.NodepoolName},
 		{"scheduling.nodepoolArchive", c.NodepoolArchive},
 		{"scheduling.nodepoolValidator", c.NodepoolValidator},
+		{"scheduling.nodepoolSeed", c.NodepoolSeed},
 		{"scheduling.tolerationKey", c.TolerationKey},
 		{"scheduling.serviceAccount", c.ServiceAccount},
 		{"storage.classPerf", c.StorageClassPerf},
@@ -251,6 +293,7 @@ func (c Config) Validate() error {
 		{"resources.node", c.NodeResourcesNode},
 		{"resources.replayer", c.NodeResourcesReplayer},
 		{"resources.archive", c.NodeResourcesArchive},
+		{"resources.seed", c.NodeResourcesSeed},
 	}
 	for _, o := range overrides {
 		if err := o.val.validate(o.key); err != nil {
