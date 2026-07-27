@@ -52,8 +52,8 @@ spec:
           spec:
             description: |-
               SeiNodeSpec defines the desired state of a standalone Sei node.
-              Exactly one mode sub-spec (fullNode, archive, replayer, validator) must be set;
-              the populated field determines the node's operating mode.
+              Exactly one mode sub-spec (fullNode, archive, replayer, validator, seed) must
+              be set; the populated field determines the node's operating mode.
             properties:
               archive:
                 description: Archive configures an archive node with full history
@@ -446,6 +446,60 @@ spec:
                 required:
                 - snapshot
                 type: object
+              seed:
+                description: Seed configures a peer-discovery seed node (P2P + PEX
+                  only).
+                properties:
+                  nodeKey:
+                    description: |-
+                      NodeKey supplies the P2P identity (node_key.json) this seed presents.
+
+                      Required, where the validator's NodeKey is optional, because a seed's
+                      NodeID is published: operators dial `NodeID@host:port` and the
+                      secret-connection handshake verifies the pinned value, so a changed NodeID
+                      silently breaks every client carrying the old one. A Secret-sourced key
+                      survives pod recreation and PVC loss; one left to `seid init` regenerates
+                      onto the data volume. Carrying the identity to another cluster means
+                      replicating the Secret there — the controller reads it, it does not move
+                      it. Treat the NodeID as a one-way door.
+
+                      The Secret name is immutable, so rotating the identity means deleting and
+                      recreating the SeiNode — and announcing the new NodeID. There is no fast
+                      path for a leaked key: the old NodeID stays dialable until every client
+                      ships a new default, so a thief keeps impersonating a bootstrap anchor.
+
+                      Give each seed a distinct Secret. Nothing rejects two seeds sharing one,
+                      and they would present the same NodeID — collapsing the redundant anchors
+                      into a single entry in every dialer's peer store.
+                    properties:
+                      secret:
+                        description: |-
+                          Secret loads the node key from a Kubernetes Secret in the
+                          SeiNode's namespace.
+                        properties:
+                          secretName:
+                            description: |-
+                              SecretName is the name of a Secret in the SeiNode's namespace.
+                              The controller never creates, mutates, or deletes this Secret.
+                              Immutable: re-pointing the node ID on a running validator costs
+                              peer reputation and forces a peer-graph reset; force delete-and-recreate.
+                            maxLength: 253
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: secretName is immutable
+                              rule: self == oldSelf
+                        required:
+                        - secretName
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one node key source must be set
+                      rule: '(has(self.secret) ? 1 : 0) == 1'
+                required:
+                - nodeKey
+                type: object
               sidecar:
                 description: Sidecar configures the sei-sidecar container.
                 properties:
@@ -827,10 +881,11 @@ spec:
             - image
             type: object
             x-kubernetes-validations:
-            - message: exactly one of fullNode, archive, replayer, or validator must
-                be set
+            - message: exactly one of fullNode, archive, replayer, validator, or seed
+                must be set
               rule: '(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) +
-                (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1'
+                (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) + (has(self.seed)
+                ? 1 : 0) == 1'
             - message: peers is required when replayer mode is set
               rule: '!has(self.replayer) || (has(self.peers) && size(self.peers) >
                 0)'

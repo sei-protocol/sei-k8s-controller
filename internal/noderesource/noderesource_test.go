@@ -841,6 +841,12 @@ func nodeForRole(role string) *seiv1alpha1.SeiNode {
 		spec.Archive = &seiv1alpha1.ArchiveSpec{}
 	case roleReplayer:
 		spec.Replayer = &seiv1alpha1.ReplayerSpec{}
+	case roleSeed:
+		spec.Seed = &seiv1alpha1.SeedSpec{
+			NodeKey: seiv1alpha1.NodeKeySource{
+				Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "seed-node-key"},
+			},
+		}
 	default:
 		spec.FullNode = &seiv1alpha1.FullNodeSpec{}
 	}
@@ -861,6 +867,7 @@ func TestResourcesForNode_DefaultsPerMode(t *testing.T) {
 		{"", cpuRPCClass, memRPCClass}, // fullNode / rpc
 		{roleReplayer, cpuRPCClass, memRPCClass},
 		{roleArchive, cpuArchive, memArchive},
+		{roleSeed, cpuSeed, memSeed},
 	}
 	for _, tc := range cases {
 		t.Run("mode="+tc.role, func(t *testing.T) {
@@ -1645,7 +1652,7 @@ func TestGenerateStatefulSet_SeidMount_PassesGuard(t *testing.T) {
 
 // --- Cosmos exporter ---
 
-func TestCosmosExporter_AlwaysPresent(t *testing.T) {
+func TestCosmosExporter_PresentOnModesServingGRPC(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
 
@@ -1654,6 +1661,32 @@ func TestCosmosExporter_AlwaysPresent(t *testing.T) {
 	ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
 	g.Expect(ce).NotTo(BeNil())
 	g.Expect(sts.Spec.Template.Spec.Containers).To(HaveLen(2))
+}
+
+// cosmos-exporter's wait loop blocks until seid's gRPC accepts, and a seed never
+// binds it — so attaching the container would leave it waiting until its own
+// liveness probe killed it, in CrashLoopBackOff for the pod's life.
+func TestCosmosExporter_AbsentOnSeed(t *testing.T) {
+	g := NewWithT(t)
+
+	sts := mustGenerateStatefulSet(t, nodeForRole(roleSeed), platformtest.Config())
+
+	containers := sts.Spec.Template.Spec.Containers
+	g.Expect(findContainer(containers, containerNameCosmosExporter)).To(BeNil())
+	g.Expect(containers).To(HaveLen(1))
+	g.Expect(containers[0].Name).To(Equal(containerNameSeid))
+}
+
+// A seed needs the peer store and two DBs it never writes — not the full-state
+// volume StorageSizeDefault sizes for.
+func TestDefaultStorageForMode_Seed(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+
+	sc, size := DefaultStorageForMode(string(seiconfig.ModeSeed), cfg)
+	g.Expect(sc).To(Equal(cfg.StorageClassDefault))
+	g.Expect(size).To(Equal(cfg.SeedStorageSize()))
+	g.Expect(size).NotTo(Equal(cfg.StorageSizeDefault))
 }
 
 func TestCosmosExporter_DefaultImage(t *testing.T) {
@@ -1926,4 +1959,117 @@ func TestCosmosExporter_NonRootSecurityContext(t *testing.T) {
 	g.Expect(ce.SecurityContext.RunAsNonRoot).NotTo(BeNil())
 	g.Expect(*ce.SecurityContext.RunAsNonRoot).To(BeTrue())
 	g.Expect(*ce.SecurityContext.RunAsUser).To(Equal(int64(65532)))
+}
+
+// --- Seed identity ---
+
+// A seed's NodeID is published, so it must come from the Secret rather than be
+// regenerated onto the data volume. The mount uses subPath, so kubelet never
+// hot-swaps the identity under a running seid.
+func TestSeed_NodeKeySecretMountedOnPodTemplate(t *testing.T) {
+	g := NewWithT(t)
+
+	sts := mustGenerateStatefulSet(t, nodeForRole(roleSeed), platformtest.Config())
+
+	vol := findVolume(sts.Spec.Template.Spec.Volumes, nodeKeyVolumeName)
+	g.Expect(vol).NotTo(BeNil(), "seed node-key volume must be present")
+	g.Expect(vol.Secret).NotTo(BeNil())
+	g.Expect(vol.Secret.SecretName).To(Equal("seed-node-key"))
+	g.Expect(vol.Secret.Items[0].Key).To(Equal(nodeKeyDataKey))
+
+	seid := findContainer(sts.Spec.Template.Spec.Containers, containerNameSeid)
+	g.Expect(seid).NotTo(BeNil())
+	mount := findVolumeMount(seid.VolumeMounts, nodeKeyVolumeName)
+	g.Expect(mount).NotTo(BeNil(), "seed seid container must mount its node key")
+	g.Expect(mount.SubPath).To(Equal(nodeKeyDataKey))
+	g.Expect(mount.ReadOnly).To(BeTrue())
+}
+
+// deriveRole feeds the sei.io/role pod label the platform PodMonitor lifts into
+// sei_role, and NodeMode drives storage and nodepool selection. Both default to
+// full-node values, so a missing seed arm is silently wrong rather than a
+// compile error.
+func TestSeed_RoleAndModeAreNotFullNodeDefaults(t *testing.T) {
+	g := NewWithT(t)
+	node := nodeForRole(roleSeed)
+
+	g.Expect(deriveRole(node)).To(Equal(roleSeed))
+	g.Expect(NodeMode(node)).To(Equal(string(seiconfig.ModeSeed)))
+	g.Expect(ResourceLabels(node)).To(HaveKeyWithValue(roleLabel, roleSeed))
+	// A seed produces no snapshots, so the publish selector must not match it.
+	g.Expect(ResourceLabels(node)).NotTo(HaveKey(snapshotPublishLabel))
+	// Nothing to replay: startup thresholds stay at the short default.
+	g.Expect(NeedsLongStartup(node)).To(BeFalse())
+}
+
+// Memory request==limit makes an allocation burst an OOMKill, and the Go GC
+// cannot see the cgroup limit. A soft limit below the cap trades CPU to stay
+// resident. Seed-only: the r-class modes carry tens of GiB of absolute headroom.
+func TestSeed_GoMemLimitBelowMemoryLimit(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+
+	sts := mustGenerateStatefulSet(t, nodeForRole(roleSeed), cfg)
+	seid := findContainer(sts.Spec.Template.Spec.Containers, containerNameSeid)
+	g.Expect(seid).NotTo(BeNil())
+
+	env := findEnvVar(seid.Env, "GOMEMLIMIT")
+	g.Expect(env).NotTo(BeNil(), "a seed must carry GOMEMLIMIT")
+
+	limit := seid.Resources.Limits[corev1.ResourceMemory]
+	soft, err := resource.ParseQuantity(strings.TrimSuffix(env.Value, "B"))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(soft.Value()).To(BeNumerically("<", limit.Value()))
+	g.Expect(soft.Value()).To(BeNumerically(">", limit.Value()/2), "soft limit should not waste the footprint")
+}
+
+// Chain-following modes keep the runtime's own heap sizing; their headroom is
+// large enough that GC slack cannot cross the cap.
+func TestNonSeed_HasNoGoMemLimit(t *testing.T) {
+	g := NewWithT(t)
+
+	sts := mustGenerateStatefulSet(t, newSnapshotNode("rpc-0", "default"), platformtest.Config())
+	seid := findContainer(sts.Spec.Template.Spec.Containers, containerNameSeid)
+
+	g.Expect(findEnvVar(seid.Env, "GOMEMLIMIT")).To(BeNil())
+}
+
+func findEnvVar(env []corev1.EnvVar, name string) *corev1.EnvVar {
+	for i := range env {
+		if env[i].Name == name {
+			return &env[i]
+		}
+	}
+	return nil
+}
+
+// The alternative to failing closed is silently scheduling a 2Gi seed onto the
+// RPC-class default pool, which costs an order of magnitude more than a seed is
+// worth. Clusters running no seeds are unaffected — the check is per-render, not
+// at startup.
+func TestSeed_RenderFailsWithoutSeedNodepool(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+	cfg.NodepoolSeed = ""
+
+	_, err := GenerateStatefulSet(nodeForRole(roleSeed), cfg)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("scheduling.nodepoolSeed"))
+
+	// Every other mode still renders on the same config.
+	_, err = GenerateStatefulSet(newSnapshotNode("rpc-0", "default"), cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
+// A configured seed pool lands on the pod, not the default pool.
+func TestSeed_SchedulesOnSeedNodepool(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+
+	sts := mustGenerateStatefulSet(t, nodeForRole(roleSeed), cfg)
+	spec := sts.Spec.Template.Spec
+
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf(cfg.NodepoolSeed))
+	g.Expect(spec.Tolerations[0].Value).To(Equal(cfg.NodepoolSeed))
 }

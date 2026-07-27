@@ -310,6 +310,8 @@ func (r *NodeResolver) plannerForMode(node *seiv1alpha1.SeiNode) (NodePlanner, e
 		return &replayerPlanner{platform: r.Platform}, nil
 	case node.Spec.Validator != nil:
 		return &validatorPlanner{platform: r.Platform}, nil
+	case node.Spec.Seed != nil:
+		return &seedPlanner{platform: r.Platform}, nil
 	default:
 		return nil, fmt.Errorf("no mode sub-spec set on SeiNode %s/%s", node.Namespace, node.Name)
 	}
@@ -379,12 +381,13 @@ func validateSigningKeyParams(node *seiv1alpha1.SeiNode) any {
 	}
 }
 
+// needsValidateNodeKey reports whether the node sources its P2P identity from a
+// Secret and so needs the pre-flight validation task. Mode-blind: it asks the
+// spec which Secret holds the node key, not which mode is set, so validator and
+// seed are covered by the same gate.
 func needsValidateNodeKey(node *seiv1alpha1.SeiNode) bool {
-	if node.Spec.Validator == nil || node.Spec.Validator.NodeKey == nil {
-		return false
-	}
-	return node.Spec.Validator.NodeKey.Secret != nil &&
-		node.Spec.Validator.NodeKey.Secret.SecretName != ""
+	s := node.Spec.NodeKeySecret()
+	return s != nil && s.SecretName != ""
 }
 
 func validateNodeKeyParams(node *seiv1alpha1.SeiNode) any {
@@ -392,7 +395,7 @@ func validateNodeKeyParams(node *seiv1alpha1.SeiNode) any {
 		return nil
 	}
 	return &task.ValidateNodeKeyParams{
-		SecretName: node.Spec.Validator.NodeKey.Secret.SecretName,
+		SecretName: node.Spec.NodeKeySecret().SecretName,
 		Namespace:  node.Namespace,
 	}
 }

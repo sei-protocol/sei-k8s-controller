@@ -7,9 +7,9 @@ import (
 )
 
 // SeiNodeSpec defines the desired state of a standalone Sei node.
-// Exactly one mode sub-spec (fullNode, archive, replayer, validator) must be set;
-// the populated field determines the node's operating mode.
-// +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, or validator must be set"
+// Exactly one mode sub-spec (fullNode, archive, replayer, validator, seed) must
+// be set; the populated field determines the node's operating mode.
+// +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) + (has(self.seed) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, validator, or seed must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
@@ -73,6 +73,10 @@ type SeiNodeSpec struct {
 	// +optional
 	Validator *ValidatorSpec `json:"validator,omitempty"`
 
+	// Seed configures a peer-discovery seed node (P2P + PEX only).
+	// +optional
+	Seed *SeedSpec `json:"seed,omitempty"`
+
 	// ExternalAddress is the routable P2P host:port written into seid's
 	// `p2p.external_address`. SeiNetwork-managed nodes get this stamped by the
 	// SeiNetwork reconciler when TCP networking is enabled. Standalone SeiNodes
@@ -133,6 +137,27 @@ func (s *SeiNodeSpec) SnapshotSource() *SnapshotSource {
 		return s.Validator.Snapshot
 	case s.Replayer != nil:
 		return &s.Replayer.Snapshot
+	default:
+		return nil
+	}
+}
+
+// NodeKeySecret returns the Secret supplying this node's P2P identity
+// (node_key.json), or nil when the node has none and `seid init` generates one
+// onto the data volume.
+//
+// Two modes carry a node key on differing terms — a validator's is optional and
+// paired with a signing key, a seed's is required and standalone — so each
+// sub-spec declares its own field rather than hoisting one to SeiNodeSpec, out of
+// reach of the validator's key-pairing CEL rules. This accessor resolves that
+// split in one place, so callers needing only "which Secret holds the node key"
+// stay mode-blind. Mirrors SnapshotSource.
+func (s *SeiNodeSpec) NodeKeySecret() *SecretNodeKeySource {
+	switch {
+	case s.Validator != nil && s.Validator.NodeKey != nil:
+		return s.Validator.NodeKey.Secret
+	case s.Seed != nil:
+		return s.Seed.NodeKey.Secret
 	default:
 		return nil
 	}
@@ -294,9 +319,9 @@ const (
 	// SeiNodes with spec.validator.signingKey.
 	ConditionSigningKeyReady = "SigningKeyReady"
 
-	// ConditionNodeKeyReady indicates whether a referenced validator
-	// node-key Secret passes all validation requirements. Only set on
-	// SeiNodes with spec.validator.nodeKey.
+	// ConditionNodeKeyReady indicates whether a referenced node-key Secret
+	// passes all validation requirements. Only set on SeiNodes that source a
+	// node key from a Secret — spec.validator.nodeKey or spec.seed.nodeKey.
 	ConditionNodeKeyReady = "NodeKeyReady"
 
 	// ConditionOperatorKeyringReady indicates whether a referenced

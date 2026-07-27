@@ -41,6 +41,7 @@ func Load() (Config, error) {
 		NodepoolName:      file.Scheduling.NodepoolName,
 		NodepoolArchive:   file.Scheduling.NodepoolArchive,
 		NodepoolValidator: file.Scheduling.NodepoolValidator,
+		NodepoolSeed:      file.Scheduling.NodepoolSeed,
 		TolerationKey:     file.Scheduling.TolerationKey,
 		ServiceAccount:    file.Scheduling.ServiceAccount,
 
@@ -49,11 +50,13 @@ func Load() (Config, error) {
 		StorageClassArchive: file.Storage.ClassArchive,
 		StorageSizeDefault:  file.Storage.SizeDefault,
 		StorageSizeArchive:  file.Storage.SizeArchive,
+		StorageSizeSeed:     file.Storage.SizeSeed,
 
 		NodeResourcesValidator: file.Resources.Validator,
 		NodeResourcesNode:      file.Resources.Node,
 		NodeResourcesReplayer:  file.Resources.Replayer,
 		NodeResourcesArchive:   file.Resources.Archive,
+		NodeResourcesSeed:      file.Resources.Seed,
 
 		SnapshotBucket: file.Snapshot.Bucket,
 		SnapshotRegion: file.Snapshot.Region,
