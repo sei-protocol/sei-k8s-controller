@@ -71,7 +71,7 @@ const (
 	memValidator = "128Gi" // full r5.4xlarge envelope; provisioned on the next size up (r5.8xlarge)
 	memRPCClass  = "256Gi" // full r7i.8xlarge envelope (fullNode + replayer); provisioned on r7i.12xlarge
 	memArchive   = "512Gi" // full r7i.16xlarge envelope (verified live prod); provisioned on r7i.24xlarge
-	memSeed      = "4Gi"   // sized for the pre-auth handshake burst, see defaultNodeResourceProfiles
+	memSeed      = "2Gi"   // RFC 006 Appendix A; see defaultNodeResourceProfiles
 	cpuValidator = "16"    // r5.4xlarge vCPU; request-only, no CPU limit
 	cpuRPCClass  = "32"    // r7i.8xlarge vCPU (fullNode + replayer); request-only, no CPU limit
 	cpuArchive   = "64"    // r7i.16xlarge vCPU; request-only, no CPU limit
@@ -407,19 +407,18 @@ var defaultNodeResourceProfiles = map[string]nodeResourceProfile{
 	roleArchive: {cpuRequest: cpuArchive, memory: memArchive},
 	// Peer discovery only: no block execution, no state commitment, no query
 	// surface. The exception to the "request == the reference instance's full
-	// envelope" rule above — a seed is deliberately small.
+	// envelope" rule above — a seed is deliberately small, and this is RFC 006
+	// Appendix A's figure, which also keeps it on the t-class instances and
+	// inside the cost line that RFC budgets.
 	//
-	// Sized for the concurrent pre-auth handshake burst rather than steady state:
-	// the seed config's connection cap sets how many unauthenticated handshakes
-	// can be in flight at once, and each reads a peer-declared size bounded well
-	// above what a legitimate handshake needs. That burst is live memory, so only
-	// absolute headroom absorbs it, and it lands on top of the full cosmos app
-	// seid builds before dispatching on mode. RFC 006 Appendix A's primary-seed
-	// figure. Bounding that read upstream is what would let this shrink; the
-	// current numbers live in sei-config and sei-tendermint, not here.
-	//
-	// Note this exceeds what a 4 GiB node can schedule once kube/system
-	// reservation is taken, so the seed nodepool provisions the next size up.
+	// Accepted risk while PLT-850 is open: seid's pre-auth handshake read is
+	// bounded far above what a legitimate handshake needs, and the seed's
+	// connection cap scales it, so a remote unauthenticated flood can allocate
+	// well past this footprint. That memory is live, so GOMEMLIMIT cannot reclaim
+	// it and only absolute headroom would absorb it — which no figure in the RFC
+	// provides. Sizing around it would break the instance class and the budget,
+	// so the exposure is tracked upstream rather than bought off here. When
+	// PLT-850 lands this figure carries real headroom.
 	roleSeed: {cpuRequest: cpuSeed, memory: memSeed},
 }
 
