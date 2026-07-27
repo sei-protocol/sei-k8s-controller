@@ -71,16 +71,14 @@ const (
 	memValidator = "128Gi" // full r5.4xlarge envelope; provisioned on the next size up (r5.8xlarge)
 	memRPCClass  = "256Gi" // full r7i.8xlarge envelope (fullNode + replayer); provisioned on r7i.12xlarge
 	memArchive   = "512Gi" // full r7i.16xlarge envelope (verified live prod); provisioned on r7i.24xlarge
-	memSeed      = "4Gi"   // t4g.medium class; sized for the handshake burst, see defaultNodeResourceProfiles
+	memSeed      = "4Gi"   // sized for the pre-auth handshake burst, see defaultNodeResourceProfiles
 	cpuValidator = "16"    // r5.4xlarge vCPU; request-only, no CPU limit
 	cpuRPCClass  = "32"    // r7i.8xlarge vCPU (fullNode + replayer); request-only, no CPU limit
 	cpuArchive   = "64"    // r7i.16xlarge vCPU; request-only, no CPU limit
 	cpuSeed      = "1"     // PEX gossip is light and spiky; request-only, no CPU limit
 
 	// goMemLimitPercentOfLimit is the seed's GOMEMLIMIT as a percentage of its
-	// memory limit. The 13% margin absorbs the non-heap RSS the Go soft limit
-	// does not govern: thread stacks, mmap'd memIAVL pages, and cgo/kernel
-	// allocations. See goMemLimitEnv.
+	// memory limit; the remainder is the non-heap margin. See goMemLimitEnv.
 	goMemLimitPercentOfLimit = 87
 
 	dataDir = platform.DataDir
@@ -409,18 +407,19 @@ var defaultNodeResourceProfiles = map[string]nodeResourceProfile{
 	roleArchive: {cpuRequest: cpuArchive, memory: memArchive},
 	// Peer discovery only: no block execution, no state commitment, no query
 	// surface. The exception to the "request == the reference instance's full
-	// envelope" rule above: a seed targets the ~2 vCPU / 2-4 GiB t-class shape
-	// RFC 006 budgets, and on a node that small the fixed kube/system reservation
-	// is a large fraction of capacity — so the request sits below advertised RAM
-	// rather than equal to it.
+	// envelope" rule above — a seed is deliberately small.
 	//
-	// 4Gi, the top of that range (t4g.medium), because steady state is not what
-	// sizes a seed. sei-config caps the seed at 1000 connections, which sets
-	// maxInbound and with it the concurrent pre-auth handshake count; each of
-	// those reads up to a 1 MiB peer-declared size that no config key bounds. That
-	// burst dwarfs the ~150 MB of live connection state and lands on top of the
-	// full cosmos app seid builds before it dispatches on mode. Lowering the
-	// connection cap or bounding that read upstream would buy 2Gi back.
+	// Sized for the concurrent pre-auth handshake burst rather than steady state:
+	// the seed config's connection cap sets how many unauthenticated handshakes
+	// can be in flight at once, and each reads a peer-declared size bounded well
+	// above what a legitimate handshake needs. That burst is live memory, so only
+	// absolute headroom absorbs it, and it lands on top of the full cosmos app
+	// seid builds before dispatching on mode. RFC 006 Appendix A's primary-seed
+	// figure. Bounding that read upstream is what would let this shrink; the
+	// current numbers live in sei-config and sei-tendermint, not here.
+	//
+	// Note this exceeds what a 4 GiB node can schedule once kube/system
+	// reservation is taken, so the seed nodepool provisions the next size up.
 	roleSeed: {cpuRequest: cpuSeed, memory: memSeed},
 }
 
@@ -488,7 +487,7 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 	// Seeds need their own small pool. Required here rather than in
 	// Config.Validate so a cluster that runs no seeds keeps booting on an
 	// app-config file that predates the key — and so the alternative, silently
-	// scheduling a 2Gi seed onto the RPC-class default pool, is impossible.
+	// scheduling a small seed onto the RPC-class default pool, is impossible.
 	if !servesSeidRPC(node) && p.NodepoolForMode(NodeMode(node)) == "" {
 		return nil, fmt.Errorf("scheduling.nodepoolSeed is not configured in the app-config file; a seed requires a dedicated small-instance nodepool")
 	}
@@ -900,14 +899,27 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 // goMemLimitEnv returns the GOMEMLIMIT env var for a seed's seid container.
 //
 // The Go runtime targets a heap roughly twice the live set and cannot see the
-// cgroup limit, so with memory request==limit an allocation burst is an OOMKill
-// rather than a throttle. A soft limit below the hard cap makes the GC spend CPU
-// to stay resident instead. Scoped to seed: it is the only mode whose footprint
-// (2Gi) is small enough for ordinary GC slack to cross the cap — the r-class
-// modes carry absolute headroom in the tens of GiB.
+// cgroup limit, so with memory request==limit reclaimable growth becomes an
+// OOMKill rather than a throttle. A soft limit below the hard cap makes the GC
+// spend CPU to stay resident instead.
+//
+// What it does and does not cover: it governs churn — buffers allocated and
+// freed at rate, which GOGC alone would let balloon toward twice the live set.
+// It cannot shrink memory that is genuinely live, and it does not account for
+// non-heap RSS at all: thread stacks, cgo allocations, mmap'd memIAVL pages, or
+// the kernel socket buffers a thousand connections charge to the cgroup. The
+// concurrent pre-auth handshake burst that sizes this mode is live memory, so
+// absolute headroom is what defends it — not this limit. The margin below the
+// cap exists for the non-heap share.
+//
+// Scoped to seed as a matter of caution rather than principle: GC slack is
+// proportional to the live set, so any mode with request==limit would benefit.
+// The other modes are tuned and prod-proven, and changing their runtime
+// behaviour is not this change's business.
 //
 // Derived from the resolved limit, so an app-config resources.seed override
-// keeps it consistent. Reports false when no memory limit is set.
+// keeps it consistent. Reports false when no memory limit is set, or when the
+// limit is small enough that the computed soft cap would be useless.
 func goMemLimitEnv(node *seiv1alpha1.SeiNode, res corev1.ResourceRequirements) (corev1.EnvVar, bool) {
 	if servesSeidRPC(node) {
 		return corev1.EnvVar{}, false
@@ -916,7 +928,12 @@ func goMemLimitEnv(node *seiv1alpha1.SeiNode, res corev1.ResourceRequirements) (
 	if !ok {
 		return corev1.EnvVar{}, false
 	}
-	soft := lim.Value() / 100 * goMemLimitPercentOfLimit
+	// Multiply first: the truncation from dividing first is harmless but the
+	// product cannot overflow int64 at any schedulable memory limit.
+	soft := lim.Value() * goMemLimitPercentOfLimit / 100
+	if soft <= 0 {
+		return corev1.EnvVar{}, false
+	}
 	return corev1.EnvVar{Name: "GOMEMLIMIT", Value: fmt.Sprintf("%dB", soft)}, true
 }
 

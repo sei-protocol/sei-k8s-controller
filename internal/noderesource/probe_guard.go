@@ -35,9 +35,14 @@ func ValidateGatedSeidProbes(c corev1.Container) error {
 
 // ValidateSeedProbes is the seed counterpart of the gated-seid contract: a seed's
 // seid container must carry no probe against seid's RPC or gRPC port, since seed
-// mode binds neither for the pod's whole life. A permanently-failing readiness
-// probe holds the pod out of Service endpoints and out of any NLB target group
-// fronting it — leaving the seed unreachable, which is its only job.
+// mode binds neither for the pod's whole life.
+//
+// A probe that can never pass costs the pod its Ready condition permanently. The
+// headless Service sets PublishNotReadyAddresses, so in-cluster DNS still
+// resolves — but anything that gates on readiness does not: an externally-facing
+// load-balancer target group, a rollout waiting on Ready, an operator reading
+// kubectl. A seed exists to be dialed, so silently never becoming Ready is the
+// wrong failure to ship.
 //
 // Readiness is checked here where ValidateGatedSeidProbes skips it: during a hold
 // a failing readiness is correct and temporary, on a seed it is permanent. No-op

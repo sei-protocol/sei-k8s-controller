@@ -227,7 +227,7 @@ func (c Config) NodepoolForMode(mode string) string {
 		return c.NodepoolValidator
 	case modeSeed:
 		// No fallback to NodepoolName: that pool is sized for RPC-class nodes, so
-		// a 2Gi seed landing there costs an order of magnitude more than a seed is
+		// a seed landing there costs an order of magnitude more than a seed is
 		// worth — and karpenter.sh/do-not-disrupt then pins that node against
 		// consolidation for the seed's life. Callers rendering a seed pod must
 		// reject an empty value rather than substitute one; see

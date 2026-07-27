@@ -18,8 +18,8 @@ package v1alpha1
 // (otherwise seid advertises its in-cluster listen address over PEX and every
 // node that learns the seed by gossip gets an unroutable peer), a load balancer
 // and DNS record for TCP 26656 that outlive pod and node churn, and an ingress
-// allowance for that port. The readiness probe cannot detect any of them
-// missing — see readinessProbeForNode.
+// allowance for that port. Nothing detects any of these missing: a seed reads
+// Ready when its P2P port is bound, and nothing more.
 //
 // A seed serves no RPC, so it has no /status and no `catching_up`: sync
 // freshness is not a property a seed has. Monitor it on P2P metrics

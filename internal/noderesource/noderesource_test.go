@@ -2028,7 +2028,7 @@ func TestSeed_GoMemLimitBelowMemoryLimit(t *testing.T) {
 func TestNonSeed_HasNoGoMemLimit(t *testing.T) {
 	g := NewWithT(t)
 
-	sts := mustGenerateStatefulSet(t, newSnapshotNode("rpc-0", "default"), platformtest.Config())
+	sts := mustGenerateStatefulSet(t, newSnapshotNode("rpc-0", testNamespace), platformtest.Config())
 	seid := findContainer(sts.Spec.Template.Spec.Containers, containerNameSeid)
 
 	g.Expect(findEnvVar(seid.Env, "GOMEMLIMIT")).To(BeNil())
@@ -2043,7 +2043,7 @@ func findEnvVar(env []corev1.EnvVar, name string) *corev1.EnvVar {
 	return nil
 }
 
-// The alternative to failing closed is silently scheduling a 2Gi seed onto the
+// The alternative to failing closed is silently scheduling a small seed onto the
 // RPC-class default pool, which costs an order of magnitude more than a seed is
 // worth. Clusters running no seeds are unaffected — the check is per-render, not
 // at startup.
@@ -2056,8 +2056,9 @@ func TestSeed_RenderFailsWithoutSeedNodepool(t *testing.T) {
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("scheduling.nodepoolSeed"))
 
-	// Every other mode still renders on the same config.
-	_, err = GenerateStatefulSet(newSnapshotNode("rpc-0", "default"), cfg)
+	// Every other mode still renders on the same config — the requirement is
+	// per-render, so a cluster running no seeds is unaffected.
+	_, err = GenerateStatefulSet(newSnapshotNode("rpc-0", testNamespace), cfg)
 	g.Expect(err).NotTo(HaveOccurred())
 }
 

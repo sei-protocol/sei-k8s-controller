@@ -60,7 +60,8 @@ func TestSeed_WithSecondMode_Rejected(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("exactly one of"))
 }
 
-// Widening the exactly-one rule must not reject the four pre-existing modes.
+// Widening the exactly-one rule must not reject the pre-existing modes.
+// Replayer is omitted: CEL additionally requires peers for it.
 func TestSeed_OtherModesStillAccepted(t *testing.T) {
 	ns := makeNamespace(t)
 

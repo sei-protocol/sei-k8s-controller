@@ -11,8 +11,8 @@ func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unpa
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "sei-test",
-			Image:   "ghcr.io/sei-protocol/seid:latest",
+			ChainID:   "sei-test",
+			Image:     "ghcr.io/sei-protocol/seid:latest",
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
 		},

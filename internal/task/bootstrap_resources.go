@@ -317,7 +317,7 @@ func bootstrapPVCClaimName(node *seiv1alpha1.SeiNode) string {
 // never reaches the bootstrap-Job path. That invariant is what keeps the default
 // arm from rendering a seed as a full node here — with RPC probes and a
 // cosmos-exporter — and it is also why buildBootstrapPodSpec does not call
-// ValidateSeedProbes. Giving seed a snapshot source would break both silently.
+// ValidateSeedProbes. TestSeedNeverBootstraps pins the invariant.
 func bootstrapNodeMode(node *seiv1alpha1.SeiNode) string {
 	switch {
 	case node.Spec.Archive != nil:
