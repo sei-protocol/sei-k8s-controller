@@ -71,7 +71,7 @@ const (
 	memValidator = "128Gi" // full r5.4xlarge envelope; provisioned on the next size up (r5.8xlarge)
 	memRPCClass  = "256Gi" // full r7i.8xlarge envelope (fullNode + replayer); provisioned on r7i.12xlarge
 	memArchive   = "512Gi" // full r7i.16xlarge envelope (verified live prod); provisioned on r7i.24xlarge
-	memSeed      = "2Gi"   // peer buffers + idle DBs only; see defaultNodeResourceProfiles
+	memSeed      = "4Gi"   // t4g.medium class; sized for the handshake burst, see defaultNodeResourceProfiles
 	cpuValidator = "16"    // r5.4xlarge vCPU; request-only, no CPU limit
 	cpuRPCClass  = "32"    // r7i.8xlarge vCPU (fullNode + replayer); request-only, no CPU limit
 	cpuArchive   = "64"    // r7i.16xlarge vCPU; request-only, no CPU limit
@@ -408,12 +408,19 @@ var defaultNodeResourceProfiles = map[string]nodeResourceProfile{
 	// TF's m7i.8xlarge is stale).
 	roleArchive: {cpuRequest: cpuArchive, memory: memArchive},
 	// Peer discovery only: no block execution, no state commitment, no query
-	// surface. The working set is P2P connection buffers plus the block/state DBs
-	// seid opens and never writes. The exception to the "request == the reference
-	// instance's full envelope" rule above: a seed targets the ~2 vCPU / 2-4 GiB
-	// t-class shape RFC 006 budgets, and on a node that small the fixed
-	// kube/system reservation is a large fraction of capacity — so the request
-	// sits well below advertised RAM rather than equal to it.
+	// surface. The exception to the "request == the reference instance's full
+	// envelope" rule above: a seed targets the ~2 vCPU / 2-4 GiB t-class shape
+	// RFC 006 budgets, and on a node that small the fixed kube/system reservation
+	// is a large fraction of capacity — so the request sits below advertised RAM
+	// rather than equal to it.
+	//
+	// 4Gi, the top of that range (t4g.medium), because steady state is not what
+	// sizes a seed. sei-config caps the seed at 1000 connections, which sets
+	// maxInbound and with it the concurrent pre-auth handshake count; each of
+	// those reads up to a 1 MiB peer-declared size that no config key bounds. That
+	// burst dwarfs the ~150 MB of live connection state and lands on top of the
+	// full cosmos app seid builds before it dispatches on mode. Lowering the
+	// connection cap or bounding that read upstream would buy 2Gi back.
 	roleSeed: {cpuRequest: cpuSeed, memory: memSeed},
 }
 
@@ -669,9 +676,7 @@ func ServicePorts() []corev1.ServicePort {
 	ports := make([]corev1.ServicePort, len(np))
 	for i, p := range np {
 		ports[i] = corev1.ServicePort{Name: p.Name, Port: p.Port, TargetPort: intstr.FromInt32(p.Port), Protocol: corev1.ProtocolTCP}
-		// Literal, not seiconfig.PortNameGRPC: that constant ships in an
-		// unreleased sei-config. Adopt it at the next module bump.
-		if p.Name == "grpc" {
+		if p.Name == seiconfig.PortNameGRPC {
 			h2c := "kubernetes.io/h2c"
 			ports[i].AppProtocol = &h2c
 		}
