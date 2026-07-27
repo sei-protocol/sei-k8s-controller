@@ -317,8 +317,10 @@ func (r *SeiNodeTaskReconciler) markComplete(cr *seiv1alpha1.SeiNodeTask, exec t
 }
 
 // handleFailure resolves an engine-Failed task. For gov kinds it decodes the
-// result to distinguish a committed-but-failed tx and an inclusion-undetermined
-// (pending) result — which is re-checked, not terminal — from a hard failure.
+// result to distinguish a committed-but-failed tx, an inclusion-undetermined
+// (pending) result — re-checked, not terminal — and an unverifiable outcome
+// (terminal; the tx may have committed, so verify out-of-band) from a hard
+// failure.
 func (r *SeiNodeTaskReconciler) handleFailure(cr *seiv1alpha1.SeiNodeTask, exec task.TaskExecution, now time.Time) {
 	msg := ""
 	if e := exec.Err(); e != nil {
@@ -344,6 +346,15 @@ func (r *SeiNodeTaskReconciler) handleFailure(cr *seiv1alpha1.SeiNodeTask, exec 
 			cr.Status.Task.Status = seiv1alpha1.TaskFailed
 			cr.Status.Task.Err = msg
 			r.markFailed(cr, now, "TxFailed", msg)
+			return
+		case wire.InclusionUnverifiable:
+			// Terminal, but distinct from TxFailed: the tx may have committed,
+			// so the reason (and the sidecar message) steer the operator to
+			// verify out-of-band rather than blindly re-run.
+			populateGovOutputs(cr, gr)
+			cr.Status.Task.Status = seiv1alpha1.TaskFailed
+			cr.Status.Task.Err = msg
+			r.markFailed(cr, now, "InclusionUnverifiable", msg)
 			return
 		}
 	}

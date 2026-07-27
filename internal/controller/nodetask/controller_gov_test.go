@@ -120,6 +120,40 @@ func TestReconcile_GovUpgrade_CommittedFailed(t *testing.T) {
 	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.TxHash).To(Equal("ABC"))
 }
 
+// A gov Failed carrying inclusionStatus=unverifiable (the target node's tx
+// index is off, so inclusion is unobservable) is terminal and distinct from
+// TxFailed: outputs are still populated and the reason names the unverifiable
+// state so the operator knows to verify via an indexed RPC.
+func TestReconcile_GovUpgrade_Unverifiable(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	fakeSC := newFakeSidecarClient()
+	r, c := newReconcilerWithSidecar(t, time.Now(), fakeSC, newGovUpgradeTask(), newRunningNode())
+
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	taskID, _ := uuid.Parse(getTask(t, ctx, c).Status.Task.ID)
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	fakeSC.setResultPayload(taskID, sidecar.Failed, "inclusion unverifiable",
+		json.RawMessage(`{"txHash":"ABC","inclusionStatus":"unverifiable"}`))
+
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	g.Expect(failedReasonOf(got)).To(Equal("InclusionUnverifiable"))
+	// Not success: no Ready latch (the tx outcome is unknown, not confirmed).
+	g.Expect(readyReasonOf(got)).To(Equal(""))
+	// txHash is surfaced for the operator's out-of-band check, but height and
+	// proposalId are genuinely unknown → omitted (zero), never asserted as 0.
+	g.Expect(got.Status.Outputs).NotTo(BeNil())
+	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.TxHash).To(Equal("ABC"))
+	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.Height).To(BeZero())
+	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.ProposalID).To(BeZero())
+}
+
 func TestReconcile_GovUpgrade_Pending_ReSubmits(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
