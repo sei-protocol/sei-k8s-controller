@@ -11,8 +11,8 @@ func newGenesisNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unpa
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID:   "sei-test",
-			Image:     "ghcr.io/sei-protocol/seid:latest",
+			ChainID:   defaultTestChainID,
+			Image:     defaultTestNodeImage,
 			Validator: &seiv1alpha1.ValidatorSpec{},
 			Sidecar:   &seiv1alpha1.SidecarConfig{Port: 7777},
 		},
@@ -23,8 +23,8 @@ func newSnapshotNode(name, namespace string) *seiv1alpha1.SeiNode { //nolint:unp
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "sei-test",
-			Image:   "ghcr.io/sei-protocol/seid:latest",
+			ChainID: defaultTestChainID,
+			Image:   defaultTestNodeImage,
 			FullNode: &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{
 					S3: &seiv1alpha1.S3SnapshotSource{
