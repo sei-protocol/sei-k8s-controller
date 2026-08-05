@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -318,6 +319,11 @@ var suitesStarted atomic.Int64
 // bounds only the zero-match case; positive proof that every expected suite ran
 // is a completion-count SLI owned by the metrics layer, not this binary.
 func TestMain(m *testing.M) {
+	if msg := staleSeidImages(time.Now().UTC()); msg != "" {
+		fmt.Fprintln(os.Stderr, msg)
+		os.Exit(1)
+	}
+
 	code := m.Run()
 	if code == 0 && os.Getenv("SEI_NODE_CLUSTER") != "" && suitesStarted.Load() == 0 {
 		fmt.Fprintln(os.Stderr, "integration guard: -test.run selected zero suites against a live cluster — "+
@@ -352,6 +358,67 @@ func openClient(ctx context.Context, t *testing.T) *sei.Client {
 		t.Fatalf("open sei SDK (k8s): %v", err)
 	}
 	return c
+}
+
+// seidImageEnvVars are the image inputs Flux's image automation advances. The
+// upgrade-suite images are deliberately absent: they pin specific commits, carry
+// no date, and must not be read as stale.
+var seidImageEnvVars = []string{"SEID_IMAGE", "SEID_IMAGE_MOCK", "SEID_IMAGE_CHAOS"}
+
+// nightlyTagDate extracts the date from a nightly tag. The alternation mirrors the
+// three filterTags patterns in the platform repo's
+// clusters/harbor/flux-system/image-automation.yaml; a tag shape added there needs
+// adding here, or its image silently stops being freshness-checked. A tag that does
+// not match — a pinned commit SHA, a local build — is skipped rather than failed,
+// which is what keeps this from firing on the upgrade images or on a developer
+// pointing the suite at their own build.
+var nightlyTagDate = regexp.MustCompile(
+	`:(?:mock-|mock_chain_validation-mock_balances-)?nightly-([0-9]{8})-[0-9a-f]{7}$`)
+
+// seidImageMaxAge is how far behind the image under test may fall before the run is
+// refused. The bump lands about 01:40 UTC and the suite runs at 08:00, so a healthy
+// image is hours old; 36h tolerates one skipped upstream build without tolerating a
+// stopped pipeline. Override with SEID_IMAGE_MAX_AGE_HOURS.
+const seidImageMaxAge = 36 * time.Hour
+
+// staleSeidImages returns a diagnostic if any image input carries a nightly tag
+// older than the budget, and "" if every one is fresh, unset, or not nightly-tagged.
+// A stalled image bump otherwise reads as a green suite against an old build, since
+// nothing downstream distinguishes that from a healthy run.
+//
+// The date comes from the tag, which the selecting ImagePolicy guarantees carries
+// one, so this needs no registry call, no cluster read and no added RBAC. Local runs
+// are exempt: without SEI_NODE_CLUSTER every suite skips anyway.
+func staleSeidImages(now time.Time) string {
+	if os.Getenv("SEI_NODE_CLUSTER") == "" {
+		return ""
+	}
+	maxAge := seidImageMaxAge
+	if h, err := strconv.Atoi(os.Getenv("SEID_IMAGE_MAX_AGE_HOURS")); err == nil && h > 0 {
+		maxAge = time.Duration(h) * time.Hour
+	}
+	var stale []string
+	for _, key := range seidImageEnvVars {
+		m := nightlyTagDate.FindStringSubmatch(os.Getenv(key))
+		if m == nil {
+			continue
+		}
+		built, err := time.Parse("20060102", m[1])
+		if err != nil {
+			continue
+		}
+		if age := now.Sub(built); age > maxAge {
+			stale = append(stale, fmt.Sprintf("  %s is %s old (%s)", key, age.Round(time.Hour), os.Getenv(key)))
+		}
+	}
+	if len(stale) == 0 {
+		return ""
+	}
+	return "integration guard: refusing to run against a stale sei-chain image — the image bump is stuck, " +
+		"not the chain. Every suite would pass and report green on a build nobody has advanced.\n" +
+		strings.Join(stale, "\n") +
+		"\nCheck Flux's harbor image automation and whether its bump PR merged: " +
+		"`flux get image update -n flux-system` and any open flux-image-updates PR."
 }
 
 // envOr returns the env var or a fallback (for local runs).
