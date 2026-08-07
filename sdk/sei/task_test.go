@@ -76,6 +76,41 @@ func TestValidateTaskSpec(t *testing.T) {
 			},
 			false,
 		},
+		{
+			"config-patch valid",
+			func(s *TaskSpec) {
+				s.Kind = TaskConfigPatch
+				s.GovSoftwareUpgrade = nil
+				s.ConfigPatch = &ConfigPatch{Overrides: map[string]string{"giga_executor.enabled": "false"}}
+			},
+			false,
+		},
+		{
+			"config-patch empty overrides",
+			func(s *TaskSpec) {
+				s.Kind = TaskConfigPatch
+				s.GovSoftwareUpgrade = nil
+				s.ConfigPatch = &ConfigPatch{Overrides: map[string]string{}}
+			},
+			true,
+		},
+		{
+			"config-patch disallowed key",
+			func(s *TaskSpec) {
+				s.Kind = TaskConfigPatch
+				s.GovSoftwareUpgrade = nil
+				s.ConfigPatch = &ConfigPatch{Overrides: map[string]string{"evm.http_port": "8545"}}
+			},
+			true,
+		},
+		{
+			"config-patch missing payload",
+			func(s *TaskSpec) {
+				s.Kind = TaskConfigPatch
+				s.GovSoftwareUpgrade = nil
+			},
+			true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

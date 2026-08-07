@@ -106,6 +106,22 @@ spec:
                 required:
                 - targetHeight
                 type: object
+              configPatch:
+                description: ConfigPatch is the payload for kind=ConfigPatch.
+                properties:
+                  overrides:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Overrides maps dotted sei-config keys (the same operator-facing schema as
+                      SeiNodeSpec.Overrides, e.g. "giga_executor.enabled": "false") to their
+                      desired string values. Values are coerced to each field's registered type
+                      (bool/int/…) when rendered to TOML. At least one entry is required.
+                    minProperties: 1
+                    type: object
+                required:
+                - overrides
+                type: object
               govParamChange:
                 description: GovParamChange is the payload for kind=GovParamChange.
                 properties:
@@ -338,6 +354,7 @@ spec:
                 - AwaitNodesAtHeight
                 - RestartSeid
                 - MarkReady
+                - ConfigPatch
                 type: string
               markReady:
                 description: MarkReady is the payload for kind=MarkReady.
@@ -416,12 +433,12 @@ spec:
             x-kubernetes-validations:
             - message: exactly one of govSoftwareUpgrade, govVote, govParamChange,
                 awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid,
-                or markReady must be set
+                markReady, or configPatch must be set
               rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
                 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.awaitCondition)
                 ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight)
                 ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady)
-                ? 1 : 0) == 1'
+                ? 1 : 0) + (has(self.configPatch) ? 1 : 0) == 1'
             - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
               rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
             - message: spec.govVote is required when kind=GovVote
@@ -438,6 +455,12 @@ spec:
               rule: self.kind != 'RestartSeid' || has(self.restartSeid)
             - message: spec.markReady is required when kind=MarkReady
               rule: self.kind != 'MarkReady' || has(self.markReady)
+            - message: spec.configPatch is required when kind=ConfigPatch
+              rule: self.kind != 'ConfigPatch' || has(self.configPatch)
+            - message: spec.configPatch.overrides only admits allowlisted runtime-safe
+                keys (chain.occ_enabled, giga_executor.*, mempool.*)
+              rule: '!has(self.configPatch) || self.configPatch.overrides.all(k, k
+                == ''chain.occ_enabled'' || k.startsWith(''giga_executor.'') || k.startsWith(''mempool.''))'
             - message: spec.kind is immutable
               rule: self.kind == oldSelf.kind
           status:

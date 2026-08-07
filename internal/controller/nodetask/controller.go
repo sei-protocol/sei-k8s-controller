@@ -64,6 +64,10 @@ const (
 	// sidecar SIGTERMs seid (up to ~90s graceful), then polls seid's RPC back up.
 	defaultRestartSeidTimeout = 10 * time.Minute
 	defaultMarkReadyTimeout   = 2 * time.Minute
+	// defaultConfigPatchTimeout bounds a config-patch: a quick TOML merge-and-
+	// write on the sidecar. A generous 2m guards against a wedged sidecar
+	// pinning the task unbounded, while leaving ample room for the write + poll.
+	defaultConfigPatchTimeout = 2 * time.Minute
 )
 
 // resultRequeueImmediate mirrors planner.ResultRequeueImmediate without
@@ -376,6 +380,8 @@ func effectiveTimeout(cr *seiv1alpha1.SeiNodeTask) time.Duration {
 		return defaultRestartSeidTimeout
 	case seiv1alpha1.SeiNodeTaskKindMarkReady:
 		return defaultMarkReadyTimeout
+	case seiv1alpha1.SeiNodeTaskKindConfigPatch:
+		return defaultConfigPatchTimeout
 	default:
 		return 0
 	}

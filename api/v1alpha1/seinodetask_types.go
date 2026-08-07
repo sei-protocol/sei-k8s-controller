@@ -7,7 +7,7 @@ import (
 
 // SeiNodeTaskKind discriminates the SeiNodeTask spec union. Exactly one of
 // the matching payload sub-structs in SeiNodeTaskSpec must be set.
-// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;GovParamChange;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;RestartSeid;MarkReady
+// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;GovParamChange;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;RestartSeid;MarkReady;ConfigPatch
 type SeiNodeTaskKind string
 
 const (
@@ -68,6 +68,32 @@ const (
 	// accepts the request, a beat before /v0/healthz serves 200. Gate on the node
 	// actually serving with a following AwaitCondition/AwaitNodesAtHeight step.
 	SeiNodeTaskKindMarkReady SeiNodeTaskKind = "MarkReady"
+
+	// SeiNodeTaskKindConfigPatch applies an incremental config patch to the target
+	// node's on-disk config via the sidecar's config-apply task. The payload uses
+	// the SAME operator-facing dotted sei-config key schema as SeiNodeSpec.Overrides
+	// (e.g. "giga_executor.enabled"); the sidecar's sei-config resolver reads the
+	// current on-disk config, applies the overrides (registry-aware, covering every
+	// registered key), and re-renders config.toml / app.toml — so rendering is
+	// correct-by-construction, not a controller-side render table.
+	//
+	// PATCHING ONLY — this kind does NOT restart seid or reload config. seid
+	// re-reads config.toml/app.toml only on (re)start, so a caller composes a
+	// following RestartSeid (in-place seid bounce) or StateSync/re-bootstrap step
+	// to make the change take effect. Completion = the sidecar acks the patch
+	// written to disk (idempotent: re-running rewrites the same keys).
+	//
+	// Scope is a fail-closed ALLOWLIST (see ConfigPatchPayload.Overrides): only
+	// runtime-safe toggles are permitted, and keys the controller re-asserts on
+	// its own update plans (p2p peers/external-address, genesis/state-sync-managed
+	// keys) are rejected — a patch to those would be silently clobbered by the
+	// next SeiNode update plan.
+	//
+	// Wiring note: this kind maps to sidecar.TaskTypeConfigApply (incremental dotted
+	// intent), NOT sidecar.TaskTypeConfigPatch. The latter drives the separate
+	// ConfigPatchTask{Files} file-tree task used by the StateSync migration path; do
+	// not rewire this kind to it.
+	SeiNodeTaskKindConfigPatch SeiNodeTaskKind = "ConfigPatch"
 )
 
 // SeiNodeTaskPhase is the high-level lifecycle state of a SeiNodeTask.
@@ -112,7 +138,7 @@ const (
 // Field names locked at v1alpha1 — see https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task-lld.md
 // (PR sei-protocol/sei-k8s-controller#277).
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, govParamChange, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) + (has(self.configPatch) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, govParamChange, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, markReady, or configPatch must be set"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)",message="spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovVote' || has(self.govVote)",message="spec.govVote is required when kind=GovVote"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovParamChange' || has(self.govParamChange)",message="spec.govParamChange is required when kind=GovParamChange"
@@ -121,6 +147,8 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)",message="spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartSeid' || has(self.restartSeid)",message="spec.restartSeid is required when kind=RestartSeid"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'MarkReady' || has(self.markReady)",message="spec.markReady is required when kind=MarkReady"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'ConfigPatch' || has(self.configPatch)",message="spec.configPatch is required when kind=ConfigPatch"
+// +kubebuilder:validation:XValidation:rule="!has(self.configPatch) || self.configPatch.overrides.all(k, k == 'chain.occ_enabled' || k.startsWith('giga_executor.') || k.startsWith('mempool.'))",message="spec.configPatch.overrides only admits allowlisted runtime-safe keys (chain.occ_enabled, giga_executor.*, mempool.*)"
 // +kubebuilder:validation:XValidation:rule="self.kind == oldSelf.kind",message="spec.kind is immutable"
 type SeiNodeTaskSpec struct {
 	// Kind selects the task implementation. Immutable after creation.
@@ -175,6 +203,10 @@ type SeiNodeTaskSpec struct {
 	// MarkReady is the payload for kind=MarkReady.
 	// +optional
 	MarkReady *MarkReadyPayload `json:"markReady,omitempty"`
+
+	// ConfigPatch is the payload for kind=ConfigPatch.
+	// +optional
+	ConfigPatch *ConfigPatchPayload `json:"configPatch,omitempty"`
 }
 
 // SeiNodeTaskTarget identifies the single SeiNode this task operates on.
@@ -444,6 +476,41 @@ type RestartSeidPayload struct{}
 // target sidecar's in-process readiness flag so /v0/healthz serves 200. See the
 // SeiNodeTaskKindMarkReady doc comment for the use case.
 type MarkReadyPayload struct{}
+
+// ConfigPatchPayload is the payload for kind=ConfigPatch — a set of dotted
+// sei-config key overrides to merge-patch into the target node's on-disk config.
+//
+// VALUE CONTRACT — THE ALLOWLIST (fail-closed; keep in sync across the three
+// enforcement points below). Only these runtime-safe toggle families are
+// admitted; everything else is rejected:
+//
+//	chain.occ_enabled   — OCC concurrency toggle
+//	giga_executor.*      — v2 (giga) executor toggles, incl. giga_executor.enabled
+//	mempool.*            — mempool sizing/TTL toggles
+//
+// Deliberately EXCLUDED (the controller re-asserts these on its own SeiNode
+// update plans, so a patch here would be silently clobbered): p2p peers
+// (network.p2p.persistent_peers), p2p.external-address, and genesis /
+// state-sync-managed keys.
+//
+// The allowlist is pure allow/deny POLICY on key prefixes, not a renderer:
+// sei-config resolves and renders every registered key on the node, but only
+// these families are safe to patch out-of-band. Enforcement is layered:
+// (1) a coarse family-level CEL rule on SeiNodeTaskSpec rejects out-of-family
+// keys at admission; (2) the controller re-enforces the same allowlist policy
+// when it synthesizes the config-apply task, and the sidecar's sei-config
+// resolver additionally rejects unknown fields and type-mismatched values;
+// (3) the SDK re-checks family membership client-side for a fast clean error.
+// Widening this allowlist is a value-contract change — review the three points
+// together.
+type ConfigPatchPayload struct {
+	// Overrides maps dotted sei-config keys (the same operator-facing schema as
+	// SeiNodeSpec.Overrides, e.g. "giga_executor.enabled": "false") to their
+	// desired string values. Values are coerced to each field's registered type
+	// (bool/int/…) when rendered to TOML. At least one entry is required.
+	// +kubebuilder:validation:MinProperties=1
+	Overrides map[string]string `json:"overrides"`
+}
 
 // ---------------------------------------------------------------------------
 // Status

@@ -28,6 +28,7 @@ const (
 	TaskGovVote            = "GovVote"
 	TaskAwaitNodesAtHeight = "AwaitNodesAtHeight"
 	TaskUpdateNodeImage    = "UpdateNodeImage"
+	TaskConfigPatch        = "ConfigPatch"
 )
 
 // Vote options for GovVote.Option (gov v1beta1 VoteOption parse rules).
@@ -68,6 +69,7 @@ type TaskSpec struct {
 	GovVote            *GovVote
 	AwaitNodesAtHeight *AwaitNodesAtHeight
 	UpdateNodeImage    *UpdateNodeImage
+	ConfigPatch        *ConfigPatch
 }
 
 // GovSoftwareUpgrade is the payload for TaskGovSoftwareUpgrade — submit an
@@ -134,6 +136,27 @@ type AwaitNodesAtHeight struct {
 // at RequirePhaseTimeout.
 type UpdateNodeImage struct {
 	Image string // desired seid image (with tag/digest)
+}
+
+// ConfigPatch is the payload for TaskConfigPatch — apply an incremental config
+// patch to the target node's on-disk config via the sidecar's sei-config
+// resolver, which reads the current config and patches only the given keys.
+// Overrides uses the operator-facing dotted sei-config key schema (the same as
+// SeiNodeSpec.Overrides), e.g. {"giga_executor.enabled": "false"}, and is
+// limited to an allowlisted set of runtime-safe toggles. At least one entry is
+// required.
+//
+// PATCHING ONLY: this does not restart or reload seid. seid re-reads its config
+// only on (re)start, so a caller composes a following RestartSeid (in-place seid
+// bounce) or a StateSync/re-bootstrap step to make the change take effect.
+//
+// Scope is a fail-closed allowlist — only chain.occ_enabled, giga_executor.*,
+// and mempool.* keys are admitted (the controller re-asserts p2p/genesis/state-
+// sync keys on its own plans, so patching those would be silently clobbered).
+// The SDK rejects out-of-allowlist keys client-side; the controller is the
+// authoritative gate.
+type ConfigPatch struct {
+	Overrides map[string]string
 }
 
 // TaskOutputs carries a completed task's typed results. A nil sub-field means
@@ -251,6 +274,9 @@ func validateTaskSpec(s TaskSpec) error {
 	if s.UpdateNodeImage != nil {
 		set++
 	}
+	if s.ConfigPatch != nil {
+		set++
+	}
 	if set != 1 {
 		return usageErr("TaskSpec requires exactly one payload set, got %d", set)
 	}
@@ -274,10 +300,35 @@ func validateTaskSpec(s TaskSpec) error {
 		if s.UpdateNodeImage == nil {
 			return usageErr("TaskSpec.Kind %q requires UpdateNodeImage payload", s.Kind)
 		}
+	case TaskConfigPatch:
+		if s.ConfigPatch == nil {
+			return usageErr("TaskSpec.Kind %q requires ConfigPatch payload", s.Kind)
+		}
+		if len(s.ConfigPatch.Overrides) == 0 {
+			return usageErr("ConfigPatch.Overrides must have at least one entry")
+		}
+		for k := range s.ConfigPatch.Overrides {
+			if !configPatchKeyAllowed(k) {
+				return usageErr("ConfigPatch.Overrides key %q is not in the runtime-safe allowlist (chain.occ_enabled, giga_executor.*, mempool.*)", k)
+			}
+		}
 	default:
 		return usageErr("TaskSpec.Kind %q is not supported by the SDK", s.Kind)
 	}
 	return nil
+}
+
+// configPatchKeyAllowed reports whether a dotted sei-config override key is in
+// the ConfigPatch runtime-safe allowlist. This is the coarse client-side gate
+// (family membership) mirroring the CRD's CEL rule; the controller re-enforces
+// the same allowlist policy, and the sidecar's sei-config resolver additionally
+// rejects unknown fields and type-mismatched values. Keep this family list in
+// sync with the CEL rule on SeiNodeTaskSpec and
+// internal/task.configPatchKeyAllowed — it is a value contract.
+func configPatchKeyAllowed(key string) bool {
+	return key == "chain.occ_enabled" ||
+		strings.HasPrefix(key, "giga_executor.") ||
+		strings.HasPrefix(key, "mempool.")
 }
 
 // validVoteOption reports whether opt is an option the CRD's vote enum accepts
