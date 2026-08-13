@@ -86,3 +86,38 @@ func TestUnauthenticatedIsTheZeroValue(t *testing.T) {
 			server.AuthnModeUnauthenticated)
 	}
 }
+
+// The flag's Required only checks that a value was supplied, and SEI_HOME=""
+// supplies one. Before validateHome existed, an empty value started the sidecar
+// and it created config/, data/ and sidecar.db relative to its working
+// directory — a running, probe-passing sidecar operating off the data volume.
+func TestValidateHome(t *testing.T) {
+	cases := []struct {
+		name    string
+		home    string
+		wantErr bool
+	}{
+		{name: "empty is refused", home: "", wantErr: true},
+		{name: "whitespace-only is refused", home: "   ", wantErr: true},
+		{name: "tab is refused", home: "\t", wantErr: true},
+		{name: "a real path is accepted", home: "/home/nonroot/.sei", wantErr: false},
+		{name: "a relative path is accepted — odd but the operator's choice", home: "sei", wantErr: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateHome(tc.home)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected a refusal, got nil")
+				}
+				if !strings.Contains(err.Error(), "SEI_HOME") {
+					t.Errorf("error should name SEI_HOME; got %q", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("expected nil, got %v", err)
+			}
+		})
+	}
+}

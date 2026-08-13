@@ -101,6 +101,8 @@ The controller image is built and pushed to ECR by GitHub Actions on every push 
 
 **Deployment ordering**: When adding new environment variables to the sidecar, the controller must be deployed first — it injects env vars into pod specs. If the sidecar image is updated before the controller, existing pods will crash because they lack the new env vars. The safe sequence is: (1) deploy the controller, (2) then update the sidecar image in SeiNode specs.
 
+That ordering holds only for *additive* env vars. It does **not** hold for a change to the sidecar's entrypoint or binary name: the controller renders no `Command`, so the image's ENTRYPOINT is the command, and the two must move together. Split apart, the container prints help and exits 0 in a restart loop while seid waits on `/v0/healthz` behind a `FailureThreshold: 86400` probe — silent for roughly five days. See CLAUDE.md, "The sidecar binary".
+
 The `config/` directory follows the standard [Kubebuilder](https://book.kubebuilder.io) layout:
 
 ```

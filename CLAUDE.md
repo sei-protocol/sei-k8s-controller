@@ -26,7 +26,13 @@ Two checks keep the controller tidyable, both in `make ci`. The `depguard` rule 
 
 ### The sidecar binary
 
-`sidecar/main.go` → `sei-sidecar`, published to ECR as `sei/sei-sidecar`. The image also installs a `seictl` symlink because the controller renders `Command: []string{"seictl", "serve"}` into every pod spec (`internal/noderesource/`, `internal/task/bootstrap_resources.go`). Controller and sidecar images roll independently, so a rename without the shim has no safe ordering — and the failure is silent, not loud: seid blocks on a shell loop polling `/v0/healthz` behind a StartupProbe with `FailureThreshold: 86400` at 5s. Remove the shim only after the controller stops rendering `Command` and every cell has rolled past that controller.
+`sidecar/main.go` → `sei-sidecar`, published to ECR as `sei/sei-sidecar`. The controller renders **no `Command`** for the sidecar container (`internal/noderesource/`, `internal/task/bootstrap_resources.go`), so the image's ENTRYPOINT — `sei-sidecar serve` — is what runs. The image owns its entrypoint; renaming the binary is an image-only change.
+
+**Changing the sidecar image is a coordinated deploy.** The image, `images.sidecar` in the platform app-config, and the controller ship together per cell. `images.sidecar` is read once at startup, so a config edit alone does nothing until the controller restarts — and the two halves failing apart is silent, not loud. A controller that renders no `Command` against an image whose entrypoint lacks the subcommand gets a container that prints help and exits 0, restarting forever under `restartPolicy: Always`, while seid blocks on a shell loop polling `/v0/healthz` behind a StartupProbe with `FailureThreshold: 86400` at 5s — about five days before Kubernetes calls it failed.
+
+The rollout is controller-driven, not Kubernetes-driven: StatefulSets use `UpdateStrategy: OnDelete`, so a template change never touches a live pod. Sidecar-image drift builds a NodeUpdate plan whose `replace-pod` task deletes pods at the old revision, for **every** node whose `status.currentSidecarImage` is set. Expect the whole cell to roll.
+
+`spec.sidecar.image` still overrides `images.sidecar` per node. Pin only images whose entrypoint matches what the controller renders.
 
 Two startup refusals in `sidecar/` are load-bearing; do not soften them into defaults:
 
