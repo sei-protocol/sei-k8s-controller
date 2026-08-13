@@ -33,17 +33,32 @@ COPY --from=build /go/bin/sei-sidecar /usr/bin/sei-sidecar
 
 # Compatibility shim, deliberately temporary. The controller renders
 # `Command: []string{"seictl", "serve"}` into every SeiNode pod spec
-# (internal/noderesource/noderesource.go, internal/task/bootstrap_resources.go).
-# Controller rollouts and sidecar-image rollouts are independent, so a binary
-# rename with no shim has no safe ordering: an old controller against a new
-# image fails to find `seictl`, and a new controller against an old image fails
-# to find the new name. Either way the pod does not crash loudly — the seid
-# container blocks on a shell loop polling /v0/healthz behind a StartupProbe
-# with FailureThreshold 86400 at 5s, so it hangs for days instead of alerting.
+# (internal/noderesource/noderesource.go, internal/task/bootstrap_resources.go),
+# and a pod spec's `command` overrides ENTRYPOINT outright — so without this
+# name the container cannot start at all.
 #
-# With the shim, adopting this image is a pure `images.sidecar` reference
-# change. Remove it only after the controller stops rendering `Command` (letting
-# this ENTRYPOINT decide) and every cell has rolled past that controller.
+# The rename cannot be done in lockstep, which is why the shim exists rather
+# than a coordinated cutover. The sidecar image is chosen per node by
+# `spec.sidecar.image` when set (noderesource.go, sidecarImage), and that
+# overrides the platform config's images.sidecar — every SeiNode sample in
+# manifests/samples pins it. So a controller that rendered the new name would
+# break every node carrying a pinned older image, and no config rollout reaches
+# those; each CR would have to change in the same instant as the controller
+# deploy. The failure is also quiet: the seid container blocks on a shell loop
+# polling /v0/healthz behind a StartupProbe with FailureThreshold 86400 at 5s,
+# so a broken sidecar hangs for days rather than alerting.
+#
+# With both names present, adoption is a per-node image reference change at any
+# pace. Retire the shim in three steps, each safe alone:
+#
+#  1. this image reaches every cell;
+#  2. the controller stops rendering `Command` (or renders sei-sidecar) — by
+#     then every image answers to either name;
+#  3. delete this COPY.
 COPY --from=build /go/bin/sei-sidecar /usr/bin/seictl
 
-ENTRYPOINT ["/usr/bin/sei-sidecar"]
+# `serve` belongs in the ENTRYPOINT, not left to the pod spec. Step 2 above
+# removes `Command`, and a bare `sei-sidecar` with no subcommand prints help and
+# exits 0 — a container that restarts forever while reporting success, which is
+# worse than a crash. Naming the subcommand here makes step 2 a pure deletion.
+ENTRYPOINT ["/usr/bin/sei-sidecar", "serve"]
