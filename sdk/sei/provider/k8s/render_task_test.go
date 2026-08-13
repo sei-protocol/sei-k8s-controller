@@ -5,7 +5,6 @@ import (
 	"time"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 

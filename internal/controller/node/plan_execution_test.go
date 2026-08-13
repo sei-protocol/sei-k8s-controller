@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
 	seiconfig "github.com/sei-protocol/sei-config"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,6 +25,7 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 const (

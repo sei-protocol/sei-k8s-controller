@@ -26,12 +26,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	"github.com/sei-protocol/seictl/sidecar/wire"
-
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 const (

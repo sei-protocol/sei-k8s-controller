@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	seiconfig "github.com/sei-protocol/sei-config"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	"go.opentelemetry.io/otel/metric"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -22,6 +21,7 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 const unknownValue = "unknown"

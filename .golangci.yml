@@ -5,6 +5,7 @@ linters:
   default: none
   enable:
     - bodyclose
+    - depguard
     - copyloopvar
     - dupl
     - errcheck
@@ -25,6 +26,35 @@ linters:
     - unparam
     - unused
   settings:
+    depguard:
+      rules:
+        # sidecarapi is the sidecar's wire contract, imported by the controller,
+        # the sidecar module, and the seictl CLI. Only the sidecar module may
+        # carry the sei-chain graph.
+        #
+        # `go mod tidy` walks the test closure of every package the main module
+        # imports, so a test-only import of a heavy package here — even from a
+        # _test.go file — makes the controller un-tidyable: sei-cosmos requires
+        # gogo/protobuf v1.3.3, which exists only in the regen-network fork, and
+        # a dependency module's replace directive is ignored. That is exactly how
+        # this broke once before (seictl#238 added such an import to a test).
+        contract-stays-light:
+          list-mode: lax
+          files:
+            - "**/sidecarapi/**"
+          deny:
+            - pkg: github.com/sei-protocol/sei-chain
+              desc: the chain graph belongs to the sidecar module; a test needing both sides of the wire boundary belongs there
+            # Trailing slash matters: `pkg` is a prefix match, and without it
+            # this also denies sidecarapi/* itself.
+            - pkg: github.com/sei-protocol/sei-k8s-controller/sidecar/
+              desc: the contract must not import its own implementation; the sidecar module imports this one, never the reverse
+            - pkg: github.com/cosmos/cosmos-sdk
+              desc: chain graph
+            - pkg: github.com/cometbft
+              desc: chain graph
+            - pkg: github.com/gogo/protobuf
+              desc: chain graph, and only resolvable through the regen-network replace
     revive:
       rules:
         - name: comment-spacings
@@ -46,6 +76,19 @@ linters:
           - dupl
           - lll
         path: sdk/*
+      - linters:
+          - dupl
+          - lll
+        path: sidecarapi/*
+      # goconst flags the JSON keys inside the request-params maps — chainId,
+      # keyName, fees, gas, title, initialDeposit, address. Those literals are
+      # the wire contract: reading a params map and seeing the JSON it produces
+      # is the property that makes the client reviewable against the server's
+      # struct tags. Hoisting them into constants would trade that away for a
+      # DRY score. The remaining hits are test fixtures (1usei, config.toml).
+      - linters:
+          - goconst
+        path: sidecarapi/client/*
     paths:
       - third_party$
       - builtin$

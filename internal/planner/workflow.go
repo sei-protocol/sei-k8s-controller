@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // Task-type strings for the three new sidecar tasks the StateSync recipe

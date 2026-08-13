@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
-
 	_ "github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider/docker"
 	_ "github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider/k8s"
 )

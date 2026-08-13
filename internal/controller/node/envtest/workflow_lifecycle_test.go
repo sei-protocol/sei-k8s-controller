@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,6 +23,7 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // fakeSidecar is a controllable task.SidecarClient: every submitted task

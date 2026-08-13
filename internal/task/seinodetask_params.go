@@ -5,9 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
-
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // SeiNodeTaskParams holds a synthesized task type and its payload. The caller

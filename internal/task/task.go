@@ -11,12 +11,12 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // taskIDNamespace is a fixed UUID v5 namespace for generating deterministic

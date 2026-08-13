@@ -14,7 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // StubSidecarClient satisfies internal/task.SidecarClient (the narrow,

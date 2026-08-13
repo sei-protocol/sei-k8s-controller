@@ -9,6 +9,10 @@ ARG TARGETARCH
 WORKDIR /workspace
 COPY go.mod go.mod
 COPY go.sum go.sum
+# sidecarapi is resolved through a filesystem `replace`, so its manifests must
+# exist before the prefetch. See the same copy in the root Dockerfile.
+COPY sidecarapi/go.mod sidecarapi/go.mod
+COPY sidecarapi/go.sum sidecarapi/go.sum
 RUN go mod download
 
 COPY . .

@@ -18,7 +18,6 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider"
 )

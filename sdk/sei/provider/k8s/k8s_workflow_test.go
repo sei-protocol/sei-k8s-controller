@@ -11,7 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
-
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 

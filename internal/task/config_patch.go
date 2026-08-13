@@ -1,7 +1,7 @@
 package task
 
 import (
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // ConfigPatchTask stamps controller-owned TOML keys into named seid

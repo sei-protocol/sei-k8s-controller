@@ -9,6 +9,13 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One job per Go module. golangci-lint resolves packages with Go
+        # patterns, which stop at a nested module boundary — a root-only run
+        # would never lint sidecarapi/ and would pass while it was broken.
+        module: [".", "sidecarapi"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,9 +24,25 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.1
+          working-directory: ${{ matrix.module }}
           # Temporary override — pre-existing lint debt surfaced by the
           # v2.8.0 → v2.12.1 bump. Tracked in #163; remove once paid down.
           only-new-issues: true
+
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Every module must be tidy. Without this, the failure mode that
+      # motivated sidecarapi is invisible in CI: `go build` succeeds while
+      # `go mod tidy` cannot resolve the graph at all.
+      - run: make tidy-check
 
   test:
     runs-on: ubuntu-latest
