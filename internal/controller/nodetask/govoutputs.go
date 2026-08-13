@@ -3,10 +3,9 @@ package nodetask
 import (
 	"encoding/json"
 
-	"github.com/sei-protocol/seictl/sidecar/wire"
-
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 // resulter is the optional accessor sidecarExecution implements to surface the

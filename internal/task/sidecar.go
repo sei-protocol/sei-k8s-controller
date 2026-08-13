@@ -7,8 +7,9 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // sidecarExecution is a generic TaskExecution backed by the sidecar HTTP API.

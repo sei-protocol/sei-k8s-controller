@@ -2,7 +2,8 @@ package task
 
 import (
 	seiconfig "github.com/sei-protocol/sei-config"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
+
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // configApplyTask satisfies sidecar.TaskBuilder for config-apply. The

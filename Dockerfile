@@ -5,6 +5,12 @@ ARG TARGETARCH
 WORKDIR /workspace
 COPY go.mod go.mod
 COPY go.sum go.sum
+# The root module resolves sidecarapi through a filesystem `replace`, so its
+# go.mod must be present before `go mod download` — otherwise the replace target
+# is missing and the prefetch fails. Copy the manifests only, so this layer
+# still caches on dependency changes rather than on every source edit.
+COPY sidecarapi/go.mod sidecarapi/go.mod
+COPY sidecarapi/go.sum sidecarapi/go.sum
 RUN go mod download
 
 COPY . .

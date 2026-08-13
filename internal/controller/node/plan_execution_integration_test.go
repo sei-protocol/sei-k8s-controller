@@ -6,12 +6,12 @@ import (
 
 	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
-	sidecar "github.com/sei-protocol/seictl/sidecar/client"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // driveTask submits one task and completes it via the full Reconcile pipeline.

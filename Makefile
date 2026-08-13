@@ -17,16 +17,38 @@ CONTROLLER_GEN_VERSION ?= v0.20.1
 LOCALBIN ?= $(CURDIR)/bin
 SETUP_ENVTEST ?= $(LOCALBIN)/setup-envtest
 
-.PHONY: build test test-integration test-all lint manifests generate verify-generated setup-envtest ci docker-build docker-push
+# MODULES is every Go module in this repo. Go package patterns stop at a nested
+# module boundary — `go list ./...` in the root does NOT descend into
+# sidecarapi/ — so anything that walks packages must loop this list or the
+# nested module goes unbuilt, unlinted and untested while CI stays green.
+MODULES ?= . sidecarapi
+
+.PHONY: build test test-modules test-integration test-all lint lint-modules tidy-check manifests generate verify-generated setup-envtest ci docker-build docker-push
 
 build: ## Build manager binary.
 	go build -o bin/manager ./cmd/
 
-test: ## Run tests.
+test: test-modules ## Run tests (root module with coverage, then every other module).
 	go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-lint: ## Run golangci-lint.
-	$(GOLANGCI_LINT) run
+test-modules: ## Run tests in every non-root module.
+	@set -e; for m in $(MODULES); do \
+		[ "$$m" = "." ] && continue; \
+		echo "==> go test ./... ($$m)"; \
+		(cd $$m && go test ./...); \
+	done
+
+tidy-check: ## Fail if any module's go.mod/go.sum is not tidy.
+	@set -e; for m in $(MODULES); do \
+		echo "==> go mod tidy -diff ($$m)"; \
+		(cd $$m && go mod tidy -diff); \
+	done
+
+lint: ## Run golangci-lint over every module.
+	@set -e; for m in $(MODULES); do \
+		echo "==> golangci-lint run ($$m)"; \
+		(cd $$m && $(GOLANGCI_LINT) run); \
+	done
 
 manifests: ## Generate CRD and RBAC manifests.
 	controller-gen rbac:roleName=manager-role crd webhook paths="./..." \
@@ -59,7 +81,7 @@ verify-generated: manifests generate ## Fail if generated artifacts drift from c
 		echo "ERROR: generated artifacts out of date — run 'make manifests generate' and commit"; \
 		exit 1; }
 
-ci: lint test verify-generated build ## Run lint, test, verify-generated, and build.
+ci: lint tidy-check test verify-generated build ## Run lint, tidy-check, test, verify-generated, and build.
 
 docker-build: ## Build docker image.
 	docker build --platform linux/amd64 -t ${IMG} .

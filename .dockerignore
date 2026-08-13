@@ -6,9 +6,14 @@
 !**/*.go
 **/*_test.go
 
-# Re-include Go module files
+# Re-include Go module files. Both patterns are needed: `!go.mod` matches the
+# root module only, so a nested module's go.mod (sidecarapi/go.mod, which the
+# root module resolves through a filesystem `replace`) stays excluded without
+# the recursive form, and `go mod download` fails on the missing replace target.
 !go.mod
 !go.sum
+!**/go.mod
+!**/go.sum
 
 # Re-include embedded shell scripts
 !**/*.sh
