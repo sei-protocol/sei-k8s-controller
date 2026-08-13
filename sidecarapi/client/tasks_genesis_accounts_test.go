@@ -72,11 +72,11 @@ func TestAssembleAndUploadGenesisTask_ToTaskRequest_SerializesAccounts(t *testin
 	if req.Type != TaskTypeAssembleGenesis {
 		t.Errorf("Type: got %q, want %q", req.Type, TaskTypeAssembleGenesis)
 	}
-	got, ok := (*req.Params)["accounts"].([]interface{})
+	got, ok := (*req.Params)["accounts"].([]any)
 	if !ok || len(got) != 1 {
 		t.Fatalf("accounts: %+v", (*req.Params)["accounts"])
 	}
-	entry := got[0].(map[string]interface{})
+	entry := got[0].(map[string]any)
 	if entry["address"] != validSeiAddr1 || entry["balance"] != "1000usei" {
 		t.Errorf("entry: got %+v", entry)
 	}
@@ -97,9 +97,9 @@ func TestAssembleAndUploadGenesisTask_ToTaskRequest_SerializesVesting(t *testing
 	}}
 	req := validNonForkTask(accs).ToTaskRequest()
 
-	got := (*req.Params)["accounts"].([]interface{})
-	entry := got[0].(map[string]interface{})
-	vesting, ok := entry["vesting"].(map[string]interface{})
+	got := (*req.Params)["accounts"].([]any)
+	entry := got[0].(map[string]any)
+	vesting, ok := entry["vesting"].(map[string]any)
 	if !ok {
 		t.Fatalf("vesting key: got %+v", entry["vesting"])
 	}

@@ -31,7 +31,7 @@ func genConfigPatchTask() gopter.Gen {
 	return gopter.CombineGens(
 		genNonEmptyString(),
 		genNonEmptyString(),
-	).Map(func(v []interface{}) ConfigPatchTask {
+	).Map(func(v []any) ConfigPatchTask {
 		return ConfigPatchTask{
 			Files: map[string]map[string]any{
 				"config.toml": {
@@ -129,7 +129,7 @@ func TestConfigPatchRoundTrip(t *testing.T) {
 			if !ok {
 				return false
 			}
-			filesMap, ok := files.(map[string]interface{})
+			filesMap, ok := files.(map[string]any)
 			if !ok {
 				return false
 			}
@@ -613,7 +613,7 @@ func TestAwaitConditionJSONRoundTrip(t *testing.T) {
 
 // snapshotRestoreTaskFromParams reconstructs a SnapshotRestoreTask from
 // a generic params map. Useful for round-trip testing.
-func snapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestoreTask {
+func snapshotRestoreTaskFromParams(params map[string]any) SnapshotRestoreTask {
 	var t SnapshotRestoreTask
 	switch h := params["targetHeight"].(type) {
 	case float64:
@@ -626,7 +626,7 @@ func snapshotRestoreTaskFromParams(params map[string]interface{}) SnapshotRestor
 
 // resultExportTaskFromParams reconstructs a ResultExportTask from
 // a generic params map.
-func resultExportTaskFromParams(params map[string]interface{}) ResultExportTask {
+func resultExportTaskFromParams(params map[string]any) ResultExportTask {
 	s := func(k string) string { v, _ := params[k].(string); return v }
 	return ResultExportTask{
 		Bucket:       s("bucket"),

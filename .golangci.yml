@@ -80,6 +80,15 @@ linters:
           - dupl
           - lll
         path: sidecarapi/*
+      # goconst flags the JSON keys inside the request-params maps — chainId,
+      # keyName, fees, gas, title, initialDeposit, address. Those literals are
+      # the wire contract: reading a params map and seeing the JSON it produces
+      # is the property that makes the client reviewable against the server's
+      # struct tags. Hoisting them into constants would trade that away for a
+      # DRY score. The remaining hits are test fixtures (1usei, config.toml).
+      - linters:
+          - goconst
+        path: sidecarapi/client/*
     paths:
       - third_party$
       - builtin$

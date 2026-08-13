@@ -7,6 +7,7 @@ import (
 
 	"github.com/cosmos/btcutil/bech32"
 	seiconfig "github.com/sei-protocol/sei-config"
+
 	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
@@ -102,9 +103,9 @@ func (t SnapshotRestoreTask) TaskType() string { return TaskTypeSnapshotRestore 
 func (t SnapshotRestoreTask) Validate() error { return nil }
 
 func (t SnapshotRestoreTask) ToTaskRequest() TaskRequest {
-	var p *map[string]interface{}
+	var p *map[string]any
 	if t.TargetHeight > 0 {
-		m := map[string]interface{}{"targetHeight": t.TargetHeight}
+		m := map[string]any{"targetHeight": t.TargetHeight}
 		p = &m
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: p}
@@ -165,7 +166,7 @@ func (t ConfigureGenesisTask) ToTaskRequest() TaskRequest {
 	if t.ExpectedGenesisHash == "" {
 		return TaskRequest{Type: t.TaskType()}
 	}
-	p := map[string]interface{}{"expectedGenesisHash": t.ExpectedGenesisHash}
+	p := map[string]any{"expectedGenesisHash": t.ExpectedGenesisHash}
 	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
@@ -186,11 +187,11 @@ func (t ConfigPatchTask) Validate() error {
 }
 
 func (t ConfigPatchTask) ToTaskRequest() TaskRequest {
-	files := make(map[string]interface{}, len(t.Files))
+	files := make(map[string]any, len(t.Files))
 	for k, v := range t.Files {
 		files[k] = v
 	}
-	p := map[string]interface{}{"files": files}
+	p := map[string]any{"files": files}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
 }
@@ -209,7 +210,7 @@ func (t ConfigureStateSyncTask) TaskType() string { return TaskTypeConfigureStat
 func (t ConfigureStateSyncTask) Validate() error  { return nil }
 
 func (t ConfigureStateSyncTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{}
+	p := map[string]any{}
 	if t.UseLocalSnapshot {
 		p["useLocalSnapshot"] = true
 	}
@@ -327,13 +328,13 @@ func (t ConfigApplyTask) Validate() error {
 }
 
 func (t ConfigApplyTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
+	p := map[string]any{
 		"mode":          string(t.Intent.Mode),
 		"incremental":   t.Intent.Incremental,
 		"targetVersion": t.Intent.TargetVersion,
 	}
 	if len(t.Intent.Overrides) > 0 {
-		overrides := make(map[string]interface{}, len(t.Intent.Overrides))
+		overrides := make(map[string]any, len(t.Intent.Overrides))
 		for k, v := range t.Intent.Overrides {
 			overrides[k] = v
 		}
@@ -370,11 +371,11 @@ func (t ConfigReloadTask) Validate() error {
 }
 
 func (t ConfigReloadTask) ToTaskRequest() TaskRequest {
-	fields := make(map[string]interface{}, len(t.Fields))
+	fields := make(map[string]any, len(t.Fields))
 	for k, v := range t.Fields {
 		fields[k] = v
 	}
-	p := map[string]interface{}{"fields": fields}
+	p := map[string]any{"fields": fields}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
 }
@@ -424,7 +425,7 @@ func (t ResultExportTask) Validate() error {
 }
 
 func (t ResultExportTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
+	p := map[string]any{
 		"bucket": t.Bucket,
 		"region": t.Region,
 	}
@@ -472,7 +473,7 @@ func (t GenerateIdentityTask) Validate() error {
 }
 
 func (t GenerateIdentityTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
+	p := map[string]any{
 		"chainId": t.ChainID,
 		"moniker": t.Moniker,
 	}
@@ -505,7 +506,7 @@ func (t GenerateGentxTask) Validate() error {
 }
 
 func (t GenerateGentxTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
+	p := map[string]any{
 		"chainId":        t.ChainID,
 		"stakingAmount":  t.StakingAmount,
 		"accountBalance": t.AccountBalance,
@@ -530,7 +531,7 @@ func (t UploadGenesisArtifactsTask) Validate() error {
 }
 
 func (t UploadGenesisArtifactsTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
+	p := map[string]any{
 		"nodeName": t.NodeName,
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
@@ -551,15 +552,15 @@ type (
 	GenesisAccountVesting = wire.GenesisAccountVesting
 )
 
-func genesisAccountsToWire(accounts []GenesisAccountEntry) []interface{} {
+func genesisAccountsToWire(accounts []GenesisAccountEntry) []any {
 	if len(accounts) == 0 {
 		return nil
 	}
-	out := make([]interface{}, len(accounts))
+	out := make([]any, len(accounts))
 	for i, a := range accounts {
-		entry := map[string]interface{}{"address": a.Address, "balance": a.Balance}
+		entry := map[string]any{"address": a.Address, "balance": a.Balance}
 		if a.Vesting != nil {
-			entry["vesting"] = map[string]interface{}{
+			entry["vesting"] = map[string]any{
 				"amount":  a.Vesting.Amount,
 				"endTime": a.Vesting.EndTime,
 				"delayed": a.Vesting.Delayed,
@@ -632,11 +633,11 @@ func (t AssembleAndUploadGenesisTask) Validate() error {
 }
 
 func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
-	nodes := make([]interface{}, len(t.Nodes))
+	nodes := make([]any, len(t.Nodes))
 	for i, n := range t.Nodes {
-		nodes[i] = map[string]interface{}{"name": n.Name}
+		nodes[i] = map[string]any{"name": n.Name}
 	}
-	p := map[string]interface{}{
+	p := map[string]any{
 		"accountBalance": t.AccountBalance,
 		"namespace":      t.Namespace,
 		"nodes":          nodes,
@@ -645,7 +646,7 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 		p["accounts"] = accounts
 	}
 	if len(t.Overrides) > 0 {
-		overrides := make(map[string]interface{}, len(t.Overrides))
+		overrides := make(map[string]any, len(t.Overrides))
 		for k, v := range t.Overrides {
 			overrides[k] = v
 		}
@@ -685,7 +686,7 @@ func (t AwaitConditionTask) Validate() error {
 }
 
 func (t AwaitConditionTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
+	p := map[string]any{
 		"condition": t.Condition,
 	}
 	// targetHeight is meaningful only for the height condition; omit it
@@ -736,7 +737,7 @@ func (t GovVoteTask) Validate() error {
 }
 
 func (t GovVoteTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
+	p := map[string]any{
 		"chainId":    t.ChainID,
 		"keyName":    t.KeyName,
 		"proposalId": t.ProposalID,
@@ -808,7 +809,7 @@ func (t GovSoftwareUpgradeTask) Validate() error {
 }
 
 func (t GovSoftwareUpgradeTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
+	p := map[string]any{
 		"chainId":        t.ChainID,
 		"keyName":        t.KeyName,
 		"title":          t.Title,
@@ -912,7 +913,7 @@ func (t GovParamChangeTask) Validate() error {
 }
 
 func (t GovParamChangeTask) ToTaskRequest() TaskRequest {
-	p := map[string]interface{}{
+	p := map[string]any{
 		"chainId":        t.ChainID,
 		"keyName":        t.KeyName,
 		"title":          t.Title,
