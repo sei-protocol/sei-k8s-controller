@@ -1,4 +1,7 @@
 IMG ?= sei-k8s-controller:latest
+# The sidecar publishes to ECR as sei/sei-sidecar; the tag is supplied by CI.
+SIDECAR_IMG ?= sei-sidecar:latest
+CONTAINER_TOOL ?= docker
 GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null || echo $(HOME)/go/bin/golangci-lint)
 
 # Pinned tool versions. Bump together: setup-envtest's release branch tracks
@@ -21,12 +24,23 @@ SETUP_ENVTEST ?= $(LOCALBIN)/setup-envtest
 # module boundary — `go list ./...` in the root does NOT descend into
 # sidecarapi/ — so anything that walks packages must loop this list or the
 # nested module goes unbuilt, unlinted and untested while CI stays green.
-MODULES ?= . sidecarapi
+MODULES ?= . sidecarapi sidecar
 
-.PHONY: build test test-modules test-integration test-all lint lint-modules tidy-check manifests generate verify-generated setup-envtest ci docker-build docker-push
+.PHONY: build build-sidecar docker-build-sidecar test test-modules test-integration test-all lint lint-modules tidy-check manifests generate verify-generated setup-envtest ci docker-build docker-push
 
 build: ## Build manager binary.
 	go build -o bin/manager ./cmd/
+
+build-sidecar: ## Build the sidecar binary.
+	@# GOWORK=off keeps this identical to the Docker and release builds: the
+	@# sidecar module pins x/crypto and grpc *down*, and a workspace would
+	@# promote those replaces into the root module's resolution.
+	cd sidecar && GOWORK=off go build -o ../bin/sei-sidecar .
+
+docker-build-sidecar: ## Build the sidecar container image.
+	@# Build context is the repo root — sidecar/ resolves sidecarapi/ through a
+	@# filesystem replace, so both module trees must be in the context.
+	$(CONTAINER_TOOL) build -f sidecar/Dockerfile -t $(SIDECAR_IMG) .
 
 test: test-modules ## Run tests (root module with coverage, then every other module).
 	go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out

@@ -15,7 +15,7 @@ jobs:
         # One job per Go module. golangci-lint resolves packages with Go
         # patterns, which stop at a nested module boundary — a root-only run
         # would never lint sidecarapi/ and would pass while it was broken.
-        module: [".", "sidecarapi"]
+        module: [".", "sidecarapi", "sidecar"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

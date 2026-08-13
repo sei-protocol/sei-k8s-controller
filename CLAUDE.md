@@ -1,6 +1,6 @@
 # sei-k8s-controller
 
-Kubernetes operator for managing Sei blockchain nodes. Single binary, three controllers: `SeiNetwork` (genesis-ceremony orchestration: bootstraps a chain's genesis.json and founding validator set, owns the child SeiNodes), `SeiNode` (individual node lifecycle), and `SeiNodeTask` (sidecar-driven task execution).
+Kubernetes operator for managing Sei blockchain nodes, plus the per-node sidecar it drives. Two binaries across three Go modules. Three controllers: `SeiNetwork` (genesis-ceremony orchestration: bootstraps a chain's genesis.json and founding validator set, owns the child SeiNodes), `SeiNode` (individual node lifecycle), and `SeiNodeTask` (sidecar-driven task execution).
 
 ## Architecture
 
@@ -9,6 +9,29 @@ Kubernetes operator for managing Sei blockchain nodes. Single binary, three cont
 - **Controllers**: `internal/controller/seinetwork/`, `internal/controller/node/`, `internal/controller/nodetask/`
 - **Entry point**: `cmd/main.go` — thin binary that creates a `manager.Manager` and registers both controllers
 - **Framework**: controller-runtime v0.23.1 / kubebuilder v4.12.0
+
+### Modules
+
+Three Go modules, wired by filesystem `replace` — **not** `go.work`. A workspace promotes a used module's `replace` directives to main-module status, and `sidecar/` pins `golang.org/x/crypto` and `google.golang.org/grpc` *down* from what the controller needs, so a workspace build would diverge from every `GOWORK=off` build (Docker, release CI, external consumers).
+
+| Module | Contains | Dependency profile |
+|---|---|---|
+| `.` (root) | the controller, `api/v1alpha1`, `sdk/sei` | controller-runtime + k8s. **No chain graph** |
+| `sidecarapi/` | `api/` (OpenAPI spec), `client/` (generated), `wire/` (contract types), `tomlpatch/` | light; ~10 modules. **No replace directives** — a dependency module's replaces are ignored, so any here would be a silent no-op |
+| `sidecar/` | the sidecar binary: `tasks/`, `engine/`, `server/`, `s3/`, `shadow/`, `rpc/`, `actions/` | the sei-chain graph; restates all 11 of sei-chain's replaces |
+
+Anything that walks packages must loop `MODULES` in the Makefile. Go package patterns stop at a nested module boundary, so `go list ./...` in the root does **not** see `sidecarapi/` or `sidecar/` — a root-only lint or test passes while a whole module goes uncompiled.
+
+Two checks keep the controller tidyable, both in `make ci`. The `depguard` rule `contract-stays-light` in `.golangci.yml` denies the chain graph to anything under `sidecarapi/`, `_test.go` files included — that is the import a test added once before, and it stopped every consumer's `go mod tidy` from working. `make tidy-check` runs `go mod tidy -diff` per module, which catches the unresolvable graph that import produces. Neither covers a third-party dependency that transitively reaches the chain graph while still resolving; that is a dependency-review question, not a lint one.
+
+### The sidecar binary
+
+`sidecar/main.go` → `sei-sidecar`, published to ECR as `sei/sei-sidecar`. The image also installs a `seictl` symlink because the controller renders `Command: []string{"seictl", "serve"}` into every pod spec (`internal/noderesource/`, `internal/task/bootstrap_resources.go`). Controller and sidecar images roll independently, so a rename without the shim has no safe ordering — and the failure is silent, not loud: seid blocks on a shell loop polling `/v0/healthz` behind a StartupProbe with `FailureThreshold: 86400` at 5s. Remove the shim only after the controller stops rendering `Command` and every cell has rolled past that controller.
+
+Two startup refusals in `sidecar/` are load-bearing; do not soften them into defaults:
+
+- `SEI_HOME` is **required**, with no fallback. It previously defaulted to `/sei` while the controller mounts the data PVC at `$HOME/.sei`, so a dropped value produced a running, probe-passing sidecar writing genesis and config into an empty directory.
+- A configured `SEI_KEYRING_BACKEND` with `SEI_SIDECAR_AUTHN_MODE` unauthenticated is refused (`checkKeyringNeedsAuthn`). Unauthenticated binds all interfaces and installs no middleware, so that combination exposes the sign-tx API — gov-vote included — to any pod in the cluster while the keyring is open.
 
 ## Subagents
 
