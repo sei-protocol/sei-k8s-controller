@@ -135,7 +135,6 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 	sidecar := corev1.Container{
 		Name:          "sei-sidecar",
 		Image:         bootstrapSidecarImage(node, platformCfg),
-		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env: []corev1.EnvVar{
 			{Name: "SEI_CHAIN_ID", Value: node.Spec.ChainID},

@@ -31,34 +31,13 @@ RUN cd sidecar && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /go/bin/sei-sidecar /usr/bin/sei-sidecar
 
-# Compatibility shim, deliberately temporary. The controller renders
-# `Command: []string{"seictl", "serve"}` into every SeiNode pod spec
-# (internal/noderesource/noderesource.go, internal/task/bootstrap_resources.go),
-# and a pod spec's `command` overrides ENTRYPOINT outright — so without this
-# name the container cannot start at all.
+# The subcommand belongs here, not in the pod spec. The controller renders no
+# `Command` for the sidecar container, so this ENTRYPOINT is what runs, and the
+# image owns its own binary name — renaming it later is an image-only change.
 #
-# The rename cannot be done in lockstep, which is why the shim exists rather
-# than a coordinated cutover. The sidecar image is chosen per node by
-# `spec.sidecar.image` when set (noderesource.go, sidecarImage), and that
-# overrides the platform config's images.sidecar — every SeiNode sample in
-# manifests/samples pins it. So a controller that rendered the new name would
-# break every node carrying a pinned older image, and no config rollout reaches
-# those; each CR would have to change in the same instant as the controller
-# deploy. The failure is also quiet: the seid container blocks on a shell loop
-# polling /v0/healthz behind a StartupProbe with FailureThreshold 86400 at 5s,
-# so a broken sidecar hangs for days rather than alerting.
-#
-# With both names present, adoption is a per-node image reference change at any
-# pace. Retire the shim in three steps, each safe alone:
-#
-#  1. this image reaches every cell;
-#  2. the controller stops rendering `Command` (or renders sei-sidecar) — by
-#     then every image answers to either name;
-#  3. delete this COPY.
-COPY --from=build /go/bin/sei-sidecar /usr/bin/seictl
-
-# `serve` belongs in the ENTRYPOINT, not left to the pod spec. Step 2 above
-# removes `Command`, and a bare `sei-sidecar` with no subcommand prints help and
-# exits 0 — a container that restarts forever while reporting success, which is
-# worse than a crash. Naming the subcommand here makes step 2 a pure deletion.
+# `serve` is named explicitly rather than left as the root command's default: a
+# bare `sei-sidecar` with SEI_HOME set prints help and exits 0, which under
+# restartPolicy Always is a container that loops forever while reporting
+# success. Harder to notice than a crash, and the seid container beside it would
+# sit blocked on /v0/healthz behind a StartupProbe with FailureThreshold 86400.
 ENTRYPOINT ["/usr/bin/sei-sidecar", "serve"]
