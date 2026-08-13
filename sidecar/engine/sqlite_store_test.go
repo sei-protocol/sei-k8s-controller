@@ -115,7 +115,7 @@ func TestStoreListOrdering(t *testing.T) {
 	s := newTestStore(t)
 	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		r := &TaskResult{
 			ID:          "list-" + string(rune('a'+i)) + "0000000-0000-0000-0000-000000000000",
 			Type:        "config-patch",
@@ -147,7 +147,7 @@ func TestStoreListLimit(t *testing.T) {
 	s := newTestStore(t)
 	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		r := &TaskResult{
 			ID:          "limit-" + string(rune('a'+i)) + "000000-0000-0000-0000-000000000000",
 			Type:        "config-patch",

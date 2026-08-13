@@ -164,7 +164,7 @@ func TestMarkNotReady_PurgesThenFlipsReadyFalse(t *testing.T) {
 // with no dependence on goroutine scheduling. Looped to stress the ordering
 // under -race, where the pre-fix concurrent dispatch would flake.
 func TestRehydrate_StrandedHoldWinsDeterministically(t *testing.T) {
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		store, dbPath := newFileStore(t)
 		seedStrandedMarkReady(t, store)
 		seedStrandedMarkNotReady(t, store)
@@ -329,7 +329,7 @@ func TestRehydrate_FailedPurgeSupersedesStrandedMarkReady(t *testing.T) {
 // and no stale hold. The durable supersession rule (keyed on the persisted hold
 // record, any status) must keep the node held across BOTH restarts.
 func TestRehydrate_HoldSurvivesFailedPurgeAcrossTwoRestarts(t *testing.T) {
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		store, dbPath := newFileStore(t)
 		base := time.Now().UTC()
 		readyID := seedStrandedAt(t, store, TaskMarkReady, base)          // earlier lifecycle's release

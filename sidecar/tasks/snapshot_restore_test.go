@@ -70,10 +70,7 @@ func (m *mockObjectLister) ListObjectsV2(_ context.Context, input *s3.ListObject
 		}
 	}
 
-	end := startIdx + pageSize
-	if end > len(m.keys) {
-		end = len(m.keys)
-	}
+	end := min(startIdx+pageSize, len(m.keys))
 
 	var contents []types.Object
 	for _, k := range m.keys[startIdx:end] {

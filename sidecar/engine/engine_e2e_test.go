@@ -177,8 +177,7 @@ func TestE2E_TaskLifecycle(t *testing.T) {
 		cancel()
 		store2 := reopenStore(t, store, dbPath)
 
-		ctx2, cancel2 := context.WithCancel(context.Background())
-		defer cancel2()
+		ctx2 := t.Context()
 		eng2 := NewEngine(ctx2, handlers, store2)
 
 		// The successful task should still be there.
@@ -243,8 +242,7 @@ func TestE2E_StaleTaskRehydration(t *testing.T) {
 
 	// Reopen store and create a new engine (simulates restart).
 	store2 := reopenStore(t, store, dbPath)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	handlers := map[TaskType]TaskHandler{
 		TaskConfigPatch: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	}
@@ -260,8 +258,7 @@ func TestE2E_StaleTaskRehydration(t *testing.T) {
 
 func TestE2E_ConcurrentSubmit(t *testing.T) {
 	store, _ := newFileStore(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var execCount atomic.Int32
 	handlers := map[TaskType]TaskHandler{
@@ -281,7 +278,7 @@ func TestE2E_ConcurrentSubmit(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(n)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		go func(i int) {
 			defer wg.Done()
 			ids[i], errs[i] = eng.Submit(Task{Type: TaskConfigPatch})

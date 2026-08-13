@@ -11,7 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -325,7 +325,7 @@ func pickUploadCandidate(snapshotsDir string) (int64, error) {
 		return 0, nil
 	}
 
-	sort.Slice(heights, func(i, j int) bool { return heights[i] < heights[j] })
+	slices.Sort(heights)
 	return heights[len(heights)-2], nil
 }
 

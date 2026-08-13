@@ -7,6 +7,8 @@
 // across a module boundary that this migration exists to remove.
 package tomlpatch
 
+import "maps"
+
 // Merge performs a recursive merge-patch of patch into original.
 // nil values in the patch delete the corresponding key from original.
 // Non-map patches replace the original entirely.
@@ -20,9 +22,7 @@ func Merge(original, patch any) any {
 		originalMap = make(map[string]any)
 	}
 	result := make(map[string]any)
-	for k, v := range originalMap {
-		result[k] = v
-	}
+	maps.Copy(result, originalMap)
 	for key, patchAt := range patchMap {
 		if patchAt == nil {
 			delete(result, key)

@@ -31,7 +31,7 @@ func (c *Comparator) compareLayer1(ctx context.Context, height int64) (*Layer1Re
 
 	// Compare the overlapping transactions.
 	minLen := min(len(sTxs), len(cTxs))
-	for i := 0; i < minLen; i++ {
+	for i := range minLen {
 		divergence := compareTxReceipts(i, sTxs[i], cTxs[i])
 		if divergence != nil {
 			result.Divergences = append(result.Divergences, *divergence)

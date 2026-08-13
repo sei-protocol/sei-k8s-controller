@@ -3,6 +3,7 @@ package tasks
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -247,12 +248,7 @@ func mustModTime(t *testing.T, path string) int64 {
 }
 
 func containsAddr(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if h == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // findAuthAccount returns the genesis account at addr, or nil if absent.

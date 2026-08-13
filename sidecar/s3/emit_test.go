@@ -154,7 +154,7 @@ func TestStreamGzip_UploadErrorUnblocksWriter(t *testing.T) {
 	// backstop if it does not).
 	up := &captureUploader{err: errors.New("s3 down")}
 	_, err := StreamGzipFunc(context.Background(), up, "bkt", "k", func(w io.Writer) error {
-		for i := 0; i < 100000; i++ {
+		for range 100000 {
 			if _, werr := io.WriteString(w, "padding-line\n"); werr != nil {
 				return werr
 			}

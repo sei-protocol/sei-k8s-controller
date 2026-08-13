@@ -79,7 +79,7 @@ func TestWriteAtBuffer_SparseWrite(t *testing.T) {
 	if len(got) != 6 {
 		t.Fatalf("len(Bytes()) = %d, want 6", len(got))
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if got[i] != 0 {
 			t.Errorf("Bytes()[%d] = %d, want 0", i, got[i])
 		}

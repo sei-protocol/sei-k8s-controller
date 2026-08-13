@@ -109,10 +109,7 @@ func (s *StateSyncConfigurer) Configure(ctx context.Context, p StateSyncRequest)
 		if err != nil {
 			return fmt.Errorf("configure-state-sync: querying latest height: %w", err)
 		}
-		trustHeight = latestHeight - trustHeightOffset
-		if trustHeight < 1 {
-			trustHeight = 1
-		}
+		trustHeight = max(latestHeight-trustHeightOffset, 1)
 	}
 
 	ssLog.Info("querying trust hash", "trust-height", trustHeight, "endpoint", reachable[0])
@@ -352,7 +349,7 @@ func readPeersFromConfig(homeDir string) ([]string, error) {
 	}
 
 	var peers []string
-	for _, p := range strings.Split(raw, ",") {
+	for p := range strings.SplitSeq(raw, ",") {
 		p = strings.TrimSpace(p)
 		if p != "" {
 			peers = append(peers, p)

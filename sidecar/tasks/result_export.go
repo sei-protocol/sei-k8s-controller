@@ -155,7 +155,7 @@ func (e *ResultExporter) Export(ctx context.Context, cfg ResultExportRequest) er
 		return nil
 	}
 
-	for page := 0; page < fullPages; page++ {
+	for page := range fullPages {
 		pageStart := startHeight + int64(page*defaultPageSize)
 		pageEnd := pageStart + int64(defaultPageSize) - 1
 

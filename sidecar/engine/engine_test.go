@@ -472,7 +472,7 @@ func TestRecentResultsReturnsAll(t *testing.T) {
 	})
 
 	var ids []string
-	for i := 0; i < 7; i++ {
+	for range 7 {
 		id, _ := eng.Submit(Task{Type: TaskConfigPatch})
 		ids = append(ids, id)
 	}
@@ -1110,7 +1110,7 @@ func TestSubmitConcurrentSameFailedID(t *testing.T) {
 	// Two concurrent submits of the same failed ID.
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		go func() {
 			defer wg.Done()
 			eng.Submit(Task{ID: taskID, Type: TaskConfigPatch})
