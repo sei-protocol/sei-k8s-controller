@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// emptyCell is what a table cell shows when the value is absent.
+const emptyCell = "—"
+
 // RenderMarkdown produces a human-readable investigation report from a
 // DivergenceReport. The output is designed to be consumed by engineers
 // or LLM agents analyzing why a shadow node diverged from the canonical chain.
@@ -52,16 +55,16 @@ func writeL0Row(b *strings.Builder, field string, match bool, shadow, canonical 
 	s := truncateHash(shadow)
 	c := truncateHash(canonical)
 	if match {
-		s = "—"
-		c = "—"
+		s = emptyCell
+		c = emptyCell
 	}
 	fmt.Fprintf(b, "| %s | %s | %s | %s |\n", field, s, c, icon)
 }
 
 func writeL0GasRow(b *strings.Builder, l0 Layer0Result) {
 	icon := "✅"
-	s := "—"
-	c := "—"
+	s := emptyCell
+	c := emptyCell
 	if !l0.GasUsedMatch {
 		icon = "❌"
 		s = fmt.Sprintf("%d", l0.ShadowGasUsed)
@@ -107,7 +110,7 @@ func writeLayer2(b *strings.Builder, l2 *Layer2Result) {
 	for _, d := range l2.Divergences {
 		slot := d.Slot
 		if slot == "" {
-			slot = "—"
+			slot = emptyCell
 		}
 		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n",
 			d.Kind, truncateHash(d.Addr), truncateHash(slot),

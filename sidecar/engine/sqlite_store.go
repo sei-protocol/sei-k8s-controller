@@ -49,13 +49,13 @@ func openStore(dsn string) (*SQLiteStore, error) {
 		"PRAGMA synchronous=NORMAL",
 	} {
 		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, fmt.Errorf("%s: %w", pragma, err)
 		}
 	}
 
 	if err := migrate(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
@@ -192,7 +192,7 @@ func (s *SQLiteStore) queryMany(query string, args ...any) ([]TaskResult, error)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var results []TaskResult
 	for rows.Next() {

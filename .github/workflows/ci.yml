@@ -25,6 +25,12 @@ jobs:
         module: [".", "sidecarapi", "sidecar"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # only-new-issues below diffs against the merge base, which a shallow
+          # clone does not contain — the filter then silently passes and the
+          # module's whole pre-existing backlog is reported as new. A rebase or
+          # force-push is what exposes it.
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

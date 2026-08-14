@@ -22,7 +22,7 @@ func FetchReport(ctx context.Context, downloader seis3.Downloader, bucket, key s
 	if err != nil {
 		return nil, fmt.Errorf("downloading s3://%s/%s: %w", bucket, key, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var reader io.Reader = resp.Body
 	if strings.HasSuffix(key, ".gz") {
@@ -30,7 +30,7 @@ func FetchReport(ctx context.Context, downloader seis3.Downloader, bucket, key s
 		if err != nil {
 			return nil, fmt.Errorf("decompressing report: %w", err)
 		}
-		defer gz.Close()
+		defer func() { _ = gz.Close() }()
 		reader = gz
 	}
 

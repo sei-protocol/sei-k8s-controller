@@ -13,7 +13,7 @@ func migrate(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		if _, err := tx.Exec(`
 			CREATE TABLE IF NOT EXISTS task_results (
@@ -49,7 +49,7 @@ func migrate(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		if _, err := tx.Exec(`
 			DROP INDEX IF EXISTS idx_task_results_schedule;
@@ -73,7 +73,7 @@ func migrate(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		if _, err := tx.Exec(`
 			ALTER TABLE task_results ADD COLUMN run INTEGER NOT NULL DEFAULT 1;
@@ -95,7 +95,7 @@ func migrate(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		// result holds a handler's structured output as raw JSON; NULL
 		// for the common case of a handler that emits no result.
@@ -119,7 +119,7 @@ func migrate(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		// tx_markers: pre-broadcast signed-tx bytes so a crashed sign-tx task
 		// re-adopts the identical tx instead of re-signing. Engine-owned. A
