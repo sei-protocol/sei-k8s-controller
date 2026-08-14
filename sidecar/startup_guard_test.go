@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/urfave/cli/v3"
 
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/server"
 )
@@ -124,6 +128,56 @@ func TestValidateHome(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "SEI_HOME") {
 				t.Errorf("error should name SEI_HOME; got %q", err.Error())
+			}
+		})
+	}
+}
+
+// validateHome is wired into the --home flag's Action, and in production nothing
+// passes that flag: the controller sets SEI_HOME and the image runs
+// `sei-sidecar serve`. A unit test on validateHome alone cannot tell whether the
+// wiring reaches an environment-sourced value on a subcommand, which is the only
+// path that runs in a pod. This drives the real cli.Command to find out.
+func TestHomeValidationReachesEnvSourcedValues(t *testing.T) {
+	cases := []struct {
+		name    string
+		home    string
+		set     bool
+		wantErr string
+	}{
+		{name: "unset reports the required flag, not emptiness", set: false, wantErr: `Required flag "home" not set`},
+		{name: "empty", home: "", set: true, wantErr: "set but empty"},
+		{name: "whitespace only", home: "   ", set: true, wantErr: "set but empty"},
+		{name: "relative", home: "sei", set: true, wantErr: "absolute path"},
+		{name: "dot relative", home: "./sei", set: true, wantErr: "absolute path"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.set {
+				t.Setenv("SEI_HOME", tc.home)
+			} else {
+				t.Setenv("SEI_HOME", "")
+				os.Unsetenv("SEI_HOME")
+			}
+
+			// A no-op subcommand: this asserts the guard runs before any
+			// subcommand body, so it must not depend on serve's own env.
+			var ran bool
+			cmd := newRootCommand()
+			cmd.Commands = []*cli.Command{{
+				Name:   "serve",
+				Action: func(context.Context, *cli.Command) error { ran = true; return nil },
+			}}
+
+			err := cmd.Run(context.Background(), []string{"sei-sidecar", "serve"})
+			if err == nil {
+				t.Fatalf("expected a refusal, got nil (subcommand ran: %v)", ran)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error: got %q, want substring %q", err.Error(), tc.wantErr)
+			}
+			if ran {
+				t.Error("subcommand ran despite an invalid SEI_HOME")
 			}
 		})
 	}

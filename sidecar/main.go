@@ -23,7 +23,20 @@ import (
 )
 
 func main() {
-	cmd := &cli.Command{
+	cmd := newRootCommand()
+	cmd.Commands = []*cli.Command{&serveCmd}
+
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		_ = seilog.Close()
+		os.Exit(1)
+	}
+}
+
+// newRootCommand builds the root command without its subcommands, so a test can
+// drive the same flag wiring production runs.
+func newRootCommand() *cli.Command {
+	return &cli.Command{
 		Name:  "sei-sidecar",
 		Usage: "Sei node sidecar: task executor and HTTP API",
 		Flags: []cli.Flag{
@@ -54,13 +67,6 @@ func main() {
 				},
 			},
 		},
-		Commands: []*cli.Command{&serveCmd},
-	}
-
-	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		_ = seilog.Close()
-		os.Exit(1)
 	}
 }
 

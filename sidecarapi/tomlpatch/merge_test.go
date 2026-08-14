@@ -5,6 +5,9 @@ import (
 	"testing"
 )
 
+// nestedKey is the map key the nested-merge case shares across its three maps.
+const nestedKey = "obj"
+
 func TestMerge(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -37,10 +40,12 @@ func TestMerge(t *testing.T) {
 			expected: map[string]any{"a": 1},
 		},
 		{
+			// The key is the same in all three maps on purpose — that is what
+			// makes this a merge rather than a replacement.
 			name:     "nested map merge",
-			original: map[string]any{"obj": map[string]any{"x": 1, "y": 2}},
-			patch:    map[string]any{"obj": map[string]any{"y": 3, "z": 4}},
-			expected: map[string]any{"obj": map[string]any{"x": 1, "y": 3, "z": 4}},
+			original: map[string]any{nestedKey: map[string]any{"x": 1, "y": 2}},
+			patch:    map[string]any{nestedKey: map[string]any{"y": 3, "z": 4}},
+			expected: map[string]any{nestedKey: map[string]any{"x": 1, "y": 3, "z": 4}},
 		},
 	}
 
