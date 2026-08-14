@@ -64,22 +64,26 @@ linters:
         - omitzero
   exclusions:
     generated: lax
+    # `path` is a REGEXP, not a glob. An unanchored `sidecar/*` means "sidecar"
+    # followed by zero or more slashes, which also matches every sidecarapi/
+    # path — it silently turned goconst off for the contract module. Anchor with
+    # ^ so a rule applies to the tree it names.
     rules:
       - linters:
           - lll
-        path: api/*
+        path: ^api/
       - linters:
           - dupl
           - lll
-        path: internal/*
+        path: ^internal/
       - linters:
           - dupl
           - lll
-        path: sdk/*
+        path: ^sdk/
       - linters:
           - dupl
           - lll
-        path: sidecarapi/*
+        path: ^sidecarapi/
       # goconst flags the JSON keys inside the request-params maps — chainId,
       # keyName, fees, gas, title, initialDeposit, address. Those literals are
       # the wire contract: reading a params map and seeing the JSON it produces
@@ -88,7 +92,7 @@ linters:
       # DRY score. The remaining hits are test fixtures (1usei, config.toml).
       - linters:
           - goconst
-        path: sidecarapi/client/*
+        path: ^sidecarapi/client/
       # sidecar/ arrived from a repo with no golangci-lint config, so none of it
       # has ever been linted. Everything below is pre-existing debt made visible
       # by the move, not new code — and only-new-issues cannot help, because every
@@ -98,11 +102,11 @@ linters:
       #
       # lll and dupl match what internal/, api/, sdk/ and sidecarapi/ already get.
       - linters: [dupl, lll]
-        path: sidecar/*
+        path: ^sidecar/
       # Test code carries different standards than the binary. bodyclose and
       # staticcheck fire only in _test.go here, and errcheck almost entirely.
       - linters: [bodyclose, errcheck, goconst, gocyclo, noctx, prealloc, staticcheck, unparam]
-        path: sidecar/.*_test\.go
+        path: ^sidecar/.*_test\.go
       # unparam flags cfg/cdc parameters that a few unexported methods do not
       # read. They are there for symmetry across a family of sibling methods that
       # do, so dropping them from some and not others makes the family harder to
@@ -110,7 +114,7 @@ linters:
       # one remaining hit is a json.Unmarshal destination, which Unmarshal
       # allocates itself, so preallocating changes nothing.
       - linters: [prealloc, unparam]
-        path: sidecar/*
+        path: ^sidecar/
       # goconst's remaining hits are wire and config literals: JSON field names
       # in the EVM digest and shadow comparators (code, type, nonce, balance,
       # gasUsed, storage), seid config.toml keys, which are hyphenated by
@@ -122,7 +126,7 @@ linters:
       # merely share the spelling "height"; that constant names an
       # await-condition kind, so reusing it would conflate two unrelated things.
       - linters: [goconst]
-        path: sidecar/*
+        path: ^sidecar/
       # noctx wants the database/sql *Context variants throughout the store. That
       # is a real improvement and a behaviour change — it makes queries
       # cancellable in the component whose SetMaxOpenConns(1) and WAL-checkpoint
@@ -130,7 +134,7 @@ linters:
       # than riding along inside a 24,000-line relocation. Scoped to the two files
       # that hold it so noctx stays live everywhere else in the module.
       - linters: [noctx]
-        path: sidecar/engine/sqlite_(migrations|store)\.go
+        path: ^sidecar/engine/sqlite_(migrations|store)\.go
     paths:
       - third_party$
       - builtin$
