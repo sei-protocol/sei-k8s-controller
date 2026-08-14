@@ -6,7 +6,8 @@ require (
 	github.com/cosmos/btcutil v1.0.5
 	github.com/google/uuid v1.6.0
 	github.com/leanovate/gopter v0.2.11
-	github.com/oapi-codegen/runtime v1.6.0
+	github.com/oapi-codegen/runtime v1.2.0
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/sei-protocol/sei-config v0.0.25
 )
 

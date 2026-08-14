@@ -18,6 +18,13 @@
 # Re-include embedded shell scripts
 !**/*.sh
 
+# Re-include //go:embed targets that are not Go source. The build fails at
+# compile time when one is missing from the context — `pattern config.toml: no
+# matching files found` — so an addition here is required whenever a new asset
+# is embedded. Currently: sidecar/tasks/defaults/config.toml, the seid config
+# the sidecar writes on first start.
+!**/tasks/defaults/*.toml
+
 # Re-include the runner image's per-kind Go text templates. The runner
 # Dockerfile (runner/Dockerfile) bakes runner/templates/ into the image
 # at /templates/. Without this re-include the seitask-runner build fails

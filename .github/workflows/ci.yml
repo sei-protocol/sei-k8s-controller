@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: ["*"]
 
+# `push` and `pull_request` both fire on every branch, so a PR commit runs this
+# workflow twice. Without a group, superseded runs keep going — and each one now
+# builds two container images.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -15,19 +22,36 @@ jobs:
         # One job per Go module. golangci-lint resolves packages with Go
         # patterns, which stop at a nested module boundary — a root-only run
         # would never lint sidecarapi/ and would pass while it was broken.
-        module: [".", "sidecarapi"]
+        module: [".", "sidecarapi", "sidecar"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # only-new-issues below diffs against the merge base, which a shallow
+          # clone does not contain — the filter then silently passes and the
+          # module's whole pre-existing backlog is reported as new. A rebase or
+          # force-push is what exposes it.
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # only-new-issues builds its filter from the pull-request patch, and on a
+      # diff this size that silently yields nothing — every pre-existing finding
+      # in an untouched file is then reported as new. --new-from-merge-base has
+      # git compute the same thing locally, so PR size cannot defeat it. The
+      # filter exists because of pre-existing debt from the v2.8.0 → v2.12.1
+      # bump, tracked in #163; remove it once that is paid down.
+      - name: Make the merge base available to the filter
+        run: |
+          git fetch --no-tags --quiet origin \
+            "+refs/heads/${BASE}:refs/remotes/origin/${BASE}"
+        env:
+          BASE: ${{ github.base_ref || github.event.repository.default_branch }}
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.1
           working-directory: ${{ matrix.module }}
-          # Temporary override — pre-existing lint debt surfaced by the
-          # v2.8.0 → v2.12.1 bump. Tracked in #163; remove once paid down.
-          only-new-issues: true
+          args: >-
+            --new-from-merge-base=origin/${{ github.base_ref || github.event.repository.default_branch }}
 
   hygiene:
     runs-on: ubuntu-latest
@@ -43,6 +67,46 @@ jobs:
       # motivated sidecarapi is invisible in CI: `go build` succeeds while
       # `go mod tidy` cannot resolve the graph at all.
       - run: make tidy-check
+
+  # Build both images without pushing. Nothing else in CI compiles a Dockerfile,
+  # and the publish workflow only runs on main — so a build-context problem
+  # reaches main unseen. That is not hypothetical: `.dockerignore` starts with
+  # `**`, and an embedded asset outside its re-include list
+  # (sidecar/tasks/defaults/config.toml, a //go:embed target) failed the sidecar
+  # build with `pattern config.toml: no matching files found` while every other
+  # check stayed green.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # This job builds container images from Dockerfiles the branch controls, so
+    # it gets the narrowest token in the workflow. The repository default is
+    # write.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build controller image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64
+          cache-from: type=gha,scope=controller
+          cache-to: type=gha,scope=controller,mode=max
+      - name: Build sidecar image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sidecar/Dockerfile
+          push: false
+          # amd64 only here — the publish job builds arm64 too, but doubling a
+          # sei-chain-sized build on every PR is not worth catching an
+          # arch-specific break that the Dockerfile's cross-compile makes
+          # unlikely.
+          platforms: linux/amd64
+          cache-from: type=gha,scope=sidecar
+          cache-to: type=gha,scope=sidecar,mode=max
 
   test:
     runs-on: ubuntu-latest

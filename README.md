@@ -10,7 +10,7 @@ A Kubernetes operator for managing the full lifecycle of [Sei](https://sei.io) b
 
 - **One StatefulSet per node** — each `SeiNode` gets its own single-replica StatefulSet rather than pooling nodes. Groups exist for fleet coordination.
 - **Dedicated node scheduling** — pods require `karpenter.sh/nodepool=sei-node` and tolerate `sei.io/workload=sei-node:NoSchedule`, keeping blockchain workloads off general-purpose nodes.
-- **Sidecar architecture** — every node runs a [seictl](https://github.com/sei-protocol/seictl) sidecar as a restartable init container that drives bootstrap tasks before seid starts and handles runtime operations afterward.
+- **Sidecar architecture** — every node runs a `sei-sidecar` container (built from `sidecar/` in this repo) as a restartable init container that drives bootstrap tasks before seid starts and handles runtime operations afterward. The controller renders no `command` for it; the image's entrypoint is the command.
 - **Plan model** — bootstrap is driven by a `TaskPlan` stored in `status.plan`. The controller builds a task sequence based on the node's mode, submits tasks to the sidecar one at a time, and advances through the plan.
 - **Environment-driven genesis** — genesis resolution is handled by the sidecar autonomously. Embedded sei-config is checked first for well-known chains (pacific-1, atlantic-2, arctic-1), then S3 fallback at `{SEI_GENESIS_BUCKET}/{chainID}/genesis.json`.
 
@@ -37,9 +37,15 @@ spec:
   genesis:
     chainId: my-devnet
     stakingAmount: "10000000usei"
-  sidecar:
-    image: ghcr.io/sei-protocol/seictl:v0.0.29
 ```
+
+`spec.sidecar.image` is omitted here on purpose, as in every sample under
+`manifests/samples/`: the sidecar image comes from `images.sidecar` in the
+platform app-config, so one value governs a whole cell. Setting it per node
+overrides that, and a pin left behind on an older image outlives a coordinated
+entrypoint change — the container then exits 0 in a restart loop while seid
+waits on `/v0/healthz` behind a five-day startup probe. Pin only to debug, and
+only to an image whose entrypoint matches what the controller renders.
 
 ### SeiNode
 
@@ -100,6 +106,8 @@ make manifests generate       # Regenerate CRDs, RBAC, DeepCopy after type chang
 The controller image is built and pushed to ECR by GitHub Actions on every push to `main`.
 
 **Deployment ordering**: When adding new environment variables to the sidecar, the controller must be deployed first — it injects env vars into pod specs. If the sidecar image is updated before the controller, existing pods will crash because they lack the new env vars. The safe sequence is: (1) deploy the controller, (2) then update the sidecar image in SeiNode specs.
+
+That ordering holds only for *additive* env vars. It does **not** hold for a change to the sidecar's entrypoint or binary name: the controller renders no `Command`, so the image's ENTRYPOINT is the command, and the two must move together. Split apart, the container prints help and exits 0 in a restart loop while seid waits on `/v0/healthz` behind a `FailureThreshold: 86400` probe — silent for roughly five days. See CLAUDE.md, "The sidecar binary".
 
 The `config/` directory follows the standard [Kubebuilder](https://book.kubebuilder.io) layout:
 

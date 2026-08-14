@@ -855,10 +855,10 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 	)
 	mounts = append(mounts, keyringMounts...)
 
+	// No Command — the sidecar image's ENTRYPOINT is the command.
 	c := corev1.Container{
 		Name:          containerNameSidecar,
 		Image:         sidecarImage(node, p),
-		Command:       []string{"seictl", "serve"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env:           env,
 		Ports: []corev1.ContainerPort{
