@@ -46,11 +46,21 @@ const (
 // Each path's caller does not carry K8s auth headers, so requiring
 // X-Remote-User would break the corresponding probe / scrape.
 // kube-rbac-proxy must include every path here in its --allow-paths.
+// The bypass paths, named so the route registrations in server.go and this list
+// cannot drift apart. kube-rbac-proxy's --ignore-paths and openapi.yaml carry
+// their own copies; those are still hand-synced.
+const (
+	PathHealthz  = "/v0/healthz"  // kubelet readiness probe
+	PathStartupz = "/v0/startupz" // kubelet startup probe
+	PathLivez    = "/v0/livez"    // kubelet liveness probe
+	PathMetrics  = "/v0/metrics"  // Prometheus scrape
+)
+
 var bypassPaths = map[string]struct{}{
-	"/v0/healthz":  {}, // kubelet readiness probe
-	"/v0/startupz": {}, // kubelet startup probe
-	"/v0/livez":    {}, // kubelet liveness probe
-	"/v0/metrics":  {}, // Prometheus scrape
+	PathHealthz:  {},
+	PathStartupz: {},
+	PathLivez:    {},
+	PathMetrics:  {},
 }
 
 // BypassPaths returns the set of paths exempt from the X-Remote-User

@@ -59,11 +59,11 @@ func NewServer(addr string, eng *engine.Engine, homeDir, authnMode string) *Serv
 		engine:  eng,
 		mux:     http.NewServeMux(),
 	}
-	s.mux.HandleFunc("GET /v0/healthz", s.handleHealthz)
-	s.mux.HandleFunc("GET /v0/startupz", s.handleHealthz)
-	s.mux.HandleFunc("GET /v0/livez", s.handleLivez)
+	s.mux.HandleFunc("GET "+PathHealthz, s.handleHealthz)
+	s.mux.HandleFunc("GET "+PathStartupz, s.handleHealthz)
+	s.mux.HandleFunc("GET "+PathLivez, s.handleLivez)
 	s.mux.HandleFunc("GET /v0/status", s.handleStatus)
-	s.mux.Handle("GET /v0/metrics", promhttp.Handler())
+	s.mux.Handle("GET "+PathMetrics, promhttp.Handler())
 	s.mux.HandleFunc("GET /v0/node-id", s.handleNodeID)
 	s.mux.HandleFunc("POST /v0/tasks", s.handlePostTask)
 	s.mux.HandleFunc("GET /v0/tasks", s.handleListTasks)

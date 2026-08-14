@@ -111,6 +111,18 @@ linters:
       # allocates itself, so preallocating changes nothing.
       - linters: [prealloc, unparam]
         path: sidecar/*
+      # goconst's remaining hits are wire and config literals: JSON field names
+      # in the EVM digest and shadow comparators (code, type, nonce, balance,
+      # gasUsed, storage), seid config.toml keys, which are hyphenated by
+      # convention and must read exactly as written (p2p, persistent-peers,
+      # statesync), and log attribute names. Same call as sidecarapi/client —
+      # reading the literal in place is what makes these checkable against the
+      # thing they mirror, and hoisting them trades that for a DRY score. One hit
+      # suggests reusing conditionHeight for a JSON key and a log attribute that
+      # merely share the spelling "height"; that constant names an
+      # await-condition kind, so reusing it would conflate two unrelated things.
+      - linters: [goconst]
+        path: sidecar/*
       # noctx wants the database/sql *Context variants throughout the store. That
       # is a real improvement and a behaviour change — it makes queries
       # cancellable in the component whose SetMaxOpenConns(1) and WAL-checkpoint

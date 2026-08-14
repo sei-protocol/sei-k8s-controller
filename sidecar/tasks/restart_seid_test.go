@@ -34,9 +34,9 @@ func (f *fakeSignaler) Alive(int) bool { return f.alive.Load() }
 
 // upAfter returns a probe that reports down for the first n calls, then up.
 func upAfter(n int) func(context.Context) bool {
-	var calls int32
+	var calls atomic.Int32
 	return func(context.Context) bool {
-		return atomic.AddInt32(&calls, 1) > int32(n)
+		return calls.Add(1) > int32(n)
 	}
 }
 
