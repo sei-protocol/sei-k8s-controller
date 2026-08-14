@@ -56,3 +56,44 @@ jobs:
           # controller image's build.
           cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:integration-harness
           cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:integration-harness,mode=max
+
+  # A separate job, not a third step in `publish`. ECR sets
+  # image_tag_mutability = IMMUTABLE, so re-running this workflow on a sha whose
+  # controller image is already pushed fails that step and would abort every
+  # step after it — the sidecar would silently never publish. Independent jobs
+  # also mean a sidecar build failure does not block the controller image.
+  publish-sidecar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::189176372795:role/common/gha
+          role-duration-seconds: 900
+          aws-region: us-east-2
+
+      - id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The per-node sidecar. Built from the repo root so the sidecarapi module
+      # it resolves through a filesystem `replace` is in the context.
+      - name: Build and push sidecar image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sidecar/Dockerfile
+          push: true
+          # arm64 as well as amd64, matching what the GHCR build this replaces
+          # produced. The Dockerfile pins its build stage to $BUILDPLATFORM and
+          # cross-compiles, so neither target needs QEMU.
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.ecr-login.outputs.registry }}/sei/sei-sidecar:${{ inputs.tag || github.sha }}
+          # Dedicated cache ref, for the same reason the integration-harness has
+          # one — and more so here: this build pulls the whole sei-chain graph,
+          # and the image holds an operator keyring at runtime, so a poisoned
+          # layer must not be able to reach the controller image's build.
+          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:sei-sidecar
+          cache-to: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/sei/build-cache:sei-sidecar,mode=max

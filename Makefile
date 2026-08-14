@@ -40,7 +40,9 @@ build-sidecar: ## Build the sidecar binary.
 docker-build-sidecar: ## Build the sidecar container image.
 	@# Build context is the repo root — sidecar/ resolves sidecarapi/ through a
 	@# filesystem replace, so both module trees must be in the context.
-	$(CONTAINER_TOOL) build -f sidecar/Dockerfile -t $(SIDECAR_IMG) .
+	@# --platform matches docker-build: without it this silently produces an
+	@# arm64 image on an Apple Silicon machine, which no cluster node runs.
+	$(CONTAINER_TOOL) build --platform linux/amd64 -f sidecar/Dockerfile -t $(SIDECAR_IMG) .
 
 test: test-modules ## Run tests (root module with coverage, then every other module).
 	go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out

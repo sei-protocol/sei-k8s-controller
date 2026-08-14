@@ -8,7 +8,12 @@
 # and google.golang.org/grpc *down* relative to the controller module. Under a
 # workspace those replaces would be promoted to main-module status and leak into
 # the root module's resolution; off keeps this build identical to a consumer's.
-FROM docker.io/golang:1.26 AS build
+#
+# --platform=$BUILDPLATFORM keeps the build stage on the runner's native
+# architecture and cross-compiles with GOOS/GOARCH below. Without it, buildx
+# emulates this stage under QEMU for every non-native target, which means
+# compiling the whole sei-chain graph through emulation.
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.26 AS build
 
 ENV GOWORK=off
 WORKDIR /workspace

@@ -44,6 +44,41 @@ jobs:
       # `go mod tidy` cannot resolve the graph at all.
       - run: make tidy-check
 
+  # Build both images without pushing. Nothing else in CI compiles a Dockerfile,
+  # and the publish workflow only runs on main — so a build-context problem
+  # reaches main unseen. That is not hypothetical: `.dockerignore` starts with
+  # `**`, and an embedded asset outside its re-include list
+  # (sidecar/tasks/defaults/config.toml, a //go:embed target) failed the sidecar
+  # build with `pattern config.toml: no matching files found` while every other
+  # check stayed green.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build controller image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64
+          cache-from: type=gha,scope=controller
+          cache-to: type=gha,scope=controller,mode=max
+      - name: Build sidecar image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sidecar/Dockerfile
+          push: false
+          # amd64 only here — the publish job builds arm64 too, but doubling a
+          # sei-chain-sized build on every PR is not worth catching an
+          # arch-specific break that the Dockerfile's cross-compile makes
+          # unlikely.
+          platforms: linux/amd64
+          cache-from: type=gha,scope=sidecar
+          cache-to: type=gha,scope=sidecar,mode=max
+
   test:
     runs-on: ubuntu-latest
     steps:
