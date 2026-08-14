@@ -21,13 +21,12 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// destinations holds flag-bound values shared with the subcommands, mirroring
-// the shape the seictl CLI used so serve.go's call sites are unchanged.
+// destinations holds flag-bound values the subcommands read.
 //
-// home is the one that matters. It binds SEI_HOME, which the controller sets to
-// the node's data-PVC mount. In seictl this flag lived on the root command and
-// serve.go read it from here; the wiring is reproduced deliberately, because
-// losing it does not fail — it silently relocates every write off the PVC.
+// home binds SEI_HOME, which the controller sets to the node's data-PVC mount.
+// It lives on the root command so every subcommand resolves the same directory,
+// and losing that binding does not fail — it silently relocates every write off
+// the PVC, which is why validateHome guards it.
 var destinations = struct {
 	home string
 }{}

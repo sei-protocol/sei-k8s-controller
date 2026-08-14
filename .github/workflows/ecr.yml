@@ -64,13 +64,21 @@ jobs:
   # also mean a sidecar build failure does not block the controller image.
   publish-sidecar:
     runs-on: ubuntu-latest
+    # Bounded so a stuck build fails rather than burning a runner for six hours;
+    # generous because a cold-cache two-arch sei-chain compile is slow.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::189176372795:role/common/gha
-          role-duration-seconds: 900
+          # Longer than the controller job's 900s, and deliberately: this build
+          # compiles the sei-chain graph for two architectures, which overruns
+          # 15 minutes on a cold cache — the credentials would expire before the
+          # push and the image would never reach ECR. 3600 is inside the role's
+          # max_session_duration of 7200 (terraform .../common/gha.tf).
+          role-duration-seconds: 3600
           aws-region: us-east-2
 
       - id: ecr-login
