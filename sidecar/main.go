@@ -15,21 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sei-protocol/seilog"
 	"github.com/urfave/cli/v3"
 )
-
-// destinations holds flag-bound values the subcommands read.
-//
-// home binds SEI_HOME, which the controller sets to the node's data-PVC mount.
-// It lives on the root command so every subcommand resolves the same directory,
-// and losing that binding does not fail — it silently relocates every write off
-// the PVC, which is why validateHome guards it.
-var destinations = struct {
-	home string
-}{}
 
 func main() {
 	cmd := &cli.Command{
@@ -39,23 +30,31 @@ func main() {
 			&cli.StringFlag{
 				Name:    "home",
 				Sources: cli.EnvVars("SEI_HOME"),
-				// No Value: an unset home must fail, not default. The previous
-				// fallback was "/sei" while the controller mounts the data PVC
-				// at $HOME/.sei, so a dropped SEI_HOME produced a running,
-				// probe-passing sidecar writing genesis and config into an
-				// empty directory. Required turns that into a startup error.
-				Required:    true,
-				Destination: &destinations.home,
-				TakesFile:   true,
-				Config:      cli.StringConfig{TrimSpace: true},
-				Usage:       "seid home directory (the node's data volume)",
+				// No Value: a wrong home is silent, because every path the
+				// sidecar writes is resolved against it.
+				Required:  true,
+				TakesFile: true,
+				Config:    cli.StringConfig{TrimSpace: true},
+				Usage:     "seid home directory (the node's data volume)",
+				// Validation belongs here, not in a root Before hook. urfave
+				// runs Before hooks ahead of its own required-flag check, so a
+				// hook would shadow that check and report an unset SEI_HOME as
+				// though it were set-but-empty. A flag Action runs only for
+				// flags that were actually set, which leaves the unset case to
+				// the required-flag check that describes it correctly.
+				Action: func(_ context.Context, cmd *cli.Command, home string) error {
+					if err := validateHome(home); err != nil {
+						return err
+					}
+					// Normalize before any subcommand reads it: two consumers
+					// take the value raw rather than through filepath.Join —
+					// tasks.NewSnapshotUploader's os.CreateTemp root and the
+					// gentx generator's cfg.SetRoot.
+					return cmd.Set("home", filepath.Clean(home))
+				},
 			},
 		},
 		Commands: []*cli.Command{&serveCmd},
-	}
-
-	cmd.Before = func(ctx context.Context, _ *cli.Command) (context.Context, error) {
-		return ctx, validateHome(destinations.home)
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
@@ -65,17 +64,22 @@ func main() {
 	}
 }
 
-// validateHome rejects a set-but-empty home directory.
+// validateHome rejects a home directory that would silently relocate every
+// write off the node's data volume.
 //
-// The flag's Required only tests whether a value was supplied, and SEI_HOME=""
-// supplies one. Without this check the sidecar starts and resolves every path
-// relative to its working directory — measured, it creates config/, data/ and
-// sidecar.db there and serves normally — which is the silent wrong-directory
-// failure Required is there to prevent.
+// Two shapes get past the flag's Required, which only tests that a value was
+// supplied. An empty value resolves every path against the working directory,
+// and so does any relative value — the harm is identical, so both are refused
+// rather than only the one that prompted the check.
 func validateHome(home string) error {
-	if strings.TrimSpace(home) == "" {
+	trimmed := strings.TrimSpace(home)
+	if trimmed == "" {
 		return errors.New("SEI_HOME is set but empty; it must name the node's data " +
 			"volume, or every path resolves relative to the working directory")
+	}
+	if !filepath.IsAbs(trimmed) {
+		return fmt.Errorf("SEI_HOME must be an absolute path; got %q, which resolves "+
+			"relative to the working directory rather than the node's data volume", home)
 	}
 	return nil
 }

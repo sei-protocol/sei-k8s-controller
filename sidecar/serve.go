@@ -39,11 +39,7 @@ var serveCmd = cli.Command{
 		ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 		defer stop()
 
-		// destinations.home is bound to SEI_HOME on the root command and marked
-		// Required there, so an unset value fails before we reach this point.
-		// It used to fall back to "/sei" while the controller mounts the data
-		// PVC elsewhere, which made a dropped SEI_HOME silent.
-		homeDir := destinations.home
+		homeDir := cmd.String("home")
 		port := cmd.String("port")
 		chainID := os.Getenv("SEI_CHAIN_ID")
 		genesisBucket := os.Getenv("SEI_GENESIS_BUCKET")

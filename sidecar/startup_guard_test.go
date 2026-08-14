@@ -87,36 +87,43 @@ func TestUnauthenticatedIsTheZeroValue(t *testing.T) {
 	}
 }
 
-// The flag's Required only checks that a value was supplied, and SEI_HOME=""
-// supplies one. Before validateHome existed, an empty value started the sidecar
-// and it created config/, data/ and sidecar.db relative to its working
-// directory — a running, probe-passing sidecar operating off the data volume.
+// Required only tests that a value was supplied. Both an empty value and a
+// relative one resolve every path against the working directory instead of the
+// node's data volume, and the sidecar serves normally either way — it creates
+// config/, data/ and sidecar.db wherever it happens to be running.
 func TestValidateHome(t *testing.T) {
 	cases := []struct {
 		name    string
 		home    string
-		wantErr bool
+		wantErr string
 	}{
-		{name: "empty is refused", home: "", wantErr: true},
-		{name: "whitespace-only is refused", home: "   ", wantErr: true},
-		{name: "tab is refused", home: "\t", wantErr: true},
-		{name: "a real path is accepted", home: "/home/nonroot/.sei", wantErr: false},
-		{name: "a relative path is accepted — odd but the operator's choice", home: "sei", wantErr: false},
+		{name: "empty", home: "", wantErr: "set but empty"},
+		{name: "whitespace only", home: "   ", wantErr: "set but empty"},
+		{name: "tab only", home: "\t", wantErr: "set but empty"},
+		// A relative path carries the same consequence as an empty one.
+		{name: "bare relative", home: "sei", wantErr: "absolute path"},
+		{name: "dot relative", home: "./sei", wantErr: "absolute path"},
+		{name: "parent relative", home: "../sei", wantErr: "absolute path"},
+		{name: "absolute", home: "/home/nonroot/.sei"},
+		{name: "absolute unnormalized", home: "/home/nonroot/.sei///"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateHome(tc.home)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected a refusal, got nil")
-				}
-				if !strings.Contains(err.Error(), "SEI_HOME") {
-					t.Errorf("error should name SEI_HOME; got %q", err.Error())
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("expected nil, got %v", err)
 				}
 				return
 			}
-			if err != nil {
-				t.Errorf("expected nil, got %v", err)
+			if err == nil {
+				t.Fatalf("expected a refusal containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error: got %q, want substring %q", err.Error(), tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), "SEI_HOME") {
+				t.Errorf("error should name SEI_HOME; got %q", err.Error())
 			}
 		})
 	}

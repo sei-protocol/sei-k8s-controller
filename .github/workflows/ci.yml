@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: ["*"]
 
+# `push` and `pull_request` both fire on every branch, so a PR commit runs this
+# workflow twice. Without a group, superseded runs keep going — and each one now
+# builds two container images.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -54,6 +61,11 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # This job builds container images from Dockerfiles the branch controls, so
+    # it gets the narrowest token in the workflow. The repository default is
+    # write.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

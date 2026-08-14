@@ -73,12 +73,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::189176372795:role/common/gha
-          # Longer than the controller job's 900s, and deliberately: this build
-          # compiles the sei-chain graph for two architectures, which overruns
-          # 15 minutes on a cold cache — the credentials would expire before the
-          # push and the image would never reach ECR. 3600 is inside the role's
-          # max_session_duration of 7200 (terraform .../common/gha.tf).
-          role-duration-seconds: 3600
+          role-duration-seconds: 900
           aws-region: us-east-2
 
       - id: ecr-login
@@ -94,10 +89,15 @@ jobs:
           context: .
           file: sidecar/Dockerfile
           push: true
-          # arm64 as well as amd64, matching what the GHCR build this replaces
-          # produced. The Dockerfile pins its build stage to $BUILDPLATFORM and
-          # cross-compiles, so neither target needs QEMU.
-          platforms: linux/amd64,linux/arm64
+          # amd64 only. The sei-node Karpenter pool pins
+          # kubernetes.io/arch In [amd64] (platform repo,
+          # clusters/prod/default/nodepool-default.yaml), so no node can schedule
+          # an arm64 sidecar. Publishing one would also make this repository the
+          # registry's first multi-arch image index, under an IMMUTABLE tag
+          # policy whose only lifecycle rule expires *untagged* manifests — the
+          # child manifests of an index — at 7 days. Untested, and a broken index
+          # cannot be replaced at the same tag.
+          platforms: linux/amd64
           tags: ${{ steps.ecr-login.outputs.registry }}/sei/sei-sidecar:${{ inputs.tag || github.sha }}
           # Dedicated cache ref, for the same reason the integration-harness has
           # one — and more so here: this build pulls the whole sei-chain graph,

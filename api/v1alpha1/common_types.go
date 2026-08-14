@@ -207,7 +207,16 @@ type ShadowResultConfig struct {
 
 // SidecarConfig configures the sei-sidecar container.
 type SidecarConfig struct {
-	// Image overrides the sidecar container image.
+	// Image overrides the sidecar container image for this node, in place of the
+	// platform config's images.sidecar. Prefer leaving it unset so one value
+	// governs the whole cell.
+	//
+	// The controller renders no command for the sidecar container, so the image's
+	// entrypoint is the command. An image whose entrypoint does not match what
+	// the controller expects fails quietly rather than loudly: the container
+	// exits 0 and restarts while seid waits on /v0/healthz behind a startup
+	// probe that tolerates roughly five days. Pin only to debug, and only to an
+	// image built alongside the running controller.
 	// +optional
 	Image string `json:"image,omitempty"`
 
