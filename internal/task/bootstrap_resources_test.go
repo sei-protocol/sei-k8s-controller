@@ -248,6 +248,39 @@ func bootstrapEnv(c *corev1.Container, name string) string {
 // (platform.HomeDir), never the data dir itself. A regression here — HOME left
 // equal to the data dir, or a lingering `--home "$HOME"` — reintroduces the
 // nesting bug and, mid-migration, risks a validator-data wipe.
+// Second render site for the sidecar container, and it must agree with the
+// StatefulSet one: no Command, no Args, so the image's ENTRYPOINT is the
+// command. See TestSidecarContainer_RendersNoCommandOrArgs in
+// internal/noderesource — the bootstrap Job is the site a steady-state cell
+// roll never exercises, so only a new snapshot-bootstrapped node would find a
+// regression here.
+func TestBootstrapJob_SidecarRendersNoCommandOrArgs(t *testing.T) {
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "v-0", Namespace: testReplaceNs},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID: "sei-test",
+			Image:   "ghcr.io/sei-protocol/seid:latest",
+		},
+	}
+	snap := &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 12345}}
+
+	job, err := GenerateBootstrapJob(node, snap, platformtest.Config())
+	if err != nil {
+		t.Fatalf("GenerateBootstrapJob error: %v", err)
+	}
+
+	sc := findBootstrapContainer(job.Spec.Template.Spec, bootstrapTestSidecarContainer)
+	if sc == nil {
+		t.Fatalf("%s container not found", bootstrapTestSidecarContainer)
+	}
+	if len(sc.Command) != 0 {
+		t.Errorf("sidecar Command = %v, want empty (the image ENTRYPOINT is the command)", sc.Command)
+	}
+	if len(sc.Args) != 0 {
+		t.Errorf("sidecar Args = %v, want empty", sc.Args)
+	}
+}
+
 func TestBootstrapJob_HomeAndDataDir(t *testing.T) {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "v-0", Namespace: testReplaceNs},

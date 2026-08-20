@@ -382,6 +382,23 @@ func TestSidecarContainer_DefaultImage(t *testing.T) {
 	g.Expect(sc.Image).To(Equal(platformtest.Config().SidecarImage))
 }
 
+// The sidecar container must render NO Command and NO Args: the image's
+// ENTRYPOINT is the command. Re-adding either silently breaks every pod in every
+// cell — the container exits 0 and restarts while seid blocks on /v0/healthz
+// behind a StartupProbe tolerating roughly five days, so nothing crashes and
+// nothing alerts. Nothing else in the suite pins this, and the `seictl`
+// compatibility name in sidecar/Dockerfile cannot be removed safely until it is.
+func TestSidecarContainer_RendersNoCommandOrArgs(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("sc-0", "default")
+
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+	sc := findInitContainer(sts.Spec.Template.Spec.InitContainers, "sei-sidecar")
+
+	g.Expect(sc.Command).To(BeEmpty())
+	g.Expect(sc.Args).To(BeEmpty())
+}
+
 func TestSidecarContainer_CustomImage(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("sc-0", "default")
