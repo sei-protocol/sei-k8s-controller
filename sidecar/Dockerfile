@@ -45,4 +45,34 @@ COPY --from=build /go/bin/sei-sidecar /usr/bin/sei-sidecar
 # restartPolicy Always is a container that loops forever while reporting
 # success. Harder to notice than a crash, and the seid container beside it would
 # sit blocked on /v0/healthz behind a StartupProbe with FailureThreshold 86400.
+
+# Compatibility shim, deliberately temporary. A pod spec's `command` overrides
+# ENTRYPOINT outright, so this second name is what lets ONE image satisfy both
+# controller versions:
+#
+#   controller at 92850d5 and earlier renders Command ["seictl","serve"],
+#   which overrides the ENTRYPOINT below and resolves through this name.
+#
+#   controller at 186d65a and later renders no Command, so the ENTRYPOINT runs.
+#
+# Without it the two working combinations are diagonal — old controller needs
+# `seictl`, new controller needs the ENTRYPOINT — so there is no ordering that
+# passes through a working state, and image and controller must flip together in
+# every cell at once. Worse, the rollback wedges: every mode's plan runs
+# config-patch (a polled sidecar task) before replace-pod, so reverting the
+# controller submits to a sidecar that is already dead, the submit fails,
+# replace-pod is never reached, and the broken pod is never replaced. With this
+# name present there is never a dead sidecar to wedge on.
+#
+# A second COPY rather than a symlink because the final stage is distroless and
+# has no shell to run `ln`. The cost is one duplicated static binary in the
+# image layer, taken deliberately over being clever across build stages.
+#
+# REMOVAL CONDITION (unchanged from when this was first written): remove only
+# after the controller stops rendering Command — it already has, at 186d65a —
+# AND every cell has rolled past that controller. As of this commit no cell has
+# adopted this image at all, so the second half is not met anywhere. Deleting it
+# before then is what turns three reversible steps into one simultaneous flip.
+COPY --from=build /go/bin/sei-sidecar /usr/bin/seictl
+
 ENTRYPOINT ["/usr/bin/sei-sidecar", "serve"]
