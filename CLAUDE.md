@@ -28,7 +28,13 @@ Two checks keep the controller tidyable, both in `make ci`. The `depguard` rule 
 
 `sidecar/main.go` → `sei-sidecar`, published to ECR as `sei/sei-sidecar`. The controller renders **no `Command`** for the sidecar container (`internal/noderesource/`, `internal/task/bootstrap_resources.go`), so the image's ENTRYPOINT — `sei-sidecar serve` — is what runs. The image owns its entrypoint; renaming the binary is an image-only change.
 
-**Changing the sidecar image is a coordinated deploy.** The image, `images.sidecar` in the platform app-config, and the controller ship together per cell. `images.sidecar` is read once at startup, so a config edit alone does nothing until the controller restarts — and the two halves failing apart is silent, not loud. A controller that renders no `Command` against an image whose entrypoint lacks the subcommand gets a container that prints help and exits 0, restarting forever under `restartPolicy: Always`, while seid blocks on a shell loop polling `/v0/healthz` behind a StartupProbe with `FailureThreshold: 86400` at 5s — about five days before Kubernetes calls it failed.
+**Changing the sidecar image is an ordered deploy, not a simultaneous one.** The image carries a `seictl` compatibility name alongside `sei-sidecar` (`sidecar/Dockerfile`), so it runs under both the controller that renders `Command: ["seictl","serve"]` and the one that renders none. That makes the image version-agnostic; it does **not** make the controller version-agnostic. Per cell, in this order:
+
+1. point `images.sidecar` at the ECR image and restart the controller — the restart is what reads it, and it rolls the cell through `replace-pod` on the *old* controller, via the `seictl` name;
+2. bump the controller — changes no image, so it drifts nothing and rolls nothing;
+3. delete the shim, once no cell is left behind.
+
+**The safe rollback is "revert the controller, leave the image" — never the reverse.** The new controller against an *old* image is the one pair the shim cannot save: a bare `seictl` prints help and exits 0, restarting forever under `restartPolicy: Always` while seid blocks on a shell loop polling `/v0/healthz` behind a StartupProbe with `FailureThreshold: 86400` at 5s — about five days before Kubernetes calls it failed. Recovery from a dead sidecar is a manual `kubectl delete pod` per node: StatefulSets are `OnDelete`, so nothing re-rolls on its own, and any later image-drift plan wedges at `config-patch`, which every mode orders before `replace-pod` and which submits to the dead sidecar.
 
 The rollout is controller-driven, not Kubernetes-driven: StatefulSets use `UpdateStrategy: OnDelete`, so a template change never touches a live pod. Sidecar-image drift builds a NodeUpdate plan whose `replace-pod` task deletes pods at the old revision, for **every** node whose `status.currentSidecarImage` is set. Expect the whole cell to roll.
 
