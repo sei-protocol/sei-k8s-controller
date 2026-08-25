@@ -65,9 +65,17 @@ var votingPeriodGenesis = map[string]string{
 // upgradeConfig are the seid runtime overrides the upgrade flow needs: the REST
 // API serves the gov proposal queries (off by default), and kv tx-indexing lets
 // the proposal-submission tx be found.
+//
+// giga_executor.enabled is pinned off because the pre-upgrade image predates the
+// executor. sei-config renders enabled=true into every app.toml and overrides the
+// binary's own default, but sei-chain only began shipping libevmone in the runtime
+// image on 2026-06-23; an older binary reads the flag, calls InitEvmoneVM and
+// panics in app.New before it binds the RPC port. Drop this line once
+// SEID_UPGRADE_FROM_IMAGE is v6.6.0 or later.
 var upgradeConfig = map[string]string{
-	"api.rest.enable":  "true",
-	"tx_index.indexer": "kv",
+	"api.rest.enable":       "true",
+	"tx_index.indexer":      "kv",
+	"giga_executor.enabled": "false",
 }
 
 // restUnreachable is the last-seen note when a gov REST poll gets no 200.
@@ -143,6 +151,14 @@ func TestNightlyChainUpgrade(t *testing.T) {
 	tmRPC := ch.network.TendermintRPC() // aggregate endpoint; name/namespace-derived, stable across the image bump
 	rest := ch.network.REST()
 	hc := &http.Client{Timeout: 15 * time.Second}
+
+	// Genesis accounts become queryable only once block 1 commits, and the proposal
+	// task looks the proposer account up before it signs. WaitReady gates on the
+	// SeiNetwork phase plus one /status probe, both of which a chain still at height
+	// 0 satisfies, so wait out the first block here.
+	if err := pollHeightAtLeast(ctx, hc, tmRPC, 1); err != nil {
+		t.Fatalf("network %q first block: %v", chainID, err)
+	}
 
 	// Schedule the upgrade comfortably ahead of the current height so the 60s
 	// voting period elapses and the proposal passes before the chain halts.
