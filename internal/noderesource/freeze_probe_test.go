@@ -9,7 +9,8 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// Covers spec freeze-node: FN-8 and FN-9.
+// Readiness-probe selection for a frozen node, and the bound on that change:
+// no unfrozen node's probe may move.
 //
 // A frozen node's lag is a constant, not a shrinking quantity: block sync hands
 // off at the freeze height and the peer pool keeps the tip it last observed, so
@@ -56,8 +57,8 @@ func TestReadinessProbe_FrozenNode_TargetsStatus(t *testing.T) {
 	}
 }
 
-// FN-9: the change is bounded. An unfrozen RPC-serving node keeps the lag
-// probe, which is a stronger signal than an open socket.
+// The change is bounded. An unfrozen RPC-serving node keeps the lag probe,
+// which is a stronger signal than an open socket.
 func TestReadinessProbe_UnfrozenNode_KeepsLagStatus(t *testing.T) {
 	tests := []struct {
 		name string
@@ -116,8 +117,8 @@ func TestReadinessProbe_FrozenAndUnfrozen_ShareTimings(t *testing.T) {
 	g.Expect(frozen.TimeoutSeconds).To(Equal(unfrozen.TimeoutSeconds))
 }
 
-// FN-4 is structural: only fullNode and archive carry the field, so the shared
-// accessor reports nil for every other mode. A validator that could freeze
+// Only fullNode and archive carry the field, so the shared accessor reports nil
+// for every other mode. A validator that could freeze
 // would fail at boot, because sei-tendermint refuses the combination.
 func TestSpecFreeze_NilForNonRPCModes(t *testing.T) {
 	g := NewWithT(t)

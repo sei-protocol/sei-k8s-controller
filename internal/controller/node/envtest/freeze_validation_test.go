@@ -14,11 +14,12 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// Covers spec freeze-node: FN-1, FN-2, FN-3, FN-5, FN-6.
+// Admission-level coverage of the freeze sub-spec: which shapes the API server
+// accepts, and which it rejects.
 //
-// These cases need no controller. The API server alone accepts the valid
-// shapes and rejects each invalid one, which is the spec's Independent Test for
-// the CRD-contract group.
+// These cases need no controller. The API server alone accepts the valid shapes
+// and rejects each invalid one, so a failure here is a CRD-contract defect and
+// never a reconcile bug.
 
 // frozenFullNode returns a full node held at height. A height of 0 leaves
 // freeze unset, which admission must accept as an ordinary full node.
@@ -78,8 +79,7 @@ func updateNodeWithRetry(t *testing.T, key client.ObjectKey, mutate func(*seiv1a
 	return lastErr
 }
 
-// FN-1, FN-2: both RPC-serving modes carry freeze, and a height of at least 1
-// is accepted.
+// Both RPC-serving modes carry freeze, and a height of at least 1 is accepted.
 func TestFreeze_OnFullNodeAndArchive_Accepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -90,7 +90,7 @@ func TestFreeze_OnFullNodeAndArchive_Accepted(t *testing.T) {
 		To(Succeed(), "a frozen archive node must be accepted")
 }
 
-// FN-2: the minimum guards against a freeze at height 0, which seid treats as
+// The minimum guards against a freeze at height 0, which seid treats as
 // "not frozen" — an operator who writes 0 means something else.
 func TestFreeze_HeightZero_Rejected(t *testing.T) {
 	g := NewWithT(t)
@@ -103,7 +103,7 @@ func TestFreeze_HeightZero_Rejected(t *testing.T) {
 	g.Expect(err).To(HaveOccurred(), "freeze.height of 0 must be rejected")
 }
 
-// FN-3: the node has already stopped at its height, so a change cannot take
+// The node has already stopped at its height, so a change cannot take
 // effect without a rebuild. Admission rejects it rather than leaving a spec
 // that disagrees with the running node.
 func TestFreeze_HeightImmutable(t *testing.T) {
@@ -133,7 +133,7 @@ func TestFreeze_HeightImmutable(t *testing.T) {
 	})
 }
 
-// FN-5: mergeOverrides copies user overrides last, so a user key would outrank
+// mergeOverrides copies user overrides last, so a user key would outrank
 // the controller-derived one and leave the probe disagreeing with the config.
 // Admission rejects the key instead.
 func TestFreeze_HeightInOverrides_Rejected(t *testing.T) {
@@ -148,7 +148,7 @@ func TestFreeze_HeightInOverrides_Rejected(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("not overrides"))
 }
 
-// FN-5: the guard targets one key. An unrelated override still works.
+// The guard targets one key. An unrelated override still works.
 func TestFreeze_OtherOverrides_Accepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -189,7 +189,7 @@ func TestFreeze_HaltKeysWithoutFreeze_Accepted(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
 }
 
-// FN-6: snapshot generation produces snapshots from new blocks, and a frozen
+// Snapshot generation produces snapshots from new blocks, and a frozen
 // node has none. The two fields together describe nothing coherent.
 func TestFreeze_WithSnapshotGeneration_Rejected(t *testing.T) {
 	generation := &seiv1alpha1.SnapshotGenerationConfig{
@@ -221,7 +221,7 @@ func TestFreeze_WithSnapshotGeneration_Rejected(t *testing.T) {
 	})
 }
 
-// FN-6: snapshot generation on its own is untouched by the new rule.
+// Snapshot generation on its own is untouched by the new rule.
 func TestFreeze_SnapshotGenerationWithoutFreeze_Accepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -234,7 +234,7 @@ func TestFreeze_SnapshotGenerationWithoutFreeze_Accepted(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
 }
 
-// FN-3, the half a field-level transition rule cannot express. A CEL rule using
+// The half a field-level transition rule cannot express. A CEL rule using
 // oldSelf is skipped when the path is absent from the stored object, so
 // `self == oldSelf` on height permits ADDING freeze to an unfrozen node and
 // REMOVING it from a frozen one. Both are unsafe, for different reasons:
@@ -306,7 +306,7 @@ func TestFreeze_PresenceIsCreateOnly(t *testing.T) {
 	})
 }
 
-// FN-1 with a seid-fatal combination the CRD must catch: seid refuses to start
+// A seid-fatal combination the CRD must catch: seid refuses to start
 // once a store has already reached the freeze height, so a snapshot target at
 // or above it is a permanent CrashLoopBackOff.
 func TestFreeze_SnapshotTargetAtOrAboveHeight_Rejected(t *testing.T) {

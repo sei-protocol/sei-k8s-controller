@@ -13,8 +13,8 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// Covers spec freeze-node: FN-7, and the constant/CEL pin the keyFreezeHeight
-// comment promises.
+// Freeze-height override emission, and the two pins the keyFreezeHeight comment
+// promises: one to the CEL literal, one to sei-config's field registry.
 
 func TestFreezeOverrides_EmitsHeight(t *testing.T) {
 	got := freezeOverrides(&seiv1alpha1.FreezeSpec{Height: 12345})
@@ -33,8 +33,8 @@ func TestFreezeOverrides_NilWhenUnfrozen(t *testing.T) {
 	}
 }
 
-// FN-7 for both RPC-serving modes. The planners hold the mode in hand, so each
-// reads its own sub-spec rather than the shared accessor.
+// Both RPC-serving modes emit the override. The planners hold the mode in hand,
+// so each reads its own sub-spec rather than the shared accessor.
 func TestControllerOverrides_CarryFreezeHeight(t *testing.T) {
 	tests := []struct {
 		name string
@@ -77,8 +77,8 @@ func TestControllerOverrides_CarryFreezeHeight(t *testing.T) {
 	}
 }
 
-// FN-9 at the planner: an unfrozen node's overrides are unchanged, so the new
-// branch cannot leak the key into every other node.
+// An unfrozen node's overrides are unchanged, so the new branch cannot leak the
+// key into every other node.
 func TestControllerOverrides_OmitFreezeWhenUnfrozen(t *testing.T) {
 	full := &seiv1alpha1.SeiNode{Spec: seiv1alpha1.SeiNodeSpec{
 		FullNode: &seiv1alpha1.FullNodeSpec{},
