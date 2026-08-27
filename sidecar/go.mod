@@ -12,7 +12,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sei-protocol/sei-chain v0.0.29-fix.0.20260326202429-c9b42951fef7
-	github.com/sei-protocol/sei-config v0.0.25
+	github.com/sei-protocol/sei-config v0.0.27
 	github.com/sei-protocol/sei-k8s-controller/sidecarapi v0.0.0
 	github.com/sei-protocol/seilog v0.0.3
 	github.com/urfave/cli/v3 v3.6.1
