@@ -54,6 +54,16 @@ spec:
               SeiNodeSpec defines the desired state of a standalone Sei node.
               Exactly one mode sub-spec (fullNode, archive, replayer, validator, seed) must
               be set; the populated field determines the node's operating mode.
+
+              The last rule below reduces both freeze-capable modes to a single effective
+              freeze height, 0 when unfrozen, and pins it across updates. It reads dense, and
+              it has to live here rather than on the mode sub-specs: a transition rule is
+              skipped when its path is absent from the stored object, so a rule on the
+              OPTIONAL fullNode/archive parent never fires for a mode switch. Written per
+              mode, swapping an unfrozen fullNode for a frozen archive is admitted, and so is
+              swapping between two frozen modes at different heights. Both leave a Running
+              node carrying the frozen readiness probe with no freeze height in app.toml,
+              because only a bootstrap plan writes config.
             properties:
               archive:
                 description: Archive configures an archive node with full history
@@ -973,6 +983,14 @@ spec:
               rule: '!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive)
                 && has(self.archive.freeze))) || !has(self.overrides) || (!(''chain.halt_height''
                 in self.overrides) && !(''chain.halt_time'' in self.overrides))'
+            - message: 'the effective freeze height is create-only: it cannot be added,
+                removed, or changed on an existing node, including by switching mode;
+                replace the node instead'
+              rule: '(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height
+                : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height
+                : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ?
+                oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze)
+                ? oldSelf.archive.freeze.height : 0))'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:

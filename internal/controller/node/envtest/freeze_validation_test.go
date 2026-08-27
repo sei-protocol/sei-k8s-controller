@@ -357,3 +357,72 @@ func TestFreeze_WithStateSync_Rejected(t *testing.T) {
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("stateSync"))
 }
+
+// A mode switch reaches the same split the per-mode presence rule closes, one
+// level up. The per-mode rule reads oldSelf on an OPTIONAL parent, so CEL skips
+// it when that parent was absent from the stored object: swapping an unfrozen
+// fullNode for a frozen archive never evaluates the archive rule.
+//
+// The consequence matches the in-mode case exactly. The pod template picks up
+// the frozen /status probe on the next reconcile, while chain.freeze_height only
+// ever reaches app.toml on a bootstrap plan.
+func TestFreeze_ModeSwitchCannotIntroduceOrDropFreeze(t *testing.T) {
+	t.Run("unfrozen fullNode to frozen archive is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := frozenFullNode(ns, "swap-to-frozen", 0)
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.FullNode = nil
+			cur.Spec.Archive = &seiv1alpha1.ArchiveSpec{Freeze: &seiv1alpha1.FreezeSpec{Height: 100}}
+		})
+		g.Expect(err).To(HaveOccurred(), "a mode switch must not introduce a freeze")
+	})
+
+	t.Run("frozen archive to unfrozen fullNode is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := frozenArchiveNode(ns, "swap-to-unfrozen", 100)
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.Archive = nil
+			cur.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
+		})
+		g.Expect(err).To(HaveOccurred(), "a mode switch must not drop a freeze")
+	})
+
+	// The height rule cannot catch this either: it lives on FreezeSpec.Height, and
+	// the destination mode's freeze path is new, so CEL skips it there too. Only a
+	// rule that reduces both modes to one effective height sees the change.
+	t.Run("swapping between frozen modes cannot change the height", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := frozenFullNode(ns, "swap-frozen-height", 100)
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.FullNode = nil
+			cur.Spec.Archive = &seiv1alpha1.ArchiveSpec{Freeze: &seiv1alpha1.FreezeSpec{Height: 200}}
+		})
+		g.Expect(err).To(HaveOccurred(), "a mode switch must not smuggle a new freeze height")
+	})
+
+	t.Run("a mode switch that keeps the node unfrozen is still allowed", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := frozenFullNode(ns, "swap-unfrozen", 0)
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.FullNode = nil
+			cur.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
+		})
+		g.Expect(err).NotTo(HaveOccurred(), "this change does not touch freeze, so it must not be collateral damage")
+	})
+}
