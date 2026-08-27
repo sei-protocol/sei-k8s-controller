@@ -59,6 +59,27 @@ spec:
                 description: Archive configures an archive node with full history
                   and no pruning.
                 properties:
+                  freeze:
+                    description: |-
+                      Freeze holds the node at a block height. The node serves query RPC at
+                      that height and never advances. An archive node retains every block, so
+                      a frozen archive node serves any height below the freeze height.
+                    properties:
+                      height:
+                        description: |-
+                          Height is the block height at which the node stops executing; the node
+                          serves blocks through Height-1. Immutable: the node has already stopped,
+                          so lowering the height cannot un-execute and raising it would resume a
+                          node that is read-only by contract. Replace the node to change it.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                        x-kubernetes-validations:
+                        - message: height is immutable
+                          rule: self == oldSelf
+                    required:
+                    - height
+                    type: object
                   snapshotGeneration:
                     description: SnapshotGeneration configures periodic snapshot creation
                       and optional upload.
@@ -87,6 +108,10 @@ spec:
                         type: object
                     type: object
                 type: object
+                x-kubernetes-validations:
+                - message: 'freeze and snapshotGeneration are mutually exclusive:
+                    a frozen node produces no new blocks to snapshot'
+                  rule: '!has(self.freeze) || !has(self.snapshotGeneration)'
               chainId:
                 description: |-
                   ChainID of the chain this node belongs to.
@@ -144,6 +169,28 @@ spec:
                 description: FullNode configures a chain-following full node (absorbs
                   the "rpc" role).
                 properties:
+                  freeze:
+                    description: |-
+                      Freeze holds the node at a block height. The node serves query RPC at
+                      that height and never advances. Set the height here rather than through
+                      spec.overrides: the controller derives the node's readiness probe from
+                      this field, because a frozen node's lag grows without bound.
+                    properties:
+                      height:
+                        description: |-
+                          Height is the block height at which the node stops executing; the node
+                          serves blocks through Height-1. Immutable: the node has already stopped,
+                          so lowering the height cannot un-execute and raising it would resume a
+                          node that is read-only by contract. Replace the node to change it.
+                        format: int64
+                        minimum: 1
+                        type: integer
+                        x-kubernetes-validations:
+                        - message: height is immutable
+                          rule: self == oldSelf
+                    required:
+                    - height
+                    type: object
                   snapshot:
                     description: |-
                       Snapshot configures how the node obtains its initial chain state.
@@ -244,6 +291,10 @@ spec:
                         type: object
                     type: object
                 type: object
+                x-kubernetes-validations:
+                - message: 'freeze and snapshotGeneration are mutually exclusive:
+                    a frozen node produces no new blocks to snapshot'
+                  rule: '!has(self.freeze) || !has(self.snapshotGeneration)'
               image:
                 description: Image is the seid container image.
                 maxLength: 512
@@ -899,6 +950,9 @@ spec:
             - message: peers is required when replayer mode is set
               rule: '!has(self.replayer) || (has(self.peers) && size(self.peers) >
                 0)'
+            - message: 'set the freeze height via fullNode.freeze or archive.freeze,
+                not overrides: user overrides outrank controller-derived ones'
+              rule: '!has(self.overrides) || !(''chain.freeze_height'' in self.overrides)'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:

@@ -950,25 +950,43 @@ func goMemLimitEnv(node *seiv1alpha1.SeiNode, res corev1.ResourceRequirements) (
 // tendermint_p2p_new_connections{direction="in"} and books a handshake failure
 // roughly 6/min; alerts on those series need that baseline subtracted, and
 // inbound connections alone do not prove a seed is publicly reachable.
+// readinessProbeForNode picks the readiness signal the node can actually
+// report. Three cases, in order:
+//
+//   - A seed serves no query RPC, so its P2P listener is the only signal.
+//   - A frozen node holds its height while peers advance, so its lag grows
+//     without bound and /lag_status fails once the lag threshold trips. Its RPC
+//     listener is the signal instead — that is what a caller needs.
+//   - Every other node reports lag, which is the strongest signal available.
 func readinessProbeForNode(node *seiv1alpha1.SeiNode) *corev1.Probe {
 	if !servesSeidRPC(node) {
-		return &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				TCPSocket: &corev1.TCPSocketAction{
-					Port: intstr.FromInt32(seiconfig.PortP2P),
-				},
-			},
-			InitialDelaySeconds: 30,
-			PeriodSeconds:       10,
-			FailureThreshold:    3,
-			TimeoutSeconds:      5,
-		}
+		return tcpReadinessProbe(seiconfig.PortP2P)
+	}
+	if node.Spec.Freeze() != nil {
+		return tcpReadinessProbe(seiconfig.PortRPC)
 	}
 	return &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path: "/lag_status",
 				Port: intstr.FromInt32(seiconfig.PortRPC),
+			},
+		},
+		InitialDelaySeconds: 30,
+		PeriodSeconds:       10,
+		FailureThreshold:    3,
+		TimeoutSeconds:      5,
+	}
+}
+
+// tcpReadinessProbe reports a listener as ready once it accepts a connection.
+// Timings match the HTTP readiness probe so a mode switch does not change how
+// quickly the kubelet reacts.
+func tcpReadinessProbe(port int32) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{
+				Port: intstr.FromInt32(port),
 			},
 		},
 		InitialDelaySeconds: 30,

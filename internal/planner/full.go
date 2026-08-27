@@ -71,6 +71,12 @@ func (p *fullNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alp
 }
 
 func (p *fullNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
+	// A frozen node produces no new blocks, so it never generates snapshots.
+	// FullNodeSpec's CEL rule rejects both fields together, so this returns
+	// rather than merging.
+	if freeze := node.Spec.FullNode.Freeze; freeze != nil {
+		return freezeOverrides(freeze)
+	}
 	sg := node.Spec.FullNode.SnapshotGeneration
 	if sg == nil || sg.Tendermint == nil {
 		return nil

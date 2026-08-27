@@ -11,6 +11,7 @@ import (
 // be set; the populated field determines the node's operating mode.
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) + (has(self.seed) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, validator, or seed must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
+// +kubebuilder:validation:XValidation:rule="!has(self.overrides) || !('chain.freeze_height' in self.overrides)",message="set the freeze height via fullNode.freeze or archive.freeze, not overrides: user overrides outrank controller-derived ones"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
@@ -122,6 +123,20 @@ type DataVolumeImport struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="pvcName is immutable"
 	PVCName string `json:"pvcName"`
+}
+
+// Freeze returns the FreezeSpec from whichever mode sub-spec is populated, or
+// nil when the node is not frozen. Only fullNode and archive carry the field:
+// seid refuses to freeze a validator, and a seed serves no query RPC.
+func (s *SeiNodeSpec) Freeze() *FreezeSpec {
+	switch {
+	case s.FullNode != nil:
+		return s.FullNode.Freeze
+	case s.Archive != nil:
+		return s.Archive.Freeze
+	default:
+		return nil
+	}
 }
 
 // SnapshotSource returns the SnapshotSource from whichever mode sub-spec is

@@ -62,6 +62,12 @@ func (p *archiveNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1
 }
 
 func (p *archiveNodePlanner) controllerOverrides(node *seiv1alpha1.SeiNode) map[string]string {
+	// A frozen node produces no new blocks, so it never generates snapshots.
+	// ArchiveSpec's CEL rule rejects both fields together, so this returns
+	// rather than merging.
+	if freeze := node.Spec.Archive.Freeze; freeze != nil {
+		return freezeOverrides(freeze)
+	}
 	sg := node.Spec.Archive.SnapshotGeneration
 	if sg == nil || sg.Tendermint == nil {
 		return nil
