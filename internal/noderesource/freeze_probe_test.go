@@ -32,7 +32,7 @@ func TestReadinessProbe_FrozenNode_TargetsStatus(t *testing.T) {
 			},
 		},
 		{
-			name: "archive",
+			name: "archive node",
 			spec: seiv1alpha1.SeiNodeSpec{
 				Archive: &seiv1alpha1.ArchiveSpec{
 					Freeze: &seiv1alpha1.FreezeSpec{Height: 100},
@@ -65,8 +65,8 @@ func TestReadinessProbe_UnfrozenNode_KeepsLagStatus(t *testing.T) {
 		spec seiv1alpha1.SeiNodeSpec
 	}{
 		{name: "full node", spec: seiv1alpha1.SeiNodeSpec{FullNode: &seiv1alpha1.FullNodeSpec{}}},
-		{name: "archive", spec: seiv1alpha1.SeiNodeSpec{Archive: &seiv1alpha1.ArchiveSpec{}}},
-		{name: "validator", spec: seiv1alpha1.SeiNodeSpec{Validator: &seiv1alpha1.ValidatorSpec{}}},
+		{name: "archive node", spec: seiv1alpha1.SeiNodeSpec{Archive: &seiv1alpha1.ArchiveSpec{}}},
+		{name: "validator node", spec: seiv1alpha1.SeiNodeSpec{Validator: &seiv1alpha1.ValidatorSpec{}}},
 	}
 
 	for _, tt := range tests {
@@ -124,9 +124,9 @@ func TestSpecFreeze_NilForNonRPCModes(t *testing.T) {
 	g := NewWithT(t)
 
 	for name, spec := range map[string]seiv1alpha1.SeiNodeSpec{
-		"validator": {Validator: &seiv1alpha1.ValidatorSpec{}},
-		"seed":      {Seed: &seiv1alpha1.SeedSpec{}},
-		"replayer":  {Replayer: &seiv1alpha1.ReplayerSpec{}},
+		"validator node": {Validator: &seiv1alpha1.ValidatorSpec{}},
+		"seed":           {Seed: &seiv1alpha1.SeedSpec{}},
+		"replayer":       {Replayer: &seiv1alpha1.ReplayerSpec{}},
 	} {
 		g.Expect(spec.Freeze()).To(BeNil(), "%s must not report a freeze", name)
 	}
