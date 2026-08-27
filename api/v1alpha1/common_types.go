@@ -182,6 +182,25 @@ type TendermintSnapshotGenerationConfig struct {
 // override, prefix) without a breaking change.
 type TendermintSnapshotPublishConfig struct{}
 
+// FreezeSpec holds a node at a block height. The node executes through
+// Height-1, then stops while it continues to serve query RPC. seid refuses to
+// freeze a validator, so only the non-consensus modes carry this sub-spec.
+//
+// Which history the node serves follows from its mode. Pruning happens at
+// commit, so a stopped node stops pruning: a frozen full node serves only the
+// window it had retained, while a frozen archive node serves every block below
+// the freeze height.
+type FreezeSpec struct {
+	// Height is the block height at which the node stops executing; the node
+	// serves blocks through Height-1. Immutable: the node has already stopped,
+	// so lowering the height cannot un-execute and raising it would resume a
+	// node that is read-only by contract. Replace the node to change it.
+	//
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="height is immutable"
+	Height int64 `json:"height"`
+}
+
 // ResultExportConfig configures the node to export block-execution results.
 // One or more use-case sub-structs may be enabled. An empty ResultExportConfig
 // (no sub-struct set) is rejected by the planner as a likely user typo.

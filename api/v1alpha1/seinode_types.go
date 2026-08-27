@@ -9,8 +9,21 @@ import (
 // SeiNodeSpec defines the desired state of a standalone Sei node.
 // Exactly one mode sub-spec (fullNode, archive, replayer, validator, seed) must
 // be set; the populated field determines the node's operating mode.
+//
+// The last rule below reduces both freeze-capable modes to a single effective
+// freeze height, 0 when unfrozen, and pins it across updates. It reads dense, and
+// it has to live here rather than on the mode sub-specs: a transition rule is
+// skipped when its path is absent from the stored object, so a rule on the
+// OPTIONAL fullNode/archive parent never fires for a mode switch. Written per
+// mode, swapping an unfrozen fullNode for a frozen archive is admitted, and so is
+// swapping between two frozen modes at different heights. Both leave a Running
+// node carrying the frozen readiness probe with no freeze height in app.toml,
+// because only a bootstrap plan writes config.
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) + (has(self.seed) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, validator, or seed must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
+// +kubebuilder:validation:XValidation:rule="!has(self.overrides) || !('chain.freeze_height' in self.overrides)",message="set the freeze height via fullNode.freeze or archive.freeze, not overrides: user overrides outrank controller-derived ones"
+// +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
+// +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
@@ -122,6 +135,20 @@ type DataVolumeImport struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="pvcName is immutable"
 	PVCName string `json:"pvcName"`
+}
+
+// Freeze returns the FreezeSpec from whichever mode sub-spec is populated, or
+// nil when the node is not frozen. Only fullNode and archive carry the field:
+// seid refuses to freeze a validator, and a seed serves no query RPC.
+func (s *SeiNodeSpec) Freeze() *FreezeSpec {
+	switch {
+	case s.FullNode != nil:
+		return s.FullNode.Freeze
+	case s.Archive != nil:
+		return s.Archive.Freeze
+	default:
+		return nil
+	}
 }
 
 // SnapshotSource returns the SnapshotSource from whichever mode sub-spec is

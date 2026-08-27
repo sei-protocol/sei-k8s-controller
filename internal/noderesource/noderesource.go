@@ -43,6 +43,15 @@ const (
 	snapshotPublishLabel = "sei.io/snapshot-publish"
 	snapshotPublishValue = "true"
 
+	// frozenLabel marks a node held at a block height. Every "is it keeping up"
+	// signal is dead by design on such a node, so the height-based alerts must
+	// exclude it or they fire forever without resolving: NodeFellBehind trips
+	// once the chain advances past its threshold beyond the freeze height and
+	// never clears. Never appears in the immutable StatefulSet/Service
+	// selectors (which carry only sei.io/node).
+	frozenLabel = "sei.io/frozen"
+	frozenValue = "true"
+
 	// DedicatedNodeKey is the well-known key used both as a SeiNode annotation
 	// (the opt-in) and as the pod-template label it is mirrored to. Value
 	// "true" opts the node into single-tenant scheduling: its pod refuses to
@@ -187,6 +196,9 @@ func ResourceLabels(node *seiv1alpha1.SeiNode) map[string]string {
 	}
 	if snapshotPublishEnabled(node) {
 		labels[snapshotPublishLabel] = snapshotPublishValue
+	}
+	if node.Spec.Freeze() != nil {
+		labels[frozenLabel] = frozenValue
 	}
 	return labels
 }
@@ -937,38 +949,65 @@ func goMemLimitEnv(node *seiv1alpha1.SeiNode, res corev1.ResourceRequirements) (
 }
 
 // readinessProbeForNode returns the seid readiness probe for the node's mode.
+// Three cases, in the order the function tests them.
 //
-// Chain-following modes gate on seid's /lag_status, which reports sync distance
-// — the meaningful "ready to serve" signal. A seed serves no RPC, so its only
-// in-band signal is that the P2P transport is bound: it distinguishes a crashed
-// seid or a failed bind from a live one, and nothing more.
+// An UNFROZEN chain-following mode gates on seid's /lag_status, which reports
+// sync distance — the meaningful "ready to serve" signal.
 //
-// Two limits an operator must know. It proves nothing about EXTERNAL
-// reachability — a seed with no DNS record, no load balancer, or a closed
-// security group reads Ready while no stranger can dial it. And each probe
-// completes a TCP connect without the secret handshake, so it increments
+// A FROZEN node gates on /status instead. Its lag is a constant, not a
+// shrinking quantity: block sync hands off at the freeze height and the peer
+// pool keeps the tip it last observed, so /lag_status reports the same distance
+// forever and the pod would never become Ready. /status stays valid at a pinned
+// height and, unlike a bare TCP connect, it proves the RPC server answers
+// rather than that a socket is bound. It does not prove the node has REACHED
+// the freeze height: /status answers throughout the initial block sync, so a
+// frozen node reads Ready while it is still catching up.
+//
+// A SEED serves no RPC, so its only in-band signal is that the P2P transport is
+// bound: it distinguishes a crashed seid or a failed bind from a live one, and
+// nothing more.
+//
+// Two limits an operator must know about the seed case. It proves nothing about
+// EXTERNAL reachability — a seed with no DNS record, no load balancer, or a
+// closed security group reads Ready while no stranger can dial it. And each
+// probe completes a TCP connect without the secret handshake, so it increments
 // tendermint_p2p_new_connections{direction="in"} and books a handshake failure
 // roughly 6/min; alerts on those series need that baseline subtracted, and
 // inbound connections alone do not prove a seed is publicly reachable.
 func readinessProbeForNode(node *seiv1alpha1.SeiNode) *corev1.Probe {
 	if !servesSeidRPC(node) {
-		return &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				TCPSocket: &corev1.TCPSocketAction{
-					Port: intstr.FromInt32(seiconfig.PortP2P),
-				},
-			},
-			InitialDelaySeconds: 30,
-			PeriodSeconds:       10,
-			FailureThreshold:    3,
-			TimeoutSeconds:      5,
-		}
+		return tcpReadinessProbe(seiconfig.PortP2P)
 	}
+	if node.Spec.Freeze() != nil {
+		return httpReadinessProbe("/status", seiconfig.PortRPC)
+	}
+	return httpReadinessProbe("/lag_status", seiconfig.PortRPC)
+}
+
+// httpReadinessProbe reports a node as ready when seid answers path with a 2xx.
+func httpReadinessProbe(path string, port int32) *corev1.Probe {
 	return &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
-				Path: "/lag_status",
-				Port: intstr.FromInt32(seiconfig.PortRPC),
+				Path: path,
+				Port: intstr.FromInt32(port),
+			},
+		},
+		InitialDelaySeconds: 30,
+		PeriodSeconds:       10,
+		FailureThreshold:    3,
+		TimeoutSeconds:      5,
+	}
+}
+
+// tcpReadinessProbe reports a listener as ready once it accepts a connection.
+// Timings match the HTTP readiness probe so a mode switch does not change how
+// quickly the kubelet reacts.
+func tcpReadinessProbe(port int32) *corev1.Probe {
+	return &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{
+				Port: intstr.FromInt32(port),
 			},
 		},
 		InitialDelaySeconds: 30,

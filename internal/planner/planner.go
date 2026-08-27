@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +53,13 @@ const (
 	// network.p2p.persistent_peers (WithHotReload). sei-config v0.0.19
 	// exposes no exported constant for it, so it is named here.
 	keyP2PPersistentPeers = "network.p2p.persistent_peers"
+
+	// keyFreezeHeight is the sei-config key for seid's app.toml freeze-height.
+	// sei-config v0.0.27 exposes no exported constant for it, so it is named
+	// here. The same literal appears in the SeiNodeSpec CEL guard, which cannot
+	// reference a Go constant; TestFreezeHeightKeyMatchesCELGuard pins them
+	// together.
+	keyFreezeHeight = "chain.freeze_height"
 )
 
 // baseProgression defines the ordered task sequence for each bootstrap mode.
@@ -696,6 +704,20 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 		t.BackfillBlocks = snap.BackfillBlocks
 	}
 	return t
+}
+
+// freezeOverrides returns the override that holds a node at a block height, or
+// nil when the node is not frozen. The controller owns this key: SeiNodeSpec's
+// CEL guard rejects it in spec.overrides, because mergeOverrides lets a user
+// override outrank a controller one.
+//
+// Only the bootstrap path carries a ConfigIntent, so this reaches app.toml on an
+// init plan alone. The mode sub-specs make freeze create-only for that reason.
+func freezeOverrides(freeze *seiv1alpha1.FreezeSpec) map[string]string {
+	if freeze == nil {
+		return nil
+	}
+	return map[string]string{keyFreezeHeight: strconv.FormatInt(freeze.Height, 10)}
 }
 
 // commonOverrides returns controller overrides that apply to all node modes.
