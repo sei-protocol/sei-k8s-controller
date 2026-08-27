@@ -706,6 +706,20 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 	return t
 }
 
+// freezeOverrides returns the override that holds a node at a block height, or
+// nil when the node is not frozen. The controller owns this key: SeiNodeSpec's
+// CEL guard rejects it in spec.overrides, because mergeOverrides lets a user
+// override outrank a controller one.
+//
+// Only the bootstrap path carries a ConfigIntent, so this reaches app.toml on an
+// init plan alone. The mode sub-specs make freeze create-only for that reason.
+func freezeOverrides(freeze *seiv1alpha1.FreezeSpec) map[string]string {
+	if freeze == nil {
+		return nil
+	}
+	return map[string]string{keyFreezeHeight: strconv.FormatInt(freeze.Height, 10)}
+}
+
 // commonOverrides returns controller overrides that apply to all node modes.
 // logging.level defaults to defaultLoggingLevel ("error") here; because
 // mergeOverrides lets user overrides win, a spec.Overrides entry for
@@ -714,17 +728,6 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 // persistent_peers is stamped from Status.ResolvedPeers ("" when none — a valid
 // no-peers config). On an init plan it's frozen at build time and refreshes only
 // on the next deployment: peers update on deployments, not on churn.
-// freezeOverrides returns the override that holds a node at a block height, or
-// nil when the node is not frozen. The controller owns this key: SeiNodeSpec's
-// CEL guard rejects it in spec.overrides, because mergeOverrides lets a user
-// override outrank a controller one.
-func freezeOverrides(freeze *seiv1alpha1.FreezeSpec) map[string]string {
-	if freeze == nil {
-		return nil
-	}
-	return map[string]string{keyFreezeHeight: strconv.FormatInt(freeze.Height, 10)}
-}
-
 func commonOverrides(node *seiv1alpha1.SeiNode) map[string]string {
 	out := map[string]string{
 		overrideKeyLoggingLevel: defaultLoggingLevel,

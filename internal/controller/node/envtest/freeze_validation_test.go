@@ -54,8 +54,8 @@ func frozenArchiveNode(ns, name string, height int64) *seiv1alpha1.SeiNode {
 }
 
 // updateNodeWithRetry re-fetches and re-applies mutate on a resourceVersion
-// conflict, so a concurrent status write cannot lose the 409 race before CEL
-// validation fires.
+// conflict. This suite starts no controller, so nothing writes concurrently
+// today; the retry keeps the helper correct if one is ever added.
 func updateNodeWithRetry(t *testing.T, key client.ObjectKey, mutate func(*seiv1alpha1.SeiNode)) error {
 	t.Helper()
 	var lastErr error
@@ -148,13 +148,43 @@ func TestFreeze_HeightInOverrides_Rejected(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("not overrides"))
 }
 
-// FN-5: the guard targets one key. Every other override still works.
+// FN-5: the guard targets one key. An unrelated override still works.
 func TestFreeze_OtherOverrides_Accepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
 	node := frozenFullNode(ns, "freeze-other-override", 100)
-	node.Spec.Overrides = map[string]string{"chain.halt_time": "0"}
+	node.Spec.Overrides = map[string]string{"logging.level": "info"}
+
+	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+}
+
+// A frozen node plus a halt key is a config seid refuses to load. Without this
+// guard the manifest merges, Flux reports success, and the node wedges at
+// config-apply with a JSON diagnostic.
+func TestFreeze_WithHaltKeys_Rejected(t *testing.T) {
+	for _, key := range []string{"chain.halt_height", "chain.halt_time"} {
+		t.Run(key, func(t *testing.T) {
+			g := NewWithT(t)
+			ns := makeNamespace(t)
+
+			node := frozenFullNode(ns, "freeze-halt", 100)
+			node.Spec.Overrides = map[string]string{key: "500"}
+
+			err := testCli.Create(testCtx, node)
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(err.Error()).To(ContainSubstring("halt"))
+		})
+	}
+}
+
+// An unfrozen node may still set a halt key: the guard is conditional on freeze.
+func TestFreeze_HaltKeysWithoutFreeze_Accepted(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	node := frozenFullNode(ns, "halt-only", 0)
+	node.Spec.Overrides = map[string]string{"chain.halt_height": "500"}
 
 	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
 }
@@ -202,4 +232,128 @@ func TestFreeze_SnapshotGenerationWithoutFreeze_Accepted(t *testing.T) {
 	}
 
 	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+}
+
+// FN-3, the half a field-level transition rule cannot express. A CEL rule using
+// oldSelf is skipped when the path is absent from the stored object, so
+// `self == oldSelf` on height permits ADDING freeze to an unfrozen node and
+// REMOVING it from a frozen one. Both are unsafe, for different reasons:
+//
+//   - Adding it never reaches app.toml. Only the bootstrap path carries a
+//     ConfigIntent, so a Running node keeps following the chain while its
+//     readiness probe changes on the next reconcile. The node then presents as
+//     frozen and behaves as an ordinary RPC node with weaker readiness.
+//   - Removing it leaves freeze-height in app.toml while the probe reverts to
+//     /lag_status, so the node goes NotReady permanently at the next pod
+//     replacement.
+//
+// The presence rule lives on the mode sub-spec, where has() is observable on
+// both sides of the transition.
+func TestFreeze_PresenceIsCreateOnly(t *testing.T) {
+	t.Run("adding freeze to an existing node is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := frozenFullNode(ns, "freeze-add", 0)
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.FullNode.Freeze = &seiv1alpha1.FreezeSpec{Height: 100}
+		})
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("create-only"))
+	})
+
+	t.Run("removing freeze from an existing node is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := frozenFullNode(ns, "freeze-remove", 100)
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.FullNode.Freeze = nil
+		})
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("create-only"))
+	})
+
+	t.Run("archive is guarded the same way", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := frozenArchiveNode(ns, "freeze-add-archive", 0)
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.Archive.Freeze = &seiv1alpha1.FreezeSpec{Height: 100}
+		})
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("create-only"))
+	})
+
+	t.Run("an unrelated spec edit on a frozen node still succeeds", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := frozenFullNode(ns, "freeze-edit-ok", 100)
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.Image = "sei:next"
+		})
+		g.Expect(err).NotTo(HaveOccurred(), "an image bump must not be collateral damage")
+	})
+}
+
+// FN-1 with a seid-fatal combination the CRD must catch: seid refuses to start
+// once a store has already reached the freeze height, so a snapshot target at
+// or above it is a permanent CrashLoopBackOff.
+func TestFreeze_SnapshotTargetAtOrAboveHeight_Rejected(t *testing.T) {
+	for name, target := range map[string]int64{"equal": 100, "above": 200} {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			ns := makeNamespace(t)
+
+			node := frozenFullNode(ns, "freeze-snap-"+name, 100)
+			node.Spec.FullNode.Snapshot = &seiv1alpha1.SnapshotSource{
+				S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: target},
+			}
+
+			err := testCli.Create(testCtx, node)
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(err.Error()).To(ContainSubstring("targetHeight"))
+		})
+	}
+}
+
+// A snapshot target below the freeze height is the supported bootstrap: the node
+// restores, block-syncs the remainder, and stops.
+func TestFreeze_SnapshotTargetBelowHeight_Accepted(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	node := frozenFullNode(ns, "freeze-snap-below", 100)
+	node.Spec.FullNode.Snapshot = &seiv1alpha1.SnapshotSource{
+		S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 50},
+	}
+
+	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+}
+
+// seid disables state sync under freeze and falls back to block sync from
+// genesis, silently. An operator who asks for a fast bootstrap would instead get
+// a multi-week one with nothing saying why.
+func TestFreeze_WithStateSync_Rejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	node := frozenFullNode(ns, "freeze-statesync", 100)
+	node.Spec.FullNode.Snapshot = &seiv1alpha1.SnapshotSource{
+		StateSync: &seiv1alpha1.StateSyncSource{},
+	}
+
+	err := testCli.Create(testCtx, node)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("stateSync"))
 }

@@ -11,12 +11,13 @@ import (
 
 // Covers spec freeze-node: FN-8 and FN-9.
 //
-// A frozen node holds its height while peers advance, so its lag grows without
-// bound and /lag_status fails once the lag threshold trips. The pod would then
-// leave its Service endpoints and the RPC would answer nothing, even though
-// seid is serving correctly at the frozen height.
+// A frozen node's lag is a constant, not a shrinking quantity: block sync hands
+// off at the freeze height and the peer pool keeps the tip it last observed, so
+// /lag_status reports the same distance forever. A node frozen below the chain
+// tip would never become Ready, and its RPC would answer nothing even though
+// seid serves correctly at the frozen height.
 
-func TestReadinessProbe_FrozenNode_TargetsRPCListener(t *testing.T) {
+func TestReadinessProbe_FrozenNode_TargetsStatus(t *testing.T) {
 	tests := []struct {
 		name string
 		spec seiv1alpha1.SeiNodeSpec
@@ -45,11 +46,12 @@ func TestReadinessProbe_FrozenNode_TargetsRPCListener(t *testing.T) {
 			probe := readinessProbeForNode(&seiv1alpha1.SeiNode{Spec: tt.spec})
 
 			g.Expect(probe).NotTo(BeNil())
-			g.Expect(probe.HTTPGet).To(BeNil(),
-				"a frozen node must not be gated on /lag_status: its lag grows without bound")
-			g.Expect(probe.TCPSocket).NotTo(BeNil())
-			g.Expect(probe.TCPSocket.Port.IntVal).To(Equal(seiconfig.PortRPC),
-				"readiness must track the listener a caller actually uses")
+			g.Expect(probe.TCPSocket).To(BeNil(),
+				"a bare TCP connect proves a socket is bound, not that seid answers")
+			g.Expect(probe.HTTPGet).NotTo(BeNil())
+			g.Expect(probe.HTTPGet.Path).To(Equal("/status"),
+				"a frozen node must not gate on /lag_status: its lag never shrinks")
+			g.Expect(probe.HTTPGet.Port.IntVal).To(Equal(seiconfig.PortRPC))
 		})
 	}
 }
@@ -73,7 +75,8 @@ func TestReadinessProbe_UnfrozenNode_KeepsLagStatus(t *testing.T) {
 
 			g.Expect(probe.TCPSocket).To(BeNil())
 			g.Expect(probe.HTTPGet).NotTo(BeNil())
-			g.Expect(probe.HTTPGet.Path).To(Equal("/lag_status"))
+			g.Expect(probe.HTTPGet.Path).To(Equal("/lag_status"),
+				"an unfrozen node keeps the stronger signal")
 			g.Expect(probe.HTTPGet.Port.IntVal).To(Equal(seiconfig.PortRPC))
 		})
 	}
@@ -126,4 +129,22 @@ func TestSpecFreeze_NilForNonRPCModes(t *testing.T) {
 	} {
 		g.Expect(spec.Freeze()).To(BeNil(), "%s must not report a freeze", name)
 	}
+}
+
+// C1: NodeFellBehind selects on sei.io/role and fires once the chain advances
+// past its threshold beyond the freeze height, and never resolves. The label is
+// what lets the rule exclude a node whose height is constant by design.
+func TestResourceLabels_MarkFrozenNodes(t *testing.T) {
+	g := NewWithT(t)
+
+	frozen := ResourceLabels(&seiv1alpha1.SeiNode{Spec: seiv1alpha1.SeiNodeSpec{
+		FullNode: &seiv1alpha1.FullNodeSpec{Freeze: &seiv1alpha1.FreezeSpec{Height: 100}},
+	}})
+	g.Expect(frozen).To(HaveKeyWithValue("sei.io/frozen", "true"))
+
+	unfrozen := ResourceLabels(&seiv1alpha1.SeiNode{Spec: seiv1alpha1.SeiNodeSpec{
+		FullNode: &seiv1alpha1.FullNodeSpec{},
+	}})
+	g.Expect(unfrozen).NotTo(HaveKey("sei.io/frozen"),
+		"an unfrozen node must not carry the label; the alerts key off its absence")
 }

@@ -112,6 +112,9 @@ spec:
                 - message: 'freeze and snapshotGeneration are mutually exclusive:
                     a frozen node produces no new blocks to snapshot'
                   rule: '!has(self.freeze) || !has(self.snapshotGeneration)'
+                - message: 'freeze is create-only: it cannot be added to or removed
+                    from an existing node; replace the node instead'
+                  rule: has(self.freeze) == has(oldSelf.freeze)
               chainId:
                 description: |-
                   ChainID of the chain this node belongs to.
@@ -174,7 +177,8 @@ spec:
                       Freeze holds the node at a block height. The node serves query RPC at
                       that height and never advances. Set the height here rather than through
                       spec.overrides: the controller derives the node's readiness probe from
-                      this field, because a frozen node's lag grows without bound.
+                      this field, and /lag_status reports a permanent failure on a node frozen
+                      below the chain tip.
                     properties:
                       height:
                         description: |-
@@ -295,6 +299,17 @@ spec:
                 - message: 'freeze and snapshotGeneration are mutually exclusive:
                     a frozen node produces no new blocks to snapshot'
                   rule: '!has(self.freeze) || !has(self.snapshotGeneration)'
+                - message: 'freeze is create-only: it cannot be added to or removed
+                    from an existing node; replace the node instead'
+                  rule: has(self.freeze) == has(oldSelf.freeze)
+                - message: 'snapshot.s3.targetHeight must be below freeze.height:
+                    seid refuses to start once a store has reached the freeze height'
+                  rule: '!has(self.freeze) || !has(self.snapshot) || !has(self.snapshot.s3)
+                    || self.snapshot.s3.targetHeight < self.freeze.height'
+                - message: 'freeze and snapshot.stateSync are mutually exclusive:
+                    seid disables state sync under freeze and falls back to block
+                    sync from genesis'
+                  rule: '!has(self.freeze) || !has(self.snapshot) || !has(self.snapshot.stateSync)'
               image:
                 description: Image is the seid container image.
                 maxLength: 512
@@ -953,6 +968,11 @@ spec:
             - message: 'set the freeze height via fullNode.freeze or archive.freeze,
                 not overrides: user overrides outrank controller-derived ones'
               rule: '!has(self.overrides) || !(''chain.freeze_height'' in self.overrides)'
+            - message: 'a frozen node cannot also set chain.halt_height or chain.halt_time:
+                seid refuses to load the combination'
+              rule: '!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive)
+                && has(self.archive.freeze))) || !has(self.overrides) || (!(''chain.halt_height''
+                in self.overrides) && !(''chain.halt_time'' in self.overrides))'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:

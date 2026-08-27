@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
 
@@ -138,4 +139,35 @@ func TestFreezeHeightKeyMatchesCELGuard(t *testing.T) {
 		}
 	}
 	t.Errorf("no spec-level CEL rule guards %q in overrides.\nrules: %v", keyFreezeHeight, rules)
+}
+
+// TestFreezeHeightKeyResolvesInSeiConfig pins keyFreezeHeight to the dependency
+// that consumes it. keyFreezeHeight is a local constant because sei-config
+// exports none, so a rename upstream would leave every frozen node failing
+// config-apply with "unknown config field" — at bootstrap, on the node, with
+// nothing in this repo catching it first.
+//
+// TestFreezeHeightKeyMatchesCELGuard pins the constant to the CEL literal; that
+// mismatch is harmless. This one pins it to the registry, where a mismatch
+// breaks the node.
+func TestFreezeHeightKeyResolvesInSeiConfig(t *testing.T) {
+	intent := seiconfig.ConfigIntent{
+		Mode:      seiconfig.ModeFull,
+		Overrides: freezeOverrides(&seiv1alpha1.FreezeSpec{Height: 12345}),
+	}
+
+	if got := seiconfig.ValidateIntent(intent); !got.Valid {
+		t.Fatalf("sei-config rejects %s as an override key: %v", keyFreezeHeight, got.Diagnostics)
+	}
+
+	resolved, err := seiconfig.ResolveIntent(intent)
+	if err != nil {
+		t.Fatalf("ResolveIntent: %v", err)
+	}
+	if !resolved.Valid {
+		t.Fatalf("resolved config is invalid: %v", resolved.Diagnostics)
+	}
+	if got := resolved.Config.Chain.FreezeHeight; got != 12345 {
+		t.Errorf("%s resolved to Chain.FreezeHeight = %d, want 12345", keyFreezeHeight, got)
+	}
 }

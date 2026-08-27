@@ -175,6 +175,13 @@ type TendermintSnapshotGenerationConfig struct {
 	Publish *TendermintSnapshotPublishConfig `json:"publish,omitempty"`
 }
 
+// TendermintSnapshotPublishConfig configures how completed Tendermint
+// snapshots are uploaded. Currently an empty struct — its presence on
+// TendermintSnapshotGenerationConfig enables upload to the platform
+// snapshot bucket. Fields may be added here in the future (e.g., bucket
+// override, prefix) without a breaking change.
+type TendermintSnapshotPublishConfig struct{}
+
 // FreezeSpec holds a node at a block height. The node executes through
 // Height-1, then stops while it continues to serve query RPC. seid refuses to
 // freeze a validator, so only the non-consensus modes carry this sub-spec.
@@ -193,13 +200,6 @@ type FreezeSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="height is immutable"
 	Height int64 `json:"height"`
 }
-
-// TendermintSnapshotPublishConfig configures how completed Tendermint
-// snapshots are uploaded. Currently an empty struct — its presence on
-// TendermintSnapshotGenerationConfig enables upload to the platform
-// snapshot bucket. Fields may be added here in the future (e.g., bucket
-// override, prefix) without a breaking change.
-type TendermintSnapshotPublishConfig struct{}
 
 // ResultExportConfig configures the node to export block-execution results.
 // One or more use-case sub-structs may be enabled. An empty ResultExportConfig
