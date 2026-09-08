@@ -170,7 +170,7 @@ and its fields per node group, so that I compare storage-bound scenarios.
 3. WHEN the operator sets a storage field, THE controller SHALL apply it to the volume of every node in the group.
 4. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL refuse the selection.
 5. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL name the supported set.
-6. THE supported set SHALL hold [NEEDS CLARIFICATION: which storage types belong to the set, and the field range for each — the storage-class review decides this. Raised and not decided: 10,000 IOPS and 750 throughput against a 125 default.]
+6. THE supported set SHALL hold the gp3 EBS volume type, with the IOPS and the throughput as configurable fields.
 
 ### Requirement 4: A default lighter than the mainnet shape
 
@@ -231,6 +231,7 @@ role that decides.
 - The node group holds enough capacity for the default shape. Capacity and pod placement live in the `node-ec2-locality` work item.
 - The controller already reconciles child StatefulSets and volumes from the CRD. This spec adds fields; it does not add a controller.
 - This iteration exposes resources as a typed CRD field that mirrors the pod resources tree. The field plumbs values through and adds no new semantics, which the team accepts for the first controller iteration.
+- The first iteration supports the gp3 EBS volume type, with configurable IOPS and throughput. The validators use a 125 throughput today. The storage-class review may add types or tune ranges before Barcelona. It raised 10,000 IOPS and 750 throughput as candidates to reconsider.
 - The default shape suits a quick test, not a production comparison. The operator raises it for a production comparison.
 - The team set the default at about one quarter of the mainnet shape as a safe first value. The team tunes it later from cost and run data.
 
