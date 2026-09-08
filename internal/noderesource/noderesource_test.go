@@ -936,6 +936,168 @@ func TestResourcesForNode_PartialOverride(t *testing.T) {
 	g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse(cpuRPCClass)))
 }
 
+// nodeWithCRDResources builds a node of the given role carrying a
+// spec.resources request block. An empty cpu or memory string leaves that
+// dimension unset, which is the fall-through case.
+func nodeWithCRDResources(role, cpu, mem string) *seiv1alpha1.SeiNode {
+	node := nodeForRole(role)
+	requests := corev1.ResourceList{}
+	if cpu != "" {
+		requests[corev1.ResourceCPU] = resource.MustParse(cpu)
+	}
+	if mem != "" {
+		requests[corev1.ResourceMemory] = resource.MustParse(mem)
+	}
+	node.Spec.Resources = &seiv1alpha1.Resources{Requests: requests}
+	return node
+}
+
+// TestResourcesForNode_CRDFieldWinsOverAppConfig is SC-006: with the CRD field
+// and the app-config override both set to different values, the rendered node
+// takes the CRD field.
+func TestResourcesForNode_CRDFieldWinsOverAppConfig(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+	cfg.NodeResourcesValidator = platform.ResourceOverride{CPURequest: "12", Memory: "180Gi"}
+
+	res := ResourcesForNode(nodeWithCRDResources(roleValidator, "4", "32Gi"), cfg)
+
+	mem := resource.MustParse("32Gi")
+	g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("4")))
+	g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(mem))
+	g.Expect(res.Limits[corev1.ResourceMemory]).To(Equal(mem))
+}
+
+// TestResourcesForNode_CRDPartialFallsThrough locks per-dimension resolution:
+// each axis the CRD field leaves unset falls to the next source independently,
+// so raising one axis never silently resets the other to a code default.
+func TestResourcesForNode_CRDPartialFallsThrough(t *testing.T) {
+	t.Run("cpu-only CRD leaves memory on the app-config override", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := platformtest.Config()
+		cfg.NodeResourcesNode = platform.ResourceOverride{Memory: "200Gi"}
+
+		res := ResourcesForNode(nodeWithCRDResources("", "4", ""), cfg)
+
+		g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("4")))
+		g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse("200Gi")))
+	})
+
+	t.Run("memory-only CRD leaves cpu on the per-mode code default", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := platformtest.Config()
+
+		res := ResourcesForNode(nodeWithCRDResources(roleArchive, "", "128Gi"), cfg)
+
+		g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse(cpuArchive)))
+		g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse("128Gi")))
+	})
+
+	t.Run("an empty requests map falls through on both axes", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := platformtest.Config()
+
+		res := ResourcesForNode(nodeWithCRDResources(roleValidator, "", ""), cfg)
+
+		g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse(cpuValidator)))
+		g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse(memValidator)))
+	})
+}
+
+// TestResourcesForNode_CRDPreservesModeCouplings verifies the CRD field does not
+// buy its way out of either per-mode coupling: memory is still emitted as
+// request==limit, and a CPU limit is still never rendered.
+func TestResourcesForNode_CRDPreservesModeCouplings(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+
+	res := ResourcesForNode(nodeWithCRDResources(roleValidator, "4", "32Gi"), cfg)
+
+	mem := resource.MustParse("32Gi")
+	g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(mem))
+	g.Expect(res.Limits[corev1.ResourceMemory]).To(Equal(mem),
+		"the CRD memory request must still be emitted as the limit")
+
+	_, hasCPULimit := res.Limits[corev1.ResourceCPU]
+	g.Expect(hasCPULimit).To(BeFalse(), "seid must never carry a CPU limit")
+}
+
+// TestResourcesForNode_CRDLimitsAreNotRead locks the documented redundancy of
+// spec.resources.limits: the controller derives the memory limit from the
+// REQUEST, so a limits block changes nothing. Admission already pins the two
+// equal (see Resources), and this keeps the controller honest about which
+// of the two it actually reads.
+func TestResourcesForNode_CRDLimitsAreNotRead(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+
+	withLimits := nodeWithCRDResources(roleValidator, "4", "32Gi")
+	withLimits.Spec.Resources.Limits = corev1.ResourceList{
+		corev1.ResourceMemory: resource.MustParse("32Gi"),
+	}
+	withoutLimits := nodeWithCRDResources(roleValidator, "4", "32Gi")
+
+	g.Expect(ResourcesForNode(withLimits, cfg)).To(Equal(ResourcesForNode(withoutLimits, cfg)))
+}
+
+// TestResourcesForNode_CRDEquivalentUnitsRoundTrip pairs with the admission rule
+// that compares memory through quantity(): a request spelled in a different but
+// equal unit resolves to that same quantity, request and limit alike.
+func TestResourcesForNode_CRDEquivalentUnitsRoundTrip(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+
+	res := ResourcesForNode(nodeWithCRDResources(roleValidator, "4", "131072Mi"), cfg)
+
+	// Quantity.Cmp has a pointer receiver and a map index is not addressable.
+	gotReq := res.Requests[corev1.ResourceMemory]
+	gotLim := res.Limits[corev1.ResourceMemory]
+	g.Expect(gotReq.Cmp(resource.MustParse("128Gi"))).To(Equal(0))
+	g.Expect(gotLim.Cmp(resource.MustParse("128Gi"))).To(Equal(0))
+}
+
+// TestResourcesForNode_NilCRDFieldIsUnchanged pins the no-regression case: a
+// node that sets no spec.resources renders exactly what it rendered before the
+// field existed, on every mode.
+func TestResourcesForNode_NilCRDFieldIsUnchanged(t *testing.T) {
+	cfg := platformtest.Config()
+	for _, role := range []string{roleValidator, "", roleReplayer, roleArchive, roleSeed} {
+		t.Run("mode="+role, func(t *testing.T) {
+			g := NewWithT(t)
+			node := nodeForRole(role)
+			g.Expect(node.Spec.Resources).To(BeNil())
+
+			d := defaultNodeResourceProfiles[deriveRole(node)]
+			res := ResourcesForNode(node, cfg)
+			g.Expect(res.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse(d.cpuRequest)))
+			g.Expect(res.Requests[corev1.ResourceMemory]).To(Equal(resource.MustParse(d.memory)))
+		})
+	}
+}
+
+// TestResourcesForNode_CRDReachesStatefulSet closes the loop from the CRD field
+// to the rendered seid container — the generator, not just the resolver.
+func TestResourcesForNode_CRDReachesStatefulSet(t *testing.T) {
+	g := NewWithT(t)
+	node := nodeWithCRDResources(roleValidator, "4", "32Gi")
+
+	sts, err := GenerateStatefulSet(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var seid *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == containerNameSeid {
+			seid = &sts.Spec.Template.Spec.Containers[i]
+		}
+	}
+	g.Expect(seid).NotTo(BeNil())
+
+	mem := resource.MustParse("32Gi")
+	g.Expect(seid.Resources.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("4")))
+	g.Expect(seid.Resources.Requests[corev1.ResourceMemory]).To(Equal(mem))
+	g.Expect(seid.Resources.Limits[corev1.ResourceMemory]).To(Equal(mem))
+}
+
 // --- Signing key (validator) ---
 
 func newValidatorNodeWithSigningKey(name, namespace, secretName string) *seiv1alpha1.SeiNode { //nolint:unparam // test helper designed for reuse

@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,6 +25,17 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.overrides) || !('chain.freeze_height' in self.overrides)",message="set the freeze height via fullNode.freeze or archive.freeze, not overrides: user overrides outrank controller-derived ones"
 // +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
+// resources is create-only, but compared PER-DIMENSION through quantity() — NOT
+// structural == on the object. The values are int-or-string Quantities, so a
+// node applied with a bare int (cpu: 4) stores an int, while the controller's
+// own typed Update (finalizer install) re-encodes it as the string "4"; a
+// structural == would read int 4 != string "4", reject the controller's write,
+// and wedge the node on its first reconcile. quantity(string(...)).compareTo
+// compares the values, so a re-encode is a no-op while a real change is caught.
+// limits is not compared here: the equality rule already pins limits.memory to
+// requests.memory, and the controller derives the limit from the request, so the
+// footprint is frozen by freezing requests.
+// +kubebuilder:validation:XValidation:rule="(!has(self.resources) && !has(oldSelf.resources)) || (has(self.resources) && has(oldSelf.resources) && (has(self.resources.requests) == has(oldSelf.resources.requests)) && (!has(self.resources.requests) || ((('cpu' in self.resources.requests) == ('cpu' in oldSelf.resources.requests)) && (('memory' in self.resources.requests) == ('memory' in oldSelf.resources.requests)) && (!('cpu' in self.resources.requests) || !('cpu' in oldSelf.resources.requests) || quantity(string(self.resources.requests['cpu'])).compareTo(quantity(string(oldSelf.resources.requests['cpu']))) == 0) && (!('memory' in self.resources.requests) || !('memory' in oldSelf.resources.requests) || quantity(string(self.resources.requests['memory'])).compareTo(quantity(string(oldSelf.resources.requests['memory']))) == 0))))",message="spec.resources is create-only: the footprint is fixed at creation (a change is not rolled onto a running pod — the StatefulSet is OnDelete and drift detection is image-only), so replace the node to resize"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
@@ -68,6 +80,23 @@ type SeiNodeSpec struct {
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
 
+	// Resources overrides the seid-container footprint for this node. It is the
+	// HIGHEST-precedence sizing source: it outranks the app-config
+	// resources.<mode> override, which in turn outranks the per-mode code
+	// default (see noderesource.ResourcesForNode for the full ladder).
+	//
+	// Resolution is per-dimension, not all-or-nothing: setting only the CPU
+	// request leaves memory on whichever lower source supplies it. That keeps a
+	// benchmark operator from having to restate a mode's whole footprint to
+	// raise one axis.
+	//
+	// Immutable after creation (spec-level CEL). A change here would not reach a
+	// running pod anyway — the StatefulSets use UpdateStrategy: OnDelete and
+	// drift detection is image-only — so admission rejects the edit rather than
+	// accept an inert one. Replace the node to resize.
+	// +optional
+	Resources *Resources `json:"resources,omitempty"`
+
 	// --- Mode-specific sub-specs (exactly one must be set) ---
 
 	// FullNode configures a chain-following full node (absorbs the "rpc" role).
@@ -106,6 +135,30 @@ type SeiNodeSpec struct {
 	// recover from a failed node.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+}
+
+// Resources overrides the seid-container footprint in pod-resource shape.
+// Narrow by design (not corev1.ResourceRequirements) so admission accepts only
+// cpu/memory. The CEL rules pin the per-mode couplings — no CPU limit, memory
+// limit == request, positive values — and reject a bad value by name at apply
+// time. Keep the quantity(string(...)) form; see the envtest cases for why ==
+// on a raw string would be wrong.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.requests) || self.requests.all(k, k in ['cpu', 'memory'])",message="resources.requests accepts only cpu and memory"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || self.limits.all(k, k == 'memory')",message="resources.limits accepts only memory: seid deliberately carries no CPU limit"
+// +kubebuilder:validation:XValidation:rule="(!has(self.requests) || !('cpu' in self.requests) || quantity(string(self.requests['cpu'])).compareTo(quantity('0')) > 0) && (!has(self.requests) || !('memory' in self.requests) || quantity(string(self.requests['memory'])).compareTo(quantity('0')) > 0)",message="resources.requests values must be positive"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || !('memory' in self.limits) || (has(self.requests) && 'memory' in self.requests && quantity(string(self.limits['memory'])).compareTo(quantity(string(self.requests['memory']))) == 0)",message="resources.limits.memory must equal resources.requests.memory (the mode's memory-Guaranteed footprint)"
+type Resources struct {
+	// Requests is the seid container's resource request. Only cpu and memory
+	// are accepted.
+	// +optional
+	Requests corev1.ResourceList `json:"requests,omitempty"`
+
+	// Limits accepts only memory, pinned equal to the request by CEL. The
+	// controller derives the limit from the request, so it is redundant but
+	// kept as a served field — do not remove.
+	// +optional
+	Limits corev1.ResourceList `json:"limits,omitempty"`
 }
 
 // DataVolumeSpec configures how the data PVC is sourced.

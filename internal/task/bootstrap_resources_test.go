@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -333,4 +335,43 @@ func TestBootstrapJob_HomeAndDataDir(t *testing.T) {
 	if got := bootstrapEnv(seidInit, "HOME"); got != platform.HomeDir {
 		t.Errorf("seid-init HOME = %q, want %q", got, platform.HomeDir)
 	}
+}
+
+// TestBootstrapJob_TakesCRDResourceFootprint locks the second consumer of
+// noderesource.ResourcesForNode. The Job runs seid to --halt-height on the same
+// nodepool as the node it warms, so it must take the same footprint: a Job sized
+// past node allocatable is a Pending pod that reads as a hung bootstrap rather
+// than as a sizing error, and this is the render site a steady-state cell roll
+// never exercises.
+func TestBootstrapJob_TakesCRDResourceFootprint(t *testing.T) {
+	g := NewWithT(t)
+	node := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "v-0", Namespace: testReplaceNs},
+		Spec: seiv1alpha1.SeiNodeSpec{
+			ChainID:   "sei-test",
+			Image:     "ghcr.io/sei-protocol/seid:latest",
+			Validator: &seiv1alpha1.ValidatorSpec{},
+			Resources: &seiv1alpha1.Resources{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("4"),
+					corev1.ResourceMemory: resource.MustParse("32Gi"),
+				},
+			},
+		},
+	}
+	snap := &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 12345}}
+
+	job, err := GenerateBootstrapJob(node, snap, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	seid := findBootstrapContainer(job.Spec.Template.Spec, "seid")
+	g.Expect(seid).NotTo(BeNil())
+
+	mem := resource.MustParse("32Gi")
+	g.Expect(seid.Resources.Requests[corev1.ResourceCPU]).To(Equal(resource.MustParse("4")))
+	g.Expect(seid.Resources.Requests[corev1.ResourceMemory]).To(Equal(mem))
+	g.Expect(seid.Resources.Limits[corev1.ResourceMemory]).To(Equal(mem))
+
+	_, hasCPULimit := seid.Resources.Limits[corev1.ResourceCPU]
+	g.Expect(hasCPULimit).To(BeFalse(), "the bootstrap seid must never carry a CPU limit either")
 }
