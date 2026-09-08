@@ -64,6 +64,16 @@ spec:
               swapping between two frozen modes at different heights. Both leave a Running
               node carrying the frozen readiness probe with no freeze height in app.toml,
               because only a bootstrap plan writes config.
+              resources is create-only, but compared PER-DIMENSION through quantity() — NOT
+              structural == on the object. The values are int-or-string Quantities, so a
+              node applied with a bare int (cpu: 4) stores an int, while the controller's
+              own typed Update (finalizer install) re-encodes it as the string "4"; a
+              structural == would read int 4 != string "4", reject the controller's write,
+              and wedge the node on its first reconcile. quantity(string(...)).compareTo
+              compares the values, so a re-encode is a no-op while a real change is caught.
+              limits is not compared here: the equality rule already pins limits.memory to
+              requests.memory, and the controller derives the limit from the request, so the
+              footprint is frozen by freezing requests.
             properties:
               archive:
                 description: Archive configures an archive node with full history
@@ -1049,12 +1059,18 @@ spec:
                 : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ?
                 oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze)
                 ? oldSelf.archive.freeze.height : 0))'
-            - message: 'spec.resources is create-only: a footprint change is not rolled
-                onto a running pod (the StatefulSet is OnDelete and drift detection
-                is image-only), so admission rejects the edit rather than accept an
-                inert one; replace the node to resize'
-              rule: (!has(self.resources) && !has(oldSelf.resources)) || self.resources
-                == oldSelf.resources
+            - message: 'spec.resources is create-only: the footprint is fixed at creation
+                (a change is not rolled onto a running pod — the StatefulSet is OnDelete
+                and drift detection is image-only), so replace the node to resize'
+              rule: (!has(self.resources) && !has(oldSelf.resources)) || (has(self.resources)
+                && has(oldSelf.resources) && (has(self.resources.requests) == has(oldSelf.resources.requests))
+                && (!has(self.resources.requests) || ((('cpu' in self.resources.requests)
+                == ('cpu' in oldSelf.resources.requests)) && (('memory' in self.resources.requests)
+                == ('memory' in oldSelf.resources.requests)) && (!('cpu' in self.resources.requests)
+                || !('cpu' in oldSelf.resources.requests) || quantity(string(self.resources.requests['cpu'])).compareTo(quantity(string(oldSelf.resources.requests['cpu'])))
+                == 0) && (!('memory' in self.resources.requests) || !('memory' in
+                oldSelf.resources.requests) || quantity(string(self.resources.requests['memory'])).compareTo(quantity(string(oldSelf.resources.requests['memory'])))
+                == 0))))
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:

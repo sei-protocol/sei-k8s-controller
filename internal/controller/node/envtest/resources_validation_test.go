@@ -344,3 +344,29 @@ func TestSeidResources_UnrelatedEditWithUnchangedResourcesAccepted(t *testing.T)
 	})
 	g.Expect(err).NotTo(HaveOccurred(), "an edit leaving spec.resources unchanged must be accepted")
 }
+
+// TestSeidResources_BareIntSurvivesControllerReencode reproduces the finalizer
+// wedge that a structural `==` create-only rule would cause. A node applied with
+// a bare-integer quantity (a JSON number) stores an int in etcd; the controller's
+// first reconcile installs its finalizer with a typed Update, which re-encodes
+// the footprint as a string. A structural `==` reads int != string and rejects
+// the controller's own write, so the node never gets a finalizer and wedges. The
+// quantity()-based rule compares values, so the re-encode is admitted.
+//
+// The bare-int spelling is only reachable through the unstructured client — the
+// typed client always marshals a Quantity as a string (see unstructuredNodeWithMemory).
+func TestSeidResources_BareIntSurvivesControllerReencode(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	// memory as a bare JSON integer (32Gi in bytes), the spelling that stores an
+	// int in etcd; the subsequent typed Update re-encodes it as a string.
+	node := unstructuredNodeWithMemory(ns, "res-reencode", `34359738368`, `34359738368`)
+	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+	err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.Paused = true // any typed write re-marshals the footprint as a string
+	})
+	g.Expect(err).NotTo(HaveOccurred(),
+		"a typed re-encode of a bare-int footprint must not trip the create-only rule (the finalizer Update depends on it)")
+}

@@ -25,7 +25,17 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.overrides) || !('chain.freeze_height' in self.overrides)",message="set the freeze height via fullNode.freeze or archive.freeze, not overrides: user overrides outrank controller-derived ones"
 // +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
-// +kubebuilder:validation:XValidation:rule="(!has(self.resources) && !has(oldSelf.resources)) || self.resources == oldSelf.resources",message="spec.resources is create-only: a footprint change is not rolled onto a running pod (the StatefulSet is OnDelete and drift detection is image-only), so admission rejects the edit rather than accept an inert one; replace the node to resize"
+// resources is create-only, but compared PER-DIMENSION through quantity() — NOT
+// structural == on the object. The values are int-or-string Quantities, so a
+// node applied with a bare int (cpu: 4) stores an int, while the controller's
+// own typed Update (finalizer install) re-encodes it as the string "4"; a
+// structural == would read int 4 != string "4", reject the controller's write,
+// and wedge the node on its first reconcile. quantity(string(...)).compareTo
+// compares the values, so a re-encode is a no-op while a real change is caught.
+// limits is not compared here: the equality rule already pins limits.memory to
+// requests.memory, and the controller derives the limit from the request, so the
+// footprint is frozen by freezing requests.
+// +kubebuilder:validation:XValidation:rule="(!has(self.resources) && !has(oldSelf.resources)) || (has(self.resources) && has(oldSelf.resources) && (has(self.resources.requests) == has(oldSelf.resources.requests)) && (!has(self.resources.requests) || ((('cpu' in self.resources.requests) == ('cpu' in oldSelf.resources.requests)) && (('memory' in self.resources.requests) == ('memory' in oldSelf.resources.requests)) && (!('cpu' in self.resources.requests) || !('cpu' in oldSelf.resources.requests) || quantity(string(self.resources.requests['cpu'])).compareTo(quantity(string(oldSelf.resources.requests['cpu']))) == 0) && (!('memory' in self.resources.requests) || !('memory' in oldSelf.resources.requests) || quantity(string(self.resources.requests['memory'])).compareTo(quantity(string(oldSelf.resources.requests['memory']))) == 0))))",message="spec.resources is create-only: the footprint is fixed at creation (a change is not rolled onto a running pod — the StatefulSet is OnDelete and drift detection is image-only), so replace the node to resize"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
