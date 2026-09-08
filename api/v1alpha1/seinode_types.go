@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -68,6 +69,23 @@ type SeiNodeSpec struct {
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
 
+	// Resources overrides the seid-container footprint for this node. It is the
+	// HIGHEST-precedence sizing source: it outranks the app-config
+	// resources.<mode> override, which in turn outranks the per-mode code
+	// default (see noderesource.ResourcesForNode for the full ladder).
+	//
+	// Resolution is per-dimension, not all-or-nothing: setting only the CPU
+	// request leaves memory on whichever lower source supplies it. That keeps a
+	// benchmark operator from having to restate a mode's whole footprint to
+	// raise one axis.
+	//
+	// A change here reaches a running pod only on pod recreation — the
+	// StatefulSets use UpdateStrategy: OnDelete, so the pod template updates
+	// while a live pod keeps the footprint it started with until a replace-pod,
+	// drain, or eviction.
+	// +optional
+	Resources *SeidResources `json:"resources,omitempty"`
+
 	// --- Mode-specific sub-specs (exactly one must be set) ---
 
 	// FullNode configures a chain-following full node (absorbs the "rpc" role).
@@ -106,6 +124,58 @@ type SeiNodeSpec struct {
 	// recover from a failed node.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+}
+
+// SeidResources is the seid-container footprint in the shape of a pod resource
+// block, so an operator's Kubernetes knowledge transfers directly. It is
+// deliberately NOT corev1.ResourceRequirements: that type carries `claims`
+// (dynamic resource allocation), which this controller does not support, and it
+// would admit resource names the seid container can never satisfy. The narrow
+// type keeps the generated schema to the two keys that mean something here.
+//
+// The three rules below encode the per-mode couplings the controller has always
+// enforced, moved to admission so a rejected value is named at apply time rather
+// than silently normalized during reconcile:
+//
+//   - requests accepts only cpu and memory.
+//   - limits accepts only memory. seid is work-conserving and CPU is
+//     compressible, so a CPU limit would only throttle its 10–12 core
+//     consensus/replay bursts; there is deliberately no CPU-limit path.
+//   - a memory limit must equal the memory request (memory-Guaranteed: the
+//     footprint is hard-reserved and hard-capped).
+//
+// The last rule compares through quantity() rather than ==, because == on a
+// quantity is a STRING comparison: it would reject "128Gi" against "131072Mi",
+// which are the same quantity. TestSeidResources_EquivalentMemoryUnitsAccepted
+// locks that; do not "simplify" the rule.
+//
+// The string() wrapper inside it is also load-bearing. A Quantity generates as
+// x-kubernetes-int-or-string, so "memory: 137438953472" is a legal spelling and
+// reaches CEL as an int, on which quantity() has no overload — the rule would
+// fail to EVALUATE and reject a valid pair with an unreadable error. string() is
+// identity on the string spelling and yields a parseable decimal on the int one.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.requests) || self.requests.all(k, k in ['cpu', 'memory'])",message="resources.requests accepts only cpu and memory"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || self.limits.all(k, k == 'memory')",message="resources.limits accepts only memory: seid deliberately carries no CPU limit"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || !('memory' in self.limits) || (has(self.requests) && 'memory' in self.requests && quantity(string(self.limits['memory'])).compareTo(quantity(string(self.requests['memory']))) == 0)",message="resources.limits.memory must equal resources.requests.memory (the mode's memory-Guaranteed footprint)"
+type SeidResources struct {
+	// Requests is the seid container's resource request. Only cpu and memory
+	// are accepted.
+	// +optional
+	Requests corev1.ResourceList `json:"requests,omitempty"`
+
+	// Limits is the seid container's resource limit. Only memory is accepted,
+	// and it must equal the memory request.
+	//
+	// This field is deliberately redundant: the controller does not read it. It
+	// DERIVES the memory limit from the memory request on every render, so
+	// leaving it unset yields exactly the same pod spec as setting it to the
+	// request. It exists so the block reads as a complete pod resource block to
+	// an operator who expects to see the limit spelled out, and the rule above
+	// keeps the two from disagreeing. Do not "clean it up" as unused — removing
+	// a served CRD field is a one-way door.
+	// +optional
+	Limits corev1.ResourceList `json:"limits,omitempty"`
 }
 
 // DataVolumeSpec configures how the data PVC is sourced.

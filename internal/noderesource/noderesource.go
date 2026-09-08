@@ -368,6 +368,9 @@ func DefaultStorageForMode(mode string, p PlatformConfig) (storageClass string, 
 // request-only — seid is work-conserving and CPU is compressible, so a CPU
 // limit would only throttle its 10–12 core consensus/replay bursts; there is no
 // CPU-limit field.
+//
+// This is the LOWEST of three sizing sources; see ResourcesForNode for the
+// ladder above it.
 type nodeResourceProfile struct {
 	cpuRequest string
 	// memory is set as both the memory request and the memory limit
@@ -376,10 +379,16 @@ type nodeResourceProfile struct {
 }
 
 // defaultNodeResourceProfiles is the per-mode seid-container footprint, applied
-// whenever the app-config file sets no resources.<mode> override. One uniform
-// profile per CRD mode, keyed off deriveRole (the CRD sub-spec) — NOT the 3-way
-// seiconfig mode, which collapses replayer and fullNode into "full" though they
-// take distinct footprints.
+// whenever neither the node's spec.resources field nor the app-config file's
+// resources.<mode> override supplies a dimension. One uniform profile per CRD
+// mode, keyed off deriveRole (the CRD sub-spec) — NOT the 3-way seiconfig mode,
+// which collapses replayer and fullNode into "full" though they take distinct
+// footprints.
+//
+// These values are the PROD-SAFE fallback for every cluster, not a benchmark
+// default. A cheap "quick test" shape belongs on spec.resources at the point of
+// use; lowering a figure here shrinks every production node of that mode and
+// breaks the Karpenter contract described below.
 //
 // Each mode's memory (request==limit, memory-Guaranteed) and CPU (request-only)
 // equal the full RAM/vCPU of its sei-infra reference instance. The Karpenter
@@ -452,15 +461,34 @@ func overrideForRole(role string, p PlatformConfig) platform.ResourceOverride {
 
 // ResourcesForNode returns the seid-container resource requirements for a node:
 // a CPU request and a memory request==limit (no CPU limit — see
-// nodeResourceProfile). Values come from the app-config resources.<mode>
-// override when set, otherwise the per-mode code default.
+// nodeResourceProfile).
+//
+// Three sizing sources, resolved PER-DIMENSION (highest first), so raising one
+// axis never forces an operator to restate the rest:
+//
+//  1. the node's spec.resources field       — typed, per-object (benchmark knob)
+//  2. the app-config resources.<mode> block — per-cluster (overrideForRole)
+//  3. defaultNodeResourceProfiles[role]     — code-authoritative, prod-safe
+//
+// Both per-mode couplings survive the new source unchanged: memory is emitted as
+// request AND limit, and CPU never carries a limit. The CRD's own
+// resources.limits.memory is therefore not read here — admission already pins it
+// equal to the request (see SeidResources), and the limit below is derived from
+// the request regardless of whether the operator spelled it out.
+//
+// Only sources 2 and 3 reach MustParse, and both are pre-validated: the
+// app-config strings are parse-checked at startup by Config.Validate, and the
+// code defaults are compile-time constants. Source 1 arrives as an
+// apiserver-validated resource.Quantity, so the CRD path adds no panic risk to
+// the reconcile.
 func ResourcesForNode(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.ResourceRequirements {
 	role := deriveRole(node)
 	d := defaultNodeResourceProfiles[role]
 	o := overrideForRole(role, p)
+	crdCPU, crdMem := crdFootprint(node)
 
-	cpuReq := resource.MustParse(firstNonEmpty(o.CPURequest, d.cpuRequest))
-	mem := resource.MustParse(firstNonEmpty(o.Memory, d.memory))
+	cpuReq := resolveQuantity(crdCPU, o.CPURequest, d.cpuRequest)
+	mem := resolveQuantity(crdMem, o.Memory, d.memory)
 
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
@@ -472,6 +500,35 @@ func ResourcesForNode(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.Resour
 			corev1.ResourceMemory: mem,
 		},
 	}
+}
+
+// crdFootprint returns the CPU and memory requests the node's spec.resources
+// field sets, or nil for a dimension it leaves unset. A nil return is the signal
+// to fall through to the next source, which is why this reports presence rather
+// than a zero Quantity — an explicit "0" and an absent key are different
+// intents, and only the absent one should fall through.
+func crdFootprint(node *seiv1alpha1.SeiNode) (cpu, mem *resource.Quantity) {
+	r := node.Spec.Resources
+	if r == nil {
+		return nil, nil
+	}
+	if q, ok := r.Requests[corev1.ResourceCPU]; ok {
+		cpu = &q
+	}
+	if q, ok := r.Requests[corev1.ResourceMemory]; ok {
+		mem = &q
+	}
+	return cpu, mem
+}
+
+// resolveQuantity picks one dimension off the sizing ladder in ResourcesForNode:
+// the CRD field when it sets this dimension, else the app-config override, else
+// the per-mode code default.
+func resolveQuantity(crd *resource.Quantity, override, codeDefault string) resource.Quantity {
+	if crd != nil {
+		return *crd
+	}
+	return resource.MustParse(firstNonEmpty(override, codeDefault))
 }
 
 func firstNonEmpty(a, b string) string {

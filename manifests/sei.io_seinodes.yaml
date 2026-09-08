@@ -522,6 +522,66 @@ spec:
                 required:
                 - snapshot
                 type: object
+              resources:
+                description: |-
+                  Resources overrides the seid-container footprint for this node. It is the
+                  HIGHEST-precedence sizing source: it outranks the app-config
+                  resources.<mode> override, which in turn outranks the per-mode code
+                  default (see noderesource.ResourcesForNode for the full ladder).
+
+                  Resolution is per-dimension, not all-or-nothing: setting only the CPU
+                  request leaves memory on whichever lower source supplies it. That keeps a
+                  benchmark operator from having to restate a mode's whole footprint to
+                  raise one axis.
+
+                  A change here reaches a running pod only on pod recreation — the
+                  StatefulSets use UpdateStrategy: OnDelete, so the pod template updates
+                  while a live pod keeps the footprint it started with until a replace-pod,
+                  drain, or eviction.
+                properties:
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits is the seid container's resource limit. Only memory is accepted,
+                      and it must equal the memory request.
+
+                      This field is deliberately redundant: the controller does not read it. It
+                      DERIVES the memory limit from the memory request on every render, so
+                      leaving it unset yields exactly the same pod spec as setting it to the
+                      request. It exists so the block reads as a complete pod resource block to
+                      an operator who expects to see the limit spelled out, and the rule above
+                      keeps the two from disagreeing. Do not "clean it up" as unused — removing
+                      a served CRD field is a one-way door.
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests is the seid container's resource request. Only cpu and memory
+                      are accepted.
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: resources.requests accepts only cpu and memory
+                  rule: '!has(self.requests) || self.requests.all(k, k in [''cpu'',
+                    ''memory''])'
+                - message: 'resources.limits accepts only memory: seid deliberately
+                    carries no CPU limit'
+                  rule: '!has(self.limits) || self.limits.all(k, k == ''memory'')'
+                - message: resources.limits.memory must equal resources.requests.memory
+                    (the mode's memory-Guaranteed footprint)
+                  rule: '!has(self.limits) || !(''memory'' in self.limits) || (has(self.requests)
+                    && ''memory'' in self.requests && quantity(string(self.limits[''memory''])).compareTo(quantity(string(self.requests[''memory''])))
+                    == 0)'
               seed:
                 description: Seed configures a peer-discovery seed node (P2P + PEX
                   only).
