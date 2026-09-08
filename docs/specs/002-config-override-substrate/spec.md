@@ -54,12 +54,13 @@ states what the anchor does not reach, because that gap is the honest part.
 - **Merge**: the key-by-key application of the overlay onto a base config file, from the existing tomlpatch engine.
 - **Config-apply**: the controller step that writes the overlay before seid starts.
 - **Materialize**: make a config change take effect on the node.
-- **Register**: the controller's current map from a known config key to its file, which a config value bypasses.
+- **Register**: the controller's current map from a known config key to its file. A config value bypasses it, because the operator names the file.
+- **Allow-list**: the sei-config rule that accepts only a known set of keys. The config-value path does not apply it.
 
 ## Boundary Context
 
 - **Sits within**: the override path in the sei-k8s-controller, for a SeiNode — the existing overrides, the config-apply step, the restart-seid task, and the tomlpatch merge engine.
-- **Owns**: the new config-value field on a SeiNode, its merge as an overlay over the base config, and the materialization of a change.
+- **Owns**: the new config-value field on a SeiNode, its merge as an overlay over the base config, the unvalidated write path that carries an arbitrary key to the file, and the materialization of a change.
 - **Does not own**: the same surface on SeiNetwork validators. The `config-substrate-parity-seinetwork` work item owns that.
 - **Does not own**: genesis overrides, which write genesis.json chain state on a different lifecycle.
 - **Does not own**: the seid config schema. seid owns which keys are valid.
@@ -169,8 +170,10 @@ file, a key, and a value, so that a new seid key works without controller code.
 
 1. THE controller SHALL accept a field of config values on a SeiNode, beside the existing overrides.
 2. THE controller SHALL read a file name, a key, and a value from each config value.
-3. THE controller SHALL accept a config value whose file name and key are absent from the register.
-4. THE controller SHALL preserve the type of a config value when it writes the overlay.
+3. THE controller SHALL treat the key as a dotted path into the file.
+4. WHEN a section on the path is missing, THE controller SHALL create it.
+5. THE controller SHALL write a config value without a check of its key against the sei-config allow-list.
+6. THE controller SHALL preserve the type of a config value when it writes the overlay.
 
 ### Requirement 2: The overlay merges onto the base config
 
@@ -266,11 +269,17 @@ role that decides.
   *Verifier:* judgement — a platform engineer names a new file and confirms the controller creates it from the value.
 - **SC-010**: A config value that makes seid refuse the config produces a reported failed start.
   *Verifier:* judgement — a platform engineer sets a bad value and confirms the controller reports the failed start.
+- **SC-011**: A dotted key writes into its section, and the controller creates a missing section.
+  *Verifier:* judgement — a platform engineer sets a dotted key for a missing section and confirms the file holds the nested section.
+- **SC-012**: A key the sei-config allow-list does not know still reaches the file.
+  *Verifier:* judgement — a platform engineer sets an unknown key and confirms it reaches the file.
 
 ## Assumptions
 
 - The controller already carries the tomlpatch merge engine and the config-apply and restart-seid tasks. This spec extends the override surface and its routing; it does not add a merge engine.
 - The config-value field sits beside the existing overrides, so the CEL guards and backward compatibility survive.
+- The sei-config package accepts only allow-listed keys today. This spec adds an unvalidated write path, so an arbitrary key reaches the file. seid decides at load whether the key is meaningful.
+- The allow-list and the CEL guards are separate layers. The config-value path bypasses the allow-list. The CEL guards stay as a small denylist of specific dangerous keys, in Requirement 6.
 - The controller recomputes the overlay over the base config on every start and on every change. A removed config value therefore returns its key to the base value. There is no in-value delete marker.
 - The operator owns the correctness of a config value the guards do not block. A wrong value fails at seid load, which the team accepts in exchange for full control.
 
