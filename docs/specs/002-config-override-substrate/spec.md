@@ -64,6 +64,7 @@ states what the anchor does not reach, because that gap is the honest part.
 - **Does not own**: the same surface on SeiNetwork validators. The `config-substrate-parity-seinetwork` work item owns that.
 - **Does not own**: genesis overrides, which write genesis.json chain state on a different lifecycle.
 - **Does not own**: the seid config schema. seid owns which keys are valid.
+- **Does not own**: the existing overrides field and its CEL guards. This spec adds a new field and leaves the old one unchanged.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -131,28 +132,28 @@ the base value.
 
 ---
 
-### User Story 4 - A guarded key is caught (Priority: P3)
+### User Story 4 - A wrong value surfaces (Priority: P3)
 
-An operator sets a config value for a guarded key by mistake, such as a freeze
-height. The controller already blocks that key on the existing overrides. The
-controller rejects the config value, so the operator does not wedge the node.
+An operator sets a config value that seid refuses at load. The operator is the
+expert, so the controller does not block the value. The node fails to start, and
+the controller reports the failed start, so the operator sees the foot-gun and not
+a silent stall.
 
-**Why this priority**: this ranks with Story 3 as a safety backstop, below the
-core add, merge, and change path. It keeps a known landmine from returning through
-the new field.
+**Why this priority**: this ranks with Story 3 as a safety net, below the core
+add, merge, and change path. It keeps a bad value visible.
 
-**Independent Test**: Set a config value for a guarded key. Confirm that the
-controller rejects the config value.
+**Independent Test**: Set a config value that seid refuses. Confirm that the
+controller reports the failed start.
 
 **Acceptance Scenarios**:
 
-1. **Given** a config value that names a guarded key, **When** the controller validates the node, **Then** the controller rejects the config value.
+1. **Given** a config value that seid refuses, **When** the node starts, **Then** the controller reports the failed start to the operator.
 
 ### Edge Cases
 
 - What happens when a config value is malformed and seid refuses it at load? The controller reports the failed start — see Requirement 6, criterion 3.
 - What happens when a config value names a key the controller derives? The config value wins — see Requirement 3.
-- What happens when a config value names a guarded key, such as a freeze height? The controller rejects the value — see Requirement 6, criterion 2.
+- What happens when a config value names a key the old field's guards block, such as a freeze height? The controller applies it; the operator owns the result — see the Assumptions.
 
 ## Requirements *(mandatory)*
 
@@ -172,8 +173,9 @@ file, a key, and a value, so that a new seid key works without controller code.
 2. THE controller SHALL read a file name, a key, and a value from each config value.
 3. THE controller SHALL treat the key as a dotted path into the file.
 4. WHEN a section on the path is missing, THE controller SHALL create it.
-5. THE controller SHALL write a config value without a check of its key against the sei-config allow-list.
-6. THE controller SHALL preserve the type of a config value when it writes the overlay.
+5. THE controller SHALL apply a config value for any key, without a check against the sei-config allow-list.
+6. THE controller SHALL apply a config value without a code change to sei-config, the controller, or the sidecar.
+7. THE controller SHALL preserve the type of a config value when it writes the overlay.
 
 ### Requirement 2: The overlay merges onto the base config
 
@@ -225,18 +227,17 @@ so that the node reads it on the first boot.
 
 1. WHEN the controller creates a node, THE controller SHALL write the overlay before seid starts.
 
-### Requirement 6: The controller keeps the existing safety guards
+### Requirement 6: A wrong value surfaces
 
-**Objective:** As a node operator, I want the controller to keep the existing
-guards, so that a dangerous known key is still caught.
+**Objective:** As a node operator, I want a wrong config value surfaced, so that a
+foot-gun is visible and not silent.
 
 **Traces to:** User Story 4
 
 #### Acceptance Criteria
 
-1. THE controller SHALL validate the existing override keys against the existing CEL guards.
-2. IF a config value names a key the existing guards block, THEN THE controller SHALL reject that config value.
-3. IF seid refuses the config, THEN THE controller SHALL report the failed start to the operator.
+1. THE controller SHALL apply a config value for a key the old field's guards block.
+2. IF seid refuses the config, THEN THE controller SHALL report the failed start to the operator.
 
 ### Key Entities
 
@@ -261,8 +262,8 @@ role that decides.
   *Verifier:* judgement — a platform engineer sets a key the controller also derives and confirms the config value wins.
 - **SC-006**: A node reads the overlay on its first boot.
   *Verifier:* judgement — a platform engineer confirms the overlay sits in the config file before seid starts.
-- **SC-007**: A config value that names a guarded key fails the existing guard.
-  *Verifier:* judgement — a platform engineer sets a guarded key through a config value and confirms the controller rejects it.
+- **SC-007**: A config value applies even for a key the old field's guards block.
+  *Verifier:* judgement — a platform engineer sets a key the old override field blocks and confirms the controller applies the config value.
 - **SC-008**: A typed value survives into the config file.
   *Verifier:* judgement — a platform engineer sets a boolean value and confirms the file holds a boolean, not a string.
 - **SC-009**: A config value for a file the controller does not write creates that file.
@@ -277,11 +278,11 @@ role that decides.
 ## Assumptions
 
 - The controller already carries the tomlpatch merge engine and the config-apply and restart-seid tasks. This spec extends the override surface and its routing; it does not add a merge engine.
-- The config-value field sits beside the existing overrides, so the CEL guards and backward compatibility survive.
-- The sei-config package accepts only allow-listed keys today. This spec adds an unvalidated write path, so an arbitrary key reaches the file. seid decides at load whether the key is meaningful.
-- The allow-list and the CEL guards are separate layers. The config-value path bypasses the allow-list. The CEL guards stay as a small denylist of specific dangerous keys, in Requirement 6.
+- The config-value field sits beside the existing overrides, so the old field and its guards stay unchanged and backward compatibility survives.
+- The sei-config package accepts only allow-listed keys today, compiled into sei-config, the controller, and the sidecar. This spec adds a path that needs no such entry, so an arbitrary key reaches the file. seid decides at load whether the key is meaningful.
+- The config-value path applies no allow-list and no denylist. A config value can set a key the old field's CEL guards block, such as a freeze height. The controller applies it, and the operator owns the interaction with the controller's own freeze management.
 - The controller recomputes the overlay over the base config on every start and on every change. A removed config value therefore returns its key to the base value. There is no in-value delete marker.
-- The operator owns the correctness of a config value the guards do not block. A wrong value fails at seid load, which the team accepts in exchange for full control.
+- The operator owns the correctness of a config value. A wrong value fails at seid load, which the team accepts in exchange for full control.
 
 ## Out of scope
 
