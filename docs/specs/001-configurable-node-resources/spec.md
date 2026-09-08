@@ -47,6 +47,8 @@ states what the anchor does not reach, because that gap is the honest part.
 - **Harness**: the harbor tooling that prompts the operator and renders the CRD manifests.
 - **Controller**: the sei-k8s-controller, which reconciles a CRD into child StatefulSets, volumes, and services.
 - **CRD**: the SeiNetwork or SeiNode resource the operator declares and the controller reconciles.
+- **Per-mode default profile**: the code-authoritative seid resource footprint the controller ships for each node mode.
+- **App-config resources override**: the optional per-mode block in the controller app-config that overrides the per-mode default profile.
 
 ## Boundary Context
 
@@ -153,8 +155,11 @@ in the field shape I already know, so that my knowledge transfers.
 2. WHEN the operator sets a storage size, THE harness SHALL accept it in the field shape of a volume claim request.
 3. IF the operator sets a value the schema rejects, THEN THE controller SHALL refuse the change.
 4. IF the operator sets a value the schema rejects, THEN THE controller SHALL name the rejected field.
-5. THE resource surface SHALL be a typed CRD field that mirrors the pod resources tree, with requests, limits, and the volume claim.
+5. THE resource surface SHALL be a typed CRD field in the pod resources shape, with the CPU and memory requests, the memory limit, and the volume claim.
 6. THE controller SHALL stamp that field onto the child StatefulSet.
+7. THE controller SHALL set the memory limit equal to the memory request, which keeps the per-mode memory-Guaranteed control.
+8. IF the field sets a memory limit that differs from the memory request, THEN THE controller SHALL use the memory request for both.
+9. THE controller SHALL set the CPU request without a CPU limit, which keeps the current per-mode CPU model.
 
 ### Requirement 3: Selectable storage parameters
 
@@ -207,6 +212,20 @@ shape, so that a pending pod does not read as slow.
 
 1. IF a requested shape exceeds the capacity of the node group, THEN THE harness SHALL report the pending pod and the reason.
 
+### Requirement 7: The CRD field resolves against the existing sizing sources
+
+**Objective:** As a controller maintainer, I want the CRD resource field placed
+in the existing sizing precedence, so that the controller iteration is
+unambiguous.
+
+**Traces to:** User Story 1
+
+#### Acceptance Criteria
+
+1. WHEN the operator sets the CRD resource field, THE controller SHALL prefer it over the app-config resources override and the per-mode default profile.
+2. WHEN the operator sets no CRD resource field, THE controller SHALL fall back to the app-config resources override.
+3. WHEN neither the CRD field nor the app-config override holds a value, THE controller SHALL fall back to the per-mode default profile.
+
 ### Key Entities
 
 - **Resource shape**: the CPU request, the memory request, and the storage size of one node group.
@@ -225,12 +244,16 @@ role that decides.
   *Verifier:* judgement — the benchmark owner compares the two rendered manifests and confirms the throughput field is the only difference.
 - **SC-004**: An oversize shape produces a reported pending pod, not a silent wait.
   *Verifier:* judgement — a platform engineer requests a shape above node capacity and confirms the harness reports the pending pod.
+- **SC-005**: A rendered node holds its memory limit equal to its memory request.
+  *Verifier:* judgement — a platform engineer reads the rendered StatefulSet and confirms the memory limit equals the memory request.
+- **SC-006**: A set CRD field wins over the app-config override and the per-mode default.
+  *Verifier:* judgement — a platform engineer sets the field and the app-config override to different values and confirms the rendered node uses the field.
 
 ## Assumptions
 
 - The node group holds enough capacity for the default shape. Capacity and pod placement live in the `node-ec2-locality` work item.
 - The controller already reconciles child StatefulSets and volumes from the CRD. This spec adds fields; it does not add a controller.
-- This iteration exposes resources as a typed CRD field that mirrors the pod resources tree. The field plumbs values through and adds no new semantics, which the team accepts for the first controller iteration.
+- This iteration exposes resources as a typed CRD field in the pod resources shape. The controller preserves its per-mode couplings: the memory limit equals the memory request, and the CPU request carries no CPU limit. The field feeds the existing per-mode resolution and adds no new sizing semantics.
 - The first iteration supports the gp3 EBS volume type, with configurable IOPS and throughput. The validators use a 125 throughput today. The storage-class review may add types or tune ranges before Barcelona. It raised 10,000 IOPS and 750 throughput as candidates to reconsider.
 - The default shape suits a quick test, not a production comparison. The operator raises it for a production comparison.
 - The team set the default at about one quarter of the mainnet shape as a safe first value. The team tunes it later from cost and run data.
