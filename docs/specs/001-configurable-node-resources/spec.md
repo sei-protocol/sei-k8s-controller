@@ -153,20 +153,23 @@ in the field shape I already know, so that my knowledge transfers.
 2. WHEN the operator sets a storage size, THE harness SHALL accept it in the field shape of a volume claim request.
 3. IF the operator sets a value the schema rejects, THEN THE controller SHALL refuse the change.
 4. IF the operator sets a value the schema rejects, THEN THE controller SHALL name the rejected field.
-5. THE resource surface SHALL be [NEEDS CLARIFICATION: a CRD field that mirrors the pod resource tree, or a generated StatefulSet the operator edits — the transcript left this fork open, and it decides whether a CRD field exists at all].
+5. THE resource surface SHALL be [NEEDS CLARIFICATION: under discussion. Three shapes are on the table. Shape A: a typed CRD field that mirrors the pod resources tree (requests and limits) plus the volume claim; the controller stamps it onto the child StatefulSet. Shape B: a curated CRD field that exposes only the benchmark knobs — CPU, memory, storage size, storage type, IOPS, throughput. Shape C: the controller generates a plain StatefulSet the operator edits, with no resource field on the CRD].
 
 ### Requirement 3: Selectable storage parameters
 
-**Objective:** As a benchmark engineer, I want to select disk type, IOPS, and
-throughput per node group, so that I compare storage-bound scenarios.
+**Objective:** As a benchmark engineer, I want to select a supported storage type
+and its fields per node group, so that I compare storage-bound scenarios.
 
 **Traces to:** User Story 3
 
 #### Acceptance Criteria
 
-1. THE harness SHALL accept a disk type, an IOPS value, and a throughput value for each node group.
-2. WHEN the operator sets a storage parameter, THE controller SHALL apply it to the volume of every node in the group.
-3. WHEN the operator selects a disk type, THE harness SHALL offer only the disk types the platform supports. [NEEDS CLARIFICATION: which storage classes, and which IOPS and throughput ranges, the harbor platform supports — the transcript deferred this to a storage-class review. Candidates raised and not decided: 10,000 IOPS and 750 throughput against a 125 default.]
+1. THE harness SHALL expose a fixed set of supported storage types.
+2. WHEN the operator selects a supported storage type, THE harness SHALL accept the standard fields for that type, such as the IOPS and the throughput.
+3. WHEN the operator sets a storage field, THE controller SHALL apply it to the volume of every node in the group.
+4. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL refuse the selection.
+5. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL name the supported set.
+6. THE supported set SHALL hold [NEEDS CLARIFICATION: which storage types belong to the set, and the field range for each — the storage-class review decides this. Raised and not decided: 10,000 IOPS and 750 throughput against a 125 default.]
 
 ### Requirement 4: A default lighter than the mainnet shape
 
@@ -177,7 +180,7 @@ lighter than the mainnet shape, so that a routine run costs less.
 
 #### Acceptance Criteria
 
-1. THE harness SHALL set a default whose CPU request, memory request, and storage size each stay below the mainnet shape. [NEEDS CLARIFICATION: how far below — the transcript gave a cost intent and no numbers.]
+1. THE harness SHALL set a default whose CPU request, memory request, and storage size each sit at about one quarter of the mainnet shape.
 2. THE harness SHALL let the operator raise the resource shape to the mainnet shape or above it.
 
 ### Requirement 5: An independent shape per node group
@@ -215,8 +218,8 @@ role that decides.
 
 - **SC-001**: The rendered CRD carries the CPU, the memory, and the storage the operator set.
   *Verifier:* judgement — the benchmark owner reads the rendered SeiNetwork with kubectl and confirms every validator child carries the set values.
-- **SC-002**: A default run requests less CPU, less memory, and less storage than a mainnet-shape run.
-  *Verifier:* judgement — the benchmark owner compares the default render against the mainnet shape on all three dimensions.
+- **SC-002**: A default run requests about one quarter of the mainnet shape on CPU, memory, and storage.
+  *Verifier:* judgement — the benchmark owner compares the default render against one quarter of the mainnet shape on all three dimensions.
 - **SC-003**: Two runs that differ only in disk throughput render two manifests that differ only in that field.
   *Verifier:* judgement — the benchmark owner compares the two rendered manifests and confirms the throughput field is the only difference.
 - **SC-004**: An oversize shape produces a reported pending pod, not a silent wait.
@@ -227,6 +230,7 @@ role that decides.
 - The node group holds enough capacity for the default shape. Capacity and pod placement live in the `node-ec2-locality` work item.
 - The controller already reconciles child StatefulSets and volumes from the CRD. This spec adds fields; it does not add a controller.
 - The default shape suits a quick test, not a production comparison. The operator raises it for a production comparison.
+- The team set the default at about one quarter of the mainnet shape as a safe first value. The team tunes it later from cost and run data.
 
 ## Out of scope
 
