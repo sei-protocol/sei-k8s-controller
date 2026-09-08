@@ -111,6 +111,7 @@ Confirm that the merged file holds both the config value and the controller keys
 1. **Given** a controller-written app.toml and a config value that adds one key, **When** the controller merges the overlay, **Then** the merged file holds both keys.
 2. **Given** a config value for a file the controller does not write, **When** the controller applies the overlay, **Then** the controller creates the file from the value.
 3. **Given** a config value for a key the base config already holds, **When** the controller merges the overlay, **Then** the merged file holds the config value.
+4. **Given** a config value for a key the controller derives, **When** the controller merges the overlay, **Then** the merged file holds the config value.
 
 ---
 
@@ -175,7 +176,7 @@ file, a key, and a value, so that a new seid key works with no new controller co
 
 1. THE controller SHALL accept a field of config values on a SeiNode, beside the existing overrides.
 2. THE controller SHALL read a file name, a key, and a value from each config value.
-3. THE CRD schema SHALL require a value in each config value.
+3. THE CRD schema SHALL reject a config value whose value is null or absent.
 4. THE CRD schema SHALL reject two config values that name the same file and the same key.
 5. THE controller SHALL treat the key as a dotted path into the file.
 6. IF a section on the path is missing, THEN THE controller SHALL create that section.
@@ -294,8 +295,11 @@ role that decides.
 - The sei-config package accepts only allow-listed keys today. sei-config, the controller, and the sidecar each hold a compiled copy of that allow-list. This spec adds a path that needs no entry in it, so an arbitrary key reaches the file. seid decides at load whether the key is meaningful.
 - The config-value path applies no allow-list and no denylist. A config value can set a key the existing field's freeze and halt guards block. The controller applies it. The operator accepts the outcome, including any conflict with the freeze height the controller sets itself.
 - The owner signed off on this trade-off. The config-value path does not apply the freeze and halt guards that the existing field applies. The existing field keeps those guards.
+- Requirement 6 reports a value seid refuses at load. It does not cover a valid but wrong value on a consensus key, such as a freeze or halt height. Such a value loads cleanly and can halt the node later, which is a liveness event and not a reported failed start.
+- The existing field treats a freeze or halt height as create-only, set on the bootstrap plan. The config-value path is mutable, so it offers a mutable route to that key. The plan reconciles this, and the operator owns the result.
 - The controller recomputes the overlay over the base config on every start and on every change. A removed config value therefore returns its key to the base value.
-- The tomlpatch engine deletes a key when a patch gives that key no value. The config-value path never does this, because the CRD schema requires a value. To stop overriding a key, the operator removes its config value, and the controller returns the key to its base value.
+- The value in a config value is a typed value, not a string, so its type survives the merge. The plan chooses the representation. A string-only field could not preserve a boolean or a number.
+- The tomlpatch engine deletes a key when a patch gives that key a null value, as RFC 7386 merge-patch defines. The config-value path never sends a null, because the CRD schema rejects a null or absent value. To stop overriding a key, the operator removes its config value, and the controller returns the key to its base value.
 - The operator owns the correctness of a config value. A wrong value fails at seid load, which the team accepts in exchange for full control.
 
 ## Out of scope
