@@ -991,6 +991,11 @@ func (in *SeiNetworkSpec) DeepCopyInto(out *SeiNetworkSpec) {
 		*out = new(DataVolumeSpec)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.Resources != nil {
+		in, out := &in.Resources, &out.Resources
+		*out = new(Resources)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Sidecar != nil {
 		in, out := &in.Sidecar, &out.Sidecar
 		*out = new(SidecarConfig)
