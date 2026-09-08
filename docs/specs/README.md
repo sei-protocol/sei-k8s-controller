@@ -13,3 +13,4 @@ gate checks that every success criterion names a verifier.
 | [002](002-config-override-substrate/spec.md) | Arbitrary config override substrate | Draft |
 | [003](003-config-substrate-parity-seinetwork/spec.md) | Config-value parity on the validator network | Draft |
 | [004](004-crd-ownership-and-deletion/spec.md) | Predictable ownership and deletion | Draft |
+| [005](005-ephemeral-teardown-and-prune/spec.md) | Ephemeral teardown and prune | Draft |
