@@ -155,6 +155,7 @@ controller reports the failed start.
 
 - What happens when a config value is malformed and seid refuses it at load? The controller reports the failed start — see Requirement 6, criterion 2.
 - What happens when a config value omits its value? The CRD schema rejects it, so the merge never receives an empty value — see Requirement 1, criterion 3.
+- What happens when two config values name the same file and the same key? The CRD schema rejects the pair, so the overlay has one value per key — see Requirement 1, criterion 4.
 - What happens when a config value names a key the controller derives? The config value wins — see Requirement 3.
 - What happens when a config value names a key the existing field's guards block, such as a freeze height? The controller applies it; the operator owns the result — see Requirement 6, criterion 1, and the Assumptions.
 
@@ -175,11 +176,12 @@ file, a key, and a value, so that a new seid key works with no new controller co
 1. THE controller SHALL accept a field of config values on a SeiNode, beside the existing overrides.
 2. THE controller SHALL read a file name, a key, and a value from each config value.
 3. THE CRD schema SHALL require a value in each config value.
-4. THE controller SHALL treat the key as a dotted path into the file.
-5. IF a section on the path is missing, THEN THE controller SHALL create that section.
-6. THE controller SHALL apply a config value for any key, without a check against the sei-config allow-list.
-7. THE controller SHALL apply a config value with no code change to sei-config, the controller, or the sidecar.
-8. WHEN the controller writes the overlay, THE controller SHALL preserve the type of each config value.
+4. THE CRD schema SHALL reject two config values that name the same file and the same key.
+5. THE controller SHALL treat the key as a dotted path into the file.
+6. IF a section on the path is missing, THEN THE controller SHALL create that section.
+7. THE controller SHALL apply a config value for any key, without a check against the sei-config allow-list.
+8. THE controller SHALL apply a config value with no code change to sei-config, the controller, or the sidecar.
+9. WHEN the controller writes the overlay, THE controller SHALL preserve the type of each config value.
 
 ### Requirement 2: The overlay merges over the base config
 
@@ -282,6 +284,8 @@ role that decides.
   *Verifier:* judgement — a platform engineer sets an unknown key and confirms it reaches the file.
 - **SC-013**: A config value with no value never reaches the merge.
   *Verifier:* judgement — a platform engineer applies a config value with no value and confirms the CRD schema rejects it.
+- **SC-014**: Two config values that name the same file and key never both apply.
+  *Verifier:* judgement — a platform engineer sets two config values with the same file and key and confirms the CRD schema rejects them.
 
 ## Assumptions
 
