@@ -157,8 +157,8 @@ in the field shape I already know, so that my knowledge transfers.
 4. IF the operator sets a value the schema rejects, THEN THE controller SHALL name the rejected field.
 5. THE resource surface SHALL be a typed CRD field in the pod resources shape, with the CPU and memory requests, the memory limit, and the volume claim.
 6. THE controller SHALL stamp that field onto the child StatefulSet.
-7. THE controller SHALL set the memory limit equal to the memory request, which keeps the per-mode memory-Guaranteed control.
-8. IF the field sets a memory limit that differs from the memory request, THEN THE controller SHALL use the memory request for both.
+7. WHEN the field sets no memory limit, THE controller SHALL set the memory limit equal to the memory request, which keeps the per-mode memory-Guaranteed control.
+8. THE CRD schema SHALL reject a memory limit that differs from the memory request, which routes it through the refuse-and-name path above.
 9. THE controller SHALL set the CPU request without a CPU limit, which keeps the current per-mode CPU model.
 
 ### Requirement 3: Selectable storage parameters
