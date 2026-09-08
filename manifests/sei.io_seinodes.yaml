@@ -534,10 +534,10 @@ spec:
                   benchmark operator from having to restate a mode's whole footprint to
                   raise one axis.
 
-                  A change here reaches a running pod only on pod recreation — the
-                  StatefulSets use UpdateStrategy: OnDelete, so the pod template updates
-                  while a live pod keeps the footprint it started with until a replace-pod,
-                  drain, or eviction.
+                  Immutable after creation (spec-level CEL). A change here would not reach a
+                  running pod anyway — the StatefulSets use UpdateStrategy: OnDelete and
+                  drift detection is image-only — so admission rejects the edit rather than
+                  accept an inert one. Replace the node to resize.
                 properties:
                   limits:
                     additionalProperties:
@@ -1049,6 +1049,12 @@ spec:
                 : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ?
                 oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze)
                 ? oldSelf.archive.freeze.height : 0))'
+            - message: 'spec.resources is create-only: a footprint change is not rolled
+                onto a running pod (the StatefulSet is OnDelete and drift detection
+                is image-only), so admission rejects the edit rather than accept an
+                inert one; replace the node to resize'
+              rule: (!has(self.resources) && !has(oldSelf.resources)) || self.resources
+                == oldSelf.resources
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:

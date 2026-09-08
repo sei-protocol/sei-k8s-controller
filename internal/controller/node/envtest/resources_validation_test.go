@@ -282,16 +282,15 @@ func TestSeidResources_UnequalMemoryRejectedOnRawPath(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("resources.limits.memory must equal resources.requests.memory"))
 }
 
-// TestSeidResources_RaisedAfterCreateAccepted pins the deliberate absence of an
-// immutability rule. Compute is a pod-template field, and the benchmark loop is
-// "raise it and re-run", so admission must accept the edit. What the edit does
-// NOT do is roll a live pod — the StatefulSets are OnDelete — which is a
-// controller-behaviour question, not an admission one.
-func TestSeidResources_RaisedAfterCreateAccepted(t *testing.T) {
+// TestSeidResources_ChangeAfterCreateRejected pins the create-only rule. The
+// footprint reaches a pod only at creation/replace (StatefulSets are OnDelete,
+// drift detection is image-only), so a raise-in-place is admitted-but-inert —
+// admission rejects it by name instead, and the operator replaces the node.
+func TestSeidResources_ChangeAfterCreateRejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	node := nodeWithResources(ns, "res-raise", &seiv1alpha1.Resources{
+	node := nodeWithResources(ns, "res-change", &seiv1alpha1.Resources{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4"),
 			corev1.ResourceMemory: resource.MustParse("32Gi"),
@@ -302,5 +301,46 @@ func TestSeidResources_RaisedAfterCreateAccepted(t *testing.T) {
 	err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
 		cur.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("32")
 	})
-	g.Expect(err).NotTo(HaveOccurred(), "raising the shape after create must be accepted")
+	g.Expect(err).To(HaveOccurred(), "changing the footprint after create must be rejected")
+	g.Expect(err.Error()).To(ContainSubstring("spec.resources is create-only"))
+}
+
+// TestSeidResources_AddedAfterCreateRejected pins that create-only blocks the
+// unset->set transition too: a node created on defaults cannot have a footprint
+// pinned onto it later; it must be recreated with the footprint set.
+func TestSeidResources_AddedAfterCreateRejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	node := nodeWithResources(ns, "res-add", nil)
+	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+	err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.Resources = &seiv1alpha1.Resources{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")},
+		}
+	})
+	g.Expect(err).To(HaveOccurred(), "adding a footprint after create must be rejected")
+	g.Expect(err.Error()).To(ContainSubstring("spec.resources is create-only"))
+}
+
+// TestSeidResources_UnrelatedEditWithUnchangedResourcesAccepted proves the rule
+// freezes only the footprint, not the whole object: an edit to another field
+// that leaves spec.resources byte-identical is still admitted.
+func TestSeidResources_UnrelatedEditWithUnchangedResourcesAccepted(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	node := nodeWithResources(ns, "res-unrelated", &seiv1alpha1.Resources{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("4"),
+			corev1.ResourceMemory: resource.MustParse("32Gi"),
+		},
+	})
+	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+	err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.Paused = true
+	})
+	g.Expect(err).NotTo(HaveOccurred(), "an edit leaving spec.resources unchanged must be accepted")
 }

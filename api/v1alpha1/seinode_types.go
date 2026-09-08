@@ -25,6 +25,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.overrides) || !('chain.freeze_height' in self.overrides)",message="set the freeze height via fullNode.freeze or archive.freeze, not overrides: user overrides outrank controller-derived ones"
 // +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
+// +kubebuilder:validation:XValidation:rule="(!has(self.resources) && !has(oldSelf.resources)) || self.resources == oldSelf.resources",message="spec.resources is create-only: a footprint change is not rolled onto a running pod (the StatefulSet is OnDelete and drift detection is image-only), so admission rejects the edit rather than accept an inert one; replace the node to resize"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
@@ -79,10 +80,10 @@ type SeiNodeSpec struct {
 	// benchmark operator from having to restate a mode's whole footprint to
 	// raise one axis.
 	//
-	// A change here reaches a running pod only on pod recreation — the
-	// StatefulSets use UpdateStrategy: OnDelete, so the pod template updates
-	// while a live pod keeps the footprint it started with until a replace-pod,
-	// drain, or eviction.
+	// Immutable after creation (spec-level CEL). A change here would not reach a
+	// running pod anyway — the StatefulSets use UpdateStrategy: OnDelete and
+	// drift detection is image-only — so admission rejects the edit rather than
+	// accept an inert one. Replace the node to resize.
 	// +optional
 	Resources *Resources `json:"resources,omitempty"`
 
