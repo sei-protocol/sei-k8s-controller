@@ -11,3 +11,4 @@ gate checks that every success criterion names a verifier.
 |---|---|---|
 | [001](001-configurable-node-resources/spec.md) | Selectable node resources for benchmarks | Draft |
 | [002](002-config-override-substrate/spec.md) | Arbitrary config override substrate | Draft |
+| [003](003-config-substrate-parity-seinetwork/spec.md) | Config-value parity on the validator network | Draft |
