@@ -10,3 +10,4 @@ gate checks that every success criterion names a verifier.
 | Spec | Title | Status |
 |---|---|---|
 | [001](001-configurable-node-resources/spec.md) | Selectable node resources for benchmarks | Draft |
+| [002](002-config-override-substrate/spec.md) | Arbitrary config override substrate | Draft |
