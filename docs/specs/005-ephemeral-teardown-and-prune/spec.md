@@ -9,9 +9,9 @@
 **Blocks**: a low-cost benchmark cycle. An engineer who tears down a benchmark
 namespace expects the volumes and their disks to be gone. Today a delete PR
 leaves the resources in place, and a retained disk keeps costing money. This spec
-reclaims the volumes and their disks, prunes the resources whose source files a
-delete PR removes, and keeps the retain protection for a volume whose data cannot
-be recreated. Requirement 5 holds the one open question: the single source of the
+reclaims the benchmark disks, prunes the resources whose source files a delete PR
+removes, and keeps the retain protection for a volume whose data cannot be
+recreated. Requirement 5 holds the one open question: the single source of the
 ephemeral behavior.
 
 **Input**: the Benchmark Party transcript, 2026-09-04. The fence below holds the
@@ -25,10 +25,11 @@ as ephemeral infrastructure. Massage the deletion policy for the PVCs so a
 teardown leaves no cost behind.
 ```
 
-The StatefulSet retention policy defaults to retain a node's volume, so a delete
-does not lose its data. The platform team reviewed the transcript and kept that
-protection for a volume whose data cannot be recreated. This spec gives the
-ephemeral benchmark path a clean prune and reclaim.
+The controller creates a node's data volume as a standalone PVC, owned by the
+SeiNode, so a node delete garbage-collects the PVC. The storage class reclaim
+policy defaults to `Retain`, so the disk survives the PVC. The platform team kept
+that protection for a volume whose data cannot be recreated. This spec reclaims
+the benchmark disk and prunes the resource.
 
 ## Semantic Anchors
 
@@ -40,19 +41,20 @@ states what the anchor does not reach, because that gap is the honest part.
 | EARS | acceptance criteria syntax | whether a criterion is the right one |
 | RFC 2119 | normative keywords, uppercase | whether the obligation is correct |
 | INVEST | whether each story is a real slice | whether the slice delivers value |
-| Kubernetes API conventions | PVC retention, reclaim policy | whether the controller reconciles correctly |
+| Kubernetes API conventions | owner references, garbage collection, reclaim policy | whether the controller reconciles correctly |
 | OpenGitOps | the prune of a resource whose source is gone | whether the overlay is correct |
 
 ## Glossary
 
-- **Controller**: the sei-k8s-controller reconciler that creates a node's StatefulSet and volume claim.
+- **Controller**: the sei-k8s-controller reconciler that creates a node's data PVC.
 - **Operator**: a person who runs and tears down a benchmark namespace.
 - **Benchmark node**: a SeiNode in a benchmark namespace. Its volume is ephemeral.
 - **Non-benchmark node**: a node outside a benchmark namespace. Its volume holds data worth keeping.
-- **PVC**: the persistent volume claim a node mounts for its data.
+- **Data PVC**: the standalone persistent volume claim the controller creates for a node's data. The controller owns it through the SeiNode.
 - **Disk**: the cloud volume that backs a PVC. On this platform it is an EBS volume.
+- **Owner reference**: the field on the data PVC that names its SeiNode, so Kubernetes garbage-collects the PVC when the node is deleted.
+- **Garbage collection**: the Kubernetes behavior that deletes a child once its owner is gone.
 - **Reclaim policy**: the value on the storage class that decides whether a deleted PVC also deletes its disk. It holds `Retain` or `Delete`.
-- **Retention policy**: the StatefulSet value that decides whether a deleted node also deletes its PVC. It holds `Retain` or `Delete`.
 - **Workspace reconciler**: the Flux Kustomization that applies the workspace manifests. The platform team owns its settings.
 - **Prune**: the GitOps step where the workspace reconciler deletes a resource once its source file is gone.
 - **Delete PR**: a pull request that removes a benchmark manifest from the workspace repository.
@@ -61,10 +63,10 @@ states what the anchor does not reach, because that gap is the honest part.
 ## Boundary Context
 
 - **Sits within**: the volume lifecycle of a benchmark node, and the GitOps teardown of a benchmark namespace.
-- **Owns**: the retention policy on a benchmark node, the storage class of a benchmark PVC, and the prune requirement on the workspace reconciler.
+- **Owns**: the storage class reclaim of a benchmark PVC, and the prune requirement on the workspace reconciler. It keeps the owner reference that already garbage-collects the PVC.
 - **Does not own**: the deletion cascade from a SeiNetwork down to its pods. The `crd-ownership-and-deletion` work item owns that.
 - **Does not own**: the size or the throughput of a disk. The `configurable-node-resources` work item owns those.
-- **Does not own**: the data protection for a non-benchmark node. This spec keeps the `Retain` default there.
+- **Does not own**: the data protection for a non-benchmark node. This spec keeps the `Retain` reclaim there.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -72,9 +74,10 @@ Order stories by priority. Each story stands as an independent test.
 
 ### User Story 1 - A deleted benchmark node takes its disk with it (Priority: P1)
 
-An operator deletes a benchmark node at the end of a run. The node's PVC goes with
-the node, and the disk goes with the PVC. No disk keeps costing money, and the
-next run starts clean.
+An operator deletes a benchmark node at the end of a run. The node owns its data
+PVC, so garbage collection deletes the PVC with the node. The disk goes with the
+PVC, because the benchmark storage class reclaims it. No disk keeps costing money,
+and the next run starts clean.
 
 **Why this priority**: this story fixes the reported cost leak. A retained disk
 keeps costing money after the run, and a stale volume collides with the next run.
@@ -84,8 +87,8 @@ that node remains.
 
 **Acceptance Scenarios**:
 
-1. **Given** a benchmark node with a volume, **When** the operator deletes the node, **Then** the StatefulSet controller deletes the node's PVC.
-2. **Given** the deleted PVC, **When** the storage provisioner runs, **Then** the provisioner deletes the disk that backed the PVC.
+1. **Given** a benchmark node with a data PVC, **When** the operator deletes the node, **Then** garbage collection deletes the owner-referenced PVC.
+2. **Given** the deleted PVC, **When** the storage provisioner runs, **Then** the provisioner deletes the disk, because the storage class reclaims it.
 
 ---
 
@@ -110,9 +113,9 @@ that the workspace reconciler deletes the cluster resource.
 ### User Story 3 - A non-benchmark node keeps its data (Priority: P2)
 
 An operator tears down a benchmark namespace that sits beside a non-benchmark
-node. The non-benchmark node holds data worth keeping, so its volume stays on
-`Retain`. The teardown reclaims the benchmark disks and leaves the non-benchmark
-disk in place.
+node. The non-benchmark node holds data worth keeping, so its PVC stays on a
+`Retain` reclaim. The teardown reclaims the benchmark disks and leaves the
+non-benchmark disk in place.
 
 **Why this priority**: this ranks with Story 2. A reclaim that reached a
 non-benchmark disk would lose data that cannot be recreated.
@@ -127,15 +130,15 @@ Confirm that the benchmark disks are gone and the non-benchmark disk remains.
 ### Edge Cases
 
 - What happens when a delete PR removes a manifest but the workspace reconciler has no prune? The resource keeps running with no source file — see Requirement 3.
-- What happens to a benchmark disk when its node is deleted? The PVC goes with the node, and the disk goes with the PVC — see Requirement 1 and Requirement 2.
-- What happens to a non-benchmark node in the same teardown? The controller keeps its volume on `Retain` — see Requirement 4.
+- What happens to a benchmark disk when its node is deleted? Garbage collection deletes the PVC, and the storage class reclaims the disk — see Requirement 1 and Requirement 2.
+- What happens to a non-benchmark node in the same teardown? The controller keeps its PVC on a `Retain` reclaim — see Requirement 4.
 
 ## Requirements *(mandatory)*
 
 Each requirement carries its own acceptance criteria, so no requirement is an
 orphan and no criterion floats free of a requirement.
 
-### Requirement 1: A benchmark node deletes its PVC on delete
+### Requirement 1: A benchmark PVC is garbage-collected with its node
 
 **Objective:** As an operator, I want a benchmark node's PVC to go when the node
 goes, so that a teardown leaves no volume claim behind.
@@ -144,9 +147,9 @@ goes, so that a teardown leaves no volume claim behind.
 
 #### Acceptance Criteria
 
-1. THE controller SHALL set the retention policy of a benchmark node to `Delete`, so the StatefulSet controller deletes the PVC with the node.
+1. THE controller SHALL set an owner reference from a benchmark node's data PVC to the SeiNode, so garbage collection deletes the PVC with the node.
 
-### Requirement 2: A benchmark PVC deletes its disk
+### Requirement 2: A benchmark PVC reclaims its disk
 
 **Objective:** As an operator, I want a benchmark disk to go when its PVC goes, so
 that a teardown leaves no disk to pay for.
@@ -180,24 +183,24 @@ that a benchmark teardown does not lose a node's state.
 
 #### Acceptance Criteria
 
-1. THE controller SHALL keep the retention policy of a non-benchmark node at `Retain`.
+1. THE controller SHALL place a non-benchmark PVC on a storage class whose reclaim policy is `Retain`.
 2. THE controller SHALL NOT place a non-benchmark PVC on a storage class whose reclaim policy is `Delete`.
 
-### Requirement 5: The ephemeral behavior has one source
+### Requirement 5: The ephemeral reclaim has one source
 
-**Objective:** As an operator, I want one source for the ephemeral behavior, so
+**Objective:** As an operator, I want one source for the ephemeral reclaim, so
 that every teardown reclaims the same way.
 
 **Traces to:** User Story 1
 
 #### Acceptance Criteria
 
-1. THE controller SHALL take the ephemeral behavior of a benchmark volume from [NEEDS CLARIFICATION: the storage class, or a per-network setting? Owner: the platform team. Decide by: 2026-10-31.]
+1. THE controller SHALL take the reclaim of a benchmark disk from [NEEDS CLARIFICATION: a benchmark storage class, or a per-network setting? Owner: the platform team. Decide by: 2026-10-31.]
 
 The two candidates:
 
 - A benchmark storage class whose reclaim policy is `Delete`. It needs no new field.
-- A per-network setting the controller applies to the retention policy and the storage class. It keeps the choice with the network.
+- A per-network setting the controller applies to the PVC storage class. It keeps the choice with the network.
 
 ## Success Criteria *(mandatory)*
 
@@ -214,20 +217,21 @@ role that decides.
   *Verifier:* judgement — a platform engineer tears down a benchmark namespace beside a non-benchmark node and confirms the non-benchmark disk remains.
 - **SC-005**: A deleted benchmark node leaves no PVC.
   *Verifier:* judgement — a platform engineer deletes a benchmark node and confirms no PVC remains.
-- **SC-006**: Every benchmark PVC takes its ephemeral behavior from the source that Requirement 5 selects.
+- **SC-006**: Every benchmark PVC takes its reclaim from the source that Requirement 5 selects.
   *Verifier:* not built — Requirement 5, criterion 1 is open, so the chosen source does not exist yet.
 
 ## Assumptions
 
-- The controller already creates a node's PVC from a storage class and a volume claim template. This spec sets the retention and the storage class; it does not add the volume model.
-- The StatefulSet retention policy defaults to `Retain`, and the storage class reclaim policy protects the disk. This spec changes both for a benchmark volume only.
+- The controller creates a node's data volume as a standalone PVC through the ensure-data-pvc task, and owns it through the SeiNode. This spec sets the storage class reclaim; it does not add the volume model.
+- The owner reference already garbage-collects the data PVC when the node is deleted, so Requirement 1 restates existing behavior as a regression guard. The open lever is the storage class reclaim in Requirement 2.
+- The storage class reclaim policy defaults to `Retain` and protects the disk. This spec changes the reclaim for a benchmark volume only.
 - A benchmark node deletion arrives from the `crd-ownership-and-deletion` cascade. That work item owns the cascade, and its default policy for a benchmark network gates the teardown.
 - A benchmark run mints a fresh consensus identity at its genesis ceremony. A reclaim of a benchmark disk therefore loses nothing that a later run cannot recreate.
-- A non-benchmark node keeps its `Retain` default, because its data cannot be recreated. This spec changes the benchmark path only.
+- A non-benchmark node keeps its `Retain` reclaim, because its data cannot be recreated. This spec changes the benchmark path only.
 
 ## Out of scope
 
 - The deletion cascade from a SeiNetwork down to its pods. That work lives in the `crd-ownership-and-deletion` work item.
 - The size or the throughput of a disk. That work lives in the `configurable-node-resources` work item.
-- The `Retain` default for a non-benchmark node. This spec keeps it.
+- The `Retain` reclaim for a non-benchmark node. This spec keeps it.
 - A snapshot of a benchmark disk before a teardown.
