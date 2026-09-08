@@ -948,7 +948,7 @@ func nodeWithCRDResources(role, cpu, mem string) *seiv1alpha1.SeiNode {
 	if mem != "" {
 		requests[corev1.ResourceMemory] = resource.MustParse(mem)
 	}
-	node.Spec.Resources = &seiv1alpha1.SeidResources{Requests: requests}
+	node.Spec.Resources = &seiv1alpha1.Resources{Requests: requests}
 	return node
 }
 
@@ -1025,7 +1025,7 @@ func TestResourcesForNode_CRDPreservesModeCouplings(t *testing.T) {
 // TestResourcesForNode_CRDLimitsAreNotRead locks the documented redundancy of
 // spec.resources.limits: the controller derives the memory limit from the
 // REQUEST, so a limits block changes nothing. Admission already pins the two
-// equal (see SeidResources), and this keeps the controller honest about which
+// equal (see Resources), and this keeps the controller honest about which
 // of the two it actually reads.
 func TestResourcesForNode_CRDLimitsAreNotRead(t *testing.T) {
 	g := NewWithT(t)

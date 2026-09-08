@@ -84,7 +84,7 @@ type SeiNodeSpec struct {
 	// while a live pod keeps the footprint it started with until a replace-pod,
 	// drain, or eviction.
 	// +optional
-	Resources *SeidResources `json:"resources,omitempty"`
+	Resources *Resources `json:"resources,omitempty"`
 
 	// --- Mode-specific sub-specs (exactly one must be set) ---
 
@@ -126,54 +126,26 @@ type SeiNodeSpec struct {
 	Paused bool `json:"paused,omitempty"`
 }
 
-// SeidResources is the seid-container footprint in the shape of a pod resource
-// block, so an operator's Kubernetes knowledge transfers directly. It is
-// deliberately NOT corev1.ResourceRequirements: that type carries `claims`
-// (dynamic resource allocation), which this controller does not support, and it
-// would admit resource names the seid container can never satisfy. The narrow
-// type keeps the generated schema to the two keys that mean something here.
-//
-// The three rules below encode the per-mode couplings the controller has always
-// enforced, moved to admission so a rejected value is named at apply time rather
-// than silently normalized during reconcile:
-//
-//   - requests accepts only cpu and memory.
-//   - limits accepts only memory. seid is work-conserving and CPU is
-//     compressible, so a CPU limit would only throttle its 10–12 core
-//     consensus/replay bursts; there is deliberately no CPU-limit path.
-//   - a memory limit must equal the memory request (memory-Guaranteed: the
-//     footprint is hard-reserved and hard-capped).
-//
-// The last rule compares through quantity() rather than ==, because == on a
-// quantity is a STRING comparison: it would reject "128Gi" against "131072Mi",
-// which are the same quantity. TestSeidResources_EquivalentMemoryUnitsAccepted
-// locks that; do not "simplify" the rule.
-//
-// The string() wrapper inside it is also load-bearing. A Quantity generates as
-// x-kubernetes-int-or-string, so "memory: 137438953472" is a legal spelling and
-// reaches CEL as an int, on which quantity() has no overload — the rule would
-// fail to EVALUATE and reject a valid pair with an unreadable error. string() is
-// identity on the string spelling and yields a parseable decimal on the int one.
+// Resources overrides the seid-container footprint in pod-resource shape.
+// Narrow by design (not corev1.ResourceRequirements) so admission accepts only
+// cpu/memory. The CEL rules pin the per-mode couplings — no CPU limit, memory
+// limit == request, positive values — and reject a bad value by name at apply
+// time. Keep the quantity(string(...)) form; see the envtest cases for why ==
+// on a raw string would be wrong.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.requests) || self.requests.all(k, k in ['cpu', 'memory'])",message="resources.requests accepts only cpu and memory"
 // +kubebuilder:validation:XValidation:rule="!has(self.limits) || self.limits.all(k, k == 'memory')",message="resources.limits accepts only memory: seid deliberately carries no CPU limit"
+// +kubebuilder:validation:XValidation:rule="(!has(self.requests) || !('cpu' in self.requests) || quantity(string(self.requests['cpu'])).compareTo(quantity('0')) > 0) && (!has(self.requests) || !('memory' in self.requests) || quantity(string(self.requests['memory'])).compareTo(quantity('0')) > 0)",message="resources.requests values must be positive"
 // +kubebuilder:validation:XValidation:rule="!has(self.limits) || !('memory' in self.limits) || (has(self.requests) && 'memory' in self.requests && quantity(string(self.limits['memory'])).compareTo(quantity(string(self.requests['memory']))) == 0)",message="resources.limits.memory must equal resources.requests.memory (the mode's memory-Guaranteed footprint)"
-type SeidResources struct {
+type Resources struct {
 	// Requests is the seid container's resource request. Only cpu and memory
 	// are accepted.
 	// +optional
 	Requests corev1.ResourceList `json:"requests,omitempty"`
 
-	// Limits is the seid container's resource limit. Only memory is accepted,
-	// and it must equal the memory request.
-	//
-	// This field is deliberately redundant: the controller does not read it. It
-	// DERIVES the memory limit from the memory request on every render, so
-	// leaving it unset yields exactly the same pod spec as setting it to the
-	// request. It exists so the block reads as a complete pod resource block to
-	// an operator who expects to see the limit spelled out, and the rule above
-	// keeps the two from disagreeing. Do not "clean it up" as unused — removing
-	// a served CRD field is a one-way door.
+	// Limits accepts only memory, pinned equal to the request by CEL. The
+	// controller derives the limit from the request, so it is redundant but
+	// kept as a served field — do not remove.
 	// +optional
 	Limits corev1.ResourceList `json:"limits,omitempty"`
 }

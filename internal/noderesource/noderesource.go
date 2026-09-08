@@ -473,7 +473,7 @@ func overrideForRole(role string, p PlatformConfig) platform.ResourceOverride {
 // Both per-mode couplings survive the new source unchanged: memory is emitted as
 // request AND limit, and CPU never carries a limit. The CRD's own
 // resources.limits.memory is therefore not read here — admission already pins it
-// equal to the request (see SeidResources), and the limit below is derived from
+// equal to the request (see Resources), and the limit below is derived from
 // the request regardless of whether the operator spelled it out.
 //
 // Only sources 2 and 3 reach MustParse, and both are pre-validated: the
@@ -485,7 +485,7 @@ func ResourcesForNode(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.Resour
 	role := deriveRole(node)
 	d := defaultNodeResourceProfiles[role]
 	o := overrideForRole(role, p)
-	crdCPU, crdMem := crdFootprint(node)
+	crdCPU, crdMem := resourcesFrom(node)
 
 	cpuReq := resolveQuantity(crdCPU, o.CPURequest, d.cpuRequest)
 	mem := resolveQuantity(crdMem, o.Memory, d.memory)
@@ -502,12 +502,12 @@ func ResourcesForNode(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.Resour
 	}
 }
 
-// crdFootprint returns the CPU and memory requests the node's spec.resources
+// resourcesFrom returns the CPU and memory requests the node's spec.resources
 // field sets, or nil for a dimension it leaves unset. A nil return is the signal
 // to fall through to the next source, which is why this reports presence rather
 // than a zero Quantity — an explicit "0" and an absent key are different
 // intents, and only the absent one should fall through.
-func crdFootprint(node *seiv1alpha1.SeiNode) (cpu, mem *resource.Quantity) {
+func resourcesFrom(node *seiv1alpha1.SeiNode) (cpu, mem *resource.Quantity) {
 	r := node.Spec.Resources
 	if r == nil {
 		return nil, nil

@@ -547,16 +547,9 @@ spec:
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       x-kubernetes-int-or-string: true
                     description: |-
-                      Limits is the seid container's resource limit. Only memory is accepted,
-                      and it must equal the memory request.
-
-                      This field is deliberately redundant: the controller does not read it. It
-                      DERIVES the memory limit from the memory request on every render, so
-                      leaving it unset yields exactly the same pod spec as setting it to the
-                      request. It exists so the block reads as a complete pod resource block to
-                      an operator who expects to see the limit spelled out, and the rule above
-                      keeps the two from disagreeing. Do not "clean it up" as unused — removing
-                      a served CRD field is a one-way door.
+                      Limits accepts only memory, pinned equal to the request by CEL. The
+                      controller derives the limit from the request, so it is redundant but
+                      kept as a served field — do not remove.
                     type: object
                   requests:
                     additionalProperties:
@@ -577,6 +570,11 @@ spec:
                 - message: 'resources.limits accepts only memory: seid deliberately
                     carries no CPU limit'
                   rule: '!has(self.limits) || self.limits.all(k, k == ''memory'')'
+                - message: resources.requests values must be positive
+                  rule: (!has(self.requests) || !('cpu' in self.requests) || quantity(string(self.requests['cpu'])).compareTo(quantity('0'))
+                    > 0) && (!has(self.requests) || !('memory' in self.requests) ||
+                    quantity(string(self.requests['memory'])).compareTo(quantity('0'))
+                    > 0)
                 - message: resources.limits.memory must equal resources.requests.memory
                     (the mode's memory-Guaranteed footprint)
                   rule: '!has(self.limits) || !(''memory'' in self.limits) || (has(self.requests)

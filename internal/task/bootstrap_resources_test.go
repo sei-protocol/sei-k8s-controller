@@ -351,7 +351,7 @@ func TestBootstrapJob_TakesCRDResourceFootprint(t *testing.T) {
 			ChainID:   "sei-test",
 			Image:     "ghcr.io/sei-protocol/seid:latest",
 			Validator: &seiv1alpha1.ValidatorSpec{},
-			Resources: &seiv1alpha1.SeidResources{
+			Resources: &seiv1alpha1.Resources{
 				Requests: corev1.ResourceList{
 					corev1.ResourceCPU:    resource.MustParse("4"),
 					corev1.ResourceMemory: resource.MustParse("32Gi"),

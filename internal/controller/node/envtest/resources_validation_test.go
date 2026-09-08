@@ -20,7 +20,7 @@ import (
 // Admission-level coverage of spec.resources: which footprints the API server
 // accepts, and which it rejects by name.
 //
-// These cases need no controller. The CEL rules on SeidResources are the whole
+// These cases need no controller. The CEL rules on Resources are the whole
 // subject, and only a real API server evaluates them — the fake client does
 // not — so a failure here is a CRD-contract defect and never a reconcile bug.
 //
@@ -37,7 +37,7 @@ const (
 
 // nodeWithResources returns a full node carrying the given resource block. A nil
 // block leaves spec.resources unset.
-func nodeWithResources(ns, name string, res *seiv1alpha1.SeidResources) *seiv1alpha1.SeiNode {
+func nodeWithResources(ns, name string, res *seiv1alpha1.Resources) *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: seiv1alpha1.SeiNodeSpec{
@@ -65,7 +65,7 @@ func TestSeidResources_RequestsOnlyAccepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	node := nodeWithResources(ns, "res-requests", &seiv1alpha1.SeidResources{
+	node := nodeWithResources(ns, "res-requests", &seiv1alpha1.Resources{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4"),
 			corev1.ResourceMemory: resource.MustParse("32Gi"),
@@ -82,7 +82,7 @@ func TestSeidResources_CPULimitRejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	node := nodeWithResources(ns, "res-cpu-limit", &seiv1alpha1.SeidResources{
+	node := nodeWithResources(ns, "res-cpu-limit", &seiv1alpha1.Resources{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4"),
 			corev1.ResourceMemory: resource.MustParse("32Gi"),
@@ -105,7 +105,7 @@ func TestSeidResources_StrayRequestKeyRejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	node := nodeWithResources(ns, "res-stray-key", &seiv1alpha1.SeidResources{
+	node := nodeWithResources(ns, "res-stray-key", &seiv1alpha1.Resources{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4"),
 			corev1.ResourceMemory: resource.MustParse("32Gi"),
@@ -118,6 +118,43 @@ func TestSeidResources_StrayRequestKeyRejected(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("resources.requests accepts only cpu and memory"))
 }
 
+// TestSeidResources_NegativeRequestRejected closes the value-range hole: the key
+// rules constrain WHICH keys appear, and the positive-value guard rejects a
+// negative request at admission — by name — instead of letting it slip through
+// to fail later in core pod validation at apply-statefulset time.
+func TestSeidResources_NegativeRequestRejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	node := nodeWithResources(ns, "res-negative", &seiv1alpha1.Resources{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("4"),
+			corev1.ResourceMemory: resource.MustParse("-1"),
+		},
+	})
+
+	err := testCli.Create(testCtx, node)
+	g.Expect(err).To(HaveOccurred(), "a negative memory request must be rejected")
+	g.Expect(err.Error()).To(ContainSubstring("resources.requests values must be positive"))
+}
+
+// TestSeidResources_ZeroRequestRejected pins that the guard is strict: a zero
+// request is degenerate, not a permissive "unset", so it is named too.
+func TestSeidResources_ZeroRequestRejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	node := nodeWithResources(ns, "res-zero", &seiv1alpha1.Resources{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU: resource.MustParse("0"),
+		},
+	})
+
+	err := testCli.Create(testCtx, node)
+	g.Expect(err).To(HaveOccurred(), "a zero cpu request must be rejected")
+	g.Expect(err.Error()).To(ContainSubstring("resources.requests values must be positive"))
+}
+
 // TestSeidResources_UnequalMemoryRejected locks the memory-Guaranteed coupling:
 // the footprint is hard-reserved and hard-capped at the same value, so a limit
 // above the request is not a permissive setting — it is a different memory model.
@@ -125,7 +162,7 @@ func TestSeidResources_UnequalMemoryRejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	node := nodeWithResources(ns, "res-unequal-mem", &seiv1alpha1.SeidResources{
+	node := nodeWithResources(ns, "res-unequal-mem", &seiv1alpha1.Resources{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4"),
 			corev1.ResourceMemory: resource.MustParse("32Gi"),
@@ -149,7 +186,7 @@ func TestSeidResources_MemoryLimitWithoutRequestRejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	node := nodeWithResources(ns, "res-limit-no-req", &seiv1alpha1.SeidResources{
+	node := nodeWithResources(ns, "res-limit-no-req", &seiv1alpha1.Resources{
 		Limits: corev1.ResourceList{
 			corev1.ResourceMemory: resource.MustParse("32Gi"),
 		},
@@ -254,7 +291,7 @@ func TestSeidResources_RaisedAfterCreateAccepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	node := nodeWithResources(ns, "res-raise", &seiv1alpha1.SeidResources{
+	node := nodeWithResources(ns, "res-raise", &seiv1alpha1.Resources{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("4"),
 			corev1.ResourceMemory: resource.MustParse("32Gi"),
