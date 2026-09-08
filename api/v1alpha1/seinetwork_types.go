@@ -27,6 +27,13 @@ import (
 // +kubebuilder:validation:XValidation:rule="self.genesis == oldSelf.genesis",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
 // +kubebuilder:validation:XValidation:rule="self.replicas == oldSelf.replicas",message="spec.replicas is fixed at the genesis ceremony; the validator set is minted into genesis state and cannot be grown or shrunk by editing the spec"
 // +kubebuilder:validation:XValidation:rule="(!has(self.dataVolume) && !has(oldSelf.dataVolume)) || self.dataVolume == oldSelf.dataVolume",message="spec.dataVolume is immutable once set; it backs a StatefulSet volumeClaimTemplate, which Kubernetes forbids changing after create"
+// resources is create-only, compared PER-DIMENSION via quantity() rather than
+// structural == — the values are int-or-string Quantities, and the network
+// controller's finalizer Update re-encodes a bare-int footprint as a string, so
+// a structural == would reject the controller's own write and wedge the network
+// (mirrors the SeiNode rule). limits rides on the equality rule + request-derived
+// limit, so freezing requests freezes the footprint.
+// +kubebuilder:validation:XValidation:rule="(!has(self.resources) && !has(oldSelf.resources)) || (has(self.resources) && has(oldSelf.resources) && (has(self.resources.requests) == has(oldSelf.resources.requests)) && (!has(self.resources.requests) || ((('cpu' in self.resources.requests) == ('cpu' in oldSelf.resources.requests)) && (('memory' in self.resources.requests) == ('memory' in oldSelf.resources.requests)) && (!('cpu' in self.resources.requests) || !('cpu' in oldSelf.resources.requests) || quantity(string(self.resources.requests['cpu'])).compareTo(quantity(string(oldSelf.resources.requests['cpu']))) == 0) && (!('memory' in self.resources.requests) || !('memory' in oldSelf.resources.requests) || quantity(string(self.resources.requests['memory'])).compareTo(quantity(string(oldSelf.resources.requests['memory']))) == 0))))",message="spec.resources is create-only: a validator pool is fixed-shape at the genesis ceremony, and each child SeiNode's own spec.resources is itself create-only, so an edit here could never reach the pool; replace the network to resize"
 type SeiNetworkSpec struct {
 	// Image is the seid image the genesis validators run.
 	// +kubebuilder:validation:MinLength=1
@@ -71,6 +78,23 @@ type SeiNetworkSpec struct {
 	// letting the controller silently ignore it.
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
+
+	// Resources is the seid-container footprint every genesis validator in this
+	// pool receives — one field sizes the whole pool, so the operator does not
+	// restate it per replica. The controller stamps it onto each child SeiNode's
+	// spec.resources at creation, where it becomes that node's
+	// highest-precedence sizing source (see noderesource.ResourcesForNode).
+	// Unset leaves every child on the app-config override or the per-mode code
+	// default, unchanged.
+	//
+	// Immutable after create (spec-level CEL), for two reasons that compound.
+	// The pool is fixed-shape at the genesis ceremony, like replicas. And the
+	// child's own spec.resources is create-only too, so the controller
+	// deliberately does not sync this field onto existing children (see
+	// ensureSeiNode) — an edit here would be rejected downstream even if
+	// admission let it through. Replace the network to resize the pool.
+	// +optional
+	Resources *Resources `json:"resources,omitempty"`
 
 	// Sidecar configures the sei-sidecar container on each genesis validator.
 	// +optional
