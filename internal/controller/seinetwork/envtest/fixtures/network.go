@@ -6,6 +6,8 @@
 package fixtures
 
 import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -74,6 +76,19 @@ func WithConfigOverrides(overrides map[string]string) Option {
 func WithSidecar(sidecar *seiv1alpha1.SidecarConfig) Option {
 	return func(network *seiv1alpha1.SeiNetwork) {
 		network.Spec.Sidecar = sidecar
+	}
+}
+
+// WithResources sets spec.resources — the seid footprint every genesis
+// validator in the pool receives. cpu and memory are quantity strings.
+func WithResources(cpu, memory string) Option {
+	return func(network *seiv1alpha1.SeiNetwork) {
+		network.Spec.Resources = &seiv1alpha1.Resources{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse(cpu),
+				corev1.ResourceMemory: resource.MustParse(memory),
+			},
+		}
 	}
 }
 

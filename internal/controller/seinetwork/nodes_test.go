@@ -232,6 +232,78 @@ func TestGenerateSeiNode_OverridesNotAliased(t *testing.T) {
 		"overwriting an existing key in the child's overrides must not mutate the network spec")
 }
 
+// networkResources is the pool footprint used by the spec.resources tests.
+func networkResources(cpu, mem string) *seiv1alpha1.Resources {
+	return &seiv1alpha1.Resources{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(cpu),
+			corev1.ResourceMemory: resource.MustParse(mem),
+		},
+	}
+}
+
+// One field on the network sizes every genesis validator in the pool, so the
+// operator does not restate the footprint per replica. generateSeiNode stamps it
+// onto each child's spec.resources, where it becomes that node's
+// highest-precedence sizing source.
+func TestGenerateSeiNode_StampsResources(t *testing.T) {
+	g := NewWithT(t)
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.Spec.Resources = networkResources("4", "32Gi")
+
+	for _, ordinal := range []int{0, 1, 2} {
+		node := generateSeiNode(network, ordinal)
+
+		g.Expect(node.Spec.Resources).NotTo(BeNil(),
+			"ordinal %d must carry the pool footprint", ordinal)
+		g.Expect(node.Spec.Resources.Requests[corev1.ResourceCPU]).
+			To(Equal(resource.MustParse("4")))
+		g.Expect(node.Spec.Resources.Requests[corev1.ResourceMemory]).
+			To(Equal(resource.MustParse("32Gi")))
+	}
+}
+
+// An unset spec.resources leaves the child's field nil, so every child stays on
+// the app-config override or the per-mode code default. DeepCopy on a nil
+// pointer returns nil, which is what makes the unconditional call in
+// generateSeiNode safe.
+func TestGenerateSeiNode_NoResourcesLeavesChildNil(t *testing.T) {
+	g := NewWithT(t)
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	g.Expect(network.Spec.Resources).To(BeNil())
+
+	g.Expect(generateSeiNode(network, 0).Spec.Resources).To(BeNil())
+}
+
+// generateSeiNode must not alias the network's Resources into the child.
+// Aliasing would be invisible in the single-replica case and corrupt the pool in
+// the multi-replica one: every child would share one ResourceList, so a later
+// write through any of them would rewrite the others. Mirrors
+// TestGenerateSeiNode_OverridesNotAliased.
+func TestGenerateSeiNode_ResourcesNotAliased(t *testing.T) {
+	g := NewWithT(t)
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.Spec.Resources = networkResources("4", "32Gi")
+
+	child := generateSeiNode(network, 0)
+
+	// Mutate the PARENT after generating. An aliased child would follow along.
+	network.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("64")
+	network.Spec.Resources.Requests["nvidia.com/gpu"] = resource.MustParse("1")
+
+	g.Expect(child.Spec.Resources.Requests[corev1.ResourceCPU]).
+		To(Equal(resource.MustParse("4")),
+			"an already-generated child must not follow a later parent edit")
+	g.Expect(child.Spec.Resources.Requests).NotTo(HaveKey(corev1.ResourceName("nvidia.com/gpu")),
+		"a key added to the parent must not appear on an already-generated child")
+
+	// And the reverse direction: writing through the child must not reach the parent.
+	child.Spec.Resources.Requests[corev1.ResourceMemory] = resource.MustParse("1Gi")
+	g.Expect(network.Spec.Resources.Requests[corev1.ResourceMemory]).
+		To(Equal(resource.MustParse("32Gi")),
+			"writing through the child must not mutate the network spec")
+}
+
 // setGenesisCeremonyCondition has no NotApplicable branch: every SeiNetwork
 // runs the ceremony (genesis is required).
 func TestSetGenesisCeremonyCondition(t *testing.T) {

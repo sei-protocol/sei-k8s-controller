@@ -166,7 +166,8 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 		existing.Spec.Overrides = desired.Spec.Overrides
 		updated = true
 	}
-	// No identity / Peers / DataVolume sync below — deliberate, all create-time only:
+	// No identity / Peers / DataVolume / Resources sync below — deliberate, all
+	// create-time only:
 	//   - Peers are controller-owned: the genesis ceremony's collect-and-set-peers
 	//     task patches each child's Spec.Peers with the assembled validator set
 	//     (a StaticPeerSource). generateSeiNode emits empty peers at create, so
@@ -174,6 +175,12 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 	//   - DataVolume backs a StatefulSet volumeClaimTemplate, which is immutable
 	//     post-create; a post-create spec.dataVolume edit cannot take effect, so
 	//     we do not attempt to sync it.
+	//   - Resources is stamped once at child creation. The child's own
+	//     spec.resources is CEL create-only, so writing a changed footprint here
+	//     would be rejected by admission — and the Update below carries the whole
+	//     spec, so a sync branch would fail the entire update, taking the image
+	//     and podLabels sync down with it. The parent's spec.resources is
+	//     create-only for the same reason, so there is nothing to sync anyway.
 	if updated {
 		return r.Update(ctx, existing)
 	}
@@ -204,6 +211,7 @@ func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.
 		Overrides:  maps.Clone(network.Spec.ConfigOverrides),
 		Sidecar:    network.Spec.Sidecar.DeepCopy(),
 		DataVolume: network.Spec.DataVolume.DeepCopy(),
+		Resources:  network.Spec.Resources.DeepCopy(),
 		PodLabels:  podLabels,
 		Paused:     network.Spec.Paused,
 		Validator: &seiv1alpha1.ValidatorSpec{
