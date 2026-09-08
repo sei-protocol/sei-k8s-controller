@@ -153,7 +153,8 @@ in the field shape I already know, so that my knowledge transfers.
 2. WHEN the operator sets a storage size, THE harness SHALL accept it in the field shape of a volume claim request.
 3. IF the operator sets a value the schema rejects, THEN THE controller SHALL refuse the change.
 4. IF the operator sets a value the schema rejects, THEN THE controller SHALL name the rejected field.
-5. THE resource surface SHALL be [NEEDS CLARIFICATION: under discussion. Three shapes are on the table. Shape A: a typed CRD field that mirrors the pod resources tree (requests and limits) plus the volume claim; the controller stamps it onto the child StatefulSet. Shape B: a curated CRD field that exposes only the benchmark knobs — CPU, memory, storage size, storage type, IOPS, throughput. Shape C: the controller generates a plain StatefulSet the operator edits, with no resource field on the CRD].
+5. THE resource surface SHALL be a typed CRD field that mirrors the pod resources tree, with requests, limits, and the volume claim.
+6. THE controller SHALL stamp that field onto the child StatefulSet.
 
 ### Requirement 3: Selectable storage parameters
 
@@ -229,6 +230,7 @@ role that decides.
 
 - The node group holds enough capacity for the default shape. Capacity and pod placement live in the `node-ec2-locality` work item.
 - The controller already reconciles child StatefulSets and volumes from the CRD. This spec adds fields; it does not add a controller.
+- This iteration exposes resources as a typed CRD field that mirrors the pod resources tree. The field plumbs values through and adds no new semantics, which the team accepts for the first controller iteration.
 - The default shape suits a quick test, not a production comparison. The operator raises it for a production comparison.
 - The team set the default at about one quarter of the mainnet shape as a safe first value. The team tunes it later from cost and run data.
 
