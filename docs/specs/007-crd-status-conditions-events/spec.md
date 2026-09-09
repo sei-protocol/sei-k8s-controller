@@ -58,11 +58,11 @@ states what the anchor does not reach, because that gap is the honest part.
 - **SeiNetwork**: the CRD that owns a pool of validators.
 - **Validator**: a child SeiNode of the SeiNetwork.
 - **Running phase**: the child SeiNode phase that means the pod and its sidecar are up.
-- **Sidecar**: the container beside seid that reads seid's co-located CometBFT RPC and reports up.
-- **Committed height**: the block height the validators agree on. It advances when the network produces.
-- **Producing signal**: the network committed height advancing, observed from a sufficient set of validators. A single lagging or restarting validator does not change it.
-- **Producing condition**: the always-present condition that reports whether the network produces.
-- **Grace window**: the bounded time the controller holds the phase at `Ready` after the producing signal goes absent.
+- **Sidecar**: the container beside seid that reads seid's co-located CometBFT RPC.
+- **Committed height**: the block height a validator has finalized. The node controller surfaces it on the SeiNode status.
+- **Producing signal**: the highest committed height any reachable validator reports, advancing over time. A single lagging or restarting validator does not lower it.
+- **Producing condition**: the always-present condition that reports whether the network produces, and carries the time production last advanced.
+- **Grace window**: the bounded time the network controller holds the phase at `Ready` after the producing signal goes absent.
 - **Readiness probe**: the pod probe that gates whether Kubernetes routes traffic to the pod.
 - **Plan**: the ordered task sequence the controller runs to bring the network or a node up.
 - **Owning resource**: the SeiNode or SeiNetwork that runs a plan. Its task states and task events live on itself.
@@ -72,11 +72,11 @@ states what the anchor does not reach, because that gap is the honest part.
 
 ## Boundary Context
 
-- **Sits within**: the SeiNetwork phase and conditions, the producing signal, and the per-task state and events on any resource that runs a plan.
-- **Owns**: the meaning of the `Ready` phase, the producing signal and its condition, the assignment of the `Running` task state, and the per-task events on the owning resource.
+- **Sits within**: the SeiNetwork phase and conditions, the committed height on the SeiNode status, and the per-task state and events on any resource that runs a plan.
+- **Owns**: the meaning of the `Ready` phase, the producing signal and its condition, the committed-height field on the SeiNode status and the sidecar surface that feeds it, the assignment of the `Running` task state, and the per-task events on the owning resource.
 - **Does not own**: the placement of a validator on a worker node, or the node-list report of it. The `node-ec2-locality` work item owns those status fields.
 - **Does not own**: the deletion and ownership status. The `crd-ownership-and-deletion` work item owns that.
-- **Does not own**: how a validator produces a block, and how the sidecar reads seid. seid owns consensus; the sidecar owns the local read.
+- **Does not own**: how a validator commits a block. seid owns consensus.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -88,8 +88,8 @@ An operator waits for a benchmark network to come up. The operator wants `Ready`
 to mean the network commits new blocks, not that the pods reached the `Running`
 phase. The controller holds the network off `Ready` until the committed height
 advances, then reports `Ready`. A single validator restart does not drop `Ready`,
-because a quorum keeps committing. A network that produced and then stalled reports
-`Degraded`, not `Initializing`.
+because the highest committed height keeps advancing. A network that produced and
+then stalled reports `Degraded`, not `Initializing`.
 
 **Why this priority**: an operator who starts load against a network that reports
 `Ready` but commits no block measures a network that is not running, and reads the
@@ -104,7 +104,7 @@ the phase stays `Ready`.
 
 1. **Given** a network whose validator pods are `Running` but whose committed height does not advance, **When** the network controller computes the phase, **Then** the phase is not `Ready`.
 2. **Given** the same network once its committed height advances, **When** the network controller computes the phase, **Then** the phase is `Ready`.
-3. **Given** a `Ready` network, **When** one validator restarts while a quorum keeps committing, **Then** the phase stays `Ready`.
+3. **Given** a `Ready` network, **When** one validator restarts while the highest committed height keeps advancing, **Then** the phase stays `Ready`.
 4. **Given** a network that reached `Ready` and then stopped committing past the grace window, **When** the network controller computes the phase, **Then** the phase is `Degraded`.
 
 ---
@@ -115,9 +115,10 @@ An operator brings up a fresh network. The producing signal must reflect the
 committed height advancing, not that an endpoint responds, because seid answers
 its status during initial sync and at a pinned freeze height without producing.
 The signal must not sit on the pod readiness probe, because a pod that reports
-not-ready receives no traffic, and the network never forms. The controller reads
-the signal from seid through the co-located sidecar, reports it on the status, and
-leaves the pod readiness probe to gate traffic on the pod's own liveness.
+not-ready receives no traffic, and the network never forms. The sidecar reports
+the committed height, the node controller surfaces it on the SeiNode status, the
+network controller reads the child statuses, and the pod readiness probe still
+gates traffic on the pod's own liveness.
 
 **Why this priority**: this ranks with Story 1. A gate on the pod readiness probe
 deadlocks the bring-up: no traffic, so no consensus, so no production, so the
@@ -179,9 +180,9 @@ the resource that ran it.
 
 ### Edge Cases
 
-- What happens when one validator's seid stops advancing while a quorum keeps committing? The phase stays `Ready` — see Requirement 1.
-- What happens when the controller cannot read the producing signal at all? The controller treats the read as a within-grace gap, not a stall — see Requirement 1.
-- What happens when a produced network stops committing past the grace window? The phase is `Degraded` — see Requirement 1.
+- What happens when one validator lags or restarts while the highest committed height keeps advancing? The phase stays `Ready` — see Requirement 1.
+- What happens when the network controller cannot read the committed height at all? The signal counts as absent from that moment, and the grace window governs — a within-window gap holds `Ready`, a longer gap becomes `Degraded` — see Requirement 1.
+- What happens when a produced network stops committing past the grace window? The phase is `Degraded`, and the `Producing` condition distinguishes it from a `Degraded` caused by a failed child — see Requirement 1 and Requirement 2.
 - What happens when a task fails part way through a plan? The plan keeps the task at `Failed`, distinguishable from the done tasks — see Requirement 3.
 
 ## Requirements *(mandatory)*
@@ -198,13 +199,13 @@ blocks, so that I start load against a network that runs.
 
 #### Acceptance Criteria
 
-1. THE producing signal SHALL be the network committed height advancing, observed from a sufficient set of validators.
-2. WHILE the children are `Running` and the producing signal advances, THE network controller SHALL report the network phase as `Ready`.
+1. THE producing signal SHALL be the highest committed height any reachable validator reports, advancing over time.
+2. WHILE no higher-precedence phase applies, AND the children are `Running`, AND the producing signal advances, THE network controller SHALL report the network phase as `Ready`.
 3. WHILE the children are `Running` and the network has committed no block yet, THE network controller SHALL report the network phase as `Initializing`.
 4. WHILE the children are `Running` and the network committed before but the producing signal has been absent longer than the grace window, THE network controller SHALL report the network phase as `Degraded`.
 5. WHILE the producing signal has been absent for less than the grace window and the network was `Ready`, THE network controller SHALL keep the network phase at `Ready`.
-6. IF the network controller cannot read the producing signal, THEN THE network controller SHALL treat the read as a within-grace gap, not as a production stall.
-7. WHILE a quorum keeps committing blocks, THE network controller SHALL keep the network phase at `Ready` when a single validator restarts.
+6. IF the network controller cannot read the producing signal, THEN THE network controller SHALL treat the signal as absent from that time, so the grace window governs the outcome.
+7. THE network controller SHALL derive the grace window from the time the producing signal last advanced, recorded on the `Producing` condition.
 
 ### Requirement 2: The producing signal is real, and off the pod readiness probe
 
@@ -217,10 +218,12 @@ and a forming network still receives traffic.
 #### Acceptance Criteria
 
 1. THE producing signal SHALL reflect the committed height advancing, not that an endpoint responds.
-2. THE controller SHALL read the producing signal from seid through the co-located sidecar, so the signal does not depend on externally-exposed validator RPC.
-3. THE network controller SHALL report the producing signal as an always-present `Producing` condition, set to `False` with a stable reason when the network does not produce, and carrying the observed generation.
-4. THE controller SHALL NOT use the readiness probe of a validator pod as the producing gate.
-5. WHILE a validator forms consensus and commits no block, THE controller SHALL leave the pod eligible for peer traffic.
+2. THE sidecar SHALL report the committed height on its status surface.
+3. THE node controller SHALL read the committed height from the sidecar and surface it on the SeiNode status.
+4. THE network controller SHALL derive the producing signal from the committed heights on the child SeiNode statuses.
+5. THE network controller SHALL report the producing signal as an always-present `Producing` condition, set to `False` with a stable reason when the network does not produce, and carrying the observed generation.
+6. THE controller SHALL NOT use the readiness probe of a validator pod as the producing gate.
+7. WHILE a validator forms consensus and commits no block, THE controller SHALL leave the pod eligible for peer traffic.
 
 ### Requirement 3: The plan marks the running task
 
@@ -251,6 +254,7 @@ the plan, so that `kubectl describe` on that resource reads as a timeline.
 ### Key Entities
 
 - **Producing signal**: see Glossary. The network controller reads it to gate `Ready`.
+- **Committed height**: see Glossary. The node controller surfaces it on the SeiNode status.
 - **Task state**: see Glossary. It belongs to one task in one plan, on the owning resource.
 
 ## Success Criteria *(mandatory)*
@@ -261,13 +265,13 @@ role that decides.
 - **SC-001**: A network whose pods are `Running` but whose committed height does not advance is not `Ready`.
   *Verifier:* judgement — a platform engineer holds a network's height flat and confirms the phase is not `Ready`, exercising `computeGroupPhase` in `internal/controller/seinetwork/status_test.go`.
 - **SC-002**: A network reaches `Ready` once its committed height advances.
-  *Verifier:* judgement — a platform engineer confirms the phase reaches `Ready` after the height advances.
-- **SC-003**: A single validator restart does not drop a quorum-healthy network off `Ready`.
+  *Verifier:* judgement — a platform engineer confirms the phase reaches `Ready` after the height advances, exercising `computeGroupPhase` in `internal/controller/seinetwork/status_test.go`.
+- **SC-003**: A single validator restart does not drop the network off `Ready` while the highest committed height keeps advancing.
   *Verifier:* judgement — a platform engineer restarts one validator on a `Ready` network and confirms the phase stays `Ready`.
-- **SC-004**: A produced network that stops committing past the grace window reports `Degraded`.
-  *Verifier:* judgement — a platform engineer stalls a produced network and confirms the phase becomes `Degraded`, not `Initializing`.
-- **SC-005**: A producing-signal read failure does not drop the network off `Ready` within the grace window.
-  *Verifier:* judgement — a platform engineer makes the producing signal unreadable and confirms the phase holds at `Ready` within the window.
+- **SC-004**: A produced network that stops committing past the grace window reports `Degraded`, not `Initializing`.
+  *Verifier:* judgement — a platform engineer stalls a produced network and confirms the phase becomes `Degraded`.
+- **SC-005**: A committed-height read failure holds `Ready` within the grace window and becomes `Degraded` past it.
+  *Verifier:* judgement — a platform engineer makes the height unreadable and confirms the phase holds at `Ready` within the window, then becomes `Degraded` past it.
 - **SC-006**: A catching-up validator whose status endpoint answers does not read `Ready`.
   *Verifier:* judgement — a platform engineer confirms a syncing validator whose endpoint answers is not `Ready`.
 - **SC-007**: A forming network's validator pods receive peer traffic before any validator commits a block, and the producing gate is not on the pod readiness probe.
@@ -280,16 +284,21 @@ role that decides.
   *Verifier:* judgement — a platform engineer reads the events on a SeiNode and on the SeiNetwork and confirms a start and a named end event per task.
 - **SC-011**: The `Producing` condition is always present and reads `False` with a stable reason when the network does not produce.
   *Verifier:* judgement — a platform engineer reads the condition on a not-producing network and confirms it is present and `False` with a stable reason.
+- **SC-012**: A `Degraded` from a stalled chain is distinguishable from a `Degraded` from a failed child.
+  *Verifier:* judgement — a platform engineer reads the `Producing` condition on a `Degraded` network and confirms it names the cause.
 
 ## Assumptions
 
 - The plan already carries a per-task state enum — `Pending`, `Running`, `Complete`, `Failed` — and the executor sets `Pending`, `Complete`, and `Failed`. Only `Running` is never assigned, so the running task is inferred from the first task that is not `Complete`. This spec assigns `Running`; it does not add a state field.
-- The producing signal is the network committed height, aggregated across the validators, so a single lagging or restarting validator does not change it. The gate is on the network, not on each validator. This is what keeps the gate from becoming the false-negative mirror of the false positive it fixes.
+- The producing signal is the highest committed height across the reachable validators. Committed height is the height the validators agree on, so the maximum any reachable validator reports is the network height, and a lagging or restarting validator only reports a lower value that the maximum ignores. No quorum count is needed; the maximum is the cheapest correct read.
+- The sidecar's status endpoint returns only a two-value readiness enum today, so the committed height does not cross the sidecar contract. Carrying it requires extending the sidecar API. This is in-scope cross-module work, and it follows the controller's ordered sidecar-image deploy and its rollback discipline; the contract module stays free of the chain graph.
+- The node controller already holds a sidecar client, so it reads the committed height and surfaces it on the SeiNode status. The network controller reads the child SeiNode statuses it already consumes, so it gains no new sidecar client and no per-poll fan-out to child sidecars.
 - The producing signal reflects the committed height advancing, not that an endpoint responds. seid answers its status endpoint during initial block sync and at a pinned freeze height, so a reachability check would report `Ready` on a node that is not producing.
-- The controller reads the producing signal from seid through the co-located sidecar, which already reads seid's local CometBFT RPC. The signal does not depend on externally-exposed validator RPC, which a validator does not serve by default.
-- A producing-signal read failure is not a production stall. An unreachable endpoint or a restarting sidecar reads as a within-grace gap, so a transient does not drop a healthy network off `Ready`.
-- The controller reads the producing signal periodically with a timeout, and requeues while the signal is neither advancing nor failed. The cadence and the timeout are plan concerns.
-- The `Running` phase of a child SeiNode means the pod and its sidecar are up, not that seid commits blocks. This is the gap the `Ready` redefinition closes. Today `computeGroupPhase` reaches `Ready` only when the children are `Running`, so this spec adds the producing gate and names `Degraded` for the produced-then-stalled case and `Initializing` for the pre-first-block case.
+- A committed-height read failure is not a production stall on its own. It counts as an absent signal from the time of the failure, so the grace window governs: a within-window gap holds `Ready`, and a gap past the window becomes `Degraded`. This bounds the hold, so a permanently lost read path cannot hold `Ready` forever.
+- The grace window is bounded and configurable, with a default on the order of a small multiple of the block time. Requirement 1, criteria 4, 5, and 6 turn on it.
+- The network controller derives the grace window from the `Producing` condition's last-transition time, which is where the "when did production last advance" state lives across reconciles. `computeGroupPhase` gains that time as an input.
+- `Degraded` now has two causes: a child in the `PhaseFailed` state, and a stalled chain with the children `Running`. The `Producing` condition disambiguates them for the alerting consumer: `Producing` set to `False` with a stalled reason means the chain wedged, and a node did not fail. The phase gauge alert keys on the condition to tell the two apart.
+- The `Ready` phase defers to the existing phase precedence. `Paused`, `PlanInProgress`, and a failed ceremony resolve before the producing gate, so Requirement 1, criterion 2 does not override them.
 - `Ready` is no longer monotonic: a network can leave `Ready`. In-repo consumers read the current meaning — the `WaitReady` helper and the phase gauge — so leaving `Ready` is now an expected transition, not a fault.
 - The per-task event is recorded on the resource that owns the plan. A SeiNode's task events land on the SeiNode; the genesis-ceremony task events land on the SeiNetwork. Requirement 3 and Requirement 4 share this subject.
 - Kubernetes applies its default event retention, so a bring-up older than the retention window will not show its task events, and the per-task event volume scales with the validator count times the task count. Tuning event retention is out of scope.
@@ -299,6 +308,7 @@ role that decides.
 
 - The placement of a validator on a worker node, and the node-list report of it. The `node-ec2-locality` work item owns those status fields.
 - The deletion and ownership status. The `crd-ownership-and-deletion` work item owns that.
-- How a validator commits a block, and how the sidecar reads seid. seid owns consensus; the sidecar owns the local read.
+- How a validator commits a block. seid owns consensus.
 - A change to the existing conditions beyond the new `Producing` condition and the `Ready`-phase meaning.
 - The tuning of Kubernetes event retention.
+- The cadence and the timeout of the committed-height read. Those are plan concerns.
