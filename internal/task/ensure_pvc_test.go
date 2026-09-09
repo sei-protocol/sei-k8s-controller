@@ -186,14 +186,14 @@ func TestEnsureDataPVC_ModeStorageAndOwnership(t *testing.T) {
 			g.Expect(c.Get(context.Background(), types.NamespacedName{
 				Name: noderesource.DataPVCName(node), Namespace: node.Namespace,
 			}, pvc)).To(Succeed())
-			g.Expect(pvc.Spec.StorageClassName).To(PointTo(Equal(tt.class)))
+			g.Expect(pvc.Spec.StorageClassName).To(HaveValue(Equal(tt.class)))
 			owner := metav1.GetControllerOf(pvc)
 			g.Expect(owner).NotTo(BeNil(), "Spec 005 Requirement 1: a created data PVC must be owned by its SeiNode for garbage collection")
 			g.Expect(owner.APIVersion).To(Equal(seiv1alpha1.GroupVersion.String()))
 			g.Expect(owner.Kind).To(Equal("SeiNode"))
 			g.Expect(owner.Name).To(Equal(node.Name))
 			g.Expect(owner.UID).To(Equal(node.UID))
-			g.Expect(owner.BlockOwnerDeletion).To(PointTo(BeTrue()))
+			g.Expect(owner.BlockOwnerDeletion).To(HaveValue(BeTrue()))
 		})
 	}
 }
@@ -236,7 +236,7 @@ func TestStorageClassReclaimPolicies(t *testing.T) {
 			g := NewWithT(t)
 			sc, exists := classes[tt.name]
 			g.Expect(exists).To(BeTrue(), tt.reason)
-			g.Expect(sc.ReclaimPolicy).To(PointTo(Equal(tt.policy)), tt.reason)
+			g.Expect(sc.ReclaimPolicy).To(HaveValue(Equal(tt.policy)), tt.reason)
 		})
 	}
 }
