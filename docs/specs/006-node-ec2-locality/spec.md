@@ -62,11 +62,11 @@ states what the anchor does not reach, because that gap is the honest part.
 - **Worker node**: a Kubernetes node. On this platform it is one EC2 instance.
 - **Scheduling field**: the typed, optional field this spec adds to each CRD, which carries the node-isolation value.
 - **Node isolation**: the scheduling value. It is one of `Shared` or `Dedicated`.
-- **Effective node isolation**: the value the controller acts on. It is the scheduling field value; for a standalone SeiNode with no field, it is the legacy annotation; with neither, it is `Shared`. A validator child has no annotation fallback.
+- **Effective node isolation**: the value the controller acts on, by one uniform path — the scheduling field value; for a SeiNode with no field, the legacy annotation; with neither, `Shared`. A validator child never carries the annotation, because the controller gives it none, so its value comes from the field or is `Shared`. The path reads the same on every SeiNode and needs no parentage check.
 - **Requester term**: the anti-affinity term on a `Dedicated` pod that keeps it off a worker node holding another Sei pod.
 - **Defensive term**: the anti-affinity term on every Sei pod that keeps it off a worker node holding a `Dedicated` pod.
 - **Isolation label**: the existing `sei.io/dedicated-node` pod label that both anti-affinity terms select on.
-- **Single-tenant nodepool**: a Karpenter nodepool with a taint only Sei pods tolerate, so no other workload lands on its worker nodes.
+- **Single-tenant nodepool**: a Karpenter nodepool, one per node mode, with a taint only Sei pods tolerate, so no other workload lands on its worker nodes.
 - **Legacy annotation**: the experimental `sei.io/dedicated-node` annotation on a standalone SeiNode, which the scheduling field supersedes.
 - **Placement**: the map from each validator to the worker node that runs it.
 
@@ -215,10 +215,10 @@ workload, so that a non-Sei co-tenant does not take the instance bandwidth.
 
 #### Acceptance Criteria
 
-1. WHILE a node's effective node isolation is `Dedicated`, THE controller SHALL schedule the pod onto the single-tenant nodepool that app-config names.
-2. THE controller SHALL render the toleration for the single-tenant nodepool taint.
-3. THE controller SHALL replace the per-mode nodepool affinity with the single-tenant nodepool affinity, so a `Dedicated` pod lands only on the single-tenant nodepool.
-4. WHEN app-config names no single-tenant nodepool, THE controller SHALL render the requester term only, so the guarantee holds against another Sei pod and not against a non-Sei co-tenant.
+1. WHILE a node's effective node isolation is `Dedicated`, THE controller SHALL schedule the pod onto the single-tenant nodepool that app-config names for the node's mode.
+2. WHILE a node's effective node isolation is `Dedicated`, THE controller SHALL render the toleration for the single-tenant nodepool taint.
+3. THE controller SHALL replace the per-mode nodepool affinity with the single-tenant nodepool affinity for the same mode, so a `Dedicated` pod lands only on its mode's single-tenant nodepool.
+4. WHEN app-config names no single-tenant nodepool for the node's mode, THE controller SHALL render the requester term only, so the guarantee holds against another Sei pod and not against a non-Sei co-tenant.
 
 ### Requirement 5: The controller reports the placement
 
@@ -253,8 +253,8 @@ role that decides.
   *Verifier:* judgement — a platform engineer creates a node with neither the field nor the annotation and confirms the controller renders no requester term.
 - **SC-005**: An existing SeiNode with only the legacy annotation still schedules single-tenant after the upgrade.
   *Verifier:* judgement — a platform engineer sets only the annotation, leaves the field unset, and confirms the pod avoids a worker node holding another Sei pod.
-- **SC-006**: A `Dedicated` node schedules onto the single-tenant nodepool when app-config names one, and renders the requester term when app-config names none.
-  *Verifier:* judgement — a platform engineer runs a `Dedicated` node with and without a named single-tenant nodepool and confirms the placement in each case.
+- **SC-006**: A `Dedicated` node schedules onto its mode's single-tenant nodepool when app-config names one for that mode, and renders the requester term when app-config names none.
+  *Verifier:* judgement — a platform engineer runs a `Dedicated` node with and without a named single-tenant nodepool for its mode and confirms the placement in each case.
 - **SC-007**: The SeiNetwork status names each validator's worker node and follows a reschedule.
   *Verifier:* judgement — a platform engineer reads the status, reschedules a pod, and confirms the status names the new worker node.
 - **SC-008**: A pending validator appears on the SeiNetwork status.
@@ -274,9 +274,10 @@ role that decides.
 - The controller propagates the scheduling field through the existing child-sync path, the same path that carries the config, sidecar, and pod-label fields. This replaces the annotation path, which cannot reach a validator child. The SeiNetwork gives its children no annotation, and the controller reconciles a hand-applied child annotation back to none on the next loop.
 - The anti-affinity selects on the existing `sei.io/dedicated-node` pod label. The field changes only the source of that label's value, not the label key, so a rolling upgrade does not split running and new pods across two keys and lapse the isolation mid-roll.
 - The controller already renders the hard cross-namespace anti-affinity, with the worker node as the topology, for a `Dedicated` pod. Requirement 2 is a regression guard on that rendering. Requirement 1, Requirement 3, and Requirement 5 are new work: the typed field, the propagation, and the placement report.
-- The controller already renders a per-mode nodepool affinity and toleration. Requirement 4 replaces the per-mode affinity with a single-tenant nodepool affinity; provisioning that nodepool is new platform work. A widened, additive affinity would let a `Dedicated` pod still land on the shared per-mode pool, so the single-tenant affinity replaces rather than appends.
+- The controller already renders a per-mode nodepool affinity and toleration. Requirement 4 replaces the per-mode affinity with a single-tenant nodepool affinity for the same mode; provisioning that nodepool is new platform work. A widened, additive affinity would let a `Dedicated` pod still land on the shared per-mode pool, so the single-tenant affinity replaces rather than appends.
+- The single-tenant nodepool is per mode. `NodepoolForMode` maps each mode to a deliberately distinct pool — archive, validator, and seed each need their own, and seed must not fall back to the default pool, which is sized for RPC-class nodes. A `Dedicated` node keeps its mode's sizing, so the single-tenant pool the controller selects is the one for the node's mode, not one shared pool.
 - The controller reads nodepool names from app-config at startup and holds no access to Karpenter resources, so it cannot observe whether a named nodepool is provisioned. "No single-tenant nodepool" therefore means app-config names none.
-- Full instance exclusivity depends on a single-tenant nodepool with a taint only Sei pods tolerate. The platform team provisions it. The nodepool must use the same instance class as the validator nodepool, or a benchmark compared across the pool change is not comparable.
+- Full instance exclusivity depends on a single-tenant nodepool with a taint only Sei pods tolerate. The platform team provisions it. The single-tenant nodepool for a mode must use the same instance class as that mode's shared nodepool, or a benchmark compared across the pool change is not comparable.
 - The placement report needs pod-read access and a pod watch that the SeiNetwork controller does not hold today. This is part of the new work in Requirement 5, because a reschedule trips no existing reconcile trigger and the report would otherwise lag until the periodic resync.
 - One worker node is one EC2 instance, so an anti-affinity on the worker node isolates at the EC2 level.
 - The single-tenant nodepool is the binding capacity, not the whole cluster. Where the pool holds fewer worker nodes than the network holds `Dedicated` validators, a validator stays pending and Requirement 5 reports it. The platform team sizes the pool.
