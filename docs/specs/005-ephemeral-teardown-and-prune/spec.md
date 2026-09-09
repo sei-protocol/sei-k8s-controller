@@ -235,3 +235,43 @@ role that decides.
 - The size or the throughput of a disk. That work lives in the `configurable-node-resources` work item.
 - The `Retain` reclaim for a non-benchmark node. This spec keeps it.
 - A snapshot of a benchmark disk before a teardown.
+
+## Findings addendum — PLT-1215 (2026-09-09)
+
+These findings correct the reclaim-policy premise above, including Requirements
+2 and 5. PLT-1215's stated cause is false: the performance storage class already
+uses `Delete`. This change adds regression guards only and does **not** fix the
+cost leak.
+
+- **Requirement 2:** Benchmarks run ordinary validator and full nodes. SeiNode
+  has archive, validator, seed, full, and replayer shapes; there is no benchmark
+  mode. This spec defines a benchmark node by namespace. `NodeMode`,
+  `DefaultStorageForMode`, and `StorageForNode` in
+  `internal/noderesource/noderesource.go` resolve full and validator to
+  `StorageClassPerf`; replayer and an empty spec resolve through full too.
+  Archive resolves to `StorageClassArchive`, and seed to `StorageClassDefault`.
+- `config/storage/storage-classes.yaml` has defined `gp3-10k-750` with
+  `reclaimPolicy: Delete` since its first commit. Harbor's deployed
+  `sei-controller-config` sets `classPerf: gp3-10k-750`, byte-identical across
+  all five clusters. No new benchmark class or mode selector is needed.
+- **Requirement 4 clarification:** Only `gp3-archive` is `Retain` in that
+  manifest. It is selected only for archive mode, which no workspace node uses.
+  The guard preserves archive protection; the requirement's blanket claim that
+  every non-benchmark node uses `Retain` is not current behavior. Full and
+  validator nodes use the performance class outside benchmark namespaces too.
+- **Requirement 5:** Reclaim already comes from the selected StorageClass.
+  The proposed choice between a new benchmark class and a per-network class
+  selector rests on the incorrect premise above. Neither is introduced here.
+- The surviving disks originate upstream of reclaim:
+  `api/v1alpha1/seinetwork_types.go` defaults `SeiNetwork.spec.deletionPolicy`
+  to `Retain`. `internal/controller/seinetwork/controller.go` deliberately
+  strips child SeiNode owner references under that policy. Orphaned SeiNodes
+  keep their PVCs, so PVC deletion never occurs and `Delete` reclaim never
+  fires. The deletion-policy/cascade fix is separate and out of scope here.
+
+The tests pin mode-to-class resolution, Requirement 1's existing SeiNode owner
+reference on created data PVCs, and the manifest's `Delete` performance / `Retain`
+archive policies. They do not simulate Kubernetes garbage collection or EBS
+provisioner deletion, and do not establish the end-to-end teardown success
+criteria above. Production code, API/CRD types, storage classes, and deletion
+policies are unchanged.

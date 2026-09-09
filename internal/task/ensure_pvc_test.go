@@ -3,14 +3,18 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"os"
 	"testing"
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -145,6 +149,96 @@ func TestEnsureDataPVC_Create_PVCMissing_CreatesAndCompletes(t *testing.T) {
 		Name: noderesource.DataPVCName(node), Namespace: node.Namespace,
 	}, pvc)).To(Succeed())
 	g.Expect(pvc.Spec.AccessModes).To(ConsistOf(corev1.ReadWriteOnce))
+}
+
+// Spec 005 Requirements 1 and 4: preserve class selection and PVC ownership.
+// Benchmark is a namespace designation, not a SeiNode mode.
+func TestEnsureDataPVC_ModeStorageAndOwnership(t *testing.T) {
+	p := platformtest.Config()
+	cases := []struct {
+		name  string
+		spec  seiv1alpha1.SeiNodeSpec
+		mode  string
+		class string
+	}{
+		{"archive", seiv1alpha1.SeiNodeSpec{Archive: &seiv1alpha1.ArchiveSpec{}}, "archive", p.StorageClassArchive},
+		{"full", seiv1alpha1.SeiNodeSpec{FullNode: &seiv1alpha1.FullNodeSpec{}}, "full", p.StorageClassPerf},
+		{"validator", seiv1alpha1.SeiNodeSpec{Validator: &seiv1alpha1.ValidatorSpec{}}, "validator", p.StorageClassPerf},
+		{"seed", seiv1alpha1.SeiNodeSpec{Seed: &seiv1alpha1.SeedSpec{}}, "seed", p.StorageClassDefault},
+		{"replayer", seiv1alpha1.SeiNodeSpec{Replayer: &seiv1alpha1.ReplayerSpec{}}, "full", p.StorageClassPerf},
+		{"default", seiv1alpha1.SeiNodeSpec{}, "full", p.StorageClassPerf},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := ensurePVCNode()
+			node.Spec = tt.spec
+			mode := noderesource.NodeMode(node)
+			g.Expect(mode).To(Equal(tt.mode))
+			class, _ := noderesource.DefaultStorageForMode(mode, p)
+			g.Expect(class).To(Equal(tt.class))
+			class, _ = noderesource.StorageForNode(node, p)
+			g.Expect(class).To(Equal(tt.class))
+			exec, c := newEnsurePVCExec(t, node)
+			g.Expect(exec.Execute(context.Background())).To(Succeed())
+			g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+			pvc := &corev1.PersistentVolumeClaim{}
+			g.Expect(c.Get(context.Background(), types.NamespacedName{
+				Name: noderesource.DataPVCName(node), Namespace: node.Namespace,
+			}, pvc)).To(Succeed())
+			g.Expect(pvc.Spec.StorageClassName).To(PointTo(Equal(tt.class)))
+			owner := metav1.GetControllerOf(pvc)
+			g.Expect(owner).NotTo(BeNil(), "Spec 005 Requirement 1: a created data PVC must be owned by its SeiNode for garbage collection")
+			g.Expect(owner.APIVersion).To(Equal(seiv1alpha1.GroupVersion.String()))
+			g.Expect(owner.Kind).To(Equal("SeiNode"))
+			g.Expect(owner.Name).To(Equal(node.Name))
+			g.Expect(owner.UID).To(Equal(node.UID))
+			g.Expect(owner.BlockOwnerDeletion).To(PointTo(BeTrue()))
+		})
+	}
+}
+
+func TestStorageClassReclaimPolicies(t *testing.T) {
+	f, err := os.Open("../../config/storage/storage-classes.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	decoder := yaml.NewYAMLOrJSONDecoder(f, 4096)
+	classes := map[string]storagev1.StorageClass{}
+	for {
+		var sc storagev1.StorageClass
+		err := decoder.Decode(&sc)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := classes[sc.Name]; exists {
+			t.Fatalf("duplicate storage class %q", sc.Name)
+		}
+		classes[sc.Name] = sc
+	}
+	for _, tt := range []struct {
+		name   string
+		policy corev1.PersistentVolumeReclaimPolicy
+		reason string
+	}{
+		{"gp3-10k-750", corev1.PersistentVolumeReclaimDelete, "PLT-1215 regression guard: benchmark full/validator nodes already use Delete; changing perf to Retain would leave EBS disks behind after PVC deletion. The existing cost leak is upstream at SeiNetwork deletionPolicy: Retain."},
+		{"gp3-archive", corev1.PersistentVolumeReclaimRetain, "Spec 005 Requirement 4: preserve Retain protection for non-benchmark archive data."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			sc, exists := classes[tt.name]
+			g.Expect(exists).To(BeTrue(), tt.reason)
+			g.Expect(sc.ReclaimPolicy).To(PointTo(Equal(tt.policy)), tt.reason)
+		})
+	}
 }
 
 func TestEnsureDataPVC_Create_PVCExistsOwnedByUs_Completes(t *testing.T) {
