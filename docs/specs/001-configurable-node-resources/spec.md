@@ -40,7 +40,8 @@ states what the anchor does not reach, because that gap is the honest part.
 
 - **Node group**: the set of nodes of one role, validator or RPC, that share one resource shape.
 - **Resource shape**: the CPU request, the memory request, and the storage size that every node in one node group receives.
-- **Storage parameters**: the disk type, the IOPS, and the throughput of the volume a node mounts.
+- **Storage parameters**: the disk type, the IOPS, and the throughput of the volume a node mounts, selected as a named VolumeAttributesClass.
+- **VolumeAttributesClass (VAC)**: a platform-managed, cluster-scoped object that names a supported set of EBS volume parameters (type, IOPS, throughput). A node volume selects one by name; the controller references it and never creates it.
 - **Profile default**: the resource shape the harness proposes when the operator states nothing.
 - **Scenario**: one benchmark run with a fixed set of swappable parameters, which an engineer compares against another run.
 - **Mainnet shape**: the resource shape a production validator receives today.
@@ -171,11 +172,11 @@ and its fields per node group, so that I compare storage-bound scenarios.
 #### Acceptance Criteria
 
 1. THE harness SHALL expose a fixed set of supported storage types.
-2. WHEN the operator selects a supported storage type, THE harness SHALL accept the standard fields for that type, such as the IOPS and the throughput.
-3. WHEN the operator sets a storage field, THE controller SHALL apply it to the volume of every node in the group.
+2. WHEN the operator selects a supported storage type, THE harness SHALL accept the standard fields for that type, such as the IOPS and the throughput, and resolve them to a supported VolumeAttributesClass.
+3. WHEN the operator sets a storage selection, THE controller SHALL apply the named VolumeAttributesClass to the volume of every node in the group.
 4. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL refuse the selection.
 5. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL name the supported set.
-6. THE supported set SHALL hold the gp3 EBS volume type, with the IOPS and the throughput as configurable fields.
+6. THE supported set SHALL hold the gp3 EBS volume type, with the IOPS and the throughput configurable, offered as platform-managed VolumeAttributesClasses.
 
 ### Requirement 4: A default lighter than the mainnet shape
 
@@ -229,7 +230,7 @@ unambiguous.
 ### Key Entities
 
 - **Resource shape**: the CPU request, the memory request, and the storage size of one node group.
-- **Storage parameters**: the disk type, the IOPS, and the throughput of a node volume.
+- **Storage parameters**: the disk type, the IOPS, and the throughput of a node volume, selected as a named VolumeAttributesClass.
 
 ## Success Criteria *(mandatory)*
 
@@ -240,8 +241,8 @@ role that decides.
   *Verifier:* judgement — the benchmark owner reads the rendered SeiNetwork with kubectl and confirms every validator child carries the set values.
 - **SC-002**: A default run requests about one quarter of the mainnet shape on CPU, memory, and storage.
   *Verifier:* judgement — the benchmark owner compares the default render against one quarter of the mainnet shape on all three dimensions.
-- **SC-003**: Two runs that differ only in disk throughput render two manifests that differ only in that field.
-  *Verifier:* judgement — the benchmark owner compares the two rendered manifests and confirms the throughput field is the only difference.
+- **SC-003**: Two runs that differ only in disk throughput render two manifests that differ only in the VolumeAttributesClass reference.
+  *Verifier:* judgement — the benchmark owner compares the two rendered manifests and confirms the VolumeAttributesClass name is the only difference.
 - **SC-004**: An oversize shape produces a reported pending pod, not a silent wait.
   *Verifier:* judgement — a platform engineer requests a shape above node capacity and confirms the harness reports the pending pod.
 - **SC-005**: A rendered node holds its memory limit equal to its memory request.
@@ -254,7 +255,8 @@ role that decides.
 - The node group holds enough capacity for the default shape. Capacity and pod placement live in the `node-ec2-locality` work item.
 - The controller already reconciles child StatefulSets and volumes from the CRD. This spec adds fields; it does not add a controller.
 - This iteration exposes resources as a typed CRD field in the pod resources shape. The controller preserves its per-mode couplings: the memory limit equals the memory request, and the CPU request carries no CPU limit. The field feeds the existing per-mode resolution and adds no new sizing semantics.
-- The first iteration supports the gp3 EBS volume type, with configurable IOPS and throughput. The validators use a 125 throughput today. The storage-class review may add types or tune ranges before Barcelona. It raised 10,000 IOPS and 750 throughput as candidates to reconsider.
+- The first iteration supports the gp3 EBS volume type, with configurable IOPS and throughput. The validators use a 125 throughput today. The storage-class review may add offerings or tune ranges before Barcelona. It raised 10,000 IOPS and 750 throughput as candidates to reconsider.
+- Storage performance is selected as a platform-managed VolumeAttributesClass referenced by name. The harness owns the IOPS/throughput menu and maps a selection to a supported VAC; the controller stamps the VAC name onto each node's volume claim and does not mint classes. A new (IOPS, throughput) offering is a platform/GitOps change, not a controller change. See `decisions.md` in this directory for the rationale.
 - The default shape suits a quick test, not a production comparison. The operator raises it for a production comparison.
 - The team set the default at about one quarter of the mainnet shape as a safe first value. The team tunes it later from cost and run data.
 
