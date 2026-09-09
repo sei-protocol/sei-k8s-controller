@@ -20,9 +20,20 @@ import (
 // reconcileSeiNodes ensures the desired child SeiNodes exist with the desired
 // spec (image/sidecar/overrides/labels propagated in-place every reconcile)
 // and refreshes IncumbentNodes for the genesis planner. Mutations are skipped
-// while a plan is in progress (guarding the ceremony's child-Peers writes) or
-// while paused.
+// while the network is being deleted (so the cascade is not fought), while a
+// plan is in progress (guarding the ceremony's child-Peers writes), or while
+// paused.
 func (r *SeiNetworkReconciler) reconcileSeiNodes(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
+	// A deleting network mutates no child. Its children are being deleted with
+	// it, so a create or an update here would recreate exactly what the cascade
+	// is removing. Reconcile already routes a deleting network to
+	// handleDeletion before it reaches this function; the guard lives here too
+	// because this is the mutation site, and a later reordering upstream must
+	// not be able to reintroduce the resurrect.
+	if !network.DeletionTimestamp.IsZero() {
+		return r.populateIncumbentNodes(ctx, network)
+	}
+
 	if network.Spec.Paused {
 		return r.populateIncumbentNodes(ctx, network)
 	}
@@ -139,6 +150,23 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 	}
 
 	updated := false
+	// The network's controller reference is reconciled on every pass, not only
+	// at create, because a live child can be missing it: a Retain teardown
+	// orphans children deliberately, and the next run recreates the same-named
+	// SeiNetwork on top of them. Without re-adoption the controller manages a
+	// child it does not own — it propagates image and labels below, while
+	// garbage collection has no edge to walk, so a later Delete teardown leaves
+	// the stale validator running and the next run collides with it.
+	// SetControllerReference refuses to steal a child another controller owns,
+	// which is the conflict worth failing loud on rather than fighting over.
+	if !metav1.IsControlledBy(existing, network) {
+		if err := ctrl.SetControllerReference(network, existing, r.Scheme); err != nil {
+			return fmt.Errorf("adopting SeiNode %s: %w", existing.Name, err)
+		}
+		r.Recorder.Eventf(network, corev1.EventTypeNormal, "SeiNodeAdopted",
+			"Set owner reference on existing SeiNode %s", existing.Name)
+		updated = true
+	}
 	if !maps.Equal(existing.Labels, desired.Labels) {
 		existing.Labels = desired.Labels
 		updated = true
