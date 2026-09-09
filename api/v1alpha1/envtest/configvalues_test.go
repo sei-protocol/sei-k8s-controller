@@ -19,6 +19,9 @@ import (
 )
 
 // Only SeiNode is needed to exercise admission of configValues.
+// Kubernetes 1.34 prunes explicit null from this non-nullable JSON field, then
+// rejects the missing required value. CEL cannot access the untyped field; the
+// probes below retain that evidence without adding an unusable schema rule.
 func TestConfigValuesAdmission(t *testing.T) {
 	ctx := context.Background()
 	environment := &envtest.Environment{}
