@@ -32,9 +32,10 @@ node.
 Today the single-tenant mechanism is an experimental annotation on a standalone
 SeiNode. Review chose to replace it with a typed field on both CRDs. The field
 takes an enumerated value, `Shared` or `Dedicated`, rather than a boolean, so it
-can grow a new tier later without a breaking change. A benchmark validator can
-then request the isolation. The API server validates the request, and the CRD
-schema makes it discoverable. The controller propagates the field the same way it
+can grow a new tier later without a breaking change. The field is optional and
+carries no schema default, so an unset field stays unset and the controller can
+still read the legacy annotation on an existing node. A benchmark validator
+requests the isolation; the controller propagates the field the same way it
 propagates the existing config and sidecar fields, so the field is the smaller
 change as well as the more conventional one.
 
@@ -48,7 +49,7 @@ states what the anchor does not reach, because that gap is the honest part.
 | EARS | acceptance criteria syntax | whether a criterion is the right one |
 | RFC 2119 | normative keywords, uppercase | whether the obligation is correct |
 | INVEST | whether each story is a real slice | whether the slice delivers value |
-| Kubernetes API conventions | CRD field shape, status, conditions | whether the controller reconciles correctly |
+| Kubernetes API conventions | CRD field shape, defaults, status | whether the controller reconciles correctly |
 | Google AIP | an enum over a boolean | whether the resource model is the right one |
 
 ## Glossary
@@ -59,11 +60,12 @@ states what the anchor does not reach, because that gap is the honest part.
 - **SeiNode**: the CRD for a single node. A validator child is a SeiNode; a standalone RPC node is a SeiNode.
 - **Validator child**: a SeiNode the SeiNetwork creates and owns.
 - **Worker node**: a Kubernetes node. On this platform it is one EC2 instance.
-- **Scheduling field**: the typed field this spec adds to each CRD, which carries the node-isolation value.
+- **Scheduling field**: the typed, optional field this spec adds to each CRD, which carries the node-isolation value.
 - **Node isolation**: the scheduling value. It is one of `Shared` or `Dedicated`.
-- **Effective node isolation**: the scheduling field value. For a standalone SeiNode with no field value, it is the legacy annotation instead. A validator child has no annotation fallback.
+- **Effective node isolation**: the value the controller acts on. It is the scheduling field value; for a standalone SeiNode with no field, it is the legacy annotation; with neither, it is `Shared`. A validator child has no annotation fallback.
 - **Requester term**: the anti-affinity term on a `Dedicated` pod that keeps it off a worker node holding another Sei pod.
 - **Defensive term**: the anti-affinity term on every Sei pod that keeps it off a worker node holding a `Dedicated` pod.
+- **Isolation label**: the existing `sei.io/dedicated-node` pod label that both anti-affinity terms select on.
 - **Single-tenant nodepool**: a Karpenter nodepool with a taint only Sei pods tolerate, so no other workload lands on its worker nodes.
 - **Legacy annotation**: the experimental `sei.io/dedicated-node` annotation on a standalone SeiNode, which the scheduling field supersedes.
 - **Placement**: the map from each validator to the worker node that runs it.
@@ -131,7 +133,7 @@ the new worker node.
 An operator sets the scheduling field on a standalone SeiNode to `Dedicated`. The
 node schedules single-tenant, through the same field a SeiNetwork uses. An
 operator who still sets the legacy annotation, and sets no field, keeps the old
-behavior.
+behavior across the upgrade.
 
 **Why this priority**: this ranks with Story 2. One field for both CRDs keeps the
 surface consistent, and the backward-compatible annotation keeps a current user
@@ -149,8 +151,9 @@ SeiNode. Confirm that its pod still schedules single-tenant.
 ### Edge Cases
 
 - What happens when a non-Sei workload tolerates the nodepool taint and lands on a `Dedicated` node? The anti-affinity applies only to Sei pods, so the guarantee holds only on a single-tenant nodepool — see Requirement 4.
-- What happens when a validator pod moves to a new worker node? The controller re-reads the placement each reconcile and updates the status — see Requirement 5.
+- What happens when a validator pod moves to a new worker node? The controller watches the validator pods, so a reschedule triggers a reconcile and updates the status — see Requirement 5.
 - What happens when a SeiNode sets both the scheduling field and the legacy annotation? The controller uses the field — see Requirement 1.
+- What happens to an existing annotation-only node on the upgrade? The field stays unset, so the controller still reads the annotation — see Requirement 1.
 - What happens when the network holds more validators than the nodepool has worker nodes? A validator with no node stays pending, and the status reports it — see Requirement 5.
 
 ## Requirements *(mandatory)*
@@ -158,22 +161,23 @@ SeiNode. Confirm that its pod still schedules single-tenant.
 Each requirement carries its own acceptance criteria, so no requirement is an
 orphan and no criterion floats free of a requirement.
 
-### Requirement 1: A typed scheduling field on both CRDs
+### Requirement 1: A typed, optional scheduling field on both CRDs
 
 **Objective:** As an operator, I want a validated scheduling field on the SeiNode
 and the SeiNetwork, so that I request single-tenant scheduling and see it in the
-CRD schema.
+CRD schema, and an existing node keeps working.
 
 **Traces to:** User Story 1, User Story 3
 
 #### Acceptance Criteria
 
-1. THE SeiNode CRD SHALL carry a scheduling field that holds a node-isolation value.
-2. THE SeiNetwork CRD SHALL carry a scheduling field with the same shape as the SeiNode field.
-3. THE SeiNode CRD and THE SeiNetwork CRD SHALL each define the node-isolation value as the enumeration `Shared` and `Dedicated`.
-4. IF a manifest omits the node-isolation value, THEN THE API server SHALL apply the default `Shared`.
-5. WHILE a standalone SeiNode carries no scheduling field, THE controller SHALL read the effective node isolation from the legacy annotation.
-6. WHILE a SeiNode carries a scheduling field value, THE controller SHALL read the effective node isolation from the field and ignore the legacy annotation.
+1. THE SeiNode CRD SHALL carry an optional scheduling field that holds a node-isolation value.
+2. THE SeiNetwork CRD SHALL carry the same optional scheduling field.
+3. THE node-isolation value SHALL be one named enumeration of `Shared` and `Dedicated`, shared by both CRDs.
+4. IF a manifest omits the scheduling field, THEN THE API server SHALL leave the field unset, with no schema default.
+5. WHILE a SeiNode sets the scheduling field, THE controller SHALL read the effective node isolation from the field.
+6. WHILE a SeiNode sets no scheduling field and carries the legacy annotation, THE controller SHALL read the effective node isolation from the annotation.
+7. WHILE a SeiNode sets no scheduling field and no legacy annotation, THE controller SHALL treat the effective node isolation as `Shared`.
 
 ### Requirement 2: The controller renders hard anti-affinity for a Dedicated node
 
@@ -187,6 +191,7 @@ node, so that no two Sei pods share an EC2 instance and its bandwidth.
 1. WHILE a node's effective node isolation is `Dedicated`, THE controller SHALL render the requester term that keeps the pod off a worker node holding another Sei pod.
 2. THE controller SHALL set the anti-affinity topology to the worker node, so the isolation is one pod per EC2 instance.
 3. THE controller SHALL render the defensive term on every Sei pod, so the term spans every namespace and keeps the pod off a worker node holding a `Dedicated` pod.
+4. WHILE a node's effective node isolation is `Dedicated`, THE controller SHALL stamp the existing isolation label on the pod, so both terms select on the unchanged label key.
 
 ### Requirement 3: The SeiNetwork propagates the field to every validator child
 
@@ -210,10 +215,10 @@ workload, so that a non-Sei co-tenant does not take the instance bandwidth.
 
 #### Acceptance Criteria
 
-1. WHILE a node's effective node isolation is `Dedicated`, THE controller SHALL schedule the pod onto the single-tenant nodepool the platform team provisions.
+1. WHILE a node's effective node isolation is `Dedicated`, THE controller SHALL schedule the pod onto the single-tenant nodepool that app-config names.
 2. THE controller SHALL render the toleration for the single-tenant nodepool taint.
-3. THE controller SHALL render the node affinity that places the pod on the single-tenant nodepool.
-4. IF the platform provisions no single-tenant nodepool, THEN THE controller SHALL still render the requester term. The guarantee then holds against another Sei pod only.
+3. THE controller SHALL replace the per-mode nodepool affinity with the single-tenant nodepool affinity, so a `Dedicated` pod lands only on the single-tenant nodepool.
+4. WHEN app-config names no single-tenant nodepool, THE controller SHALL render the requester term only, so the guarantee holds against another Sei pod and not against a non-Sei co-tenant.
 
 ### Requirement 5: The controller reports the placement
 
@@ -225,7 +230,7 @@ I can confirm that no two share one.
 #### Acceptance Criteria
 
 1. THE controller SHALL report the worker node of each validator on the node list in the SeiNetwork status.
-2. THE controller SHALL read the worker node from the validator pod on each reconcile, so the report follows a rescheduled pod.
+2. THE controller SHALL watch the validator pods, so a pod reschedule triggers a reconcile and updates the reported worker node.
 3. WHILE a validator has no worker node, THE controller SHALL report the validator as pending on the node list.
 
 ### Key Entities
@@ -238,18 +243,18 @@ I can confirm that no two share one.
 Every criterion names the command that checks it, or says `judgement` with the
 role that decides.
 
-- **SC-001**: The SeiNode and the SeiNetwork each carry the scheduling field with the same shape.
-  *Verifier:* judgement — a platform engineer reads the two CRD schemas and confirms the field and its enumeration match.
+- **SC-001**: The SeiNode and the SeiNetwork each carry the optional scheduling field with the same enumeration.
+  *Verifier:* judgement — a platform engineer reads the two CRD schemas and confirms the field, its enumeration, and its optionality match.
 - **SC-002**: A `Dedicated` node renders the hard, worker-node-topology anti-affinity.
   *Verifier:* judgement — a platform engineer runs `TestBuildNodePodSpec_Dedicated_AddsRequesterTermAndLabel` in `internal/noderesource` and confirms the anti-affinity terms.
 - **SC-003**: A `Dedicated` value on a SeiNetwork reaches every validator child.
   *Verifier:* judgement — a platform engineer sets the network field and confirms every validator child carries the value.
 - **SC-004**: A node with no scheduling field and no legacy annotation behaves as `Shared`.
   *Verifier:* judgement — a platform engineer creates a node with neither the field nor the annotation and confirms the controller renders no requester term.
-- **SC-005**: A SeiNode with only the legacy annotation still schedules single-tenant.
-  *Verifier:* judgement — a platform engineer sets only the annotation and confirms the pod avoids a worker node holding another Sei pod.
-- **SC-006**: A `Dedicated` node schedules onto a single-tenant nodepool when one exists, and renders the requester term when none does.
-  *Verifier:* judgement — a platform engineer runs a `Dedicated` node with and without a single-tenant nodepool and confirms the placement in each case.
+- **SC-005**: An existing SeiNode with only the legacy annotation still schedules single-tenant after the upgrade.
+  *Verifier:* judgement — a platform engineer sets only the annotation, leaves the field unset, and confirms the pod avoids a worker node holding another Sei pod.
+- **SC-006**: A `Dedicated` node schedules onto the single-tenant nodepool when app-config names one, and renders the requester term when app-config names none.
+  *Verifier:* judgement — a platform engineer runs a `Dedicated` node with and without a named single-tenant nodepool and confirms the placement in each case.
 - **SC-007**: The SeiNetwork status names each validator's worker node and follows a reschedule.
   *Verifier:* judgement — a platform engineer reads the status, reschedules a pod, and confirms the status names the new worker node.
 - **SC-008**: A pending validator appears on the SeiNetwork status.
@@ -258,15 +263,21 @@ role that decides.
   *Verifier:* judgement — a platform engineer sets a `Dedicated` field and a conflicting annotation and confirms the controller follows the field.
 - **SC-010**: A `Shared` Sei pod still carries the defensive term.
   *Verifier:* judgement — a platform engineer reads a `Shared` pod and confirms it carries the defensive anti-affinity term.
+- **SC-011**: A `Dedicated` pod carries the unchanged isolation label.
+  *Verifier:* judgement — a platform engineer reads a `Dedicated` pod and confirms it carries the existing `sei.io/dedicated-node` label key.
 
 ## Assumptions
 
 - The node-isolation value is an enumeration of `Shared` and `Dedicated`, not a boolean. Google AIP prefers a descriptive value over a boolean, because a two-state boolean often grows a third state. A later tier, such as a shared-but-spread value, then fits the same field.
-- The scheduling field defaults to `Shared`, so an existing node keeps its current behavior. The benchmark harness sets `Dedicated` for a benchmark run.
+- The scheduling field is optional and carries no schema default. A structural-schema default materializes on a read from etcd, so a default would present `Shared` on every node, including an existing annotation-only node, and the legacy fallback would die on the upgrade. The controller reads an unset field as `Shared` instead, which keeps the fallback.
+- The node-isolation enumeration is one named type shared by both CRDs, in a shared file, following the `DeletionPolicy` precedent.
 - The controller propagates the scheduling field through the existing child-sync path, the same path that carries the config, sidecar, and pod-label fields. This replaces the annotation path, which cannot reach a validator child. The SeiNetwork gives its children no annotation, and the controller reconciles a hand-applied child annotation back to none on the next loop.
+- The anti-affinity selects on the existing `sei.io/dedicated-node` pod label. The field changes only the source of that label's value, not the label key, so a rolling upgrade does not split running and new pods across two keys and lapse the isolation mid-roll.
 - The controller already renders the hard cross-namespace anti-affinity, with the worker node as the topology, for a `Dedicated` pod. Requirement 2 is a regression guard on that rendering. Requirement 1, Requirement 3, and Requirement 5 are new work: the typed field, the propagation, and the placement report.
-- The controller already renders a per-mode nodepool toleration and node affinity. Requirement 4 points that placement at a single-tenant nodepool; provisioning that nodepool is new platform work.
-- Full instance exclusivity depends on a single-tenant nodepool with a taint only Sei pods tolerate. The platform team provisions it. Without it, `Dedicated` keeps one Sei pod per worker node, but a non-Sei co-tenant that tolerates the nodepool taint can still share the instance.
+- The controller already renders a per-mode nodepool affinity and toleration. Requirement 4 replaces the per-mode affinity with a single-tenant nodepool affinity; provisioning that nodepool is new platform work. A widened, additive affinity would let a `Dedicated` pod still land on the shared per-mode pool, so the single-tenant affinity replaces rather than appends.
+- The controller reads nodepool names from app-config at startup and holds no access to Karpenter resources, so it cannot observe whether a named nodepool is provisioned. "No single-tenant nodepool" therefore means app-config names none.
+- Full instance exclusivity depends on a single-tenant nodepool with a taint only Sei pods tolerate. The platform team provisions it. The nodepool must use the same instance class as the validator nodepool, or a benchmark compared across the pool change is not comparable.
+- The placement report needs pod-read access and a pod watch that the SeiNetwork controller does not hold today. This is part of the new work in Requirement 5, because a reschedule trips no existing reconcile trigger and the report would otherwise lag until the periodic resync.
 - One worker node is one EC2 instance, so an anti-affinity on the worker node isolates at the EC2 level.
 - The single-tenant nodepool is the binding capacity, not the whole cluster. Where the pool holds fewer worker nodes than the network holds `Dedicated` validators, a validator stays pending and Requirement 5 reports it. The platform team sizes the pool.
 - The controller may report the pending state as a field on the node-list entry, or as a status condition. If it uses a condition, the always-present, stable-reason, and observed-generation discipline applies.

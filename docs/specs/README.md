@@ -14,4 +14,4 @@ gate checks that every success criterion names a verifier.
 | [003](003-config-substrate-parity-seinetwork/spec.md) | Config-value parity on the validator network | Draft |
 | [004](004-crd-ownership-and-deletion/spec.md) | Predictable ownership and deletion | Draft |
 | [005](005-ephemeral-teardown-and-prune/spec.md) | Ephemeral teardown and prune | Draft |
-| [006](006-node-ec2-locality/spec.md) | One validator per EC2 for a benchmark | Draft |
+| [006](006-node-ec2-locality/spec.md) | Single-tenant scheduling for benchmark nodes | Draft |
