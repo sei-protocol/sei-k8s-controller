@@ -26,7 +26,15 @@ import (
 //
 // +kubebuilder:validation:XValidation:rule="self.genesis == oldSelf.genesis",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
 // +kubebuilder:validation:XValidation:rule="self.replicas == oldSelf.replicas",message="spec.replicas is fixed at the genesis ceremony; the validator set is minted into genesis state and cannot be grown or shrunk by editing the spec"
-// +kubebuilder:validation:XValidation:rule="(!has(self.dataVolume) && !has(oldSelf.dataVolume)) || self.dataVolume == oldSelf.dataVolume",message="spec.dataVolume is immutable once set; it backs a StatefulSet volumeClaimTemplate, which Kubernetes forbids changing after create"
+// dataVolume is create-only (change, unset, first-time set all rejected).
+// Presence parity only here; values are pinned on the shared DataVolume* types,
+// covering both Kinds. A structural == cannot stay once a Quantity lives here (a
+// typed re-encode would reject the controller's own write), and enumerating
+// values — reaching import.pvcName — exceeds the CEL per-rule cost budget.
+//
+// COMPLETENESS: a new DataVolume* field is silently mutable until it gets BOTH a
+// value rule on its sub-type AND a presence term here, on both Kinds.
+// +kubebuilder:validation:XValidation:rule="((has(self.dataVolume)) == (has(oldSelf.dataVolume))) && ((has(self.dataVolume) && has(self.dataVolume.import)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.import))) && ((has(self.dataVolume) && has(self.dataVolume.storage)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage))) && ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="spec.dataVolume is create-only: each validator's data PVC is created once (ensure-data-pvc is Get-then-Create with no update path) and nothing replaces a node on storage drift, so a later edit could never reach the pool's volumes; recreate the network to change its storage"
 // resources is create-only, compared PER-DIMENSION via quantity() rather than
 // structural == — the values are int-or-string Quantities, and the network
 // controller's finalizer Update re-encodes a bare-int footprint as a string, so
@@ -72,10 +80,8 @@ type SeiNetworkSpec struct {
 	// validator. The ceremony-generated consensus identity lives here, so
 	// DeletionPolicy defaults to Retain.
 	//
-	// Immutable after create (spec-level CEL): it backs a StatefulSet
-	// volumeClaimTemplate, which Kubernetes forbids changing post-create, so a
-	// later edit could never take effect — admission rejects it rather than
-	// letting the controller silently ignore it.
+	// Create-only (spec-level CEL): each child's PVC is created once and nothing
+	// replaces a node on storage drift, so a later edit would be inert.
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
 

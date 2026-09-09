@@ -399,6 +399,46 @@ func TestEnsureDataPVC_Import_CapacityTooSmall_Terminal(t *testing.T) {
 	g.Expect(importReasonFor(node)).To(Equal(seiv1alpha1.ReasonPVCInvalid))
 }
 
+// The import floor is the RESOLVED size. Defense in depth only: import+storage
+// together is rejected by admission, so this state is unreachable and only the
+// fake client can build it; CapacityTooSmall_Terminal covers the reachable case.
+func TestEnsureDataPVC_Import_FloorUsesResolvedSize(t *testing.T) {
+	withCRDSize := func(node *seiv1alpha1.SeiNode, size string) *seiv1alpha1.SeiNode {
+		node.Spec.DataVolume.Storage = &seiv1alpha1.DataVolumeStorage{
+			Resources: &seiv1alpha1.VolumeClaimResources{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(size),
+				},
+			},
+		}
+		return node
+	}
+
+	t.Run("a 500Gi import passes when the CRD asks for 500Gi", func(t *testing.T) {
+		g := NewWithT(t)
+		node := withCRDSize(importNode("data-500"), "500Gi")
+		exec, _ := newEnsurePVCExec(t, node,
+			validImportedPVC("data-500", "default", "500Gi"),
+			validImportedPV("pv-data-500", "500Gi"))
+
+		g.Expect(exec.Execute(context.Background())).To(Succeed())
+		g.Expect(importReasonFor(node)).To(Equal(seiv1alpha1.ReasonPVCValidated))
+	})
+
+	t.Run("the same import fails when the CRD asks for 2000Gi", func(t *testing.T) {
+		g := NewWithT(t)
+		node := withCRDSize(importNode("data-500"), "2000Gi")
+		exec, _ := newEnsurePVCExec(t, node,
+			validImportedPVC("data-500", "default", "500Gi"),
+			validImportedPV("pv-data-500", "500Gi"))
+
+		err := exec.Execute(context.Background())
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("less than required"))
+		g.Expect(importReasonFor(node)).To(Equal(seiv1alpha1.ReasonPVCInvalid))
+	})
+}
+
 func TestEnsureDataPVC_Import_CapacityUnset_Transient(t *testing.T) {
 	g := NewWithT(t)
 	node := importNode("data-nocap")

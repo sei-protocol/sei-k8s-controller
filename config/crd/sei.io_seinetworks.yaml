@@ -75,6 +75,14 @@ spec:
               controller synthesizes each child SeiNode's validator spec from these
               scalars (see generateSeiNode).
 
+              dataVolume is create-only (change, unset, first-time set all rejected).
+              Presence parity only here; values are pinned on the shared DataVolume* types,
+              covering both Kinds. A structural == cannot stay once a Quantity lives here (a
+              typed re-encode would reject the controller's own write), and enumerating
+              values — reaching import.pvcName — exceeds the CEL per-rule cost budget.
+
+              COMPLETENESS: a new DataVolume* field is silently mutable until it gets BOTH a
+              value rule on its sub-type AND a presence term here, on both Kinds.
               resources is create-only, compared PER-DIMENSION via quantity() rather than
               structural == — the values are int-or-string Quantities, and the network
               controller's finalizer Update re-encodes a bare-int footprint as a string, so
@@ -98,10 +106,8 @@ spec:
                   validator. The ceremony-generated consensus identity lives here, so
                   DeletionPolicy defaults to Retain.
 
-                  Immutable after create (spec-level CEL): it backs a StatefulSet
-                  volumeClaimTemplate, which Kubernetes forbids changing post-create, so a
-                  later edit could never take effect — admission rejects it rather than
-                  letting the controller silently ignore it.
+                  Create-only (spec-level CEL): each child's PVC is created once and nothing
+                  replaces a node on storage drift, so a later edit would be inert.
                 properties:
                   import:
                     description: |-
@@ -129,10 +135,61 @@ spec:
                     required:
                     - pvcName
                     type: object
+                  storage:
+                    description: Storage configures the volume the controller provisions.
+                      Excludes Import.
+                    properties:
+                      resources:
+                        description: |-
+                          Resources is the volume claim request. The size overrides the per-mode
+                          default; unset falls through.
+                        properties:
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests carries only the storage size. A map, not a struct, because a
+                              struct prunes a misspelled or empty key and silently defaults the size.
+                            type: object
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'dataVolume.storage.resources must carry resources.requests.storage:
+                        an empty or null storage request would silently provision
+                        the per-mode default while reading as a size request'
+                      rule: '!has(self.resources) || (has(self.resources.requests)
+                        && ''storage'' in self.resources.requests)'
+                    - message: 'dataVolume.storage.resources.requests.storage is create-only:
+                        the data PVC is created once (ensure-data-pvc is Get-then-Create
+                        with no update path), so a later size edit could never reach
+                        the volume; delete and recreate the owning resource (the node,
+                        or the SeiNetwork for a pooled validator) to resize'
+                      rule: '!has(self.resources) || !has(self.resources.requests)
+                        || !(''storage'' in self.resources.requests) || !has(oldSelf.resources)
+                        || !has(oldSelf.resources.requests) || !(''storage'' in oldSelf.resources.requests)
+                        || quantity(string(self.resources.requests[''storage''])).compareTo(quantity(string(oldSelf.resources.requests[''storage''])))
+                        == 0'
+                    - message: dataVolume.storage.resources.requests accepts only
+                        storage
+                      rule: '!has(self.resources) || !has(self.resources.requests)
+                        || self.resources.requests.all(k, k == ''storage'')'
+                    - message: dataVolume.storage.resources.requests.storage must
+                        be positive
+                      rule: '!has(self.resources) || !has(self.resources.requests)
+                        || !(''storage'' in self.resources.requests) || quantity(string(self.resources.requests[''storage''])).compareTo(quantity(''0''))
+                        > 0'
                 type: object
                 x-kubernetes-validations:
                 - message: import cannot be unset once configured
                   rule: (!has(oldSelf.import) || has(self.import))
+                - message: 'dataVolume.storage and dataVolume.import are mutually
+                    exclusive: an imported PVC keeps the importer''s class and size,
+                    and the controller never mutates it'
+                  rule: '!(has(self.import) && has(self.storage))'
               deletionPolicy:
                 default: Retain
                 description: |-
@@ -431,10 +488,21 @@ spec:
                 set is minted into genesis state and cannot be grown or shrunk by
                 editing the spec
               rule: self.replicas == oldSelf.replicas
-            - message: spec.dataVolume is immutable once set; it backs a StatefulSet
-                volumeClaimTemplate, which Kubernetes forbids changing after create
-              rule: (!has(self.dataVolume) && !has(oldSelf.dataVolume)) || self.dataVolume
-                == oldSelf.dataVolume
+            - message: 'spec.dataVolume is create-only: each validator''s data PVC
+                is created once (ensure-data-pvc is Get-then-Create with no update
+                path) and nothing replaces a node on storage drift, so a later edit
+                could never reach the pool''s volumes; recreate the network to change
+                its storage'
+              rule: ((has(self.dataVolume)) == (has(oldSelf.dataVolume))) && ((has(self.dataVolume)
+                && has(self.dataVolume.import)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.import)))
+                && ((has(self.dataVolume) && has(self.dataVolume.storage)) == (has(oldSelf.dataVolume)
+                && has(oldSelf.dataVolume.storage))) && ((has(self.dataVolume) &&
+                has(self.dataVolume.storage) && has(self.dataVolume.storage.resources)
+                && has(self.dataVolume.storage.resources.requests) && ('storage' in
+                self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume)
+                && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources)
+                && has(oldSelf.dataVolume.storage.resources.requests) && ('storage'
+                in oldSelf.dataVolume.storage.resources.requests)))
             - message: 'spec.resources is create-only: a validator pool is fixed-shape
                 at the genesis ceremony, and each child SeiNode''s own spec.resources
                 is itself create-only, so an edit here could never reach the pool;
