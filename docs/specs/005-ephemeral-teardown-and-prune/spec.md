@@ -36,9 +36,9 @@ Corrections below.
 
 This section supersedes any statement below that contradicts it. The Draft was
 written from the Benchmark Party transcript without checking the running code.
-Three of its load-bearing factual claims are false, and two of its requirements
-cannot both be satisfied. Each correction below cites the file and line that
-settles it.
+Three of its load-bearing factual claims are false, and the current
+class-selection implementation cannot satisfy both Requirement 2 and Requirement
+4. Each correction below cites the file and line that settles it.
 
 ### C-1. The reclaim policy is already `Delete` for benchmark validator and full nodes
 
@@ -82,7 +82,7 @@ benchmark node by **namespace**, but `DefaultStorageForMode` takes only a mode a
 a `PlatformConfig` -- it receives no namespace and cannot distinguish a benchmark
 node from a non-benchmark one.
 
-### C-3. Requirements 2 and 4 are mutually unsatisfiable as written
+### C-3. The current class-selection implementation cannot satisfy both R2 and R4
 
 The claim is scoped to PVCs the **controller generates** under a single
 `PlatformConfig`, which is what Requirements 2 and 4 place obligations on ("THE
@@ -134,6 +134,17 @@ at `platform/clusters/harbor/engineers/base/sync.yaml:14`, in the single shared
 base that renders all nine per-engineer reconcilers. There is nothing to enable.
 
 ### C-5. The real cause: the cascade's default gates the teardown shut
+
+**Scope of this section:** it describes deleting a **SeiNetwork while its
+namespace remains**, which is what a workspace delete PR actually does. That is
+the operation behind the reported leak, and it is *not* the same as deleting the
+Namespace object. If a Namespace were genuinely deleted, Kubernetes' namespace
+controller would delete every namespaced resource in it -- including orphaned
+SeiNodes and their PVCs -- and this failure would not arise. The Glossary's
+definition of teardown ("removes a benchmark namespace and everything in it")
+conflates the two. In practice the `eng-<alias>` namespace is platform-owned,
+persists across benchmark runs, and is not removed by a workspace PR, so the
+namespace-deletion path is not the one operators exercise.
 
 The Assumptions section already names the dependency -- "a benchmark node deletion
 arrives from the `crd-ownership-and-deletion` cascade ... its default policy for a
@@ -247,7 +258,7 @@ states what the anchor does not reach, because that gap is the honest part.
 - **Workspace reconciler**: the Flux Kustomization that applies the workspace manifests. The platform team owns its settings.
 - **Prune**: the GitOps step where the workspace reconciler deletes a resource once its source file is gone.
 - **Delete PR**: a pull request that removes a benchmark manifest from the workspace repository.
-- **Teardown**: the operator action that removes a benchmark namespace and everything in it.
+- **Teardown**: the operator action that removes a benchmark namespace and everything in it. **Correction (2026-09-09):** this definition does not match the operation operators actually perform. A workspace delete PR removes the *SeiNetwork manifest*; the `eng-<alias>` Namespace object is platform-owned and is not deleted by it. The distinction is load-bearing -- see C-5.
 
 ## Boundary Context
 
@@ -389,10 +400,12 @@ that a benchmark teardown does not lose a node's state.
 2. THE controller SHALL NOT place a non-benchmark PVC on a storage class whose reclaim policy is `Delete`.
 
 **Correction (2026-09-09): these criteria describe behavior that does not exist.**
-Today only `archive` resolves to a `Retain` class; non-benchmark `full`,
-`validator`, and `replayer` nodes all sit on a `Delete` class, violating criterion
-2 as written. They are therefore **not** a regression guard, and must not be
-implemented as one.
+Today a generated PVC for a non-benchmark `full`, `validator`, or `replayer` node
+sits on a `Delete` class, violating criterion 2 as written. Seed is excluded --
+`classDefault`'s reclaim policy is not established by this repository -- as are
+imported PVCs, whose class the controller neither sets nor validates. These
+criteria are therefore **not** a regression guard, and must not be implemented as
+one.
 
 Implementing them would be a deliberate behavior change: newly generated
 non-benchmark volumes would move to a `Retain` class and thereafter require manual
@@ -466,7 +479,10 @@ share a fate, and the difference is the most useful thing in this section.
   PVCs are explicitly exempt (`controller.go:390-395`).
 - **SC-001 and SC-002** ("a benchmark *teardown* leaves no PVC / no disk") fail
   whenever the torn-down network carries `deletionPolicy: Retain`, for the reason
-  in C-5. Under `Delete` they are expected to pass -- see C-7.
+  in C-5. Under `Delete` they are expected to pass -- see C-7. Both statements are
+  scoped to SeiNetwork deletion with the namespace left in place; deleting the
+  Namespace object itself would remove the orphans by a different mechanism
+  entirely, and is not what a workspace delete PR does.
 
 The gap between them is the whole bug. The machinery works from the node entry
 point and is never reached from the operator's real entry point -- deleting a
