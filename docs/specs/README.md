@@ -19,4 +19,4 @@ not re-litigated later. See `001-configurable-node-resources/decisions.md`.
 | [004](004-crd-ownership-and-deletion/spec.md) | Predictable ownership and deletion | Draft |
 | [005](005-ephemeral-teardown-and-prune/spec.md) | Ephemeral teardown and prune | Draft |
 | [006](006-node-ec2-locality/spec.md) | Single-tenant scheduling for benchmark nodes | Draft |
-| [007](007-crd-status-conditions-events/spec.md) | Ready means the network produces blocks, and the plan shows task progress | Draft |
+| [007](007-crd-status-conditions-events/spec.md) | Ready means the network produces blocks, and the plan marks the running task | Draft |
