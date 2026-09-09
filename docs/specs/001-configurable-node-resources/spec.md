@@ -173,7 +173,7 @@ and its fields per node group, so that I compare storage-bound scenarios.
 
 1. THE harness SHALL expose a fixed set of supported storage types.
 2. WHEN the operator selects a supported storage type, THE harness SHALL accept the standard fields for that type, such as the IOPS and the throughput, and resolve them to a supported VolumeAttributesClass.
-3. WHEN the operator sets a storage selection, THE controller SHALL apply the named VolumeAttributesClass to the volume of every node in the group.
+3. WHEN the operator sets a storage selection, THE controller SHALL apply the named VolumeAttributesClass to the volume of every node in the group whose data volume it provisions; a node that imports a pre-existing volume keeps the importer's parameters.
 4. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL refuse the selection.
 5. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL name the supported set.
 6. THE supported set SHALL hold the gp3 EBS volume type, with the IOPS and the throughput configurable, offered as platform-managed VolumeAttributesClasses.

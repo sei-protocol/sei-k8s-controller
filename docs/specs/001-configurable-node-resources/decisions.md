@@ -17,24 +17,55 @@ An engineer benchmarking a storage-bound workload must select the gp3 volume's
 IOPS and throughput per node group. Kubernetes offers no way to put arbitrary
 driver parameters inline on a PVC — IOPS/throughput always come from a
 cluster-scoped object the PVC references: a StorageClass (at provision) or a
-VolumeAttributesClass (as a QoS class the CSI driver applies, EBS CSI on
-Kubernetes ≥ 1.31 / GA-track by 1.34, matching the production EKS control
-plane). So the design questions are: which object carries the parameters, who
-creates it, and what the CRD field selects.
+VolumeAttributesClass (as a QoS class the CSI driver applies). VAC reached GA in
+Kubernetes 1.34, which matches the production EKS control plane; the earlier beta
+(1.31) is not a usable floor here, because managed EKS does not let a user enable
+a beta feature gate or the `storage.k8s.io/v1beta1` group. So the design
+questions are: which object carries the parameters, who creates it, and what the
+CRD field selects.
 
 ### Decision
 
 - **VolumeAttributesClass (VAC), referenced by name.** The CRD carries a VAC
   name (plus the volume-claim size); the controller stamps it onto each node's
-  PVC and otherwise passes it through. The controller MAY read-only pre-flight
-  the referenced VAC so a missing/typo'd name surfaces as a named node
-  condition rather than a silently-Pending pod. It MUST NOT create VACs.
+  PVC at provision and otherwise passes it through. It MUST NOT create VACs.
+- **The controller SHALL pre-flight the referenced VAC (read-only)** and surface
+  the result as an always-present node condition (a `Ready`-family type with a
+  stable `CamelCase` reason, per the repo's Conditions standard) — a missing or
+  mistyped name reports `False/<reason>` instead of leaving a silently-Pending
+  pod. This is committed, not optional: the named-failure path in Consequences
+  depends on it.
+- **The selection is provision-time only in this iteration.** `ensure-data-pvc`
+  is Get-then-Create with no update path
+  (`internal/task/ensure_pvc.go:69-85`), so the VAC name and size bind when the
+  PVC is first created; changing them on a running node group means replacing
+  the node (create-only, consistent with the compute footprint). Live
+  `ModifyVolume`-driven retuning of a bound volume is deferred until an update
+  path exists — so the live-modification capability cited under Rationale is a
+  property of the mechanism, not something this iteration exercises.
+- **Storage selection resolves in the same precedence ladder as compute
+  (Req 7).** A selection on the CRD wins; with none set, the node falls back to
+  its per-mode default class (`noderesource.DefaultStorageForMode`,
+  `internal/noderesource/noderesource.go:348`). There is no app-config middle
+  rung for the VAC name in this iteration.
+- **The selection covers controller-provisioned volumes only.** An imported PVC
+  (`spec.dataVolume.import`) keeps the importer's class and parameters — the
+  controller validates but never mutates it (`seinode_types.go:167`) — so
+  `dataVolume.storage` and `dataVolume.import` are mutually exclusive, and
+  Req 3.3's "every node in the group" is scoped to nodes whose volume the
+  controller provisions.
 - **The platform owns the VAC catalog** (GitOps), exactly as it owns the
   StorageClasses today. Adding a new (IOPS, throughput) offering is a
   platform/GitOps change, not a controller change or a CRD change.
 - **The harness owns the IOPS/throughput menu.** It exposes the supported set
   (Req 3.1/3.4/3.5), prompts for the parameters (Req 3.2), and maps a selection
   to a supported VAC name, which is what lands on the rendered CRD.
+
+For gp3, the StorageClass fixes the base volume *type* at provision while the VAC
+carries the tunable *performance* parameters (IOPS, throughput); the supported
+set the harness exposes is the set of VACs. "Storage type" in Req 3.1/3.4/3.5 is
+the base type the class provisions — gp3 for this iteration — so the two objects
+do not compete for authority over it.
 
 Under this split, two runs that differ only in throughput render CRDs that
 differ only in the `volumeAttributesClassName` field — SC-003, read at the
@@ -86,13 +117,26 @@ selector rather than at a raw parameter field.
   require a dedicated storage-catalog controller that owns minting with proper
   RBAC and GC — deliberately **deferred**; revisit only if the friction proves
   real after the event.
-- The controller change is minimal: a VAC-name field on the CRD, passthrough to
-  the PVC, and an optional read pre-flight condition.
+- The controller change is minimal for a fresh render: a VAC-name field on the
+  CRD, passthrough to the PVC at provision, and the read pre-flight condition.
+  Changing the VAC on an already-provisioned volume is deliberately out of scope
+  this iteration (see the provision-time note in Decision).
 
 ### Open — verify before PR 5
 
-- Confirm the harbor EKS runs an `aws-ebs-csi-driver` recent enough to support
-  VolumeAttributesClass, that the `VolumeAttributesClass` feature gate is
-  enabled, and that the driver's IAM role holds `ec2:ModifyVolume`. If the
-  plumbing is absent, fall back to the curated-StorageClass-by-name alternative
-  above — same CRD field shape, no re-spec.
+Confirm the VAC plumbing on the harbor EKS — all four, not just the driver
+version:
+
+- the `aws-ebs-csi-driver` addon is recent enough to support VolumeAttributesClass;
+- the addon's `external-resizer` sidecar is running with VAC support and volume
+  modification enabled — this is configured on the addon, separately from
+  anything the control plane exposes;
+- the driver's IAM role holds `ec2:ModifyVolume`;
+- the usable API is the 1.34 GA `storage.k8s.io/v1` group — do not rely on the
+  1.31 beta gate, which managed EKS does not expose.
+
+If the plumbing is absent, fall back to the curated-StorageClass-by-name
+alternative above. The CRD field shape is unaffected (a name is a name), but the
+VAC-specific wording this decision added to the spec — the glossary term
+(`spec.md:44`), Req 3.2/3.3/3.6, SC-003, and the assumptions paragraph — would
+need rewording to a generic "named storage class."

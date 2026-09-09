@@ -7,6 +7,10 @@ Semantic Anchors, Glossary, Boundary Context, EARS acceptance criteria, and
 named verifiers. The writing contract's `writing/scripts/check-verifiers.sh`
 gate checks that every success criterion names a verifier.
 
+A spec directory may also hold a `decisions.md` — records of design decisions its
+requirements do not dictate (the *how* and *why* behind the *what*), so they are
+not re-litigated later. See `001-configurable-node-resources/decisions.md`.
+
 | Spec | Title | Status |
 |---|---|---|
 | [001](001-configurable-node-resources/spec.md) | Selectable node resources for benchmarks | Draft |
