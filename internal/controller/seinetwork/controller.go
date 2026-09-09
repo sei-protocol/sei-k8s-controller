@@ -116,6 +116,12 @@ func (r *SeiNetworkReconciler) ensureFinalizer(ctx context.Context, network *sei
 	return r.Patch(ctx, network, patch)
 }
 
+// handleDeletion runs the finalizer once per SeiNetwork deletion and selects
+// between the two DeletionPolicy outcomes. Neither arm deletes a child: under
+// Delete the owner references are left intact and Kubernetes garbage collection
+// removes the tree; under Retain they are stripped so the children outlive the
+// network. Both arms then release the finalizer, which is what lets the
+// apiserver drop the object and, on the Delete arm, what starts the cascade.
 func (r *SeiNetworkReconciler) handleDeletion(ctx context.Context, network *seiv1alpha1.SeiNetwork) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(network, networkFinalizerName) {
 		return ctrl.Result{}, nil
@@ -132,7 +138,24 @@ func (r *SeiNetworkReconciler) handleDeletion(ctx context.Context, network *seiv
 		policy = seiv1alpha1.DeletionPolicyRetain // kubebuilder default is Retain; keep in sync
 	}
 
-	if policy == seiv1alpha1.DeletionPolicyRetain {
+	// Retain is the default arm, not just the Retain arm: a value this build
+	// does not recognize orphans rather than cascades. The two outcomes are not
+	// symmetric — a wrongly-retained validator keeps running and is recoverable,
+	// while a wrongly-cascaded one destroys a ceremony-generated consensus
+	// identity that cannot be regenerated. The CRD enum admits only Delete and
+	// Retain today, so this is a direction choice for a future value, not a
+	// reachable branch.
+	switch policy {
+	case seiv1alpha1.DeletionPolicyDelete:
+		// Nothing to do, deliberately. Every child carries this network's
+		// controller reference (ensureSeiNode reconciles it on every pass), and
+		// each child in turn owns its StatefulSet, which owns its pods. Removing
+		// the finalizer below is therefore the whole cascade: Kubernetes garbage
+		// collection walks the chain down to the pod. The controller deletes no
+		// child itself — bespoke deletion here would race the collector over
+		// resources it is already removing, and a delete issued against a child
+		// this reconcile could be re-created by the next one.
+	default:
 		r.Recorder.Event(network, corev1.EventTypeNormal, "RetainResources", "Orphaning child SeiNodes and internal Service")
 		if err := r.orphanChildSeiNodes(ctx, network); err != nil {
 			return ctrl.Result{}, fmt.Errorf("orphaning child SeiNodes: %w", err)
