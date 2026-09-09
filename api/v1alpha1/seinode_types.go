@@ -65,6 +65,10 @@ type SeiNodeSpec struct {
 	// +optional
 	Overrides map[string]string `json:"overrides,omitempty"`
 
+	// Scheduling configures worker-node isolation.
+	// +optional
+	Scheduling *SchedulingConfig `json:"scheduling,omitempty"`
+
 	// Sidecar configures the sei-sidecar container.
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
