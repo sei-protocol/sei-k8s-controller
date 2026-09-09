@@ -29,6 +29,13 @@ CRD field selects.
 - **VolumeAttributesClass (VAC), referenced by name.** The CRD carries a VAC
   name (plus the volume-claim size); the controller stamps it onto each node's
   PVC at provision and otherwise passes it through. It MUST NOT create VACs.
+- **CRD surface.** The selection lands on `spec.dataVolume.storage`, so
+  `SeiNetwork.spec.dataVolume` inherits it: the storage **size** in the
+  volume-claim shape Req 2.2/2.5 call for (`resources.requests.storage`, a
+  `VolumeResourceRequirements`), and the VAC selection as a sibling name field
+  (`volumeAttributesClassName`, mirroring the PVC field). The size has one home,
+  the volume-claim field — not two. Exact field names are finalized in PR 4/PR 5,
+  but the record fixes the shape so implementation does not settle it by default.
 - **The controller SHALL pre-flight the referenced VAC (read-only)** and surface
   the result as an always-present node condition (a `Ready`-family type with a
   stable `CamelCase` reason, per the repo's Conditions standard) — a missing or
@@ -38,16 +45,26 @@ CRD field selects.
 - **The selection is provision-time only in this iteration.** `ensure-data-pvc`
   is Get-then-Create with no update path
   (`internal/task/ensure_pvc.go:69-85`), so the VAC name and size bind when the
-  PVC is first created; changing them on a running node group means replacing
-  the node (create-only, consistent with the compute footprint). Live
-  `ModifyVolume`-driven retuning of a bound volume is deferred until an update
-  path exists — so the live-modification capability cited under Rationale is a
-  property of the mechanism, not something this iteration exercises.
+  PVC is first created. Nothing in the planner replaces a node on storage drift
+  either — NodeUpdate plans are built on `spec.image != status.currentImage` — so
+  changing storage on a running node group is an **operator act: delete and
+  recreate the node.** This is not symmetric with a compute change, which rolls
+  the pod in place (`apply-statefulset`/`replace-pod`) with the volume intact: a
+  controller-provisioned PVC carries an `ownerReference` to the SeiNode
+  (`ensure_pvc.go:65`), so deleting the node garbage-collects its data volume.
+  For a benchmark node that data loss is usually acceptable, but it is real and
+  the operator should expect it. Live `ModifyVolume`-driven retuning of a bound
+  volume is deferred until an update path exists — so the live-modification
+  capability cited under Rationale is a property of the mechanism, not something
+  this iteration exercises.
 - **Storage selection resolves in the same precedence ladder as compute
-  (Req 7).** A selection on the CRD wins; with none set, the node falls back to
-  its per-mode default class (`noderesource.DefaultStorageForMode`,
-  `internal/noderesource/noderesource.go:348`). There is no app-config middle
-  rung for the VAC name in this iteration.
+  (Req 7).** The ladder is specifically about the **VAC name**: a selection on
+  the CRD wins; with none set, the PVC carries **no `volumeAttributesClassName`
+  at all**, and the mode-default StorageClass supplies the baseline performance.
+  This is a distinct PVC field from `storageClassName`, which `GenerateDataPVC`
+  sets unconditionally from `noderesource.DefaultStorageForMode`
+  (`internal/noderesource/noderesource.go:706-712`) today, selection or not.
+  There is no app-config middle rung for the VAC name in this iteration.
 - **The selection covers controller-provisioned volumes only.** An imported PVC
   (`spec.dataVolume.import`) keeps the importer's class and parameters — the
   controller validates but never mutates it (`seinode_types.go:167`) — so
@@ -124,16 +141,24 @@ selector rather than at a raw parameter field.
 
 ### Open — verify before PR 5
 
-Confirm the VAC plumbing on the harbor EKS — all four, not just the driver
-version:
+Confirm the VAC plumbing on the harbor EKS. Split by which path each item serves
+— this iteration applies a VAC only at provision, so only the first pair blocks
+PR 5:
 
-- the `aws-ebs-csi-driver` addon is recent enough to support VolumeAttributesClass;
-- the addon's `external-resizer` sidecar is running with VAC support and volume
-  modification enabled — this is configured on the addon, separately from
-  anything the control plane exposes;
-- the driver's IAM role holds `ec2:ModifyVolume`;
+**Blocks PR 5 (provision-time VAC apply):**
+
+- the `aws-ebs-csi-driver` addon (and its external-provisioner) is recent enough
+  to support VolumeAttributesClass — the provisioner carries the VAC's mutable
+  parameters into `CreateVolume` at provision;
 - the usable API is the 1.34 GA `storage.k8s.io/v1` group — do not rely on the
   1.31 beta gate, which managed EKS does not expose.
+
+**Blocks only the deferred live-retune follow-up (not PR 5):**
+
+- the addon's `external-resizer` sidecar is running with VAC support and volume
+  modification enabled — it handles `ModifyVolume` when the VAC changes on an
+  existing PVC, which this iteration never does;
+- the driver's IAM role holds `ec2:ModifyVolume`.
 
 If the plumbing is absent, fall back to the curated-StorageClass-by-name
 alternative above. The CRD field shape is unaffected (a name is a name), but the
