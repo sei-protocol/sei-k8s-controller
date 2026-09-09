@@ -61,16 +61,10 @@ func (e *ensureDataPVCExecution) Execute(ctx context.Context) error {
 // executeCreate is Get-then-Create, failing if an unexpected PVC already
 // exists that the SeiNode does not own.
 //
-// Create is once-only, by design rather than a missing update path: an existing
-// owned PVC is accepted as-is, with no size or class comparison. spec.dataVolume
-// .storage is CEL create-only, so a *size* edit cannot diverge the live PVC.
-// The size/class also depend on NodeMode, which is NOT create-only — a mode
-// switch (e.g. fullNode->archive) changes the resolved class always and the size
-// when no CRD size is set, so a live PVC CAN diverge from the spec that way. That
-// is pre-existing and out of scope here; this task deliberately does not
-// reconcile it. Resizing a provisioned volume is an operator act — delete and
-// recreate the node — and note the PVC carries an ownerReference to the SeiNode
-// (set below), so that discards its data.
+// Once-only by design, not a missing update path: an owned PVC is accepted
+// as-is. dataVolume.storage is create-only so a size edit cannot diverge it, but
+// NodeMode is not, so a mode switch still can (pre-existing). Resizing means
+// deleting the node, which discards the volume via its ownerReference.
 func (e *ensureDataPVCExecution) executeCreate(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	desired := noderesource.GenerateDataPVC(node, e.cfg.Platform)
 	if err := ctrl.SetControllerReference(node, desired, e.cfg.Scheme); err != nil {
@@ -166,12 +160,7 @@ func (e *ensureDataPVCExecution) validateImport(
 		return Terminal(fmt.Errorf("PVC %q accessModes %v must include ReadWriteOnce or ReadWriteOncePod", name, pvc.Spec.AccessModes))
 	}
 
-	// The floor is the RESOLVED size, not the raw per-mode default, so it tracks
-	// whatever size this node would have been provisioned at. Today an importing
-	// node cannot carry spec.dataVolume.storage — storage and import are mutually
-	// exclusive by CEL — so this resolves to the per-mode default either way;
-	// routing through the resolver is what keeps the floor correct against the
-	// generator if that pairing ever changes.
+	// Resolved size, so the floor tracks what this node would be provisioned at.
 	_, requiredStr := noderesource.StorageForNode(node, e.cfg.Platform)
 	required, parseErr := resource.ParseQuantity(requiredStr)
 	if parseErr != nil {

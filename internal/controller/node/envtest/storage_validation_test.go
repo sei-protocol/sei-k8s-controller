@@ -17,16 +17,9 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
-// Admission-level coverage of spec.dataVolume.storage: which data-volume sizes
-// the API server accepts, and which it rejects by name.
-//
-// The size is create-only because the PVC is provisioned once — ensure-data-pvc
-// is Get-then-Create with no update path — so a later edit could never reach the
-// volume. The check is split between a presence rule on SeiNodeSpec and a value
-// rule on DataVolumeStorage; these cases cover both halves and the seam.
+// Admission coverage of spec.dataVolume.storage. The size is create-only (the
+// PVC is provisioned once): presence rule on the spec, value rule on the sub-type.
 
-// nodeWithStorageSize returns a full node whose data volume asks for size. An
-// empty size leaves the storage block off entirely.
 func nodeWithStorageSize(ns, name, size string) *seiv1alpha1.SeiNode {
 	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -50,14 +43,8 @@ func nodeWithStorageSize(ns, name, size string) *seiv1alpha1.SeiNode {
 	return node
 }
 
-// unstructuredNodeWithStorage returns a SeiNode as unstructured JSON so the size
-// reaches the API server EXACTLY as written. The typed client cannot express
-// these cases: apimachinery canonicalizes a Quantity on parse and always
-// marshals it as a string, so a typed create can never put a bare JSON number,
-// or two different spellings of one value, on the wire. kubectl apply can and
-// does. See unstructuredNodeWithMemory for the same problem on the compute side.
-//
-// size is a raw JSON value: `"2Ti"` (quoted) or `2199023255552` (bare).
+// unstructuredNodeWithStorage sends size as raw JSON (`"2Ti"` or `2199023255552`);
+// a typed client canonicalizes a Quantity, so it cannot spell a bare int.
 func unstructuredNodeWithStorage(ns, name, size string) *unstructured.Unstructured {
 	raw := fmt.Sprintf(`{
 	  "apiVersion": "sei.io/v1alpha1",
@@ -78,9 +65,6 @@ func unstructuredNodeWithStorage(ns, name, size string) *unstructured.Unstructur
 	return u
 }
 
-// TestDataVolumeStorage_SizeInClaimShapeAccepted covers the shape the harness
-// renders: a size in the volume-claim shape, which is the whole surface of this
-// iteration.
 func TestDataVolumeStorage_SizeInClaimShapeAccepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -88,8 +72,6 @@ func TestDataVolumeStorage_SizeInClaimShapeAccepted(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, nodeWithStorageSize(ns, "dv-size", "500Gi"))).To(Succeed())
 }
 
-// TestDataVolumeStorage_UnsetAccepted is the no-regression case: the field is
-// optional, and every node predating it must still be admissible.
 func TestDataVolumeStorage_UnsetAccepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -97,14 +79,8 @@ func TestDataVolumeStorage_UnsetAccepted(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, nodeWithStorageSize(ns, "dv-unset", ""))).To(Succeed())
 }
 
-// TestDataVolumeStorage_EmptyOrNullSizeRejected closes the sibling of the
-// misspelled-key hole: a storage block whose request prunes to empty (a null
-// value, or an empty/absent requests map) would pass the narrowing rules
-// vacuously and silently provision the per-mode default while the manifest read
-// as a size request. The realistic trigger is a Helm value templated to
-// `storage:`. `storage: {}` with no resources at all is NOT this case — that is
-// the legitimate "no override" fall-through and stays accepted (UnsetAccepted's
-// sibling), so the rule keys on resources being present.
+// A request pruning to empty (a Helm value templated to `storage:`) would pass
+// the rules vacuously; `storage: {}` is the legitimate no-override case.
 func TestDataVolumeStorage_EmptyOrNullSizeRejected(t *testing.T) {
 	ns := makeNamespace(t)
 	for name, requests := range map[string]string{
@@ -130,7 +106,6 @@ func TestDataVolumeStorage_EmptyOrNullSizeRejected(t *testing.T) {
 			g.Expect(err.Error()).To(ContainSubstring("must carry resources.requests.storage"))
 		})
 	}
-	// resources absent entirely is the legitimate no-override state.
 	t.Run("storage block with no resources is accepted", func(t *testing.T) {
 		g := NewWithT(t)
 		raw := fmt.Sprintf(`{
@@ -145,10 +120,6 @@ func TestDataVolumeStorage_EmptyOrNullSizeRejected(t *testing.T) {
 	})
 }
 
-// TestDataVolumeStorage_WithImportRejected locks the mutual exclusion. An
-// imported PVC keeps the importer's class and size and the controller never
-// mutates it, so a size beside an import would read as applied while being
-// ignored.
 func TestDataVolumeStorage_WithImportRejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -161,10 +132,6 @@ func TestDataVolumeStorage_WithImportRejected(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("mutually exclusive"))
 }
 
-// TestDataVolumeStorage_LimitsRejected: a volume claim carries a request, not a
-// limit. The limit is absent from the schema, so the API server rejects it as an
-// unknown field rather than by a rule — either way it is named, which is what
-// Req 2.4 asks for.
 func TestDataVolumeStorage_LimitsRejected(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -189,14 +156,9 @@ func TestDataVolumeStorage_LimitsRejected(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("limits"))
 }
 
-// TestDataVolumeStorage_StrayRequestKeyRejected keeps the claim to the one key
-// that means something. The claim is a map rather than a struct precisely so
-// this is a NAMED rejection rather than a silent prune — a pruned `storag` would
-// provision the per-mode default size while the manifest read as though it asked
-// for 2Ti, which is the failure this whole field is meant to avoid.
+// A map, not a struct, so a misspelled key is named rather than silently pruned.
 func TestDataVolumeStorage_StrayRequestKeyRejected(t *testing.T) {
 	t.Run("a misspelled key alone is rejected", func(t *testing.T) {
-		// The realistic typo: the operator writes one key and gets it wrong.
 		g := NewWithT(t)
 		ns := makeNamespace(t)
 
@@ -223,8 +185,6 @@ func TestDataVolumeStorage_StrayRequestKeyRejected(t *testing.T) {
 	})
 }
 
-// TestDataVolumeStorage_NonPositiveSizeRejected: a zero or negative claim is not
-// a smaller volume, it is an unprovisionable one.
 func TestDataVolumeStorage_NonPositiveSizeRejected(t *testing.T) {
 	for _, size := range []string{"0", "-1Gi"} {
 		t.Run("size="+size, func(t *testing.T) {
@@ -238,13 +198,7 @@ func TestDataVolumeStorage_NonPositiveSizeRejected(t *testing.T) {
 	}
 }
 
-// TestDataVolumeStorage_EquivalentUnitsAccepted is the case the create-only rule
-// exists in quantity() form for. A node created with one spelling and re-applied
-// with an equal one must be admitted, because it asks for no change at all.
-//
-// It has to go through the unstructured client — see unstructuredNodeWithStorage.
-// If this starts failing, someone replaced compareTo with ==; restore the
-// quantity() form rather than relaxing the test.
+// Why the rule uses quantity(): an equal size spelled differently is no change.
 func TestDataVolumeStorage_EquivalentUnitsAccepted(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -252,34 +206,19 @@ func TestDataVolumeStorage_EquivalentUnitsAccepted(t *testing.T) {
 	node := unstructuredNodeWithStorage(ns, "dv-equiv", `"2048Gi"`)
 	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
 
-	// Re-apply the same size spelled as 2Ti. Same quantity, different string.
 	cur := unstructuredNodeWithStorage(ns, "dv-equiv", `"2Ti"`)
 	cur.SetResourceVersion(node.GetResourceVersion())
 	g.Expect(testCli.Update(testCtx, cur)).To(Succeed(),
 		"2048Gi and 2Ti are the same size; the rule must compare quantities, not strings")
 }
 
-// TestDataVolumeStorage_BareIntSizeSurvivesControllerReencode reproduces the
-// finalizer wedge a structural create-only rule would cause, for the size.
-//
-// A node applied with a bare-integer size stores an int in etcd. The
-// controller's first reconcile installs its finalizer with a typed Update, which
-// re-encodes the size as a string. A structural == reads int != string, rejects
-// the controller's own write, and the node never gets a finalizer — it wedges
-// before it ever provisions. The quantity()-based rule compares values, so the
-// re-encode is admitted. This is the case that fails against a structural rule;
-// it is mutation-checked.
-//
-// This suite runs no manager (see suite_test.go), so the typed `Paused = true`
-// write below STANDS IN for the controller's finalizer Update — it exercises the
-// same admission path (a typed full-spec write re-marshalling the size). The
-// SeiNetwork suite's counterpart proves the real controller-write path end to
-// end (an actual child create + sync under a running reconciler).
+// A bare-int size stores an int the finalizer Update re-encodes as a string, so
+// == would reject the controller's own write. No manager here, so the typed
+// write stands in; the SeiNetwork twin proves the real path.
 func TestDataVolumeStorage_BareIntSizeSurvivesControllerReencode(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	// 500Gi in bytes as a bare JSON integer — the spelling that stores an int.
 	node := unstructuredNodeWithStorage(ns, "dv-reencode", `536870912000`)
 	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
 
@@ -290,8 +229,6 @@ func TestDataVolumeStorage_BareIntSizeSurvivesControllerReencode(t *testing.T) {
 		"a typed re-encode of a bare-int size must not trip the create-only rule (the finalizer Update depends on it)")
 }
 
-// TestDataVolumeStorage_CreateOnlyGate covers the three edits the create-only
-// pair must reject, and the unrelated edit it must not.
 func TestDataVolumeStorage_CreateOnlyGate(t *testing.T) {
 	t.Run("changing the size is rejected", func(t *testing.T) {
 		g := NewWithT(t)
@@ -307,9 +244,7 @@ func TestDataVolumeStorage_CreateOnlyGate(t *testing.T) {
 		g.Expect(err.Error()).To(ContainSubstring("create-only"))
 	})
 
-	// The grow case above catches a compareTo() == 0 -> >= 0 slip; this shrink
-	// case catches the <= 0 direction, so the create-only comparison is pinned
-	// from both sides and cannot silently degrade to a one-way (grow-only) gate.
+	// Shrink too, so the comparison cannot degrade to grow-only.
 	t.Run("shrinking the size is rejected", func(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
@@ -328,10 +263,7 @@ func TestDataVolumeStorage_CreateOnlyGate(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
 
-		// The case a rule on the sub-type alone would miss: with no storage in
-		// the stored object, a transition rule there never fires. By this point
-		// the PVC is already provisioned at the per-mode size, so an added size
-		// is inert — which is exactly why it must not be accepted.
+		// What a sub-type rule misses: absent in the stored object, it never fires.
 		node := nodeWithStorageSize(ns, "dv-add", "")
 		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
 
@@ -382,8 +314,6 @@ func TestDataVolumeStorage_CreateOnlyGate(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
 
-		// The size gate is scoped to the size. Import adoption on a node that
-		// never had a dataVolume is pre-existing behaviour and must survive.
 		node := nodeWithStorageSize(ns, "dv-import-add", "")
 		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
 

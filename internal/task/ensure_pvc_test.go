@@ -399,18 +399,9 @@ func TestEnsureDataPVC_Import_CapacityTooSmall_Terminal(t *testing.T) {
 	g.Expect(importReasonFor(node)).To(Equal(seiv1alpha1.ReasonPVCInvalid))
 }
 
-// TestEnsureDataPVC_Import_FloorUsesResolvedSize pins that the import floor is
-// the RESOLVED size, not the raw per-mode default, so the check tracks whatever
-// size the node would have been provisioned at.
-//
-// Note what this does and does not prove. The pairing it exercises —
-// dataVolume.import AND dataVolume.storage on one node — is rejected by
-// admission (the two are mutually exclusive by CEL), so it is not a reachable
-// production state, and the fake client is what allows building it. The test is
-// defense in depth: it pins the floor to the same resolver the PVC generator
-// uses, so the two cannot drift apart if a later iteration relaxes that pairing.
-// TestEnsureDataPVC_Import_CapacityTooSmall_Terminal above covers the reachable
-// case, where the floor is the per-mode default.
+// The import floor is the RESOLVED size. Defense in depth only: import+storage
+// together is rejected by admission, so this state is unreachable and only the
+// fake client can build it; CapacityTooSmall_Terminal covers the reachable case.
 func TestEnsureDataPVC_Import_FloorUsesResolvedSize(t *testing.T) {
 	withCRDSize := func(node *seiv1alpha1.SeiNode, size string) *seiv1alpha1.SeiNode {
 		node.Spec.DataVolume.Storage = &seiv1alpha1.DataVolumeStorage{
@@ -423,8 +414,6 @@ func TestEnsureDataPVC_Import_FloorUsesResolvedSize(t *testing.T) {
 		return node
 	}
 
-	// A 500Gi imported volume: below the 2000Gi mode default, but exactly what a
-	// CRD-set 500Gi asks for.
 	t.Run("a 500Gi import passes when the CRD asks for 500Gi", func(t *testing.T) {
 		g := NewWithT(t)
 		node := withCRDSize(importNode("data-500"), "500Gi")

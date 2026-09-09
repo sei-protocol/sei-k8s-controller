@@ -727,9 +727,7 @@ func withStorageSize(node *seiv1alpha1.SeiNode, size string) *seiv1alpha1.SeiNod
 	return node
 }
 
-// TestStorageForNode_CRDSizeWinsOverModeDefault locks the size ladder: a CRD-set
-// size overrides the platform per-mode default on every mode, while the CLASS
-// still comes from the mode — this iteration adds no class rung.
+// A CRD size overrides the per-mode default; the class still comes from the mode.
 func TestStorageForNode_CRDSizeWinsOverModeDefault(t *testing.T) {
 	cfg := platformtest.Config()
 	cases := []struct {
@@ -753,8 +751,7 @@ func TestStorageForNode_CRDSizeWinsOverModeDefault(t *testing.T) {
 	}
 }
 
-// TestStorageForNode_UnsetFallsThroughPerMode is the no-regression case: with no
-// CRD size, every mode keeps exactly what DefaultStorageForMode resolves.
+// No-regression: unset keeps exactly what DefaultStorageForMode resolves.
 func TestStorageForNode_UnsetFallsThroughPerMode(t *testing.T) {
 	cfg := platformtest.Config()
 	for _, role := range []string{roleValidator, "", roleReplayer, roleArchive, roleSeed} {
@@ -770,8 +767,6 @@ func TestStorageForNode_UnsetFallsThroughPerMode(t *testing.T) {
 		})
 	}
 
-	// The two sizes that are NOT StorageSizeDefault, pinned explicitly so a
-	// regression in the fall-through cannot hide behind a shared value.
 	g := NewWithT(t)
 	_, archive := StorageForNode(nodeForRole(roleArchive), cfg)
 	g.Expect(archive).To(Equal(cfg.StorageSizeArchive))
@@ -779,10 +774,7 @@ func TestStorageForNode_UnsetFallsThroughPerMode(t *testing.T) {
 	g.Expect(seed).To(Equal(cfg.SeedStorageSize()))
 }
 
-// TestStorageForNode_PartialStorageBlockFallsThrough covers the shapes that set
-// the storage block but no size. Each must fall through to the per-mode default
-// rather than resolve to an empty or zero size — an empty string would panic the
-// generator's MustParse, and a zero would provision an unusable volume.
+// A storage block with no size must fall through: empty would panic MustParse.
 func TestStorageForNode_PartialStorageBlockFallsThrough(t *testing.T) {
 	cfg := platformtest.Config()
 	cases := map[string]*seiv1alpha1.DataVolumeSpec{
@@ -805,8 +797,7 @@ func TestStorageForNode_PartialStorageBlockFallsThrough(t *testing.T) {
 	}
 }
 
-// TestGenerateDataPVC_UsesResolvedSize closes the loop from the CRD field to the
-// rendered claim — the generator, not just the resolver.
+// Closes the loop from CRD field to rendered claim, not just the resolver.
 func TestGenerateDataPVC_UsesResolvedSize(t *testing.T) {
 	g := NewWithT(t)
 	cfg := platformtest.Config()
@@ -820,9 +811,7 @@ func TestGenerateDataPVC_UsesResolvedSize(t *testing.T) {
 		"a size override must not disturb the class")
 }
 
-// TestGenerateDataPVC_EquivalentUnitsRoundTrip pins the string round-trip inside
-// StorageForNode: the resolver returns the size as a canonical string that the
-// generator re-parses, so an equal-but-differently-spelled size must survive it.
+// The resolver's string round-trip must not change an equal size's value.
 func TestGenerateDataPVC_EquivalentUnitsRoundTrip(t *testing.T) {
 	g := NewWithT(t)
 	node := withStorageSize(newSnapshotNode("snap-0", "ns1"), "2048Gi")

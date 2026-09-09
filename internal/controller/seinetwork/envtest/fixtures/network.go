@@ -92,8 +92,7 @@ func WithResources(cpu, memory string) Option {
 	}
 }
 
-// WithDataVolumeStorage sets spec.dataVolume.storage — the data volume size
-// every genesis validator in the pool receives.
+// WithDataVolumeStorage sets the data volume size every pool validator receives.
 func WithDataVolumeStorage(size string) Option {
 	return func(network *seiv1alpha1.SeiNetwork) {
 		network.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{

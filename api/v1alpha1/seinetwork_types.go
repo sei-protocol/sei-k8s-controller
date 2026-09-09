@@ -26,31 +26,14 @@ import (
 //
 // +kubebuilder:validation:XValidation:rule="self.genesis == oldSelf.genesis",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
 // +kubebuilder:validation:XValidation:rule="self.replicas == oldSelf.replicas",message="spec.replicas is fixed at the genesis ceremony; the validator set is minted into genesis state and cannot be grown or shrunk by editing the spec"
-// dataVolume is create-only — a change, an unset, and a first-time set are all
-// rejected, so a pool's storage is fixed for its life.
+// dataVolume is create-only (change, unset, first-time set all rejected).
+// Presence parity only here; values are pinned on the shared DataVolume* types,
+// covering both Kinds. A structural == cannot stay once a Quantity lives here (a
+// typed re-encode would reject the controller's own write), and enumerating
+// values — reaching import.pvcName — exceeds the CEL per-rule cost budget.
 //
-// This rule checks PRESENCE parity only; the VALUES are pinned one level down, by
-// rules on the shared DataVolumeSpec/DataVolumeImport/DataVolumeStorage types,
-// which apply to this Kind and to SeiNode alike (pvcName carries self == oldSelf;
-// the size is compared through quantity()). Between them the semantics are the
-// same as the structural `self.dataVolume == oldSelf.dataVolume` this replaced.
-//
-// The split is forced, not stylistic. A structural == cannot stay once a Quantity
-// lives under dataVolume: any typed full-spec write (the finalizer Update, the
-// child sync) re-encodes a bare-int size as a string, so == would read
-// int != string and reject the controller's own write. And the obvious rewrite —
-// enumerating the fields with their values here — does not install: CEL's
-// rule-cost estimator puts a comparison reaching self.dataVolume.import.pvcName
-// at more than 100x the per-rule budget, so the CRD is refused outright. Keeping
-// value comparisons on the sub-types keeps every path one hop long. Measure with
-// a CRD install before adding a term here.
-//
-// COMPLETENESS OBLIGATION for the next field under DataVolume* (e.g. PR 5's
-// volumeAttributesClassName): unlike the old structural ==, this rule pins an
-// explicit list, so a new field is silently mutable until it is added in BOTH
-// places — a value rule on its sub-type (fires on a change) AND a presence-parity
-// term in this spec-level rule on BOTH Kinds (fires on a first-time set, which a
-// sub-type transition rule skips). Miss either and nothing fails.
+// COMPLETENESS: a new DataVolume* field is silently mutable until it gets BOTH a
+// value rule on its sub-type AND a presence term here, on both Kinds.
 // +kubebuilder:validation:XValidation:rule="((has(self.dataVolume)) == (has(oldSelf.dataVolume))) && ((has(self.dataVolume) && has(self.dataVolume.import)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.import))) && ((has(self.dataVolume) && has(self.dataVolume.storage)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage))) && ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="spec.dataVolume is create-only: each validator's data PVC is created once (ensure-data-pvc is Get-then-Create with no update path) and nothing replaces a node on storage drift, so a later edit could never reach the pool's volumes; recreate the network to change its storage"
 // resources is create-only, compared PER-DIMENSION via quantity() rather than
 // structural == — the values are int-or-string Quantities, and the network
@@ -97,12 +80,8 @@ type SeiNetworkSpec struct {
 	// validator. The ceremony-generated consensus identity lives here, so
 	// DeletionPolicy defaults to Retain.
 	//
-	// Create-only (spec-level CEL) — a change, an unset, and a first-time set are
-	// all rejected, so the pool's storage is fixed for its life. Each child's
-	// data PVC is created once (ensure-data-pvc is Get-then-Create with no update
-	// path) and nothing replaces a node on storage drift, so a later edit could
-	// never take effect; admission rejects it rather than letting the controller
-	// silently ignore it. Changing a pool's storage means recreating the network.
+	// Create-only (spec-level CEL): each child's PVC is created once and nothing
+	// replaces a node on storage drift, so a later edit would be inert.
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
 

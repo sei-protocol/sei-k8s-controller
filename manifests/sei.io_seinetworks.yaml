@@ -75,31 +75,14 @@ spec:
               controller synthesizes each child SeiNode's validator spec from these
               scalars (see generateSeiNode).
 
-              dataVolume is create-only — a change, an unset, and a first-time set are all
-              rejected, so a pool's storage is fixed for its life.
+              dataVolume is create-only (change, unset, first-time set all rejected).
+              Presence parity only here; values are pinned on the shared DataVolume* types,
+              covering both Kinds. A structural == cannot stay once a Quantity lives here (a
+              typed re-encode would reject the controller's own write), and enumerating
+              values — reaching import.pvcName — exceeds the CEL per-rule cost budget.
 
-              This rule checks PRESENCE parity only; the VALUES are pinned one level down, by
-              rules on the shared DataVolumeSpec/DataVolumeImport/DataVolumeStorage types,
-              which apply to this Kind and to SeiNode alike (pvcName carries self == oldSelf;
-              the size is compared through quantity()). Between them the semantics are the
-              same as the structural `self.dataVolume == oldSelf.dataVolume` this replaced.
-
-              The split is forced, not stylistic. A structural == cannot stay once a Quantity
-              lives under dataVolume: any typed full-spec write (the finalizer Update, the
-              child sync) re-encodes a bare-int size as a string, so == would read
-              int != string and reject the controller's own write. And the obvious rewrite —
-              enumerating the fields with their values here — does not install: CEL's
-              rule-cost estimator puts a comparison reaching self.dataVolume.import.pvcName
-              at more than 100x the per-rule budget, so the CRD is refused outright. Keeping
-              value comparisons on the sub-types keeps every path one hop long. Measure with
-              a CRD install before adding a term here.
-
-              COMPLETENESS OBLIGATION for the next field under DataVolume* (e.g. PR 5's
-              volumeAttributesClassName): unlike the old structural ==, this rule pins an
-              explicit list, so a new field is silently mutable until it is added in BOTH
-              places — a value rule on its sub-type (fires on a change) AND a presence-parity
-              term in this spec-level rule on BOTH Kinds (fires on a first-time set, which a
-              sub-type transition rule skips). Miss either and nothing fails.
+              COMPLETENESS: a new DataVolume* field is silently mutable until it gets BOTH a
+              value rule on its sub-type AND a presence term here, on both Kinds.
               resources is create-only, compared PER-DIMENSION via quantity() rather than
               structural == — the values are int-or-string Quantities, and the network
               controller's finalizer Update re-encodes a bare-int footprint as a string, so
@@ -123,12 +106,8 @@ spec:
                   validator. The ceremony-generated consensus identity lives here, so
                   DeletionPolicy defaults to Retain.
 
-                  Create-only (spec-level CEL) — a change, an unset, and a first-time set are
-                  all rejected, so the pool's storage is fixed for its life. Each child's
-                  data PVC is created once (ensure-data-pvc is Get-then-Create with no update
-                  path) and nothing replaces a node on storage drift, so a later edit could
-                  never take effect; admission rejects it rather than letting the controller
-                  silently ignore it. Changing a pool's storage means recreating the network.
+                  Create-only (spec-level CEL): each child's PVC is created once and nothing
+                  replaces a node on storage drift, so a later edit would be inert.
                 properties:
                   import:
                     description: |-
@@ -157,23 +136,13 @@ spec:
                     - pvcName
                     type: object
                   storage:
-                    description: |-
-                      Storage configures the data volume the controller provisions for this
-                      node. Mutually exclusive with Import.
+                    description: Storage configures the volume the controller provisions.
+                      Excludes Import.
                     properties:
                       resources:
                         description: |-
-                          Resources is the volume claim request; the size is
-                          resources.requests.storage. It OVERRIDES the platform's per-mode default
-                          size (storage.sizeDefault / sizeArchive / sizeSeed, resolved through
-                          noderesource.DefaultStorageForMode); unset falls through to that default.
-                          See noderesource.StorageForNode for the ladder.
-
-                          Create-only, enforced by a spec-level rule on SeiNodeSpec (it has to live
-                          there to fire when this whole path is first added). The PVC is created
-                          once — ensure-data-pvc is Get-then-Create with no update path — so a later
-                          size edit could never reach the volume; admission rejects it rather than
-                          accept an inert one.
+                          Resources is the volume claim request. The size overrides the per-mode
+                          default; unset falls through.
                         properties:
                           requests:
                             additionalProperties:
@@ -183,16 +152,8 @@ spec:
                               pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                               x-kubernetes-int-or-string: true
                             description: |-
-                              Requests carries exactly the storage size, narrowed to that one key by the
-                              rule on DataVolumeStorage.
-
-                              It is a MAP rather than a struct with a `storage` field on purpose: a
-                              struct lets the API server PRUNE a misspelled key, so `storag: 2Ti` would
-                              provision the per-mode default size while the manifest read as though it
-                              asked for something else. As a map, the rule rejects the unknown key by
-                              name. The sibling hole — an empty or null request that also prunes to the
-                              per-mode default (a Helm value templated to `storage:`) — is closed by the
-                              "must carry resources.requests.storage" rule on DataVolumeStorage.
+                              Requests carries only the storage size. A map, not a struct, because a
+                              struct prunes a misspelled or empty key and silently defaults the size.
                             type: object
                         type: object
                     type: object
