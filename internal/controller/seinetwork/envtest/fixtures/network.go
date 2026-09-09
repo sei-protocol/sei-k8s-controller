@@ -92,6 +92,22 @@ func WithResources(cpu, memory string) Option {
 	}
 }
 
+// WithDataVolumeStorage sets spec.dataVolume.storage — the data volume size
+// every genesis validator in the pool receives.
+func WithDataVolumeStorage(size string) Option {
+	return func(network *seiv1alpha1.SeiNetwork) {
+		network.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{
+			Storage: &seiv1alpha1.DataVolumeStorage{
+				Resources: &seiv1alpha1.VolumeClaimResources{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: resource.MustParse(size),
+					},
+				},
+			},
+		}
+	}
+}
+
 // WithDataVolumeImport sets spec.dataVolume to import a pre-existing PVC.
 func WithDataVolumeImport(pvcName string) Option {
 	return func(network *seiv1alpha1.SeiNetwork) {

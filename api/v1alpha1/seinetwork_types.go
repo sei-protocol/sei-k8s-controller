@@ -26,7 +26,25 @@ import (
 //
 // +kubebuilder:validation:XValidation:rule="self.genesis == oldSelf.genesis",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
 // +kubebuilder:validation:XValidation:rule="self.replicas == oldSelf.replicas",message="spec.replicas is fixed at the genesis ceremony; the validator set is minted into genesis state and cannot be grown or shrunk by editing the spec"
-// +kubebuilder:validation:XValidation:rule="(!has(self.dataVolume) && !has(oldSelf.dataVolume)) || self.dataVolume == oldSelf.dataVolume",message="spec.dataVolume is immutable once set; it backs a StatefulSet volumeClaimTemplate, which Kubernetes forbids changing after create"
+// dataVolume is create-only — a change, an unset, and a first-time set are all
+// rejected, so a pool's storage is fixed for its life.
+//
+// This rule checks PRESENCE parity only; the VALUES are pinned one level down, by
+// rules on the shared DataVolumeSpec/DataVolumeImport/DataVolumeStorage types,
+// which apply to this Kind and to SeiNode alike (pvcName carries self == oldSelf;
+// the size is compared through quantity()). Between them the semantics are the
+// same as the structural `self.dataVolume == oldSelf.dataVolume` this replaced.
+//
+// The split is forced, not stylistic. A structural == cannot stay once a Quantity
+// lives under dataVolume: any typed full-spec write (the finalizer Update, the
+// child sync) re-encodes a bare-int size as a string, so == would read
+// int != string and reject the controller's own write. And the obvious rewrite —
+// enumerating the fields with their values here — does not install: CEL's
+// rule-cost estimator puts a comparison reaching self.dataVolume.import.pvcName
+// at more than 100x the per-rule budget, so the CRD is refused outright. Keeping
+// value comparisons on the sub-types keeps every path one hop long. Measure with
+// a CRD install before adding a term here.
+// +kubebuilder:validation:XValidation:rule="((has(self.dataVolume)) == (has(oldSelf.dataVolume))) && ((has(self.dataVolume) && has(self.dataVolume.import)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.import))) && ((has(self.dataVolume) && has(self.dataVolume.storage)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage))) && ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="spec.dataVolume is create-only: each validator's data PVC is created once (ensure-data-pvc is Get-then-Create with no update path) and nothing replaces a node on storage drift, so a later edit could never reach the pool's volumes; recreate the network to change its storage"
 // resources is create-only, compared PER-DIMENSION via quantity() rather than
 // structural == — the values are int-or-string Quantities, and the network
 // controller's finalizer Update re-encodes a bare-int footprint as a string, so
@@ -72,10 +90,12 @@ type SeiNetworkSpec struct {
 	// validator. The ceremony-generated consensus identity lives here, so
 	// DeletionPolicy defaults to Retain.
 	//
-	// Immutable after create (spec-level CEL): it backs a StatefulSet
-	// volumeClaimTemplate, which Kubernetes forbids changing post-create, so a
-	// later edit could never take effect — admission rejects it rather than
-	// letting the controller silently ignore it.
+	// Create-only (spec-level CEL) — a change, an unset, and a first-time set are
+	// all rejected, so the pool's storage is fixed for its life. Each child's
+	// data PVC is created once (ensure-data-pvc is Get-then-Create with no update
+	// path) and nothing replaces a node on storage drift, so a later edit could
+	// never take effect; admission rejects it rather than letting the controller
+	// silently ignore it. Changing a pool's storage means recreating the network.
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
 

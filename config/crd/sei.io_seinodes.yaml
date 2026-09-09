@@ -64,6 +64,18 @@ spec:
               swapping between two frozen modes at different heights. Both leave a Running
               node carrying the frozen readiness probe with no freeze height in app.toml,
               because only a bootstrap plan writes config.
+              The data-volume SIZE is create-only. The check is split in two, and both
+              halves are needed.
+
+              PRESENCE parity lives here, at spec level, because a transition rule is
+              skipped when its path is absent from the stored object: on the sub-type it
+              could never fire for a first-time set, which is the case that matters most —
+              the PVC is already provisioned by then, so a size added later is inert.
+              VALUE equality lives on DataVolumeStorage, where the path is one hop; see the
+              CEL cost note there and on SeiNetworkSpec for why depth is not free.
+
+              Scoped to the size alone, deliberately: adding dataVolume.import to an
+              existing node stays allowed, as it is today.
               resources is create-only, but compared PER-DIMENSION through quantity() — NOT
               structural == on the object. The values are int-or-string Quantities, so a
               node applied with a bare int (cpu: 4) stores an int, while the controller's
@@ -177,10 +189,71 @@ spec:
                     required:
                     - pvcName
                     type: object
+                  storage:
+                    description: |-
+                      Storage configures the data volume the controller provisions for this
+                      node. Mutually exclusive with Import.
+                    properties:
+                      resources:
+                        description: |-
+                          Resources is the volume claim request; the size is
+                          resources.requests.storage. It OVERRIDES the platform's per-mode default
+                          size (storage.sizeDefault / sizeArchive / sizeSeed, resolved through
+                          noderesource.DefaultStorageForMode); unset falls through to that default.
+                          See noderesource.StorageForNode for the ladder.
+
+                          Create-only, enforced by a spec-level rule on SeiNodeSpec (it has to live
+                          there to fire when this whole path is first added). The PVC is created
+                          once — ensure-data-pvc is Get-then-Create with no update path — so a later
+                          size edit could never reach the volume; admission rejects it rather than
+                          accept an inert one.
+                        properties:
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests carries exactly the storage size, narrowed to that one key by the
+                              rule on DataVolumeStorage.
+
+                              It is a MAP rather than a struct with a `storage` field on purpose: a
+                              struct lets the API server PRUNE a misspelled key, so `storag: 2Ti` would
+                              provision the per-mode default size while the manifest read as though it
+                              asked for something else. As a map, the rule rejects the unknown key by
+                              name.
+                            type: object
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'dataVolume.storage.resources.requests.storage is create-only:
+                        the data PVC is created once (ensure-data-pvc is Get-then-Create
+                        with no update path), so a later size edit could never reach
+                        the volume; delete and recreate the node to resize'
+                      rule: '!has(self.resources) || !has(self.resources.requests)
+                        || !(''storage'' in self.resources.requests) || !has(oldSelf.resources)
+                        || !has(oldSelf.resources.requests) || !(''storage'' in oldSelf.resources.requests)
+                        || quantity(string(self.resources.requests[''storage''])).compareTo(quantity(string(oldSelf.resources.requests[''storage''])))
+                        == 0'
+                    - message: dataVolume.storage.resources.requests accepts only
+                        storage
+                      rule: '!has(self.resources) || !has(self.resources.requests)
+                        || self.resources.requests.all(k, k == ''storage'')'
+                    - message: dataVolume.storage.resources.requests.storage must
+                        be positive
+                      rule: '!has(self.resources) || !has(self.resources.requests)
+                        || !(''storage'' in self.resources.requests) || quantity(string(self.resources.requests[''storage''])).compareTo(quantity(''0''))
+                        > 0'
                 type: object
                 x-kubernetes-validations:
                 - message: import cannot be unset once configured
                   rule: (!has(oldSelf.import) || has(self.import))
+                - message: 'dataVolume.storage and dataVolume.import are mutually
+                    exclusive: an imported PVC keeps the importer''s class and size,
+                    and the controller never mutates it'
+                  rule: '!(has(self.import) && has(self.storage))'
               externalAddress:
                 description: |-
                   ExternalAddress is the routable P2P host:port written into seid's
@@ -1059,6 +1132,17 @@ spec:
                 : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ?
                 oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze)
                 ? oldSelf.archive.freeze.height : 0))'
+            - message: 'spec.dataVolume.storage.resources.requests.storage is create-only:
+                it cannot be added to or removed from an existing node — the data
+                PVC is created once (ensure-data-pvc is Get-then-Create with no update
+                path), so the edit would be inert; delete and recreate the node to
+                resize'
+              rule: ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources)
+                && has(self.dataVolume.storage.resources.requests) && ('storage' in
+                self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume)
+                && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources)
+                && has(oldSelf.dataVolume.storage.resources.requests) && ('storage'
+                in oldSelf.dataVolume.storage.resources.requests)))
             - message: 'spec.resources is create-only: the footprint is fixed at creation
                 (a change is not rolled onto a running pod — the StatefulSet is OnDelete
                 and drift detection is image-only), so replace the node to resize'

@@ -713,6 +713,127 @@ func TestGenerateNodeDataPVC(t *testing.T) {
 	g.Expect(storage.String()).To(Equal("2000Gi"))
 }
 
+// withStorageSize gives node a CRD data-volume size.
+func withStorageSize(node *seiv1alpha1.SeiNode, size string) *seiv1alpha1.SeiNode {
+	node.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{
+		Storage: &seiv1alpha1.DataVolumeStorage{
+			Resources: &seiv1alpha1.VolumeClaimResources{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(size),
+				},
+			},
+		},
+	}
+	return node
+}
+
+// TestStorageForNode_CRDSizeWinsOverModeDefault locks the size ladder: a CRD-set
+// size overrides the platform per-mode default on every mode, while the CLASS
+// still comes from the mode — this iteration adds no class rung.
+func TestStorageForNode_CRDSizeWinsOverModeDefault(t *testing.T) {
+	cfg := platformtest.Config()
+	cases := []struct {
+		name      string
+		node      *seiv1alpha1.SeiNode
+		wantClass string
+	}{
+		{"fullNode", nodeForRole(""), cfg.StorageClassPerf},
+		{"validator", nodeForRole(roleValidator), cfg.StorageClassPerf},
+		{"archive", nodeForRole(roleArchive), cfg.StorageClassArchive},
+		{"seed", nodeForRole(roleSeed), cfg.StorageClassDefault},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			class, size := StorageForNode(withStorageSize(tc.node, "500Gi"), cfg)
+
+			g.Expect(size).To(Equal("500Gi"), "the CRD size must win over the per-mode default")
+			g.Expect(class).To(Equal(tc.wantClass), "the class still comes from the mode")
+		})
+	}
+}
+
+// TestStorageForNode_UnsetFallsThroughPerMode is the no-regression case: with no
+// CRD size, every mode keeps exactly what DefaultStorageForMode resolves.
+func TestStorageForNode_UnsetFallsThroughPerMode(t *testing.T) {
+	cfg := platformtest.Config()
+	for _, role := range []string{roleValidator, "", roleReplayer, roleArchive, roleSeed} {
+		t.Run("mode="+role, func(t *testing.T) {
+			g := NewWithT(t)
+			node := nodeForRole(role)
+			g.Expect(node.Spec.DataVolume).To(BeNil())
+
+			wantClass, wantSize := DefaultStorageForMode(NodeMode(node), cfg)
+			class, size := StorageForNode(node, cfg)
+			g.Expect(class).To(Equal(wantClass))
+			g.Expect(size).To(Equal(wantSize))
+		})
+	}
+
+	// The two sizes that are NOT StorageSizeDefault, pinned explicitly so a
+	// regression in the fall-through cannot hide behind a shared value.
+	g := NewWithT(t)
+	_, archive := StorageForNode(nodeForRole(roleArchive), cfg)
+	g.Expect(archive).To(Equal(cfg.StorageSizeArchive))
+	_, seed := StorageForNode(nodeForRole(roleSeed), cfg)
+	g.Expect(seed).To(Equal(cfg.SeedStorageSize()))
+}
+
+// TestStorageForNode_PartialStorageBlockFallsThrough covers the shapes that set
+// the storage block but no size. Each must fall through to the per-mode default
+// rather than resolve to an empty or zero size — an empty string would panic the
+// generator's MustParse, and a zero would provision an unusable volume.
+func TestStorageForNode_PartialStorageBlockFallsThrough(t *testing.T) {
+	cfg := platformtest.Config()
+	cases := map[string]*seiv1alpha1.DataVolumeSpec{
+		"storage absent":  {},
+		"storage empty":   {Storage: &seiv1alpha1.DataVolumeStorage{}},
+		"resources empty": {Storage: &seiv1alpha1.DataVolumeStorage{Resources: &seiv1alpha1.VolumeClaimResources{}}},
+		"requests without a size": {Storage: &seiv1alpha1.DataVolumeStorage{
+			Resources: &seiv1alpha1.VolumeClaimResources{Requests: corev1.ResourceList{}},
+		}},
+	}
+	for name, dv := range cases {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := nodeForRole("")
+			node.Spec.DataVolume = dv
+
+			_, size := StorageForNode(node, cfg)
+			g.Expect(size).To(Equal(cfg.StorageSizeDefault))
+		})
+	}
+}
+
+// TestGenerateDataPVC_UsesResolvedSize closes the loop from the CRD field to the
+// rendered claim — the generator, not just the resolver.
+func TestGenerateDataPVC_UsesResolvedSize(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+	node := withStorageSize(newSnapshotNode("snap-0", "ns1"), "500Gi")
+
+	pvc := GenerateDataPVC(node, cfg)
+
+	got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	g.Expect(got.String()).To(Equal("500Gi"))
+	g.Expect(*pvc.Spec.StorageClassName).To(Equal(cfg.StorageClassPerf),
+		"a size override must not disturb the class")
+}
+
+// TestGenerateDataPVC_EquivalentUnitsRoundTrip pins the string round-trip inside
+// StorageForNode: the resolver returns the size as a canonical string that the
+// generator re-parses, so an equal-but-differently-spelled size must survive it.
+func TestGenerateDataPVC_EquivalentUnitsRoundTrip(t *testing.T) {
+	g := NewWithT(t)
+	node := withStorageSize(newSnapshotNode("snap-0", "ns1"), "2048Gi")
+
+	pvc := GenerateDataPVC(node, platformtest.Config())
+
+	got := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	g.Expect(got.Cmp(resource.MustParse("2Ti"))).To(Equal(0),
+		"2048Gi and 2Ti are the same quantity; the round-trip must not change the value")
+}
+
 func newArchiveNode(name, namespace string) *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},

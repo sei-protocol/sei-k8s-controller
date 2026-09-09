@@ -25,6 +25,19 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.overrides) || !('chain.freeze_height' in self.overrides)",message="set the freeze height via fullNode.freeze or archive.freeze, not overrides: user overrides outrank controller-derived ones"
 // +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
+// The data-volume SIZE is create-only. The check is split in two, and both
+// halves are needed.
+//
+// PRESENCE parity lives here, at spec level, because a transition rule is
+// skipped when its path is absent from the stored object: on the sub-type it
+// could never fire for a first-time set, which is the case that matters most —
+// the PVC is already provisioned by then, so a size added later is inert.
+// VALUE equality lives on DataVolumeStorage, where the path is one hop; see the
+// CEL cost note there and on SeiNetworkSpec for why depth is not free.
+//
+// Scoped to the size alone, deliberately: adding dataVolume.import to an
+// existing node stays allowed, as it is today.
+// +kubebuilder:validation:XValidation:rule="((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="spec.dataVolume.storage.resources.requests.storage is create-only: it cannot be added to or removed from an existing node — the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path), so the edit would be inert; delete and recreate the node to resize"
 // resources is create-only, but compared PER-DIMENSION through quantity() — NOT
 // structural == on the object. The values are int-or-string Quantities, so a
 // node applied with a bare int (cpu: 4) stores an int, while the controller's
@@ -163,7 +176,13 @@ type Resources struct {
 
 // DataVolumeSpec configures how the data PVC is sourced.
 //
+// Import and Storage are mutually exclusive: Storage configures a volume the
+// controller provisions, while Import adopts one it only ever reads. Keeping
+// them apart preserves the import contract — the importer owns that PVC's class
+// and size, and the controller never mutates it.
+//
 // +kubebuilder:validation:XValidation:rule="(!has(oldSelf.import) || has(self.import))",message="import cannot be unset once configured"
+// +kubebuilder:validation:XValidation:rule="!(has(self.import) && has(self.storage))",message="dataVolume.storage and dataVolume.import are mutually exclusive: an imported PVC keeps the importer's class and size, and the controller never mutates it"
 type DataVolumeSpec struct {
 	// Import references a pre-existing PersistentVolumeClaim in the same
 	// namespace as the SeiNode, instead of creating a new one. The
@@ -175,6 +194,62 @@ type DataVolumeSpec struct {
 	// on SeiNode deletion — storage lifecycle is the operator's responsibility.
 	// +optional
 	Import *DataVolumeImport `json:"import,omitempty"`
+
+	// Storage configures the data volume the controller provisions for this
+	// node. Mutually exclusive with Import.
+	// +optional
+	Storage *DataVolumeStorage `json:"storage,omitempty"`
+}
+
+// DataVolumeStorage configures the data volume the controller provisions.
+//
+// The size lives in the volume-claim shape an operator already knows —
+// `resources.requests.storage`, exactly as on a PersistentVolumeClaim — so the
+// size has one home rather than a bespoke scalar sitting beside a claim block.
+// Only the request is accepted: a volume claim has no limit dimension.
+//
+// The rules below narrow the claim to that one key and compare the size through
+// quantity(), for the same reason the compute footprint does — see the Resources
+// type. The value comparison lives HERE rather than on SeiNodeSpec because the
+// path is one hop from this type; the matching presence check has to sit at spec
+// level to fire on a first-time set. Storage performance selection is a sibling
+// field added separately; this type carries the size only.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || !has(oldSelf.resources) || !has(oldSelf.resources.requests) || !('storage' in oldSelf.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity(string(oldSelf.resources.requests['storage']))) == 0",message="dataVolume.storage.resources.requests.storage is create-only: the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path), so a later size edit could never reach the volume; delete and recreate the node to resize"
+// +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || self.resources.requests.all(k, k == 'storage')",message="dataVolume.storage.resources.requests accepts only storage"
+// +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity('0')) > 0",message="dataVolume.storage.resources.requests.storage must be positive"
+type DataVolumeStorage struct {
+	// Resources is the volume claim request; the size is
+	// resources.requests.storage. It OVERRIDES the platform's per-mode default
+	// size (storage.sizeDefault / sizeArchive / sizeSeed, resolved through
+	// noderesource.DefaultStorageForMode); unset falls through to that default.
+	// See noderesource.StorageForNode for the ladder.
+	//
+	// Create-only, enforced by a spec-level rule on SeiNodeSpec (it has to live
+	// there to fire when this whole path is first added). The PVC is created
+	// once — ensure-data-pvc is Get-then-Create with no update path — so a later
+	// size edit could never reach the volume; admission rejects it rather than
+	// accept an inert one.
+	// +optional
+	Resources *VolumeClaimResources `json:"resources,omitempty"`
+}
+
+// VolumeClaimResources is a volume claim's resource block, in the shape a
+// PersistentVolumeClaim uses. Narrow by design rather than
+// corev1.VolumeResourceRequirements: a volume claim carries a request and no
+// limit, so the limit is absent from the schema rather than present and rejected
+// by a rule the reader then has to find.
+type VolumeClaimResources struct {
+	// Requests carries exactly the storage size, narrowed to that one key by the
+	// rule on DataVolumeStorage.
+	//
+	// It is a MAP rather than a struct with a `storage` field on purpose: a
+	// struct lets the API server PRUNE a misspelled key, so `storag: 2Ti` would
+	// provision the per-mode default size while the manifest read as though it
+	// asked for something else. As a map, the rule rejects the unknown key by
+	// name.
+	// +optional
+	Requests corev1.ResourceList `json:"requests,omitempty"`
 }
 
 // DataVolumeImport names a pre-existing PVC to adopt as this node's data volume.

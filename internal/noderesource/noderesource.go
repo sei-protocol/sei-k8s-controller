@@ -345,8 +345,53 @@ func NeedsLongStartup(node *seiv1alpha1.SeiNode) bool {
 	}
 }
 
+// StorageForNode resolves the StorageClass name and the PVC size for a node's
+// data volume. Every consumer of "how big is this node's volume" goes through
+// here — the PVC generator and the imported-PVC size floor — so the two cannot
+// drift apart.
+//
+// Two rungs for the SIZE, highest first:
+//
+//  1. spec.dataVolume.storage.resources.requests.storage — the CRD override
+//  2. the platform per-mode size, via DefaultStorageForMode
+//
+// The CLASS has no CRD rung in this iteration: it always comes from
+// DefaultStorageForMode. Storage performance selection is a separate field.
+//
+// The size is returned as a string, matching DefaultStorageForMode, so callers
+// keep the parse handling they already have — the graceful ParseQuantity in the
+// import floor, and the MustParse in GenerateDataPVC. The CRD rung is an
+// apiserver-validated Quantity, so its canonical string always parses; only the
+// app-config rung carries the pre-existing malformed-value risk.
+func StorageForNode(node *seiv1alpha1.SeiNode, p PlatformConfig) (storageClass string, size string) {
+	storageClass, size = DefaultStorageForMode(NodeMode(node), p)
+	if q := crdStorageSize(node); q != nil {
+		size = q.String()
+	}
+	return storageClass, size
+}
+
+// crdStorageSize returns the size set on spec.dataVolume.storage, or nil when
+// the node leaves it unset — the signal to fall through to the per-mode default.
+//
+// Note that an importing node can never reach the non-nil branch: dataVolume's
+// storage and import are mutually exclusive by CEL. The lookup is written
+// against the field rather than the caller so the floor and the generator share
+// one definition of the size, whatever a later iteration does with that pairing.
+func crdStorageSize(node *seiv1alpha1.SeiNode) *resource.Quantity {
+	dv := node.Spec.DataVolume
+	if dv == nil || dv.Storage == nil || dv.Storage.Resources == nil {
+		return nil
+	}
+	if q, ok := dv.Storage.Resources.Requests[corev1.ResourceStorage]; ok {
+		return &q
+	}
+	return nil
+}
+
 // DefaultStorageForMode returns the StorageClass name and PVC size for a
-// node based on its operating mode.
+// node based on its operating mode. It is the LOWEST size rung; see
+// StorageForNode for the CRD override above it.
 func DefaultStorageForMode(mode string, p PlatformConfig) (storageClass string, size string) {
 	switch mode {
 	case string(seiconfig.ModeArchive):
@@ -701,9 +746,10 @@ func GenerateHeadlessService(node *seiv1alpha1.SeiNode) *corev1.Service {
 // ---------------------------------------------------------------------------
 
 // GenerateDataPVC produces the desired PersistentVolumeClaim for a SeiNode's
-// data volume.
+// data volume. The size comes from StorageForNode, so a CRD-set size overrides
+// the per-mode default.
 func GenerateDataPVC(node *seiv1alpha1.SeiNode, p PlatformConfig) *corev1.PersistentVolumeClaim {
-	sc, size := DefaultStorageForMode(NodeMode(node), p)
+	sc, size := StorageForNode(node, p)
 
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
