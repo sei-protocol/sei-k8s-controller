@@ -138,6 +138,10 @@ type SeiNetworkSpec struct {
 	// +optional
 	Resources *Resources `json:"resources,omitempty"`
 
+	// Scheduling configures worker-node isolation.
+	// +optional
+	Scheduling *SchedulingConfig `json:"scheduling,omitempty"`
+
 	// Sidecar configures the sei-sidecar container on each genesis validator.
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`

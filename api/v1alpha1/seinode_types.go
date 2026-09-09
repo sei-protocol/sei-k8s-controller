@@ -95,6 +95,10 @@ type SeiNodeSpec struct {
 	// +listMapKey=key
 	ConfigValues []ConfigValue `json:"configValues,omitempty"`
 
+	// Scheduling configures worker-node isolation.
+	// +optional
+	Scheduling *SchedulingConfig `json:"scheduling,omitempty"`
+
 	// Sidecar configures the sei-sidecar container.
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
