@@ -149,6 +149,20 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 		return err
 	}
 
+	// A child on its way out is left entirely alone. Under a Delete teardown the
+	// network disappears before its children do — each holds the SeiNode
+	// finalizer — so `kubectl delete --wait` returns, and the next run can
+	// recreate this network while the previous generation's validators are still
+	// terminating. Adopting one would rescue from the collector exactly the stale
+	// validator the teardown just removed; re-speccing one would enroll a doomed
+	// node in the new genesis ceremony. Once it is collected the Owns watch wakes
+	// this reconcile and the Get above takes the create path.
+	if !existing.DeletionTimestamp.IsZero() {
+		log.FromContext(ctx).Info("child SeiNode is terminating; deferring until it is collected",
+			"seinode", existing.Name)
+		return nil
+	}
+
 	updated := false
 	// The network's controller reference is reconciled on every pass, not only
 	// at create, because a live child can be missing it: a Retain teardown
@@ -157,15 +171,25 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 	// child it does not own — it propagates image and labels below, while
 	// garbage collection has no edge to walk, so a later Delete teardown leaves
 	// the stale validator running and the next run collides with it.
-	// SetControllerReference refuses to steal a child another controller owns,
-	// which is the conflict worth failing loud on rather than fighting over.
-	if !metav1.IsControlledBy(existing, network) {
+	//
+	// Only a child with no controller at all is adopted. ctrl.SetControllerReference
+	// builds the reference but does not decide this: its already-owned check
+	// matches an existing reference on name alone, so left to itself it would
+	// rewrite a stale UID in place and take a child belonging to a previous
+	// generation of this same-named network. A child that still names another
+	// controller is a genuine conflict — two owners over one validator — and
+	// fails loud rather than being fought over.
+	switch controller := metav1.GetControllerOf(existing); {
+	case controller == nil:
 		if err := ctrl.SetControllerReference(network, existing, r.Scheme); err != nil {
 			return fmt.Errorf("adopting SeiNode %s: %w", existing.Name, err)
 		}
 		r.Recorder.Eventf(network, corev1.EventTypeNormal, "SeiNodeAdopted",
 			"Set owner reference on existing SeiNode %s", existing.Name)
 		updated = true
+	case controller.UID != network.UID:
+		return fmt.Errorf("SeiNode %s is controlled by %s %s (uid %s), so this SeiNetwork (uid %s) will not adopt it",
+			existing.Name, controller.Kind, controller.Name, controller.UID, network.UID)
 	}
 	if !maps.Equal(existing.Labels, desired.Labels) {
 		existing.Labels = desired.Labels

@@ -35,7 +35,7 @@ func TestEnsureSeiNode_SetsControllerReferenceOnCreate(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("syncer", testNamespace)
+	network := newTestNetwork(testSyncerName, testNamespace)
 	network.UID = testNetUID
 	r := newPlanTestReconciler(t, network)
 
@@ -68,13 +68,13 @@ func TestEnsureSeiNode_ReadoptsOrphanedChild(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      testSyncerOrd0,
 			Namespace: testNamespace,
-			Labels:    map[string]string{seinetworkLabel: "syncer"},
+			Labels:    map[string]string{seinetworkLabel: testSyncerName},
 			// No owner references: a prior Retain teardown stripped them.
 		},
 		Spec: seiv1alpha1.SeiNodeSpec{Image: "ghcr.io/sei-protocol/seid:v0.9.0"},
 	}
 
-	network := newTestNetwork("syncer", testNamespace)
+	network := newTestNetwork(testSyncerName, testNamespace)
 	network.UID = testNetUID
 	r := newPlanTestReconciler(t, network, orphan)
 
@@ -115,13 +115,13 @@ func TestEnsureSeiNode_RefusesChildOwnedByAnotherController(t *testing.T) {
 		},
 	}
 
-	network := newTestNetwork("syncer", testNamespace)
+	network := newTestNetwork(testSyncerName, testNamespace)
 	network.UID = testNetUID
 	r := newPlanTestReconciler(t, network, foreign)
 
 	err := r.ensureSeiNode(ctx, network, 0)
 	g.Expect(err).To(HaveOccurred(), "must not steal a child another controller owns")
-	g.Expect(err.Error()).To(ContainSubstring("adopting SeiNode"))
+	g.Expect(err.Error()).To(ContainSubstring("is controlled by"))
 
 	child := &seiv1alpha1.SeiNode{}
 	g.Expect(r.Get(ctx, types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}, child)).To(Succeed())
@@ -136,7 +136,7 @@ func TestEnsureSeiNode_OwnedChildIsNoOp(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
-	network := newTestNetwork("syncer", testNamespace)
+	network := newTestNetwork(testSyncerName, testNamespace)
 	network.UID = testNetUID
 	r := newPlanTestReconciler(t, network)
 
@@ -291,6 +291,98 @@ func TestReconcileSeiNodes_DeletingNetwork_DoesNotRecreateCollectedChild(t *test
 	g.Expect(nodes.Items).To(HaveLen(1), "a collected child must not be recreated mid-cascade")
 	g.Expect(network.Status.IncumbentNodes).To(ConsistOf(survivor.Name),
 		"the incumbent list still tracks what is left")
+}
+
+// A Delete teardown removes the SeiNetwork before its children, because each
+// child holds the SeiNode finalizer. So `kubectl delete --wait` returns and the
+// next run can recreate the same-named network while the previous generation's
+// validators are still terminating. Adopting one would hand it a live owner and
+// rescue from the collector exactly the stale validator the teardown removed —
+// the bug this whole spec exists to close — and would enroll a doomed node in
+// the new genesis ceremony.
+func TestEnsureSeiNode_DoesNotAdoptTerminatingChild(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	const oldNetUID types.UID = "previous-generation-uid"
+	terminating := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testSyncerOrd0,
+			Namespace: testNamespace,
+			Labels:    map[string]string{seinetworkLabel: testSyncerName},
+			// Still held by the node controller's finalizer, still owned by the
+			// generation the collector is tearing down.
+			Finalizers: []string{"sei.io/seinode-finalizer"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: testAPIVersion,
+				Kind:       testKind,
+				Name:       testSyncerName,
+				UID:        oldNetUID,
+				Controller: new(true),
+			}},
+		},
+		Spec: seiv1alpha1.SeiNodeSpec{Image: "ghcr.io/sei-protocol/seid:v0.9.0"},
+	}
+
+	network := newTestNetwork(testSyncerName, testNamespace)
+	network.UID = testNetUID
+	r := newPlanTestReconciler(t, network, terminating)
+
+	childKey := types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}
+	g.Expect(r.Delete(ctx, terminating)).To(Succeed()) // finalizer holds it in Terminating
+
+	live := &seiv1alpha1.SeiNode{}
+	g.Expect(r.Get(ctx, childKey, live)).To(Succeed())
+	g.Expect(live.DeletionTimestamp).NotTo(BeNil(), "fixture must actually be terminating")
+	rvBefore := live.ResourceVersion
+
+	g.Expect(r.ensureSeiNode(ctx, network, 0)).To(Succeed())
+
+	g.Expect(r.Get(ctx, childKey, live)).To(Succeed())
+	g.Expect(metav1.GetControllerOf(live).UID).To(Equal(oldNetUID),
+		"a terminating child must not be re-owned; that would rescue it from the collector")
+	g.Expect(live.ResourceVersion).To(Equal(rvBefore),
+		"a terminating child must not be written at all")
+	g.Expect(live.Spec.Image).To(Equal("ghcr.io/sei-protocol/seid:v0.9.0"),
+		"a doomed node must not be re-specced into the new ceremony")
+}
+
+// The same hazard without a DeletionTimestamp: a live child still owned by a
+// previous generation of this same-named network. ctrl.SetControllerReference
+// compares an existing reference by name, not UID, so on its own it would
+// rewrite the stale UID in place and quietly take the child. Refuse instead.
+func TestEnsureSeiNode_RefusesChildOwnedByAPreviousGeneration(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	const oldNetUID types.UID = "previous-generation-uid"
+	stale := &seiv1alpha1.SeiNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testSyncerOrd0,
+			Namespace: testNamespace,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: testAPIVersion,
+				Kind:       testKind,
+				Name:       testSyncerName, // same name, older generation
+				UID:        oldNetUID,
+				Controller: new(true),
+			}},
+		},
+	}
+
+	network := newTestNetwork(testSyncerName, testNamespace)
+	network.UID = testNetUID
+	r := newPlanTestReconciler(t, network, stale)
+
+	err := r.ensureSeiNode(ctx, network, 0)
+	g.Expect(err).To(HaveOccurred(),
+		"a child owned by a previous generation must not be silently re-owned")
+	g.Expect(err.Error()).To(ContainSubstring("is controlled by"))
+
+	live := &seiv1alpha1.SeiNode{}
+	g.Expect(r.Get(ctx, types.NamespacedName{Name: testSyncerOrd0, Namespace: testNamespace}, live)).To(Succeed())
+	g.Expect(metav1.GetControllerOf(live).UID).To(Equal(oldNetUID),
+		"the stale owner reference must be left for the collector to act on")
 }
 
 // --- fixtures ---
