@@ -183,7 +183,8 @@ the resource that ran it.
 
 - What happens when one validator lags or restarts while the highest committed height keeps advancing? The phase stays `Ready` — see Requirement 1.
 - What happens when the network controller cannot read the committed height at all? The observed height stops advancing, so the grace window governs — a within-window gap holds `Ready`, a longer gap becomes `Degraded` — see Requirement 1.
-- What happens when a node controller stops reconciling and freezes a child's committed height? The stale read time marks the child as unreadable, not stalled, so a controller-side outage does not read as a chain stall — see Requirement 2.
+- What happens when one child of many has a stale read time? The network controller excludes that child, so a stale minority does not read as a stall and the phase stays `Ready` from the fresh children — see Requirement 2.
+- What happens when the node controller stops reconciling and freezes every child's read time? The whole signal is unreadable, so the phase becomes `Degraded` past the grace window and the `Producing` reason is signal-unreadable, which the runbook reads as a controller outage, not a chain stall — see Requirement 1 and Requirement 2.
 - What happens when a produced network stops committing past the grace window? The phase is `Degraded`, and the `Producing` condition reason distinguishes it from a `Degraded` caused by a failed child — see Requirement 1 and Requirement 2.
 - What happens when a task fails part way through a plan? The plan keeps the task at `Failed`, distinguishable from the done tasks — see Requirement 3.
 
@@ -204,8 +205,8 @@ blocks, so that I start load against a network that runs.
 1. THE producing signal SHALL be the highest committed height any reachable validator reports.
 2. WHEN the producing signal exceeds the observed height, THE network controller SHALL record the new height and the observation time as the observed height on the SeiNetwork status.
 3. WHILE no higher-precedence phase applies, AND the children are `Running`, AND the observed height advanced within the grace window, THE network controller SHALL report the network phase as `Ready`.
-4. WHILE the children are `Running` and the observed height has never advanced past the genesis height, THE network controller SHALL report the network phase as `Initializing`.
-5. WHILE the children are `Running` and the observed height advanced past the genesis height before but not within the grace window, THE network controller SHALL report the network phase as `Degraded`.
+4. WHILE the children are `Running` and the observed height has not advanced since the network first recorded one, THE network controller SHALL report the network phase as `Initializing`.
+5. WHILE the children are `Running` and the observed height advanced at least once before but not within the grace window, THE network controller SHALL report the network phase as `Degraded`.
 6. IF the network controller cannot read the committed height, THEN THE network controller SHALL leave the observed height unchanged, so the grace window measured from its observation time governs the outcome.
 7. THE network controller SHALL measure the grace window from the observed height's observation time.
 
@@ -222,10 +223,11 @@ and a forming network still receives traffic.
 1. THE producing signal SHALL reflect the committed height advancing, not that an endpoint responds.
 2. THE sidecar SHALL report the committed height on its status surface, as an optional field whose absence means the height is unreadable, not zero.
 3. THE node controller SHALL read the committed height from the sidecar and surface it, with the time it read it, on the SeiNode status.
-4. THE network controller SHALL take the producing signal from the committed heights on the child SeiNode statuses, and SHALL treat a child whose read time is stale as unreadable, not stalled.
-5. THE network controller SHALL report the `Producing` condition, always present, carrying a reason from the set: advancing, awaiting the first block, stalled, and signal unreadable, with the observed generation.
-6. THE controller SHALL NOT use the readiness probe of a validator pod as the producing gate.
-7. WHILE a validator forms consensus and commits no block, THE controller SHALL leave the pod eligible for peer traffic.
+4. THE network controller SHALL take the producing signal from the committed heights on the child SeiNode statuses, and SHALL exclude a child whose read time is stale, so a stale minority does not read as a stall.
+5. WHILE every child read time is stale, THE network controller SHALL set the `Producing` reason to signal unreadable, and let the grace window drive the phase.
+6. THE network controller SHALL report the `Producing` condition, always present, carrying a reason from the set: advancing, awaiting the first block, stalled, and signal unreadable, with the observed generation.
+7. THE controller SHALL NOT use the readiness probe of a validator pod as the producing gate.
+8. WHILE a validator forms consensus and commits no block, THE controller SHALL leave the pod eligible for peer traffic.
 
 ### Requirement 3: The plan marks the running task
 
@@ -288,8 +290,8 @@ role that decides.
   *Verifier:* judgement — a platform engineer reads the condition on a not-producing network and confirms it is present, `False`, and carries one of the named reasons.
 - **SC-012**: A `Degraded` from a stalled chain is distinguishable from a `Degraded` from a failed child.
   *Verifier:* judgement — a platform engineer reads the `Producing` condition reason on a `Degraded` network and confirms it names the stall.
-- **SC-013**: A frozen child read time reads as unreadable, not as a chain stall.
-  *Verifier:* judgement — a platform engineer stops a node controller and confirms the network treats the stale child as unreadable rather than dropping to `Degraded` on a producing chain.
+- **SC-013**: A stale minority of children does not drop the network off `Ready`, and a wholly unreadable signal surfaces the signal-unreadable reason while the phase still goes `Degraded` past the window.
+  *Verifier:* judgement — a platform engineer makes one child of many stale and confirms the phase stays `Ready` from the fresh children, then stops the node controller and confirms the `Producing` reason is signal-unreadable and the phase becomes `Degraded` past the window.
 
 ## Assumptions
 
@@ -298,7 +300,9 @@ role that decides.
 - The observed height — a height plus its observation time — lives on the SeiNetwork status, not on the `Producing` condition. `SetStatusCondition` moves a condition's transition time only when the status changes, so it cannot record "when the height last advanced". The stall detector needs the prior height and its time to notice that the height stopped, and that state must survive a controller restart or a leader change, so it belongs on the status.
 - The `Producing` condition status flips to `False` when the observed height has not advanced within the grace window. Its reason distinguishes four cases, and the reason strings are the public API for runbooks and alerts: `HeightAdvancing`, `AwaitingFirstBlock`, `HeightStalled`, and `SignalUnreadable`. `HeightStalled` on a `Degraded` network means the chain wedged, which a `Degraded` caused by a failed child does not carry.
 - The grace window is a multiple of the status poll interval, which is about 30 seconds, not a multiple of the block time. An observed height is up to about 60 seconds stale end to end across the node and network reconciles, so a block-time window would flap `Ready` and `Degraded` on sampling jitter with nothing wrong on the chain. The window is configurable.
-- The committed height on the SeiNode status carries the time the node controller read it. The network controller treats a child whose read time is older than a staleness bound as unreadable, so a node controller that stopped reconciling reads as a controller-side outage, not a chain stall.
+- The committed height on the SeiNode status carries the time the node controller read it. The network controller excludes a child whose read time is older than a staleness bound, so a stale minority does not read as a stall. When every child is stale — a node controller that stopped reconciling freezes them all at once — the whole signal is unreadable: the observed height stops advancing, the grace window drives the phase to `Degraded`, and the `Producing` reason is `SignalUnreadable`, so the runbook reads a controller outage rather than a chain stall. Both an unreadable signal and a real stall reach `Degraded`, which keeps the bound; the reason tells them apart.
+- The network distinguishes a network that has not yet advanced (`Initializing`) from one that advanced and then stalled (`Degraded`) from the observed-height history — whether the observed height has risen above the value the network first recorded — not from the genesis height, which is on no status. This reads correctly for a network that starts at its genesis height and for one restored from a snapshot or a state sync, whose first reading already exceeds genesis. The `Producing` reason carries this history across a controller restart.
+- The observed height need not capture every advance. The grace window only needs it fresh within the window, so the network controller coalesces updates: a producing network records the observed height at least once well within each grace window rather than on every reconcile. This avoids a guaranteed per-poll status write that would bump the resource version every cycle and raise the optimistic-lock conflict rate.
 - The sidecar height field is optional, and its absence means unreadable, not zero. A controller reading an older sidecar image sees the field absent and treats the height as unreadable, so an image that predates the field does not read as a fleet-wide stall of zero. The ordered deploy puts the sidecar image before the controller, which keeps the normal direction safe.
 - The sidecar's status endpoint returns only a two-value readiness enum today, so the committed height does not cross the sidecar contract. Carrying it extends the sidecar API. This is in-scope cross-module work, and it follows the controller's ordered sidecar-image deploy and its rollback discipline; the contract module stays free of the chain graph.
 - The node controller already holds a sidecar client, so it reads the committed height and surfaces it on the SeiNode status. The network controller reads the child SeiNode statuses it already consumes, so it gains no new sidecar client and no per-poll fan-out to child sidecars.
