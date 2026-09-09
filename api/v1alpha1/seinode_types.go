@@ -65,6 +65,20 @@ type SeiNodeSpec struct {
 	// +optional
 	Overrides map[string]string `json:"overrides,omitempty"`
 
+	// ConfigValues are per-file config entries, each naming the config file, the
+	// key within it, and the value. They sit BESIDE Overrides, which is
+	// unchanged: Overrides routes dotted keys through the sei-config unified
+	// schema, while a ConfigValue names its file and takes no allow-list check,
+	// so an arbitrary key reaches the node.
+	//
+	// The same field, with the same shape, is on SeiNetworkSpec; a SeiNetwork
+	// copies its entries onto every validator child.
+	// +listType=map
+	// +listMapKey=file
+	// +listMapKey=key
+	// +optional
+	ConfigValues []ConfigValue `json:"configValues,omitempty"`
+
 	// Sidecar configures the sei-sidecar container.
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`

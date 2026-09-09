@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -18,10 +19,10 @@ import (
 )
 
 // reconcileSeiNodes ensures the desired child SeiNodes exist with the desired
-// spec (image/sidecar/overrides/labels propagated in-place every reconcile)
-// and refreshes IncumbentNodes for the genesis planner. Mutations are skipped
-// while a plan is in progress (guarding the ceremony's child-Peers writes) or
-// while paused.
+// spec (image/sidecar/overrides/configValues/labels propagated in-place every
+// reconcile) and refreshes IncumbentNodes for the genesis planner. Mutations
+// are skipped while a plan is in progress (guarding the ceremony's child-Peers
+// writes) or while paused.
 func (r *SeiNetworkReconciler) reconcileSeiNodes(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
 	if network.Spec.Paused {
 		return r.populateIncumbentNodes(ctx, network)
@@ -166,6 +167,16 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 		existing.Spec.Overrides = desired.Spec.Overrides
 		updated = true
 	}
+	// The network's ConfigValues are authoritative for its children, so assign
+	// the WHOLE desired set rather than merging entry-by-entry: whole-set
+	// replacement is what makes a removed parent entry disappear from the child
+	// and a direct child edit reconcile back. Semantic.DeepEqual (not
+	// slices.Equal) so a nil parent set and an empty one compare equal, which
+	// keeps the no-op reconcile from issuing an Update.
+	if !equality.Semantic.DeepEqual(existing.Spec.ConfigValues, desired.Spec.ConfigValues) {
+		existing.Spec.ConfigValues = desired.Spec.ConfigValues
+		updated = true
+	}
 	// No identity / Peers / DataVolume / Resources sync below — deliberate, all
 	// create-time only:
 	//   - Peers are controller-owned: the genesis ceremony's collect-and-set-peers
@@ -206,14 +217,22 @@ func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.
 	podLabels[seinetworkLabel] = network.Name
 
 	spec := seiv1alpha1.SeiNodeSpec{
-		ChainID:    gc.ChainID,
-		Image:      network.Spec.Image,
-		Overrides:  maps.Clone(network.Spec.ConfigOverrides),
-		Sidecar:    network.Spec.Sidecar.DeepCopy(),
-		DataVolume: network.Spec.DataVolume.DeepCopy(),
-		Resources:  network.Spec.Resources.DeepCopy(),
-		PodLabels:  podLabels,
-		Paused:     network.Spec.Paused,
+		ChainID:   gc.ChainID,
+		Image:     network.Spec.Image,
+		Overrides: maps.Clone(network.Spec.ConfigOverrides),
+		// slices.Clone is a full deep copy here because ConfigValue is
+		// scalar-only (three strings) — same reasoning as maps.Clone above. It
+		// gives the child its own backing array, so a multi-replica pool does
+		// not hand every child one shared slice that a later write through any
+		// of them would rewrite. Adding a pointer, slice, or map field to
+		// ConfigValue makes this shallow; switch to the generated per-element
+		// DeepCopy if that happens.
+		ConfigValues: slices.Clone(network.Spec.ConfigValues),
+		Sidecar:      network.Spec.Sidecar.DeepCopy(),
+		DataVolume:   network.Spec.DataVolume.DeepCopy(),
+		Resources:    network.Spec.Resources.DeepCopy(),
+		PodLabels:    podLabels,
+		Paused:       network.Spec.Paused,
 		Validator: &seiv1alpha1.ValidatorSpec{
 			GenesisCeremony: &seiv1alpha1.GenesisCeremonyNodeConfig{
 				ChainID:        gc.ChainID,

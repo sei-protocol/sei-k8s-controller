@@ -224,6 +224,33 @@ type ShadowResultConfig struct {
 	CanonicalRPC string `json:"canonicalRpc"`
 }
 
+// ConfigValue is one config override entry: the config file it lands in, the
+// key within that file, and the value to set.
+//
+// DISTINCT from the dotted-key Overrides map, which routes through the
+// sei-config unified schema — that map is schema-validated and carries the
+// chain.freeze_height guard. A ConfigValue names its file explicitly, so it
+// bypasses the controller's key-to-file mapping and takes NO allow-list or
+// known-key check: an arbitrary key reaches the node. The operator owns the
+// result, which is the point — a new seid key works with no controller change.
+//
+// Entries are keyed by (file, key), so one key per file per node.
+type ConfigValue struct {
+	// File is the config file name the key lands in, e.g. "config.toml" or "app.toml".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	File string `json:"file"`
+
+	// Key is the key within File, e.g. "evm.enable".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Key string `json:"key"`
+
+	// Value is the value to set for Key.
+	// +kubebuilder:validation:MaxLength=4096
+	Value string `json:"value"`
+}
+
 // SidecarConfig configures the sei-sidecar container.
 type SidecarConfig struct {
 	// Image overrides the sidecar container image for this node, in place of the

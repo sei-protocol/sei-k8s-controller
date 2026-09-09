@@ -76,6 +76,23 @@ type SeiNetworkSpec struct {
 	// +optional
 	ConfigOverrides map[string]string `json:"configOverrides,omitempty"`
 
+	// ConfigValues are per-file config entries, each naming the config file, the
+	// key within it, and the value. They sit BESIDE ConfigOverrides, which is
+	// unchanged: ConfigOverrides routes dotted keys through the sei-config
+	// unified schema, while a ConfigValue names its file and takes no allow-list
+	// check, so an arbitrary key reaches the validators.
+	//
+	// This is the same field, with the same shape, as SeiNodeSpec.ConfigValues —
+	// one surface for both Kinds. The controller copies the whole set onto every
+	// validator child, at creation and on every reconcile: changing an entry,
+	// removing one, or editing a child directly all converge the child back onto
+	// this set (see ensureSeiNode).
+	// +listType=map
+	// +listMapKey=file
+	// +listMapKey=key
+	// +optional
+	ConfigValues []ConfigValue `json:"configValues,omitempty"`
+
 	// DataVolume configures the data PersistentVolumeClaim for each genesis
 	// validator. The ceremony-generated consensus identity lives here, so
 	// DeletionPolicy defaults to Retain.

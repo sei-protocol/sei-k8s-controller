@@ -24,6 +24,16 @@ const (
 
 	testOverrideKey = "evm.http_port"
 	testOverrideVal = "8545"
+
+	// Config-value fixtures. testConfigKey is deliberately a key no sei-config
+	// allow-list knows, so the tests exercise the unvalidated path (SC-006).
+	testConfigFile     = "config.toml"
+	testConfigKey      = "evm.enable"
+	testConfigVal      = "true"
+	testConfigValFalse = "false"
+	testConfigFileApp  = "app.toml"
+	testConfigKeyApp   = "state-sync.snapshot-interval"
+	testConfigValApp   = "1000"
 )
 
 // newTestNetwork builds a SeiNetwork with a required genesis ceremony — the

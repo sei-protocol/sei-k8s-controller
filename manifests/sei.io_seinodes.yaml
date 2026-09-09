@@ -147,6 +147,55 @@ spec:
                 minLength: 1
                 pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+              configValues:
+                description: |-
+                  ConfigValues are per-file config entries, each naming the config file, the
+                  key within it, and the value. They sit BESIDE Overrides, which is
+                  unchanged: Overrides routes dotted keys through the sei-config unified
+                  schema, while a ConfigValue names its file and takes no allow-list check,
+                  so an arbitrary key reaches the node.
+
+                  The same field, with the same shape, is on SeiNetworkSpec; a SeiNetwork
+                  copies its entries onto every validator child.
+                items:
+                  description: |-
+                    ConfigValue is one config override entry: the config file it lands in, the
+                    key within that file, and the value to set.
+
+                    DISTINCT from the dotted-key Overrides map, which routes through the
+                    sei-config unified schema — that map is schema-validated and carries the
+                    chain.freeze_height guard. A ConfigValue names its file explicitly, so it
+                    bypasses the controller's key-to-file mapping and takes NO allow-list or
+                    known-key check: an arbitrary key reaches the node. The operator owns the
+                    result, which is the point — a new seid key works with no controller change.
+
+                    Entries are keyed by (file, key), so one key per file per node.
+                  properties:
+                    file:
+                      description: File is the config file name the key lands in,
+                        e.g. "config.toml" or "app.toml".
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    key:
+                      description: Key is the key within File, e.g. "evm.enable".
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    value:
+                      description: Value is the value to set for Key.
+                      maxLength: 4096
+                      type: string
+                  required:
+                  - file
+                  - key
+                  - value
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - file
+                - key
+                x-kubernetes-list-type: map
               dataVolume:
                 description: |-
                   DataVolume configures the data PersistentVolumeClaim for this node.

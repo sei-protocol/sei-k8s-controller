@@ -232,6 +232,263 @@ func TestGenerateSeiNode_OverridesNotAliased(t *testing.T) {
 		"overwriting an existing key in the child's overrides must not mutate the network spec")
 }
 
+// networkConfigValues is the two-file config-value set the ConfigValues tests
+// declare on the network. A fresh slice per call, so a test that mutates the
+// parent set cannot leak into the next one.
+func networkConfigValues() []seiv1alpha1.ConfigValue {
+	return []seiv1alpha1.ConfigValue{
+		{File: testConfigFile, Key: testConfigKey, Value: testConfigVal},
+		{File: testConfigFileApp, Key: testConfigKeyApp, Value: testConfigValApp},
+	}
+}
+
+// ensureAllChildren runs ensureSeiNode across every replica ordinal, which is
+// what reconcileSeiNodes does for a network not under an active plan.
+func ensureAllChildren(t *testing.T, ctx context.Context, r *SeiNetworkReconciler, network *seiv1alpha1.SeiNetwork) {
+	t.Helper()
+	g := NewWithT(t)
+	for i := range int(network.Spec.Replicas) {
+		g.Expect(r.ensureSeiNode(ctx, network, i)).To(Succeed(), "ensuring ordinal %d", i)
+	}
+}
+
+// childNames lists the child SeiNode names for every replica ordinal.
+func childNames(network *seiv1alpha1.SeiNetwork) []string {
+	names := make([]string, 0, network.Spec.Replicas)
+	for i := range int(network.Spec.Replicas) {
+		names = append(names, seiNodeName(network, i))
+	}
+	return names
+}
+
+// getChild reads one child SeiNode by name.
+func getChild(t *testing.T, ctx context.Context, r *SeiNetworkReconciler, name string) *seiv1alpha1.SeiNode {
+	t.Helper()
+	g := NewWithT(t)
+	child := &seiv1alpha1.SeiNode{}
+	g.Expect(r.Get(ctx, types.NamespacedName{Name: name, Namespace: testNamespace}, child)).To(Succeed())
+	return child
+}
+
+// A config value on the network is stamped onto every validator child at
+// creation, so one entry configures the whole pool (spec Requirement 2,
+// criterion 1). Checked at the generate layer, across ordinals.
+func TestGenerateSeiNode_StampsConfigValues(t *testing.T) {
+	g := NewWithT(t)
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.Spec.ConfigValues = networkConfigValues()
+
+	for _, ordinal := range []int{0, 1, 2} {
+		node := generateSeiNode(network, ordinal)
+
+		g.Expect(node.Spec.ConfigValues).To(ConsistOf(networkConfigValues()),
+			"ordinal %d must carry the network's whole config-value set", ordinal)
+	}
+}
+
+// An unset spec.configValues leaves the child's field nil — no empty slice that
+// would read as "the operator declared an empty set".
+func TestGenerateSeiNode_NoConfigValuesLeavesChildNil(t *testing.T) {
+	g := NewWithT(t)
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	g.Expect(network.Spec.ConfigValues).To(BeNil())
+
+	g.Expect(generateSeiNode(network, 0).Spec.ConfigValues).To(BeNil())
+}
+
+// generateSeiNode must not alias the network's ConfigValues backing array into
+// the child. Aliasing is invisible with one replica and corrupts the pool with
+// several: every child would share one slice, so a write through any of them
+// would rewrite the others. Mirrors TestGenerateSeiNode_ResourcesNotAliased.
+func TestGenerateSeiNode_ConfigValuesNotAliased(t *testing.T) {
+	g := NewWithT(t)
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.Spec.ConfigValues = networkConfigValues()
+
+	child := generateSeiNode(network, 0)
+
+	// Write through the CHILD's slice. An aliased child would reach the parent.
+	child.Spec.ConfigValues[0].Value = "mutated"
+	child.Spec.ConfigValues = append(child.Spec.ConfigValues,
+		seiv1alpha1.ConfigValue{File: testConfigFile, Key: "added", Value: "1"})
+
+	g.Expect(network.Spec.ConfigValues).To(ConsistOf(networkConfigValues()),
+		"writing through the child's config values must not mutate the network spec")
+
+	// And the reverse direction: a later parent edit must not reach an
+	// already-generated child.
+	other := generateSeiNode(network, 1)
+	network.Spec.ConfigValues[0].Value = "parent-changed"
+
+	g.Expect(other.Spec.ConfigValues[0].Value).To(Equal(testConfigVal),
+		"an already-generated child must not follow a later parent edit")
+}
+
+// Editing spec.configValues on a live network propagates in-place to every
+// existing child (spec Requirement 2, criterion 2 — the create half of SC-001).
+func TestEnsureSeiNode_PropagatesConfigValues(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork("syncer", testNamespace)
+	r := newPlanTestReconciler(t, network)
+	ensureAllChildren(t, ctx, r, network)
+
+	for _, name := range childNames(network) {
+		g.Expect(getChild(t, ctx, r, name).Spec.ConfigValues).To(BeEmpty(),
+			"%s starts with no config values", name)
+	}
+
+	network.Spec.ConfigValues = networkConfigValues()
+	ensureAllChildren(t, ctx, r, network)
+
+	for _, name := range childNames(network) {
+		g.Expect(getChild(t, ctx, r, name).Spec.ConfigValues).
+			To(ConsistOf(networkConfigValues()), "%s must hold the network's config values", name)
+	}
+}
+
+// The network's config values are authoritative for its children, and the sync
+// is a WHOLE-SET replacement rather than a per-entry merge. That single property
+// is what makes all four of these converge: a changed value, a removed entry, a
+// cleared set, and a direct edit to a child (spec Requirement 2, criteria 2-3;
+// SC-005, SC-008).
+func TestEnsureSeiNode_ConfigValuesDriftSync(t *testing.T) {
+	// mutate runs after the children exist, and edits either the parent spec or
+	// a child directly. want is the set every child must hold afterwards.
+	cases := []struct {
+		name   string
+		mutate func(t *testing.T, ctx context.Context, r *SeiNetworkReconciler, network *seiv1alpha1.SeiNetwork)
+		want   []seiv1alpha1.ConfigValue
+	}{
+		{
+			name: "changed parent value reaches every child",
+			mutate: func(_ *testing.T, _ context.Context, _ *SeiNetworkReconciler, network *seiv1alpha1.SeiNetwork) {
+				network.Spec.ConfigValues[0].Value = testConfigValFalse
+			},
+			want: []seiv1alpha1.ConfigValue{
+				{File: testConfigFile, Key: testConfigKey, Value: testConfigValFalse},
+				{File: testConfigFileApp, Key: testConfigKeyApp, Value: testConfigValApp},
+			},
+		},
+		{
+			name: "removed parent entry disappears from every child",
+			mutate: func(_ *testing.T, _ context.Context, _ *SeiNetworkReconciler, network *seiv1alpha1.SeiNetwork) {
+				network.Spec.ConfigValues = network.Spec.ConfigValues[:1]
+			},
+			want: []seiv1alpha1.ConfigValue{
+				{File: testConfigFile, Key: testConfigKey, Value: testConfigVal},
+			},
+		},
+		{
+			name: "clearing the parent set empties every child",
+			mutate: func(_ *testing.T, _ context.Context, _ *SeiNetworkReconciler, network *seiv1alpha1.SeiNetwork) {
+				network.Spec.ConfigValues = nil
+			},
+			want: nil,
+		},
+		{
+			name: "a direct edit to a child reconciles back to the network set",
+			mutate: func(t *testing.T, ctx context.Context, r *SeiNetworkReconciler, network *seiv1alpha1.SeiNetwork) {
+				t.Helper()
+				g := NewWithT(t)
+				child := getChild(t, ctx, r, seiNodeName(network, 1))
+				patch := client.MergeFrom(child.DeepCopy())
+				child.Spec.ConfigValues = []seiv1alpha1.ConfigValue{
+					{File: testConfigFile, Key: "operator.went.rogue", Value: "yes"},
+				}
+				g.Expect(r.Patch(ctx, child, patch)).To(Succeed())
+			},
+			want: networkConfigValues(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			ctx := context.Background()
+
+			network := newTestNetwork("syncer", testNamespace)
+			network.Spec.ConfigValues = networkConfigValues()
+			r := newPlanTestReconciler(t, network)
+			ensureAllChildren(t, ctx, r, network)
+
+			tc.mutate(t, ctx, r, network)
+			ensureAllChildren(t, ctx, r, network)
+
+			for _, name := range childNames(network) {
+				got := getChild(t, ctx, r, name).Spec.ConfigValues
+				if tc.want == nil {
+					g.Expect(got).To(BeEmpty(), "%s must hold no config values", name)
+					continue
+				}
+				g.Expect(got).To(ConsistOf(tc.want), "%s must converge on the network set", name)
+			}
+		})
+	}
+}
+
+// configValues sits BESIDE the pre-existing configOverrides; both propagate on
+// the same reconcile and neither clobbers the other (spec SC-007).
+func TestEnsureSeiNode_ConfigValuesAndOverridesCoexist(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork("syncer", testNamespace)
+	network.Spec.ConfigOverrides = map[string]string{testOverrideKey: testOverrideVal}
+	network.Spec.ConfigValues = networkConfigValues()
+
+	r := newPlanTestReconciler(t, network)
+	ensureAllChildren(t, ctx, r, network)
+
+	for _, name := range childNames(network) {
+		child := getChild(t, ctx, r, name)
+		g.Expect(child.Spec.Overrides).To(HaveKeyWithValue(testOverrideKey, testOverrideVal),
+			"%s keeps the dotted-key overrides", name)
+		g.Expect(child.Spec.ConfigValues).To(ConsistOf(networkConfigValues()),
+			"%s also carries the config values", name)
+	}
+
+	// Editing one must not disturb the other.
+	network.Spec.ConfigValues[0].Value = testConfigValFalse
+	ensureAllChildren(t, ctx, r, network)
+
+	for _, name := range childNames(network) {
+		child := getChild(t, ctx, r, name)
+		g.Expect(child.Spec.Overrides).To(HaveKeyWithValue(testOverrideKey, testOverrideVal),
+			"%s: a config-value edit must not clear the overrides map", name)
+		g.Expect(child.Spec.ConfigValues).To(ContainElement(
+			seiv1alpha1.ConfigValue{File: testConfigFile, Key: testConfigKey, Value: testConfigValFalse}))
+	}
+}
+
+// Reconcile stays idempotent with config values set: a second pass over an
+// unchanged network must issue NO child Update, so nothing downstream (a config
+// re-apply, a seid restart) is triggered by a bare requeue. The slice compare
+// has to be semantic for this — a per-field or pointer compare would see drift
+// every loop and update forever.
+func TestEnsureSeiNode_NoOpWhenConfigValuesUnchanged(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork("syncer", testNamespace)
+	network.Spec.ConfigValues = networkConfigValues()
+	r := newPlanTestReconciler(t, network)
+	ensureAllChildren(t, ctx, r, network)
+
+	before := make(map[string]string, network.Spec.Replicas)
+	for _, name := range childNames(network) {
+		before[name] = getChild(t, ctx, r, name).ResourceVersion
+	}
+
+	ensureAllChildren(t, ctx, r, network)
+
+	for _, name := range childNames(network) {
+		g.Expect(getChild(t, ctx, r, name).ResourceVersion).To(Equal(before[name]),
+			"%s: an unchanged second reconcile must not bump resourceVersion", name)
+	}
+}
+
 // networkResources is the pool footprint used by the spec.resources tests.
 func networkResources(cpu, mem string) *seiv1alpha1.Resources {
 	return &seiv1alpha1.Resources{
