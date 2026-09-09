@@ -65,6 +65,13 @@ type SeiNodeSpec struct {
 	// +optional
 	Overrides map[string]string `json:"overrides,omitempty"`
 
+	// ConfigValues supplies typed values by config file and dotted TOML path.
+	// +optional
+	// +listType=map
+	// +listMapKey=fileName
+	// +listMapKey=key
+	ConfigValues []ConfigValue `json:"configValues,omitempty"`
+
 	// Sidecar configures the sei-sidecar container.
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
