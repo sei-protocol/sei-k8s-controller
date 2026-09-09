@@ -27,9 +27,10 @@ teardown leaves no cost behind.
 
 The controller creates a node's data volume as a standalone PVC, owned by the
 SeiNode, so a node delete garbage-collects the PVC. The storage class reclaim
-policy is already `Delete` on the classes a benchmark's `full` and `validator`
-nodes use; only the archive class retains. The disk nevertheless survives a
-teardown, because nothing deletes the PVC. See Corrections below.
+policy is already `Delete` on the class a benchmark's `full` and `validator` nodes
+use; of the classes this repository defines, only the archive class retains. The
+disk nevertheless survives a teardown, because nothing deletes the PVC. See
+Corrections below.
 
 ## Corrections (2026-09-09)
 
@@ -39,7 +40,7 @@ Three of its load-bearing factual claims are false, and two of its requirements
 cannot both be satisfied. Each correction below cites the file and line that
 settles it.
 
-### C-1. The reclaim policy is already `Delete` on every benchmark class
+### C-1. The reclaim policy is already `Delete` for benchmark validator and full nodes
 
 For a PVC the controller generates, the storage class is a pure function of node
 mode. `func NodeMode` (`internal/noderesource/noderesource.go:305-317`) collapses
@@ -85,13 +86,19 @@ node from a non-benchmark one.
 
 The claim is scoped to PVCs the **controller generates** under a single
 `PlatformConfig`, which is what Requirements 2 and 4 place obligations on ("THE
-controller SHALL place ..."). For those, class is a pure function of mode, and
-configuration is loaded once at startup (`internal/platform/load.go`). A benchmark
-`full` node and a non-benchmark `full` node are the same mode, so they resolve to
-the same class. Requirement 2 demands the benchmark PVC land on a `Delete` class;
-Requirement 4 demands the non-benchmark PVC land on a `Retain` class and forbids a
-`Delete` class. The controller cannot satisfy both, because it receives no
-namespace and has no other input that separates the two.
+controller SHALL place ..."). For those, class is a pure function of mode
+(`noderesource.go:706`), and configuration is loaded once at startup
+(`internal/platform/load.go`). A benchmark `full` node and a non-benchmark `full`
+node are the same effective mode, so they resolve to the same class. Requirement 2
+demands the benchmark PVC land on a `Delete` class; Requirement 4 demands the
+non-benchmark PVC land on a `Retain` class and forbids a `Delete` class.
+
+**Without changing the current selection implementation, both cannot hold.** The
+selection function receives only a mode and a `PlatformConfig` -- not a namespace,
+and nothing else that separates a benchmark node from a non-benchmark one. This is
+a property of the implementation, not a logical contradiction in the requirements:
+they become satisfiable the moment selection gains an input that distinguishes the
+two. Requirement 5 is where that input would be chosen.
 
 **One supported path escapes this**, and the spec should acknowledge it rather
 than claim a blanket impossibility: `spec.dataVolume.import.pvcName`
@@ -105,9 +112,12 @@ places and never deletes, not automatic namespace-based placement -- but it mean
 the honest claim is the narrower one above.
 
 Requirement 4 is additionally **not** a description of current behavior, and must
-not be implemented as a regression guard. Today every non-archive node --
-including non-benchmark `full`, `validator`, and (via `NodeMode`) `replayer` nodes
--- sits on a `Delete` class, which violates R4 criterion 2 as written.
+not be implemented as a regression guard. Today a generated PVC for a
+non-benchmark `full`, `validator`, or (via `NodeMode`) `replayer` node sits on a
+`Delete` class, which violates R4 criterion 2 as written. Seed nodes are not
+included in that statement, because `classDefault`'s reclaim policy is not
+established by this repository; nor are imported PVCs, whose class the controller
+neither sets nor validates.
 
 Implementing R4 literally would therefore be a **behavior change, not a guard**:
 it would move newly generated non-benchmark volumes onto a `Retain` class. That is
@@ -135,7 +145,7 @@ gates it **shut**.
 reconciler independently defaults an empty policy to `Retain` at
 `internal/controller/seinetwork/controller.go:132`). When the policy is `Retain`,
 `controller.go:135` takes the branch that removes the network owner reference from
-the child SeiNodes (`internal/controller/seinetwork/nodes.go:285`). The chain is
+the child SeiNodes (`internal/controller/seinetwork/nodes.go:286`). The chain is
 therefore:
 
 1. A delete PR removes the SeiNetwork manifest.
@@ -162,9 +172,10 @@ deployed network left it unset.
 
 ### C-6. Consequence for this spec's scope
 
-As written, Requirements 1-4 are either already satisfied (R1, R2, R3) or harmful
-if implemented (R4), and none of them addresses the failure the spec exists to
-fix. The load-bearing change is that a benchmark SeiNetwork must carry
+As written, Requirements 1-4 are either already satisfied (R1, R2, R3) or, in R4's
+case, a deliberate retention-versus-cleanup trade that must be decided on its
+merits rather than inherited as a guard (see C-3 and the R4 correction). None of
+them addresses the failure the spec exists to fix. The load-bearing change is that a benchmark SeiNetwork must carry
 `deletionPolicy: Delete`. This spec places that in Out of scope and assigns it to
 `crd-ownership-and-deletion`, so **Spec 005 cannot deliver its own Blocks
 statement**. Either the cascade's benchmark default moves into this spec's scope,
@@ -182,9 +193,9 @@ assumes an untested mechanism is how this spec went wrong in the first place.
 
 **The `Delete` cascade completes.** SeiNetwork deletion under `Delete` leaves the
 child owner references in place, so the children are garbage-collected; each
-SeiNode's finalizer deletes its data PVC
-(`internal/controller/node/controller.go:398`), and the class's `Delete` reclaim
-releases the disk. The one mechanism that could have silently broken this is the
+SeiNode's finalizer deletes its data PVC (lookup at
+`internal/controller/node/controller.go:398`, delete at line 406), and the class's
+`Delete` reclaim releases the disk. The one mechanism that could have silently broken this is the
 `GenerationChangedPredicate` on both primary watches
 (`internal/controller/seinetwork/controller.go`, `internal/controller/node/controller.go`):
 if a deletion did not change `metadata.generation`, the update could be filtered
@@ -197,14 +208,17 @@ The deletion update is not filtered.
 **`deletionPolicy` is mutable.** It carries no CEL `XValidation` immutability rule
 and no validating webhook; the generated CRD
 (`config/crd/sei.io_seinetworks.yaml`) shows only a default, description, enum,
-and type. Only `spec.genesis`, `spec.replicas`, `spec.dataVolume`, and
-`spec.resources` are immutable.
+and type. `SeiNetworkSpec` carries exactly three immutability rules, covering
+`spec.genesis`, `spec.replicas`, and `spec.dataVolume`
+(`api/v1alpha1/seinetwork_types.go:27-29`).
 
 The consequence for remediation is an ordering constraint, and it is sharp. A live
 network can be patched from `Retain` to `Delete` **before** teardown, and the
 cascade then works. Once a `Retain` teardown has already stripped the owner
 references and removed the parent, the cascade is unrecoverable and the leftover
-SeiNodes and PVCs require manual cleanup. Patching after deletion is too late.
+SeiNodes and PVCs require manual cleanup. The point of no return is the
+**completed** teardown -- owner references stripped and the parent SeiNetwork gone
+-- not merely the arrival of a deletion timestamp.
 
 ## Semantic Anchors
 
@@ -335,10 +349,12 @@ that a teardown leaves no disk to pay for.
 
 1. THE controller SHALL place a benchmark PVC on a storage class whose reclaim policy is `Delete`, so the provisioner deletes the disk with the PVC.
 
-**Correction (2026-09-09):** already satisfied. Every mode a benchmark runs
-(`full`, `validator`, `seed`, `replayer`) already resolves to a `Delete` class --
-see C-1. This requirement needs no implementation, and satisfying it does not
-reclaim any disk, because the PVC is never deleted -- see C-5.
+**Correction (2026-09-09):** already satisfied for the shapes that matter. A
+generated PVC for a `full`, `validator`, or `replayer` node already resolves to a
+`Delete` class -- see C-1. (Seed is excluded: `classDefault`'s policy is not
+established by this repository.) This requirement needs no implementation for
+those modes, and satisfying it does not reclaim any disk, because the PVC is never
+deleted -- see C-5.
 
 ### Requirement 3: A delete PR prunes the resource
 
@@ -445,11 +461,12 @@ share a fate, and the difference is the most useful thing in this section.
 
 - **SC-005** ("a deleted benchmark node leaves no PVC") **passes today** for a
   controller-generated PVC. Deleting a SeiNode directly runs its finalizer, which
-  deletes the data PVC (`internal/controller/node/controller.go:398`), and the
-  `Delete` reclaim then releases the disk. Imported PVCs are explicitly exempt
-  (`controller.go:390`).
-- **SC-001 and SC-002** ("a benchmark *teardown* leaves no PVC / no disk") fail,
-  for the reason in C-5.
+  deletes the data PVC (lookup at `internal/controller/node/controller.go:398`,
+  delete at line 406), and the `Delete` reclaim then releases the disk. Imported
+  PVCs are explicitly exempt (`controller.go:390-395`).
+- **SC-001 and SC-002** ("a benchmark *teardown* leaves no PVC / no disk") fail
+  whenever the torn-down network carries `deletionPolicy: Retain`, for the reason
+  in C-5. Under `Delete` they are expected to pass -- see C-7.
 
 The gap between them is the whole bug. The machinery works from the node entry
 point and is never reached from the operator's real entry point -- deleting a
@@ -461,7 +478,7 @@ remains unfixed.
 
 - The controller creates a node's data volume as a standalone PVC through the ensure-data-pvc task, and owns it through the SeiNode. This spec sets the storage class reclaim; it does not add the volume model.
 - The owner reference already garbage-collects the data PVC when the node is deleted, so Requirement 1 restates existing behavior as a regression guard. The open lever is the storage class reclaim in Requirement 2.
-- ~~The storage class reclaim policy defaults to `Retain` and protects the disk. This spec changes the reclaim for a benchmark volume only.~~ **False for the benchmark path -- see C-1.** The perf class `gp3-10k-750`, which every `full` and `validator` node resolves to, reclaims with `Delete`. Of the classes this repository defines, only `gp3-archive` retains, and it is reachable only by `archive` mode, which no benchmark node uses. The reclaim policy of `classDefault` is not established by this repository.
+- ~~The storage class reclaim policy defaults to `Retain` and protects the disk. This spec changes the reclaim for a benchmark volume only.~~ **False for the benchmark path -- see C-1.** The perf class `gp3-10k-750`, which every generated `full` and `validator` PVC resolves to, reclaims with `Delete`. Of the classes this repository defines, only `gp3-archive` retains, and it is reachable only by `archive` mode, which no benchmark node uses. The reclaim policy of `classDefault` (seed) is not established by this repository, and an imported PVC's class is set by the importer, not the controller.
 - A benchmark node deletion arrives from the `crd-ownership-and-deletion` cascade. That work item owns the cascade, and its default policy for a benchmark network gates the teardown. **This assumption is unmet -- see C-5.** That default is `Retain`, so it gates the teardown *shut*: the cascade orphans the child SeiNodes instead of deleting them, and no PVC is ever deleted. Spec 005 was carved out of a precondition that was never satisfied, and placed the fix for it out of scope.
 - A benchmark run mints a fresh consensus identity at its genesis ceremony. A reclaim of a benchmark disk therefore loses nothing that a later run cannot recreate.
 - A non-benchmark node keeps its `Retain` reclaim, because its data cannot be recreated. This spec changes the benchmark path only.
