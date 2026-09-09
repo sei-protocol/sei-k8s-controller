@@ -89,7 +89,9 @@ type SeiNodeSpec struct {
 
 	// DataVolume configures the data PersistentVolumeClaim for this node.
 	// When omitted, the controller creates a PVC using the node's mode-default
-	// storage class and size (see noderesource.DefaultStorageForMode).
+	// storage class and size; dataVolume.storage overrides the size. The
+	// resolved size comes from noderesource.StorageForNode (the ladder), which
+	// falls through to noderesource.DefaultStorageForMode when unset.
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
 
@@ -215,7 +217,8 @@ type DataVolumeSpec struct {
 // level to fire on a first-time set. Storage performance selection is a sibling
 // field added separately; this type carries the size only.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || !has(oldSelf.resources) || !has(oldSelf.resources.requests) || !('storage' in oldSelf.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity(string(oldSelf.resources.requests['storage']))) == 0",message="dataVolume.storage.resources.requests.storage is create-only: the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path), so a later size edit could never reach the volume; delete and recreate the node to resize"
+// +kubebuilder:validation:XValidation:rule="!has(self.resources) || (has(self.resources.requests) && 'storage' in self.resources.requests)",message="dataVolume.storage.resources must carry resources.requests.storage: an empty or null storage request would silently provision the per-mode default while reading as a size request"
+// +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || !has(oldSelf.resources) || !has(oldSelf.resources.requests) || !('storage' in oldSelf.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity(string(oldSelf.resources.requests['storage']))) == 0",message="dataVolume.storage.resources.requests.storage is create-only: the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path), so a later size edit could never reach the volume; delete and recreate the owning resource (the node, or the SeiNetwork for a pooled validator) to resize"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || self.resources.requests.all(k, k == 'storage')",message="dataVolume.storage.resources.requests accepts only storage"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity('0')) > 0",message="dataVolume.storage.resources.requests.storage must be positive"
 type DataVolumeStorage struct {
@@ -247,7 +250,9 @@ type VolumeClaimResources struct {
 	// struct lets the API server PRUNE a misspelled key, so `storag: 2Ti` would
 	// provision the per-mode default size while the manifest read as though it
 	// asked for something else. As a map, the rule rejects the unknown key by
-	// name.
+	// name. The sibling hole — an empty or null request that also prunes to the
+	// per-mode default (a Helm value templated to `storage:`) — is closed by the
+	// "must carry resources.requests.storage" rule on DataVolumeStorage.
 	// +optional
 	Requests corev1.ResourceList `json:"requests,omitempty"`
 }

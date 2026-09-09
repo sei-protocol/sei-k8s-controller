@@ -94,8 +94,10 @@ func TestDataVolume_SizeCreateOnly(t *testing.T) {
 			cur.Spec.DataVolume.Storage.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("2Ti")
 		})
 		g.Expect(err).To(HaveOccurred(), "resizing a pool's volumes after create must be rejected")
-		// The VALUE comparison lives on the shared DataVolumeStorage type.
-		g.Expect(err.Error()).To(ContainSubstring("create-only"))
+		// A size CHANGE is caught by the shared DataVolumeStorage value rule, whose
+		// message is Kind-neutral — assert its specific text so a regression to the
+		// old node-only wording (wrong remedy for a network operator) is caught.
+		g.Expect(err.Error()).To(ContainSubstring("recreate the owning resource"))
 	})
 
 	t.Run("adding a size to an existing network is rejected", func(t *testing.T) {
@@ -109,6 +111,22 @@ func TestDataVolume_SizeCreateOnly(t *testing.T) {
 			fixtures.WithDataVolumeStorage("500Gi")(cur)
 		})
 		g.Expect(err).To(HaveOccurred(), "adding a size after create must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("spec.dataVolume is create-only"))
+	})
+
+	t.Run("removing dataVolume from an existing network is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		network := fixtures.NewNetwork(ns, "dv-size-remove", fixtures.WithDataVolumeStorage("500Gi"))
+		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+
+		// Presence parity at spec level catches the whole-block removal a sub-type
+		// value rule would miss (present -> absent, so the sub-type rule never fires).
+		err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+			cur.Spec.DataVolume = nil
+		})
+		g.Expect(err).To(HaveOccurred(), "removing dataVolume after create must be rejected")
 		g.Expect(err.Error()).To(ContainSubstring("spec.dataVolume is create-only"))
 	})
 }

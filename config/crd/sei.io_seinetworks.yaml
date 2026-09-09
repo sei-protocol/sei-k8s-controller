@@ -93,6 +93,13 @@ spec:
               at more than 100x the per-rule budget, so the CRD is refused outright. Keeping
               value comparisons on the sub-types keeps every path one hop long. Measure with
               a CRD install before adding a term here.
+
+              COMPLETENESS OBLIGATION for the next field under DataVolume* (e.g. PR 5's
+              volumeAttributesClassName): unlike the old structural ==, this rule pins an
+              explicit list, so a new field is silently mutable until it is added in BOTH
+              places — a value rule on its sub-type (fires on a change) AND a presence-parity
+              term in this spec-level rule on BOTH Kinds (fires on a first-time set, which a
+              sub-type transition rule skips). Miss either and nothing fails.
               resources is create-only, compared PER-DIMENSION via quantity() rather than
               structural == — the values are int-or-string Quantities, and the network
               controller's finalizer Update re-encodes a bare-int footprint as a string, so
@@ -183,15 +190,23 @@ spec:
                               struct lets the API server PRUNE a misspelled key, so `storag: 2Ti` would
                               provision the per-mode default size while the manifest read as though it
                               asked for something else. As a map, the rule rejects the unknown key by
-                              name.
+                              name. The sibling hole — an empty or null request that also prunes to the
+                              per-mode default (a Helm value templated to `storage:`) — is closed by the
+                              "must carry resources.requests.storage" rule on DataVolumeStorage.
                             type: object
                         type: object
                     type: object
                     x-kubernetes-validations:
+                    - message: 'dataVolume.storage.resources must carry resources.requests.storage:
+                        an empty or null storage request would silently provision
+                        the per-mode default while reading as a size request'
+                      rule: '!has(self.resources) || (has(self.resources.requests)
+                        && ''storage'' in self.resources.requests)'
                     - message: 'dataVolume.storage.resources.requests.storage is create-only:
                         the data PVC is created once (ensure-data-pvc is Get-then-Create
                         with no update path), so a later size edit could never reach
-                        the volume; delete and recreate the node to resize'
+                        the volume; delete and recreate the owning resource (the node,
+                        or the SeiNetwork for a pooled validator) to resize'
                       rule: '!has(self.resources) || !has(self.resources.requests)
                         || !(''storage'' in self.resources.requests) || !has(oldSelf.resources)
                         || !has(oldSelf.resources.requests) || !(''storage'' in oldSelf.resources.requests)

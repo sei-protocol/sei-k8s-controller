@@ -161,7 +161,9 @@ spec:
                 description: |-
                   DataVolume configures the data PersistentVolumeClaim for this node.
                   When omitted, the controller creates a PVC using the node's mode-default
-                  storage class and size (see noderesource.DefaultStorageForMode).
+                  storage class and size; dataVolume.storage overrides the size. The
+                  resolved size comes from noderesource.StorageForNode (the ladder), which
+                  falls through to noderesource.DefaultStorageForMode when unset.
                 properties:
                   import:
                     description: |-
@@ -223,15 +225,23 @@ spec:
                               struct lets the API server PRUNE a misspelled key, so `storag: 2Ti` would
                               provision the per-mode default size while the manifest read as though it
                               asked for something else. As a map, the rule rejects the unknown key by
-                              name.
+                              name. The sibling hole — an empty or null request that also prunes to the
+                              per-mode default (a Helm value templated to `storage:`) — is closed by the
+                              "must carry resources.requests.storage" rule on DataVolumeStorage.
                             type: object
                         type: object
                     type: object
                     x-kubernetes-validations:
+                    - message: 'dataVolume.storage.resources must carry resources.requests.storage:
+                        an empty or null storage request would silently provision
+                        the per-mode default while reading as a size request'
+                      rule: '!has(self.resources) || (has(self.resources.requests)
+                        && ''storage'' in self.resources.requests)'
                     - message: 'dataVolume.storage.resources.requests.storage is create-only:
                         the data PVC is created once (ensure-data-pvc is Get-then-Create
                         with no update path), so a later size edit could never reach
-                        the volume; delete and recreate the node to resize'
+                        the volume; delete and recreate the owning resource (the node,
+                        or the SeiNetwork for a pooled validator) to resize'
                       rule: '!has(self.resources) || !has(self.resources.requests)
                         || !(''storage'' in self.resources.requests) || !has(oldSelf.resources)
                         || !has(oldSelf.resources.requests) || !(''storage'' in oldSelf.resources.requests)

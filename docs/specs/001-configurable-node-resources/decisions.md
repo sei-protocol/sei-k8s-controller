@@ -31,8 +31,10 @@ CRD field selects.
   PVC at provision and otherwise passes it through. It MUST NOT create VACs.
 - **CRD surface.** The selection lands on `spec.dataVolume.storage`, so
   `SeiNetwork.spec.dataVolume` inherits it: the storage **size** in the
-  volume-claim shape Req 2.2/2.5 call for (`resources.requests.storage`, a
-  `VolumeResourceRequirements`), and the VAC selection as a sibling name field
+  volume-claim shape Req 2.2/2.5 call for (`resources.requests.storage`; PR 4
+  ships this as a narrow `VolumeClaimResources` — same JSON shape as
+  `corev1.VolumeResourceRequirements` but request-only, since a volume claim has
+  no limit dimension), and the VAC selection as a sibling name field
   (`volumeAttributesClassName`, mirroring the PVC field). The size has one home,
   the volume-claim field — not two. Exact field names are finalized in PR 4/PR 5,
   but the record fixes the shape so implementation does not settle it by default.

@@ -61,13 +61,16 @@ func (e *ensureDataPVCExecution) Execute(ctx context.Context) error {
 // executeCreate is Get-then-Create, failing if an unexpected PVC already
 // exists that the SeiNode does not own.
 //
-// Create is once-only, and that is complete rather than a missing update path:
-// an existing owned PVC is accepted as-is, with no size or class comparison. The
-// spec fields that would drive such a comparison are CEL create-only
-// (spec.dataVolume.storage), so a divergence between the live PVC and the spec
-// is not reachable by editing the SeiNode. Resizing a provisioned volume is an
-// operator act — delete and recreate the node — and note that the PVC carries an
-// ownerReference to the SeiNode (set below), so that discards its data.
+// Create is once-only, by design rather than a missing update path: an existing
+// owned PVC is accepted as-is, with no size or class comparison. spec.dataVolume
+// .storage is CEL create-only, so a *size* edit cannot diverge the live PVC.
+// The size/class also depend on NodeMode, which is NOT create-only — a mode
+// switch (e.g. fullNode->archive) changes the resolved class always and the size
+// when no CRD size is set, so a live PVC CAN diverge from the spec that way. That
+// is pre-existing and out of scope here; this task deliberately does not
+// reconcile it. Resizing a provisioned volume is an operator act — delete and
+// recreate the node — and note the PVC carries an ownerReference to the SeiNode
+// (set below), so that discards its data.
 func (e *ensureDataPVCExecution) executeCreate(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	desired := noderesource.GenerateDataPVC(node, e.cfg.Platform)
 	if err := ctrl.SetControllerReference(node, desired, e.cfg.Scheme); err != nil {

@@ -97,6 +97,54 @@ func TestDataVolumeStorage_UnsetAccepted(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, nodeWithStorageSize(ns, "dv-unset", ""))).To(Succeed())
 }
 
+// TestDataVolumeStorage_EmptyOrNullSizeRejected closes the sibling of the
+// misspelled-key hole: a storage block whose request prunes to empty (a null
+// value, or an empty/absent requests map) would pass the narrowing rules
+// vacuously and silently provision the per-mode default while the manifest read
+// as a size request. The realistic trigger is a Helm value templated to
+// `storage:`. `storage: {}` with no resources at all is NOT this case — that is
+// the legitimate "no override" fall-through and stays accepted (UnsetAccepted's
+// sibling), so the rule keys on resources being present.
+func TestDataVolumeStorage_EmptyOrNullSizeRejected(t *testing.T) {
+	ns := makeNamespace(t)
+	for name, requests := range map[string]string{
+		"null-value":     `{"storage": null}`,
+		"empty-requests": `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			raw := fmt.Sprintf(`{
+			  "apiVersion": "sei.io/v1alpha1",
+			  "kind": "SeiNode",
+			  "metadata": {"name": "dv-empty-%s", "namespace": %q},
+			  "spec": {
+			    "chainId": %q, "image": %q, "fullNode": {},
+			    "dataVolume": {"storage": {"resources": {"requests": %s}}}
+			  }
+			}`, name, ns, testChainID, testNodeImage, requests)
+			u := &unstructured.Unstructured{}
+			g.Expect(json.Unmarshal([]byte(raw), &u.Object)).To(Succeed())
+
+			err := testCli.Create(testCtx, u)
+			g.Expect(err).To(HaveOccurred(), "an empty/null storage request must be rejected, not silently defaulted")
+			g.Expect(err.Error()).To(ContainSubstring("must carry resources.requests.storage"))
+		})
+	}
+	// resources absent entirely is the legitimate no-override state.
+	t.Run("storage block with no resources is accepted", func(t *testing.T) {
+		g := NewWithT(t)
+		raw := fmt.Sprintf(`{
+		  "apiVersion": "sei.io/v1alpha1",
+		  "kind": "SeiNode",
+		  "metadata": {"name": "dv-empty-storage", "namespace": %q},
+		  "spec": {"chainId": %q, "image": %q, "fullNode": {}, "dataVolume": {"storage": {}}}
+		}`, ns, testChainID, testNodeImage)
+		u := &unstructured.Unstructured{}
+		g.Expect(json.Unmarshal([]byte(raw), &u.Object)).To(Succeed())
+		g.Expect(testCli.Create(testCtx, u)).To(Succeed(), "storage:{} is the no-override case, still accepted")
+	})
+}
+
 // TestDataVolumeStorage_WithImportRejected locks the mutual exclusion. An
 // imported PVC keeps the importer's class and size and the controller never
 // mutates it, so a size beside an import would read as applied while being
@@ -221,6 +269,12 @@ func TestDataVolumeStorage_EquivalentUnitsAccepted(t *testing.T) {
 // before it ever provisions. The quantity()-based rule compares values, so the
 // re-encode is admitted. This is the case that fails against a structural rule;
 // it is mutation-checked.
+//
+// This suite runs no manager (see suite_test.go), so the typed `Paused = true`
+// write below STANDS IN for the controller's finalizer Update — it exercises the
+// same admission path (a typed full-spec write re-marshalling the size). The
+// SeiNetwork suite's counterpart proves the real controller-write path end to
+// end (an actual child create + sync under a running reconciler).
 func TestDataVolumeStorage_BareIntSizeSurvivesControllerReencode(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -250,6 +304,23 @@ func TestDataVolumeStorage_CreateOnlyGate(t *testing.T) {
 			cur.Spec.DataVolume.Storage.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("2Ti")
 		})
 		g.Expect(err).To(HaveOccurred(), "resizing after create must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("create-only"))
+	})
+
+	// The grow case above catches a compareTo() == 0 -> >= 0 slip; this shrink
+	// case catches the <= 0 direction, so the create-only comparison is pinned
+	// from both sides and cannot silently degrade to a one-way (grow-only) gate.
+	t.Run("shrinking the size is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := nodeWithStorageSize(ns, "dv-shrink", "2Ti")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.DataVolume.Storage.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("500Gi")
+		})
+		g.Expect(err).To(HaveOccurred(), "shrinking after create must be rejected")
 		g.Expect(err.Error()).To(ContainSubstring("create-only"))
 	})
 

@@ -44,6 +44,13 @@ import (
 // at more than 100x the per-rule budget, so the CRD is refused outright. Keeping
 // value comparisons on the sub-types keeps every path one hop long. Measure with
 // a CRD install before adding a term here.
+//
+// COMPLETENESS OBLIGATION for the next field under DataVolume* (e.g. PR 5's
+// volumeAttributesClassName): unlike the old structural ==, this rule pins an
+// explicit list, so a new field is silently mutable until it is added in BOTH
+// places — a value rule on its sub-type (fires on a change) AND a presence-parity
+// term in this spec-level rule on BOTH Kinds (fires on a first-time set, which a
+// sub-type transition rule skips). Miss either and nothing fails.
 // +kubebuilder:validation:XValidation:rule="((has(self.dataVolume)) == (has(oldSelf.dataVolume))) && ((has(self.dataVolume) && has(self.dataVolume.import)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.import))) && ((has(self.dataVolume) && has(self.dataVolume.storage)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage))) && ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="spec.dataVolume is create-only: each validator's data PVC is created once (ensure-data-pvc is Get-then-Create with no update path) and nothing replaces a node on storage drift, so a later edit could never reach the pool's volumes; recreate the network to change its storage"
 // resources is create-only, compared PER-DIMENSION via quantity() rather than
 // structural == — the values are int-or-string Quantities, and the network
