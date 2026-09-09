@@ -194,8 +194,10 @@ func TestHandleDeletion_DeletePolicy_GarbageCollectionRemovesWholeTree(t *testin
 
 	network := deletingNetwork(seiv1alpha1.DeletionPolicyDelete)
 
-	objs := []client.Object{network}
-	for ordinal := range 3 {
+	const replicas = 3
+	objs := make([]client.Object, 0, 1+replicas*3) // network + child/STS/pod per ordinal
+	objs = append(objs, network)
+	for ordinal := range replicas {
 		child := childSeiNode(ordinal, types.UID(seiNodeName(network, ordinal)+"-uid"))
 		sts := childStatefulSet(child)
 		objs = append(objs, child, sts, childPod(sts))
@@ -386,28 +388,32 @@ func collectGarbage(t *testing.T, c client.Client) {
 	for pass := 0; ; pass++ {
 		g.Expect(pass).To(BeNumerically("<", 10), "garbage collection did not settle")
 
-		live := map[types.UID]bool{}
-		dependents := []client.Object{}
-
 		networks := &seiv1alpha1.SeiNetworkList{}
 		g.Expect(c.List(ctx, networks, client.InNamespace(testGroupNS))).To(Succeed())
+		nodes := &seiv1alpha1.SeiNodeList{}
+		g.Expect(c.List(ctx, nodes, client.InNamespace(testGroupNS))).To(Succeed())
+		sets := &appsv1.StatefulSetList{}
+		g.Expect(c.List(ctx, sets, client.InNamespace(testGroupNS))).To(Succeed())
+		pods := &corev1.PodList{}
+		g.Expect(c.List(ctx, pods, client.InNamespace(testGroupNS))).To(Succeed())
+
+		// Everything still present is a live owner; everything but the network
+		// is also a potential dependent.
+		live := make(map[types.UID]bool,
+			len(networks.Items)+len(nodes.Items)+len(sets.Items)+len(pods.Items))
+		dependents := make([]client.Object, 0,
+			len(nodes.Items)+len(sets.Items)+len(pods.Items))
 		for i := range networks.Items {
 			live[networks.Items[i].UID] = true
 		}
-		nodes := &seiv1alpha1.SeiNodeList{}
-		g.Expect(c.List(ctx, nodes, client.InNamespace(testGroupNS))).To(Succeed())
 		for i := range nodes.Items {
 			live[nodes.Items[i].UID] = true
 			dependents = append(dependents, &nodes.Items[i])
 		}
-		sets := &appsv1.StatefulSetList{}
-		g.Expect(c.List(ctx, sets, client.InNamespace(testGroupNS))).To(Succeed())
 		for i := range sets.Items {
 			live[sets.Items[i].UID] = true
 			dependents = append(dependents, &sets.Items[i])
 		}
-		pods := &corev1.PodList{}
-		g.Expect(c.List(ctx, pods, client.InNamespace(testGroupNS))).To(Succeed())
 		for i := range pods.Items {
 			live[pods.Items[i].UID] = true
 			dependents = append(dependents, &pods.Items[i])
