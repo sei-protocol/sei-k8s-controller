@@ -36,12 +36,25 @@ CRD field selects.
   (`volumeAttributesClassName`, mirroring the PVC field). The size has one home,
   the volume-claim field — not two. Exact field names are finalized in PR 4/PR 5,
   but the record fixes the shape so implementation does not settle it by default.
+  Because `SeiNetwork.spec.dataVolume` is the same type, the selection inherits
+  that field's spec-level create-only CEL (`seinetwork_types.go:29`), which
+  rejects a change, an unset, **and a first-time set**. So at the network level
+  the selection is fixed for the pool's life: a network created without one can
+  never gain it, and changing a validator pool's storage means recreating the
+  **whole network** — not the delete-and-recreate of a single node in the
+  provision-time bullet below, which is the node-level remedy. (PR 4 rewrites
+  that rule to be canonicalization-safe once a size Quantity lands under it —
+  the same int-or-string fix applied to the compute footprint — without
+  relaxing its create-only semantics.)
 - **The controller SHALL pre-flight the referenced VAC (read-only)** and surface
   the result as an always-present node condition (a `Ready`-family type with a
   stable `CamelCase` reason, per the repo's Conditions standard) — a missing or
   mistyped name reports `False/<reason>` instead of leaving a silently-Pending
   pod. This is committed, not optional: the named-failure path in Consequences
-  depends on it.
+  depends on it. The condition is present even when no VAC is selected — `True`
+  in that steady state, since the mode-default storage is used — never absence,
+  per the Conditions standard's rule against expressing "not configured" as a
+  missing condition.
 - **The selection is provision-time only in this iteration.** `ensure-data-pvc`
   is Get-then-Create with no update path
   (`internal/task/ensure_pvc.go:69-85`), so the VAC name and size bind when the
@@ -64,7 +77,13 @@ CRD field selects.
   This is a distinct PVC field from `storageClassName`, which `GenerateDataPVC`
   sets unconditionally from `noderesource.DefaultStorageForMode`
   (`internal/noderesource/noderesource.go:706-712`) today, selection or not.
-  There is no app-config middle rung for the VAC name in this iteration.
+  There is no app-config middle rung for the VAC name in this iteration. The
+  **size** has a fuller ladder, because an app-config rung already exists
+  (`storage.sizeDefault`/`sizeArchive`/`sizeSeed`, `platform.go:62-72`, resolved
+  through `DefaultStorageForMode`): a CRD-set `resources.requests.storage`
+  **overrides** the platform per-mode size, and an unset size falls through to
+  that existing per-mode default. This record fixes that override direction so
+  PR 5 does not settle it by default.
 - **The selection covers controller-provisioned volumes only.** An imported PVC
   (`spec.dataVolume.import`) keeps the importer's class and parameters — the
   controller validates but never mutates it (`seinode_types.go:167`) — so
@@ -100,9 +119,9 @@ selector rather than at a raw parameter field.
 - **VAC is the purpose-built mechanism** for per-volume IOPS/throughput on EBS,
   and the EBS CSI driver does the actual volume work (provision-time attributes,
   and `ModifyVolume` for live changes). The controller does not touch AWS.
-- **The controller takes on no cluster-scoped write.** Referencing a VAC needs
-  at most a cluster-scoped *read* (`volumeattributesclasses: get;list;watch`) for
-  the pre-flight — no new write privilege on a namespaced-workload controller.
+- **The controller takes on no cluster-scoped write.** The committed pre-flight
+  requires a cluster-scoped *read* (`volumeattributesclasses: get;list;watch`) —
+  and nothing more; no write privilege on a namespaced-workload controller.
 
 ### Alternatives rejected
 
