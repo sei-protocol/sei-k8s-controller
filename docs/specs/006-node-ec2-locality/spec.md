@@ -30,11 +30,13 @@ node.
 ```
 
 Today the single-tenant mechanism is an experimental annotation on a standalone
-SeiNode. Review chose to replace it with a typed field on both CRDs. A benchmark
-validator can then request the isolation. The API server validates the request,
-and the CRD schema makes it discoverable. The controller propagates the field the
-same way it propagates the existing config and sidecar fields, so the field is the
-smaller change as well as the more conventional one.
+SeiNode. Review chose to replace it with a typed field on both CRDs. The field
+takes an enumerated value, `Shared` or `Dedicated`, rather than a boolean, so it
+can grow a new tier later without a breaking change. A benchmark validator can
+then request the isolation. The API server validates the request, and the CRD
+schema makes it discoverable. The controller propagates the field the same way it
+propagates the existing config and sidecar fields, so the field is the smaller
+change as well as the more conventional one.
 
 ## Semantic Anchors
 
