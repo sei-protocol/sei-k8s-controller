@@ -178,6 +178,7 @@ func main() {
 		},
 		EC2Peers: peering.NewAWSEC2Resolver(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
+			Recorder: nodeRecorder,
 			ConfigFor: func(_ context.Context, node *seiv1alpha1.SeiNode) task.ExecutionConfig {
 				return task.ExecutionConfig{
 					BuildSidecarClient: func() (task.SidecarClient, error) {
@@ -225,6 +226,7 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: recorder,
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNetwork]{
+			Recorder: recorder,
 			ConfigFor: func(ctx context.Context, network *seiv1alpha1.SeiNetwork) task.ExecutionConfig {
 				var assemblerNode *seiv1alpha1.SeiNode
 				nodes := &seiv1alpha1.SeiNodeList{}

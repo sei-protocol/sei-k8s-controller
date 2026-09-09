@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -44,6 +46,7 @@ type PlanExecutor[T client.Object] interface {
 // dependencies are resolved per-reconcile.
 type Executor[T client.Object] struct {
 	ConfigFor func(ctx context.Context, obj T) task.ExecutionConfig
+	Recorder  record.EventRecorder
 }
 
 // needsSubmission reports whether the task should be submitted (or resubmitted)
@@ -79,7 +82,7 @@ func (e *Executor[T]) ExecutePlan(
 	}
 
 	cfg := e.ConfigFor(ctx, obj)
-	return executePlan(ctx, obj, plan, cfg)
+	return executePlan(ctx, obj, plan, cfg, e.Recorder)
 }
 
 // executePlan is the core plan execution loop. It advances synchronous tasks
@@ -90,6 +93,7 @@ func executePlan(
 	obj client.Object,
 	plan *seiv1alpha1.TaskPlan,
 	cfg task.ExecutionConfig,
+	recorder record.EventRecorder,
 ) (ctrl.Result, error) {
 	cn := controllerName(obj)
 
@@ -122,7 +126,7 @@ func executePlan(
 			return ResultRequeueImmediate, nil
 		}
 
-		result := advanceTask(ctx, obj, cn, plan, t, cfg)
+		result := advanceTask(ctx, obj, cn, plan, t, cfg, recorder)
 
 		// If the task is not yet complete, stop the loop — the result
 		// carries the appropriate requeue interval.
@@ -141,7 +145,29 @@ func advanceTask(
 	plan *seiv1alpha1.TaskPlan,
 	t *seiv1alpha1.PlannedTask,
 	cfg task.ExecutionConfig,
+	recorder record.EventRecorder,
 ) ctrl.Result {
+	if t.Status == seiv1alpha1.TaskFailed || t.Status == seiv1alpha1.TaskComplete {
+		return ctrl.Result{}
+	}
+	starting := needsSubmission(t)
+	started := false
+	previousRetry := t.RetryCount
+	defer func() {
+		if starting && !started && t.Status == seiv1alpha1.TaskFailed {
+			taskEvent(recorder, obj, t, corev1.EventTypeNormal, "TaskStarted", "Started")
+		}
+		switch {
+		case t.Status == seiv1alpha1.TaskComplete:
+			taskEvent(recorder, obj, t, corev1.EventTypeNormal, "TaskComplete", "Complete")
+		case t.Status == seiv1alpha1.TaskFailed:
+			taskEvent(recorder, obj, t, corev1.EventTypeWarning, "TaskFailed", "Failed: "+t.Error)
+		case t.RetryCount != previousRetry:
+			attempt := *t
+			attempt.RetryCount = previousRetry
+			taskEvent(recorder, obj, &attempt, corev1.EventTypeWarning, "TaskFailed", "Failed; retry scheduled")
+		}
+	}()
 	var paramsRaw []byte
 	if t.Params != nil {
 		paramsRaw = t.Params.Raw
@@ -164,10 +190,13 @@ func advanceTask(
 				"task", t.Type, "error", err)
 			return ctrl.Result{RequeueAfter: TaskPollInterval}
 		}
+		t.Status = seiv1alpha1.TaskRunning
 		if t.SubmittedAt == nil {
 			now := metav1.Now()
 			t.SubmittedAt = &now
 		}
+		taskEvent(recorder, obj, t, corev1.EventTypeNormal, "TaskStarted", "Started")
+		started = true
 		log.FromContext(ctx).Info("task submitted", "task", t.Type, "id", t.ID)
 	}
 
@@ -175,6 +204,7 @@ func advanceTask(
 
 	switch status {
 	case task.ExecutionRunning:
+		t.Status = seiv1alpha1.TaskRunning
 		return ctrl.Result{RequeueAfter: TaskPollInterval}
 
 	case task.ExecutionComplete:
@@ -259,5 +289,12 @@ func setTargetPhase(obj client.Object, phase seiv1alpha1.SeiNodePhase) {
 		node.Status.Phase = phase
 		now := metav1.Now()
 		node.Status.PhaseTransitionTime = &now
+	}
+}
+
+// taskEvent records on the plan owner, even when a ceremony uses a node sidecar.
+func taskEvent(recorder record.EventRecorder, obj client.Object, t *seiv1alpha1.PlannedTask, eventType, reason, outcome string) {
+	if recorder != nil {
+		recorder.Eventf(obj, eventType, reason, "Task %s (%s), attempt %d: %s", t.Type, t.ID, t.RetryCount+1, outcome)
 	}
 }
