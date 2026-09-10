@@ -1,7 +1,9 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -115,4 +117,13 @@ func EnsureDefaultConfig(homeDir string) error {
 	}
 
 	return nil
+}
+
+// UnmarshalJSON retains JSON numbers for the TOML encoder instead of turning
+// every integer into a float during the typed-handler roundtrip.
+func (r *ConfigPatchRequest) UnmarshalJSON(data []byte) error {
+	type payload ConfigPatchRequest
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	return decoder.Decode((*payload)(r))
 }

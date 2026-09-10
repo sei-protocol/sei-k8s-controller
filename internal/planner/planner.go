@@ -588,13 +588,13 @@ func buildBasePlan(
 		}
 		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{
+	return withConfigValues(&seiv1alpha1.TaskPlan{
 		ID:          planID,
 		Phase:       seiv1alpha1.TaskPlanActive,
 		Tasks:       tasks,
 		TargetPhase: seiv1alpha1.PhaseRunning,
 		FailedPhase: seiv1alpha1.PhaseFailed,
-	}, nil
+	}, node)
 }
 
 // paramsForTaskType constructs the appropriate params struct for a task type.
