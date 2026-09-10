@@ -16,6 +16,9 @@ import (
 )
 
 const (
+	overlayTestFull      = "full"
+	overlayTestValidator = "validator"
+	overlayTestSeed      = "seed"
 	overlayTestAppFile   = "app.toml"
 	overlayTestBase      = "base"
 	overlayTestStateSync = "state-sync"
@@ -162,21 +165,21 @@ func TestConfigValuesInvalidJSON(t *testing.T) {
 }
 
 func TestConfigValuesAllModePlanners(t *testing.T) {
-	for _, mode := range []string{"full", overlayTestArchive, "validator", "seed", overlayTestReplayer} {
+	for _, mode := range []string{overlayTestFull, overlayTestArchive, overlayTestValidator, overlayTestSeed, overlayTestReplayer} {
 		t.Run(mode, func(t *testing.T) {
 			n := overlayTestNode()
 			var build func(*seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
 			switch mode {
-			case "full":
+			case overlayTestFull:
 				n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
 				build = (&fullNodePlanner{}).BuildPlan
 			case overlayTestArchive:
 				n.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
 				build = (&archiveNodePlanner{}).BuildPlan
-			case "validator":
+			case overlayTestValidator:
 				n.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
 				build = (&validatorPlanner{}).BuildPlan
-			case "seed":
+			case overlayTestSeed:
 				n.Spec.Seed = &seiv1alpha1.SeedSpec{}
 				build = (&seedPlanner{}).BuildPlan
 			case overlayTestReplayer:
