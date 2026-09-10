@@ -117,7 +117,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 	var req TaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	// Keep integer tokens exact until the typed handler decodes task params.
+	decoder.UseNumber()
+	if err := decoder.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
