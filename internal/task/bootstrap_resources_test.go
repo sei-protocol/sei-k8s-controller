@@ -375,3 +375,26 @@ func TestBootstrapJob_TakesCRDResourceFootprint(t *testing.T) {
 	_, hasCPULimit := seid.Resources.Limits[corev1.ResourceCPU]
 	g.Expect(hasCPULimit).To(BeFalse(), "the bootstrap seid must never carry a CPU limit either")
 }
+
+// The bootstrap Job pod picks its pool the same way the StatefulSet pod does,
+// so a Dedicated node's snapshot restore lands where its validator pod can
+// follow the PVC — and a Shared node's bootstrap is unchanged.
+func TestBuildBootstrapPodSpec_DedicatedFollowsSingleTenantPool(t *testing.T) {
+	g := NewWithT(t)
+	snap := &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100}}
+	cfg := platformtest.Config()
+	cfg.DedicatedNodepoolValidator = "sei-validator-dedicated"
+
+	shared := validatorNodeWithSecrets("", "", "")
+	spec := buildBootstrapPodSpec(shared, snap, cfg)
+	g.Expect(spec.Tolerations[0].Value).To(Equal("sei-validator"))
+	g.Expect(spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(1))
+
+	dedicated := validatorNodeWithSecrets("", "", "")
+	dedicated.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodeIsolation: seiv1alpha1.NodeIsolationDedicated}
+	spec = buildBootstrapPodSpec(dedicated, snap, cfg)
+	g.Expect(spec.Tolerations[0].Value).To(Equal("sei-validator-dedicated"))
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-validator-dedicated"))
+	g.Expect(spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(2))
+}

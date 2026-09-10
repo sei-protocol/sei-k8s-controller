@@ -206,7 +206,8 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 	seidInit := bootstrapSeidInitContainer(node)
 	seidInit.Image = bootstrapImage
 
-	pool := platformCfg.NodepoolForMode(bootstrapNodeMode(node))
+	dedicated := noderesource.IsDedicatedNode(node)
+	pool := noderesource.NodepoolForMode(bootstrapNodeMode(node), platformCfg, dedicated)
 
 	return corev1.PodSpec{
 		Hostname:                      fmt.Sprintf("%s-0", node.Name),
@@ -230,10 +231,10 @@ func buildBootstrapPodSpec(node *seiv1alpha1.SeiNode, snap *seiv1alpha1.Snapshot
 					}},
 				},
 			},
-			// Defensive term only: a bootstrap Job pod must not land on a node
-			// reserved by a dedicated-node pod. Bootstrap is not itself a
-			// requester (no exclusive term, not labeled exclusive).
-			PodAntiAffinity: noderesource.BuildPodAntiAffinity(false),
+			// A Dedicated node's bootstrap requests the same isolation as the
+			// pod it warms, so the PVC it binds sits where that pod can follow.
+			// A Shared node's bootstrap carries the defensive term only.
+			PodAntiAffinity: noderesource.BuildPodAntiAffinity(dedicated),
 		},
 		Volumes:        []corev1.Volume{dataVolume, proxyConfigVolume},
 		InitContainers: []corev1.Container{seidInit, sidecar, rbacProxy},

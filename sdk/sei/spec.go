@@ -12,6 +12,18 @@ const (
 	DeletionRetain = "Retain"
 )
 
+// NodeIsolation values for NetworkSpec.NodeIsolation. They mirror the
+// sei.io/v1alpha1 NodeIsolation enum.
+const (
+	// IsolationShared lets a validator pod share a worker node (EC2 instance)
+	// with other Sei pods.
+	IsolationShared = "Shared"
+	// IsolationDedicated places every validator alone on its own worker node so
+	// the instance's network bandwidth is not split across validators — what a
+	// benchmark wants.
+	IsolationDedicated = "Dedicated"
+)
+
 // NetworkSpec is the typed input to CreateNetwork. ChainID is not a field: it
 // defaults to Name (the genesis chain ID == the network name). Genesis and
 // Config are the two override escape hatches so the typed surface need not chase
@@ -37,6 +49,11 @@ type NetworkSpec struct {
 	// SidecarImage overrides the platform-default seictl sidecar image on this
 	// network and its children; "" => platform default. -> spec.sidecar.image.
 	SidecarImage string
+
+	// NodeIsolation requests IsolationShared or IsolationDedicated worker-node
+	// placement for every validator; "" leaves spec.scheduling unset, which the
+	// controller treats as Shared. -> spec.scheduling.nodeIsolation.
+	NodeIsolation string
 }
 
 // GenesisAccount is a non-validator genesis account to fund.

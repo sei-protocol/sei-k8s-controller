@@ -45,6 +45,11 @@ func Load() (Config, error) {
 		TolerationKey:     file.Scheduling.TolerationKey,
 		ServiceAccount:    file.Scheduling.ServiceAccount,
 
+		DedicatedNodepoolName:      file.Scheduling.Dedicated.NodepoolName,
+		DedicatedNodepoolArchive:   file.Scheduling.Dedicated.NodepoolArchive,
+		DedicatedNodepoolValidator: file.Scheduling.Dedicated.NodepoolValidator,
+		DedicatedNodepoolSeed:      file.Scheduling.Dedicated.NodepoolSeed,
+
 		StorageClassPerf:    file.Storage.ClassPerf,
 		StorageClassDefault: file.Storage.ClassDefault,
 		StorageClassArchive: file.Storage.ClassArchive,

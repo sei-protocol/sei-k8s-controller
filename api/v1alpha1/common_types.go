@@ -274,3 +274,22 @@ type ConfigValue struct {
 	// at plan-build.
 	Value apiextensionsv1.JSON `json:"value"`
 }
+
+// NodeIsolation controls whether a Sei pod may share a worker node.
+// +kubebuilder:validation:Enum=Shared;Dedicated
+type NodeIsolation string
+
+const (
+	NodeIsolationShared    NodeIsolation = "Shared"
+	NodeIsolationDedicated NodeIsolation = "Dedicated"
+)
+
+// SchedulingConfig configures scheduling for a SeiNode or SeiNetwork.
+type SchedulingConfig struct {
+	// NodeIsolation requests shared or single-tenant worker-node placement.
+	// There is deliberately no schema default: an unset field must remain unset
+	// on reads so existing SeiNodes retain their legacy annotation fallback.
+	// The controller resolves an unset value to Shared after that fallback.
+	// +optional
+	NodeIsolation NodeIsolation `json:"nodeIsolation,omitempty"`
+}

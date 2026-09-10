@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
@@ -18,6 +19,14 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	nodes, err := r.listChildSeiNodes(ctx, network)
 	if err != nil {
 		return err
+	}
+	workerNodes, err := r.childWorkerNodes(ctx, network)
+	if err != nil {
+		// Placement is two fields of the report; a failed pod list degrades
+		// them to Pending rather than holding back phase, replicas and
+		// conditions, which are computed from the children alone.
+		log.FromContext(ctx).Error(err, "reading validator placement; reporting every child as pending")
+		workerNodes = nil
 	}
 
 	var readyReplicas, upToDateReplicas int32
@@ -30,10 +39,16 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 		if node.Status.CurrentImage == network.Spec.Image {
 			upToDateReplicas++
 		}
+		placement := seiv1alpha1.PlacementPending
+		if workerNodes[node.Name] != "" {
+			placement = seiv1alpha1.PlacementScheduled
+		}
 		nodeStatuses = append(nodeStatuses, seiv1alpha1.GroupNodeStatus{
 			Name:         node.Name,
 			Phase:        node.Status.Phase,
 			CurrentImage: node.Status.CurrentImage,
+			WorkerNode:   workerNodes[node.Name],
+			Placement:    placement,
 		})
 	}
 
@@ -57,6 +72,36 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	setRolloutInProgressCondition(network, upToDateReplicas, network.Spec.Replicas, len(nodes))
 
 	return r.Status().Patch(ctx, network, statusBase)
+}
+
+// childWorkerNodes maps each child SeiNode name to the worker node its pod is
+// bound to, read from the pods rather than from any cached status so a
+// reschedule is reflected on the next reconcile. A child with no bound pod is
+// absent from the map. The pods are found by the sei.io/seinetwork label the
+// network stamps into every child's podLabels; the sei.io/node label names the
+// child.
+func (r *SeiNetworkReconciler) childWorkerNodes(ctx context.Context, network *seiv1alpha1.SeiNetwork) (map[string]string, error) {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(network.Namespace),
+		client.MatchingLabels(seinetworkSelector(network)),
+	); err != nil {
+		return nil, fmt.Errorf("listing child pods: %w", err)
+	}
+	workerNodes := make(map[string]string, len(pods.Items))
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		child := pod.Labels[noderesource.NodeLabel]
+		if child == "" || pod.Spec.NodeName == "" || pod.DeletionTimestamp != nil {
+			continue
+		}
+		// A pod in a terminal phase keeps its nodeName but no longer runs there.
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		workerNodes[child] = pod.Spec.NodeName
+	}
+	return workerNodes, nil
 }
 
 // setRolloutInProgressCondition stamps the DERIVED RolloutInProgress

@@ -138,6 +138,10 @@ type SeiNetworkSpec struct {
 	// +optional
 	Resources *Resources `json:"resources,omitempty"`
 
+	// Scheduling configures worker-node isolation.
+	// +optional
+	Scheduling *SchedulingConfig `json:"scheduling,omitempty"`
+
 	// Sidecar configures the sei-sidecar container on each genesis validator.
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`
@@ -446,7 +450,31 @@ type GroupNodeStatus struct {
 	// condition.
 	// +optional
 	CurrentImage string `json:"currentImage,omitempty"`
+
+	// WorkerNode is the Kubernetes node (one EC2 instance on this platform)
+	// running the child's pod, read from the pod each reconcile so it follows
+	// a reschedule. Empty while Placement is Pending. Two validators naming
+	// the same worker node share that instance's network bandwidth.
+	// +optional
+	WorkerNode string `json:"workerNode,omitempty"`
+
+	// Placement reports whether the child's pod is bound to a worker node.
+	// Pending covers both "no pod yet" and "pod exists but is unschedulable",
+	// e.g. a Dedicated validator with no free single-tenant worker node.
+	// +optional
+	Placement Placement `json:"placement,omitempty"`
 }
+
+// Placement is the scheduling state of a child SeiNode's pod.
+// +kubebuilder:validation:Enum=Pending;Scheduled
+type Placement string
+
+const (
+	// PlacementPending means no pod of the child is bound to a worker node.
+	PlacementPending Placement = "Pending"
+	// PlacementScheduled means the child's pod is bound to WorkerNode.
+	PlacementScheduled Placement = "Scheduled"
+)
 
 // Status condition types for SeiNetwork.
 const (

@@ -8,13 +8,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
@@ -43,6 +46,7 @@ type SeiNetworkReconciler struct {
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *SeiNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -182,6 +186,26 @@ func (r *SeiNetworkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&seiv1alpha1.SeiNetwork{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&seiv1alpha1.SeiNode{}, builder.WithPredicates(childPhaseChangedPredicate())).
 		Owns(&corev1.Service{}).
+		// Child pods are two ownership hops away (SeiNode -> StatefulSet -> pod),
+		// so Owns cannot see them. The status placement report reads each pod's
+		// nodeName; without this watch a reschedule would trip no reconcile and
+		// the report would lag until the periodic resync.
+		Watches(&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(podToSeiNetwork),
+			builder.WithPredicates(podPlacementChangedPredicate())).
 		Named(controllerName).
 		Complete(r)
+}
+
+// podToSeiNetwork maps a child pod to its SeiNetwork through the
+// sei.io/seinetwork label the network stamps into every child's podLabels.
+func podToSeiNetwork(_ context.Context, obj client.Object) []reconcile.Request {
+	name := obj.GetLabels()[seinetworkLabel]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: obj.GetNamespace(),
+		Name:      name,
+	}}}
 }
