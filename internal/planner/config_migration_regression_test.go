@@ -43,7 +43,7 @@ func TestRunningConfigIntentMatchesPlannerMode(t *testing.T) {
 }
 
 func TestB1RunningPlanRevertsGigaStoreMigration(t *testing.T) {
-	// Known defect B1 (docs/notes/b1-severity.md): pin the REVERT, not a remedy.
+	// Known defect B1 (the B1 severity analysis on PR #534): pin the REVERT, not a remedy.
 	// Only full nodes are workflow-eligible. The other rows measure regeneration
 	// defensively; literal expectations catch changes to sibling default flags.
 	expected := map[string][]any{
