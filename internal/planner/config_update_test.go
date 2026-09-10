@@ -16,6 +16,12 @@ import (
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
+const (
+	configUpdateBoth    = "both"
+	configUpdateFile    = "config.toml"
+	configUpdateOldHash = "old"
+)
+
 func TestConfigValuesEmptyObservedHashDoesNotRestartFleetOnControllerUpgrade(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
@@ -60,20 +66,20 @@ func TestConfigUpdateAllModesOrderingAndPeerPrecedence(t *testing.T) {
 		{"replayer", func(n *seiv1alpha1.SeiNode) { n.Spec.Replayer = &seiv1alpha1.ReplayerSpec{} }},
 	}
 	for _, mode := range modes {
-		for _, drift := range []string{"config", "image", "both", "sidecar"} {
+		for _, drift := range []string{"config", "image", configUpdateBoth, "sidecar"} {
 			t.Run(mode.name+"/"+drift, func(t *testing.T) {
 				g := NewWithT(t)
 				node := runningFullNode()
 				node.Spec.FullNode = nil
 				mode.configure(node)
 				node.Spec.ConfigValues = []seiv1alpha1.ConfigValue{{
-					FileName: "config.toml", Key: "p2p", Value: apiextensionsv1.JSON{Raw: []byte(`{"external-address":"pinned:26656","persistent-peers":"pinned-peer"}`)},
+					FileName: configUpdateFile, Key: "p2p", Value: apiextensionsv1.JSON{Raw: []byte(`{"external-address":"pinned:26656","persistent-peers":"pinned-peer"}`)},
 				}}
 				node.Status.CurrentConfigValuesHash = "previous"
 				if drift == "image" || drift == "sidecar" {
 					node.Status.CurrentConfigValuesHash, _ = configValuesHash(node.Spec.ConfigValues)
 				}
-				if drift == "image" || drift == "both" {
+				if drift == "image" || drift == configUpdateBoth {
 					node.Spec.Image = testImageV2
 				}
 				resolver := &NodeResolver{}
@@ -93,12 +99,12 @@ func TestConfigUpdateAllModesOrderingAndPeerPrecedence(t *testing.T) {
 					g.Expect(types).NotTo(ContainElement(sidecar.TaskTypeRestartSeid))
 					g.Expect(types).To(ContainElement(task.TaskTypeReplacePod))
 				}
-				g.Expect(slices.Contains(types, TaskConfigApply)).To(Equal(drift == "config" || drift == "both"))
+				g.Expect(slices.Contains(types, TaskConfigApply)).To(Equal(drift == "config" || drift == configUpdateBoth))
 				validate := slices.Index(types, TaskConfigValidate)
 				g.Expect(types[validate-2 : validate]).To(Equal([]string{TaskConfigPatch, TaskConfigPatch}))
 				var patch task.ConfigPatchTask
 				g.Expect(json.Unmarshal(plan.Tasks[validate-1].Params.Raw, &patch)).To(Succeed())
-				g.Expect(patch.Files["config.toml"]["p2p"]).To(Equal(map[string]any{
+				g.Expect(patch.Files[configUpdateFile]["p2p"]).To(Equal(map[string]any{
 					"external-address": "pinned:26656", "persistent-peers": "pinned-peer",
 				}))
 				g.Expect(plan.ConfigValuesHash).NotTo(BeEmpty())
@@ -118,7 +124,7 @@ func TestConfigUpdateAllModesOrderingAndPeerPrecedence(t *testing.T) {
 func TestConfigUpdateReconcileTwiceHasNoRestartLoop(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
-	node.Status.CurrentConfigValuesHash = "old"
+	node.Status.CurrentConfigValuesHash = configUpdateOldHash
 	node.Spec.ConfigValues = overlayTestNode().Spec.ConfigValues
 	resolver := &NodeResolver{}
 	ctx := context.Background()
@@ -145,7 +151,7 @@ func TestConfigUpdateCompletionObservesCapturedSpecAndFailureDoesNotObserve(t *t
 		t.Run(string(phase), func(t *testing.T) {
 			g := NewWithT(t)
 			node := runningFullNode()
-			node.Status.CurrentConfigValuesHash = "old"
+			node.Status.CurrentConfigValuesHash = configUpdateOldHash
 			node.Spec.ConfigValues = overlayTestNode().Spec.ConfigValues
 			plan, err := buildConfigUpdatePlan(node)
 			g.Expect(err).NotTo(HaveOccurred())
@@ -157,7 +163,7 @@ func TestConfigUpdateCompletionObservesCapturedSpecAndFailureDoesNotObserve(t *t
 			_, err = executePlan(context.Background(), node, plan, task.ExecutionConfig{})
 			g.Expect(err).NotTo(HaveOccurred())
 			if phase == seiv1alpha1.TaskPlanFailed {
-				g.Expect(node.Status.CurrentConfigValuesHash).To(Equal("old"))
+				g.Expect(node.Status.CurrentConfigValuesHash).To(Equal(configUpdateOldHash))
 			} else {
 				g.Expect(node.Status.CurrentConfigValuesHash).To(Equal(plan.ConfigValuesHash))
 			}
@@ -177,7 +183,7 @@ func TestConfigValuesHashCanonicalNumericJSON(t *testing.T) {
 			g := NewWithT(t)
 			var want string
 			for _, raw := range variants {
-				values := []seiv1alpha1.ConfigValue{{FileName: "config.toml", Key: "custom",
+				values := []seiv1alpha1.ConfigValue{{FileName: configUpdateFile, Key: "custom",
 					Value: apiextensionsv1.JSON{Raw: []byte(`{"nested":[` + raw + `]}`)},
 				}}
 				got, err := configValuesHash(values)
@@ -211,7 +217,7 @@ func TestConfigUpdateWaitsForRestartBeforeObserving(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 	node := runningFullNode()
-	node.Status.CurrentConfigValuesHash = "old"
+	node.Status.CurrentConfigValuesHash = configUpdateOldHash
 	plan, err := buildConfigUpdatePlan(node)
 	g.Expect(err).NotTo(HaveOccurred())
 	var restartID uuid.UUID
@@ -230,7 +236,7 @@ func TestConfigUpdateWaitsForRestartBeforeObserving(t *testing.T) {
 	_, err = executePlan(ctx, node, plan, cfg)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
-	g.Expect(node.Status.CurrentConfigValuesHash).To(Equal("old"))
+	g.Expect(node.Status.CurrentConfigValuesHash).To(Equal(configUpdateOldHash))
 	sc.activeResults[restartID].Status = sidecar.Completed
 	_, err = executePlan(ctx, node, plan, cfg)
 	g.Expect(err).NotTo(HaveOccurred())
