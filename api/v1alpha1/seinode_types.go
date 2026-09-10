@@ -480,6 +480,11 @@ const (
 	// False/VolumeAttributesClassNotFound and holds provisioning rather than
 	// leaving a silently-Pending pod; adding the class (a platform/GitOps change)
 	// lets the next poll proceed.
+	//
+	// True reports a best-effort existence check at the last reconcile, not a
+	// binding guarantee: the class can be deleted afterwards, and the controller
+	// reads a cache that may lag. Treat it as the pre-flight's verdict on the
+	// selection, not as a promise about the volume.
 	ConditionVolumeAttributesClassReady = "VolumeAttributesClassReady"
 
 	// ConditionSigningKeyReady indicates whether a referenced validator

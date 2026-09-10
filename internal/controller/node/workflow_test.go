@@ -6,6 +6,7 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -77,9 +78,22 @@ func callReconcileWorkflow(t *testing.T, r *SeiNodeReconciler, c client.Client, 
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: name}, node); err != nil {
 		t.Fatalf("get node: %v", err)
 	}
+	// Stands in for the reconciler's single status writer: same optimistic lock,
+	// same no-op-when-unchanged short-circuit, same re-baseline on success.
 	before := node.DeepCopy()
 	base := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
-	suppress, _, handled, err := r.reconcileWorkflow(context.Background(), node, before, base)
+	flushStatus := func() error {
+		if apiequality.Semantic.DeepEqual(before.Status, node.Status) {
+			return nil
+		}
+		if err := r.Status().Patch(context.Background(), node, base); err != nil {
+			return err
+		}
+		before = node.DeepCopy()
+		base = client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
+		return nil
+	}
+	suppress, _, handled, err := r.reconcileWorkflow(context.Background(), node, flushStatus)
 	if err != nil {
 		t.Fatalf("reconcileWorkflow: %v", err)
 	}

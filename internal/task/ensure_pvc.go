@@ -79,6 +79,21 @@ func (e *ensureDataPVCExecution) Execute(ctx context.Context) error {
 // Nothing selected is never held: there is no reference to verify, so a
 // selection-free node cannot be blocked by this gate even if the condition were
 // somehow unresolved.
+//
+// THE ORDERING IS THE INVARIANT, and the nil guard below does not substitute for
+// it. What this reads is a condition PERSISTED on status, so it is only as fresh
+// as the resolve that preceded it in this same reconcile. Move plan execution
+// ahead of reconcileVolumeAttributesClass and the guard still passes — on a
+// stale True left by an earlier reconcile, which is precisely the check being
+// skipped. The nil case catches only a node that has never been resolved, not a
+// node resolved too long ago.
+//
+// The pre-flight it consumes is best-effort existence, never a binding
+// guarantee: the class can be deleted between the resolve and the Create below,
+// and the resolve reads an informer cache that may lag the API. It converts the
+// common operator mistake — a name that is not in the catalog — into a named
+// condition instead of a silently-Pending pod; it does not make provisioning
+// atomic with respect to the class's lifetime.
 func holdForVolumeAttributesClass(node *seiv1alpha1.SeiNode) error {
 	name := noderesource.VolumeAttributesClassForNode(node)
 	if name == nil {

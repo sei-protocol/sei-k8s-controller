@@ -41,6 +41,18 @@ import (
 // requeue is needed for a blocked selection: the only work a missing class
 // blocks is provisioning, and the holding task's transient error already drives
 // the executor's poll until the platform adds the class.
+//
+// Because the task consumes the PERSISTED condition, this resolve must keep
+// running before plan execution — see the ordering note on
+// holdForVolumeAttributesClass before moving either one.
+//
+// What it establishes is best-effort existence at resolve time, not a binding
+// guarantee. The Get reads the manager's informer cache, which can lag the API,
+// and the class can be deleted between here and the Create the task performs.
+// The value is turning the common operator mistake — a name that is not in the
+// catalog — into a named condition rather than a silently-Pending pod; a class
+// yanked mid-provision still lands as a Pending volume, and the condition
+// re-resolves to False on the next reconcile.
 func (r *SeiNodeReconciler) reconcileVolumeAttributesClass(ctx context.Context, node *seiv1alpha1.SeiNode) {
 	if dv := node.Spec.DataVolume; dv != nil && dv.Import != nil && dv.Import.PVCName != "" {
 		// An imported volume keeps the importer's parameters — the controller

@@ -9,9 +9,11 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -399,4 +401,165 @@ func TestVACRoleGrantsReadOnly(t *testing.T) {
 	}
 	g.Expect(got).To(ConsistOf("get", "list", "watch"),
 		"the pre-flight is read-only: DR-001 pins get;list;watch, and the controller must never hold a write on a cluster-scoped class")
+}
+
+// --- The error returns that attempt no flush of their own ---
+//
+// Resolving the condition in memory is not persisting it. Each of these paths
+// returns before the end-of-reconcile flush and writes no status of its own, so
+// without the flush-on-the-way-out a node parked on any of them keeps whatever
+// absence it started with for as long as the error persists. Every case reads
+// the node back from the client — the in-memory object would pass regardless —
+// and asserts the original error still propagates.
+
+// failingClient injects a persistent API failure on one operation, standing in
+// for a Forbidden from RBAC or a wedged admission webhook. Status writes are
+// deliberately left working (Status() is promoted from the embedded client), so
+// these tests fail only because nothing ATTEMPTS the write.
+type failingClient struct {
+	client.Client
+	failSTSWrite    bool
+	failNodeList    bool
+	failWorkflowGet bool
+}
+
+func forbidden(resource, name string) error {
+	return apierrors.NewForbidden(schema.GroupResource{Resource: resource}, name, fmt.Errorf("injected"))
+}
+
+func (f *failingClient) isSTS(obj client.Object) bool {
+	_, ok := obj.(*appsv1.StatefulSet)
+	return f.failSTSWrite && ok
+}
+
+func (f *failingClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if f.isSTS(obj) {
+		return forbidden("statefulsets", obj.GetName())
+	}
+	return f.Client.Create(ctx, obj, opts...)
+}
+
+func (f *failingClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if f.isSTS(obj) {
+		return forbidden("statefulsets", obj.GetName())
+	}
+	return f.Client.Update(ctx, obj, opts...)
+}
+
+func (f *failingClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if f.isSTS(obj) {
+		return forbidden("statefulsets", obj.GetName())
+	}
+	return f.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func (f *failingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*seiv1alpha1.SeiNodeTaskWorkflow); ok && f.failWorkflowGet {
+		return forbidden("seinodetaskworkflows", key.Name)
+	}
+	return f.Client.Get(ctx, key, obj, opts...)
+}
+
+func (f *failingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*seiv1alpha1.SeiNodeList); ok && f.failNodeList {
+		return forbidden("seinodes", "")
+	}
+	return f.Client.List(ctx, list, opts...)
+}
+
+// assertVACConditionPersisted reads the node back and asserts the resolved
+// condition actually reached the API.
+func assertVACConditionPersisted(t *testing.T, g Gomega, c client.Client, name string) {
+	t.Helper()
+	persisted := getSeiNode(t, context.Background(), c, name, testNamespace)
+	cond := vacCondition(persisted)
+	g.Expect(cond).NotTo(BeNil(),
+		"the resolved condition must be PERSISTED, not merely resolved in memory")
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonNoVolumeAttributesClass))
+}
+
+// The path with the known reproduction: a persistent Forbidden on StatefulSet
+// apply, node status writes available, and no condition on the node afterwards.
+// It also sits before the Paused branch, so a paused node cannot save it.
+func TestReconcile_StatefulSetError_StillPersistsVACCondition(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := vacNode("vac-sts-err", "")
+	r, c := newNodeReconciler(t, node)
+	r.Client = &failingClient{Client: r.Client, failSTSWrite: true}
+
+	// Twice, as the reproduction did: a node parked on this error must not stay
+	// condition-less across repeated reconciles.
+	for i := range 2 {
+		_, err := r.Reconcile(ctx, nodeReqFor("vac-sts-err", testNamespace))
+		g.Expect(err).To(HaveOccurred(), "reconcile %d must surface the StatefulSet failure", i)
+		g.Expect(err.Error()).To(ContainSubstring("reconciling statefulset"),
+			"the original error must not be masked by the flush")
+		assertVACConditionPersisted(t, g, c, "vac-sts-err")
+	}
+}
+
+func TestReconcile_PeersError_StillPersistsVACCondition(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// A label peer source makes peer resolution list SeiNodes through the client.
+	node := vacNode("vac-peers-err", "")
+	node.Spec.Peers = []seiv1alpha1.PeerSource{{
+		Label: &seiv1alpha1.LabelPeerSource{
+			Selector: map[string]string{"sei.io/chain-id": testChainID},
+		},
+	}}
+	r, c := newNodeReconciler(t, node)
+	r.Client = &failingClient{Client: r.Client, failNodeList: true}
+
+	_, err := r.Reconcile(ctx, nodeReqFor("vac-peers-err", testNamespace))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("reconciling peers"),
+		"the original error must not be masked by the flush")
+	assertVACConditionPersisted(t, g, c, "vac-peers-err")
+}
+
+func TestReconcile_WorkflowError_StillPersistsVACCondition(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// An adoption pointer sends the reconcile into driveAdoptedWorkflow, which
+	// returns a non-NotFound Get failure to the caller unhandled.
+	node := vacNode("vac-wf-err", "")
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.CurrentImage = node.Spec.Image
+	node.Status.AdoptedWorkflow = &seiv1alpha1.AdoptedWorkflowRef{
+		Name: "some-workflow",
+		UID:  "wf-uid",
+	}
+	r, c := newNodeReconciler(t, node)
+	r.Client = &failingClient{Client: r.Client, failWorkflowGet: true}
+
+	_, err := r.Reconcile(ctx, nodeReqFor("vac-wf-err", testNamespace))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("reconciling workflow"),
+		"the original error must not be masked by the flush")
+	assertVACConditionPersisted(t, g, c, "vac-wf-err")
+}
+
+// A fatal planner error aborts before the end-of-reconcile flush. A node with no
+// mode sub-spec is the cheapest fatal (plannerForMode has no default); admission
+// rejects that shape, so only a direct write can build it.
+func TestReconcile_PlannerFatalError_StillPersistsVACCondition(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := vacNode("vac-planner-err", "")
+	node.Spec.FullNode = nil
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	r, c := newNodeReconciler(t, node)
+
+	_, err := r.Reconcile(ctx, nodeReqFor("vac-planner-err", testNamespace))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("resolving plan"),
+		"the original error must not be masked by the flush")
+	assertVACConditionPersisted(t, g, c, "vac-planner-err")
 }
