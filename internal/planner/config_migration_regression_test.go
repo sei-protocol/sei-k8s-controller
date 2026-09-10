@@ -17,11 +17,11 @@ import (
 
 func migrationModeSpecs() map[string]seiv1alpha1.SeiNodeSpec {
 	return map[string]seiv1alpha1.SeiNodeSpec{
-		"full":      {FullNode: &seiv1alpha1.FullNodeSpec{}},
-		"archive":   {Archive: &seiv1alpha1.ArchiveSpec{}},
-		"validator": {Validator: &seiv1alpha1.ValidatorSpec{}},
-		"seed":      {Seed: &seiv1alpha1.SeedSpec{}},
-		"replayer":  {Replayer: &seiv1alpha1.ReplayerSpec{}},
+		overlayTestFull:      {FullNode: &seiv1alpha1.FullNodeSpec{}},
+		overlayTestArchive:   {Archive: &seiv1alpha1.ArchiveSpec{}},
+		overlayTestValidator: {Validator: &seiv1alpha1.ValidatorSpec{}},
+		overlayTestSeed:      {Seed: &seiv1alpha1.SeedSpec{}},
+		overlayTestReplayer:  {Replayer: &seiv1alpha1.ReplayerSpec{}},
 	}
 }
 
@@ -35,7 +35,7 @@ func TestRunningConfigIntentMatchesPlannerMode(t *testing.T) {
 			g.Expect(string(runningConfigIntent(node).Mode)).To(Equal(mode.Mode()))
 			// Replayer deliberately uses full defaults, just like its init intent;
 			// its controller overrides only tune state-commit buffers and retention.
-			if name == "replayer" {
+			if name == overlayTestReplayer {
 				g.Expect(runningConfigIntent(node).Mode).To(Equal(seiconfig.ModeFull))
 			}
 		})
@@ -47,11 +47,11 @@ func TestB1RunningPlanRevertsGigaStoreMigration(t *testing.T) {
 	// Only full nodes are workflow-eligible. The other rows measure regeneration
 	// defensively; literal expectations catch changes to sibling default flags.
 	expected := map[string][]any{
-		"full":      {true, true, "pebbledb", true},
-		"archive":   {true, nil, "pebbledb", true},
-		"validator": {false, nil, "pebbledb", true},
-		"seed":      {false, nil, "pebbledb", true},
-		"replayer":  {true, true, "pebbledb", true},
+		overlayTestFull:      {true, true, backendPebble, true},
+		overlayTestArchive:   {true, nil, backendPebble, true},
+		overlayTestValidator: {false, nil, backendPebble, true},
+		overlayTestSeed:      {false, nil, backendPebble, true},
+		overlayTestReplayer:  {true, true, backendPebble, true},
 	}
 	for name, spec := range migrationModeSpecs() {
 		t.Run(name, func(t *testing.T) {
@@ -152,9 +152,12 @@ func TestUnobservedConfigNonRunningPhasesNeverGetBaselineNotice(t *testing.T) {
 		t.Run(string(phase), func(t *testing.T) {
 			g := NewWithT(t)
 			node := runningFullNode()
-			node.Status.Phase = phase
 			node.Status.CurrentConfigValuesHash = ""
 			node.Spec.ConfigValues = overlayTestNode().Spec.ConfigValues
+			// Positive control isolates phase as the only changed gate input.
+			g.Expect(shouldExplainUnobservedConfig(node)).To(BeTrue())
+			node.Status.Phase = phase
+			g.Expect(shouldExplainUnobservedConfig(node)).To(BeFalse())
 			g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 			condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
 			if condition != nil {
