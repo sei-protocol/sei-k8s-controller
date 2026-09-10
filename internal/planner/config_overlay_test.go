@@ -207,16 +207,17 @@ func TestConfigValuesAllModePlanners(t *testing.T) {
 }
 
 func TestConfigValuesRejectUnsafePatches(t *testing.T) {
+	const parentKey = "a.b"
 	for _, tc := range []struct {
 		name string
 		keys []string
 		raw  string
 		want string
 	}{
-		{"prefix", []string{"a.b", "a.b.c"}, "1", "overlapping keys"},
-		{"reverse-prefix", []string{"a.b.c", "a.b"}, "1", "overlapping keys"},
-		{"nested-null", []string{"a.b"}, `{"child":{"value":null}}`, "null values"},
-		{"array-null", []string{"a.b"}, `[{"child":null}]`, "null values"},
+		{"prefix", []string{parentKey, "a.b.c"}, "1", "overlapping keys"},
+		{"reverse-prefix", []string{"a.b.c", parentKey}, "1", "overlapping keys"},
+		{"nested-null", []string{parentKey}, `{"child":{"value":null}}`, "null values"},
+		{"array-null", []string{parentKey}, `[{"child":null}]`, "null values"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := &seiv1alpha1.SeiNode{}
