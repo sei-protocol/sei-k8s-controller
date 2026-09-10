@@ -1,6 +1,8 @@
 package task
 
 import (
+	"bytes"
+	"encoding/json"
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
@@ -19,4 +21,12 @@ func (t ConfigPatchTask) Validate() error {
 
 func (t ConfigPatchTask) ToTaskRequest() sidecar.TaskRequest {
 	return sidecar.ConfigPatchTask{Files: t.Files}.ToTaskRequest()
+}
+
+// UnmarshalJSON retains numeric tokens so TOML can distinguish integers and floats.
+func (t *ConfigPatchTask) UnmarshalJSON(data []byte) error {
+	type payload ConfigPatchTask
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	return decoder.Decode((*payload)(t))
 }
