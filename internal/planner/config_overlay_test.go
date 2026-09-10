@@ -8,18 +8,26 @@ import (
 	"testing"
 
 	seiconfig "github.com/sei-protocol/sei-config"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/tomlpatch"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+)
+
+const (
+	overlayTestAppFile   = "app.toml"
+	overlayTestBase      = "base"
+	overlayTestStateSync = "state-sync"
+	overlayTestArchive   = "archive"
 )
 
 func overlayTestNode() *seiv1alpha1.SeiNode {
 	n := &seiv1alpha1.SeiNode{}
 	for _, v := range []struct{ file, key, raw string }{
-		{"app.toml", "arbitrary.deep.enabled", "true"},
-		{"app.toml", "arbitrary.deep.count", "42"},
-		{"app.toml", "arbitrary.deep.ratio", "1.25"},
+		{overlayTestAppFile, "arbitrary.deep.enabled", "true"},
+		{overlayTestAppFile, "arbitrary.deep.count", "42"},
+		{overlayTestAppFile, "arbitrary.deep.ratio", "1.25"},
 		{"config.toml", "custom.label", `"true"`},
 	} {
 		n.Spec.ConfigValues = append(n.Spec.ConfigValues, seiv1alpha1.ConfigValue{FileName: v.file, Key: v.key, Value: apiextensionsv1.JSON{Raw: []byte(v.raw)}})
@@ -55,7 +63,7 @@ func TestConfigValuesTypedTOMLFile(t *testing.T) {
 	}
 	dir := t.TempDir()
 	for file, overlay := range received.Files {
-		base := map[string]any{"untouched": "base"}
+		base := map[string]any{"untouched": overlayTestBase}
 		merged := tomlpatch.Merge(base, overlay).(map[string]any)
 		path := filepath.Join(dir, file)
 		if err := tomlpatch.WriteTOML(path, merged); err != nil {
@@ -65,10 +73,10 @@ func TestConfigValuesTypedTOMLFile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if doc["untouched"] != "base" {
+		if doc["untouched"] != overlayTestBase {
 			t.Fatal("base erased")
 		}
-		if file == "app.toml" {
+		if file == overlayTestAppFile {
 			deep := doc["arbitrary"].(map[string]any)["deep"].(map[string]any)
 			if deep["enabled"] != true || deep["count"] != int64(42) || deep["ratio"] != float64(1.25) {
 				t.Fatalf("wrong TOML types: %#v", deep)
@@ -95,8 +103,8 @@ func TestConfigValuesInitOrdering(t *testing.T) {
 		build  func() (*seiv1alpha1.TaskPlan, error)
 		stages int
 	}{
-		{"base", func() (*seiv1alpha1.TaskPlan, error) { return buildBasePlan(n, nil, intent) }, 1},
-		{"state-sync", func() (*seiv1alpha1.TaskPlan, error) { return buildBasePlan(n, &seiv1alpha1.SnapshotSource{}, intent) }, 1},
+		{overlayTestBase, func() (*seiv1alpha1.TaskPlan, error) { return buildBasePlan(n, nil, intent) }, 1},
+		{overlayTestStateSync, func() (*seiv1alpha1.TaskPlan, error) { return buildBasePlan(n, &seiv1alpha1.SnapshotSource{}, intent) }, 1},
 		{"bootstrap", func() (*seiv1alpha1.TaskPlan, error) {
 			return buildBootstrapPlan(n, &seiv1alpha1.SnapshotSource{}, intent)
 		}, 2},
@@ -153,7 +161,7 @@ func TestConfigValuesInvalidJSON(t *testing.T) {
 }
 
 func TestConfigValuesAllModePlanners(t *testing.T) {
-	for _, mode := range []string{"full", "archive", "validator", "seed", "replayer"} {
+	for _, mode := range []string{"full", overlayTestArchive, "validator", "seed", "replayer"} {
 		t.Run(mode, func(t *testing.T) {
 			n := overlayTestNode()
 			var build func(*seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
@@ -161,7 +169,7 @@ func TestConfigValuesAllModePlanners(t *testing.T) {
 			case "full":
 				n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
 				build = (&fullNodePlanner{}).BuildPlan
-			case "archive":
+			case overlayTestArchive:
 				n.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
 				build = (&archiveNodePlanner{}).BuildPlan
 			case "validator":
