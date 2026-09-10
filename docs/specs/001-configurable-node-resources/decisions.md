@@ -65,14 +65,14 @@ CRD field selects.
   missing condition.
 - **The selection is provision-time only in this iteration.** `ensure-data-pvc`
   is Get-then-Create with no update path
-  (`internal/task/ensure_pvc.go:69-85`), so the VAC name and size bind when the
+  (the `executeCreate` path in `internal/task/ensure_pvc.go`), so the VAC name and size bind when the
   PVC is first created. Nothing in the planner replaces a node on storage drift
   either — NodeUpdate plans are built on `spec.image != status.currentImage` — so
   changing storage on a running node group is an **operator act: delete and
   recreate the node.** This is not symmetric with a compute change, which rolls
   the pod in place (`apply-statefulset`/`replace-pod`) with the volume intact: a
   controller-provisioned PVC carries an `ownerReference` to the SeiNode
-  (`ensure_pvc.go:65`), so deleting the node garbage-collects its data volume.
+  (`ctrl.SetControllerReference` in `executeCreate`), so deleting the node garbage-collects its data volume.
   For a benchmark node that data loss is usually acceptable, but it is real and
   the operator should expect it. Live `ModifyVolume`-driven retuning of a bound
   volume is deferred until an update path exists — so the live-modification

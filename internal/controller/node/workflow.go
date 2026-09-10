@@ -399,9 +399,32 @@ func (r *SeiNodeReconciler) gateOnRequirePhase(
 // reapCompletedWorkflowFinalizers skips anything whose phase is not Complete,
 // so a workflow deleted MID-RUN stays Terminating until an operator strips the
 // finalizer by hand — the GitOps-prune wedge the reaper exists to prevent.
-// Finalizer first, pointer second: either crash order converges, because a
-// workflow with no finalizer takes the no-finalizer branch below and clears the
-// pointer there.
+// Finalizer first, pointer second, and the reordering opens no permanent-hold
+// window of its own: if the patch lands but the flush does not, the surviving
+// pointer routes the next reconcile back into driveAdoptedWorkflow, and all
+// three states it can find there clear the pointer.
+//
+//  1. Object fully gone — the usual case, since dropping the last finalizer off
+//     a Terminating object lets the apiserver collect it. driveAdoptedWorkflow's
+//     NotFound / UID-mismatch branch, keyed on
+//     `getErr == nil && wf.UID != ptr.UID`, clears the pointer and releases the
+//     hold. That branch sits ABOVE the DeletionTimestamp check,
+//     `if !wf.DeletionTimestamp.IsZero() {`, so finalizeWorkflow is not
+//     re-entered for an object that no longer exists.
+//  2. Object present without this finalizer — another finalizer is still holding
+//     it, or the patch landed on an object not being collected yet. The
+//     no-finalizer branch immediately below clears the pointer.
+//  3. Cache temporarily stale — the informer still serves the pre-patch object,
+//     so finalizeWorkflow is re-entered and re-issues the removal. That object
+//     still carries the finalizer, so RemoveFinalizer reports a change and
+//     patchWorkflowFinalizer does re-issue the patch; its `if !changed` early
+//     return covers the already-fresh object, not this case. What makes the
+//     retry a no-op rather than an error is the NotFound tolerance on
+//     `r.Patch(ctx, wf, patch)`.
+//
+// A reconcile is guaranteed to run those branches: the delete handler
+// `func (h *workflowTargetHandler) Delete(` enqueues the target node on the
+// workflow's delete event, and the node's own steady-state poll backs that up.
 func (r *SeiNodeReconciler) finalizeWorkflow(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
