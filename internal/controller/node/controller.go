@@ -335,6 +335,9 @@ func (r *SeiNodeReconciler) resolveDriftPlan(
 	// non-state-sync work. Its internal fail-closed gate declines to build a
 	// state-sync plan when StateSyncReady isn't True.
 	if err := r.Planner.ResolvePlan(ctx, node); err != nil {
+		if r.Recorder != nil {
+			r.Recorder.Eventf(node, corev1.EventTypeWarning, "PlanBuildFailed", "Cannot build node plan: %v", err)
+		}
 		return ctrl.Result{}, nil, fmt.Errorf("resolving plan: %w", err)
 	}
 

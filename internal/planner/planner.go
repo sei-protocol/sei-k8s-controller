@@ -74,7 +74,8 @@ var baseProgression = map[string][]string{
 // running resource — callers don't see the distinction.
 //
 // Convention: init writes the whole config via TaskConfigApply; an
-// existing resource patches only controller-owned keys via TaskConfigPatch.
+// existing resource patches config on image updates and regenerates it on
+// configValues drift, applying the operator overlay last in both cases.
 type NodePlanner interface {
 	Validate(node *seiv1alpha1.SeiNode) error
 	BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
@@ -177,6 +178,15 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return err
 	}
 	if plan == nil {
+		// handleTerminalPlan writes UpdateFailed before clearing a failed plan.
+		// Preserve that diagnostic on this and subsequent no-op reconciles.
+		condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+		terminalReason := condition != nil && condition.Reason == "UpdateFailed"
+		if node.Status.Phase == seiv1alpha1.PhaseRunning && node.Status.CurrentConfigValuesHash == "" &&
+			len(node.Spec.ConfigValues) > 0 && !terminalReason {
+			setNodeUpdateCondition(node, metav1.ConditionFalse, "ConfigBaselineUnobserved",
+				"configValues changes are deferred until an image update regenerates configuration and establishes an observed baseline")
+		}
 		return nil
 	}
 
@@ -269,6 +279,8 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 			return "node-update"
 		case task.TaskTypeEnsureDataPVC:
 			return "init"
+		case sidecar.TaskTypeRestartSeid:
+			return "config-update"
 		}
 	}
 	if len(plan.Tasks) == 1 && plan.Tasks[0].Type == sidecar.TaskTypeMarkReady {
@@ -644,6 +656,8 @@ func paramsForTaskType(
 		return sidecar.ConfigValidateTask{}
 	case TaskMarkReady:
 		return sidecar.MarkReadyTask{}
+	case sidecar.TaskTypeRestartSeid:
+		return sidecar.RestartSeidTask{}
 
 	// Genesis ceremony tasks — only valid when Validator.GenesisCeremony is set.
 	case TaskGenerateIdentity, TaskGenerateGentx, TaskUploadGenesisArtifacts, TaskSetGenesisPeers:
@@ -711,8 +725,8 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 // CEL guard rejects it in spec.overrides, because mergeOverrides lets a user
 // override outrank a controller one.
 //
-// Only the bootstrap path carries a ConfigIntent, so this reaches app.toml on an
-// init plan alone. The mode sub-specs make freeze create-only for that reason.
+// Init plans and Running-path base regeneration both carry this override in
+// their ConfigIntent. The mode sub-specs continue to make freeze create-only.
 func freezeOverrides(freeze *seiv1alpha1.FreezeSpec) map[string]string {
 	if freeze == nil {
 		return nil
@@ -763,6 +777,18 @@ func buildMarkReadyPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error
 
 func imageDrifted(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Image != node.Status.CurrentImage
+}
+
+// configValuesDrifted mirrors image observation. Never restart an unobserved
+// node during a controller upgrade; its next materialization establishes baseline.
+// A hashing error surfaces through the controller's PlanBuildFailed event when
+// overlay construction rejects the same input, not through a condition.
+func configValuesDrifted(node *seiv1alpha1.SeiNode) bool {
+	if node.Status.CurrentConfigValuesHash == "" {
+		return false
+	}
+	hash, err := configValuesHash(node.Spec.ConfigValues)
+	return err != nil || hash != node.Status.CurrentConfigValuesHash
 }
 
 // sidecarImageDrifted reports whether the effective sidecar image diverges
@@ -822,6 +848,16 @@ func p2pConfigPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 // so the reason/message reflects the actual trigger. FailedPhase stays
 // empty so a failure retries on next reconcile.
 func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
+	// First observation must also restore the base: an unobserved node may
+	// carry removed piece-1 overlay keys. This does not trigger a plan; it
+	// only strengthens materialization in an update already being performed.
+	if node.Status.CurrentConfigValuesHash == "" || configValuesDrifted(node) {
+		var err error
+		prog, err = insertBefore(prog, TaskConfigPatch, TaskConfigApply)
+		if err != nil {
+			return nil, err
+		}
+	}
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
@@ -832,18 +868,20 @@ func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[stri
 		}
 		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{
+	return withConfigValues(&seiv1alpha1.TaskPlan{
 		ID:          planID,
 		Phase:       seiv1alpha1.TaskPlanActive,
 		Tasks:       tasks,
 		TargetPhase: seiv1alpha1.PhaseRunning,
-	}, nil
+	}, node)
 }
 
 // paramsForUpdateTask returns ConfigPatchTask params for TaskConfigPatch
-// and delegates everything else to paramsForTaskType. Update plans never
-// carry a ConfigIntent — those are init-path only.
+// and the full base intent when configValues drift requires regeneration.
 func paramsForUpdateTask(node *seiv1alpha1.SeiNode, taskType string, patch map[string]map[string]any) any {
+	if taskType == TaskConfigApply {
+		return runningConfigIntent(node)
+	}
 	if taskType == TaskConfigPatch {
 		return task.ConfigPatchTask{Files: patch}
 	}

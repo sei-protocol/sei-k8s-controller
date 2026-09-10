@@ -2,8 +2,10 @@ package planner
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"regexp"
 	"slices"
 	"strings"
@@ -49,10 +51,15 @@ func configValuesOverlay(values []seiv1alpha1.ConfigValue) (*task.ConfigPatchTas
 	return patch, nil
 }
 
-// withConfigValues is only used by INIT plan builders. Apply the overlay after
+// withConfigValues captures the desired config and applies the overlay after
 // base regeneration and any state-sync/genesis peer writes, before validation.
 // Bootstrap plans have two validation stages and need the overlay in both.
 func withConfigValues(plan *seiv1alpha1.TaskPlan, node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	hash, err := configValuesHash(node.Spec.ConfigValues)
+	if err != nil {
+		return nil, err
+	}
+	plan.ConfigValuesHash = hash
 	if len(node.Spec.ConfigValues) == 0 {
 		return plan, nil
 	}
@@ -155,4 +162,75 @@ func validateOverlayNumbers(value any) error {
 		}
 	}
 	return nil
+}
+
+// configValuesHash hashes sorted JSON tuples. Decode with UseNumber to preserve
+// large integer precision; normalize numbers exactly, then Marshal sorts object
+// keys and removes whitespace.
+// Sorting the complete tuples makes list order and Go map iteration irrelevant.
+func configValuesHash(values []seiv1alpha1.ConfigValue) (string, error) {
+	tuples := make([]string, 0, len(values))
+	for _, entry := range values {
+		var value any
+		decoder := json.NewDecoder(bytes.NewReader(entry.Value.Raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return "", fmt.Errorf("configValues %s:%s: %w", entry.FileName, entry.Key, err)
+		}
+		tuple, err := json.Marshal([]any{entry.FileName, entry.Key, canonicalJSONValue(value)})
+		if err != nil {
+			return "", fmt.Errorf("hashing configValues: %w", err)
+		}
+		tuples = append(tuples, string(tuple))
+	}
+	slices.Sort(tuples)
+	encoded, err := json.Marshal(tuples)
+	if err != nil {
+		return "", fmt.Errorf("hashing configValues tuples: %w", err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(encoded)), nil
+}
+
+// canonicalJSONValue normalizes numeric spelling without a float64 roundtrip.
+func canonicalJSONValue(value any) any {
+	switch v := value.(type) {
+	case json.Number:
+		return canonicalJSONNumber(v)
+	case map[string]any:
+		for key, child := range v {
+			v[key] = canonicalJSONValue(child)
+		}
+	case []any:
+		for i, child := range v {
+			v[i] = canonicalJSONValue(child)
+		}
+	}
+	return value
+}
+
+// canonicalJSONNumber uses an integer significand and decimal exponent. It
+// preserves arbitrary integer precision and avoids allocating exponent-sized
+// strings (even 0e999999999 has constant-sized canonical output).
+func canonicalJSONNumber(number json.Number) json.Number {
+	mantissa, exponent, _ := strings.Cut(strings.ToLower(string(number)), "e")
+	negative := strings.HasPrefix(mantissa, "-")
+	mantissa = strings.TrimPrefix(mantissa, "-")
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	digits := strings.TrimLeft(whole+fraction, "0")
+	if digits == "" {
+		return "0"
+	}
+	trimmed := strings.TrimRight(digits, "0")
+	power := new(big.Int)
+	if exponent != "" {
+		power.SetString(exponent, 10)
+	}
+	power.Add(power, big.NewInt(int64(len(digits)-len(trimmed)-len(fraction))))
+	if negative {
+		trimmed = "-" + trimmed
+	}
+	if power.Sign() != 0 {
+		trimmed += "e" + power.String()
+	}
+	return json.Number(trimmed)
 }
