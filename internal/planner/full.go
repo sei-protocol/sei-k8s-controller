@@ -64,6 +64,9 @@ func (p *fullNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alp
 		}
 		return assembleUpdatePlan(node, prog, p2pConfigPatch(node))
 	}
+	if configValuesDrifted(node) {
+		return buildConfigUpdatePlan(node)
+	}
 	if sidecarNeedsReapproval(node) {
 		return buildMarkReadyPlan(node)
 	}
