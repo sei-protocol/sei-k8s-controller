@@ -178,7 +178,12 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return err
 	}
 	if plan == nil {
-		if node.Status.Phase == seiv1alpha1.PhaseRunning && node.Status.CurrentConfigValuesHash == "" {
+		// handleTerminalPlan writes these reasons before clearing the plan.
+		// Preserve them on this and subsequent no-op reconciles.
+		condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+		terminalReason := condition != nil && (condition.Reason == "UpdateFailed" || condition.Reason == "UpdateComplete")
+		if node.Status.Phase == seiv1alpha1.PhaseRunning && node.Status.CurrentConfigValuesHash == "" &&
+			len(node.Spec.ConfigValues) > 0 && !terminalReason {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "ConfigBaselineUnobserved",
 				"configValues changes are deferred until an image update regenerates configuration and establishes an observed baseline")
 		}
@@ -274,6 +279,8 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 			return "node-update"
 		case task.TaskTypeEnsureDataPVC:
 			return "init"
+		case sidecar.TaskTypeRestartSeid:
+			return "config-update"
 		}
 	}
 	if len(plan.Tasks) == 1 && plan.Tasks[0].Type == sidecar.TaskTypeMarkReady {
@@ -718,8 +725,8 @@ func configureStateSyncTask(node *seiv1alpha1.SeiNode) sidecar.ConfigureStateSyn
 // CEL guard rejects it in spec.overrides, because mergeOverrides lets a user
 // override outrank a controller one.
 //
-// Only the bootstrap path carries a ConfigIntent, so this reaches app.toml on an
-// init plan alone. The mode sub-specs make freeze create-only for that reason.
+// Init plans and Running-path base regeneration both carry this override in
+// their ConfigIntent. The mode sub-specs continue to make freeze create-only.
 func freezeOverrides(freeze *seiv1alpha1.FreezeSpec) map[string]string {
 	if freeze == nil {
 		return nil
@@ -774,6 +781,8 @@ func imageDrifted(node *seiv1alpha1.SeiNode) bool {
 
 // configValuesDrifted mirrors image observation. Never restart an unobserved
 // node during a controller upgrade; its next materialization establishes baseline.
+// A hashing error surfaces through the controller's PlanBuildFailed event when
+// overlay construction rejects the same input, not through a condition.
 func configValuesDrifted(node *seiv1alpha1.SeiNode) bool {
 	if node.Status.CurrentConfigValuesHash == "" {
 		return false
