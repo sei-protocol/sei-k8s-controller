@@ -29,15 +29,21 @@ CRD field selects.
 - **VolumeAttributesClass (VAC), referenced by name.** The CRD carries a VAC
   name (plus the volume-claim size); the controller stamps it onto each node's
   PVC at provision and otherwise passes it through. It MUST NOT create VACs.
-- **CRD surface.** The selection lands on `spec.dataVolume.storage`, so
-  `SeiNetwork.spec.dataVolume` inherits it: the storage **size** in the
-  volume-claim shape Req 2.2/2.5 call for (`resources.requests.storage`; PR 4
-  ships this as a narrow `VolumeClaimResources` — same JSON shape as
+- **CRD surface.** The selection lands **under the `spec.dataVolume.storage`
+  object** — that path is a field-path prefix, never a bare quantity — so
+  `SeiNetwork.spec.dataVolume` inherits the same object: the storage **size**
+  at `spec.dataVolume.storage.resources.requests.storage`, in the volume-claim
+  shape Req 2.2/2.5 call for (PR 4 ships this as a narrow
+  `VolumeClaimResources` — same JSON shape as
   `corev1.VolumeResourceRequirements` but request-only, since a volume claim has
-  no limit dimension), and the VAC selection as a sibling name field
-  (`volumeAttributesClassName`, mirroring the PVC field). The size has one home,
-  the volume-claim field — not two. Exact field names are finalized in PR 4/PR 5,
-  but the record fixes the shape so implementation does not settle it by default.
+  no limit dimension), and the VAC selection as a sibling name field at
+  `spec.dataVolume.storage.volumeAttributesClassName` (mirroring the PVC field).
+  The size has one home, the volume-claim field — not two. The size leaf is no
+  longer provisional: PR 4 shipped it as `DataVolumeStorage.Resources` →
+  `VolumeClaimResources.Requests["storage"]` (`api/v1alpha1/seinode_types.go`),
+  with CEL positively requiring the `storage` key. Only the
+  `volumeAttributesClassName` leaf is still open; PR 5 finalizes that one name,
+  and the record fixes its shape so implementation does not settle it by default.
   Because `SeiNetwork.spec.dataVolume` is the same type, the selection inherits
   that field's spec-level create-only CEL (`seinetwork_types.go:29`), which
   rejects a change, an unset, **and a first-time set**. So at the network level
