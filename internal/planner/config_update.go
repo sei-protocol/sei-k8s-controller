@@ -10,10 +10,12 @@ import (
 
 // buildConfigUpdatePlan leaves the StatefulSet and images untouched. The
 // shared assembler regenerates base, patches peers, then overlays configValues
-// before validation and the polled restart. Image updates use replacement instead.
+// before validation, start-gate approval, and the polled restart. Approval must
+// precede restart so seid can pass its sidecar healthz startup gate. Image
+// updates use replacement instead.
 func buildConfigUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	plan, err := assembleUpdatePlan(node, []string{
-		TaskConfigPatch, TaskConfigValidate, sidecar.TaskTypeRestartSeid, TaskMarkReady,
+		TaskConfigPatch, TaskConfigValidate, TaskMarkReady, sidecar.TaskTypeRestartSeid,
 	}, p2pConfigPatch(node))
 	if err != nil {
 		return nil, err
