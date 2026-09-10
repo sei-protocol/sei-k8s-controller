@@ -861,7 +861,7 @@ func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[stri
 	// only strengthens materialization in an update already being performed.
 	// Regeneration also recurs on every configValues edit, including removals.
 	// It resets out-of-band first-party StateSync giga-store migration keys
-	// (known defect B1; see docs/notes/b1-severity.md).
+	// (known defect B1; see the B1 severity analysis on PR #534).
 	if node.Status.CurrentConfigValuesHash == "" || configValuesDrifted(node) {
 		var err error
 		prog, err = insertBefore(prog, TaskConfigPatch, TaskConfigApply)
