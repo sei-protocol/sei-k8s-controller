@@ -12,7 +12,9 @@ import (
 // shared assembler regenerates base, patches peers, then overlays configValues
 // before validation, start-gate approval, and the polled restart. Approval must
 // precede restart so seid can pass its sidecar healthz startup gate. Image
-// updates use replacement instead.
+// updates use replacement instead. Running-path base regeneration resets
+// [statesync] to mode defaults, clearing the trust point written at init by
+// configure-state-sync. The StateSync workflow patches config separately.
 func buildConfigUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	plan, err := assembleUpdatePlan(node, []string{
 		TaskConfigPatch, TaskConfigValidate, TaskMarkReady, sidecar.TaskTypeRestartSeid,
