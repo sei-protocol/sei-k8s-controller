@@ -66,11 +66,13 @@ type SeiNodeSpec struct {
 	Overrides map[string]string `json:"overrides,omitempty"`
 
 	// ConfigValues supplies typed values by config file and dotted TOML path.
-	// It is admitted and persisted but is not yet honoured by any planner or
-	// task: it has no effect until PLT-1210 lands. Precedence against Overrides
-	// is currently undefined. The intended rule is a post-config-apply TOML
-	// overlay, so ConfigValues wins when both set the same dotted path;
-	// Overrides feeds the allow-listed ConfigIntent on the init path.
+	// It is honoured on every INIT path through a config-patch overlay spliced
+	// before config-validate. Applied after config-apply, ConfigValues wins over
+	// Overrides when both set the same dotted path; Overrides feeds the
+	// allow-listed ConfigIntent on the init path.
+	// Edits on already-running nodes are not yet materialized: until the
+	// config-only drift trigger and restart-seid land in piece 2, values take
+	// effect on init paths only.
 	//
 	// Deliberately unguarded: unlike Overrides, this field carries no
 	// allow-list and no denylist, so a ConfigValue may name chain.freeze_height,
