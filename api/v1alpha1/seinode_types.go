@@ -67,12 +67,17 @@ type SeiNodeSpec struct {
 
 	// ConfigValues supplies typed values by config file and dotted TOML path.
 	// It is honoured on every INIT path through a config-patch overlay spliced
-	// before config-validate. Applied after config-apply, ConfigValues wins over
-	// Overrides when both set the same dotted path; Overrides feeds the
+	// before config-validate. On INIT, applied after config-apply, ConfigValues
+	// wins over Overrides when both set the same dotted path; Overrides feeds the
 	// allow-listed ConfigIntent on the init path.
 	// Edits on already-running nodes are not yet materialized: until the
 	// config-only drift trigger and restart-seid land in piece 2, values take
-	// effect on init paths only.
+	// effect on init paths only. On a subsequent image roll, the Running-node
+	// update plan overwrites config.toml p2p.external-address and
+	// p2p.persistent-peers with controller-derived values without reapplying
+	// this overlay. The rest of the overlay survives because the update plan
+	// does not regenerate base configuration. Piece 2 will resolve this
+	// image-roll precedence limitation by reapplying the overlay.
 	//
 	// Deliberately unguarded: unlike Overrides, this field carries no
 	// allow-list and no denylist, so a ConfigValue may name chain.freeze_height,
