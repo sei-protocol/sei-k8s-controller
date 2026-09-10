@@ -36,6 +36,21 @@ func TestRenderNetwork_PropagatesVesting(t *testing.T) {
 	}
 }
 
+// The spec is the sole authority for deletionPolicy, so it is always sent
+// resolved: an omitted value renders as Delete rather than as an absent field
+// that a re-apply would let admission default over a prior Retain.
+func TestRenderNetwork_DeletionPolicyAlwaysResolved(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", sei.DeletionDelete},
+		{sei.DeletionRetain, sei.DeletionRetain},
+	} {
+		net := renderNetwork(sei.NetworkSpec{Name: testNet, Image: testImage, Validators: 1, DeletionPolicy: tc.in}, testNS)
+		if got := string(net.Spec.DeletionPolicy); got != tc.want {
+			t.Errorf("DeletionPolicy %q: rendered %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	spec := sei.NetworkSpec{
 		Name: testNet, Image: testImage, Validators: 4,
@@ -66,8 +81,6 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	if len(net.Spec.Genesis.Accounts) != 1 || net.Spec.Genesis.Accounts[0].Address != testGenesisAddr {
 		t.Errorf("genesis accounts = %+v", net.Spec.Genesis.Accounts)
 	}
-	// DeletionPolicy threads through so an ephemeral chain cascades to its
-	// validators on teardown instead of orphaning them (the CRD default Retain).
 	if got := string(net.Spec.DeletionPolicy); got != sei.DeletionDelete {
 		t.Errorf("deletionPolicy = %q, want %q", got, sei.DeletionDelete)
 	}

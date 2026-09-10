@@ -51,7 +51,9 @@ func (r *SeiNetworkReconciler) reconcileInternalService(ctx context.Context, net
 }
 
 // orphanInternalService strips the owner reference on the internal Service
-// so the resource survives parent deletion under DeletionPolicy=Retain.
+// so the resource survives parent deletion under DeletionPolicy=Retain, and
+// stamps the same retain annotations the children get so the whole retained
+// set is self-describing.
 func (r *SeiNetworkReconciler) orphanInternalService(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
 	svc := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Name: internalServiceName(network), Namespace: network.Namespace}, svc)
@@ -61,7 +63,7 @@ func (r *SeiNetworkReconciler) orphanInternalService(ctx context.Context, networ
 	if err != nil {
 		return fmt.Errorf("fetching internal Service for orphan: %w", err)
 	}
-	if err := r.patchOwnerRefRemoval(ctx, svc, network); err != nil {
+	if err := r.retain(ctx, svc, network); err != nil {
 		return fmt.Errorf("orphaning internal Service: %w", err)
 	}
 	return nil

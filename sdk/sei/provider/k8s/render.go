@@ -22,6 +22,14 @@ const fieldOwner client.FieldOwner = sei.FieldOwner
 // the object carries no canonical labels — but spec.Labels (e.g. a caller GC
 // selector) are stamped when provided.
 func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwork {
+	// The SDK spec is the sole authority for deletionPolicy: the field is sent
+	// on every apply, resolved rather than omitted, so a re-apply without it
+	// cannot silently drop a Retain this same field owner set earlier and let
+	// admission stamp Delete over it.
+	deletionPolicy := seiv1alpha1.DeletionPolicy(spec.DeletionPolicy)
+	if deletionPolicy == "" {
+		deletionPolicy = seiv1alpha1.DeletionPolicyDelete
+	}
 	net := &seiv1alpha1.SeiNetwork{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: seiv1alpha1.GroupVersion.String(),
@@ -33,11 +41,9 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 			Labels:    maps.Clone(spec.Labels), // nil-safe; caller GC/run-id selector
 		},
 		Spec: seiv1alpha1.SeiNetworkSpec{
-			Image:    spec.Image,
-			Replicas: int32(spec.Validators),
-			// "" leaves the CRD default (Delete); a caller sets Retain so a
-			// validator pool's consensus identity outlives the network.
-			DeletionPolicy: seiv1alpha1.DeletionPolicy(spec.DeletionPolicy),
+			Image:          spec.Image,
+			Replicas:       int32(spec.Validators),
+			DeletionPolicy: deletionPolicy,
 			Genesis: seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: spec.Name, // chain ID defaults to the network name
 			},

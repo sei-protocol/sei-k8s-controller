@@ -27,9 +27,11 @@ type NetworkSpec struct {
 	Config   map[string]string // -> spec.configOverrides (config.toml/app.toml)
 	Labels   map[string]string // extra labels on the SeiNetwork object (e.g. a caller GC/run-id selector); the network object carries no labels otherwise
 
-	// DeletionPolicy controls child-validator deletion; "" leaves the CRD Delete
-	// default. Set DeletionRetain to keep validators past the network's deletion.
-	// -> spec.deletionPolicy.
+	// DeletionPolicy controls child-validator deletion; "" means DeletionDelete.
+	// Set DeletionRetain to keep validators past the network's deletion. This
+	// spec is the sole authority for the field: every CreateNetwork applies the
+	// resolved value, so a re-apply that omits it resets a prior Retain to
+	// Delete. -> spec.deletionPolicy.
 	DeletionPolicy string
 
 	// SidecarImage overrides the platform-default seictl sidecar image on this

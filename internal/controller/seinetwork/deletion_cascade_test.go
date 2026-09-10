@@ -256,7 +256,9 @@ func TestHandleDeletion_RetainPolicy_OrphansChildrenSoTheySurvive(t *testing.T) 
 	network := deletingNetwork(seiv1alpha1.DeletionPolicyRetain)
 	child := childSeiNode(0, "child-uid-0")
 	sts := childStatefulSet(child)
-	r := newPlanTestReconciler(t, network, child, sts, childPod(sts))
+	svc := generateInternalService(network)
+	svc.OwnerReferences = child.OwnerReferences
+	r := newPlanTestReconciler(t, network, child, sts, childPod(sts), svc)
 	recorder := r.Recorder.(*record.FakeRecorder)
 
 	_, err := r.handleDeletion(ctx, network)
@@ -268,6 +270,14 @@ func TestHandleDeletion_RetainPolicy_OrphansChildrenSoTheySurvive(t *testing.T) 
 	g.Expect(got.Annotations).To(HaveKeyWithValue(seiv1alpha1.RetainedFromAnnotation, network.Name),
 		"the child must name the network that released it")
 	g.Expect(got.Annotations).To(HaveKeyWithValue(seiv1alpha1.RetainReasonAnnotation, retainReason))
+
+	// The internal Service is the other object Retain leaves ownerless; it
+	// carries the same record so nothing retained reads as a leak.
+	gotSvc := &corev1.Service{}
+	g.Expect(r.Get(ctx, client.ObjectKeyFromObject(svc), gotSvc)).To(Succeed())
+	g.Expect(metav1.GetControllerOf(gotSvc)).To(BeNil(), "Retain must orphan the internal Service")
+	g.Expect(gotSvc.Annotations).To(HaveKeyWithValue(seiv1alpha1.RetainedFromAnnotation, network.Name))
+	g.Expect(gotSvc.Annotations).To(HaveKeyWithValue(seiv1alpha1.RetainReasonAnnotation, retainReason))
 
 	events := drainEvents(recorder)
 	g.Expect(events).To(ContainElement(SatisfyAll(
