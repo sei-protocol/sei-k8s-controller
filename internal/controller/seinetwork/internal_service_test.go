@@ -11,6 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
 
 // --- Pure generator ---
@@ -233,4 +235,31 @@ func gomegaPtrBool(expected bool) OmegaMatcher {
 	return WithTransform(func(p *bool) bool {
 		return p != nil && *p == expected
 	}, BeTrue())
+}
+
+// A same-named network re-owning a Service released under Retain must clear
+// the retain record: the annotations describe an ownerless object, and the
+// Apply alone cannot remove them since a different field manager wrote them.
+func TestReconcileInternalService_ReownClearsRetainRecord(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork(testGroupLabelValue, testNamespace)
+	network.UID = "net-uid-2"
+	retained := generateInternalService(network)
+	retained.Annotations = map[string]string{
+		seiv1alpha1.RetainedFromAnnotation: network.Name,
+		seiv1alpha1.RetainReasonAnnotation: retainReason,
+		"unrelated":                        "kept",
+	}
+	r := newPlanTestReconciler(t, network, retained)
+
+	g.Expect(r.reconcileInternalService(ctx, network)).To(Succeed())
+
+	got := &corev1.Service{}
+	g.Expect(r.Get(ctx, client.ObjectKeyFromObject(retained), got)).To(Succeed())
+	g.Expect(metav1.GetControllerOf(got)).NotTo(BeNil(), "the Service is owned again")
+	g.Expect(got.Annotations).NotTo(HaveKey(seiv1alpha1.RetainedFromAnnotation))
+	g.Expect(got.Annotations).NotTo(HaveKey(seiv1alpha1.RetainReasonAnnotation))
+	g.Expect(got.Annotations).To(HaveKeyWithValue("unrelated", "kept"))
 }

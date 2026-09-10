@@ -391,14 +391,7 @@ func (r *SeiNetworkReconciler) orphanChildSeiNodes(ctx context.Context, network 
 	}
 	for i := range nodes {
 		node := &nodes[i]
-		patch := client.MergeFrom(node.DeepCopy())
-		removeOwnerRef(node, network)
-		if node.Annotations == nil {
-			node.Annotations = make(map[string]string, 2)
-		}
-		node.Annotations[seiv1alpha1.RetainedFromAnnotation] = network.Name
-		node.Annotations[seiv1alpha1.RetainReasonAnnotation] = retainReason
-		if err := r.Patch(ctx, node, patch); err != nil {
+		if err := r.retain(ctx, node, network); err != nil {
 			return fmt.Errorf("orphaning SeiNode %s: %w", node.Name, err)
 		}
 		r.Recorder.Eventf(node, corev1.EventTypeNormal, "RetainedByDeletionPolicy",
@@ -407,29 +400,41 @@ func (r *SeiNetworkReconciler) orphanChildSeiNodes(ctx context.Context, network 
 	return nil
 }
 
-// removeOwnerRef drops owner's reference from obj in memory. It reports
-// whether anything changed so callers can skip a no-op patch.
-func removeOwnerRef(obj client.Object, owner *seiv1alpha1.SeiNetwork) bool {
+// retain releases obj from network in one patch: the network's owner
+// reference goes and the retain annotations arrive together, so an ownerless
+// object is never found without its reason. Re-running it is a no-op patch.
+func (r *SeiNetworkReconciler) retain(ctx context.Context, obj client.Object, network *seiv1alpha1.SeiNetwork) error {
+	patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
 	refs := obj.GetOwnerReferences()
 	filtered := make([]metav1.OwnerReference, 0, len(refs))
 	for _, ref := range refs {
-		if ref.UID != owner.UID {
+		if ref.UID != network.UID {
 			filtered = append(filtered, ref)
 		}
 	}
-	if len(filtered) == len(refs) {
-		return false
-	}
 	obj.SetOwnerReferences(filtered)
-	return true
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string, 2)
+	}
+	annotations[seiv1alpha1.RetainedFromAnnotation] = network.Name
+	annotations[seiv1alpha1.RetainReasonAnnotation] = retainReason
+	obj.SetAnnotations(annotations)
+	return r.Patch(ctx, obj, patch)
 }
 
-// patchOwnerRefRemoval drops the network's owner reference from obj and
-// persists the change when there is one.
-func (r *SeiNetworkReconciler) patchOwnerRefRemoval(ctx context.Context, obj client.Object, owner *seiv1alpha1.SeiNetwork) error {
-	patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
-	if !removeOwnerRef(obj, owner) {
+// clearRetainRecord removes the retain annotations from an object a network
+// owns again. No-op when neither is present.
+func (r *SeiNetworkReconciler) clearRetainRecord(ctx context.Context, obj client.Object) error {
+	annotations := obj.GetAnnotations()
+	_, hasFrom := annotations[seiv1alpha1.RetainedFromAnnotation]
+	_, hasReason := annotations[seiv1alpha1.RetainReasonAnnotation]
+	if !hasFrom && !hasReason {
 		return nil
 	}
+	patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
+	delete(annotations, seiv1alpha1.RetainedFromAnnotation)
+	delete(annotations, seiv1alpha1.RetainReasonAnnotation)
+	obj.SetAnnotations(annotations)
 	return r.Patch(ctx, obj, patch)
 }

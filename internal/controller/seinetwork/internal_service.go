@@ -37,6 +37,13 @@ func (r *SeiNetworkReconciler) reconcileInternalService(ctx context.Context, net
 	if err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
 		return fmt.Errorf("applying internal Service: %w", err)
 	}
+	// The Apply decodes the live object into desired. A Service a previous
+	// same-named network released under Retain still carries that record; the
+	// Apply cannot clear it (a different field manager wrote it), so drop it
+	// here now that the Service is owned again.
+	if err := r.clearRetainRecord(ctx, desired); err != nil {
+		return fmt.Errorf("clearing retain record on internal Service: %w", err)
+	}
 
 	network.Status.InternalService = &seiv1alpha1.InternalServiceStatus{
 		Name:      desired.Name,
@@ -51,7 +58,9 @@ func (r *SeiNetworkReconciler) reconcileInternalService(ctx context.Context, net
 }
 
 // orphanInternalService strips the owner reference on the internal Service
-// so the resource survives parent deletion under DeletionPolicy=Retain.
+// so the resource survives parent deletion under DeletionPolicy=Retain, and
+// stamps the same retain annotations the children get so the whole retained
+// set is self-describing.
 func (r *SeiNetworkReconciler) orphanInternalService(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
 	svc := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Name: internalServiceName(network), Namespace: network.Namespace}, svc)
@@ -61,7 +70,7 @@ func (r *SeiNetworkReconciler) orphanInternalService(ctx context.Context, networ
 	if err != nil {
 		return fmt.Errorf("fetching internal Service for orphan: %w", err)
 	}
-	if err := r.patchOwnerRefRemoval(ctx, svc, network); err != nil {
+	if err := r.retain(ctx, svc, network); err != nil {
 		return fmt.Errorf("orphaning internal Service: %w", err)
 	}
 	return nil
