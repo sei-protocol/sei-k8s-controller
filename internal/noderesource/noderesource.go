@@ -370,6 +370,24 @@ func crdStorageSize(node *seiv1alpha1.SeiNode) *resource.Quantity {
 	return nil
 }
 
+// VolumeAttributesClassForNode returns the VolumeAttributesClass name the node
+// selects for the volume the controller provisions, or nil to leave the PVC's
+// volumeAttributesClassName unset — the mode-default StorageClass then supplies
+// the baseline performance. There is no app-config or per-mode rung below the
+// CRD field: the ladder for this name is one rung deep by design (DR-001).
+//
+// An importing node never reaches the non-nil branch (storage and import are
+// mutually exclusive), so an imported volume keeps the importer's parameters.
+// The returned pointer is a copy, so a caller cannot alias the node's spec.
+func VolumeAttributesClassForNode(node *seiv1alpha1.SeiNode) *string {
+	dv := node.Spec.DataVolume
+	if dv == nil || dv.Storage == nil || dv.Storage.VolumeAttributesClassName == nil {
+		return nil
+	}
+	name := *dv.Storage.VolumeAttributesClassName
+	return &name
+}
+
 // DefaultStorageForMode returns the StorageClass name and PVC size for a
 // node based on its operating mode. Lowest size rung; see StorageForNode.
 func DefaultStorageForMode(mode string, p PlatformConfig) (storageClass string, size string) {
@@ -726,7 +744,9 @@ func GenerateHeadlessService(node *seiv1alpha1.SeiNode) *corev1.Service {
 // ---------------------------------------------------------------------------
 
 // GenerateDataPVC produces the desired PersistentVolumeClaim for a SeiNode's
-// data volume. Size resolved by StorageForNode.
+// data volume. Size resolved by StorageForNode, performance selection by
+// VolumeAttributesClassForNode — nil there leaves volumeAttributesClassName off
+// the claim entirely, which is the no-selection case, not an empty selection.
 func GenerateDataPVC(node *seiv1alpha1.SeiNode, p PlatformConfig) *corev1.PersistentVolumeClaim {
 	sc, size := StorageForNode(node, p)
 
@@ -744,6 +764,7 @@ func GenerateDataPVC(node *seiv1alpha1.SeiNode, p PlatformConfig) *corev1.Persis
 					corev1.ResourceStorage: resource.MustParse(size),
 				},
 			},
+			VolumeAttributesClassName: VolumeAttributesClassForNode(node),
 		},
 	}
 }

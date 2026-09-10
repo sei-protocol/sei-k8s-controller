@@ -111,3 +111,11 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattributesclasses
+  verbs:
+  - get
+  - list
+  - watch

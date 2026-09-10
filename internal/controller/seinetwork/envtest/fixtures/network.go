@@ -107,6 +107,21 @@ func WithDataVolumeStorage(size string) Option {
 	}
 }
 
+// WithDataVolumeVAC sets the VolumeAttributesClass name every pool validator's
+// volume selects. Layers onto an existing spec.dataVolume.storage (from
+// WithDataVolumeStorage) rather than replacing it, so the two compose.
+func WithDataVolumeVAC(name string) Option {
+	return func(network *seiv1alpha1.SeiNetwork) {
+		if network.Spec.DataVolume == nil {
+			network.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{}
+		}
+		if network.Spec.DataVolume.Storage == nil {
+			network.Spec.DataVolume.Storage = &seiv1alpha1.DataVolumeStorage{}
+		}
+		network.Spec.DataVolume.Storage.VolumeAttributesClassName = &name
+	}
+}
+
 // WithDataVolumeImport sets spec.dataVolume to import a pre-existing PVC.
 func WithDataVolumeImport(pvcName string) Option {
 	return func(network *seiv1alpha1.SeiNetwork) {

@@ -66,6 +66,10 @@ spec:
               because only a bootstrap plan writes config.
               dataVolume.storage size is create-only: presence parity here (a sub-type rule
               skips a first-time set), value on the sub-type. Size only — import still adds.
+              The VAC selection's presence half — its own rule rather than a term on the
+              size rule above, so a rejection names the field the operator actually edited.
+              COMPLETENESS: a new DataVolume* field needs BOTH a value rule on its sub-type
+              and a presence term at spec level, on both Kinds.
               resources is create-only, but compared PER-DIMENSION through quantity() — NOT
               structural == on the object. The values are int-or-string Quantities, so a
               node applied with a bare int (cpu: 4) stores an int, while the controller's
@@ -201,6 +205,33 @@ spec:
                               struct prunes a misspelled or empty key and silently defaults the size.
                             type: object
                         type: object
+                      volumeAttributesClassName:
+                        description: |-
+                          VolumeAttributesClassName selects the volume's performance parameters
+                          (for gp3: IOPS and throughput) as a platform-managed, cluster-scoped
+                          VolumeAttributesClass, referenced by NAME — the field mirrors the PVC
+                          field of the same name. The controller reads the named class to pre-flight
+                          it (see the VolumeAttributesClassReady condition) and stamps the name onto
+                          the PVC it provisions; it never creates one. The catalog is platform-owned
+                          (GitOps), so a novel (IOPS, throughput) point is a platform change, not a
+                          controller or CRD change.
+
+                          Unset means the PVC carries no volumeAttributesClassName at all and the
+                          mode-default StorageClass supplies the baseline performance. This is a
+                          distinct PVC field from storageClassName, which the controller always sets
+                          from the per-mode default. There is no app-config rung for this name.
+
+                          Covers controller-provisioned volumes only: dataVolume.import is mutually
+                          exclusive with dataVolume.storage, and an imported PVC keeps the
+                          importer's parameters.
+
+                          Create-only (a value rule here, the presence half at spec level, on both
+                          Kinds): the PVC is provisioned once, so a change, an unset, and a
+                          first-time set are all rejected — the edit could never reach the volume.
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
                     type: object
                     x-kubernetes-validations:
                     - message: 'dataVolume.storage.resources must carry resources.requests.storage:
@@ -208,6 +239,14 @@ spec:
                         the per-mode default while reading as a size request'
                       rule: '!has(self.resources) || (has(self.resources.requests)
                         && ''storage'' in self.resources.requests)'
+                    - message: 'dataVolume.storage.volumeAttributesClassName is create-only:
+                        the data PVC is created once (ensure-data-pvc is Get-then-Create
+                        with no update path) and the VAC name binds at provision,
+                        so a later edit could never reach the volume; delete and recreate
+                        the owning resource (the node, or the SeiNetwork for a pooled
+                        validator) to reselect'
+                      rule: '!has(self.volumeAttributesClassName) || !has(oldSelf.volumeAttributesClassName)
+                        || self.volumeAttributesClassName == oldSelf.volumeAttributesClassName'
                     - message: 'dataVolume.storage.resources.requests.storage is create-only:
                         the data PVC is created once (ensure-data-pvc is Get-then-Create
                         with no update path), so a later size edit could never reach
@@ -1124,6 +1163,14 @@ spec:
                 && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources)
                 && has(oldSelf.dataVolume.storage.resources.requests) && ('storage'
                 in oldSelf.dataVolume.storage.resources.requests)))
+            - message: 'spec.dataVolume.storage.volumeAttributesClassName is create-only:
+                it cannot be added to or removed from an existing node — the data
+                PVC is created once (ensure-data-pvc is Get-then-Create with no update
+                path) and the VAC name binds there, so the edit would be inert; delete
+                and recreate the node to reselect'
+              rule: ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.volumeAttributesClassName))
+                == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) &&
+                has(oldSelf.dataVolume.storage.volumeAttributesClassName)))
             - message: 'spec.resources is create-only: the footprint is fixed at creation
                 (a change is not rolled onto a running pod — the StatefulSet is OnDelete
                 and drift detection is image-only), so replace the node to resize'

@@ -28,6 +28,11 @@ import (
 // dataVolume.storage size is create-only: presence parity here (a sub-type rule
 // skips a first-time set), value on the sub-type. Size only — import still adds.
 // +kubebuilder:validation:XValidation:rule="((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="spec.dataVolume.storage.resources.requests.storage is create-only: it cannot be added to or removed from an existing node — the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path), so the edit would be inert; delete and recreate the node to resize"
+// The VAC selection's presence half — its own rule rather than a term on the
+// size rule above, so a rejection names the field the operator actually edited.
+// COMPLETENESS: a new DataVolume* field needs BOTH a value rule on its sub-type
+// and a presence term at spec level, on both Kinds.
+// +kubebuilder:validation:XValidation:rule="((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.volumeAttributesClassName)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.volumeAttributesClassName)))",message="spec.dataVolume.storage.volumeAttributesClassName is create-only: it cannot be added to or removed from an existing node — the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path) and the VAC name binds there, so the edit would be inert; delete and recreate the node to reselect"
 // resources is create-only, but compared PER-DIMENSION through quantity() — NOT
 // structural == on the object. The values are int-or-string Quantities, so a
 // node applied with a bare int (cpu: 4) stores an int, while the controller's
@@ -186,11 +191,14 @@ type DataVolumeSpec struct {
 	Storage *DataVolumeStorage `json:"storage,omitempty"`
 }
 
-// DataVolumeStorage carries the size in the volume-claim shape. Create-only:
-// value rule here, presence half on the spec — via quantity(), not ==, because a
-// typed re-encode of an int-or-string Quantity would reject the controller's write.
+// DataVolumeStorage carries the size in the volume-claim shape and the storage
+// performance selection. Both are create-only: value rule here, presence half on
+// the spec. The size compares via quantity(), not ==, because a typed re-encode
+// of an int-or-string Quantity would reject the controller's write; the VAC name
+// is a plain string, so == is safe for it.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || (has(self.resources.requests) && 'storage' in self.resources.requests)",message="dataVolume.storage.resources must carry resources.requests.storage: an empty or null storage request would silently provision the per-mode default while reading as a size request"
+// +kubebuilder:validation:XValidation:rule="!has(self.volumeAttributesClassName) || !has(oldSelf.volumeAttributesClassName) || self.volumeAttributesClassName == oldSelf.volumeAttributesClassName",message="dataVolume.storage.volumeAttributesClassName is create-only: the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path) and the VAC name binds at provision, so a later edit could never reach the volume; delete and recreate the owning resource (the node, or the SeiNetwork for a pooled validator) to reselect"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || !has(oldSelf.resources) || !has(oldSelf.resources.requests) || !('storage' in oldSelf.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity(string(oldSelf.resources.requests['storage']))) == 0",message="dataVolume.storage.resources.requests.storage is create-only: the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path), so a later size edit could never reach the volume; delete and recreate the owning resource (the node, or the SeiNetwork for a pooled validator) to resize"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || self.resources.requests.all(k, k == 'storage')",message="dataVolume.storage.resources.requests accepts only storage"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity('0')) > 0",message="dataVolume.storage.resources.requests.storage must be positive"
@@ -199,6 +207,34 @@ type DataVolumeStorage struct {
 	// default; unset falls through.
 	// +optional
 	Resources *VolumeClaimResources `json:"resources,omitempty"`
+
+	// VolumeAttributesClassName selects the volume's performance parameters
+	// (for gp3: IOPS and throughput) as a platform-managed, cluster-scoped
+	// VolumeAttributesClass, referenced by NAME — the field mirrors the PVC
+	// field of the same name. The controller reads the named class to pre-flight
+	// it (see the VolumeAttributesClassReady condition) and stamps the name onto
+	// the PVC it provisions; it never creates one. The catalog is platform-owned
+	// (GitOps), so a novel (IOPS, throughput) point is a platform change, not a
+	// controller or CRD change.
+	//
+	// Unset means the PVC carries no volumeAttributesClassName at all and the
+	// mode-default StorageClass supplies the baseline performance. This is a
+	// distinct PVC field from storageClassName, which the controller always sets
+	// from the per-mode default. There is no app-config rung for this name.
+	//
+	// Covers controller-provisioned volumes only: dataVolume.import is mutually
+	// exclusive with dataVolume.storage, and an imported PVC keeps the
+	// importer's parameters.
+	//
+	// Create-only (a value rule here, the presence half at spec level, on both
+	// Kinds): the PVC is provisioned once, so a change, an unset, and a
+	// first-time set are all rejected — the edit could never reach the volume.
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	// +optional
+	VolumeAttributesClassName *string `json:"volumeAttributesClassName,omitempty"`
 }
 
 // VolumeClaimResources is request-only, narrow rather than
@@ -427,6 +463,18 @@ const (
 	// validation requirements. Only set on SeiNodes with spec.dataVolume.import.
 	ConditionImportPVCReady = "ImportPVCReady"
 
+	// ConditionVolumeAttributesClassReady reports the read-only pre-flight of
+	// spec.dataVolume.storage.volumeAttributesClassName, run before the data PVC
+	// is provisioned. Always-present once ensure-data-pvc runs, INCLUDING when no
+	// VAC is selected — that steady state is True/NoVolumeAttributesClass (the
+	// mode-default storage is used), never absence, so a consumer never has to
+	// read "not configured" out of a missing condition. A named class that is not
+	// in the cluster reports False/VolumeAttributesClassNotFound and holds the
+	// provision, rather than binding a dangling reference into a create-once PVC
+	// and leaving a silently-Pending pod; adding the class (a platform/GitOps
+	// change) lets the next poll proceed.
+	ConditionVolumeAttributesClassReady = "VolumeAttributesClassReady"
+
 	// ConditionSigningKeyReady indicates whether a referenced validator
 	// signing-key Secret passes all validation requirements. Only set on
 	// SeiNodes with spec.validator.signingKey.
@@ -507,6 +555,29 @@ const (
 	ReasonPVCValidated = "PVCValidated" // import succeeded
 	ReasonPVCNotReady  = "PVCNotReady"  // transient: retry
 	ReasonPVCInvalid   = "PVCInvalid"   // terminal: fail the plan
+)
+
+// Reasons for the VolumeAttributesClassReady condition.
+const (
+	// ReasonVolumeAttributesClassFound: the selected class exists; provisioning
+	// may stamp its name onto the PVC.
+	ReasonVolumeAttributesClassFound = "VolumeAttributesClassFound"
+	// ReasonNoVolumeAttributesClass: no class is selected, so the mode-default
+	// storage supplies the baseline performance. A True steady state — the
+	// no-selection case is reported, not left absent.
+	ReasonNoVolumeAttributesClass = "NoVolumeAttributesClass"
+	// ReasonVolumeAttributesClassNotFound: the selected class is not in the
+	// cluster. Transient by intent — the platform adds it (GitOps) and the next
+	// poll proceeds — so the message names the class the operator must add.
+	ReasonVolumeAttributesClassNotFound = "VolumeAttributesClassNotFound"
+	// ReasonVolumeAttributesClassLookupError: reading the class failed for a
+	// reason other than absence, including a cluster that does not serve
+	// storage.k8s.io VolumeAttributesClasses at all (transient: retry).
+	ReasonVolumeAttributesClassLookupError = "VolumeAttributesClassLookupError"
+	// ReasonVolumeAttributesClassNotApplicable: the node imports its data volume,
+	// which keeps the importer's parameters, so there is no selection to
+	// pre-flight. Reported rather than left absent (see the Conditions standard).
+	ReasonVolumeAttributesClassNotApplicable = "NotApplicable"
 )
 
 // Reasons for the SigningKeyReady condition.

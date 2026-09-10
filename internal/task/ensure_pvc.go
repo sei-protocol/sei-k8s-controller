@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -20,6 +21,12 @@ import (
 )
 
 const TaskTypeEnsureDataPVC = "ensure-data-pvc"
+
+// The VAC pre-flight is a cluster-scoped READ and nothing more — the catalog is
+// platform-owned (GitOps), so the controller never creates a class. get;list;watch
+// is the whole set: the read goes through the manager's cached client, whose
+// informer needs list and watch.
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattributesclasses,verbs=get;list;watch
 
 type EnsureDataPVCParams struct {
 	NodeName  string `json:"nodeName"`
@@ -53,9 +60,58 @@ func (e *ensureDataPVCExecution) Execute(ctx context.Context) error {
 	}
 
 	if dv := node.Spec.DataVolume; dv != nil && dv.Import != nil && dv.Import.PVCName != "" {
+		// An imported volume keeps the importer's parameters — the controller
+		// never stamps a VAC on it — so there is no selection to pre-flight.
+		// Reported, not left absent: absence would read as "never evaluated".
+		setVolumeAttributesClassCondition(node, metav1.ConditionFalse,
+			seiv1alpha1.ReasonVolumeAttributesClassNotApplicable,
+			fmt.Sprintf("data volume is imported from PVC %q, which keeps the importer's volume attributes", dv.Import.PVCName))
 		return e.executeImport(ctx, node, dv.Import.PVCName)
 	}
+
+	if err := e.preflightVolumeAttributesClass(ctx, node); err != nil {
+		return err
+	}
 	return e.executeCreate(ctx, node)
+}
+
+// preflightVolumeAttributesClass verifies, read-only, that a selected
+// VolumeAttributesClass exists before the data PVC is provisioned, and records
+// the outcome on the always-present VolumeAttributesClassReady condition.
+//
+// It holds the provision on a missing class rather than failing the plan: the
+// PVC is created once, so binding a dangling reference would need a
+// delete-and-recreate to undo, while the fix — adding the class, a
+// platform/GitOps change — lets the next poll proceed. No selection is a True
+// steady state, so a consumer never reads "not configured" out of an absent
+// condition.
+func (e *ensureDataPVCExecution) preflightVolumeAttributesClass(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+	name := noderesource.VolumeAttributesClassForNode(node)
+	if name == nil {
+		setVolumeAttributesClassCondition(node, metav1.ConditionTrue,
+			seiv1alpha1.ReasonNoVolumeAttributesClass,
+			"no volumeAttributesClassName selected; the mode-default storage class supplies the volume's performance")
+		return nil
+	}
+
+	vac := &storagev1.VolumeAttributesClass{}
+	switch err := e.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: *name}, vac); {
+	case err == nil:
+		setVolumeAttributesClassCondition(node, metav1.ConditionTrue,
+			seiv1alpha1.ReasonVolumeAttributesClassFound,
+			fmt.Sprintf("VolumeAttributesClass %q exists (driver %q)", *name, vac.DriverName))
+		return nil
+	case apierrors.IsNotFound(err):
+		msg := fmt.Sprintf("VolumeAttributesClass %q not found; the platform must add it before this volume can be provisioned", *name)
+		setVolumeAttributesClassCondition(node, metav1.ConditionFalse,
+			seiv1alpha1.ReasonVolumeAttributesClassNotFound, msg)
+		return errors.New(msg)
+	default:
+		setVolumeAttributesClassCondition(node, metav1.ConditionFalse,
+			seiv1alpha1.ReasonVolumeAttributesClassLookupError,
+			fmt.Sprintf("reading VolumeAttributesClass %q: %v", *name, err))
+		return fmt.Errorf("reading VolumeAttributesClass %q: %w", *name, err)
+	}
 }
 
 // executeCreate is Get-then-Create, failing if an unexpected PVC already
@@ -203,6 +259,16 @@ func (e *ensureDataPVCExecution) Status(_ context.Context) ExecutionStatus {
 func isTerminal(err error) bool {
 	var te *TerminalError
 	return errors.As(err, &te)
+}
+
+func setVolumeAttributesClassCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:               seiv1alpha1.ConditionVolumeAttributesClassReady,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: node.Generation,
+	})
 }
 
 func setImportPVCCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason, message string) {
