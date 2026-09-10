@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -23,8 +24,8 @@ func configValuesOverlay(values []seiv1alpha1.ConfigValue) (*task.ConfigPatchTas
 			return nil, fmt.Errorf("configValues %s:%s: %w", entry.FileName, entry.Key, err)
 		}
 		path := strings.Split(entry.Key, ".")
-		for i := len(path) - 1; i >= 0; i-- {
-			value = map[string]any{path[i]: value}
+		for _, key := range slices.Backward(path) {
+			value = map[string]any{key: value}
 		}
 		patch.Files[entry.FileName] = tomlpatch.Merge(patch.Files[entry.FileName], value).(map[string]any)
 	}
