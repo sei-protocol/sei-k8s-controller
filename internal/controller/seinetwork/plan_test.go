@@ -5,8 +5,11 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -63,9 +66,11 @@ func TestFailPlan_LatchesCeremonyFailedAndClearsPlan(t *testing.T) {
 // A founding validator deleted while the ceremony plan is active must not
 // wedge the network: reconcileSeiNodes defers creates under PlanInProgress
 // and the ceremony's tasks retry by name against the missing node forever.
-// reconcilePlan abandons the plan instead — PlanInProgress drops to False so
-// the child is recreated, and GenesisCeremonyComplete records ValidatorLost
-// so the planner rebuilds the ceremony once the set is whole again.
+// reconcilePlan abandons the plan and deletes the survivors instead — their
+// fetched genesis no longer matches what the replacement's gentx would
+// assemble — so PlanInProgress drops to False, the whole set is recreated, and
+// GenesisCeremonyComplete records ValidatorLost so the planner rebuilds the
+// ceremony once the set is whole again.
 func TestReconcilePlan_ValidatorLostMidCeremony_AbandonsPlan(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
@@ -75,10 +80,21 @@ func TestReconcilePlan_ValidatorLostMidCeremony_AbandonsPlan(t *testing.T) {
 	network.Status.IncumbentNodes = []string{testNode0, "genesis-net-1"}
 	setPlanInProgress(network, "PlanStarted", "Plan execution started")
 
-	r := newPlanTestReconciler(t, network)
+	survivor0 := generateSeiNode(network, 0)
+	survivor1 := generateSeiNode(network, 1)
+	for _, s := range []*seiv1alpha1.SeiNode{survivor0, survivor1} {
+		g.Expect(controllerutil.SetControllerReference(network, s, newPlanTestScheme(t))).To(Succeed())
+	}
+
+	r := newPlanTestReconciler(t, network, survivor0, survivor1)
 	result, err := r.reconcilePlan(ctx, network)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+	for _, s := range []*seiv1alpha1.SeiNode{survivor0, survivor1} {
+		err := r.Get(ctx, client.ObjectKeyFromObject(s), &seiv1alpha1.SeiNode{})
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "surviving founding child %s should be deleted", s.Name)
+	}
 
 	g.Expect(network.Status.Plan).To(BeNil())
 
@@ -109,4 +125,27 @@ func TestReconcilePlan_FullSetMidCeremony_KeepsPlan(t *testing.T) {
 	network.Status.IncumbentNodes = []string{testNode0, "genesis-net-1", "genesis-net-2"}
 
 	g.Expect(validatorLost(network)).To(BeFalse())
+}
+
+// A child held in Terminating by its finalizer is already lost to the
+// ceremony: it is not an incumbent, so the loss is detected as soon as the
+// delete lands rather than once the finalizer releases, and no ceremony is
+// built over a node that is on its way out.
+func TestPopulateIncumbentNodes_ExcludesTerminatingChildren(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	live := generateSeiNode(network, 0)
+	terminating := generateSeiNode(network, 1)
+	terminating.Finalizers = []string{"sei.io/test-hold"}
+	for _, s := range []*seiv1alpha1.SeiNode{live, terminating} {
+		g.Expect(controllerutil.SetControllerReference(network, s, newPlanTestScheme(t))).To(Succeed())
+	}
+
+	r := newPlanTestReconciler(t, network, live, terminating)
+	g.Expect(r.Delete(ctx, terminating)).To(Succeed())
+
+	g.Expect(r.populateIncumbentNodes(ctx, network)).To(Succeed())
+	g.Expect(network.Status.IncumbentNodes).To(ConsistOf(live.Name))
 }

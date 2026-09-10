@@ -3,6 +3,7 @@
 package envtest_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -21,7 +22,9 @@ import (
 // not wedge the network. The ceremony's tasks name the founding set and would
 // retry against the missing node forever while the PlanInProgress gate keeps
 // reconcileSeiNodes from recreating it. The network abandons the plan, records
-// ValidatorLost, recreates the child, and rebuilds the ceremony to completion.
+// ValidatorLost, tears down and recreates the whole founding set (the
+// survivor's fetched genesis is stale once the replacement mints a new gentx),
+// and rebuilds the ceremony to completion.
 func TestGenesisCeremony_ValidatorLostMidCeremony_Recovers(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
@@ -41,35 +44,44 @@ func TestGenesisCeremony_ValidatorLostMidCeremony_Recovers(t *testing.T) {
 			n.Status.Plan != nil
 	}, "the genesis ceremony plan is active")
 
-	childKey := types.NamespacedName{Name: network.Name + "-1", Namespace: ns}
-	child := &seiv1alpha1.SeiNode{}
-	g.Expect(testCli.Get(testCtx, childKey, child)).To(Succeed())
-	originalUID := child.UID
-	if len(child.Finalizers) > 0 {
-		patch := client.MergeFrom(child.DeepCopy())
-		child.Finalizers = nil
-		g.Expect(testCli.Patch(testCtx, child, patch)).To(Succeed())
-	}
-
-	// envtest runs no garbage collector: the owner-referenced data PVC would
-	// outlive its SeiNode and the replacement's init plan would refuse to
-	// adopt it. Stand in for GC before the delete so the recreated child
-	// never races a lingering claim, keeping the scenario about the ceremony.
-	pvcKey := types.NamespacedName{Name: "data-" + childKey.Name, Namespace: ns}
-	pvc := &corev1.PersistentVolumeClaim{}
-	if err := testCli.Get(testCtx, pvcKey, pvc); err == nil {
-		if len(pvc.Finalizers) > 0 {
-			patch := client.MergeFrom(pvc.DeepCopy())
-			pvc.Finalizers = nil
-			g.Expect(testCli.Patch(testCtx, pvc, patch)).To(Succeed())
+	// The whole founding set is torn down and recreated — the survivor's
+	// fetched genesis is stale once the replacement mints a new gentx — so
+	// every child needs the same GC stand-in. envtest runs no garbage
+	// collector: finalizers would pin the SeiNodes in Terminating and the
+	// owner-referenced data PVCs would outlive them, and a recreated child's
+	// init plan refuses to adopt a claim it does not own. Clear both up front
+	// so the scenario stays about the ceremony.
+	originalUIDs := map[string]types.UID{}
+	for i := range 2 {
+		childKey := types.NamespacedName{Name: fmt.Sprintf("%s-%d", network.Name, i), Namespace: ns}
+		child := &seiv1alpha1.SeiNode{}
+		g.Expect(testCli.Get(testCtx, childKey, child)).To(Succeed())
+		originalUIDs[child.Name] = child.UID
+		if len(child.Finalizers) > 0 {
+			patch := client.MergeFrom(child.DeepCopy())
+			child.Finalizers = nil
+			g.Expect(testCli.Patch(testCtx, child, patch)).To(Succeed())
 		}
-		g.Expect(client.IgnoreNotFound(testCli.Delete(testCtx, pvc))).To(Succeed())
-	}
-	waitFor(t, func() bool {
-		return testCli.Get(testCtx, pvcKey, &corev1.PersistentVolumeClaim{}) != nil
-	}, "the lost validator's data PVC is gone")
 
-	g.Expect(testCli.Delete(testCtx, child)).To(Succeed())
+		pvcKey := types.NamespacedName{Name: "data-" + childKey.Name, Namespace: ns}
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := testCli.Get(testCtx, pvcKey, pvc); err == nil {
+			if len(pvc.Finalizers) > 0 {
+				patch := client.MergeFrom(pvc.DeepCopy())
+				pvc.Finalizers = nil
+				g.Expect(testCli.Patch(testCtx, pvc, patch)).To(Succeed())
+			}
+			g.Expect(client.IgnoreNotFound(testCli.Delete(testCtx, pvc))).To(Succeed())
+		}
+		waitFor(t, func() bool {
+			return testCli.Get(testCtx, pvcKey, &corev1.PersistentVolumeClaim{}) != nil
+		}, "the data PVC of "+childKey.Name+" is gone")
+	}
+
+	lostKey := types.NamespacedName{Name: network.Name + "-1", Namespace: ns}
+	lost := &seiv1alpha1.SeiNode{}
+	g.Expect(testCli.Get(testCtx, lostKey, lost)).To(Succeed())
+	g.Expect(testCli.Delete(testCtx, lost)).To(Succeed())
 
 	// The ValidatorLost condition is transient — the rebuilt plan supersedes
 	// it as soon as the child is back — so the durable operator signal is the
@@ -88,9 +100,14 @@ func TestGenesisCeremony_ValidatorLostMidCeremony_Recovers(t *testing.T) {
 	}, "the network emits a ValidatorLost warning for the abandoned ceremony")
 
 	waitFor(t, func() bool {
-		fresh := &seiv1alpha1.SeiNode{}
-		return testCli.Get(testCtx, childKey, fresh) == nil && fresh.UID != originalUID
-	}, "the lost validator is recreated")
+		for name, uid := range originalUIDs {
+			fresh := &seiv1alpha1.SeiNode{}
+			if err := testCli.Get(testCtx, types.NamespacedName{Name: name, Namespace: ns}, fresh); err != nil || fresh.UID == uid {
+				return false
+			}
+		}
+		return true
+	}, "the whole founding set is recreated with fresh identities")
 
 	waitForStatusWithin(t, convergeTimeout, key, func(n *seiv1alpha1.SeiNetwork) bool {
 		return apimeta.IsStatusConditionTrue(n.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete) &&

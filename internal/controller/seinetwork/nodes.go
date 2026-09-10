@@ -120,7 +120,10 @@ func (r *SeiNetworkReconciler) setGenesisCeremonyCondition(network *seiv1alpha1.
 
 // populateIncumbentNodes lists child SeiNodes and records their names on the
 // network status. This is the genesis planner's child-list feed, refreshed
-// each reconcile — NOT rollout state.
+// each reconcile — NOT rollout state. A terminating child is not an
+// incumbent: its finalizer can hold it for a while, and a ceremony built over
+// it would enroll a node that is on its way out and whose replacement carries
+// a different identity.
 func (r *SeiNetworkReconciler) populateIncumbentNodes(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
 	nodes, err := r.listChildSeiNodes(ctx, network)
 	if err != nil {
@@ -128,6 +131,9 @@ func (r *SeiNetworkReconciler) populateIncumbentNodes(ctx context.Context, netwo
 	}
 	names := make([]string, 0, len(nodes))
 	for i := range nodes {
+		if !nodes[i].DeletionTimestamp.IsZero() {
+			continue
+		}
 		names = append(names, nodes[i].Name)
 	}
 	network.Status.IncumbentNodes = names

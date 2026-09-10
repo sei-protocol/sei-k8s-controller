@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -26,7 +27,9 @@ func (r *SeiNetworkReconciler) reconcilePlan(ctx context.Context, network *seiv1
 	// Drive active plan.
 	if network.Status.Plan != nil && network.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
 		if validatorLost(network) {
-			r.abandonPlanForLostValidator(ctx, network)
+			if err := r.abandonPlanForLostValidator(ctx, network); err != nil {
+				return ctrl.Result{}, err
+			}
 			return planner.ResultRequeueImmediate, nil
 		}
 		return r.drivePlan(ctx, network)
@@ -120,15 +123,35 @@ func validatorLost(network *seiv1alpha1.SeiNetwork) bool {
 	return int32(len(network.Status.IncumbentNodes)) < network.Spec.Replicas
 }
 
-// abandonPlanForLostValidator drops the active ceremony plan so the gate
-// reopens and reconcileSeiNodes recreates the missing child. The ceremony's
-// tasks address the founding set by name and would otherwise retry forever
-// against a node the gate never lets come back. The recreated node carries a
-// fresh identity, so genesis must be reassembled: clearing the plan with the
-// ceremony still incomplete makes the planner rebuild it once every replica
-// exists again. All mutations are in-memory.
-func (r *SeiNetworkReconciler) abandonPlanForLostValidator(ctx context.Context, network *seiv1alpha1.SeiNetwork) {
-	msg := fmt.Sprintf("%d of %d founding validators present; genesis ceremony restarts once the set is recreated",
+// abandonPlanForLostValidator drops the active ceremony plan and deletes the
+// surviving founding children so the whole set is recreated and the ceremony
+// rebuilt over it. The ceremony's tasks address the founding set by name and
+// would otherwise retry forever against a node the gate never lets come back.
+// Recreating only the lost node is not enough: its replacement carries a fresh
+// identity and gentx, so the reassembled genesis differs from the one the
+// survivors already fetched — configure-genesis is marker-guarded on the
+// sidecar and never re-fetches — and the set would split across two genesis
+// hashes. Nothing of the chain exists yet, so restarting from an empty set is
+// the only convergent outcome. Status mutations are in-memory; child deletes
+// go to the API server.
+func (r *SeiNetworkReconciler) abandonPlanForLostValidator(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
+	survivors, err := r.listChildSeiNodes(ctx, network)
+	if err != nil {
+		return err
+	}
+	for i := range survivors {
+		node := &survivors[i]
+		if !node.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if err := r.Delete(ctx, node); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting founding SeiNode %s after validator loss: %w", node.Name, err)
+		}
+		r.Recorder.Eventf(network, corev1.EventTypeNormal, "SeiNodeDeleted",
+			"Deleted founding SeiNode %s so the genesis ceremony can restart over a whole set", node.Name)
+	}
+
+	msg := fmt.Sprintf("%d of %d founding validators present; the set is torn down and the genesis ceremony restarts once it is recreated",
 		len(network.Status.IncumbentNodes), network.Spec.Replicas)
 
 	setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
@@ -139,7 +162,9 @@ func (r *SeiNetworkReconciler) abandonPlanForLostValidator(ctx context.Context, 
 
 	r.Recorder.Event(network, corev1.EventTypeWarning, ReasonValidatorLost, msg)
 	log.FromContext(ctx).Info("plan abandoned: validator lost during genesis ceremony",
-		"incumbents", len(network.Status.IncumbentNodes), "replicas", network.Spec.Replicas)
+		"incumbents", len(network.Status.IncumbentNodes), "replicas", network.Spec.Replicas,
+		"survivorsDeleted", len(survivors))
+	return nil
 }
 
 func setPlanInProgress(network *seiv1alpha1.SeiNetwork, reason, message string) {
