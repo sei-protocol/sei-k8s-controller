@@ -123,8 +123,8 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Ta
 // a signingKey+nodeKey validator with no operatorKeyring must not gate on
 // it. Mirrors buildBasePlan's guards.
 func (p *validatorPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if imageDrifted(node) || sidecarImageDrifted(node, p.platform) {
-		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node, p.platform))
+	if podTemplateDrifted(node, p.platform) {
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", podTemplateDriftMessage(node, p.platform))
 		prog := make([]string, 0, 10)
 		if needsValidateSigningKey(node) {
 			prog = append(prog, task.TaskTypeValidateSigningKey)

@@ -54,8 +54,8 @@ func (p *seedPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPla
 // a missing or malformed identity Secret fails controller-side rather than as a
 // kubelet volume-mount error on the recreated pod.
 func (p *seedPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if imageDrifted(node) || sidecarImageDrifted(node, p.platform) {
-		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node, p.platform))
+	if podTemplateDrifted(node, p.platform) {
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", podTemplateDriftMessage(node, p.platform))
 		prog := make([]string, 0, 8)
 		if needsValidateNodeKey(node) {
 			prog = append(prog, task.TaskTypeValidateNodeKey)

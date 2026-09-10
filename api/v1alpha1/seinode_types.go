@@ -720,6 +720,14 @@ type SeiNodeStatus struct {
 	// +optional
 	CurrentSidecarImage string `json:"currentSidecarImage,omitempty"`
 
+	// CurrentNodeIsolation is the effective node isolation the owned
+	// StatefulSet's pod was last rolled with, stamped jointly with
+	// CurrentImage on rollout completion. Empty means "not yet observed" and
+	// is treated as no-drift so a controller upgrade doesn't fleet-roll every
+	// node on first reconcile.
+	// +optional
+	CurrentNodeIsolation NodeIsolation `json:"currentNodeIsolation,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional

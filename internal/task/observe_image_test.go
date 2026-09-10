@@ -187,3 +187,24 @@ func TestObserveImage_DeserializeEmptyParams(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(exec).NotTo(BeNil())
 }
+
+// Rollout completion also records the effective node isolation the pod was
+// rolled with, so the planner can detect a later isolation change.
+func TestObserveImage_RolloutComplete_StampsNodeIsolation(t *testing.T) {
+	g := NewWithT(t)
+	shared := observeImageNode()
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: shared.Name, Namespace: shared.Namespace, Generation: 2},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
+		Status:     appsv1.StatefulSetStatus{ObservedGeneration: 2, UpdatedReplicas: 1, Replicas: 1},
+	}
+	exec := newObserveImageExec(t, observeImageCfg(t, shared, sts))
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(shared.Status.CurrentNodeIsolation).To(Equal(seiv1alpha1.NodeIsolationShared))
+
+	dedicated := observeImageNode()
+	dedicated.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodeIsolation: seiv1alpha1.NodeIsolationDedicated}
+	exec = newObserveImageExec(t, observeImageCfg(t, dedicated, sts))
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(dedicated.Status.CurrentNodeIsolation).To(Equal(seiv1alpha1.NodeIsolationDedicated))
+}
