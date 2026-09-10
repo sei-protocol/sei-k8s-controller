@@ -296,14 +296,17 @@ func BuildPodAntiAffinity(dedicated bool) *corev1.PodAntiAffinity {
 	}
 }
 
-// nodepoolFor returns the Karpenter NodePool the node's pod is pinned to. A
-// Dedicated node lands on its mode's single-tenant pool when app-config names
-// one, replacing (not widening) the per-mode shared pool so the pod cannot fall
-// back onto a shared instance. With no single-tenant pool named for the mode,
-// the pod stays on the shared per-mode pool and the requester anti-affinity
-// term alone keeps it apart from other Sei pods — not from a non-Sei co-tenant.
-func nodepoolFor(node *seiv1alpha1.SeiNode, p PlatformConfig, dedicated bool) string {
-	mode := NodeMode(node)
+// NodepoolForMode returns the Karpenter NodePool a pod of the given mode is
+// pinned to. A Dedicated node lands on its mode's single-tenant pool when
+// app-config names one, replacing (not widening) the per-mode shared pool so the
+// pod cannot fall back onto a shared instance. With no single-tenant pool named
+// for the mode, the pod stays on the shared per-mode pool and the requester
+// anti-affinity term alone keeps it apart from other Sei pods — not from a
+// non-Sei co-tenant. Every pod the node's PVC is bound from (the StatefulSet
+// pod and the snapshot-bootstrap Job pod) must pick its pool here so they agree
+// on a pool, and so a WaitForFirstConsumer volume lands in a zone that pool
+// can serve.
+func NodepoolForMode(mode string, p PlatformConfig, dedicated bool) string {
 	if dedicated {
 		if pool := p.DedicatedNodepoolForMode(mode); pool != "" {
 			return pool
@@ -874,7 +877,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 	volumes = append(volumes, keyringVolumes...)
 
 	dedicated := IsDedicatedNode(node)
-	pool := nodepoolFor(node, p, dedicated)
+	pool := NodepoolForMode(NodeMode(node), p, dedicated)
 
 	spec := corev1.PodSpec{
 		// AutomountServiceAccountToken is explicit here because the

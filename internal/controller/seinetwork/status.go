@@ -22,7 +22,11 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	}
 	workerNodes, err := r.childWorkerNodes(ctx, network)
 	if err != nil {
-		return err
+		// Placement is two fields of the report; a failed pod list degrades
+		// them to Pending rather than holding back phase, replicas and
+		// conditions, which are computed from the children alone.
+		log.FromContext(ctx).Error(err, "reading validator placement; reporting every child as pending")
+		workerNodes = nil
 	}
 
 	var readyReplicas, upToDateReplicas int32
@@ -91,8 +95,7 @@ func (r *SeiNetworkReconciler) childWorkerNodes(ctx context.Context, network *se
 		if child == "" || pod.Spec.NodeName == "" || pod.DeletionTimestamp != nil {
 			continue
 		}
-		// A finished genesis-bootstrap Job pod carries the same labels and keeps
-		// its nodeName; it is not where the validator runs.
+		// A pod in a terminal phase keeps its nodeName but no longer runs there.
 		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			continue
 		}
