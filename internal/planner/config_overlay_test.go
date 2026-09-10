@@ -209,9 +209,11 @@ func TestConfigValuesAllModePlanners(t *testing.T) {
 
 func TestConfigValuesRejectUnsafePatches(t *testing.T) {
 	const (
-		parentKey = "a.b"
-		childKey  = "a.b.c"
-		peerTable = "p2p"
+		parentKey    = "a.b"
+		childKey     = "a.b.c"
+		peerTable    = "p2p"
+		peerCountKey = "p2p.max_num_peers"
+		overlapError = "overlapping keys"
 	)
 	for _, tc := range []struct {
 		name string
@@ -219,14 +221,14 @@ func TestConfigValuesRejectUnsafePatches(t *testing.T) {
 		raw  []string
 		want string
 	}{
-		{"prefix", []string{parentKey, childKey}, []string{"1", "2"}, "overlapping keys"},
-		{"reverse-prefix", []string{childKey, parentKey}, []string{"2", "1"}, "overlapping keys"},
-		{"array-prefix", []string{parentKey, childKey}, []string{"[1,2]", "2"}, "overlapping keys"},
-		{"colliding-member", []string{peerTable, "p2p.max_num_peers"}, []string{`{"max_num_peers":10}`, "50"}, "overlapping keys"},
-		{"disjoint-member", []string{peerTable, "p2p.max_num_peers"}, []string{`{"seeds":"a"}`, "50"}, ""},
-		{"nested-collision", []string{peerTable, "p2p.options"}, []string{`{"options":{"count":10}}`, `{"count":50}`}, "overlapping keys"},
+		{"prefix", []string{parentKey, childKey}, []string{"1", "2"}, overlapError},
+		{"reverse-prefix", []string{childKey, parentKey}, []string{"2", "1"}, overlapError},
+		{"array-prefix", []string{parentKey, childKey}, []string{"[1,2]", "2"}, overlapError},
+		{"colliding-member", []string{peerTable, peerCountKey}, []string{`{"max_num_peers":10}`, "50"}, overlapError},
+		{"disjoint-member", []string{peerTable, peerCountKey}, []string{`{"seeds":"a"}`, "50"}, ""},
+		{"nested-collision", []string{peerTable, "p2p.options"}, []string{`{"options":{"count":10}}`, `{"count":50}`}, overlapError},
 		{"nested-disjoint", []string{peerTable, "p2p.options"}, []string{`{"options":{"seeds":"a"}}`, `{"count":50}`}, ""},
-		{"empty-table", []string{peerTable, "p2p.max_num_peers"}, []string{`{}`, "50"}, ""},
+		{"empty-table", []string{peerTable, peerCountKey}, []string{`{}`, "50"}, ""},
 		{"nested-null", []string{parentKey}, []string{`{"child":{"value":null}}`}, "null values"},
 		{"array-null", []string{parentKey}, []string{`[{"child":null}]`}, "null values"},
 		{"number-overflow", []string{parentKey}, []string{`1e400`}, "int64 or float64"},
