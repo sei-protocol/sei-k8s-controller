@@ -47,17 +47,22 @@ const (
 //   - suppress: a workflow occupies this node (driving or parked-held); the
 //     caller must skip drift planning, execution, and sidecar reapproval.
 //   - result: the requeue cadence to use when suppress is true.
-//   - handled: reconcileWorkflow performed its own node-first status patch and
+//   - handled: reconcileWorkflow committed the node-first adoption pointer and
 //     the caller must return (result, nil) immediately (the adopting reconcile).
 //
 // It mutates node.Status in-memory for the non-handled cases so the
 // WorkflowInProgress condition and any pointer clear ride the caller's single
 // node patch.
+//
+// flushStatus is the caller's one status writer, threaded in rather than a
+// (before, statusBase) pair so the adoption commit shares the caller's
+// watermark: a patch issued here re-baselines it, which is what keeps the
+// caller's flush-on-the-way-out from re-patching against a resourceVersion this
+// commit already superseded.
 func (r *SeiNodeReconciler) reconcileWorkflow(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
-	before *seiv1alpha1.SeiNode,
-	statusBase client.Patch,
+	flushStatus func() error,
 ) (suppress bool, result ctrl.Result, handled bool, err error) {
 	if node.Status.AdoptedWorkflow != nil {
 		// An adoption pointer is only ever stamped on a Running node;
@@ -79,7 +84,7 @@ func (r *SeiNodeReconciler) reconcileWorkflow(
 		return false, ctrl.Result{}, false, nil
 	}
 	seedWorkflowInProgress(node)
-	return r.maybeAdoptWorkflow(ctx, node, before, statusBase)
+	return r.maybeAdoptWorkflow(ctx, node, flushStatus)
 }
 
 // driveAdoptedWorkflow resolves the adopted workflow by UID and advances,
@@ -229,8 +234,7 @@ func (r *SeiNodeReconciler) executeWorkflow(
 func (r *SeiNodeReconciler) maybeAdoptWorkflow(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
-	before *seiv1alpha1.SeiNode,
-	statusBase client.Patch,
+	flushStatus func() error,
 ) (suppress bool, result ctrl.Result, handled bool, err error) {
 	// GC safety net: strip the finalizer from completed workflows targeting
 	// this node so a GitOps prune isn't wedged Terminating forever.
@@ -307,10 +311,10 @@ func (r *SeiNodeReconciler) maybeAdoptWorkflow(
 	}
 	setWorkflowInProgress(node, metav1.ConditionTrue, seiv1alpha1.ReasonWorkflowRunning,
 		fmt.Sprintf("adopted workflow %s", winner.Name))
-	if !apiequality.Semantic.DeepEqual(before.Status, node.Status) {
-		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
-			return false, ctrl.Result{}, false, fmt.Errorf("committing adoption pointer: %w", err)
-		}
+	// Through the caller's writer: it carries the same optimistic lock, skips
+	// the patch when nothing changed, and re-baselines on success.
+	if err := flushStatus(); err != nil {
+		return false, ctrl.Result{}, false, fmt.Errorf("committing adoption pointer: %w", err)
 	}
 
 	// Gate deletion before any destructive step runs (also ensured on every
@@ -383,7 +387,21 @@ func (r *SeiNodeReconciler) gateOnRequirePhase(
 
 // finalizeWorkflow handles a workflow whose deletion was requested. It lifts
 // the hold only when the data state is verified safe (or the force annotation
-// is set), then clears the node pointer and removes the finalizer.
+// is set), then removes the finalizer and clears the node pointer.
+//
+// Ordered workflow-write-then-pointer-clear, the same order and for the same
+// reason as releaseCompletedWorkflow: the finalizer removal must be DURABLE
+// before the pointer clear, because the pointer clear rides the CALLER'S flush
+// — which now runs on the way out of Reconcile on error exits too. Clear first
+// and the backstop persists a released hold on a workflow that still carries
+// its finalizer, and nothing is left to re-enter finalization: without the
+// pointer driveAdoptedWorkflow is never reached, and
+// reapCompletedWorkflowFinalizers skips anything whose phase is not Complete,
+// so a workflow deleted MID-RUN stays Terminating until an operator strips the
+// finalizer by hand — the GitOps-prune wedge the reaper exists to prevent.
+// Finalizer first, pointer second: either crash order converges, because a
+// workflow with no finalizer takes the no-finalizer branch below and clears the
+// pointer there.
 func (r *SeiNodeReconciler) finalizeWorkflow(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
@@ -409,12 +427,15 @@ func (r *SeiNodeReconciler) finalizeWorkflow(
 		return true, ctrl.Result{RequeueAfter: statusPollInterval}, false, nil
 	}
 
-	node.Status.AdoptedWorkflow = nil
-	setWorkflowInProgress(node, metav1.ConditionFalse, seiv1alpha1.ReasonNoWorkflow,
-		"workflow deleted; hold released")
+	// Finalizer removal first (see the ordering note on this function): a failure
+	// here must leave the hold intact and persisted, so the next reconcile
+	// re-enters finalization through the still-present pointer.
 	if err := r.patchWorkflowFinalizer(ctx, wf, false); err != nil {
 		return true, ctrl.Result{}, false, err
 	}
+	node.Status.AdoptedWorkflow = nil
+	setWorkflowInProgress(node, metav1.ConditionFalse, seiv1alpha1.ReasonNoWorkflow,
+		"workflow deleted; hold released")
 	if forced {
 		r.Recorder.Eventf(wf, corev1.EventTypeWarning, "WorkflowForceDeleted",
 			"force-deleted; node %s hold released without data verification", node.Name)

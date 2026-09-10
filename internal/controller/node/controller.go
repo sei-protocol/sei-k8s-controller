@@ -80,7 +80,7 @@ type SeiNodeReconciler struct {
 
 // Reconcile drives the SeiNode lifecycle. All status mutations after the
 // finalizer are accumulated in-memory and flushed in a single status patch.
-func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, retErr error) {
 	node := &seiv1alpha1.SeiNode{}
 	if err := r.Get(ctx, req.NamespacedName, node); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -111,12 +111,81 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	setNodePausedCondition(node)
 
+	// flushStatus is the ONLY writer of this node's status for the rest of the
+	// reconcile — the adoption commit in maybeAdoptWorkflow goes through it too,
+	// which is what lets the backstop below be unconditional.
+	//
+	// Idempotent in both directions. It no-ops when nothing has changed since
+	// the last successful patch, so the backstop cannot double-write a path that
+	// already flushed; and a successful patch re-baselines the watermark, so a
+	// later write preconditions on the resourceVersion the API just returned
+	// rather than one it has already superseded (a stale precondition would
+	// surface as a spurious conflict, which is how a naive deferred flush turns
+	// a successful workflow adoption into an error).
+	flushFailed := false
 	flushStatus := func() error {
 		if apiequality.Semantic.DeepEqual(before.Status, node.Status) {
 			return nil
 		}
-		return r.Status().Patch(ctx, node, statusBase)
+		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
+			flushFailed = true
+			return err
+		}
+		before = node.DeepCopy()
+		statusBase = client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
+		return nil
 	}
+
+	// The backstop, and the reason it is deferred rather than repeated before
+	// each return: resolving an always-present condition in memory is not the
+	// same as persisting it. Several error returns below attempt no status write
+	// of their own (StatefulSet render, peer resolution, workflow handling, a
+	// fatal planner error), and a node parked on any of them would keep whatever
+	// absence it started with for as long as the error persists — the
+	// always-present defect by another route. A flush on the way out closes the
+	// whole class, including the next early return someone adds here.
+	//
+	// The original error always wins: it is why the reconcile ended and what
+	// earns the requeue. A backstop failure becomes the returned error only when
+	// there is no original error to preserve; when both fail, the flush error is
+	// logged and dropped, and the requeue the original error earns re-resolves
+	// and re-flushes on the next round. The patch keeps its optimistic lock, so
+	// a concurrent writer yields a conflict — never a silent overwrite.
+	//
+	// Not installed on the deletion path: that returns above, and a terminating
+	// node is a separate lifecycle decision (no condition is resolved for it).
+	//
+	// WHAT THIS MEANS FOR ANY IN-MEMORY STATUS MUTATION BELOW. A mutation
+	// upstream of a fallible call is now PERSISTED when that call fails, where it
+	// used to be discarded. That is the fix for a resolved condition, and it is
+	// safe for anything derived purely from spec plus a completed read — the
+	// state-sync gate, the VAC pre-flight, the Paused mirror, the terminal-plan
+	// clear. It is NOT safe for a mutation that releases a hold or clears a
+	// pointer whose durability depends on a write that has not happened yet: the
+	// external write must land FIRST, or a failure persists the release and
+	// strands the object it was holding. finalizeWorkflow and
+	// releaseCompletedWorkflow both carry that ordering and say why; put any new
+	// release on the same side of its write.
+	//
+	// One accepted consequence: a condition persisted on an error exit skips the
+	// paired transition Event, which is emitted further down (see
+	// emitSidecarReadinessEvent / emitStateSyncBlockedEvent) and therefore not at
+	// all on a path that returns early. The next reconcile then reads its own
+	// newly-persisted value as the previous one and sees no transition. The
+	// condition is the durable, PromQL-visible contract and is now correct;
+	// Events are best-effort and lossy by design, so this trade is deliberate.
+	defer func() {
+		if flushFailed {
+			return // the call site that attempted it already reported the failure
+		}
+		if err := flushStatus(); err != nil {
+			if retErr != nil {
+				log.FromContext(ctx).Error(err, "status flush failed on the way out; returning the original reconcile error")
+				return
+			}
+			retErr = fmt.Errorf("flushing status: %w", err)
+		}
+	}()
 
 	// Resolve the always-present StateSyncReady condition before the Failed and
 	// Paused early-returns so it rides the existing flush on every path (Failed
@@ -126,6 +195,13 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// terminal-plan cleanup and non-state-sync work running. A blocked gate
 	// requeues (see end of reconcile) without aborting the steps below.
 	stateSyncBlocked := r.reconcileStateSyncGate(node)
+
+	// Same discipline, same placement, same reason: the always-present
+	// VolumeAttributesClassReady condition is resolved here so it rides the
+	// existing flush on every path — including the paths that run no plan at
+	// all, which is where its first home inside ensure-data-pvc left it absent.
+	// Read-only; enforcement is the ensure-data-pvc task's provisioning hold.
+	r.reconcileVolumeAttributesClass(ctx, node)
 
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
@@ -159,13 +235,13 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	holdForWorkflow := node.Status.AdoptedWorkflow != nil && !adoptedWorkflowParkedFailed(node)
 	if !holdInitialSTS && !holdForWorkflow {
 		if err := r.reconcileStatefulSet(ctx, node); err != nil {
-			// This return precedes the status flush, so a render failure leaves no
-			// phase and no condition behind — the operator would see a SeiNode
-			// stuck with nothing explaining it. Emit an Event so the reason reaches
-			// `kubectl describe` rather than only the controller log. Reachable on
-			// operator-supplied app-config: infra fields load once at startup, so a
-			// seed applied before the controller restarts renders against the old
-			// config.
+			// Whatever status was resolved this far is persisted by the flush on the
+			// way out, so this return no longer leaves a bare SeiNode behind. The
+			// render failure itself is not a condition, so the Event stays the only
+			// place it reaches an operator — keep it: `kubectl describe` beats
+			// grepping controller logs. Reachable on operator-supplied app-config:
+			// infra fields load once at startup, so a seed applied before the
+			// controller restarts renders against the old config.
 			r.Recorder.Eventf(node, corev1.EventTypeWarning, "StatefulSetRenderFailed",
 				"Cannot render the StatefulSet: %v", err)
 			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
@@ -188,7 +264,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// sidecar reapproval are suppressed so an image roll or mark-ready cannot
 	// disturb the recipe. The adopting reconcile is self-contained (node-first
 	// pointer patch) and returns handled.
-	suppressDrift, wfResult, handled, wfErr := r.reconcileWorkflow(ctx, node, before, statusBase)
+	suppressDrift, wfResult, handled, wfErr := r.reconcileWorkflow(ctx, node, flushStatus)
 	if wfErr != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling workflow: %w", wfErr)
 	}
@@ -208,13 +284,11 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	if !apiequality.Semantic.DeepEqual(before.Status, node.Status) {
-		if err := r.Status().Patch(ctx, node, statusBase); err != nil {
-			if execErr != nil {
-				log.FromContext(ctx).Error(execErr, "plan execution error lost due to status flush failure")
-			}
-			return ctrl.Result{}, fmt.Errorf("flushing status: %w", err)
+	if err := flushStatus(); err != nil {
+		if execErr != nil {
+			log.FromContext(ctx).Error(execErr, "plan execution error lost due to status flush failure")
 		}
+		return ctrl.Result{}, fmt.Errorf("flushing status: %w", err)
 	}
 
 	if execErr != nil {

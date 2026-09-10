@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
@@ -153,3 +154,25 @@ func listChildren(t *testing.T, network *seiv1alpha1.SeiNetwork) []seiv1alpha1.S
 // reasonAllUpToDate is the derived RolloutInProgress reason at steady state
 // (every child reports spec.image).
 const reasonAllUpToDate = "AllUpToDate"
+
+// ensureVolumeAttributesClass creates a cluster-scoped VolumeAttributesClass so
+// the data-PVC pre-flight can find it, and removes it when the test ends. The
+// driver and parameters are opaque placeholders — the controller references the
+// class by name and never reads its contents. Idempotent: a class left by a
+// parallel test is reused rather than fought over.
+func ensureVolumeAttributesClass(t *testing.T, name string) {
+	t.Helper()
+	vac := &storagev1.VolumeAttributesClass{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		DriverName: "csi.example.com",
+		Parameters: map[string]string{"placeholder": "opaque-to-the-controller"},
+	}
+	if err := testCli.Create(testCtx, vac); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("creating VolumeAttributesClass %q: %v", name, err)
+	}
+	t.Cleanup(func() {
+		if err := testCli.Delete(testCtx, vac); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("deleting VolumeAttributesClass %q: %v", name, err)
+		}
+	})
+}

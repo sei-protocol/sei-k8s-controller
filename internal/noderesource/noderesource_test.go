@@ -823,6 +823,87 @@ func TestGenerateDataPVC_EquivalentUnitsRoundTrip(t *testing.T) {
 		"2048Gi and 2Ti are the same quantity; the round-trip must not change the value")
 }
 
+// --- VolumeAttributesClass selection ---
+
+// withVolumeAttributesClass gives node a CRD VAC selection.
+func withVolumeAttributesClass(node *seiv1alpha1.SeiNode, name string) *seiv1alpha1.SeiNode {
+	if node.Spec.DataVolume == nil {
+		node.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{}
+	}
+	if node.Spec.DataVolume.Storage == nil {
+		node.Spec.DataVolume.Storage = &seiv1alpha1.DataVolumeStorage{}
+	}
+	node.Spec.DataVolume.Storage.VolumeAttributesClassName = &name
+	return node
+}
+
+// The ladder is one rung deep: the CRD field or nothing.
+func TestVolumeAttributesClassForNode_NilWithNoSelection(t *testing.T) {
+	cases := map[string]*seiv1alpha1.DataVolumeSpec{
+		"dataVolume absent": nil,
+		"storage absent":    {},
+		"storage empty":     {Storage: &seiv1alpha1.DataVolumeStorage{}},
+		"size only": {Storage: &seiv1alpha1.DataVolumeStorage{
+			Resources: &seiv1alpha1.VolumeClaimResources{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("500Gi")},
+			},
+		}},
+		"import": {Import: &seiv1alpha1.DataVolumeImport{PVCName: "adopted"}},
+	}
+	for name, dv := range cases {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := nodeForRole("")
+			node.Spec.DataVolume = dv
+
+			g.Expect(VolumeAttributesClassForNode(node)).To(BeNil(),
+				"no selection must leave the claim's volumeAttributesClassName off entirely")
+		})
+	}
+}
+
+func TestVolumeAttributesClassForNode_ReturnsCopy(t *testing.T) {
+	g := NewWithT(t)
+	node := withVolumeAttributesClass(nodeForRole(""), "vac-alpha")
+
+	got := VolumeAttributesClassForNode(node)
+	g.Expect(got).NotTo(BeNil())
+	g.Expect(*got).To(Equal("vac-alpha"))
+	g.Expect(got).NotTo(BeIdenticalTo(node.Spec.DataVolume.Storage.VolumeAttributesClassName),
+		"the resolver must not hand a caller a pointer into the node's spec")
+}
+
+// Closes the loop from CRD field to rendered claim: two nodes differing only in
+// the VAC name must render claims differing only in that field (SC-003).
+func TestGenerateDataPVC_StampsVolumeAttributesClass(t *testing.T) {
+	g := NewWithT(t)
+	cfg := platformtest.Config()
+	node := withVolumeAttributesClass(newSnapshotNode("snap-0", "ns1"), "vac-alpha")
+
+	pvc := GenerateDataPVC(node, cfg)
+
+	g.Expect(pvc.Spec.VolumeAttributesClassName).NotTo(BeNil())
+	g.Expect(*pvc.Spec.VolumeAttributesClassName).To(Equal("vac-alpha"))
+	g.Expect(*pvc.Spec.StorageClassName).To(Equal(cfg.StorageClassPerf),
+		"the VAC is a distinct field: it must not disturb the mode-default class")
+
+	other := GenerateDataPVC(withVolumeAttributesClass(newSnapshotNode("snap-0", "ns1"), "vac-beta"), cfg)
+	pvc.Spec.VolumeAttributesClassName = other.Spec.VolumeAttributesClassName
+	g.Expect(pvc.Spec).To(Equal(other.Spec),
+		"two selections must differ only in volumeAttributesClassName")
+}
+
+// Unset means the field is ABSENT from the claim, not empty — an empty string is
+// a distinct value to the CSI driver, and the mode default is what should apply.
+func TestGenerateDataPVC_NoSelectionLeavesClaimFieldUnset(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("snap-0", "ns1")
+
+	pvc := GenerateDataPVC(node, platformtest.Config())
+
+	g.Expect(pvc.Spec.VolumeAttributesClassName).To(BeNil())
+}
+
 func newArchiveNode(name, namespace string) *seiv1alpha1.SeiNode {
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},

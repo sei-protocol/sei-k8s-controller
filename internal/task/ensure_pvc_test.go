@@ -7,11 +7,14 @@ import (
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -495,6 +498,213 @@ func TestEnsureDataPVC_Import_PVFailed_Terminal(t *testing.T) {
 	g.Expect(err).To(BeAssignableToTypeOf(termErr))
 	g.Expect(err.Error()).To(ContainSubstring("phase Failed"))
 	g.Expect(importReasonFor(node)).To(Equal(seiv1alpha1.ReasonPVCInvalid))
+}
+
+// --- VolumeAttributesClass gate ---
+//
+// The node reconciler owns the pre-flight and the VolumeAttributesClassReady
+// condition (see internal/controller/node/volumeattributesclass.go); it resolves
+// both before the plan executes. The task's job is narrower: hold provisioning
+// while that condition is not True, and never write it. These tests seed the
+// condition the way the reconciler would have.
+
+// vacNode returns a full-node SeiNode selecting the named VolumeAttributesClass.
+func vacNode(name string) *seiv1alpha1.SeiNode {
+	n := ensurePVCNode()
+	n.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{
+		Storage: &seiv1alpha1.DataVolumeStorage{VolumeAttributesClassName: &name},
+	}
+	return n
+}
+
+// seedVACCondition stands in for the reconciler's resolve, which always runs
+// ahead of plan execution.
+func seedVACCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:               seiv1alpha1.ConditionVolumeAttributesClassReady,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: node.Generation,
+	})
+}
+
+func vacConditionFor(node *seiv1alpha1.SeiNode) *metav1.Condition {
+	for i := range node.Status.Conditions {
+		if node.Status.Conditions[i].Type == seiv1alpha1.ConditionVolumeAttributesClassReady {
+			return &node.Status.Conditions[i]
+		}
+	}
+	return nil
+}
+
+func dataPVCFor(t *testing.T, c client.Client, node *seiv1alpha1.SeiNode) (*corev1.PersistentVolumeClaim, error) {
+	t.Helper()
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := c.Get(context.Background(), types.NamespacedName{
+		Name: noderesource.DataPVCName(node), Namespace: node.Namespace,
+	}, pvc)
+	return pvc, err
+}
+
+// A resolved-True selection provisions, and the claim carries the name. The
+// condition must come back byte-identical: the reconciler is its only writer, so
+// a task-side rewrite would be a second writer racing the same status patch.
+func TestEnsureDataPVC_VAC_ConditionTrue_StampsAndLeavesConditionAlone(t *testing.T) {
+	g := NewWithT(t)
+	node := vacNode("vac-alpha")
+	seedVACCondition(node, metav1.ConditionTrue,
+		seiv1alpha1.ReasonVolumeAttributesClassFound, "resolved by the reconciler")
+	before := *vacConditionFor(node)
+
+	exec, c := newEnsurePVCExec(t, node)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	pvc, err := dataPVCFor(t, c, node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(pvc.Spec.VolumeAttributesClassName).NotTo(BeNil())
+	g.Expect(*pvc.Spec.VolumeAttributesClassName).To(Equal("vac-alpha"))
+
+	g.Expect(*vacConditionFor(node)).To(Equal(before),
+		"the task must not write the condition — the reconciler is its single writer")
+}
+
+// The landmine the gate defuses: the PVC is created once, so a claim must not be
+// created against a class that did not pre-flight True. The hold is transient,
+// so the platform adding the class releases it on the next poll.
+func TestEnsureDataPVC_VAC_ConditionNotTrue_HoldsProvision(t *testing.T) {
+	for _, tc := range []struct{ name, reason string }{
+		{"class missing", seiv1alpha1.ReasonVolumeAttributesClassNotFound},
+		{"class unreadable", seiv1alpha1.ReasonVolumeAttributesClassLookupError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := vacNode("vac-absent")
+			seedVACCondition(node, metav1.ConditionFalse, tc.reason, "resolved by the reconciler")
+
+			exec, c := newEnsurePVCExec(t, node)
+
+			err := exec.Execute(context.Background())
+			g.Expect(err).To(HaveOccurred())
+			var termErr *TerminalError
+			g.Expect(err).NotTo(BeAssignableToTypeOf(termErr),
+				"a missing class is fixed by adding it, so the task must retry rather than park the node in Failed")
+			g.Expect(err.Error()).To(ContainSubstring("vac-absent"))
+			g.Expect(err.Error()).To(ContainSubstring(tc.reason))
+
+			_, getErr := dataPVCFor(t, c, node)
+			g.Expect(apierrors.IsNotFound(getErr)).To(BeTrue(),
+				"no PVC may be created while the selection has not pre-flighted True — the claim binds the name once")
+		})
+	}
+}
+
+// Fails closed on an unresolved condition. Unreachable while the reconciler
+// resolves ahead of plan execution; pinned so a reordering cannot silently
+// start provisioning against an unverified name.
+func TestEnsureDataPVC_VAC_ConditionAbsent_HoldsProvision(t *testing.T) {
+	g := NewWithT(t)
+	node := vacNode("vac-alpha")
+	g.Expect(vacConditionFor(node)).To(BeNil())
+
+	exec, c := newEnsurePVCExec(t, node)
+
+	err := exec.Execute(context.Background())
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("has not resolved"))
+
+	_, getErr := dataPVCFor(t, c, node)
+	g.Expect(apierrors.IsNotFound(getErr)).To(BeTrue())
+}
+
+// The handoff: the reconciler re-resolves each reconcile, so the same task
+// proceeds once the platform has added the class.
+func TestEnsureDataPVC_VAC_ConditionFlipsTrue_Proceeds(t *testing.T) {
+	g := NewWithT(t)
+	node := vacNode("vac-late")
+	seedVACCondition(node, metav1.ConditionFalse,
+		seiv1alpha1.ReasonVolumeAttributesClassNotFound, "not found yet")
+
+	s := ensurePVCScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	cfg := ExecutionConfig{
+		KubeClient: c, APIReader: c, Scheme: s, Resource: node, Platform: platformtest.Config(),
+	}
+	raw, _ := json.Marshal(EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace})
+
+	exec, err := deserializeEnsureDataPVC("ensure-1", raw, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(exec.Execute(context.Background())).To(HaveOccurred())
+
+	// The platform adds the class; the next reconcile's resolve flips the gate.
+	seedVACCondition(node, metav1.ConditionTrue,
+		seiv1alpha1.ReasonVolumeAttributesClassFound, "found")
+
+	exec, err = deserializeEnsureDataPVC("ensure-1", raw, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	pvc, getErr := dataPVCFor(t, c, node)
+	g.Expect(getErr).NotTo(HaveOccurred())
+	g.Expect(*pvc.Spec.VolumeAttributesClassName).To(Equal("vac-late"))
+}
+
+// A selection-free node can never be held by the gate, even with no condition
+// resolved at all — there is no reference to verify, and a false block here
+// would stall every node that never asked for a class.
+func TestEnsureDataPVC_VAC_NoSelection_NeverHeld(t *testing.T) {
+	for name, dv := range map[string]*seiv1alpha1.DataVolumeSpec{
+		"dataVolume absent": nil,
+		"size only": {Storage: &seiv1alpha1.DataVolumeStorage{
+			Resources: &seiv1alpha1.VolumeClaimResources{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("500Gi")},
+			},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := ensurePVCNode()
+			node.Spec.DataVolume = dv
+			exec, c := newEnsurePVCExec(t, node)
+
+			g.Expect(exec.Execute(context.Background())).To(Succeed())
+			g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+			pvc, err := dataPVCFor(t, c, node)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(pvc.Spec.VolumeAttributesClassName).To(BeNil(),
+				"with no selection the claim carries no volumeAttributesClassName at all")
+		})
+	}
+}
+
+// Req 3.3: a node that imports a pre-existing volume keeps the importer's
+// parameters. The sentinel is what makes this test bite — a nil-to-nil assertion
+// would pass whether or not anything is preserved.
+func TestEnsureDataPVC_VAC_Import_PreservesImporterSelection(t *testing.T) {
+	g := NewWithT(t)
+	const importerVAC = "importer-owned-class"
+	node := importNode("data-imported")
+	pvc := validImportedPVC("data-imported", "default", "2000Gi")
+	pvc.Spec.VolumeAttributesClassName = ptr.To(importerVAC)
+	pv := validImportedPV("pv-data-imported", "2000Gi")
+
+	exec, c := newEnsurePVCExec(t, node, pvc, pv)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	got := &corev1.PersistentVolumeClaim{}
+	g.Expect(c.Get(context.Background(), types.NamespacedName{
+		Name: "data-imported", Namespace: "default",
+	}, got)).To(Succeed())
+	g.Expect(got.Spec.VolumeAttributesClassName).NotTo(BeNil(),
+		"the controller must not strip the importer's volume attributes")
+	g.Expect(*got.Spec.VolumeAttributesClassName).To(Equal(importerVAC),
+		"the importer's class must survive untouched")
 }
 
 // --- Poll cadence regression guard ---

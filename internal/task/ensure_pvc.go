@@ -55,7 +55,65 @@ func (e *ensureDataPVCExecution) Execute(ctx context.Context) error {
 	if dv := node.Spec.DataVolume; dv != nil && dv.Import != nil && dv.Import.PVCName != "" {
 		return e.executeImport(ctx, node, dv.Import.PVCName)
 	}
+
+	if err := holdForVolumeAttributesClass(node); err != nil {
+		return err
+	}
 	return e.executeCreate(ctx, node)
+}
+
+// holdForVolumeAttributesClass blocks provisioning while the node's selected
+// VolumeAttributesClass has not pre-flighted True. The node reconciler resolves
+// that pre-flight (and owns the condition) before the plan executes, so this
+// reads the outcome rather than repeating the cluster read — one read per
+// reconcile, and no second writer racing the reconciler's status patch.
+//
+// A missing class holds rather than failing the plan terminally: a Terminal
+// error parks the node in Failed, which needs a delete-and-recreate to leave
+// even after the platform adds the class, while a hold lets the same node
+// proceed on the next poll. Not provisioning meanwhile is deliberate too — a
+// claim binds the name once and the name itself is create-only, so a claim
+// created against a missing class can only ever be resolved by adding a class
+// of that same name.
+//
+// Nothing selected is never held: there is no reference to verify, so a
+// selection-free node cannot be blocked by this gate even if the condition were
+// somehow unresolved.
+//
+// THE ORDERING IS THE INVARIANT, and the nil guard below does not substitute for
+// it. What this reads is a condition PERSISTED on status, so it is only as fresh
+// as the resolve that preceded it in this same reconcile. Move plan execution
+// ahead of reconcileVolumeAttributesClass and the guard still passes — on a
+// stale True left by an earlier reconcile, which is precisely the check being
+// skipped. The nil case catches only a node that has never been resolved, not a
+// node resolved too long ago.
+//
+// The pre-flight it consumes is best-effort existence, never a binding
+// guarantee: the class can be deleted between the resolve and the Create below,
+// and the resolve reads an informer cache that may lag the API. It converts the
+// common operator mistake — a name that is not in the catalog — into a NAMED
+// cause rather than a silent one; the pod is still created and still sits
+// Pending on the claim this hold declines to create. It does not make
+// provisioning atomic with respect to the class's lifetime, and it does not
+// verify that the class's driver matches the StorageClass's provisioner (see
+// reconcileVolumeAttributesClass for that assumption).
+func holdForVolumeAttributesClass(node *seiv1alpha1.SeiNode) error {
+	name := noderesource.VolumeAttributesClassForNode(node)
+	if name == nil {
+		return nil
+	}
+
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionVolumeAttributesClassReady)
+	if cond == nil {
+		// Unreachable while the reconciler resolves the condition ahead of plan
+		// execution. Fails closed if that order ever changes: provisioning
+		// against an unverified name would bind it to the volume for good.
+		return fmt.Errorf("VolumeAttributesClass %q pre-flight has not resolved yet", *name)
+	}
+	if cond.Status != metav1.ConditionTrue {
+		return fmt.Errorf("VolumeAttributesClass %q is not ready (%s): %s", *name, cond.Reason, cond.Message)
+	}
+	return nil
 }
 
 // executeCreate is Get-then-Create, failing if an unexpected PVC already

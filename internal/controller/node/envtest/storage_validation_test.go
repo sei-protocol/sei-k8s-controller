@@ -310,6 +310,24 @@ func TestDataVolumeStorage_CreateOnlyGate(t *testing.T) {
 			"an edit leaving the size unchanged must be accepted")
 	})
 
+	t.Run("adding a VAC selection after create is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		// The COMPLETENESS trap: the size rule's presence terms hold here (the
+		// size never changes), so only the VAC's own presence term catches this.
+		node := nodeWithStorageSize(ns, "dv-vac-sneak", "500Gi")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			name := "vac-alpha"
+			cur.Spec.DataVolume.Storage.VolumeAttributesClassName = &name
+		})
+		g.Expect(err).To(HaveOccurred(),
+			"a VAC selection must not be silently mutable beside an unchanged size")
+		g.Expect(err.Error()).To(ContainSubstring("volumeAttributesClassName is create-only"))
+	})
+
 	t.Run("adding dataVolume.import after create is still allowed", func(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
@@ -324,5 +342,160 @@ func TestDataVolumeStorage_CreateOnlyGate(t *testing.T) {
 		})
 		g.Expect(err).NotTo(HaveOccurred(),
 			"adding an import after create must stay allowed — the gate covers the size only")
+	})
+}
+
+// Admission coverage of spec.dataVolume.storage.volumeAttributesClassName. It is
+// a NAME reference only, and create-only for the same reason the size is: the
+// data PVC binds it once, at provision.
+
+func nodeWithVAC(ns, name, vac string) *seiv1alpha1.SeiNode {
+	node := nodeWithStorageSize(ns, name, "")
+	node.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{
+		Storage: &seiv1alpha1.DataVolumeStorage{VolumeAttributesClassName: &vac},
+	}
+	return node
+}
+
+func TestDataVolumeStorage_VACNameAccepted(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	g.Expect(testCli.Create(testCtx, nodeWithVAC(ns, "dv-vac", "vac-alpha"))).To(Succeed())
+}
+
+// A name beside a size: the two selections are independent siblings.
+func TestDataVolumeStorage_VACWithSizeAccepted(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	node := nodeWithStorageSize(ns, "dv-vac-size", "500Gi")
+	name := "vac-alpha"
+	node.Spec.DataVolume.Storage.VolumeAttributesClassName = &name
+
+	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+}
+
+// unstructuredNodeWithVAC sends the VAC name as raw JSON, so a test can spell
+// `""` and `null` — values a typed client cannot express through a *string.
+func unstructuredNodeWithVAC(ns, name, vac string) *unstructured.Unstructured {
+	raw := fmt.Sprintf(`{
+	  "apiVersion": "sei.io/v1alpha1",
+	  "kind": "SeiNode",
+	  "metadata": {"name": %q, "namespace": %q},
+	  "spec": {
+	    "chainId": %q, "image": %q, "fullNode": {},
+	    "dataVolume": {"storage": {"volumeAttributesClassName": %s}}
+	  }
+	}`, name, ns, testChainID, testNodeImage, vac)
+
+	u := &unstructured.Unstructured{}
+	if err := json.Unmarshal([]byte(raw), &u.Object); err != nil {
+		panic(err) // a malformed literal in this file is a test bug, not a failure
+	}
+	return u
+}
+
+// A Helm value templated to `volumeAttributesClassName: ""` must be named, not
+// stamped onto the claim as an empty selection the CSI driver would reject.
+func TestDataVolumeStorage_EmptyVACRejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	err := testCli.Create(testCtx, unstructuredNodeWithVAC(ns, "dv-vac-empty", `""`))
+	g.Expect(err).To(HaveOccurred(),
+		"an empty VAC name must be rejected, not carried onto the claim")
+	g.Expect(err.Error()).To(ContainSubstring("volumeAttributesClassName"))
+}
+
+// `volumeAttributesClassName: null` is pruned by the apiserver, so it lands as
+// the no-selection case. Pinned because the alternative — a stored null — would
+// reach VolumeAttributesClassForNode as an empty selection.
+func TestDataVolumeStorage_NullVACPrunesToNoSelection(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	u := unstructuredNodeWithVAC(ns, "dv-vac-null", `null`)
+	g.Expect(testCli.Create(testCtx, u)).To(Succeed())
+
+	stored := &seiv1alpha1.SeiNode{}
+	g.Expect(testCli.Get(testCtx, client.ObjectKeyFromObject(u), stored)).To(Succeed())
+	g.Expect(stored.Spec.DataVolume).NotTo(BeNil())
+	g.Expect(stored.Spec.DataVolume.Storage).NotTo(BeNil())
+	g.Expect(stored.Spec.DataVolume.Storage.VolumeAttributesClassName).To(BeNil(),
+		"a null must store as no selection at all, never as an empty name")
+}
+
+// It is a name, so it must look like one — a mistyped-but-valid name is the
+// pre-flight condition's job, not admission's.
+func TestDataVolumeStorage_MalformedVACNameRejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	err := testCli.Create(testCtx, nodeWithVAC(ns, "dv-vac-bad", "GP3 Fast!"))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("volumeAttributesClassName"))
+}
+
+func TestDataVolumeStorage_VACCreateOnlyGate(t *testing.T) {
+	t.Run("changing the VAC is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := nodeWithVAC(ns, "dv-vac-change", "vac-beta")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			name := "vac-alpha"
+			cur.Spec.DataVolume.Storage.VolumeAttributesClassName = &name
+		})
+		g.Expect(err).To(HaveOccurred(), "reselecting after create must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("volumeAttributesClassName is create-only"))
+	})
+
+	t.Run("removing the VAC is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := nodeWithVAC(ns, "dv-vac-remove", "vac-alpha")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		// A sub-type value rule cannot see this: the field is gone from self.
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.DataVolume.Storage.VolumeAttributesClassName = nil
+		})
+		g.Expect(err).To(HaveOccurred(), "unsetting after create must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("volumeAttributesClassName is create-only"))
+	})
+
+	t.Run("adding a VAC to a node created without one is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := nodeWithStorageSize(ns, "dv-vac-add", "")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			name := "vac-alpha"
+			cur.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{
+				Storage: &seiv1alpha1.DataVolumeStorage{VolumeAttributesClassName: &name},
+			}
+		})
+		g.Expect(err).To(HaveOccurred(), "a first-time set must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("volumeAttributesClassName is create-only"))
+	})
+
+	t.Run("an unrelated edit is still accepted", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := nodeWithVAC(ns, "dv-vac-unrelated", "vac-alpha")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.Paused = true
+		})
+		g.Expect(err).NotTo(HaveOccurred(),
+			"an edit leaving the selection unchanged must be accepted — the controller's own writes depend on it")
 	})
 }

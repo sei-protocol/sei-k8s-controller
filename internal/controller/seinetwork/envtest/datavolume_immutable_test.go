@@ -200,3 +200,139 @@ func TestDataVolume_SizeStampedOntoChildren(t *testing.T) {
 	}, pollTimeout, pollInterval).Should(Succeed(),
 		"a create-only size on both parent and child must not block image propagation")
 }
+
+// The performance half: the pool's VolumeAttributesClass selection is fixed for
+// the network's life. DR-001 requires a change, an unset AND a first-time set to
+// be rejected, which needs the value rule on the shared sub-type and the
+// presence term in this Kind's enumerated rule working together.
+func TestDataVolume_VACCreateOnly(t *testing.T) {
+	t.Run("changing the VAC is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		network := fixtures.NewNetwork(ns, "dv-vac-change", fixtures.WithDataVolumeVAC("vac-beta"))
+		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+
+		err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+			name := "vac-alpha"
+			cur.Spec.DataVolume.Storage.VolumeAttributesClassName = &name
+		})
+		g.Expect(err).To(HaveOccurred(), "reselecting a pool's storage performance must be rejected")
+		// The shared value rule's text is Kind-neutral; node-only wording regresses.
+		g.Expect(err.Error()).To(ContainSubstring("recreate the owning resource"))
+	})
+
+	t.Run("adding a VAC to an existing network is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		network := fixtures.NewNetwork(ns, "dv-vac-add")
+		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+
+		err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+			fixtures.WithDataVolumeVAC("vac-alpha")(cur)
+		})
+		g.Expect(err).To(HaveOccurred(), "a first-time set must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("spec.dataVolume is create-only"))
+	})
+
+	// The COMPLETENESS trap this record documents: dataVolume and storage are
+	// both already present and the size never changes, so every pre-existing
+	// presence term holds. Only the VAC's own term catches the edit.
+	t.Run("adding a VAC beside an unchanged size is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		network := fixtures.NewNetwork(ns, "dv-vac-sneak", fixtures.WithDataVolumeStorage("500Gi"))
+		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+
+		err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+			name := "vac-alpha"
+			cur.Spec.DataVolume.Storage.VolumeAttributesClassName = &name
+		})
+		g.Expect(err).To(HaveOccurred(),
+			"a VAC selection must not be silently mutable beside an unchanged size")
+		g.Expect(err.Error()).To(ContainSubstring("spec.dataVolume is create-only"))
+	})
+
+	t.Run("removing the VAC is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		network := fixtures.NewNetwork(ns, "dv-vac-remove",
+			fixtures.WithDataVolumeStorage("500Gi"), fixtures.WithDataVolumeVAC("vac-alpha"))
+		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+
+		// Presence catches an unset the sub-type value rule never fires on.
+		err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+			cur.Spec.DataVolume.Storage.VolumeAttributesClassName = nil
+		})
+		g.Expect(err).To(HaveOccurred(), "unsetting after create must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("spec.dataVolume is create-only"))
+	})
+
+	t.Run("an unrelated edit is still accepted", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		network := fixtures.NewNetwork(ns, "dv-vac-unrelated", fixtures.WithDataVolumeVAC("vac-alpha"))
+		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+
+		err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+			cur.Spec.Paused = true
+		})
+		g.Expect(err).NotTo(HaveOccurred(),
+			"an edit leaving the selection unchanged must be accepted — the controller's own writes depend on it")
+	})
+}
+
+// The pool's selection reaches every child, and keeps reaching them across an
+// image bump: the child's VAC is create-only too and ensureSeiNode sends the
+// whole spec, so an over-broad gate on either Kind would wedge rollout.
+func TestDataVolume_VACStampedOntoChildren(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	// The pre-flight holds provisioning until the class exists, so the pool
+	// cannot reach Running (and the image cannot propagate) without it. The
+	// parameters are opaque placeholders: the controller never reads them.
+	ensureVolumeAttributesClass(t, "vac-children")
+
+	const replicas = 2
+	network := fixtures.NewNetwork(ns, "dv-vac-children",
+		fixtures.WithReplicas(replicas),
+		fixtures.WithDataVolumeStorage("500Gi"),
+		fixtures.WithDataVolumeVAC("vac-children"))
+	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+	key := client.ObjectKeyFromObject(network)
+
+	g.Eventually(func(g Gomega) {
+		kids := listChildren(t, getNetwork(t, key))
+		g.Expect(kids).To(HaveLen(replicas))
+		for i := range kids {
+			dv := kids[i].Spec.DataVolume
+			g.Expect(dv).NotTo(BeNil(), "child %s must carry the pool's data volume", kids[i].Name)
+			g.Expect(dv.Storage).NotTo(BeNil())
+			g.Expect(dv.Storage.VolumeAttributesClassName).NotTo(BeNil())
+			g.Expect(*dv.Storage.VolumeAttributesClassName).To(Equal("vac-children"))
+		}
+	}, pollTimeout, pollInterval).Should(Succeed(),
+		"every child SeiNode carries the network's VolumeAttributesClass selection")
+
+	const bumped = "ghcr.io/sei-protocol/seid:v3.1.0"
+	g.Expect(updateNetworkWithRetry(t, key, func(cur *seiv1alpha1.SeiNetwork) {
+		cur.Spec.Image = bumped
+	})).To(Succeed())
+
+	g.Eventually(func(g Gomega) {
+		kids := listChildren(t, getNetwork(t, key))
+		g.Expect(kids).To(HaveLen(replicas))
+		for i := range kids {
+			g.Expect(kids[i].Spec.Image).To(Equal(bumped),
+				"the image bump must reach a child that carries a create-only VAC selection")
+			g.Expect(kids[i].Spec.DataVolume.Storage.VolumeAttributesClassName).NotTo(BeNil(),
+				"the child keeps its create-time selection across the sync")
+		}
+	}, pollTimeout, pollInterval).Should(Succeed(),
+		"a create-only VAC on both parent and child must not block image propagation")
+}
