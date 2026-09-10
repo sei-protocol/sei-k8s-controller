@@ -789,8 +789,8 @@ func imageDrifted(node *seiv1alpha1.SeiNode) bool {
 
 // configValuesDrifted mirrors image observation. Never restart an unobserved
 // node during a controller upgrade; its next materialization establishes baseline.
-// A hashing error surfaces through the controller's PlanBuildFailed event when
-// overlay construction rejects the same input, not through a condition.
+// A hashing error triggers assembly, which reports the actual rejection in
+// NodeUpdateInProgress and the controller's PlanBuildFailed event.
 func configValuesDrifted(node *seiv1alpha1.SeiNode) bool {
 	if node.Status.CurrentConfigValuesHash == "" {
 		return false
@@ -852,10 +852,17 @@ func p2pConfigPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 }
 
 // assembleUpdatePlan composes a per-mode task progression into a TaskPlan.
-// Callers own the NodeUpdateInProgress condition — stamp it before calling
-// so the reason/message reflects the actual trigger. FailedPhase stays
-// empty so a failure retries on next reconcile.
-func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
+// Callers own the successful NodeUpdateInProgress trigger reason/message.
+// Any assembly error replaces the provisional condition with the actual failure,
+// including for config-only callers and nodes carrying a stale True. FailedPhase
+// stays empty so a failure retries on next reconcile.
+func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (_ *seiv1alpha1.TaskPlan, retErr error) {
+	defer func() {
+		if retErr != nil {
+			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdatePlanBuildFailed", retErr.Error())
+		}
+	}()
+
 	// First observation must also restore the base: an unobserved node may
 	// carry removed piece-1 overlay keys. This does not trigger a plan; it
 	// only strengthens materialization in an update already being performed.
