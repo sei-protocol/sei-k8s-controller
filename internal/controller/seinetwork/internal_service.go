@@ -37,6 +37,13 @@ func (r *SeiNetworkReconciler) reconcileInternalService(ctx context.Context, net
 	if err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
 		return fmt.Errorf("applying internal Service: %w", err)
 	}
+	// The Apply decodes the live object into desired. A Service a previous
+	// same-named network released under Retain still carries that record; the
+	// Apply cannot clear it (a different field manager wrote it), so drop it
+	// here now that the Service is owned again.
+	if err := r.clearRetainRecord(ctx, desired); err != nil {
+		return fmt.Errorf("clearing retain record on internal Service: %w", err)
+	}
 
 	network.Status.InternalService = &seiv1alpha1.InternalServiceStatus{
 		Name:      desired.Name,

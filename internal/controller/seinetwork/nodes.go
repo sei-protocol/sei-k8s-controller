@@ -422,3 +422,19 @@ func (r *SeiNetworkReconciler) retain(ctx context.Context, obj client.Object, ne
 	obj.SetAnnotations(annotations)
 	return r.Patch(ctx, obj, patch)
 }
+
+// clearRetainRecord removes the retain annotations from an object a network
+// owns again. No-op when neither is present.
+func (r *SeiNetworkReconciler) clearRetainRecord(ctx context.Context, obj client.Object) error {
+	annotations := obj.GetAnnotations()
+	_, hasFrom := annotations[seiv1alpha1.RetainedFromAnnotation]
+	_, hasReason := annotations[seiv1alpha1.RetainReasonAnnotation]
+	if !hasFrom && !hasReason {
+		return nil
+	}
+	patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
+	delete(annotations, seiv1alpha1.RetainedFromAnnotation)
+	delete(annotations, seiv1alpha1.RetainReasonAnnotation)
+	obj.SetAnnotations(annotations)
+	return r.Patch(ctx, obj, patch)
+}
