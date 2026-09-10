@@ -151,3 +151,45 @@ func TestConfigValuesInvalidJSON(t *testing.T) {
 		t.Fatal("invalid JSON accepted")
 	}
 }
+
+func TestConfigValuesAllModePlanners(t *testing.T) {
+	for _, mode := range []string{"full", "archive", "validator", "seed", "replayer"} {
+		t.Run(mode, func(t *testing.T) {
+			n := overlayTestNode()
+			var build func(*seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
+			switch mode {
+			case "full":
+				n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
+				build = (&fullNodePlanner{}).BuildPlan
+			case "archive":
+				n.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
+				build = (&archivePlanner{}).BuildPlan
+			case "validator":
+				n.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
+				build = (&validatorPlanner{}).BuildPlan
+			case "seed":
+				n.Spec.Seed = &seiv1alpha1.SeedSpec{}
+				build = (&seedPlanner{}).BuildPlan
+			case "replayer":
+				n.Spec.Replayer = &seiv1alpha1.ReplayerSpec{}
+				build = (&replayerPlanner{}).BuildPlan
+			}
+			plan, err := build(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for i, p := range plan.Tasks {
+				if p.Type == TaskConfigPatch {
+					found = true
+					if i == 0 || plan.Tasks[i+1].Type != TaskConfigValidate {
+						t.Fatal("incorrect ordering")
+					}
+				}
+			}
+			if !found {
+				t.Fatal("mode omitted overlay")
+			}
+		})
+	}
+}
