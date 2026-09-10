@@ -68,22 +68,22 @@ func TestBuildFailureSurvivesImageRevert(t *testing.T) {
 }
 
 func TestBuildFailureLastTransitionTimeAcrossReconciles(t *testing.T) {
-	for _, mode := range []string{"full", "archive", "replayer", "seed", "validator"} {
+	for _, mode := range []string{overlayTestFull, overlayTestArchive, overlayTestReplayer, overlayTestSeed, overlayTestValidator} {
 		t.Run(mode, func(t *testing.T) {
 			g := NewWithT(t)
 			node := runningFullNode()
-			if mode != "full" {
+			if mode != overlayTestFull {
 				node.Spec.FullNode = nil
 			}
 			switch mode {
-			case "archive":
+			case overlayTestArchive:
 				node.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
-			case "replayer":
+			case overlayTestReplayer:
 				node.Spec.Replayer = &seiv1alpha1.ReplayerSpec{Snapshot: seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100}}}
 				node.Spec.Peers = []seiv1alpha1.PeerSource{{Static: &seiv1alpha1.StaticPeerSource{Addresses: []string{"peer@host:26656"}}}}
-			case "seed":
+			case overlayTestSeed:
 				node.Spec.Seed = seedNode().Spec.Seed
-			case "validator":
+			case overlayTestValidator:
 				node.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
 			}
 			node.Spec.Image = "sei:next"
