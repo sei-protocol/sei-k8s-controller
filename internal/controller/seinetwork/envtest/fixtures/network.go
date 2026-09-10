@@ -72,6 +72,14 @@ func WithConfigOverrides(overrides map[string]string) Option {
 	}
 }
 
+// WithConfigValues sets spec.configValues (typed seid TOML values, copied to
+// every validator child).
+func WithConfigValues(values ...seiv1alpha1.ConfigValue) Option {
+	return func(network *seiv1alpha1.SeiNetwork) {
+		network.Spec.ConfigValues = values
+	}
+}
+
 // WithSidecar sets spec.sidecar.
 func WithSidecar(sidecar *seiv1alpha1.SidecarConfig) Option {
 	return func(network *seiv1alpha1.SeiNetwork) {

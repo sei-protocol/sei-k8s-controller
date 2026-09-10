@@ -76,6 +76,26 @@ type SeiNetworkSpec struct {
 	// +optional
 	ConfigOverrides map[string]string `json:"configOverrides,omitempty"`
 
+	// ConfigValues supplies typed values by config file and dotted TOML path
+	// for every validator in the pool. The controller copies the set onto each
+	// validator child's spec.configValues, where the SeiNode substrate merges
+	// it over the base configuration and restarts seid on a change; see the
+	// SeiNode field for the merge, precedence, and restart behavior.
+	//
+	// The network's set is authoritative: an edit here rewrites every child's
+	// set, and a direct edit on a child reconciles back.
+	//
+	// Deliberately unguarded, like the SeiNode field: no allow-list and no
+	// denylist, so a config value may name chain.freeze_height, chain.halt_height,
+	// or chain.halt_time across the whole validator set. Do not add a key guard
+	// here without amending spec 003-config-substrate-parity-seinetwork.
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	// +listType=map
+	// +listMapKey=fileName
+	// +listMapKey=key
+	ConfigValues []ConfigValue `json:"configValues,omitempty"`
+
 	// DataVolume configures the data PersistentVolumeClaim for each genesis
 	// validator. The ceremony-generated consensus identity lives here, so
 	// DeletionPolicy defaults to Retain.

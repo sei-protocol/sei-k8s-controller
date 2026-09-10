@@ -18,10 +18,10 @@ import (
 )
 
 // reconcileSeiNodes ensures the desired child SeiNodes exist with the desired
-// spec (image/sidecar/overrides/labels propagated in-place every reconcile)
-// and refreshes IncumbentNodes for the genesis planner. Mutations are skipped
-// while a plan is in progress (guarding the ceremony's child-Peers writes) or
-// while paused.
+// spec (image/sidecar/overrides/configValues/labels propagated in-place every
+// reconcile) and refreshes IncumbentNodes for the genesis planner. Mutations
+// are skipped while a plan is in progress (guarding the ceremony's child-Peers
+// writes) or while paused.
 func (r *SeiNetworkReconciler) reconcileSeiNodes(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
 	if network.Spec.Paused {
 		return r.populateIncumbentNodes(ctx, network)
@@ -166,6 +166,15 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 		existing.Spec.Overrides = desired.Spec.Overrides
 		updated = true
 	}
+	// The network's configValues are authoritative for the pool, so the whole
+	// set is replaced rather than merged: a changed entry, a removed entry, a
+	// cleared set, and a direct edit on the child all converge on the network's
+	// set. Semantic.DeepEqual compares the apiextensions JSON values by bytes,
+	// so a re-encode of an unchanged set is not a write.
+	if !equality.Semantic.DeepEqual(existing.Spec.ConfigValues, desired.Spec.ConfigValues) {
+		existing.Spec.ConfigValues = desired.Spec.ConfigValues
+		updated = true
+	}
 	// No identity / Peers / DataVolume / Resources sync below — deliberate, all
 	// create-time only:
 	//   - Peers are controller-owned: the genesis ceremony's collect-and-set-peers
@@ -206,14 +215,15 @@ func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.
 	podLabels[seinetworkLabel] = network.Name
 
 	spec := seiv1alpha1.SeiNodeSpec{
-		ChainID:    gc.ChainID,
-		Image:      network.Spec.Image,
-		Overrides:  maps.Clone(network.Spec.ConfigOverrides),
-		Sidecar:    network.Spec.Sidecar.DeepCopy(),
-		DataVolume: network.Spec.DataVolume.DeepCopy(),
-		Resources:  network.Spec.Resources.DeepCopy(),
-		PodLabels:  podLabels,
-		Paused:     network.Spec.Paused,
+		ChainID:      gc.ChainID,
+		Image:        network.Spec.Image,
+		Overrides:    maps.Clone(network.Spec.ConfigOverrides),
+		ConfigValues: cloneConfigValues(network.Spec.ConfigValues),
+		Sidecar:      network.Spec.Sidecar.DeepCopy(),
+		DataVolume:   network.Spec.DataVolume.DeepCopy(),
+		Resources:    network.Spec.Resources.DeepCopy(),
+		PodLabels:    podLabels,
+		Paused:       network.Spec.Paused,
 		Validator: &seiv1alpha1.ValidatorSpec{
 			GenesisCeremony: &seiv1alpha1.GenesisCeremonyNodeConfig{
 				ChainID:        gc.ChainID,
@@ -233,6 +243,20 @@ func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.
 		},
 		Spec: spec,
 	}
+}
+
+// cloneConfigValues deep-copies the network's config values for a child spec,
+// so a later write through the child cannot reach the network object. It
+// returns nil for an empty set, keeping an unset field unset on the child.
+func cloneConfigValues(values []seiv1alpha1.ConfigValue) []seiv1alpha1.ConfigValue {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]seiv1alpha1.ConfigValue, len(values))
+	for i := range values {
+		values[i].DeepCopyInto(&cloned[i])
+	}
+	return cloned
 }
 
 // scaleDown deletes SeiNodes with ordinals >= the desired replica count.

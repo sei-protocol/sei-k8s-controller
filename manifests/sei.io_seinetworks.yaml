@@ -100,6 +100,60 @@ spec:
                   genesis.json chain state — these are mutable node runtime config that
                   propagate to children in-place.
                 type: object
+              configValues:
+                description: |-
+                  ConfigValues supplies typed values by config file and dotted TOML path
+                  for every validator in the pool. The controller copies the set onto each
+                  validator child's spec.configValues, where the SeiNode substrate merges
+                  it over the base configuration and restarts seid on a change; see the
+                  SeiNode field for the merge, precedence, and restart behavior.
+
+                  The network's set is authoritative: an edit here rewrites every child's
+                  set, and a direct edit on a child reconciles back.
+
+                  Deliberately unguarded, like the SeiNode field: no allow-list and no
+                  denylist, so a config value may name chain.freeze_height, chain.halt_height,
+                  or chain.halt_time across the whole validator set. Do not add a key guard
+                  here without amending spec 003-config-substrate-parity-seinetwork.
+                items:
+                  description: ConfigValue supplies a typed value at a dotted TOML
+                    path in a config file.
+                  properties:
+                    fileName:
+                      description: |-
+                        FileName names the config file, for example config.toml or app.toml.
+                        Only config.toml and app.toml have a controller-generated base. Removing
+                        an entry for any other file leaves its key in place on disk.
+                      maxLength: 64
+                      minLength: 1
+                      pattern: ^[A-Za-z0-9_-]+\.toml$
+                      type: string
+                    key:
+                      description: Key is a dotted TOML path, for example evm.enable.
+                      maxLength: 256
+                      minLength: 1
+                      pattern: ^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$
+                      type: string
+                    value:
+                      description: |-
+                        Value preserves the JSON type for the TOML merge. Scalars, arrays, and
+                        tables are accepted. A value is required; explicit null is rejected.
+                        A nested null is admitted by the schema but rejected at plan-build because
+                        it has no TOML representation. Integers outside int64 range fall back to
+                        float64 and may lose precision; numbers outside float64 range are rejected
+                        at plan-build.
+                      x-kubernetes-preserve-unknown-fields: true
+                  required:
+                  - fileName
+                  - key
+                  - value
+                  type: object
+                maxItems: 100
+                type: array
+                x-kubernetes-list-map-keys:
+                - fileName
+                - key
+                x-kubernetes-list-type: map
               dataVolume:
                 description: |-
                   DataVolume configures the data PersistentVolumeClaim for each genesis
