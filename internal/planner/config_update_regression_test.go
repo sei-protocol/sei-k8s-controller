@@ -154,42 +154,93 @@ func TestFirstConfigObservationRegeneratesRemovedKeysOnImageUpdate(t *testing.T)
 	}
 }
 
-func TestUnobservedConfigNoOpExplainsDeferredEditsIncludingRemoval(t *testing.T) {
-	for _, hasValues := range []bool{false, true} {
-		name := "last-entry-removed"
-		if hasValues {
-			name = "entries-present"
-		}
-		t.Run(name, func(t *testing.T) {
+func TestUnobservedConfigNoOpExplainsDeferredNonemptyEdits(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Status.CurrentConfigValuesHash = ""
+	node.Spec.ConfigValues = overlayTestNode().Spec.ConfigValues
+	resolver := &NodeResolver{}
+	g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
+	g.Expect(node.Status.Plan).To(BeNil())
+	condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+	g.Expect(condition).NotTo(BeNil())
+	g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(condition.Reason).To(Equal("ConfigBaselineUnobserved"))
+	g.Expect(condition.Message).To(ContainSubstring("image update"))
+	g.Expect(node.Status.CurrentConfigValuesHash).To(BeEmpty())
+	// An ordinary image update establishes the baseline and clears the
+	// deferred explanation through the existing condition lifecycle.
+	node.Spec.Image = testImageV2
+	g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
+	for i := range node.Status.Plan.Tasks {
+		node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
+	}
+	_, err := executePlan(context.Background(), node, node.Status.Plan, task.ExecutionConfig{})
+	g.Expect(err).NotTo(HaveOccurred())
+	node.Status.CurrentImage = node.Spec.Image
+	g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
+	g.Expect(node.Status.Plan).To(BeNil())
+	condition = meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+	g.Expect(condition.Reason).To(Equal("UpdateComplete"))
+}
+
+func TestUnobservedNodeWithoutConfigValuesNeverGetsBaselineNotice(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Status.CurrentConfigValuesHash = ""
+	resolver := &NodeResolver{}
+	for range 2 {
+		g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
+		g.Expect(node.Status.Plan).To(BeNil())
+		g.Expect(meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)).To(BeNil())
+	}
+}
+
+func TestFailedUpdateReasonAndMessageSurviveUnobservedConfigReconciles(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Status.CurrentConfigValuesHash = ""
+	node.Spec.ConfigValues = overlayTestNode().Spec.ConfigValues
+	node.Spec.Image = testImageV2
+	resolver := &NodeResolver{}
+	g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
+	plan := node.Status.Plan
+	g.Expect(plan).NotTo(BeNil())
+	// observe-image succeeded, but the following start-gate approval failed.
+	node.Status.CurrentImage = node.Spec.Image
+	plan.Phase = seiv1alpha1.TaskPlanFailed
+	plan.FailedTaskDetail = &seiv1alpha1.FailedTaskInfo{Type: TaskMarkReady, Error: "approval denied"}
+	wantMessage := "plan " + plan.ID + " failed: task " + TaskMarkReady + ": approval denied"
+	for range 2 {
+		g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
+		g.Expect(node.Status.Plan).To(BeNil())
+		g.Expect(node.Status.CurrentConfigValuesHash).To(BeEmpty())
+		condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+		g.Expect(condition).NotTo(BeNil())
+		g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(condition.Reason).To(Equal("UpdateFailed"))
+		g.Expect(condition.Message).To(Equal(wantMessage))
+	}
+}
+
+func TestClassifyPlanIncludesConfigUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		types []string
+		want  string
+	}{
+		{"config", []string{TaskConfigApply, TaskConfigPatch, TaskConfigValidate, TaskMarkReady, sidecar.TaskTypeRestartSeid}, "config-update"},
+		{"image", []string{TaskConfigPatch, TaskConfigValidate, task.TaskTypeObserveImage, TaskMarkReady}, "node-update"},
+		{"init", []string{task.TaskTypeEnsureDataPVC, TaskConfigApply, TaskMarkReady}, "init"},
+		{"reapproval", []string{TaskMarkReady}, "mark-ready-reapply"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
-			node := runningFullNode()
-			node.Status.CurrentConfigValuesHash = ""
-			if hasValues {
-				node.Spec.ConfigValues = overlayTestNode().Spec.ConfigValues
+			plan := &seiv1alpha1.TaskPlan{}
+			for _, taskType := range tc.types {
+				plan.Tasks = append(plan.Tasks, seiv1alpha1.PlannedTask{Type: taskType})
 			}
-			resolver := &NodeResolver{}
-			g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
-			g.Expect(node.Status.Plan).To(BeNil())
-			condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
-			g.Expect(condition).NotTo(BeNil())
-			g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(condition.Reason).To(Equal("ConfigBaselineUnobserved"))
-			g.Expect(condition.Message).To(ContainSubstring("image update"))
-			g.Expect(node.Status.CurrentConfigValuesHash).To(BeEmpty())
-			// An ordinary image update establishes the baseline and clears the
-			// deferred explanation through the existing condition lifecycle.
-			node.Spec.Image = testImageV2
-			g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
-			for i := range node.Status.Plan.Tasks {
-				node.Status.Plan.Tasks[i].Status = seiv1alpha1.TaskComplete
-			}
-			_, err := executePlan(context.Background(), node, node.Status.Plan, task.ExecutionConfig{})
-			g.Expect(err).NotTo(HaveOccurred())
-			node.Status.CurrentImage = node.Spec.Image
-			g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
-			g.Expect(node.Status.Plan).To(BeNil())
-			condition = meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
-			g.Expect(condition.Reason).To(Equal("UpdateComplete"))
+			g.Expect(classifyPlan(plan)).To(Equal(tc.want))
 		})
 	}
 }
