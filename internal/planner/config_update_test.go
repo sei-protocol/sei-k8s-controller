@@ -165,3 +165,44 @@ func TestConfigUpdateCompletionObservesCapturedSpecAndFailureDoesNotObserve(t *t
 		})
 	}
 }
+
+func TestConfigValuesHashCanonicalNumericJSON(t *testing.T) {
+	for _, variants := range [][]string{
+		{"1", "1.00", "10e-1", "0.1e+1"},
+		{"0", "-0.0", "0e999999999"},
+		{"9007199254740993", "9007199254740993.000", "90071992547409930e-1"},
+		{"-0.0123", "-123e-4", "-1.2300E-2"},
+	} {
+		t.Run(variants[0], func(t *testing.T) {
+			g := NewWithT(t)
+			var want string
+			for _, raw := range variants {
+				values := []seiv1alpha1.ConfigValue{{FileName: "config.toml", Key: "custom",
+					Value: apiextensionsv1.JSON{Raw: []byte(`{"nested":[` + raw + `]}`)},
+				}}
+				got, err := configValuesHash(values)
+				g.Expect(err).NotTo(HaveOccurred())
+				if want == "" {
+					want = got
+				}
+				g.Expect(got).To(Equal(want), raw)
+			}
+		})
+	}
+}
+
+func TestConfigValuesRemovalToEmptyStillRegeneratesBaseAndRestarts(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	var err error
+	node.Status.CurrentConfigValuesHash, err = configValuesHash(overlayTestNode().Spec.ConfigValues)
+	g.Expect(err).NotTo(HaveOccurred())
+	plan, err := (&fullNodePlanner{}).BuildPlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(planTaskTypes(plan)).To(Equal([]string{
+		TaskConfigApply, TaskConfigPatch, TaskConfigValidate, sidecar.TaskTypeRestartSeid, TaskMarkReady,
+	}))
+	emptyHash, err := configValuesHash(nil)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan.ConfigValuesHash).To(Equal(emptyHash))
+}
