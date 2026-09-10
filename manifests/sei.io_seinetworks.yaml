@@ -109,7 +109,14 @@ spec:
                   SeiNode field for the merge, precedence, and restart behavior.
 
                   The network's set is authoritative: an edit here rewrites every child's
-                  set, and a direct edit on a child reconciles back.
+                  set, and a direct edit on a child reconciles back. Like every other
+                  propagated field, the rewrite is deferred while spec.paused is set or a
+                  plan is in progress, and lands on the reconcile after that clears.
+
+                  The rewrite reaches the whole pool at once. There is no rolling window:
+                  every validator sees the drift in the same reconcile and restarts seid
+                  independently, so a one-key edit stops block production until more than
+                  2/3 of the set is back. Edit per child instead to stage a change.
 
                   Deliberately unguarded, like the SeiNode field: no allow-list and no
                   denylist, so a config value may name chain.freeze_height, chain.halt_height,

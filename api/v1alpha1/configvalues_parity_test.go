@@ -37,17 +37,37 @@ func configValuesSchema(t *testing.T, path string) map[string]any {
 		t.Fatal(err)
 	}
 
-	versions, ok := crd["spec"].(map[string]any)["versions"].([]any)
+	versions, ok := descend(crd, "spec")["versions"].([]any)
 	if !ok || len(versions) == 0 {
 		t.Fatalf("%s: no served versions", path)
 	}
-	schema := versions[0].(map[string]any)["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)
-	specProps := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)
-	values, ok := specProps["configValues"].(map[string]any)
+	version, ok := versions[0].(map[string]any)
 	if !ok {
+		t.Fatalf("%s: malformed version entry", path)
+	}
+	values := descend(version, "schema", "openAPIV3Schema", "properties", "spec", "properties", "configValues")
+	if values == nil {
 		t.Fatalf("%s: spec.configValues is absent", path)
 	}
-	return stripDescriptions(values).(map[string]any)
+	stripped, ok := stripDescriptions(values).(map[string]any)
+	if !ok {
+		t.Fatalf("%s: spec.configValues is not an object", path)
+	}
+	return stripped
+}
+
+// descend walks a chain of object keys, returning nil at the first key that is
+// missing or does not hold an object, so a reshaped manifest reports through
+// t.Fatalf rather than panicking.
+func descend(node map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		next, ok := node[key].(map[string]any)
+		if !ok {
+			return nil
+		}
+		node = next
+	}
+	return node
 }
 
 func stripDescriptions(node any) any {

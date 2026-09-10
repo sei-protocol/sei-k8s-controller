@@ -54,6 +54,10 @@ func TestConfigValues_PropagateToEveryValidator(t *testing.T) {
 		fixtures.WithConfigValues(
 			networkConfigValue("app.toml", "evm.enable", `true`),
 			networkConfigValue("config.toml", "consensus.timeout_commit", `"2s"`),
+			// A table and a float: the two shapes the apiserver is free to
+			// re-serialize differently from what was written.
+			networkConfigValue("app.toml", "state-sync.snapshot", `{"interval":1500,"keep-recent":2}`),
+			networkConfigValue("app.toml", "evm.min-fee", `0.02`),
 		),
 	)
 	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
@@ -75,6 +79,23 @@ func TestConfigValues_PropagateToEveryValidator(t *testing.T) {
 		}
 		return true
 	}, "every validator child is created with the network's config values")
+
+	// 1b. A converged, populated set is not rewritten every reconcile. The
+	//     parent compares the child's stored values byte-for-byte, so an
+	//     apiserver re-serialization of a table or a float would show up here
+	//     as an endless Update loop that the fake client cannot reproduce.
+	settled := &seiv1alpha1.SeiNode{}
+	g.Expect(testCli.Get(testCtx, childKeys[0], settled)).To(Succeed())
+	settledRV := settled.ResourceVersion
+
+	g.Consistently(func() string {
+		cur := &seiv1alpha1.SeiNode{}
+		if err := testCli.Get(testCtx, childKeys[0], cur); err != nil {
+			return ""
+		}
+		return cur.ResourceVersion
+	}, 3*time.Second, pollInterval).Should(Equal(settledRV),
+		"a converged set must not be rewritten on every reconcile")
 
 	// 2. A changed value and a removed entry in one edit: the network's set
 	//    replaces the child's, it is not merged into it.
