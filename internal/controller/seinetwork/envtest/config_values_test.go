@@ -186,7 +186,7 @@ func TestConfigValues_ReplacementValidatorReceivesExistingValues(t *testing.T) {
 	// pollTimeout under CI load.
 	waitForStatusWithin(t, convergeTimeout, client.ObjectKeyFromObject(network), func(n *seiv1alpha1.SeiNetwork) bool {
 		return apimeta.IsStatusConditionTrue(n.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete) &&
-			!apimeta.IsStatusConditionTrue(n.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
+			apimeta.IsStatusConditionFalse(n.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
 	}, "the genesis ceremony has completed and no network plan is in progress")
 
 	child := &seiv1alpha1.SeiNode{}
