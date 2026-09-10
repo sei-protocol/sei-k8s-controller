@@ -27,6 +27,7 @@ func ReadTOML(path string) (map[string]any, error) {
 
 // WriteTOML atomically encodes doc as TOML and writes it to path via
 // temp-file + rename. JSON numeric tokens are emitted as TOML numbers.
+// Upstream marks SetMarshalJsonNumbers unstable; removal will cause a compile error.
 func WriteTOML(path string, doc map[string]any) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).SetMarshalJsonNumbers(true).Encode(doc); err != nil {
