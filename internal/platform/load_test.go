@@ -16,6 +16,8 @@ scheduling:
   nodepoolSeed: file-nodepool-seed
   tolerationKey: file-toleration
   serviceAccount: file-sa
+  dedicated:
+    nodepoolValidator: file-nodepool-validator-dedicated
 storage:
   classPerf: file-perf
   classDefault: file-default
@@ -75,6 +77,12 @@ func TestLoad_InfraFromFile_GatewayFromEnv(t *testing.T) {
 	}
 	if cfg.NodepoolValidator != "file-nodepool-validator" {
 		t.Errorf("NodepoolValidator = %q, want file-nodepool-validator", cfg.NodepoolValidator)
+	}
+	if got := cfg.DedicatedNodepoolForMode("validator"); got != "file-nodepool-validator-dedicated" {
+		t.Errorf("DedicatedNodepoolForMode(validator) = %q, want file-nodepool-validator-dedicated", got)
+	}
+	if got := cfg.DedicatedNodepoolForMode("archive"); got != "" {
+		t.Errorf("DedicatedNodepoolForMode(archive) = %q, want \"\" (none configured)", got)
 	}
 	if cfg.CosmosExporterImage != "file-cosmos-exporter" {
 		t.Errorf("CosmosExporterImage = %q, want file-cosmos-exporter", cfg.CosmosExporterImage)

@@ -997,7 +997,7 @@ func TestBuildNodePodSpec_NonDedicated_OnlyDefensiveAntiAffinity(t *testing.T) {
 func TestBuildNodePodSpec_Dedicated_AddsRequesterTermAndLabel(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("syncer-0", "pacific-1")
-	node.Annotations = map[string]string{DedicatedNodeKey: "true"}
+	node.Annotations = map[string]string{DedicatedNodeKey: dedicatedNodeValue}
 
 	spec, err := buildNodePodSpec(node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
@@ -1017,7 +1017,99 @@ func TestBuildNodePodSpec_Dedicated_AddsRequesterTermAndLabel(t *testing.T) {
 	// The annotation is mirrored to a pod-template label so anti-affinity
 	// selectors on other pods can match it.
 	g.Expect(spec).NotTo(BeNil())
-	g.Expect(ResourceLabels(node)).To(HaveKeyWithValue(DedicatedNodeKey, "true"))
+	g.Expect(ResourceLabels(node)).To(HaveKeyWithValue(DedicatedNodeKey, dedicatedNodeValue))
+}
+
+func TestEffectiveNodeIsolation_FieldThenAnnotationThenShared(t *testing.T) {
+	g := NewWithT(t)
+
+	node := newSnapshotNode("syncer-0", "pacific-1")
+	g.Expect(EffectiveNodeIsolation(node)).To(Equal(seiv1alpha1.NodeIsolationShared))
+	g.Expect(IsDedicatedNode(node)).To(BeFalse())
+
+	// Legacy annotation alone still means Dedicated.
+	node.Annotations = map[string]string{DedicatedNodeKey: dedicatedNodeValue}
+	g.Expect(EffectiveNodeIsolation(node)).To(Equal(seiv1alpha1.NodeIsolationDedicated))
+
+	// An empty scheduling block does not shadow the annotation.
+	node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{}
+	g.Expect(EffectiveNodeIsolation(node)).To(Equal(seiv1alpha1.NodeIsolationDedicated))
+
+	// A set field wins over the annotation in both directions.
+	node.Spec.Scheduling.NodeIsolation = seiv1alpha1.NodeIsolationShared
+	g.Expect(EffectiveNodeIsolation(node)).To(Equal(seiv1alpha1.NodeIsolationShared))
+	g.Expect(IsDedicatedNode(node)).To(BeFalse())
+
+	node.Annotations = nil
+	node.Spec.Scheduling.NodeIsolation = seiv1alpha1.NodeIsolationDedicated
+	g.Expect(EffectiveNodeIsolation(node)).To(Equal(seiv1alpha1.NodeIsolationDedicated))
+	g.Expect(IsDedicatedNode(node)).To(BeTrue())
+}
+
+func TestBuildNodePodSpec_DedicatedField_AddsRequesterTermAndLabel(t *testing.T) {
+	g := NewWithT(t)
+	node := newSnapshotNode("syncer-0", "pacific-1")
+	node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodeIsolation: seiv1alpha1.NodeIsolationDedicated}
+
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	terms := spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	g.Expect(terms).To(HaveLen(2))
+	g.Expect(terms[1].LabelSelector.MatchExpressions[0].Key).To(Equal(NodeLabel))
+	g.Expect(ResourceLabels(node)).To(HaveKeyWithValue(DedicatedNodeKey, dedicatedNodeValue))
+}
+
+// Dedicated replaces the shared per-mode pool with the single-tenant one when
+// app-config names it: both the nodepool affinity and the toleration move, so
+// the pod has no path back onto a shared instance.
+func TestBuildNodePodSpec_Dedicated_UsesSingleTenantNodepool(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("validator-0", "pacific-1")
+	node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodeIsolation: seiv1alpha1.NodeIsolationDedicated}
+	cfg := platformtest.Config()
+	cfg.DedicatedNodepoolValidator = "sei-validator-dedicated"
+
+	spec, err := buildNodePodSpec(node, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	g.Expect(terms).To(HaveLen(1))
+	g.Expect(terms[0].MatchExpressions).To(HaveLen(1))
+	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-validator-dedicated"))
+	g.Expect(spec.Tolerations).To(HaveLen(1))
+	g.Expect(spec.Tolerations[0].Value).To(Equal("sei-validator-dedicated"))
+	g.Expect(spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(2))
+}
+
+// With no single-tenant pool named for the mode, a Dedicated node stays on the
+// shared per-mode pool; the requester anti-affinity term is still rendered.
+func TestBuildNodePodSpec_Dedicated_NoSingleTenantPool_KeepsSharedPool(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("validator-0", "pacific-1")
+	node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodeIsolation: seiv1alpha1.NodeIsolationDedicated}
+
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-validator"))
+	g.Expect(spec.Tolerations[0].Value).To(Equal("sei-validator"))
+	g.Expect(spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(2))
+}
+
+// A Shared node never lands on the single-tenant pool even when one is named.
+func TestBuildNodePodSpec_Shared_IgnoresSingleTenantNodepool(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("validator-0", "pacific-1")
+	cfg := platformtest.Config()
+	cfg.DedicatedNodepoolValidator = "sei-validator-dedicated"
+
+	spec, err := buildNodePodSpec(node, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-validator"))
 }
 
 func TestDefaultStorageForMode_Archive(t *testing.T) {

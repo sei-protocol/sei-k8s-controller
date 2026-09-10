@@ -52,14 +52,15 @@ const (
 	frozenLabel = "sei.io/frozen"
 	frozenValue = "true"
 
-	// DedicatedNodeKey is the well-known key used both as a SeiNode annotation
-	// (the opt-in) and as the pod-template label it is mirrored to. Value
-	// "true" opts the node into single-tenant scheduling: its pod refuses to
-	// share a Kubernetes node with any other Sei-managed pod, and every other
-	// Sei-managed pod refuses to share a node with it. Experimental and
-	// annotation-driven so it needs no CRD schema bump — see the dedicated-node
-	// runbook. It is mirrored to a label because pod anti-affinity selects on
-	// labels, not annotations.
+	// DedicatedNodeKey is the well-known key used both as the legacy SeiNode
+	// annotation (the pre-spec-006 opt-in) and as the pod-template label it is
+	// mirrored to. Value "true" on the pod marks single-tenant scheduling: the
+	// pod refuses to share a Kubernetes node with any other Sei-managed pod, and
+	// every other Sei-managed pod refuses to share a node with it. The typed
+	// spec.scheduling.nodeIsolation field supersedes the annotation as the
+	// opt-in (see EffectiveNodeIsolation); the label key is unchanged so a
+	// rolling upgrade never splits running and new pods across two keys. It is
+	// a label because pod anti-affinity selects on labels, not annotations.
 	DedicatedNodeKey   = "sei.io/dedicated-node"
 	dedicatedNodeValue = "true"
 
@@ -219,14 +220,31 @@ func snapshotPublishEnabled(node *seiv1alpha1.SeiNode) bool {
 	return sg != nil && sg.Tendermint != nil && sg.Tendermint.Publish != nil
 }
 
-// IsDedicatedNode reports whether the SeiNode opts into single-tenant node
-// scheduling via the sei.io/dedicated-node annotation.
+// EffectiveNodeIsolation resolves the node isolation the controller acts on,
+// by one uniform path for every SeiNode: spec.scheduling.nodeIsolation when
+// set; otherwise the legacy sei.io/dedicated-node annotation; otherwise
+// Shared. The field has no schema default on purpose — a default would
+// materialize Shared onto every existing annotation-only node on upgrade and
+// kill the fallback.
+func EffectiveNodeIsolation(node *seiv1alpha1.SeiNode) seiv1alpha1.NodeIsolation {
+	if s := node.Spec.Scheduling; s != nil && s.NodeIsolation != "" {
+		return s.NodeIsolation
+	}
+	if node.Annotations[DedicatedNodeKey] == dedicatedNodeValue {
+		return seiv1alpha1.NodeIsolationDedicated
+	}
+	return seiv1alpha1.NodeIsolationShared
+}
+
+// IsDedicatedNode reports whether the SeiNode's effective node isolation is
+// Dedicated (single-tenant scheduling).
 //
 // A pod that can never be scheduled (no available single-tenant node) stays
-// Pending with no SeiNode condition reflecting it; check the pod's own
-// PodScheduled condition or events directly. See the dedicated-node runbook.
+// Pending with no SeiNode condition reflecting it; the owning SeiNetwork
+// reports it as pending on status.nodes, or check the pod's own PodScheduled
+// condition or events directly.
 func IsDedicatedNode(node *seiv1alpha1.SeiNode) bool {
-	return node.Annotations[DedicatedNodeKey] == dedicatedNodeValue
+	return EffectiveNodeIsolation(node) == seiv1alpha1.NodeIsolationDedicated
 }
 
 // BuildPodAntiAffinity assembles the pod anti-affinity for a Sei pod.
@@ -276,6 +294,22 @@ func BuildPodAntiAffinity(dedicated bool) *corev1.PodAntiAffinity {
 	return &corev1.PodAntiAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: terms,
 	}
+}
+
+// nodepoolFor returns the Karpenter NodePool the node's pod is pinned to. A
+// Dedicated node lands on its mode's single-tenant pool when app-config names
+// one, replacing (not widening) the per-mode shared pool so the pod cannot fall
+// back onto a shared instance. With no single-tenant pool named for the mode,
+// the pod stays on the shared per-mode pool and the requester anti-affinity
+// term alone keeps it apart from other Sei pods — not from a non-Sei co-tenant.
+func nodepoolFor(node *seiv1alpha1.SeiNode, p PlatformConfig, dedicated bool) string {
+	mode := NodeMode(node)
+	if dedicated {
+		if pool := p.DedicatedNodepoolForMode(mode); pool != "" {
+			return pool
+		}
+	}
+	return p.NodepoolForMode(mode)
 }
 
 // deriveRole returns the role label value for the node's mode. Stamped
@@ -839,7 +873,8 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 	volumes = append(volumes, nodeVolumes...)
 	volumes = append(volumes, keyringVolumes...)
 
-	pool := p.NodepoolForMode(NodeMode(node))
+	dedicated := IsDedicatedNode(node)
+	pool := nodepoolFor(node, p, dedicated)
 
 	spec := corev1.PodSpec{
 		// AutomountServiceAccountToken is explicit here because the
@@ -864,7 +899,7 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 					}},
 				},
 			},
-			PodAntiAffinity: BuildPodAntiAffinity(IsDedicatedNode(node)),
+			PodAntiAffinity: BuildPodAntiAffinity(dedicated),
 		},
 		Volumes: volumes,
 	}

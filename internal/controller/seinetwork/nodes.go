@@ -213,6 +213,10 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 		existing.Spec.Sidecar = desired.Spec.Sidecar
 		updated = true
 	}
+	if !equality.Semantic.DeepEqual(existing.Spec.Scheduling, desired.Spec.Scheduling) {
+		existing.Spec.Scheduling = desired.Spec.Scheduling
+		updated = true
+	}
 	if !maps.Equal(existing.Spec.PodLabels, desired.Spec.PodLabels) {
 		existing.Spec.PodLabels = desired.Spec.PodLabels
 		updated = true
@@ -280,6 +284,7 @@ func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.
 		Overrides:    maps.Clone(network.Spec.ConfigOverrides),
 		ConfigValues: cloneConfigValues(network.Spec.ConfigValues),
 		Sidecar:      network.Spec.Sidecar.DeepCopy(),
+		Scheduling:   network.Spec.Scheduling.DeepCopy(),
 		DataVolume:   network.Spec.DataVolume.DeepCopy(),
 		Resources:    network.Spec.Resources.DeepCopy(),
 		PodLabels:    podLabels,

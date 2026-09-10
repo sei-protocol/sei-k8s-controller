@@ -742,6 +742,20 @@ spec:
                   rule: '!has(self.limits) || !(''memory'' in self.limits) || (has(self.requests)
                     && ''memory'' in self.requests && quantity(string(self.limits[''memory''])).compareTo(quantity(string(self.requests[''memory''])))
                     == 0)'
+              scheduling:
+                description: Scheduling configures worker-node isolation.
+                properties:
+                  nodeIsolation:
+                    description: |-
+                      NodeIsolation requests shared or single-tenant worker-node placement.
+                      There is deliberately no schema default: an unset field must remain unset
+                      on reads so existing SeiNodes retain their legacy annotation fallback.
+                      The controller resolves an unset value to Shared after that fallback.
+                    enum:
+                    - Shared
+                    - Dedicated
+                    type: string
+                type: object
               seed:
                 description: Seed configures a peer-discovery seed node (P2P + PEX
                   only).

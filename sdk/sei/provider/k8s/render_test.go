@@ -94,6 +94,18 @@ func TestRenderNetwork_ChainIDDefaultsToName(t *testing.T) {
 	}
 }
 
+func TestRenderNetwork_NodeIsolation(t *testing.T) {
+	set := renderNetwork(sei.NetworkSpec{Name: testNet, Image: testImage, Validators: 4, NodeIsolation: sei.IsolationDedicated}, testNS)
+	if set.Spec.Scheduling == nil || set.Spec.Scheduling.NodeIsolation != "Dedicated" {
+		t.Errorf("scheduling = %+v, want nodeIsolation Dedicated", set.Spec.Scheduling)
+	}
+	// Empty: leaves spec.scheduling unset; the controller reads that as Shared.
+	unset := renderNetwork(sei.NetworkSpec{Name: testNet, Image: testImage, Validators: 4}, testNS)
+	if unset.Spec.Scheduling != nil {
+		t.Errorf("scheduling = %+v, want nil", unset.Spec.Scheduling)
+	}
+}
+
 func TestRenderNetwork_SidecarImage(t *testing.T) {
 	// Set: pins spec.sidecar.image, which the controller propagates to children.
 	set := renderNetwork(sei.NetworkSpec{Name: testNet, Image: testImage, Validators: 4, SidecarImage: "seictl:dev"}, testNS)

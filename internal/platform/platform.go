@@ -71,6 +71,15 @@ type Config struct {
 	NodepoolSeed    string
 	StorageSizeSeed string
 
+	// Single-tenant (Dedicated) pools, one per mode, each optional. A Dedicated
+	// node lands on its mode's pool when it is named here; when unnamed, the
+	// node stays on the shared per-mode pool and only the pod anti-affinity
+	// keeps it apart from other Sei pods. Read via DedicatedNodepoolForMode.
+	DedicatedNodepoolName      string
+	DedicatedNodepoolArchive   string
+	DedicatedNodepoolValidator string
+	DedicatedNodepoolSeed      string
+
 	// Per-role seid-container resource overrides, keyed by sei.io/role. Each is
 	// optional: an unset field (or unset sub-field) falls back to the
 	// code-authoritative, prod-safe default for that role in internal/noderesource.
@@ -151,6 +160,20 @@ type SchedulingConfig struct {
 	NodepoolSeed      string `json:"nodepoolSeed"`
 	TolerationKey     string `json:"tolerationKey"`
 	ServiceAccount    string `json:"serviceAccount"`
+
+	// Dedicated names the optional single-tenant pool per mode; see
+	// Config.DedicatedNodepoolForMode.
+	Dedicated DedicatedSchedulingConfig `json:"dedicated"`
+}
+
+// DedicatedSchedulingConfig names the single-tenant Karpenter pools a
+// Dedicated node schedules onto, keyed the same way as the shared pools. Every
+// field is optional; an empty one means no single-tenant pool for that mode.
+type DedicatedSchedulingConfig struct {
+	NodepoolName      string `json:"nodepoolName"`
+	NodepoolArchive   string `json:"nodepoolArchive"`
+	NodepoolValidator string `json:"nodepoolValidator"`
+	NodepoolSeed      string `json:"nodepoolSeed"`
 }
 
 // StorageConfig holds the PVC storage classes and sizes for default and archive nodes.
@@ -233,6 +256,23 @@ func (c Config) NodepoolForMode(mode string) string {
 		return c.NodepoolSeed
 	default:
 		return c.NodepoolName
+	}
+}
+
+// DedicatedNodepoolForMode returns the single-tenant Karpenter NodePool for the
+// given sei-config mode string, or "" when app-config names none for that
+// mode. The mapping mirrors NodepoolForMode so a Dedicated node keeps its
+// mode's sizing: seed has no fallback to the default pool here either.
+func (c Config) DedicatedNodepoolForMode(mode string) string {
+	switch mode {
+	case modeArchive:
+		return c.DedicatedNodepoolArchive
+	case modeValidator:
+		return c.DedicatedNodepoolValidator
+	case modeSeed:
+		return c.DedicatedNodepoolSeed
+	default:
+		return c.DedicatedNodepoolName
 	}
 }
 

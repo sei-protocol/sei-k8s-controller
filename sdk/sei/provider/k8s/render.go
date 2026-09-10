@@ -79,6 +79,13 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 		// EffectiveSidecarImage falls back to the platform default.
 		net.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Image: spec.SidecarImage}
 	}
+	if spec.NodeIsolation != "" {
+		// The controller propagates spec.scheduling to every validator child. ""
+		// leaves it unset (no schema default), which the controller reads as Shared.
+		net.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{
+			NodeIsolation: seiv1alpha1.NodeIsolation(spec.NodeIsolation),
+		}
+	}
 	return net
 }
 

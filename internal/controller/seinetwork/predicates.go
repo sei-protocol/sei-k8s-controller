@@ -1,6 +1,7 @@
 package seinetwork
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -33,6 +34,32 @@ func childPhaseChangedPredicate() predicate.Predicate {
 				return true
 			}
 			return oldNode.Status.Phase != newNode.Status.Phase
+		},
+	}
+}
+
+// podPlacementChangedPredicate admits only the pod events that can change the
+// status placement report: a pod appearing or disappearing, or its binding
+// (spec.nodeName) or phase changing. Every other pod update — container
+// restarts, condition flaps, readiness — is dropped so the pod watch does not
+// fan the network's reconcile rate out to its pods' churn.
+func podPlacementChangedPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc:  func(_ event.CreateEvent) bool { return true },
+		DeleteFunc:  func(_ event.DeleteEvent) bool { return true },
+		GenericFunc: func(_ event.GenericEvent) bool { return true },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldPod, ok := e.ObjectOld.(*corev1.Pod)
+			if !ok {
+				return true
+			}
+			newPod, ok := e.ObjectNew.(*corev1.Pod)
+			if !ok {
+				return true
+			}
+			return oldPod.Spec.NodeName != newPod.Spec.NodeName ||
+				oldPod.Status.Phase != newPod.Status.Phase ||
+				oldPod.DeletionTimestamp.IsZero() != newPod.DeletionTimestamp.IsZero()
 		},
 	}
 }
