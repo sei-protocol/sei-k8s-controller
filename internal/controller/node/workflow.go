@@ -387,7 +387,21 @@ func (r *SeiNodeReconciler) gateOnRequirePhase(
 
 // finalizeWorkflow handles a workflow whose deletion was requested. It lifts
 // the hold only when the data state is verified safe (or the force annotation
-// is set), then clears the node pointer and removes the finalizer.
+// is set), then removes the finalizer and clears the node pointer.
+//
+// Ordered workflow-write-then-pointer-clear, the same order and for the same
+// reason as releaseCompletedWorkflow: the finalizer removal must be DURABLE
+// before the pointer clear, because the pointer clear rides the CALLER'S flush
+// — which now runs on the way out of Reconcile on error exits too. Clear first
+// and the backstop persists a released hold on a workflow that still carries
+// its finalizer, and nothing is left to re-enter finalization: without the
+// pointer driveAdoptedWorkflow is never reached, and
+// reapCompletedWorkflowFinalizers skips anything whose phase is not Complete,
+// so a workflow deleted MID-RUN stays Terminating until an operator strips the
+// finalizer by hand — the GitOps-prune wedge the reaper exists to prevent.
+// Finalizer first, pointer second: either crash order converges, because a
+// workflow with no finalizer takes the no-finalizer branch below and clears the
+// pointer there.
 func (r *SeiNodeReconciler) finalizeWorkflow(
 	ctx context.Context,
 	node *seiv1alpha1.SeiNode,
@@ -413,12 +427,15 @@ func (r *SeiNodeReconciler) finalizeWorkflow(
 		return true, ctrl.Result{RequeueAfter: statusPollInterval}, false, nil
 	}
 
-	node.Status.AdoptedWorkflow = nil
-	setWorkflowInProgress(node, metav1.ConditionFalse, seiv1alpha1.ReasonNoWorkflow,
-		"workflow deleted; hold released")
+	// Finalizer removal first (see the ordering note on this function): a failure
+	// here must leave the hold intact and persisted, so the next reconcile
+	// re-enters finalization through the still-present pointer.
 	if err := r.patchWorkflowFinalizer(ctx, wf, false); err != nil {
 		return true, ctrl.Result{}, false, err
 	}
+	node.Status.AdoptedWorkflow = nil
+	setWorkflowInProgress(node, metav1.ConditionFalse, seiv1alpha1.ReasonNoWorkflow,
+		"workflow deleted; hold released")
 	if forced {
 		r.Recorder.Eventf(wf, corev1.EventTypeWarning, "WorkflowForceDeleted",
 			"force-deleted; node %s hold released without data verification", node.Name)

@@ -154,6 +154,26 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	//
 	// Not installed on the deletion path: that returns above, and a terminating
 	// node is a separate lifecycle decision (no condition is resolved for it).
+	//
+	// WHAT THIS MEANS FOR ANY IN-MEMORY STATUS MUTATION BELOW. A mutation
+	// upstream of a fallible call is now PERSISTED when that call fails, where it
+	// used to be discarded. That is the fix for a resolved condition, and it is
+	// safe for anything derived purely from spec plus a completed read — the
+	// state-sync gate, the VAC pre-flight, the Paused mirror, the terminal-plan
+	// clear. It is NOT safe for a mutation that releases a hold or clears a
+	// pointer whose durability depends on a write that has not happened yet: the
+	// external write must land FIRST, or a failure persists the release and
+	// strands the object it was holding. finalizeWorkflow and
+	// releaseCompletedWorkflow both carry that ordering and say why; put any new
+	// release on the same side of its write.
+	//
+	// One accepted consequence: a condition persisted on an error exit skips the
+	// paired transition Event, which is emitted further down (see
+	// emitSidecarReadinessEvent / emitStateSyncBlockedEvent) and therefore not at
+	// all on a path that returns early. The next reconcile then reads its own
+	// newly-persisted value as the previous one and sees no transition. The
+	// condition is the durable, PromQL-visible contract and is now correct;
+	// Events are best-effort and lossy by design, so this trade is deliberate.
 	defer func() {
 		if flushFailed {
 			return // the call site that attempted it already reported the failure

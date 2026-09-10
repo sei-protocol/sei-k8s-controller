@@ -2,13 +2,16 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	. "github.com/onsi/gomega"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -329,4 +332,144 @@ func TestReconcileWorkflow_ReadoptsByUIDAfterRestart(t *testing.T) {
 	// an adoption interrupted before the finalizer add must not resume into
 	// destructive execution ungated (guards the 1a regression).
 	g.Expect(resumed.Finalizers).To(ContainElement(seiv1alpha1.SeiNodeTaskWorkflowFinalizer))
+}
+
+// --- Ordering: the finalizer removal must be durable before the pointer clear ---
+
+// finalizerBlockingClient fails the merge Patch that strips the deletion-gate
+// finalizer, and counts the attempts. Node STATUS writes are deliberately left
+// working — Status() is promoted from the embedded client and the node's status
+// goes through the status subresource, not this method — so what these tests
+// observe is the ORDER of the two writes, not a broken status path. The count is
+// the re-entry witness: finalization is only reached through the adoption
+// pointer, so a second attempt proves the pointer survived.
+type finalizerBlockingClient struct {
+	client.Client
+	block    bool
+	attempts int
+}
+
+func (f *finalizerBlockingClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if _, ok := obj.(*seiv1alpha1.SeiNodeTaskWorkflow); ok {
+		f.attempts++
+		if f.block {
+			return apierrors.NewForbidden(
+				schema.GroupResource{Group: seiv1alpha1.GroupVersion.Group, Resource: "seinodetaskworkflows"},
+				obj.GetName(), fmt.Errorf("injected"))
+		}
+	}
+	return f.Client.Patch(ctx, obj, patch, opts...)
+}
+
+// deletingHeldNode returns a Running node holding an adopted workflow that has
+// been force-deleted: deletion requested, the data state "verified safe" (via
+// the force annotation — verifyWorkflowDataSafe is a fail-closed stub today, so
+// the annotation is the only way to reach the release branch), and the
+// deletion-gate finalizer still on. This is the shape finalizeWorkflow releases.
+func deletingHeldNode(t *testing.T, name string) (*seiv1alpha1.SeiNode, *seiv1alpha1.SeiNodeTaskWorkflow) {
+	t.Helper()
+	node := vacNode(name, "")
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.CurrentImage = node.Spec.Image
+	node.Status.AdoptedWorkflow = &seiv1alpha1.AdoptedWorkflowRef{
+		Name: "ss-" + name, UID: types.UID("ss-" + name + "-uid"), AdoptedAt: metav1.Now(),
+	}
+	// The hold as a driving reconcile left it: True/WorkflowRunning, which also
+	// keeps holdForWorkflow set so the STS apply stays skipped.
+	setWorkflowInProgress(node, metav1.ConditionTrue, seiv1alpha1.ReasonWorkflowRunning, "driving workflow")
+
+	wf := workflowFor("ss-"+name, name, time.Now())
+	wf.Finalizers = []string{seiv1alpha1.SeiNodeTaskWorkflowFinalizer}
+	wf.Annotations = map[string]string{seiv1alpha1.WorkflowForceDeleteAnnotation: "true"}
+	return node, wf
+}
+
+// The regression the deferred flush introduced. finalizeWorkflow used to clear
+// the pointer and resolve the condition BEFORE the finalizer patch that makes
+// the release durable. That was harmless while the only status patch came after
+// the error return — the clear was simply discarded — but the flush on the way
+// out of Reconcile PERSISTS it. The node then drops its hold permanently while
+// the workflow stays Terminating with its finalizer on, and nothing re-enters
+// finalization: driveAdoptedWorkflow is only reached through the pointer, and
+// reapCompletedWorkflowFinalizers skips anything whose phase is not Complete, so
+// a workflow deleted mid-run is never reaped and manual finalizer removal is the
+// only exit.
+//
+// Read back from the API on purpose: the in-memory node carries the same values
+// either way once finalizeWorkflow has run, so only the persisted object
+// distinguishes the two orders.
+func TestReconcile_FinalizeWorkflow_FinalizerPatchFails_HoldStaysPersisted(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node, wf := deletingHeldNode(t, "wf-finalize-hold")
+	r, c := newNodeReconciler(t, node, wf)
+	// Delete through the client so the fake apiserver stamps DeletionTimestamp
+	// (the finalizer is what keeps the object alive to be finalized).
+	g.Expect(c.Delete(ctx, wf)).To(Succeed())
+	g.Expect(getWorkflow(t, c, wf.Name).DeletionTimestamp).NotTo(BeNil(),
+		"the fixture must actually be Terminating, or finalizeWorkflow is never reached")
+
+	blocking := &finalizerBlockingClient{Client: r.Client, block: true}
+	r.Client = blocking
+
+	_, err := r.Reconcile(ctx, nodeReqFor(node.Name, testNamespace))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("reconciling workflow"),
+		"the finalizer-patch failure must surface as the reconcile error")
+	g.Expect(blocking.attempts).To(Equal(1),
+		fmt.Sprintf("finalization must have attempted the finalizer patch once; got %d", blocking.attempts))
+
+	persisted := getSeiNode(t, ctx, c, node.Name, testNamespace)
+	g.Expect(persisted.Status.AdoptedWorkflow).NotTo(BeNil(),
+		"the hold must still be PERSISTED: a released pointer with the finalizer still on "+
+			"leaves the workflow Terminating with nothing left to re-enter finalization")
+	g.Expect(persisted.Status.AdoptedWorkflow.Name).To(Equal(wf.Name))
+	wip := apimeta.FindStatusCondition(persisted.Status.Conditions, seiv1alpha1.ConditionWorkflowInProgress)
+	g.Expect(wip).NotTo(BeNil())
+	g.Expect(wip.Status).To(Equal(metav1.ConditionTrue),
+		"the condition must not report the hold released while the workflow still carries its finalizer")
+
+	// The workflow is untouched: still Terminating, still gated.
+	stillHeld := getWorkflow(t, c, wf.Name)
+	g.Expect(stillHeld.DeletionTimestamp).NotTo(BeNil())
+	g.Expect(stillHeld.Finalizers).To(ContainElement(seiv1alpha1.SeiNodeTaskWorkflowFinalizer))
+
+	// And the surviving pointer is what lets the next reconcile try again — the
+	// exact property Bugbot named: nothing re-enters finalize without it.
+	_, err = r.Reconcile(ctx, nodeReqFor(node.Name, testNamespace))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(blocking.attempts).To(Equal(2),
+		fmt.Sprintf("the second reconcile must re-enter finalization through the surviving pointer; got %d attempts", blocking.attempts))
+}
+
+// The other half of the ordering: once the finalizer patch succeeds, the hold is
+// released in the same reconcile and the release is persisted. Pins that putting
+// the workflow write first did not make the release a reconcile late.
+func TestReconcile_FinalizeWorkflow_FinalizerPatchSucceeds_HoldReleased(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node, wf := deletingHeldNode(t, "wf-finalize-ok")
+	r, c := newNodeReconciler(t, node, wf)
+	g.Expect(c.Delete(ctx, wf)).To(Succeed())
+
+	counting := &finalizerBlockingClient{Client: r.Client}
+	r.Client = counting
+
+	_, err := r.Reconcile(ctx, nodeReqFor(node.Name, testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(counting.attempts).To(Equal(1))
+
+	persisted := getSeiNode(t, ctx, c, node.Name, testNamespace)
+	g.Expect(persisted.Status.AdoptedWorkflow).To(BeNil(), "the hold is released on the same reconcile")
+	wip := apimeta.FindStatusCondition(persisted.Status.Conditions, seiv1alpha1.ConditionWorkflowInProgress)
+	g.Expect(wip).NotTo(BeNil())
+	g.Expect(wip.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(wip.Reason).To(Equal(seiv1alpha1.ReasonNoWorkflow))
+
+	// Last finalizer off a Terminating object: the fake apiserver GCs it, exactly
+	// as the real one does.
+	err = c.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: wf.Name}, &seiv1alpha1.SeiNodeTaskWorkflow{})
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the deletion gate is lifted and the object is collected")
 }
