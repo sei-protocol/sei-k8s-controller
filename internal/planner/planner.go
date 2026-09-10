@@ -863,11 +863,12 @@ func p2pConfigPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 // specific params, NOT about the types the API package happens to declare:
 // marshalParams takes `any` and does receive user-derived content on other
 // paths — genesis overrides land in AssembleAndUploadGenesisTask.Overrides
-// (group.go:50) straight from SeiNetwork.spec.genesis.overrides, typed
-// map[string]apiextensionsv1.JSON. A package-wide "no float fields declared"
-// claim proves nothing here and should not be relied on: apiextensions.JSON
-// carries arbitrary JSON, and resource.Quantity marshals as a string rather
-// than a number, so neither is covered by reasoning about Go float types.
+// (built in genesisGroupPlanner.BuildPlan, planner/group.go) straight from
+// SeiNetwork.spec.genesis.overrides, typed map[string]apiextensionsv1.JSON. A
+// package-wide "no float fields declared" claim proves nothing here and should
+// not be relied on: apiextensions.JSON carries arbitrary JSON, and
+// resource.Quantity marshals as a string rather than a number, so neither is
+// covered by reasoning about Go float types.
 //
 // What holds instead is the call path. Every update progression
 // (full/archive/validator/replay/seed buildRunningPlan) resolves through

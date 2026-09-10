@@ -519,20 +519,22 @@ const (
 	// The True on no selection is a deliberate departure from the LITERAL reading
 	// of the Conditions standard in CLAUDE.md, which says a <Subject>Ready type
 	// uses False/<reason> for both "not yet ready" and "not configured". DR-001
-	// mandates the departure in as many words
-	// (docs/specs/001-configurable-node-resources/decisions.md:51-59): present
-	// even when no VAC is selected, True in that steady state, never absence.
+	// mandates the departure in as many words, in the bullet beginning "The
+	// controller SHALL pre-flight the referenced VAC (read-only)"
+	// (docs/specs/001-configurable-node-resources/decisions.md): present even
+	// when no VAC is selected, True in that steady state, never absence.
 	// It is consistent with the rest of the same standard, which says True is the
 	// desired steady state for this family: the standard's "not configured"
 	// example is a feature that is OFF (NetworkingDisabled, spec.networking
 	// unset), whereas an unset selection here is a real choice, not a gap —
-	// decisions.md:75-78 has the PVC carry no volumeAttributesClassName at all
-	// and the mode-default StorageClass supply the baseline performance, and the
-	// volume provisions correctly. Nothing is degraded or disabled. The import
-	// branch is the genuinely inapplicable case and is the one rendered
-	// False/NotApplicable, per the standard. Two reviewers independently derived
-	// a conflict from the code alone, which is why the reasoning is recorded here
-	// rather than in a commit message.
+	// decisions.md, in the bullet beginning "Storage selection resolves in the
+	// same precedence ladder as compute", has the PVC carry no
+	// volumeAttributesClassName at all and the mode-default StorageClass supply
+	// the baseline performance, and the volume provisions correctly. Nothing is
+	// degraded or disabled. The import branch is the genuinely inapplicable case
+	// and is the one rendered False/NotApplicable, per the standard. Two
+	// reviewers independently derived a conflict from the code alone, which is
+	// why the reasoning is recorded here rather than in a commit message.
 	//
 	// What False/VolumeAttributesClassNotFound does and does NOT prevent. It
 	// holds PROVISIONING: ensure-data-pvc creates no claim while this condition
@@ -541,8 +543,8 @@ const (
 	// on the state-sync gate only, so the StatefulSet is applied on the same
 	// reconcile and its pod sits Pending on the claim nothing has created yet.
 	// What the condition buys is that the Pending is not SILENT — its cause is
-	// named right here, which is the defect DR-001 commits against
-	// (decisions.md:51-56); the Pending pod itself is not.
+	// named right here, which is the defect DR-001 commits against (the
+	// "silently-Pending" pod in decisions.md); the Pending pod itself is not.
 	//
 	// True reports a best-effort existence check at the last reconcile, not a
 	// binding guarantee: the class can be deleted afterwards, and the controller
@@ -640,8 +642,9 @@ const (
 	// may stamp its name onto the PVC.
 	ReasonVolumeAttributesClassFound = "VolumeAttributesClassFound"
 	// ReasonModeDefaultStorage: no class is selected, so the mode-default storage
-	// supplies the baseline performance (decisions.md:75-78). A True steady state
-	// — the no-selection case is reported, not left absent.
+	// supplies the baseline performance (decisions.md, the bullet beginning
+	// "Storage selection resolves in the same precedence ladder as compute"). A
+	// True steady state — the no-selection case is reported, not left absent.
 	//
 	// Named for what IS in force, not for what is absent. The earlier
 	// "NoVolumeAttributesClass" was accurate but read as a fault and sorted
