@@ -3,6 +3,7 @@ package task
 import (
 	"bytes"
 	"encoding/json"
+
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
