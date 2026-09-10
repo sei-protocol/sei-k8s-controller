@@ -20,6 +20,9 @@ import (
 	"sigs.k8s.io/yaml"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
+	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
+	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
 // The VolumeAttributesClass pre-flight lives in the reconciler, not in the
@@ -282,6 +285,22 @@ func TestReconcile_VACPreflight_ReadsTheClassOncePerReconcile(t *testing.T) {
 	r, c := newNodeReconciler(t, node)
 	counting := &vacCountingClient{Client: r.Client}
 	r.Client = counting
+	// The task must read through the counter too, or a task-side read would be
+	// invisible here and this test could not fail: the shared harness wires the
+	// executor's KubeClient to the bare fake client.
+	mock := &mockSidecarClient{nodeID: "mock-node-id"}
+	r.PlanExecutor = &planner.Executor[*seiv1alpha1.SeiNode]{
+		ConfigFor: func(_ context.Context, n *seiv1alpha1.SeiNode) task.ExecutionConfig {
+			return task.ExecutionConfig{
+				BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
+				KubeClient:         counting,
+				APIReader:          counting,
+				Scheme:             r.Scheme,
+				Resource:           n,
+				Platform:           platformtest.Config(),
+			}
+		},
+	}
 
 	// Reconcile 1: resolve + persist the plan (no task runs yet).
 	_, err := r.Reconcile(ctx, nodeReqFor("vac-onceread", testNamespace))
