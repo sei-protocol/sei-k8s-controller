@@ -84,17 +84,27 @@ func TestConfigValues_PropagateToEveryValidator(t *testing.T) {
 	//     parent compares the child's stored values byte-for-byte, so an
 	//     apiserver re-serialization of a table or a float would show up here
 	//     as an endless Update loop that the fake client cannot reproduce.
-	settled := &seiv1alpha1.SeiNode{}
-	g.Expect(testCli.Get(testCtx, childKeys[0], settled)).To(Succeed())
-	settledRV := settled.ResourceVersion
-
-	g.Consistently(func() string {
+	//     Generation, not resourceVersion: the node controller writes the
+	//     child's status throughout the ceremony, and only a spec write bumps
+	//     generation.
+	childGeneration := func() int64 {
 		cur := &seiv1alpha1.SeiNode{}
 		if err := testCli.Get(testCtx, childKeys[0], cur); err != nil {
-			return ""
+			return -1
 		}
-		return cur.ResourceVersion
-	}, 3*time.Second, pollInterval).Should(Equal(settledRV),
+		return cur.Generation
+	}
+
+	var settledGen int64
+	g.Eventually(func() bool {
+		gen := childGeneration()
+		settled := gen > 0 && gen == settledGen
+		settledGen = gen
+		return settled
+	}, 30*time.Second, time.Second).Should(BeTrue(),
+		"the ceremony's own spec writes must settle before drift can be judged")
+
+	g.Consistently(childGeneration, 5*time.Second, pollInterval).Should(Equal(settledGen),
 		"a converged set must not be rewritten on every reconcile")
 
 	// 2. A changed value and a removed entry in one edit: the network's set
