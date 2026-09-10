@@ -163,7 +163,7 @@ func TestConfigValuesAllModePlanners(t *testing.T) {
 				build = (&fullNodePlanner{}).BuildPlan
 			case "archive":
 				n.Spec.Archive = &seiv1alpha1.ArchiveSpec{}
-				build = (&archivePlanner{}).BuildPlan
+				build = (&archiveNodePlanner{}).BuildPlan
 			case "validator":
 				n.Spec.Validator = &seiv1alpha1.ValidatorSpec{}
 				build = (&validatorPlanner{}).BuildPlan
