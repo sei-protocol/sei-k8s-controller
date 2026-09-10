@@ -220,10 +220,10 @@ effect, so that I do not need a manual restart.
 
 #### Acceptance Criteria
 
-1. WHEN the operator adds, changes, or removes a config value, THE controller SHALL recompute the overlay over the base config.
+1. WHEN the operator adds, changes, or removes a config value, THE controller SHALL recompute the overlay over the base config. Recomputation requires an observed configuration baseline. Until the controller has observed one, the change is deferred and reported on the node rather than materialized, so that deploying the controller does not restart every node whose baseline is not yet observed.
 2. WHEN the overlay changes, THE controller SHALL write the new overlay to the node config.
 3. WHEN the controller writes a new overlay to a running node, THE controller SHALL restart the seid container.
-4. WHEN the operator removes a config value, THE controller SHALL return that key to its base value.
+4. WHEN the operator removes a config value for a file the controller generates, THE controller SHALL return that key to its base value. A file the controller does not generate has no base to return to, so a removed key persists in that file until the operator removes it. The config-value field documents this.
 
 ### Requirement 5: The overlay sits in place before seid starts
 
@@ -292,14 +292,14 @@ role that decides.
 
 - The controller already carries the tomlpatch merge engine and the config-apply and restart-seid tasks. This spec extends the override surface and its routing; it does not add a merge engine.
 - The config-value field sits beside the existing overrides, so the existing field and its guards stay unchanged and backward compatibility survives.
-- The sei-config package accepts only allow-listed keys today. sei-config, the controller, and the sidecar each hold a compiled copy of that allow-list. This spec adds a path that needs no entry in it, so an arbitrary key reaches the file. seid decides at load whether the key is meaningful.
+- The sei-config package accepts only allow-listed keys today. sei-config, the controller, and the sidecar each pin and statically link the same sei-config version, so they share one allow-list rather than hand-maintained copies. This spec adds a path that needs no entry in it, so an arbitrary key reaches the file. seid decides at load whether the key is meaningful.
 - The config-value path applies no allow-list and no denylist. A config value can set a key the existing field's freeze and halt guards block. The controller applies it. The operator accepts the outcome, including any conflict with the freeze height the controller sets itself.
 - The owner signed off on this trade-off. The config-value path does not apply the freeze and halt guards that the existing field applies. The existing field keeps those guards.
 - Requirement 6 reports a value seid refuses at load. It does not cover a valid but wrong value on a consensus key, such as a freeze or halt height. Such a value loads cleanly and can halt the node later, which is a liveness event and not a reported failed start.
 - The existing field treats a freeze or halt height as create-only, set on the bootstrap plan. The config-value path is mutable, so it offers a mutable route to that key. The plan reconciles this, and the operator owns the result.
-- The controller recomputes the overlay over the base config on every start and on every change. A removed config value therefore returns its key to the base value.
+- The controller recomputes the overlay over the base config on every start, and on every change once it has observed a configuration baseline. Before that first observation a change is deferred and reported rather than materialized. A removed config value returns its key to the base value for the files the controller generates, because those are regenerated wholesale from the typed model. A file the controller does not generate has no base, so a removed key persists there.
 - The value in a config value is a typed value, not a string, so its type survives the merge. The plan chooses the representation. A string-only field could not preserve a boolean or a number.
-- The tomlpatch engine deletes a key when a patch gives that key a null value, as RFC 7386 merge-patch defines. The config-value path never sends a null, because the CRD schema rejects a null or absent value. To stop overriding a key, the operator removes its config value, and the controller returns the key to its base value.
+- The tomlpatch engine deletes a key when a patch gives that key a null value, as RFC 7386 merge-patch defines. The config-value path never sends a null: the CRD schema rejects a null or absent value, and a null nested inside a value is admitted by the schema but rejected when the plan is built. To stop overriding a key, the operator removes its config value, and the controller returns the key to its base value for the files it generates.
 - The operator owns the correctness of a config value. A wrong value fails at seid load, which the team accepts in exchange for full control.
 
 ## Out of scope
