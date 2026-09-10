@@ -205,3 +205,102 @@ func TestConfigValuesAllModePlanners(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigValuesRejectUnsafePatches(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys []string
+		raw  string
+		want string
+	}{
+		{"prefix", []string{"a.b", "a.b.c"}, "1", "overlapping keys"},
+		{"reverse-prefix", []string{"a.b.c", "a.b"}, "1", "overlapping keys"},
+		{"nested-null", []string{"a.b"}, `{"child":{"value":null}}`, "null values"},
+		{"array-null", []string{"a.b"}, `[{"child":null}]`, "null values"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &seiv1alpha1.SeiNode{}
+			for _, key := range tc.keys {
+				n.Spec.ConfigValues = append(n.Spec.ConfigValues, seiv1alpha1.ConfigValue{
+					FileName: overlayTestAppFile, Key: key, Value: apiextensionsv1.JSON{Raw: []byte(tc.raw)},
+				})
+			}
+			plan, err := buildBasePlan(n, nil, &seiconfig.ConfigIntent{})
+			if err == nil || plan != nil {
+				t.Fatalf("unsafe overlay produced plan: %v, %v", plan, err)
+			}
+			for _, want := range append(tc.keys, overlayTestAppFile, tc.want) {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q missing %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestConfigValuesOverridesPrecedenceOnDisk(t *testing.T) {
+	n := &seiv1alpha1.SeiNode{}
+	n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
+	n.Spec.Overrides = map[string]string{"evm.http_port": "9545"}
+	n.Spec.ConfigValues = []seiv1alpha1.ConfigValue{{
+		FileName: overlayTestAppFile, Key: "evm.http_port",
+		Value: apiextensionsv1.JSON{Raw: []byte("10545")},
+	}}
+	plan, err := (&fullNodePlanner{}).BuildPlan(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	path := filepath.Join(home, "config", overlayTestAppFile)
+	applied := false
+	for _, planned := range plan.Tasks {
+		switch planned.Type {
+		case TaskConfigApply:
+			var intent seiconfig.ConfigIntent
+			if err := json.Unmarshal(planned.Params.Raw, &intent); err != nil {
+				t.Fatal(err)
+			}
+			result, err := seiconfig.ResolveIntent(intent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Valid {
+				t.Fatalf("invalid intent: %v", result.Diagnostics)
+			}
+			if err := seiconfig.WriteConfigToDir(result.Config, home); err != nil {
+				t.Fatal(err)
+			}
+			doc, err := tomlpatch.ReadTOML(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := doc["evm"].(map[string]any)["http_port"]; got != int64(9545) {
+				t.Fatalf("Overrides not applied: %v", got)
+			}
+		case TaskConfigPatch:
+			var patch task.ConfigPatchTask
+			if err := json.Unmarshal(planned.Params.Raw, &patch); err != nil {
+				t.Fatal(err)
+			}
+			doc, err := tomlpatch.ReadTOML(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			merged := tomlpatch.Merge(doc, patch.Files[overlayTestAppFile]).(map[string]any)
+			if err := tomlpatch.WriteTOML(path, merged); err != nil {
+				t.Fatal(err)
+			}
+			doc, err = tomlpatch.ReadTOML(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := doc["evm"].(map[string]any)["http_port"]; got != int64(10545) {
+				t.Fatalf("configValues did not win on disk: %v", got)
+			}
+			applied = true
+		}
+	}
+	if !applied {
+		t.Fatal("overlay was not applied")
+	}
+}
