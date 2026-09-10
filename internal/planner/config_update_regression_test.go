@@ -244,3 +244,20 @@ func TestClassifyPlanIncludesConfigUpdates(t *testing.T) {
 		})
 	}
 }
+
+func TestUnobservedConfigNoticeReplacesStaleUpdateComplete(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Status.CurrentConfigValuesHash = ""
+	node.Spec.ConfigValues = overlayTestNode().Spec.ConfigValues
+	setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateComplete", "prior image roll completed")
+	resolver := &NodeResolver{}
+	g.Expect(resolver.ResolvePlan(context.Background(), node)).To(Succeed())
+	g.Expect(node.Status.Plan).To(BeNil())
+	g.Expect(node.Status.CurrentConfigValuesHash).To(BeEmpty())
+	condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+	g.Expect(condition).NotTo(BeNil())
+	g.Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(condition.Reason).To(Equal("ConfigBaselineUnobserved"))
+	g.Expect(condition.Message).To(ContainSubstring("image update"))
+}
