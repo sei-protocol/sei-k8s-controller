@@ -150,18 +150,10 @@ spec:
               configValues:
                 description: |-
                   ConfigValues supplies typed values by config file and dotted TOML path.
-                  It is honoured on every INIT path through a config-patch overlay spliced
-                  before config-validate. On INIT, applied after config-apply, ConfigValues
-                  wins over Overrides when both set the same dotted path; Overrides feeds the
-                  allow-listed ConfigIntent on the init path.
-                  Edits on already-running nodes are not yet materialized: until the
-                  config-only drift trigger and restart-seid land in piece 2, values take
-                  effect on init paths only. On a subsequent image roll, the Running-node
-                  update plan overwrites config.toml p2p.external-address and
-                  p2p.persistent-peers with controller-derived values without reapplying
-                  this overlay. The rest of the overlay survives because the update plan
-                  does not regenerate base configuration. Piece 2 will resolve this
-                  image-roll precedence limitation by reapplying the overlay.
+                  Applied after base configuration and controller-derived peer patches,
+                  ConfigValues wins over Overrides and controller-derived values on init
+                  and image updates. Changes on nodes with observed configuration regenerate
+                  the base and overlay, then restart seid (or use the pending image roll).
 
                   Deliberately unguarded: unlike Overrides, this field carries no
                   allow-list and no denylist, so a ConfigValue may name chain.freeze_height,
@@ -177,8 +169,10 @@ spec:
                     path in a config file.
                   properties:
                     fileName:
-                      description: FileName names the config file, for example config.toml
-                        or app.toml.
+                      description: |-
+                        FileName names the config file, for example config.toml or app.toml.
+                        Only config.toml and app.toml have a controller-generated base. Removing
+                        an entry for any other file leaves its key in place on disk.
                       maxLength: 64
                       minLength: 1
                       pattern: ^[A-Za-z0-9_-]+\.toml$
@@ -1288,6 +1282,13 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              currentConfigValuesHash:
+                description: |-
+                  CurrentConfigValuesHash identifies the configValues last successfully
+                  materialized by a completed plan, mirroring the observed image fields.
+                  Empty means "not yet observed" and is treated as no-drift so a controller
+                  upgrade doesn't fleet-roll every node on first reconcile.
+                type: string
               currentImage:
                 description: |-
                   CurrentImage is the seid container image observed running on the
@@ -1356,6 +1357,12 @@ spec:
                   Plan tracks the active task sequence for this node. A planner generates
                   the plan based on the node's current state and conditions.
                 properties:
+                  configValuesHash:
+                    description: |-
+                      ConfigValuesHash identifies the configValues captured by this materialization
+                      plan. On successful completion it becomes Status.CurrentConfigValuesHash.
+                      Empty means this plan does not observe configuration.
+                    type: string
                   failedPhase:
                     description: |-
                       FailedPhase is the SeiNodePhase the executor sets on the owning
