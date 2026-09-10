@@ -128,7 +128,7 @@ func TestConfigUpdateReconcileTwiceHasNoRestartLoop(t *testing.T) {
 	// Execute the real registry/executor against completed sidecar task results.
 	sc := &mockSidecarClient{activeResults: make(map[uuid.UUID]*sidecar.TaskResult)}
 	for _, pt := range plan.Tasks {
-		sc.activeResults[uuid.MustParse(pt.ID)] = &sidecar.TaskResult{Status: sidecar.TaskStatusCompleted}
+		sc.activeResults[uuid.MustParse(pt.ID)] = &sidecar.TaskResult{Status: sidecar.Completed}
 	}
 	cfg := task.ExecutionConfig{BuildSidecarClient: func() (task.SidecarClient, error) { return sc, nil }}
 	_, err := executePlan(ctx, node, plan, cfg)
