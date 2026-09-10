@@ -178,10 +178,10 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return err
 	}
 	if plan == nil {
-		// handleTerminalPlan writes these reasons before clearing the plan.
-		// Preserve them on this and subsequent no-op reconciles.
+		// handleTerminalPlan writes UpdateFailed before clearing a failed plan.
+		// Preserve that diagnostic on this and subsequent no-op reconciles.
 		condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
-		terminalReason := condition != nil && (condition.Reason == "UpdateFailed" || condition.Reason == "UpdateComplete")
+		terminalReason := condition != nil && condition.Reason == "UpdateFailed"
 		if node.Status.Phase == seiv1alpha1.PhaseRunning && node.Status.CurrentConfigValuesHash == "" &&
 			len(node.Spec.ConfigValues) > 0 && !terminalReason {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "ConfigBaselineUnobserved",
