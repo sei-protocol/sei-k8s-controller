@@ -3,6 +3,7 @@ module github.com/sei-protocol/sei-k8s-controller
 go 1.26.0
 
 require (
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.6
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.293.0
