@@ -43,7 +43,6 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.
 // Same shape as full nodes (no extra validation gates).
 func (p *archiveNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if imageDrifted(node) || sidecarImageDrifted(node, p.platform) {
-		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node, p.platform))
 		prog := []string{
 			task.TaskTypeApplyStatefulSet,
 			task.TaskTypeApplyService,
@@ -53,7 +52,12 @@ func (p *archiveNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1
 			task.TaskTypeObserveImage,
 			TaskMarkReady,
 		}
-		return assembleUpdatePlan(node, prog, p2pConfigPatch(node))
+		plan, err := assembleUpdatePlan(node, prog, p2pConfigPatch(node))
+		if err != nil {
+			return nil, err
+		}
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node, p.platform))
+		return plan, nil
 	}
 	if configValuesDrifted(node) {
 		return buildConfigUpdatePlan(node)
