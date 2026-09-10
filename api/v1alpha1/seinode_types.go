@@ -65,6 +65,29 @@ type SeiNodeSpec struct {
 	// +optional
 	Overrides map[string]string `json:"overrides,omitempty"`
 
+	// ConfigValues supplies typed values by config file and dotted TOML path.
+	// It is admitted and persisted but is not yet honoured by any planner or
+	// task: it has no effect until PLT-1210 lands. Precedence against Overrides
+	// is currently undefined. The intended rule is a post-config-apply TOML
+	// overlay, so ConfigValues wins when both set the same dotted path;
+	// Overrides feeds the allow-listed ConfigIntent on the init path.
+	//
+	// Deliberately unguarded: unlike Overrides, this field carries no
+	// allow-list and no denylist, so a ConfigValue may name chain.freeze_height,
+	// chain.halt_height, or chain.halt_time even on a frozen node. That is
+	// spec 002-config-override-substrate, Requirement 1 criterion 7 ("apply a
+	// config value for any key, without a check against the sei-config
+	// allow-list") and its Assumptions: the config-value path does not apply
+	// the freeze and halt guards the existing Overrides field applies, and the
+	// operator owns the result. Do not add a key guard here without amending
+	// the spec first.
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	// +listType=map
+	// +listMapKey=fileName
+	// +listMapKey=key
+	ConfigValues []ConfigValue `json:"configValues,omitempty"`
+
 	// Sidecar configures the sei-sidecar container.
 	// +optional
 	Sidecar *SidecarConfig `json:"sidecar,omitempty"`

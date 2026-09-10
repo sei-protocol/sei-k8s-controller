@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 // PeerSource is a union type — exactly one field must be set.
@@ -247,4 +248,24 @@ type SidecarConfig struct {
 	// Resources defines CPU/memory requests and limits for the sidecar container.
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// ConfigValue supplies a typed value at a dotted TOML path in a config file.
+type ConfigValue struct {
+	// FileName names the config file, for example config.toml or app.toml.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+\.toml$`
+	FileName string `json:"fileName"`
+
+	// Key is a dotted TOML path, for example evm.enable.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$`
+	Key string `json:"key"`
+
+	// Value preserves the JSON type for the TOML merge. Scalars, arrays, and
+	// tables are accepted. A value is required; explicit null is rejected.
+	// A null nested inside Value is not pruned and has no TOML representation.
+	Value apiextensionsv1.JSON `json:"value"`
 }
