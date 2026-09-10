@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -562,4 +563,150 @@ func TestReconcile_PlannerFatalError_StillPersistsVACCondition(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("resolving plan"),
 		"the original error must not be masked by the flush")
 	assertVACConditionPersisted(t, g, c, "vac-planner-err")
+}
+
+// --- When the flush itself fails ---
+//
+// The unavoidable case, and the one the backstop must not make worse: a status
+// write that is attempted and rejected. Two documented decisions are pinned
+// here — the write is attempted exactly ONCE (the backstop must not re-patch
+// what a call site already reported), and the original error wins when both
+// fail (it is why the reconcile ended and what earns the requeue).
+
+// countingStatusClient counts node status writes and can fail them all.
+type countingStatusClient struct {
+	client.Client
+	failSTSWrite bool
+	fail         bool
+	writes       int
+}
+
+func (c *countingStatusClient) Status() client.SubResourceWriter {
+	return &countingStatusWriter{parent: c, inner: c.Client.Status()}
+}
+
+func (c *countingStatusClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if _, ok := obj.(*appsv1.StatefulSet); ok && c.failSTSWrite {
+		return forbidden("statefulsets", obj.GetName())
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func (c *countingStatusClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*appsv1.StatefulSet); ok && c.failSTSWrite {
+		return forbidden("statefulsets", obj.GetName())
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+type countingStatusWriter struct {
+	parent *countingStatusClient
+	inner  client.SubResourceWriter
+}
+
+func (w *countingStatusWriter) count(obj client.Object) error {
+	if _, ok := obj.(*seiv1alpha1.SeiNode); !ok {
+		return nil
+	}
+	w.parent.writes++
+	if w.parent.fail {
+		return forbidden("seinodes/status", obj.GetName())
+	}
+	return nil
+}
+
+func (w *countingStatusWriter) Create(ctx context.Context, obj client.Object, sub client.Object, opts ...client.SubResourceCreateOption) error {
+	if err := w.count(obj); err != nil {
+		return err
+	}
+	return w.inner.Create(ctx, obj, sub, opts...)
+}
+
+func (w *countingStatusWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+	if err := w.count(obj); err != nil {
+		return err
+	}
+	return w.inner.Update(ctx, obj, opts...)
+}
+
+func (w *countingStatusWriter) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+	if err := w.count(obj); err != nil {
+		return err
+	}
+	return w.inner.Patch(ctx, obj, patch, opts...)
+}
+
+// Unused by this controller (status writes go through Patch), but part of the
+// interface.
+func (w *countingStatusWriter) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...client.SubResourceApplyOption) error {
+	return w.inner.Apply(ctx, obj, opts...)
+}
+
+// A rejected status write surfaces as the error and is attempted once — the
+// backstop must not re-patch what the end-of-reconcile call site just reported.
+func TestReconcile_StatusFlushRejected_AttemptedOnceAndSurfaces(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := vacNode("vac-flush-reject", "")
+	r, _ := newNodeReconciler(t, node)
+	counting := &countingStatusClient{Client: r.Client, fail: true}
+	r.Client = counting
+
+	_, err := r.Reconcile(ctx, nodeReqFor("vac-flush-reject", testNamespace))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("flushing status"),
+		"with no other error to preserve, the flush failure is the returned error")
+	g.Expect(counting.writes).To(Equal(1),
+		fmt.Sprintf("the status write must be attempted once, not retried by the backstop; got %d", counting.writes))
+}
+
+// Both fail: the original error wins and the flush failure is logged and
+// dropped. The write is still attempted exactly once — by the backstop, since
+// this path has no flush call site of its own.
+func TestReconcile_StatusFlushRejectedBesideRealError_OriginalErrorWins(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := vacNode("vac-flush-both", "")
+	r, _ := newNodeReconciler(t, node)
+	counting := &countingStatusClient{Client: r.Client, fail: true, failSTSWrite: true}
+	r.Client = counting
+
+	_, err := r.Reconcile(ctx, nodeReqFor("vac-flush-both", testNamespace))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("reconciling statefulset"),
+		"the original error must not be masked by the flush failure")
+	g.Expect(err.Error()).NotTo(ContainSubstring("flushing status"))
+	g.Expect(counting.writes).To(Equal(1),
+		fmt.Sprintf("the backstop attempts the write once; got %d", counting.writes))
+}
+
+// The paths that flush explicitly must not be written twice: the successful
+// patch re-baselines the watermark, so the backstop finds nothing to do.
+func TestReconcile_ExplicitFlushPaths_WriteStatusOnce(t *testing.T) {
+	for name, prep := range map[string]func(*seiv1alpha1.SeiNode){
+		"failed": func(n *seiv1alpha1.SeiNode) { n.Status.Phase = seiv1alpha1.PhaseFailed },
+		"paused": func(n *seiv1alpha1.SeiNode) { n.Spec.Paused = true },
+		"steady state": func(n *seiv1alpha1.SeiNode) {
+			n.Status.Phase = seiv1alpha1.PhaseRunning
+			n.Status.CurrentImage = n.Spec.Image
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			ctx := context.Background()
+
+			node := vacNode("vac-once-"+testChainID, "")
+			prep(node)
+			r, _ := newNodeReconciler(t, node)
+			counting := &countingStatusClient{Client: r.Client}
+			r.Client = counting
+
+			_, err := r.Reconcile(ctx, nodeReqFor(node.Name, testNamespace))
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(counting.writes).To(Equal(1),
+				fmt.Sprintf("%s flushes explicitly; the backstop must add no second write (got %d)", name, counting.writes))
+		})
+	}
 }
