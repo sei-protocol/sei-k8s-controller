@@ -66,18 +66,10 @@ type SeiNodeSpec struct {
 	Overrides map[string]string `json:"overrides,omitempty"`
 
 	// ConfigValues supplies typed values by config file and dotted TOML path.
-	// It is honoured on every INIT path through a config-patch overlay spliced
-	// before config-validate. On INIT, applied after config-apply, ConfigValues
-	// wins over Overrides when both set the same dotted path; Overrides feeds the
-	// allow-listed ConfigIntent on the init path.
-	// Edits on already-running nodes are not yet materialized: until the
-	// config-only drift trigger and restart-seid land in piece 2, values take
-	// effect on init paths only. On a subsequent image roll, the Running-node
-	// update plan overwrites config.toml p2p.external-address and
-	// p2p.persistent-peers with controller-derived values without reapplying
-	// this overlay. The rest of the overlay survives because the update plan
-	// does not regenerate base configuration. Piece 2 will resolve this
-	// image-roll precedence limitation by reapplying the overlay.
+	// Applied after base configuration and controller-derived peer patches,
+	// ConfigValues wins over Overrides and controller-derived values on init
+	// and image updates. Changes on nodes with observed configuration regenerate
+	// the base and overlay, then restart seid (or use the pending image roll).
 	//
 	// Deliberately unguarded: unlike Overrides, this field carries no
 	// allow-list and no denylist, so a ConfigValue may name chain.freeze_height,
@@ -418,6 +410,12 @@ type TaskPlan struct {
 	// +optional
 	TargetPhase SeiNodePhase `json:"targetPhase,omitempty"`
 
+	// ConfigValuesHash identifies the configValues captured by this materialization
+	// plan. On successful completion it becomes Status.CurrentConfigValuesHash.
+	// Empty means this plan does not observe configuration.
+	// +optional
+	ConfigValuesHash string `json:"configValuesHash,omitempty"`
+
 	// FailedPhase is the SeiNodePhase the executor sets on the owning
 	// resource when the plan fails terminally. When empty, the executor
 	// does not perform a phase transition on failure.
@@ -572,6 +570,13 @@ type SeiNodeStatus struct {
 	// whether a spec change has been fully actuated.
 	// +optional
 	CurrentImage string `json:"currentImage,omitempty"`
+
+	// CurrentConfigValuesHash identifies the configValues last successfully
+	// materialized by a completed plan, mirroring the observed image fields.
+	// Empty means "not yet observed" and is treated as no-drift so a controller
+	// upgrade doesn't fleet-roll every node on first reconcile.
+	// +optional
+	CurrentConfigValuesHash string `json:"currentConfigValuesHash,omitempty"`
 
 	// CurrentSidecarImage is the sidecar container image observed running
 	// on the owned StatefulSet. Stamped jointly with CurrentImage on
