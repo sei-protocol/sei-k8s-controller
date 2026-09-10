@@ -2,6 +2,7 @@ package planner
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -49,10 +50,15 @@ func configValuesOverlay(values []seiv1alpha1.ConfigValue) (*task.ConfigPatchTas
 	return patch, nil
 }
 
-// withConfigValues is only used by INIT plan builders. Apply the overlay after
+// withConfigValues captures the desired config and applies the overlay after
 // base regeneration and any state-sync/genesis peer writes, before validation.
 // Bootstrap plans have two validation stages and need the overlay in both.
 func withConfigValues(plan *seiv1alpha1.TaskPlan, node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	hash, err := configValuesHash(node.Spec.ConfigValues)
+	if err != nil {
+		return nil, err
+	}
+	plan.ConfigValuesHash = hash
 	if len(node.Spec.ConfigValues) == 0 {
 		return plan, nil
 	}
@@ -155,4 +161,30 @@ func validateOverlayNumbers(value any) error {
 		}
 	}
 	return nil
+}
+
+// configValuesHash hashes sorted JSON tuples. Decode with UseNumber to preserve
+// large integer precision; Marshal sorts object keys and removes whitespace.
+// Sorting the complete tuples makes list order and Go map iteration irrelevant.
+func configValuesHash(values []seiv1alpha1.ConfigValue) (string, error) {
+	tuples := make([]string, 0, len(values))
+	for _, entry := range values {
+		var value any
+		decoder := json.NewDecoder(bytes.NewReader(entry.Value.Raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return "", fmt.Errorf("configValues %s:%s: %w", entry.FileName, entry.Key, err)
+		}
+		tuple, err := json.Marshal([]any{entry.FileName, entry.Key, value})
+		if err != nil {
+			return "", fmt.Errorf("hashing configValues: %w", err)
+		}
+		tuples = append(tuples, string(tuple))
+	}
+	slices.Sort(tuples)
+	encoded, err := json.Marshal(tuples)
+	if err != nil {
+		return "", fmt.Errorf("hashing configValues tuples: %w", err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(encoded)), nil
 }
