@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	configUpdateOnly    = "config"
 	configUpdateBoth    = "both"
 	configUpdateFile    = "config.toml"
 	configUpdateOldHash = "old"
@@ -66,7 +67,7 @@ func TestConfigUpdateAllModesOrderingAndPeerPrecedence(t *testing.T) {
 		{"replayer", func(n *seiv1alpha1.SeiNode) { n.Spec.Replayer = &seiv1alpha1.ReplayerSpec{} }},
 	}
 	for _, mode := range modes {
-		for _, drift := range []string{"config", "image", configUpdateBoth, "sidecar"} {
+		for _, drift := range []string{configUpdateOnly, "image", configUpdateBoth, "sidecar"} {
 			t.Run(mode.name+"/"+drift, func(t *testing.T) {
 				g := NewWithT(t)
 				node := runningFullNode()
@@ -92,14 +93,14 @@ func TestConfigUpdateAllModesOrderingAndPeerPrecedence(t *testing.T) {
 				plan, err := planner.BuildPlan(node)
 				g.Expect(err).NotTo(HaveOccurred())
 				types := planTaskTypes(plan)
-				if drift == "config" {
+				if drift == configUpdateOnly {
 					g.Expect(types).To(Equal([]string{TaskConfigApply, TaskConfigPatch, TaskConfigPatch,
 						TaskConfigValidate, sidecar.TaskTypeRestartSeid, TaskMarkReady}))
 				} else {
 					g.Expect(types).NotTo(ContainElement(sidecar.TaskTypeRestartSeid))
 					g.Expect(types).To(ContainElement(task.TaskTypeReplacePod))
 				}
-				g.Expect(slices.Contains(types, TaskConfigApply)).To(Equal(drift == "config" || drift == configUpdateBoth))
+				g.Expect(slices.Contains(types, TaskConfigApply)).To(Equal(drift == configUpdateOnly || drift == configUpdateBoth))
 				validate := slices.Index(types, TaskConfigValidate)
 				g.Expect(types[validate-2 : validate]).To(Equal([]string{TaskConfigPatch, TaskConfigPatch}))
 				var patch task.ConfigPatchTask
