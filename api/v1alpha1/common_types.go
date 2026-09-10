@@ -253,6 +253,8 @@ type SidecarConfig struct {
 // ConfigValue supplies a typed value at a dotted TOML path in a config file.
 type ConfigValue struct {
 	// FileName names the config file, for example config.toml or app.toml.
+	// Only config.toml and app.toml have a controller-generated base. Removing
+	// an entry for any other file leaves its key in place on disk.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=64
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+\.toml$`
