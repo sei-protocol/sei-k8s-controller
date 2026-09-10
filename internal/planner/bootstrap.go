@@ -114,13 +114,13 @@ func buildBootstrapPlan(
 		}
 	}
 
-	return &seiv1alpha1.TaskPlan{
+	return withConfigValues(&seiv1alpha1.TaskPlan{
 		ID:          planID,
 		Phase:       seiv1alpha1.TaskPlanActive,
 		Tasks:       tasks,
 		TargetPhase: seiv1alpha1.PhaseRunning,
 		FailedPhase: seiv1alpha1.PhaseFailed,
-	}, nil
+	}, node)
 }
 
 // buildPostBootstrapProgression returns the sidecar task sequence for the
@@ -186,11 +186,11 @@ func buildGenesisPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) 
 		}
 		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{
+	return withConfigValues(&seiv1alpha1.TaskPlan{
 		ID:          planID,
 		Phase:       seiv1alpha1.TaskPlanActive,
 		Tasks:       tasks,
 		TargetPhase: seiv1alpha1.PhaseRunning,
 		FailedPhase: seiv1alpha1.PhaseFailed,
-	}, nil
+	}, node)
 }
