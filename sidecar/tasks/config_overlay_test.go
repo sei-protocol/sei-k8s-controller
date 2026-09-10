@@ -3,11 +3,12 @@ package tasks
 import (
 	"context"
 	"encoding/json"
-	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/tomlpatch"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/tomlpatch"
 )
 
 func TestConfigPatchHandlerTypedOverlay(t *testing.T) {
