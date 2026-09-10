@@ -848,41 +848,64 @@ func p2pConfigPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 // so the reason/message reflects the actual trigger. FailedPhase stays
 // empty so a failure retries on next reconcile.
 //
-// WHY STAMPING BEFORE A FALLIBLE CALL IS SAFE HERE, AND WHAT WOULD BREAK IT.
-// Stamping first means the condition is mutated upstream of this function's
-// error return. The node reconciler now flushes status on the way out even on an
-// error exit (see the backstop in internal/controller/node/controller.go), so
-// that stamp is PERSISTED if this returns an error — leaving
-// NodeUpdateInProgress=True with no plan on status, which handleTerminalPlan
-// cannot clear because it only fires on a terminal plan. Stale-True, not
-// self-healing.
+// KNOWN HAZARD, TRACKED SEPARATELY: THE STAMP IS UPSTREAM OF FALLIBLE CALLS.
+// Five of the six callers stamp NodeUpdateInProgress=True immediately BEFORE
+// calling — the image-drift branches of the full/archive/validator/replay/seed
+// buildRunningPlan. buildConfigUpdatePlan is the sixth and the counter-example:
+// it stamps AFTER a successful assemble, which is the ordering the other five
+// need. The node reconciler flushes status on the way out even on an error exit
+// (the deferred backstop in internal/controller/node/controller.go), so a stamp
+// is PERSISTED when this returns an error, leaving NodeUpdateInProgress=True
+// with no plan on status. handleTerminalPlan cannot clear it — it returns early
+// when Status.Plan is nil. Stale-True, and not self-healing.
 //
-// That is tolerable only because this cannot fail for the inputs the five
-// callers actually pass. The one error path is buildPlannedTask's
-// marshalParams, a plain json.Marshal. The safety argument is about those
-// specific params, NOT about the types the API package happens to declare:
-// marshalParams takes `any` and does receive user-derived content on other
-// paths — genesis overrides land in AssembleAndUploadGenesisTask.Overrides
-// (built in genesisGroupPlanner.BuildPlan, planner/group.go) straight from
-// SeiNetwork.spec.genesis.overrides, typed map[string]apiextensionsv1.JSON. A
-// package-wide "no float fields declared" claim proves nothing here and should
-// not be relied on: apiextensions.JSON carries arbitrary JSON, and
-// resource.Quantity marshals as a string rather than a number, so neither is
-// covered by reasoning about Go float types.
+// That state is reachable on schema-valid input today; it is a live hazard, not
+// a hypothetical one. Four calls below can fail:
 //
-// What holds instead is the call path. Every update progression
-// (full/archive/validator/replay/seed buildRunningPlan) resolves through
-// paramsForUpdateTask to either an empty sidecar task struct
-// (ConfigValidateTask, MarkReadyTask), a controller-built struct of node
+//  1. insertBefore, when TaskConfigPatch is absent from the progression. Not
+//     reachable from the current six callers — every progression they pass
+//     contains TaskConfigPatch — so this one is a guard, not a live path.
+//  2. buildPlannedTask's marshalParams, a plain json.Marshal: once per
+//     progression entry here, and once more for the overlay task inside
+//     withConfigValues.
+//  3. configValuesHash, reached through withConfigValues in this function's
+//     own return statement.
+//  4. configValuesOverlay, likewise through withConfigValues, which rejects
+//     nested nulls, numbers outside float64 range, and overlapping dotted keys.
+//
+// (3) and (4) read node.Spec.ConfigValues, whose ConfigValue.Value is an
+// apiextensionsv1.JSON — user content the CRD schema admits and plan-build
+// rejects by documented contract; see the "nested null is admitted by the
+// schema but rejected at plan-build" note on ConfigValue.Value in
+// api/v1alpha1/common_types.go. So a Running node given an image bump and a
+// nested-null configValues entry in one apply ends up NodeUpdateInProgress=True
+// with no plan, reporting an image drift rather than the configValues rejection
+// that actually stopped it. The behavioural fix — stamp after a successful
+// assemble, as buildConfigUpdatePlan already does — is tracked separately and
+// is deliberately not made here.
+//
+// Path (2) is the one that does currently hold, and only by call path, NOT by
+// the types the API package happens to declare: marshalParams takes `any` and
+// does receive user-derived content elsewhere — genesis overrides land in
+// AssembleAndUploadGenesisTask.Overrides (built in genesisGroupPlanner.BuildPlan,
+// planner/group.go) straight from SeiNetwork.spec.genesis.overrides, typed
+// map[string]apiextensionsv1.JSON. A package-wide "no float fields declared"
+// claim would prove nothing here: apiextensions.JSON carries arbitrary JSON,
+// and resource.Quantity marshals as a string rather than a number, so neither
+// is covered by reasoning about Go float types.
+//
+// What holds for (2) is that every progression entry resolves through
+// paramsForUpdateTask to one of four shapes: an empty sidecar task struct
+// (ConfigValidateTask, MarkReadyTask); a controller-built struct of node
 // name/namespace strings (ApplyStatefulSet, ApplyService, ReplacePod,
 // ObserveImage, and the validator/seed key-validation params, which reduce a
-// Secret reference to strings), or ConfigPatchTask wrapping p2pConfigPatch,
-// whose leaves are spec.externalAddress and a strings.Join of resolved peers —
-// both strings. No unsupported value can reach json.Marshal from here.
-//
-// So: adding a progression entry whose params carry an apiextensions.JSON,
-// a float, a channel, or a func makes this genuinely fallible, and the stamp
-// must then move after the assemble rather than before it.
+// Secret reference to strings); ConfigPatchTask wrapping p2pConfigPatch, whose
+// leaves are spec.externalAddress and a strings.Join of resolved peers, both
+// strings; or — for the TaskConfigApply entry this function inserts itself —
+// runningConfigIntent's *seiconfig.ConfigIntent, whose Overrides carries
+// user-supplied spec.overrides but is typed map[string]string, so it marshals.
+// Adding a progression entry whose params carry a NaN or ±Inf float, a channel,
+// or a func would make (2) live as well; ordinary finite floats marshal fine.
 func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
 	// First observation must also restore the base: an unobserved node may
 	// carry removed piece-1 overlay keys. This does not trigger a plan; it
