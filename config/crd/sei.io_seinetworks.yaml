@@ -774,6 +774,12 @@ spec:
                   Plan tracks the active network-level task plan (genesis assembly,
                   deployment, etc.). Nil when no plan is in progress.
                 properties:
+                  configValuesHash:
+                    description: |-
+                      ConfigValuesHash identifies the configValues captured by this materialization
+                      plan. On successful completion it becomes Status.CurrentConfigValuesHash.
+                      Empty means this plan does not observe configuration.
+                    type: string
                   failedPhase:
                     description: |-
                       FailedPhase is the SeiNodePhase the executor sets on the owning
