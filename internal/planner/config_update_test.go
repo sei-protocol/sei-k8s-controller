@@ -28,6 +28,7 @@ const (
 func TestConfigValuesEmptyObservedHashDoesNotRestartFleetOnControllerUpgrade(t *testing.T) {
 	g := NewWithT(t)
 	node := runningFullNode()
+	node.Status.CurrentConfigValuesHash = ""
 	node.Spec.ConfigValues = overlayTestNode().Spec.ConfigValues
 	g.Expect(configValuesDrifted(node)).To(BeFalse())
 	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
@@ -97,7 +98,7 @@ func TestConfigUpdateAllModesOrderingAndPeerPrecedence(t *testing.T) {
 				types := planTaskTypes(plan)
 				if drift == configUpdateOnly {
 					g.Expect(types).To(Equal([]string{TaskConfigApply, TaskConfigPatch, TaskConfigPatch,
-						TaskConfigValidate, sidecar.TaskTypeRestartSeid, TaskMarkReady}))
+						TaskConfigValidate, TaskMarkReady, sidecar.TaskTypeRestartSeid}))
 				} else {
 					g.Expect(types).NotTo(ContainElement(sidecar.TaskTypeRestartSeid))
 					g.Expect(types).To(ContainElement(task.TaskTypeReplacePod))
@@ -209,7 +210,7 @@ func TestConfigValuesRemovalToEmptyStillRegeneratesBaseAndRestarts(t *testing.T)
 	plan, err := (&fullNodePlanner{}).BuildPlan(node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(planTaskTypes(plan)).To(Equal([]string{
-		TaskConfigApply, TaskConfigPatch, TaskConfigValidate, sidecar.TaskTypeRestartSeid, TaskMarkReady,
+		TaskConfigApply, TaskConfigPatch, TaskConfigValidate, TaskMarkReady, sidecar.TaskTypeRestartSeid,
 	}))
 	emptyHash, err := configValuesHash(nil)
 	g.Expect(err).NotTo(HaveOccurred())
