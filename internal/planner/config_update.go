@@ -14,7 +14,10 @@ import (
 // precede restart so seid can pass its sidecar healthz startup gate. Image
 // updates use replacement instead. Running-path base regeneration resets
 // [statesync] to mode defaults, clearing the trust point written at init by
-// configure-state-sync. The StateSync workflow patches config separately.
+// configure-state-sync. This happens on first-observation image updates and
+// every configValues edit, including removals. It also resets out-of-band
+// giga-store migration keys written by the StateSync workflow (known defect B1;
+// see the B1 severity analysis on PR #534).
 func buildConfigUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	plan, err := assembleUpdatePlan(node, []string{
 		TaskConfigPatch, TaskConfigValidate, TaskMarkReady, sidecar.TaskTypeRestartSeid,
