@@ -64,10 +64,11 @@ import (
 //     the same CSI driver, and a cross-driver mismatch is a platform-catalog
 //     error this check cannot see. Verifying it would need a `storageclasses`
 //     read verb, and DR-001 pins the RBAC set to get;list;watch on
-//     volumeattributesclasses and nothing else
-//     (docs/specs/001-configurable-node-resources/decisions.md:124-126). Not
-//     worth widening for a check that would still be advisory — a matching
-//     driver name does not mean the driver accepts these parameters.
+//     volumeattributesclasses and nothing else — the bullet beginning "The
+//     controller takes on no cluster-scoped write" in
+//     docs/specs/001-configurable-node-resources/decisions.md. Not worth
+//     widening for a check that would still be advisory — a matching driver
+//     name does not mean the driver accepts these parameters.
 //   - Scope. It gates the CLAIM, not the pod: a False holds provisioning, and
 //     the pod is still created and sits Pending on the claim nothing created.
 //     Named rather than silent is the value, and the defect DR-001 commits
