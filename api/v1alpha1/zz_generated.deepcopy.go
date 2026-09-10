@@ -1032,6 +1032,13 @@ func (in *SeiNetworkSpec) DeepCopyInto(out *SeiNetworkSpec) {
 			(*out)[key] = val
 		}
 	}
+	if in.ConfigValues != nil {
+		in, out := &in.ConfigValues, &out.ConfigValues
+		*out = make([]ConfigValue, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.DataVolume != nil {
 		in, out := &in.DataVolume, &out.DataVolume
 		*out = new(DataVolumeSpec)

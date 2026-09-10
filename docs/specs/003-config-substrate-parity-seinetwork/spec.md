@@ -60,6 +60,7 @@ controller may still perform it.
 
 - **Sits within**: the SeiNetwork CRD and the controller that creates its validator children.
 - **Owns**: the config-value field on the SeiNetwork, and its propagation to every validator child.
+- **Owns**: the network's verdict on its own set — whether the values build an overlay at all, and how that verdict reaches the operator. The substrate defines what a buildable set is; this spec decides the network answers the question once, before the set fans out.
 - **Does not own**: the config-value substrate — the merge, the overlay, the unvalidated path, and the restart behavior. The `config-override-substrate` work item defines that substrate. This spec starts it on each validator child.
 - **Does not own**: genesis overrides, which write genesis.json chain state on a different lifecycle.
 - **Does not own**: the SeiNode field itself. The `config-override-substrate` work item owns it.
@@ -129,6 +130,7 @@ Confirm that every validator child updates and restarts seid.
 - What happens when an operator edits one validator child's config value directly? The controller reconciles it back to the network value — see Requirement 2, criterion 3.
 - What happens when a network config value names a key the existing config overrides guard, such as a freeze height? The controller applies it, the same as a SeiNode. The `config-override-substrate` work item owns this behavior. See the Assumptions.
 - What happens when an operator adds a validator after setting a network config value? The controller copies the network values into the new child — see Requirement 2, criterion 1.
+- What happens when the CRD admits a set the overlay cannot build — a null nested in a table, a number no TOML number type holds, two config values whose dotted keys overlap under one file? The schema checks shape, not representability, so the set arrives intact and fails the same way on every validator at once, holding up their unrelated updates too. The controller rejects it on the network instead — see Requirement 5.
 
 ## Requirements *(mandatory)*
 
@@ -186,6 +188,21 @@ to reach every validator, so that every validator child holds the same config va
 1. WHEN the operator changes or removes a network config value, THE controller SHALL write the new set of values to every validator child.
 2. WHEN a validator child's config values change, THE controller SHALL restart that child's seid container, as the `config-override-substrate` work item defines.
 
+### Requirement 5: The network rejects a set the substrate cannot build
+
+**Objective:** As a node operator, I want a set the substrate cannot apply to
+fail on the object I edited, so that I read one error instead of finding the
+same error N times across the validator set.
+
+**Traces to:** User Story 1, User Story 3
+
+#### Acceptance Criteria
+
+1. WHEN the network config values do not build an overlay, THE controller SHALL report the failure on the SeiNetwork, carrying the reason the operator has to act on.
+2. WHEN the network config values do not build an overlay, THE controller SHALL NOT write them to any validator child, and each child SHALL keep the values it already holds.
+3. WHEN the network config values do not build an overlay, THE controller SHALL continue to propagate the network's other fields to every validator child.
+4. WHEN the operator corrects the network config values, THE controller SHALL clear the failure and write the corrected set to every validator child.
+
 ### Key Entities
 
 - **Network config value**: a config value the operator declares on the SeiNetwork, which the controller copies to every validator child.
@@ -211,6 +228,8 @@ role that decides.
   *Verifier:* judgement — a platform engineer reads the SeiNetwork CRD and confirms both fields exist.
 - **SC-008**: A removed network config value updates every validator child and returns the key to its base value.
   *Verifier:* judgement — a platform engineer removes a network config value and confirms the base value on every child.
+- **SC-009**: A set the substrate cannot build fails on the SeiNetwork, reaches no validator child, and holds up none of the network's other propagated fields.
+  *Verifier:* judgement — a platform engineer sets two overlapping dotted keys under one file, reads the failure on the SeiNetwork, and confirms every child keeps its previous set and still takes an image change.
 
 ## Assumptions
 
@@ -219,10 +238,12 @@ role that decides.
 - Every SeiNetwork child is a validator, so a network config value applies to the whole validator set.
 - The network config values are authoritative for the children. A direct child edit reconciles back to the network value.
 - A network config value can set a key the existing config overrides guard, the same as a SeiNode. The controller applies it, and the operator owns the result.
+- CRD admission is a shape check, not a representability check. A set can satisfy the schema and still fail the substrate's overlay build, so the network runs that build itself before it copies anything. Requirement 5 asks the substrate's own question earlier; it does not define a second notion of a valid value.
 
 ## Out of scope
 
 - The config-value substrate — the merge, the overlay, the unvalidated path, and the restart. The `config-override-substrate` work item owns it.
+- Rejecting a set at admission. The network's verdict is a reported one: the write succeeds, and the failure is readable on the object.
 - Genesis overrides, which write genesis.json chain state on a different lifecycle.
 - A per-validator config value that differs across the set. This spec sends one config to the whole set.
 - A rename of the existing config-override fields. This spec makes the new field homogeneous and leaves the old fields as they are.

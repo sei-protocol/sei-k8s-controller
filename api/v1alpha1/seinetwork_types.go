@@ -76,6 +76,41 @@ type SeiNetworkSpec struct {
 	// +optional
 	ConfigOverrides map[string]string `json:"configOverrides,omitempty"`
 
+	// ConfigValues supplies typed values by config file and dotted TOML path
+	// for every validator in the pool. The controller copies the set onto each
+	// validator child's spec.configValues, where the SeiNode substrate merges
+	// it over the base configuration and restarts seid on a change; see the
+	// SeiNode field for the merge, precedence, and restart behavior.
+	//
+	// The network's set is authoritative: an edit here rewrites every child's
+	// set, and a direct edit on a child reconciles back. Like every other
+	// propagated field, the rewrite is deferred while spec.paused is set or a
+	// plan is in progress, and lands on the reconcile after that clears.
+	//
+	// The rewrite reaches the whole pool at once. There is no rolling window:
+	// every validator sees the drift in the same reconcile and restarts seid
+	// independently, so a one-key edit stops block production until more than
+	// 2/3 of the set is back. There is no staged path for a network-owned pool:
+	// a child edit reconciles back, and pausing defers the rewrite rather than
+	// splitting it, so the edit has to be timed against a pool-wide restart.
+	//
+	// The set is validated here before it reaches any child: a value the CRD
+	// admits but the TOML overlay cannot build — a null nested in a table, a
+	// number outside int64 and float64, two overlapping dotted paths under one
+	// fileName — leaves ConfigValuesValid=False on this object and every child
+	// on its last good set, rather than wedging all of their plans at once.
+	//
+	// Deliberately unguarded, like the SeiNode field: no allow-list and no
+	// denylist, so a config value may name chain.freeze_height, chain.halt_height,
+	// or chain.halt_time across the whole validator set. Do not add a key guard
+	// here without amending spec 003-config-substrate-parity-seinetwork.
+	// +kubebuilder:validation:MaxItems=100
+	// +optional
+	// +listType=map
+	// +listMapKey=fileName
+	// +listMapKey=key
+	ConfigValues []ConfigValue `json:"configValues,omitempty"`
+
 	// DataVolume configures the data PersistentVolumeClaim for each genesis
 	// validator. The ceremony-generated consensus identity lives here, so
 	// DeletionPolicy defaults to Retain.
@@ -421,6 +456,11 @@ const (
 	// child snapshot — no plan or revision tracking owns it.
 	ConditionRolloutInProgress = "RolloutInProgress"
 	ConditionPaused            = "Paused"
+	// ConditionConfigValuesValid reports whether spec.configValues builds a
+	// TOML overlay. The CRD schema checks shape, not TOML representability, so
+	// the controller runs the child's own overlay builder once here rather than
+	// stamping a set that fails identically on every validator.
+	ConditionConfigValuesValid = "ConfigValuesValid"
 )
 
 // +kubebuilder:object:root=true

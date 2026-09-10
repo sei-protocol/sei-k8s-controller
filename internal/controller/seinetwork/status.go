@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/planner"
 )
 
 func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1alpha1.SeiNetwork, statusBase client.Patch) error {
@@ -160,6 +161,7 @@ const ReasonNotStarted = "NotStarted"
 func (r *SeiNetworkReconciler) seedAlwaysPresentConditions(network *seiv1alpha1.SeiNetwork) {
 	r.setGenesisCeremonyCondition(network)
 	r.setPausedCondition(network)
+	r.setConfigValuesValidCondition(network)
 	seedConditionIfAbsent(network, seiv1alpha1.ConditionPlanInProgress,
 		ReasonNotStarted, "no plan has run yet")
 	seedConditionIfAbsent(network, seiv1alpha1.ConditionNodesReady,
@@ -195,6 +197,38 @@ func (r *SeiNetworkReconciler) setPausedCondition(network *seiv1alpha1.SeiNetwor
 		r.Recorder.Event(network, corev1.EventTypeNormal, "Unpaused",
 			"operator cleared spec.paused; controller resumes plan-driven orchestration")
 	}
+}
+
+// setConfigValuesValidCondition builds the child's TOML overlay from the
+// network's set once per reconcile and reports the result. The CRD schema
+// admits values the overlay cannot represent (a null nested in a table, a
+// number outside int64 and float64, overlapping dotted paths under one file),
+// and such a set fails identically on every validator, so the network is where
+// the operator should read the error instead of N children. ensureSeiNode
+// consults this condition and leaves the children on their last good set.
+func (r *SeiNetworkReconciler) setConfigValuesValidCondition(network *seiv1alpha1.SeiNetwork) {
+	err := planner.ValidateConfigValues(network.Spec.ConfigValues)
+	if err == nil {
+		setCondition(network, seiv1alpha1.ConditionConfigValuesValid, metav1.ConditionTrue,
+			"Valid", fmt.Sprintf("%d config values build a TOML overlay", len(network.Spec.ConfigValues)))
+		return
+	}
+	// Event on the transition only: the condition already carries the standing
+	// state, and a rejected set survives every reconcile until it is edited.
+	if r.Recorder != nil && !configValuesRejected(network) {
+		r.Recorder.Event(network, corev1.EventTypeWarning, "InvalidConfigValues",
+			fmt.Sprintf("spec.configValues cannot build a TOML overlay; children keep their current set: %v", err))
+	}
+	setCondition(network, seiv1alpha1.ConditionConfigValuesValid, metav1.ConditionFalse,
+		"InvalidConfigValues", err.Error())
+}
+
+// configValuesRejected reports the standing verdict of the condition above.
+// Absent counts as accepted: the value is only ever consulted after
+// setConfigValuesValidCondition has run on the same object.
+func configValuesRejected(network *seiv1alpha1.SeiNetwork) bool {
+	c := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionConfigValuesValid)
+	return c != nil && c.Status == metav1.ConditionFalse
 }
 
 // seedConditionIfAbsent writes False/<reason>/<message> only when the
