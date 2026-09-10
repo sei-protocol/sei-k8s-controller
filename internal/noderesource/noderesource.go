@@ -236,6 +236,17 @@ func EffectiveNodeIsolation(node *seiv1alpha1.SeiNode) seiv1alpha1.NodeIsolation
 	return seiv1alpha1.NodeIsolationShared
 }
 
+// PodNodeIsolation reports the isolation a running pod was rolled with, read
+// from the sei.io/dedicated-node label ResourceLabels stamps on the pod
+// template. Pod labels are fixed at creation, so this reflects the template
+// the pod actually came from, not the current spec.
+func PodNodeIsolation(pod *corev1.Pod) seiv1alpha1.NodeIsolation {
+	if pod.Labels[DedicatedNodeKey] == dedicatedNodeValue {
+		return seiv1alpha1.NodeIsolationDedicated
+	}
+	return seiv1alpha1.NodeIsolationShared
+}
+
 // IsDedicatedNode reports whether the SeiNode's effective node isolation is
 // Dedicated (single-tenant scheduling).
 //

@@ -837,16 +837,14 @@ func nodeIsolationDrifted(node *seiv1alpha1.SeiNode) bool {
 	return noderesource.EffectiveNodeIsolation(node) != node.Status.CurrentNodeIsolation
 }
 
-// podTemplateDrifted reports whether anything that needs a pod roll has
-// drifted: either image, or node isolation.
+// podTemplateDrifted reports whether an observed pod-template input has
+// drifted: seid image, sidecar image, or node isolation. The rendered nodepool
+// is not observed, so an app-config scheduling.dedicated.* change alone does
+// not roll.
 func podTemplateDrifted(node *seiv1alpha1.SeiNode, p platform.Config) bool {
 	return imageDrifted(node) || sidecarImageDrifted(node, p) || nodeIsolationDrifted(node)
 }
 
-// podTemplateDriftMessage formats the NodeUpdateInProgress message every mode
-// planner stamps before an update plan. Names which input(s) drifted so an
-// operator reading the condition can tell seid bumps from sidecar bumps from
-// an isolation change.
 // podTemplateDriftMessage formats the NodeUpdateInProgress message every mode
 // planner stamps after building an update plan. Names which input(s) drifted so
 // an operator reading the condition can tell seid bumps from sidecar bumps from

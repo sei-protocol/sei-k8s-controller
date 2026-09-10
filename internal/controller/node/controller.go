@@ -278,6 +278,9 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	if suppressDrift {
 		result = wfResult
 	} else {
+		if err := r.backfillNodeIsolation(ctx, node); err != nil {
+			return ctrl.Result{}, fmt.Errorf("backfilling node isolation: %w", err)
+		}
 		var fatal error
 		if result, execErr, fatal = r.resolveDriftPlan(ctx, node, prevSidecar, prevStateSync); fatal != nil {
 			return ctrl.Result{}, fatal
