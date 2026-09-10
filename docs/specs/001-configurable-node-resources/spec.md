@@ -171,12 +171,12 @@ and its fields per node group, so that I compare storage-bound scenarios.
 
 #### Acceptance Criteria
 
-1. THE harness SHALL expose a fixed set of supported storage types.
-2. WHEN the operator selects a supported storage type, THE harness SHALL accept the standard fields for that type, such as the IOPS and the throughput, and resolve them to a supported VolumeAttributesClass.
+1. THE harness SHALL expose a fixed set of supported gp3 VolumeAttributesClass offerings.
+2. WHEN the operator selects a supported offering, THE harness SHALL accept the standard performance fields for that offering, such as the IOPS and the throughput, and resolve them to a supported VolumeAttributesClass name.
 3. WHEN the operator sets a storage selection, THE controller SHALL apply the named VolumeAttributesClass to the volume of every node in the group whose data volume it provisions; a node that imports a pre-existing volume keeps the importer's parameters.
-4. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL refuse the selection.
-5. IF the operator selects a storage type outside the supported set, THEN THE harness SHALL name the supported set.
-6. THE supported set SHALL hold the gp3 EBS volume type, with the IOPS and the throughput configurable, offered as platform-managed VolumeAttributesClasses.
+4. IF the operator selects an offering outside the supported set, THEN THE harness SHALL refuse the selection.
+5. IF the operator selects an offering outside the supported set, THEN THE harness SHALL name the supported VolumeAttributesClass set.
+6. THE supported set SHALL hold gp3 EBS VolumeAttributesClasses whose named offerings encode the supported IOPS and throughput values. The StorageClass fixes the gp3 base volume type; the VolumeAttributesClass carries the tunable performance parameters.
 
 ### Requirement 4: A default lighter than the mainnet shape
 
@@ -241,7 +241,7 @@ role that decides.
   *Verifier:* judgement — the benchmark owner reads the rendered SeiNetwork with kubectl and confirms every validator child carries the set values.
 - **SC-002**: A default run requests about one quarter of the mainnet shape on CPU, memory, and storage.
   *Verifier:* judgement — the benchmark owner compares the default render against one quarter of the mainnet shape on all three dimensions.
-- **SC-003**: Two runs that differ only in disk throughput render two manifests that differ only in the VolumeAttributesClass reference.
+- **SC-003**: Two runs that select different gp3 performance offerings render two manifests that differ only in the `spec.dataVolume.storage.volumeAttributesClassName` reference.
   *Verifier:* judgement — the benchmark owner compares the two rendered manifests and confirms the VolumeAttributesClass name is the only difference.
 - **SC-004**: An oversize shape produces a reported pending pod, not a silent wait.
   *Verifier:* judgement — a platform engineer requests a shape above node capacity and confirms the harness reports the pending pod.
