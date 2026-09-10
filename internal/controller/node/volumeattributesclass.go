@@ -35,12 +35,15 @@ import (
 // present discipline forbids.
 //
 // Sole writer of the condition. Enforcement lives downstream in the
-// ensure-data-pvc task, which holds provisioning while this condition is not
-// True (see holdForVolumeAttributesClass) — that keeps the hold on the one path
-// that can bind a class name to a volume and keeps this method a resolver. No
-// requeue is needed for a blocked selection: the only work a missing class
-// blocks is provisioning, and the holding task's transient error already drives
-// the executor's poll until the platform adds the class.
+// ensure-data-pvc task, which holds the CREATE of a data claim while this
+// condition is not True (see holdForVolumeAttributesClass) — that keeps the hold
+// on the one path that can bind a class name to a volume and keeps this method a
+// resolver. Narrowly the create, not the task: a claim that already exists spent
+// its name at provision time and cannot be re-classed, so a False here must not
+// stall a node that is already provisioned. No requeue is needed for a blocked
+// selection: the only work a missing class blocks is that create, and the
+// holding task's transient error already drives the executor's poll until the
+// platform adds the class.
 //
 // Because the task consumes the PERSISTED condition, this resolve must keep
 // running before plan execution — see the ordering note on

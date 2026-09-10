@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -743,4 +744,106 @@ type countingClient struct {
 func (c *countingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	c.getCount++
 	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+// --- VolumeAttributesClass gate: the create path is the only path it can change ---
+
+// ownedDataPVC returns the data PVC exactly as a previous run of this task
+// would have left it: generated from the node, controller-owned, and Bound. It
+// therefore carries whatever class the node selected AT PROVISION TIME, which
+// is the point — volumeAttributesClassName is create-only, so that name is
+// already spent.
+func ownedDataPVC(t *testing.T, node *seiv1alpha1.SeiNode, s *runtime.Scheme) *corev1.PersistentVolumeClaim {
+	t.Helper()
+	pvc := noderesource.GenerateDataPVC(node, platformtest.Config())
+	if err := ctrl.SetControllerReference(node, pvc, s); err != nil {
+		t.Fatal(err)
+	}
+	pvc.Spec.VolumeName = "pv-" + pvc.Name
+	pvc.Status.Phase = corev1.ClaimBound
+	pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2000Gi")}
+	return pvc
+}
+
+// The wedge this ordering defuses. The catalog names classes by generation
+// (sei-gp3-performance-v1) precisely because VAC parameters are immutable, so a
+// -v2 retiring a -v1 is the expected lifecycle — and every node provisioned
+// against -v1 still names it. Re-running ensure-data-pvc on such a node must
+// complete on its owned claim, not hold: the claim consumed that name at
+// provision time and the field is create-only, so a hold cannot change the
+// volume. It can only stop the node. And the stop has no floor — the hold is a
+// plain (non-Terminal) error, which the executor requeues on TaskPollInterval
+// WITHOUT charging RetryCount or consulting MaxRetries (the non-Terminal branch
+// of advanceTask in internal/planner/executor.go), so nothing ever fails the
+// plan and nothing ever releases the node.
+func TestEnsureDataPVC_VAC_ExistingOwnedPVC_ClassRetired_Completes(t *testing.T) {
+	g := NewWithT(t)
+	node := vacNode("sei-gp3-performance-v1")
+	s := ensurePVCScheme(t)
+	existing := ownedDataPVC(t, node, s)
+
+	// The reconciler re-resolved this reconcile and found the class gone — the
+	// -v1 the platform retired when it shipped -v2.
+	seedVACCondition(node, metav1.ConditionFalse,
+		seiv1alpha1.ReasonVolumeAttributesClassNotFound,
+		`VolumeAttributesClass "sei-gp3-performance-v1" not found`)
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(existing).Build()
+	cfg := ExecutionConfig{
+		KubeClient: c, APIReader: c, Scheme: s, Resource: node, Platform: platformtest.Config(),
+	}
+	raw, _ := json.Marshal(EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace})
+
+	// The claim as the API holds it before the task runs — the baseline every
+	// assertion below is read against, so none of them can pass off an
+	// in-memory fixture as the cluster's state.
+	before, err := dataPVCFor(t, c, node)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	exec, err := deserializeEnsureDataPVC("ensure-1", raw, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed(),
+		"an owned claim has already consumed its class; holding it wedges the node forever and changes nothing")
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	after, err := dataPVCFor(t, c, node)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(after.UID).To(Equal(before.UID), "the existing claim must be accepted, not replaced")
+	g.Expect(after.ResourceVersion).To(Equal(before.ResourceVersion),
+		"accepting an owned claim writes nothing — there is no update path for volumeAttributesClassName")
+	g.Expect(after.Spec.VolumeAttributesClassName).NotTo(BeNil())
+	g.Expect(*after.Spec.VolumeAttributesClassName).To(Equal("sei-gp3-performance-v1"),
+		"the retired name stays on the claim: it was bound at provision time and is create-only")
+}
+
+// The other half of the same ordering: an existing claim the SeiNode does NOT
+// own still fails Terminal, and does so on its own evidence rather than being
+// pre-empted by the class hold. Adding the missing class would not make an
+// alien claim adoptable, so the operator must see the ownership error.
+func TestEnsureDataPVC_VAC_ExistingForeignPVC_ClassRetired_TerminalOnOwnership(t *testing.T) {
+	g := NewWithT(t)
+	node := vacNode("sei-gp3-performance-v1")
+	s := ensurePVCScheme(t)
+
+	foreign := noderesource.GenerateDataPVC(node, platformtest.Config())
+	foreign.Status.Phase = corev1.ClaimBound
+
+	seedVACCondition(node, metav1.ConditionFalse,
+		seiv1alpha1.ReasonVolumeAttributesClassNotFound, "retired")
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(foreign).Build()
+	cfg := ExecutionConfig{
+		KubeClient: c, APIReader: c, Scheme: s, Resource: node, Platform: platformtest.Config(),
+	}
+	raw, _ := json.Marshal(EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace})
+	exec, err := deserializeEnsureDataPVC("ensure-1", raw, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	err = exec.Execute(context.Background())
+	g.Expect(err).To(HaveOccurred())
+	var termErr *TerminalError
+	g.Expect(err).To(BeAssignableToTypeOf(termErr),
+		"an unowned claim is an operator error no amount of polling fixes")
+	g.Expect(err.Error()).To(ContainSubstring("not owned by SeiNode"))
 }
