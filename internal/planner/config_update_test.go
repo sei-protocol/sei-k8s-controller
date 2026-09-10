@@ -206,3 +206,34 @@ func TestConfigValuesRemovalToEmptyStillRegeneratesBaseAndRestarts(t *testing.T)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan.ConfigValuesHash).To(Equal(emptyHash))
 }
+
+func TestConfigUpdateWaitsForRestartBeforeObserving(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	node := runningFullNode()
+	node.Status.CurrentConfigValuesHash = "old"
+	plan, err := buildConfigUpdatePlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+	var restartID uuid.UUID
+	for i := range plan.Tasks {
+		if plan.Tasks[i].Type == sidecar.TaskTypeRestartSeid {
+			restartID = uuid.MustParse(plan.Tasks[i].ID)
+			plan.Tasks[i].Status = seiv1alpha1.TaskRunning
+			break
+		}
+		plan.Tasks[i].Status = seiv1alpha1.TaskComplete
+	}
+	sc := &mockSidecarClient{activeResults: map[uuid.UUID]*sidecar.TaskResult{
+		restartID: {Status: sidecar.Running},
+	}}
+	cfg := task.ExecutionConfig{BuildSidecarClient: func() (task.SidecarClient, error) { return sc, nil }}
+	_, err = executePlan(ctx, node, plan, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanActive))
+	g.Expect(node.Status.CurrentConfigValuesHash).To(Equal("old"))
+	sc.activeResults[restartID].Status = sidecar.Completed
+	_, err = executePlan(ctx, node, plan, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
+	g.Expect(node.Status.CurrentConfigValuesHash).To(Equal(plan.ConfigValuesHash))
+}
