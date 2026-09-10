@@ -27,6 +27,9 @@ import (
 
 const unknownValue = "unknown"
 
+// reasonUpdateFailed is shared by the terminal writer and diagnostic-preservation guard.
+const reasonUpdateFailed = "UpdateFailed"
+
 const (
 	TaskSnapshotRestore    = sidecar.TaskTypeSnapshotRestore
 	TaskConfigureGenesis   = sidecar.TaskTypeConfigureGenesis
@@ -181,7 +184,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		// handleTerminalPlan writes UpdateFailed before clearing a failed plan.
 		// Preserve that diagnostic on this and subsequent no-op reconciles.
 		condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
-		terminalReason := condition != nil && condition.Reason == "UpdateFailed"
+		terminalReason := condition != nil && condition.Reason == reasonUpdateFailed
 		if node.Status.Phase == seiv1alpha1.PhaseRunning && node.Status.CurrentConfigValuesHash == "" &&
 			len(node.Spec.ConfigValues) > 0 && !terminalReason {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "ConfigBaselineUnobserved",
@@ -246,7 +249,7 @@ func handleTerminalPlan(ctx context.Context, node *seiv1alpha1.SeiNode) {
 
 	case seiv1alpha1.TaskPlanFailed:
 		if hasNodeUpdateCondition(node) {
-			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateFailed",
+			setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateFailed,
 				fmt.Sprintf("plan %s failed: %s", plan.ID, planFailureMessage(plan)))
 		}
 		emitPlanDuration(ctx, cn, node.Namespace, planType, "failed", plan)
@@ -851,6 +854,9 @@ func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[stri
 	// First observation must also restore the base: an unobserved node may
 	// carry removed piece-1 overlay keys. This does not trigger a plan; it
 	// only strengthens materialization in an update already being performed.
+	// Regeneration also recurs on every configValues edit, including removals.
+	// It resets out-of-band first-party StateSync giga-store migration keys
+	// (known defect B1; see docs/notes/b1-severity.md).
 	if node.Status.CurrentConfigValuesHash == "" || configValuesDrifted(node) {
 		var err error
 		prog, err = insertBefore(prog, TaskConfigPatch, TaskConfigApply)
