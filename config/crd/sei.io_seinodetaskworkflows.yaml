@@ -274,6 +274,12 @@ spec:
                   controllers persist, driven by the generic plan executor. TargetPhase
                   and FailedPhase are always empty: a workflow never drives a node phase.
                 properties:
+                  configValuesHash:
+                    description: |-
+                      ConfigValuesHash identifies the configValues captured by this materialization
+                      plan. On successful completion it becomes Status.CurrentConfigValuesHash.
+                      Empty means this plan does not observe configuration.
+                    type: string
                   failedPhase:
                     description: |-
                       FailedPhase is the SeiNodePhase the executor sets on the owning
