@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
@@ -47,5 +49,34 @@ func (r *SeiNodeReconciler) reconcileStatefulSet(ctx context.Context, node *seiv
 			UID:  sts.UID,
 		}
 	}
+	return nil
+}
+
+// backfillNodeIsolation establishes Status.CurrentNodeIsolation for a Running
+// node that predates the field. The planner treats an empty value as
+// unobserved (no drift) so a controller upgrade does not fleet-roll, but that
+// also means an isolation-only change could never roll such a node: the roll
+// that would stamp the baseline is the one the empty value suppresses. The
+// live pod carries the isolation it was rolled with in its labels, so the
+// baseline is read from there — a truthful observation with no roll.
+//
+// Skipped while a plan is active: mid-roll the pod may be at the old revision
+// and observe-image stamps the value on completion anyway. A missing pod is
+// not an error; the next reconcile retries.
+func (r *SeiNodeReconciler) backfillNodeIsolation(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+	if node.Status.Phase != seiv1alpha1.PhaseRunning || node.Status.CurrentNodeIsolation != "" ||
+		node.Status.StatefulSet == nil ||
+		(node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive) {
+		return nil
+	}
+	pod := &corev1.Pod{}
+	key := types.NamespacedName{Namespace: node.Namespace, Name: node.Status.StatefulSet.Name + "-0"}
+	if err := r.Get(ctx, key, pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("getting pod %s: %w", key.Name, err)
+	}
+	node.Status.CurrentNodeIsolation = noderesource.PodNodeIsolation(pod)
 	return nil
 }

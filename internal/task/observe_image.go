@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 )
 
@@ -44,7 +45,8 @@ func deserializeObserveImage(id string, params json.RawMessage, cfg ExecutionCon
 }
 
 // Execute polls the StatefulSet rollout. If the rollout is complete, stamps
-// status.currentImage and status.currentSidecarImage on the owning SeiNode
+// status.currentImage, status.currentSidecarImage and
+// status.currentNodeIsolation on the owning SeiNode
 // and marks the task complete. If the rollout is still in progress, returns
 // nil — the executor will re-invoke on the next reconcile since the task
 // remains Pending.
@@ -76,6 +78,7 @@ func (e *observeImageExecution) Execute(ctx context.Context) error {
 	// whole pod spec), so seid and sidecar containers roll together.
 	node.Status.CurrentImage = node.Spec.Image
 	node.Status.CurrentSidecarImage = EffectiveSidecarImage(node, e.cfg.Platform)
+	node.Status.CurrentNodeIsolation = noderesource.EffectiveNodeIsolation(node)
 	e.complete()
 	return nil
 }

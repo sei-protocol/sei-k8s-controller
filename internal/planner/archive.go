@@ -42,7 +42,7 @@ func (p *archiveNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.
 // buildRunningPlan returns the update plan for a Running archive node.
 // Same shape as full nodes (no extra validation gates).
 func (p *archiveNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if imageDrifted(node) || sidecarImageDrifted(node, p.platform) {
+	if podTemplateDrifted(node, p.platform) {
 		prog := []string{
 			task.TaskTypeApplyStatefulSet,
 			task.TaskTypeApplyService,
@@ -56,7 +56,7 @@ func (p *archiveNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1
 		if err != nil {
 			return nil, err
 		}
-		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node, p.platform))
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", podTemplateDriftMessage(node, p.platform))
 		return plan, nil
 	}
 	if configValuesDrifted(node) {

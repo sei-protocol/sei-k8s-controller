@@ -51,7 +51,7 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 // nil if no drift. pelletier/go-toml/v2 does not preserve comments on
 // re-encode — the first config-patch erases operator-added comments.
 func (p *fullNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if imageDrifted(node) || sidecarImageDrifted(node, p.platform) {
+	if podTemplateDrifted(node, p.platform) {
 		prog := []string{
 			task.TaskTypeApplyStatefulSet,
 			task.TaskTypeApplyService,
@@ -65,7 +65,7 @@ func (p *fullNodePlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alp
 		if err != nil {
 			return nil, err
 		}
-		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node, p.platform))
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", podTemplateDriftMessage(node, p.platform))
 		return plan, nil
 	}
 	if configValuesDrifted(node) {

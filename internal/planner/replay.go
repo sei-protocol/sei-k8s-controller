@@ -54,7 +54,7 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 // buildRunningPlan returns the update plan for a Running replayer node.
 // Same shape as full and archive.
 func (p *replayerPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	if imageDrifted(node) || sidecarImageDrifted(node, p.platform) {
+	if podTemplateDrifted(node, p.platform) {
 		prog := []string{
 			task.TaskTypeApplyStatefulSet,
 			task.TaskTypeApplyService,
@@ -68,7 +68,7 @@ func (p *replayerPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alp
 		if err != nil {
 			return nil, err
 		}
-		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", imageDriftMessage(node, p.platform))
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", podTemplateDriftMessage(node, p.platform))
 		return plan, nil
 	}
 	if configValuesDrifted(node) {

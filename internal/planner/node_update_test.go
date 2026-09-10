@@ -262,16 +262,16 @@ func TestImageDriftMessage_NamesWhichDrifted(t *testing.T) {
 
 	seidOnly := sidecarDriftedNode()
 	seidOnly.Spec.Image = testImageV2
-	g.Expect(imageDriftMessage(seidOnly, platformWithSidecar(testSidecarImageV1))).To(And(
+	g.Expect(podTemplateDriftMessage(seidOnly, platformWithSidecar(testSidecarImageV1))).To(And(
 		ContainSubstring("image drift detected"),
 		Not(ContainSubstring("sidecar"))))
 
 	sidecarOnly := sidecarDriftedNode()
-	g.Expect(imageDriftMessage(sidecarOnly, p)).To(ContainSubstring("sidecar image drift detected"))
+	g.Expect(podTemplateDriftMessage(sidecarOnly, p)).To(ContainSubstring("sidecar image drift detected"))
 
 	both := sidecarDriftedNode()
 	both.Spec.Image = testImageV2
-	g.Expect(imageDriftMessage(both, p)).To(And(
+	g.Expect(podTemplateDriftMessage(both, p)).To(And(
 		ContainSubstring("seid spec="),
 		ContainSubstring("sidecar spec=")))
 }
