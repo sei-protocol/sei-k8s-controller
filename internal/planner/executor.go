@@ -112,6 +112,9 @@ func executePlan(
 			// phase. The planner handles cleanup (nilling the plan, clearing
 			// conditions) when it observes the terminal plan on the next reconcile.
 			plan.Phase = seiv1alpha1.TaskPlanComplete
+			if node, ok := obj.(*seiv1alpha1.SeiNode); ok && plan.ConfigValuesHash != "" {
+				node.Status.CurrentConfigValuesHash = plan.ConfigValuesHash
+			}
 			setTargetPhase(obj, plan.TargetPhase)
 			planActiveCount.Add(ctx, -1,
 				metric.WithAttributes(
