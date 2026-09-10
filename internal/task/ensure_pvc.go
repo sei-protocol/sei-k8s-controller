@@ -56,17 +56,20 @@ func (e *ensureDataPVCExecution) Execute(ctx context.Context) error {
 		return e.executeImport(ctx, node, dv.Import.PVCName)
 	}
 
-	if err := holdForVolumeAttributesClass(node); err != nil {
-		return err
-	}
 	return e.executeCreate(ctx, node)
 }
 
-// holdForVolumeAttributesClass blocks provisioning while the node's selected
-// VolumeAttributesClass has not pre-flighted True. The node reconciler resolves
-// that pre-flight (and owns the condition) before the plan executes, so this
-// reads the outcome rather than repeating the cluster read — one read per
-// reconcile, and no second writer racing the reconciler's status patch.
+// holdForVolumeAttributesClass blocks the CREATE of a data claim while the
+// node's selected VolumeAttributesClass has not pre-flighted True. The node
+// reconciler resolves that pre-flight (and owns the condition) before the plan
+// executes, so this reads the outcome rather than repeating the cluster read —
+// one read per reconcile, and no second writer racing the reconciler's status
+// patch.
+//
+// Its one caller is executeCreate, below the existence check, and that position
+// is load-bearing rather than incidental — see the comment at the call site. A
+// claim that already exists has spent its volumeAttributesClassName; the field
+// is create-only, so there is no outcome left here for a hold to change.
 //
 // A missing class holds rather than failing the plan terminally: a Terminal
 // error parks the node in Failed, which needs a delete-and-recreate to leave
@@ -145,6 +148,20 @@ func (e *ensureDataPVCExecution) executeCreate(ctx context.Context, node *seiv1a
 			"data PVC %q already exists and is not owned by SeiNode %q; "+
 				"set spec.dataVolume.import.pvcName to adopt, or delete the PVC",
 			existing.Name, node.Name))
+	}
+
+	// The pre-flight gates the Create and nothing else, so it sits below the
+	// switch rather than at the top of the task. Reaching here means the claim
+	// does not exist yet — the one moment volumeAttributesClassName is still
+	// unwritten and a hold can still change the outcome. Above the switch it
+	// would also gate the owned-claim short-circuit, where the name was spent at
+	// provision time and is create-only, so the hold could not fix anything and
+	// could only wedge the node: a plain error requeues on TaskPollInterval
+	// without charging MaxRetries, so a retired class (the -v1/-v2 catalog
+	// lifecycle) would stall every existing node that named it, forever, the
+	// next time anything rebuilt its plan.
+	if err := holdForVolumeAttributesClass(node); err != nil {
+		return err
 	}
 
 	if err := e.cfg.KubeClient.Create(ctx, desired); err != nil {
