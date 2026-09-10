@@ -3,7 +3,6 @@ module github.com/sei-protocol/sei-k8s-controller
 go 1.26.0
 
 require (
-	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.6
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.293.0
@@ -15,6 +14,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/onsi/gomega v1.39.1
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/sei-protocol/sei-config v0.0.28
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0
