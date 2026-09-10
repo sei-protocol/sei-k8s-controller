@@ -156,6 +156,12 @@ const ReasonNotStarted = "NotStarted"
 // the set is recreated and the ceremony rebuilt on the next reconciles.
 const ReasonValidatorLost = "ValidatorLost"
 
+// ReasonFoundingSetTornDown is the event reason for each surviving founding
+// child deleted after a validator loss so the ceremony can restart over a
+// recreated set. Distinct from the scale-down SeiNodeDeleted so an
+// irreversible teardown never reads like routine excess-replica removal.
+const ReasonFoundingSetTornDown = "FoundingSetTornDown"
+
 // seedAlwaysPresentConditions stamps the seeded always-present conditions so
 // the full set — GenesisCeremonyComplete, NodesReady, RolloutInProgress,
 // Paused, PlanInProgress — is present after the first reconcile and no
