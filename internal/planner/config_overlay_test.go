@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -211,31 +212,95 @@ func TestConfigValuesRejectUnsafePatches(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		keys []string
-		raw  string
+		raw  []string
 		want string
 	}{
-		{"prefix", []string{parentKey, "a.b.c"}, "1", "overlapping keys"},
-		{"reverse-prefix", []string{"a.b.c", parentKey}, "1", "overlapping keys"},
-		{"nested-null", []string{parentKey}, `{"child":{"value":null}}`, "null values"},
-		{"array-null", []string{parentKey}, `[{"child":null}]`, "null values"},
+		{"prefix", []string{parentKey, "a.b.c"}, []string{"1", "2"}, "overlapping keys"},
+		{"reverse-prefix", []string{"a.b.c", parentKey}, []string{"2", "1"}, "overlapping keys"},
+		{"array-prefix", []string{parentKey, "a.b.c"}, []string{"[1,2]", "2"}, "overlapping keys"},
+		{"colliding-member", []string{"p2p", "p2p.max_num_peers"}, []string{`{"max_num_peers":10}`, "50"}, "overlapping keys"},
+		{"disjoint-member", []string{"p2p", "p2p.max_num_peers"}, []string{`{"seeds":"a"}`, "50"}, ""},
+		{"nested-collision", []string{"p2p", "p2p.options"}, []string{`{"options":{"count":10}}`, `{"count":50}`}, "overlapping keys"},
+		{"nested-disjoint", []string{"p2p", "p2p.options"}, []string{`{"options":{"seeds":"a"}}`, `{"count":50}`}, ""},
+		{"empty-table", []string{"p2p", "p2p.max_num_peers"}, []string{`{}`, "50"}, ""},
+		{"nested-null", []string{parentKey}, []string{`{"child":{"value":null}}`}, "null values"},
+		{"array-null", []string{parentKey}, []string{`[{"child":null}]`}, "null values"},
+		{"number-overflow", []string{parentKey}, []string{`1e400`}, "int64 or float64"},
+		{"nested-number-overflow", []string{parentKey}, []string{`{"child":[1e400]}`}, "int64 or float64"},
+		{"integer-float-fallback", []string{parentKey}, []string{`9223372036854775808`}, ""},
+		{"empty-json", []string{parentKey}, []string{""}, "EOF"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n := &seiv1alpha1.SeiNode{}
-			for _, key := range tc.keys {
-				n.Spec.ConfigValues = append(n.Spec.ConfigValues, seiv1alpha1.ConfigValue{
-					FileName: overlayTestAppFile, Key: key, Value: apiextensionsv1.JSON{Raw: []byte(tc.raw)},
-				})
-			}
-			plan, err := buildBasePlan(n, nil, &seiconfig.ConfigIntent{})
-			if err == nil || plan != nil {
-				t.Fatalf("unsafe overlay produced plan: %v, %v", plan, err)
-			}
-			for _, want := range append(tc.keys, overlayTestAppFile, tc.want) {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("error %q missing %q", err, want)
+			var first map[string]map[string]any
+			for _, reverse := range []bool{false, true} {
+				n := &seiv1alpha1.SeiNode{}
+				for j := range tc.keys {
+					i := j
+					if reverse {
+						i = len(tc.keys) - 1 - j
+					}
+					n.Spec.ConfigValues = append(n.Spec.ConfigValues, seiv1alpha1.ConfigValue{
+						FileName: overlayTestAppFile, Key: tc.keys[i], Value: apiextensionsv1.JSON{Raw: []byte(tc.raw[i])},
+					})
+				}
+				plan, err := buildBasePlan(n, nil, &seiconfig.ConfigIntent{})
+				if tc.want == "" {
+					if err != nil || plan == nil {
+						t.Fatalf("valid overlay rejected: %v", err)
+					}
+					patch, err := configValuesOverlay(n.Spec.ConfigValues)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if reverse && !reflect.DeepEqual(first, patch.Files) {
+						t.Fatalf("order-dependent: %v versus %v", first, patch.Files)
+					}
+					first = patch.Files
+					if tc.name == "disjoint-member" {
+						want := map[string]any{"seeds": "a", "max_num_peers": json.Number("50")}
+						if !reflect.DeepEqual(patch.Files[overlayTestAppFile]["p2p"], want) {
+							t.Fatalf("lost disjoint member: %v", patch.Files)
+						}
+					}
+					continue
+				}
+				if err == nil || plan != nil {
+					t.Fatalf("unsafe overlay produced plan: %v, %v", plan, err)
+				}
+				for _, want := range append(tc.keys, overlayTestAppFile, tc.want) {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q missing %q", err, want)
+					}
 				}
 			}
 		})
+	}
+}
+
+func TestConfigValuesFileNameValidation(t *testing.T) {
+	for _, name := range []string{"../app.toml", "/app.toml", "sub/app.toml", `sub\app.toml`, "app.json", "app.toml\n", ""} {
+		t.Run(name, func(t *testing.T) {
+			n := overlayTestNode()
+			n.Spec.ConfigValues[0].FileName = name
+			if _, err := configValuesOverlay(n.Spec.ConfigValues); err == nil || !strings.Contains(err.Error(), "fileName must match") || !strings.Contains(err.Error(), n.Spec.ConfigValues[0].Key) {
+				t.Fatalf("invalid file name accepted or missing context: %v", err)
+			}
+		})
+	}
+}
+
+func TestConfigValuesMissingValidationTask(t *testing.T) {
+	plan := &seiv1alpha1.TaskPlan{Tasks: []seiv1alpha1.PlannedTask{{Type: TaskConfigApply}, {Type: TaskConfigPatch}}}
+	if got, err := withConfigValues(plan, overlayTestNode()); err == nil || got != nil || !strings.Contains(err.Error(), "no config-validate") {
+		t.Fatalf("missing validation accepted: %v, %v", got, err)
+	}
+	if len(plan.Tasks) != 2 {
+		t.Fatal("failed splice mutated plan")
+	}
+	n := overlayTestNode()
+	n.Spec.ConfigValues = nil
+	if got, err := withConfigValues(plan, n); err != nil || got != plan {
+		t.Fatalf("empty overlay rejected: %v", err)
 	}
 }
 
