@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	configUpdateSidecar = "sidecar"
 	configUpdateImage   = "image"
 	configUpdateOnly    = "config"
 	configUpdateBoth    = "both"
@@ -68,7 +69,7 @@ func TestConfigUpdateAllModesOrderingAndPeerPrecedence(t *testing.T) {
 		{"replayer", func(n *seiv1alpha1.SeiNode) { n.Spec.Replayer = &seiv1alpha1.ReplayerSpec{} }},
 	}
 	for _, mode := range modes {
-		for _, drift := range []string{configUpdateOnly, configUpdateImage, configUpdateBoth, "sidecar"} {
+		for _, drift := range []string{configUpdateOnly, configUpdateImage, configUpdateBoth, configUpdateSidecar} {
 			t.Run(mode.name+"/"+drift, func(t *testing.T) {
 				g := NewWithT(t)
 				node := runningFullNode()
@@ -78,14 +79,14 @@ func TestConfigUpdateAllModesOrderingAndPeerPrecedence(t *testing.T) {
 					FileName: configUpdateFile, Key: "p2p", Value: apiextensionsv1.JSON{Raw: []byte(`{"external-address":"pinned:26656","persistent-peers":"pinned-peer"}`)},
 				}}
 				node.Status.CurrentConfigValuesHash = "previous"
-				if drift == configUpdateImage || drift == "sidecar" {
+				if drift == configUpdateImage || drift == configUpdateSidecar {
 					node.Status.CurrentConfigValuesHash, _ = configValuesHash(node.Spec.ConfigValues)
 				}
 				if drift == configUpdateImage || drift == configUpdateBoth {
 					node.Spec.Image = testImageV2
 				}
 				resolver := &NodeResolver{}
-				if drift == "sidecar" {
+				if drift == configUpdateSidecar {
 					resolver.Platform = platformWithSidecar(testSidecarImageV2)
 					node.Status.CurrentSidecarImage = testSidecarImageV1
 				}
