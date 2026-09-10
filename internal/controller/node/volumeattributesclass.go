@@ -46,13 +46,33 @@ import (
 // running before plan execution — see the ordering note on
 // holdForVolumeAttributesClass before moving either one.
 //
-// What it establishes is best-effort existence at resolve time, not a binding
-// guarantee. The Get reads the manager's informer cache, which can lag the API,
-// and the class can be deleted between here and the Create the task performs.
-// The value is turning the common operator mistake — a name that is not in the
-// catalog — into a named condition rather than a silently-Pending pod; a class
-// yanked mid-provision still lands as a Pending volume, and the condition
-// re-resolves to False on the next reconcile.
+// What it establishes is best-effort EXISTENCE at resolve time — not a binding
+// guarantee, and not a claim about the class's contents either. Three limits,
+// each deliberate:
+//
+//   - Freshness. The Get reads the manager's informer cache, which can lag the
+//     API, and the class can be deleted between here and the Create the task
+//     performs. A class yanked mid-provision still lands as a Pending volume,
+//     and the condition re-resolves to False on the next reconcile.
+//   - DRIVER MATCH — an explicit assumption, not an oversight. Nothing compares
+//     vac.DriverName (read just below, for the message) against the CSI
+//     provisioner of the StorageClass noderesource.StorageForNode picks for the
+//     same claim. A same-named class belonging to a DIFFERENT driver pre-flights
+//     True/VolumeAttributesClassFound and is then stamped onto a create-once PVC
+//     that cannot provision. The assumption this pre-flight makes is
+//     single-driver: the platform's VAC catalog and its StorageClasses belong to
+//     the same CSI driver, and a cross-driver mismatch is a platform-catalog
+//     error this check cannot see. Verifying it would need a `storageclasses`
+//     read verb, and DR-001 pins the RBAC set to get;list;watch on
+//     volumeattributesclasses and nothing else
+//     (docs/specs/001-configurable-node-resources/decisions.md:124-126). Not
+//     worth widening for a check that would still be advisory — a matching
+//     driver name does not mean the driver accepts these parameters.
+//   - Scope. It gates the CLAIM, not the pod: a False holds provisioning, and
+//     the pod is still created and sits Pending on the claim nothing created.
+//     Named rather than silent is the value, and the defect DR-001 commits
+//     against; see the reason semantics on
+//     seiv1alpha1.ConditionVolumeAttributesClassReady.
 func (r *SeiNodeReconciler) reconcileVolumeAttributesClass(ctx context.Context, node *seiv1alpha1.SeiNode) {
 	if dv := node.Spec.DataVolume; dv != nil && dv.Import != nil && dv.Import.PVCName != "" {
 		// An imported volume keeps the importer's parameters — the controller
@@ -66,7 +86,7 @@ func (r *SeiNodeReconciler) reconcileVolumeAttributesClass(ctx context.Context, 
 	name := noderesource.VolumeAttributesClassForNode(node)
 	if name == nil {
 		setVolumeAttributesClassReady(node, metav1.ConditionTrue,
-			seiv1alpha1.ReasonNoVolumeAttributesClass,
+			seiv1alpha1.ReasonModeDefaultStorage,
 			"no volumeAttributesClassName selected; the mode-default storage class supplies the volume's performance")
 		return
 	}

@@ -91,9 +91,12 @@ func (e *ensureDataPVCExecution) Execute(ctx context.Context) error {
 // The pre-flight it consumes is best-effort existence, never a binding
 // guarantee: the class can be deleted between the resolve and the Create below,
 // and the resolve reads an informer cache that may lag the API. It converts the
-// common operator mistake — a name that is not in the catalog — into a named
-// condition instead of a silently-Pending pod; it does not make provisioning
-// atomic with respect to the class's lifetime.
+// common operator mistake — a name that is not in the catalog — into a NAMED
+// cause rather than a silent one; the pod is still created and still sits
+// Pending on the claim this hold declines to create. It does not make
+// provisioning atomic with respect to the class's lifetime, and it does not
+// verify that the class's driver matches the StorageClass's provisioner (see
+// reconcileVolumeAttributesClass for that assumption).
 func holdForVolumeAttributesClass(node *seiv1alpha1.SeiNode) error {
 	name := noderesource.VolumeAttributesClassForNode(node)
 	if name == nil {
