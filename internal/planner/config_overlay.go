@@ -80,11 +80,7 @@ func containsNull(value any) bool {
 			}
 		}
 	case []any:
-		for _, child := range value {
-			if containsNull(child) {
-				return true
-			}
-		}
+		return slices.ContainsFunc(value, containsNull)
 	}
 	return false
 }
