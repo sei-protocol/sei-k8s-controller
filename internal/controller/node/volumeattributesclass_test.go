@@ -9,11 +9,13 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
@@ -265,21 +267,40 @@ func TestReconcile_VACConditionReresolvesEachReconcile(t *testing.T) {
 }
 
 // Guards the single-writer split: the reconciler owns the condition and the task
-// only reads it, so one reconcile of a node with a missing class produces
-// exactly one class read — not one per writer.
+// only reads it, so a reconcile costs exactly one class read no matter how far
+// the plan gets. Two reconciles are needed to exercise both halves — plans are
+// persisted on one reconcile and executed on the next (atomic plan creation) —
+// so a single reconcile would never run the task and the count would prove
+// nothing about it.
 func TestReconcile_VACPreflight_ReadsTheClassOncePerReconcile(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
+	// A missing class: the plan is built, and the task then holds on it, which
+	// is the state where a second reader would show up.
 	node := vacNode("vac-onceread", "vac-absent")
-	r, _ := newNodeReconciler(t, node)
+	r, c := newNodeReconciler(t, node)
 	counting := &vacCountingClient{Client: r.Client}
 	r.Client = counting
 
+	// Reconcile 1: resolve + persist the plan (no task runs yet).
 	_, err := r.Reconcile(ctx, nodeReqFor("vac-onceread", testNamespace))
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(counting.reads).To(Equal(1),
-		fmt.Sprintf("expected exactly one VolumeAttributesClass read per reconcile, got %d", counting.reads))
+	g.Expect(counting.reads).To(Equal(1), "the resolve is one read")
+	g.Expect(findPlannedTask(getSeiNode(t, ctx, c, "vac-onceread", testNamespace).Status.Plan,
+		"ensure-data-pvc")).NotTo(BeNil(), "the init plan must carry ensure-data-pvc for the task to hold on")
+
+	// Reconcile 2: resolve, then execute the plan — the task holds.
+	_, err = r.Reconcile(ctx, nodeReqFor("vac-onceread", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(counting.reads).To(Equal(2),
+		fmt.Sprintf("a reconcile that also executes the holding task must still read the class once; got %d reads over two reconciles", counting.reads))
+
+	fetched := getSeiNode(t, ctx, c, "vac-onceread", testNamespace)
+	g.Expect(vacCondition(fetched).Reason).To(Equal(seiv1alpha1.ReasonVolumeAttributesClassNotFound))
+	pvc := &corev1.PersistentVolumeClaim{}
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "data-vac-onceread", Namespace: testNamespace}, pvc)).
+		NotTo(Succeed(), "the task must have held provisioning")
 }
 
 // vacUnservedClient fails every VolumeAttributesClass read the way a cluster
