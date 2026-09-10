@@ -112,8 +112,9 @@ type SeiNetworkSpec struct {
 	ConfigValues []ConfigValue `json:"configValues,omitempty"`
 
 	// DataVolume configures the data PersistentVolumeClaim for each genesis
-	// validator. The ceremony-generated consensus identity lives here, so
-	// DeletionPolicy defaults to Retain.
+	// validator. The ceremony-generated consensus identity lives here; set
+	// DeletionPolicy to Retain on a pool whose identity must outlive the
+	// SeiNetwork.
 	//
 	// Create-only (spec-level CEL): each child's PVC is created once and nothing
 	// replaces a node on storage drift, so a later edit would be inert.
@@ -156,12 +157,14 @@ type SeiNetworkSpec struct {
 	Paused bool `json:"paused,omitempty"`
 
 	// DeletionPolicy controls what happens to child SeiNodes when the
-	// SeiNetwork is deleted. "Retain" (default) orphans children so they
-	// continue running independently — a validator pool's PVCs hold
-	// ceremony-generated, unrecoverable consensus identity. "Delete" cascades
-	// deletion.
+	// SeiNetwork is deleted. "Delete" (default) leaves the owner references in
+	// place so Kubernetes garbage collection removes every child SeiNode, its
+	// StatefulSet, and its pods. "Retain" orphans children so they continue
+	// running independently — set it on a validator pool whose PVCs hold
+	// ceremony-generated, unrecoverable consensus identity. Each retained child
+	// is annotated with sei.io/retained-from-seinetwork and sei.io/retain-reason.
 	// +optional
-	// +kubebuilder:default=Retain
+	// +kubebuilder:default=Delete
 	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 

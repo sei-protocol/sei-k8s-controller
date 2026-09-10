@@ -61,7 +61,7 @@ func (r *SeiNetworkReconciler) orphanInternalService(ctx context.Context, networ
 	if err != nil {
 		return fmt.Errorf("fetching internal Service for orphan: %w", err)
 	}
-	if err := r.removeOwnerRef(ctx, svc, network); err != nil {
+	if err := r.patchOwnerRefRemoval(ctx, svc, network); err != nil {
 		return fmt.Errorf("orphaning internal Service: %w", err)
 	}
 	return nil
