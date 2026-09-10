@@ -55,7 +55,6 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 // Same shape as full and archive.
 func (p *replayerPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if podTemplateDrifted(node, p.platform) {
-		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", podTemplateDriftMessage(node, p.platform))
 		prog := []string{
 			task.TaskTypeApplyStatefulSet,
 			task.TaskTypeApplyService,
@@ -65,7 +64,12 @@ func (p *replayerPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alp
 			task.TaskTypeObserveImage,
 			TaskMarkReady,
 		}
-		return assembleUpdatePlan(node, prog, p2pConfigPatch(node))
+		plan, err := assembleUpdatePlan(node, prog, p2pConfigPatch(node))
+		if err != nil {
+			return nil, err
+		}
+		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", podTemplateDriftMessage(node, p.platform))
+		return plan, nil
 	}
 	if configValuesDrifted(node) {
 		return buildConfigUpdatePlan(node)

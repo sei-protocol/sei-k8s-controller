@@ -27,8 +27,23 @@ import (
 
 const unknownValue = "unknown"
 
-// reasonUpdateFailed is shared by the terminal writer and diagnostic-preservation guard.
-const reasonUpdateFailed = "UpdateFailed"
+// Update failure reasons are shared by writers and the diagnostic-preservation guard.
+// Add new failure reasons to isUpdateFailureReason as well.
+const (
+	reasonUpdateFailed          = "UpdateFailed"
+	reasonUpdatePlanBuildFailed = "UpdatePlanBuildFailed"
+)
+
+// isUpdateFailureReason identifies actionable diagnostics that a baseline notice
+// must not replace on a no-op reconcile.
+func isUpdateFailureReason(reason string) bool {
+	switch reason {
+	case reasonUpdateFailed, reasonUpdatePlanBuildFailed:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	TaskSnapshotRestore    = sidecar.TaskTypeSnapshotRestore
@@ -224,12 +239,11 @@ func StateSyncBlocksPlan(node *seiv1alpha1.SeiNode) bool {
 
 // shouldExplainUnobservedConfig gates the baseline notice on no-op reconciles.
 func shouldExplainUnobservedConfig(node *seiv1alpha1.SeiNode) bool {
-	// handleTerminalPlan writes UpdateFailed before clearing a failed plan.
-	// Preserve that diagnostic on this and subsequent no-op reconciles.
+	// Preserve both execution and assembly failures across no-op reconciles.
 	condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
-	terminalReason := condition != nil && condition.Reason == reasonUpdateFailed
+	failureReason := condition != nil && isUpdateFailureReason(condition.Reason)
 	return node.Status.Phase == seiv1alpha1.PhaseRunning && node.Status.CurrentConfigValuesHash == "" &&
-		len(node.Spec.ConfigValues) > 0 && !terminalReason
+		len(node.Spec.ConfigValues) > 0 && !failureReason
 }
 
 // handleTerminalPlan handles completed or failed plans: clears conditions
@@ -833,6 +847,10 @@ func podTemplateDrifted(node *seiv1alpha1.SeiNode, p platform.Config) bool {
 // planner stamps before an update plan. Names which input(s) drifted so an
 // operator reading the condition can tell seid bumps from sidecar bumps from
 // an isolation change.
+// podTemplateDriftMessage formats the NodeUpdateInProgress message every mode
+// planner stamps after building an update plan. Names which input(s) drifted so
+// an operator reading the condition can tell seid bumps from sidecar bumps from
+// an isolation change.
 func podTemplateDriftMessage(node *seiv1alpha1.SeiNode, p platform.Config) string {
 	seid := imageDrifted(node)
 	sc := sidecarImageDrifted(node, p)
@@ -885,13 +903,13 @@ func p2pConfigPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 
 // assembleUpdatePlan composes a per-mode task progression into a TaskPlan.
 // Callers own the successful NodeUpdateInProgress trigger reason/message.
-// Any assembly error replaces the provisional condition with the actual failure,
+// Any assembly error records the actual failure,
 // including for config-only callers and nodes carrying a stale True. FailedPhase
 // stays empty so a failure retries on next reconcile.
 func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (_ *seiv1alpha1.TaskPlan, retErr error) {
 	defer func() {
 		if retErr != nil {
-			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdatePlanBuildFailed", retErr.Error())
+			setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdatePlanBuildFailed, retErr.Error())
 		}
 	}()
 
@@ -927,7 +945,39 @@ func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[stri
 }
 
 // paramsForUpdateTask returns ConfigPatchTask params for TaskConfigPatch
-// and the full base intent when configValues drift requires regeneration.
+// and the full base intent when configValues drift or an unobserved baseline
+// requires regeneration.
+//
+// WHAT KEEPS marshalParams SAFE HERE IS THE CALL SITE, NOT THE DECLARED TYPES.
+// buildPlannedTask marshals whatever this returns, and marshalParams takes
+// any, so a package-wide "no float fields are declared" claim does not cover
+// the ways a params struct actually fails to marshal. The genesis path in this
+// package makes the point: genesisGroupPlanner fills
+// AssembleAndUploadGenesisTask.Overrides, a map[string]json.RawMessage built by
+// toRawMessages, from SeiNetwork.spec.genesis.overrides. RawMessage.MarshalJSON
+// returns non-nil bytes unchanged (nil becomes null); json.Marshal validates
+// those bytes and rejects malformed JSON. Declaring no floats likewise says
+// nothing about
+// resource.Quantity, which marshals as a string rather than a number.
+//
+// For the current production update progressions, every entry resolves to one
+// of four shapes:
+//
+//   - an empty sidecar task struct (ConfigValidateTask, MarkReadyTask, RestartSeidTask);
+//   - a controller-built struct of node name/namespace strings (ApplyStatefulSet,
+//     ApplyService, ReplacePod, ObserveImage, and the validator/seed
+//     key-validation params, which reduce Secret references and key names to strings);
+//   - ConfigPatchTask wrapping p2pConfigPatch, whose leaves are
+//     spec.externalAddress and a strings.Join of resolved peers, both strings;
+//   - runningConfigIntent's *seiconfig.ConfigIntent for the TaskConfigApply entry
+//     that assembleUpdatePlan inserts itself, whose Overrides carries
+//     user-supplied spec.overrides but is typed map[string]string. Its remaining
+//     fields are a string-based mode, an integer, and a boolean.
+//
+// These call-site values cannot fail json.Marshal. This is not a guarantee for
+// arbitrary patch arguments: a progression entry whose params carry malformed
+// json.RawMessage, a NaN or ±Inf float, a channel, or a func would change that;
+// ordinary finite floats marshal fine.
 func paramsForUpdateTask(node *seiv1alpha1.SeiNode, taskType string, patch map[string]map[string]any) any {
 	if taskType == TaskConfigApply {
 		return runningConfigIntent(node)
