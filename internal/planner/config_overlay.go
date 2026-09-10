@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -16,7 +17,9 @@ func configValuesOverlay(values []seiv1alpha1.ConfigValue) (*task.ConfigPatchTas
 	patch := &task.ConfigPatchTask{Files: make(map[string]map[string]any)}
 	for _, entry := range values {
 		var value any
-		if err := json.Unmarshal(entry.Value.Raw, &value); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(entry.Value.Raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
 			return nil, fmt.Errorf("configValues %s:%s: %w", entry.FileName, entry.Key, err)
 		}
 		path := strings.Split(entry.Key, ".")
