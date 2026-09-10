@@ -9,6 +9,8 @@ import (
 	. "github.com/onsi/gomega"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -194,4 +196,62 @@ func TestConfigValues_ReplacementValidatorReceivesExistingValues(t *testing.T) {
 		got, ok := childConfigValues(t, childKey)
 		return ok && got["app.toml/evm.enable"] == "true"
 	}, "the recreated validator is stamped with the existing network values")
+}
+
+// The CRD schema admits values the TOML overlay cannot build. Such a set fails
+// the same way on every validator, so the network rejects it in one place and
+// leaves the pool on its last good set instead of wedging every child's plans.
+func TestConfigValues_UnrepresentableSetIsRejectedOnTheNetwork(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	network := fixtures.NewNetwork(ns, "config-values-invalid",
+		fixtures.WithReplicas(1),
+		fixtures.WithConfigValues(networkConfigValue("app.toml", "evm.enable", `true`)),
+	)
+	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+	key := client.ObjectKeyFromObject(network)
+	childKey := types.NamespacedName{Name: network.Name + "-0", Namespace: ns}
+
+	waitFor(t, func() bool {
+		got, ok := childConfigValues(t, childKey)
+		return ok && got["app.toml/evm.enable"] == "true"
+	}, "the validator starts from a good set")
+
+	// A scalar at evm and a path under it: admitted by the schema, rejected by
+	// the overlay builder.
+	g.Expect(updateNetworkWithRetry(t, key, func(cur *seiv1alpha1.SeiNetwork) {
+		cur.Spec.ConfigValues = []seiv1alpha1.ConfigValue{
+			networkConfigValue("app.toml", "evm", `true`),
+			networkConfigValue("app.toml", "evm.enable", `false`),
+		}
+	})).To(Succeed())
+
+	waitFor(t, func() bool {
+		cur := &seiv1alpha1.SeiNetwork{}
+		if err := testCli.Get(testCtx, key, cur); err != nil {
+			return false
+		}
+		cond := apimeta.FindStatusCondition(cur.Status.Conditions, seiv1alpha1.ConditionConfigValuesValid)
+		return cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == "InvalidConfigValues"
+	}, "the network reports the overlay error the operator has to act on")
+
+	g.Consistently(func() map[string]string {
+		got, _ := childConfigValues(t, childKey)
+		return got
+	}, 3*time.Second, pollInterval).Should(Equal(map[string]string{
+		"app.toml/evm.enable": "true",
+	}), "the rejected set must not reach the validator")
+
+	// Fixing the network releases the set to the pool.
+	g.Expect(updateNetworkWithRetry(t, key, func(cur *seiv1alpha1.SeiNetwork) {
+		cur.Spec.ConfigValues = []seiv1alpha1.ConfigValue{
+			networkConfigValue("app.toml", "evm.enable", `false`),
+		}
+	})).To(Succeed())
+
+	waitFor(t, func() bool {
+		got, ok := childConfigValues(t, childKey)
+		return ok && got["app.toml/evm.enable"] == "false"
+	}, "a corrected set propagates once the network accepts it")
 }

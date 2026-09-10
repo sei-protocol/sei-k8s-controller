@@ -116,7 +116,15 @@ spec:
                   The rewrite reaches the whole pool at once. There is no rolling window:
                   every validator sees the drift in the same reconcile and restarts seid
                   independently, so a one-key edit stops block production until more than
-                  2/3 of the set is back. Edit per child instead to stage a change.
+                  2/3 of the set is back. There is no staged path for a network-owned pool:
+                  a child edit reconciles back, and pausing defers the rewrite rather than
+                  splitting it, so the edit has to be timed against a pool-wide restart.
+
+                  The set is validated here before it reaches any child: a value the CRD
+                  admits but the TOML overlay cannot build — a null nested in a table, a
+                  number outside int64 and float64, two overlapping dotted paths under one
+                  fileName — leaves ConfigValuesValid=False on this object and every child
+                  on its last good set, rather than wedging all of their plans at once.
 
                   Deliberately unguarded, like the SeiNode field: no allow-list and no
                   denylist, so a config value may name chain.freeze_height, chain.halt_height,

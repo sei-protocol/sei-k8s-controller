@@ -132,6 +132,9 @@ func (r *SeiNetworkReconciler) populateIncumbentNodes(ctx context.Context, netwo
 
 func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1alpha1.SeiNetwork, ordinal int) error {
 	desired := generateSeiNode(network, ordinal)
+	if configValuesRejected(network) {
+		desired.Spec.ConfigValues = nil
+	}
 	if err := ctrl.SetControllerReference(network, desired, r.Scheme); err != nil {
 		return fmt.Errorf("setting owner reference: %w", err)
 	}
@@ -223,7 +226,12 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 	// cleared set, and a direct edit on the child all converge on the network's
 	// set. Semantic.DeepEqual compares the apiextensions JSON values by bytes,
 	// so a re-encode of an unchanged set is not a write.
-	if !equality.Semantic.DeepEqual(existing.Spec.ConfigValues, desired.Spec.ConfigValues) {
+	//
+	// A set that cannot build an overlay is not stamped at all: it would fail
+	// the same way on every validator, so the children keep their last good set
+	// and go on taking image rolls while ConfigValuesValid carries the error.
+	if !configValuesRejected(network) &&
+		!equality.Semantic.DeepEqual(existing.Spec.ConfigValues, desired.Spec.ConfigValues) {
 		existing.Spec.ConfigValues = desired.Spec.ConfigValues
 		updated = true
 	}

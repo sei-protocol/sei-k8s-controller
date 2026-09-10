@@ -14,6 +14,14 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
+// ValidateConfigValues reports whether a set builds a TOML overlay, so a
+// parent that copies one onto many nodes can reject it once instead of once
+// per child. It is the same build the plan performs, discarded.
+func ValidateConfigValues(values []seiv1alpha1.ConfigValue) error {
+	_, err := configValuesOverlay(values)
+	return err
+}
+
 // configValuesOverlay builds an independent merge patch. In
 // particular, these values must never pass through ConfigIntent.Overrides.
 func configValuesOverlay(values []seiv1alpha1.ConfigValue) (*task.ConfigPatchTask, error) {
