@@ -99,7 +99,7 @@ func TestConfigValuesAdmission(t *testing.T) {
 	for _, mode := range []string{"fullNode", "archive"} {
 		for _, frozen := range []bool{false, true} {
 			for _, key := range []string{"chain.freeze_height", "chain.halt_height", "chain.halt_time"} {
-				name := strings.ToLower(mode) + "-" + strings.ReplaceAll(key, ".", "-")
+				name := strings.ToLower(mode) + "-" + strings.NewReplacer(".", "-", "_", "-").Replace(key)
 				errorText := ""
 				if key == "chain.freeze_height" {
 					errorText = "set the freeze height via fullNode.freeze or archive.freeze, not configValues: user configValues outrank controller-derived ones"
