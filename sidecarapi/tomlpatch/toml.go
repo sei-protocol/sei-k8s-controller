@@ -26,10 +26,10 @@ func ReadTOML(path string) (map[string]any, error) {
 }
 
 // WriteTOML atomically encodes doc as TOML and writes it to path via
-// temp-file + rename.
+// temp-file + rename. JSON numeric tokens are emitted as TOML numbers.
 func WriteTOML(path string, doc map[string]any) error {
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
+	if err := toml.NewEncoder(&buf).SetMarshalJsonNumbers(true).Encode(doc); err != nil {
 		return fmt.Errorf("encoding TOML: %w", err)
 	}
 	return WriteFileAtomic(path, buf.Bytes(), 0o644)
@@ -47,7 +47,7 @@ func UnmarshalTOML(data []byte) (map[string]any, error) {
 // MarshalTOML encodes a map as TOML bytes.
 func MarshalTOML(doc any) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
+	if err := toml.NewEncoder(&buf).SetMarshalJsonNumbers(true).Encode(doc); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
