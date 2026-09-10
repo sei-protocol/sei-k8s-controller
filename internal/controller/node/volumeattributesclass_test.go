@@ -79,7 +79,7 @@ func TestVACGate_NoSelection_TrueAndPresent(t *testing.T) {
 	cond := vacCondition(node)
 	g.Expect(cond).NotTo(BeNil(), "the condition must be present even with no selection")
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonNoVolumeAttributesClass))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonModeDefaultStorage))
 	g.Expect(cond.ObservedGeneration).To(Equal(node.Generation))
 }
 
@@ -145,6 +145,52 @@ func TestVACGate_Import_NotApplicable(t *testing.T) {
 	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonVolumeAttributesClassNotApplicable))
 }
 
+// --- The reason strings, as wire values ---
+
+// Every other test in this file compares a reason against its CONSTANT, which
+// means none of them can see the constant's value change — and a reason is a
+// stable public API for runbooks and PromQL, per the Conditions standard in
+// CLAUDE.md. This pins the literal strings, and the status each is paired with,
+// so a rename after this field ships breaks a test instead of an alert.
+//
+// The status column is the load-bearing part for a consumer: True on
+// ModeDefaultStorage is HEALTHY (no selection, mode-default storage in force)
+// and is the departure from the standard's literal "False for not configured"
+// that DR-001 mandates; False/NotApplicable means the controller does not own
+// this volume's parameters; every other False means broken. See the reason
+// semantics on ConditionVolumeAttributesClassReady.
+func TestVACReasons_WireValuesAreStable(t *testing.T) {
+	g := NewWithT(t)
+
+	g.Expect(seiv1alpha1.ConditionVolumeAttributesClassReady).To(Equal("VolumeAttributesClassReady"))
+
+	for wire, status := range map[string]metav1.ConditionStatus{
+		"VolumeAttributesClassFound":       metav1.ConditionTrue,
+		"ModeDefaultStorage":               metav1.ConditionTrue,
+		"NotApplicable":                    metav1.ConditionFalse,
+		"VolumeAttributesClassNotFound":    metav1.ConditionFalse,
+		"VolumeAttributesClassLookupError": metav1.ConditionFalse,
+	} {
+		g.Expect(vacReasonStatus).To(HaveKeyWithValue(wire, status),
+			fmt.Sprintf("reason %q is a shipped public API value paired with %s; renaming it or "+
+				"flipping its status breaks runbooks and PromQL keyed on it", wire, status))
+	}
+	g.Expect(vacReasonStatus).To(HaveLen(5),
+		"a new reason on this condition must be added to the wire-value pin and its status declared")
+}
+
+// vacReasonStatus is the reason set this condition can report, each with the
+// status it is paired with. Built from the constants, so the test above compares
+// constants against literals in both directions: a renamed constant value drops
+// out of the map, and an unlisted new reason trips the length check.
+var vacReasonStatus = map[string]metav1.ConditionStatus{
+	seiv1alpha1.ReasonVolumeAttributesClassFound:         metav1.ConditionTrue,
+	seiv1alpha1.ReasonModeDefaultStorage:                 metav1.ConditionTrue,
+	seiv1alpha1.ReasonVolumeAttributesClassNotApplicable: metav1.ConditionFalse,
+	seiv1alpha1.ReasonVolumeAttributesClassNotFound:      metav1.ConditionFalse,
+	seiv1alpha1.ReasonVolumeAttributesClassLookupError:   metav1.ConditionFalse,
+}
+
 // --- The paths that run no ensure-data-pvc task ---
 //
 // One test per bypass. Each proves the condition is PRESENT after a full
@@ -177,7 +223,7 @@ func TestReconcile_RunningNoDrift_NoPlan_VACConditionStillPresent(t *testing.T) 
 	g.Expect(cond).NotTo(BeNil(),
 		"a steady-state Running node must acquire the condition without any plan running")
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonNoVolumeAttributesClass))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonModeDefaultStorage))
 	g.Expect(findPlannedTask(fetched.Status.Plan, "ensure-data-pvc")).To(BeNil(),
 		"no ensure-data-pvc task may have run — the reconciler is what produced the condition")
 }
@@ -478,7 +524,7 @@ func assertVACConditionPersisted(t *testing.T, g Gomega, c client.Client, name s
 	g.Expect(cond).NotTo(BeNil(),
 		"the resolved condition must be PERSISTED, not merely resolved in memory")
 	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonNoVolumeAttributesClass))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonModeDefaultStorage))
 }
 
 // The path with the known reproduction: a persistent Forbidden on StatefulSet

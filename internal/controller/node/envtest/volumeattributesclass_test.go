@@ -124,7 +124,7 @@ func TestVolumeAttributesClass_NoSelectionStillReportsTrue(t *testing.T) {
 	g.Eventually(func(g Gomega) {
 		cond := vacCondition(g, cli, nodeName)
 		g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-		g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonNoVolumeAttributesClass))
+		g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonModeDefaultStorage))
 
 		pvc, err := dataPVC(cli, nodeName)
 		g.Expect(err).NotTo(HaveOccurred())

@@ -473,18 +473,52 @@ const (
 	// field) still carries it. It is NOT conditioned on ensure-data-pvc having
 	// run; that task only consumes the condition to hold provisioning.
 	//
-	// That includes the case where no VAC is selected: that steady state is
-	// True/NoVolumeAttributesClass (the mode-default storage is used), never
-	// absence, so a consumer never has to read "not configured" out of a missing
-	// condition. A named class that is not in the cluster reports
-	// False/VolumeAttributesClassNotFound and holds provisioning rather than
-	// leaving a silently-Pending pod; adding the class (a platform/GitOps change)
-	// lets the next poll proceed.
+	// HOW TO READ THE REASON. Three semantics, not two — a runbook or PromQL
+	// alert keyed on status alone cannot tell the middle one from the last:
+	//
+	//   - True/VolumeAttributesClassFound and True/ModeDefaultStorage: HEALTHY.
+	//     A class was selected and exists, or none was selected and the
+	//     mode-default storage supplies the volume's performance.
+	//   - False/NotApplicable: the controller does not own this volume's
+	//     parameters at all (an imported PVC keeps the importer's). Inapplicable,
+	//     not broken.
+	//   - Any other False/<reason>: BROKEN. The selection names a class the
+	//     cluster does not have, or the read failed.
+	//
+	// The True on no selection is a deliberate departure from the LITERAL reading
+	// of the Conditions standard in CLAUDE.md, which says a <Subject>Ready type
+	// uses False/<reason> for both "not yet ready" and "not configured". DR-001
+	// mandates the departure in as many words
+	// (docs/specs/001-configurable-node-resources/decisions.md:51-59): present
+	// even when no VAC is selected, True in that steady state, never absence.
+	// It is consistent with the rest of the same standard, which says True is the
+	// desired steady state for this family: the standard's "not configured"
+	// example is a feature that is OFF (NetworkingDisabled, spec.networking
+	// unset), whereas an unset selection here is a real choice, not a gap —
+	// decisions.md:75-78 has the PVC carry no volumeAttributesClassName at all
+	// and the mode-default StorageClass supply the baseline performance, and the
+	// volume provisions correctly. Nothing is degraded or disabled. The import
+	// branch is the genuinely inapplicable case and is the one rendered
+	// False/NotApplicable, per the standard. Two reviewers independently derived
+	// a conflict from the code alone, which is why the reasoning is recorded here
+	// rather than in a commit message.
+	//
+	// What False/VolumeAttributesClassNotFound does and does NOT prevent. It
+	// holds PROVISIONING: ensure-data-pvc creates no claim while this condition
+	// is not True, and adding the class (a platform/GitOps change) lets the next
+	// poll proceed. It does not stop the pod. The initial-StatefulSet hold keys
+	// on the state-sync gate only, so the StatefulSet is applied on the same
+	// reconcile and its pod sits Pending on the claim nothing has created yet.
+	// What the condition buys is that the Pending is not SILENT — its cause is
+	// named right here, which is the defect DR-001 commits against
+	// (decisions.md:51-56); the Pending pod itself is not.
 	//
 	// True reports a best-effort existence check at the last reconcile, not a
 	// binding guarantee: the class can be deleted afterwards, and the controller
-	// reads a cache that may lag. Treat it as the pre-flight's verdict on the
-	// selection, not as a promise about the volume.
+	// reads a cache that may lag. It is also EXISTENCE only — nothing compares
+	// the class's driver against the CSI provisioner of the StorageClass the same
+	// claim gets (see reconcileVolumeAttributesClass for why). Treat it as the
+	// pre-flight's verdict on the selection, not as a promise about the volume.
 	ConditionVolumeAttributesClassReady = "VolumeAttributesClassReady"
 
 	// ConditionSigningKeyReady indicates whether a referenced validator
@@ -574,10 +608,17 @@ const (
 	// ReasonVolumeAttributesClassFound: the selected class exists; provisioning
 	// may stamp its name onto the PVC.
 	ReasonVolumeAttributesClassFound = "VolumeAttributesClassFound"
-	// ReasonNoVolumeAttributesClass: no class is selected, so the mode-default
-	// storage supplies the baseline performance. A True steady state — the
-	// no-selection case is reported, not left absent.
-	ReasonNoVolumeAttributesClass = "NoVolumeAttributesClass"
+	// ReasonModeDefaultStorage: no class is selected, so the mode-default storage
+	// supplies the baseline performance (decisions.md:75-78). A True steady state
+	// — the no-selection case is reported, not left absent.
+	//
+	// Named for what IS in force, not for what is absent. The earlier
+	// "NoVolumeAttributesClass" was accurate but read as a fault and sorted
+	// straight into the same family as VolumeAttributesClassNotFound below, which
+	// is the one thing a consumer grouping this condition by reason must not
+	// conflate: one is healthy, the other is broken. Reasons are a stable public
+	// API, so this was renamed before the field shipped and is fixed now.
+	ReasonModeDefaultStorage = "ModeDefaultStorage"
 	// ReasonVolumeAttributesClassNotFound: the selected class is not in the
 	// cluster. Transient by intent — the platform adds it (GitOps) and the next
 	// poll proceeds — so the message names the class the operator must add.
