@@ -74,7 +74,8 @@ var baseProgression = map[string][]string{
 // running resource — callers don't see the distinction.
 //
 // Convention: init writes the whole config via TaskConfigApply; an
-// existing resource patches only controller-owned keys via TaskConfigPatch.
+// existing resource patches config on image updates and regenerates it on
+// configValues drift, applying the operator overlay last in both cases.
 type NodePlanner interface {
 	Validate(node *seiv1alpha1.SeiNode) error
 	BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
@@ -644,6 +645,8 @@ func paramsForTaskType(
 		return sidecar.ConfigValidateTask{}
 	case TaskMarkReady:
 		return sidecar.MarkReadyTask{}
+	case sidecar.TaskTypeRestartSeid:
+		return sidecar.RestartSeidTask{}
 
 	// Genesis ceremony tasks — only valid when Validator.GenesisCeremony is set.
 	case TaskGenerateIdentity, TaskGenerateGentx, TaskUploadGenesisArtifacts, TaskSetGenesisPeers:
@@ -765,6 +768,16 @@ func imageDrifted(node *seiv1alpha1.SeiNode) bool {
 	return node.Spec.Image != node.Status.CurrentImage
 }
 
+// configValuesDrifted mirrors image observation. Never restart an unobserved
+// node during a controller upgrade; its next materialization establishes baseline.
+func configValuesDrifted(node *seiv1alpha1.SeiNode) bool {
+	if node.Status.CurrentConfigValuesHash == "" {
+		return false
+	}
+	hash, err := configValuesHash(node.Spec.ConfigValues)
+	return err != nil || hash != node.Status.CurrentConfigValuesHash
+}
+
 // sidecarImageDrifted reports whether the effective sidecar image diverges
 // from what was last observed. Empty Status.CurrentSidecarImage means
 // "not yet observed" and is treated as no-drift so a controller upgrade
@@ -822,6 +835,13 @@ func p2pConfigPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 // so the reason/message reflects the actual trigger. FailedPhase stays
 // empty so a failure retries on next reconcile.
 func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
+	if configValuesDrifted(node) {
+		var err error
+		prog, err = insertBefore(prog, TaskConfigPatch, TaskConfigApply)
+		if err != nil {
+			return nil, err
+		}
+	}
 	planID := uuid.New().String()
 	tasks := make([]seiv1alpha1.PlannedTask, len(prog))
 	for i, taskType := range prog {
@@ -832,18 +852,20 @@ func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[stri
 		}
 		tasks[i] = t
 	}
-	return &seiv1alpha1.TaskPlan{
+	return withConfigValues(&seiv1alpha1.TaskPlan{
 		ID:          planID,
 		Phase:       seiv1alpha1.TaskPlanActive,
 		Tasks:       tasks,
 		TargetPhase: seiv1alpha1.PhaseRunning,
-	}, nil
+	}, node)
 }
 
 // paramsForUpdateTask returns ConfigPatchTask params for TaskConfigPatch
-// and delegates everything else to paramsForTaskType. Update plans never
-// carry a ConfigIntent — those are init-path only.
+// and the full base intent when configValues drift requires regeneration.
 func paramsForUpdateTask(node *seiv1alpha1.SeiNode, taskType string, patch map[string]map[string]any) any {
+	if taskType == TaskConfigApply {
+		return runningConfigIntent(node)
+	}
 	if taskType == TaskConfigPatch {
 		return task.ConfigPatchTask{Files: patch}
 	}
