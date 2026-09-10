@@ -178,6 +178,10 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return err
 	}
 	if plan == nil {
+		if node.Status.Phase == seiv1alpha1.PhaseRunning && node.Status.CurrentConfigValuesHash == "" {
+			setNodeUpdateCondition(node, metav1.ConditionFalse, "ConfigBaselineUnobserved",
+				"configValues changes are deferred until an image update regenerates configuration and establishes an observed baseline")
+		}
 		return nil
 	}
 
@@ -835,7 +839,10 @@ func p2pConfigPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 // so the reason/message reflects the actual trigger. FailedPhase stays
 // empty so a failure retries on next reconcile.
 func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
-	if configValuesDrifted(node) {
+	// First observation must also restore the base: an unobserved node may
+	// carry removed piece-1 overlay keys. This does not trigger a plan; it
+	// only strengthens materialization in an update already being performed.
+	if node.Status.CurrentConfigValuesHash == "" || configValuesDrifted(node) {
 		var err error
 		prog, err = insertBefore(prog, TaskConfigPatch, TaskConfigApply)
 		if err != nil {
