@@ -178,6 +178,17 @@ func TestConfigValues_ReplacementValidatorReceivesExistingValues(t *testing.T) {
 		return ok && got["app.toml/evm.enable"] == "true"
 	}, "the initial validator carries the network's config values")
 
+	// The child is stamped at creation, before the ceremony runs. A validator
+	// deleted mid-ceremony is not replaced — reconcileSeiNodes defers creates
+	// while PlanInProgress=True and the ceremony retries against the missing
+	// node — so replacement is exercised only once the ceremony is over. The
+	// gate flips after await-nodes-running, the genesis+boot chain that exceeds
+	// pollTimeout under CI load.
+	waitForStatusWithin(t, convergeTimeout, client.ObjectKeyFromObject(network), func(n *seiv1alpha1.SeiNetwork) bool {
+		return apimeta.IsStatusConditionTrue(n.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete) &&
+			apimeta.IsStatusConditionFalse(n.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
+	}, "the genesis ceremony has completed and no network plan is in progress")
+
 	child := &seiv1alpha1.SeiNode{}
 	g.Expect(testCli.Get(testCtx, childKey, child)).To(Succeed())
 	originalUID := child.UID
