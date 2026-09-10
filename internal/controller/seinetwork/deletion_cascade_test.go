@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -174,12 +175,34 @@ func TestHandleDeletion_DeletePolicy_KeepsOwnerReferencesAndReleasesFinalizer(t 
 	ref := metav1.GetControllerOf(got)
 	g.Expect(ref).NotTo(BeNil(), "the Delete arm must leave the owner reference in place for GC")
 	g.Expect(ref.UID).To(Equal(testNetUID))
+	g.Expect(got.Annotations).NotTo(HaveKey(seiv1alpha1.RetainedFromAnnotation),
+		"only a Retain teardown records a retain")
 
 	// Finalizer released, so the apiserver can drop the network and GC can start.
 	live := &seiv1alpha1.SeiNetwork{}
 	err = r.Get(ctx, client.ObjectKeyFromObject(network), live)
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(),
 		"the network must be gone once the finalizer is released")
+}
+
+// R6: an unset policy is the Delete default. The CRD stamps Delete at
+// admission, so this covers the fallback for an object that reached the
+// controller without it — it must cascade, not orphan.
+func TestHandleDeletion_EmptyPolicy_DefaultsToDelete(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := deletingNetwork("")
+	child := childSeiNode(0, "child-uid-0")
+	r := newPlanTestReconciler(t, network, child)
+
+	_, err := r.handleDeletion(ctx, network)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got := &seiv1alpha1.SeiNode{}
+	g.Expect(r.Get(ctx, client.ObjectKeyFromObject(child), got)).To(Succeed())
+	g.Expect(metav1.GetControllerOf(got)).NotTo(BeNil(), "the default arm must leave the chain intact for GC")
+	g.Expect(got.Annotations).NotTo(HaveKey(seiv1alpha1.RetainedFromAnnotation))
 }
 
 // SC-001 and SC-003: a Delete teardown leaves no child SeiNode, StatefulSet or
@@ -223,8 +246,9 @@ func TestHandleDeletion_DeletePolicy_GarbageCollectionRemovesWholeTree(t *testin
 }
 
 // The contrast case, and the guard on the refactored policy switch: Retain
-// still strips the reference so the children outlive the network. The reason
-// recorded on the child is requirement 4's job, not this ticket's.
+// strips the reference so the children outlive the network, and records the
+// decision on each child (R4, SC-004) — the network is gone moments later, so
+// the child is the only place an operator can read why a validator survived.
 func TestHandleDeletion_RetainPolicy_OrphansChildrenSoTheySurvive(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
@@ -233,6 +257,7 @@ func TestHandleDeletion_RetainPolicy_OrphansChildrenSoTheySurvive(t *testing.T) 
 	child := childSeiNode(0, "child-uid-0")
 	sts := childStatefulSet(child)
 	r := newPlanTestReconciler(t, network, child, sts, childPod(sts))
+	recorder := r.Recorder.(*record.FakeRecorder)
 
 	_, err := r.handleDeletion(ctx, network)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -240,6 +265,15 @@ func TestHandleDeletion_RetainPolicy_OrphansChildrenSoTheySurvive(t *testing.T) 
 	got := &seiv1alpha1.SeiNode{}
 	g.Expect(r.Get(ctx, client.ObjectKeyFromObject(child), got)).To(Succeed())
 	g.Expect(metav1.GetControllerOf(got)).To(BeNil(), "Retain must orphan the child")
+	g.Expect(got.Annotations).To(HaveKeyWithValue(seiv1alpha1.RetainedFromAnnotation, network.Name),
+		"the child must name the network that released it")
+	g.Expect(got.Annotations).To(HaveKeyWithValue(seiv1alpha1.RetainReasonAnnotation, retainReason))
+
+	events := drainEvents(recorder)
+	g.Expect(events).To(ContainElement(SatisfyAll(
+		ContainSubstring("RetainedByDeletionPolicy"),
+		ContainSubstring(network.Name),
+	)), "the child must carry an Event naming the network that released it")
 
 	collectGarbage(t, r.Client)
 
@@ -386,6 +420,19 @@ func TestEnsureSeiNode_RefusesChildOwnedByAPreviousGeneration(t *testing.T) {
 }
 
 // --- fixtures ---
+
+// drainEvents returns every Event the fake recorder has buffered so far.
+func drainEvents(recorder *record.FakeRecorder) []string {
+	var events []string
+	for {
+		select {
+		case e := <-recorder.Events:
+			events = append(events, e)
+		default:
+			return events
+		}
+	}
+}
 
 // deletingNetwork builds a SeiNetwork already marked for deletion with the
 // controller's finalizer still held — the state handleDeletion runs in.

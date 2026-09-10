@@ -4,9 +4,11 @@ package sei
 // SeiNetwork CRD enum (kept as plain strings so this core stays stdlib-only).
 const (
 	// DeletionDelete cascades a SeiNetwork delete to its child validators
-	// (and their PVCs) — the right choice for an ephemeral chain.
+	// (and their PVCs) — the CRD default, and the right choice for an
+	// ephemeral chain.
 	DeletionDelete = "Delete"
-	// DeletionRetain orphans children on delete (the CRD default).
+	// DeletionRetain orphans children on delete so a validator's consensus
+	// identity outlives the network.
 	DeletionRetain = "Retain"
 )
 
@@ -25,8 +27,9 @@ type NetworkSpec struct {
 	Config   map[string]string // -> spec.configOverrides (config.toml/app.toml)
 	Labels   map[string]string // extra labels on the SeiNetwork object (e.g. a caller GC/run-id selector); the network object carries no labels otherwise
 
-	// DeletionPolicy controls child-validator deletion; "" leaves the CRD Retain
-	// default. Set DeletionDelete for ephemeral chains. -> spec.deletionPolicy.
+	// DeletionPolicy controls child-validator deletion; "" leaves the CRD Delete
+	// default. Set DeletionRetain to keep validators past the network's deletion.
+	// -> spec.deletionPolicy.
 	DeletionPolicy string
 
 	// SidecarImage overrides the platform-default seictl sidecar image on this

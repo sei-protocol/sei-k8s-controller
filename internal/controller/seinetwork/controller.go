@@ -135,10 +135,10 @@ func (r *SeiNetworkReconciler) handleDeletion(ctx context.Context, network *seiv
 
 	policy := network.Spec.DeletionPolicy
 	if policy == "" {
-		policy = seiv1alpha1.DeletionPolicyRetain // kubebuilder default is Retain; keep in sync
+		policy = seiv1alpha1.DeletionPolicyDelete // kubebuilder default is Delete; keep in sync
 	}
 
-	// Retain is the default arm, not just the Retain arm: a value this build
+	// Retain is the fallback arm, not just the Retain arm: a value this build
 	// does not recognize orphans rather than cascades. The two outcomes are not
 	// symmetric — a wrongly-retained validator keeps running and is recoverable,
 	// while a wrongly-cascaded one destroys a ceremony-generated consensus

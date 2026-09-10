@@ -6,12 +6,12 @@
 
 **Status**: Draft
 
-**Blocks**: a clean benchmark cycle. A SeiNetwork defaults to `Retain`, so a
-delete orphans its validators, StatefulSets, and pods. A stale set keeps running,
-and the next run collides with it. This spec keeps `Retain` as a deliberate
-protection, makes the policy in effect visible, and gives the `Delete` path a
-complete cascade. It does not remove `Retain`. Requirement 6 holds the one open
-question: the default for a benchmark network.
+**Blocks**: a clean benchmark cycle. A SeiNetwork defaulted to `Retain`, so a
+delete orphaned its validators, StatefulSets, and pods. A stale set kept running,
+and the next run collided with it. This spec keeps `Retain` as a deliberate
+opt-in protection, makes the policy in effect visible, and gives the `Delete`
+path a complete cascade. It does not remove `Retain`. Requirement 6 records the platform
+team's decision on the default: `Delete`.
 
 **Input**: the Benchmark Party transcript, 2026-09-04. The fence below holds the
 originator's words. The writing rules govern this document, not its source.
@@ -55,7 +55,7 @@ states what the anchor does not reach, because that gap is the honest part.
 - **Cascade**: the deletion that follows the owner references, from a parent down to every descendant.
 - **Orphan** (noun): a child the controller keeps after a delete removes its parent.
 - **Orphan** (verb): to remove the parent owner reference from a child, so the child survives the parent's deletion.
-- **DeletionPolicy**: the SeiNetwork field that selects a cascade or an orphan. It holds `Delete` or `Retain`, and defaults to `Retain`.
+- **DeletionPolicy**: the SeiNetwork field that selects a cascade or an orphan. It holds `Delete` or `Retain`, and defaults to `Delete` (Requirement 6).
 - **Consensus identity**: the ceremony-generated validator key on a validator's volume. A loss of this key is permanent.
 - **Teardown**: the operator action that removes a benchmark network and its workload.
 
@@ -63,7 +63,7 @@ states what the anchor does not reach, because that gap is the honest part.
 
 - **Sits within**: the ownership and deletion path across the SeiNetwork, the SeiNode, and their StatefulSets and pods.
 - **Owns**: the owner-reference linkage up the chain, the cascade on a `Delete` policy, and the record of the policy in effect.
-- **Does not own**: the removal of the `Retain` policy. This spec keeps the policy and its protection. Whether `Retain` stays the default for a benchmark network is open — see Requirement 6.
+- **Does not own**: the removal of the `Retain` policy. This spec keeps the policy and its protection as an explicit opt-in; Requirement 6 sets the default to `Delete`.
 - **Does not own**: the reclaim of a volume or its disk. The `ephemeral-teardown-and-prune` work item owns that.
 - **Does not own**: the Flux prune of a workspace directory. The workspace reconciliation owns that.
 
@@ -222,12 +222,14 @@ benchmark network, so that a teardown leaves no cost behind.
 
 #### Acceptance Criteria
 
-1. THE controller SHALL default the `DeletionPolicy` of a benchmark network to [NEEDS CLARIFICATION: `Delete` or `Retain`? Owner: the platform team. Decide by: before Barcelona.]
+1. THE controller SHALL default the `DeletionPolicy` of a SeiNetwork to `Delete`.
+2. WHERE an operator needs a validator's consensus identity to outlive its SeiNetwork, THE operator SHALL set the `Retain` policy explicitly.
 
-The two candidates:
-
-- `Delete` for an ephemeral eng-namespace network. It matches the ephemeral benchmark expectation.
-- The current `Retain` default, with the harness selecting `Delete` on teardown. It protects an unrecoverable consensus identity.
+**Decision** (the platform team, 2026-09-10): `Delete`. The two candidates were
+`Delete`, which matches the ephemeral benchmark expectation, and the previous
+`Retain` default with the harness selecting `Delete` on teardown. The CRD has one
+default, not one per network kind, so the choice applies to every SeiNetwork; a
+long-lived validator pool opts into `Retain`.
 
 ## Success Criteria *(mandatory)*
 
@@ -246,19 +248,19 @@ role that decides.
   *Verifier:* judgement — a platform engineer deletes a StatefulSet and confirms the controller recreates it and records that the SeiNode still exists.
 - **SC-006**: A benchmark teardown removes the network.
   *Verifier:* judgement — the benchmark owner tears down a benchmark network and confirms no network, child, or pod remains.
-- **SC-007**: A new benchmark network carries the default policy that Requirement 6 selects.
-  *Verifier:* not built — Requirement 6, criterion 1 is open, so the expected default does not exist yet.
+- **SC-007**: A new SeiNetwork created without a `deletionPolicy` reads back `Delete`.
+  *Verifier:* `kubectl get seinetwork <name> -o jsonpath='{.spec.deletionPolicy}'` prints `Delete`.
 
 ## Assumptions
 
 - The controller already sets owner references up the chain and already supports a `Delete` and a `Retain` policy. Requirement 1 restates the linkage as a regression guard; it does not add the ownership model.
-- A `Retain` policy protects a validator's consensus identity, which cannot be recovered. This spec keeps that protection.
-- The benchmark harness selects the `Delete` policy on a teardown, so an ephemeral chain leaves no cost behind.
+- A `Retain` policy protects a validator's consensus identity, which cannot be recovered. This spec keeps that protection as an explicit opt-in.
+- A benchmark network takes the `Delete` default, so an ephemeral chain leaves no workload behind.
 - The volume reclaim is a separate concern. A cascade deletes the workload; the `ephemeral-teardown-and-prune` work item decides the fate of the volume.
 
 ## Out of scope
 
-- The removal of the `Retain` policy. The transcript asks for it; review kept the protection as an explicit choice. Requirement 6 holds the one open question about the default for a benchmark network.
+- The removal of the `Retain` policy. The transcript asks for it; review kept the protection as an explicit opt-in. Requirement 6 records the default.
 - The reclaim of a volume or its disk. That work lives in the `ephemeral-teardown-and-prune` work item.
 - The Flux prune of a workspace directory after a delete PR merges. The workspace reconciliation owns that.
 - A rename of the `DeletionPolicy` field or its values.
