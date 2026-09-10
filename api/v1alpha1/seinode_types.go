@@ -70,6 +70,9 @@ type SeiNodeSpec struct {
 	// ConfigValues wins over Overrides and controller-derived values on init
 	// and image updates. Changes on nodes with observed configuration regenerate
 	// the base and overlay, then restart seid (or use the pending image roll).
+	// Entries admitted by the CRD but rejected at plan-build (such as nested
+	// nulls or numbers outside float64 range) block every update plan, including
+	// image rolls, until corrected, even when no config baseline is observed.
 	//
 	// Deliberately unguarded: unlike Overrides, this field carries no
 	// allow-list and no denylist, so a ConfigValue may name chain.freeze_height,
