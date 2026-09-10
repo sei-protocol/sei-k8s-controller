@@ -266,6 +266,9 @@ type ConfigValue struct {
 
 	// Value preserves the JSON type for the TOML merge. Scalars, arrays, and
 	// tables are accepted. A value is required; explicit null is rejected.
-	// A null nested inside Value is not pruned and has no TOML representation.
+	// A nested null is admitted by the schema but rejected at plan-build because
+	// it has no TOML representation. Integers outside int64 range fall back to
+	// float64 and may lose precision; numbers outside float64 range are rejected
+	// at plan-build.
 	Value apiextensionsv1.JSON `json:"value"`
 }
