@@ -20,6 +20,7 @@ const (
 	overlayTestBase      = "base"
 	overlayTestStateSync = "state-sync"
 	overlayTestArchive   = "archive"
+	overlayTestReplayer  = "replayer"
 )
 
 func overlayTestNode() *seiv1alpha1.SeiNode {
@@ -161,7 +162,7 @@ func TestConfigValuesInvalidJSON(t *testing.T) {
 }
 
 func TestConfigValuesAllModePlanners(t *testing.T) {
-	for _, mode := range []string{"full", overlayTestArchive, "validator", "seed", "replayer"} {
+	for _, mode := range []string{"full", overlayTestArchive, "validator", "seed", overlayTestReplayer} {
 		t.Run(mode, func(t *testing.T) {
 			n := overlayTestNode()
 			var build func(*seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error)
@@ -178,7 +179,7 @@ func TestConfigValuesAllModePlanners(t *testing.T) {
 			case "seed":
 				n.Spec.Seed = &seiv1alpha1.SeedSpec{}
 				build = (&seedPlanner{}).BuildPlan
-			case "replayer":
+			case overlayTestReplayer:
 				n.Spec.Replayer = &seiv1alpha1.ReplayerSpec{}
 				build = (&replayerPlanner{}).BuildPlan
 			}
