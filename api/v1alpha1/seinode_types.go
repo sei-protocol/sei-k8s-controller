@@ -464,15 +464,22 @@ const (
 	ConditionImportPVCReady = "ImportPVCReady"
 
 	// ConditionVolumeAttributesClassReady reports the read-only pre-flight of
-	// spec.dataVolume.storage.volumeAttributesClassName, run before the data PVC
-	// is provisioned. Always-present once ensure-data-pvc runs, INCLUDING when no
-	// VAC is selected — that steady state is True/NoVolumeAttributesClass (the
-	// mode-default storage is used), never absence, so a consumer never has to
-	// read "not configured" out of a missing condition. A named class that is not
-	// in the cluster reports False/VolumeAttributesClassNotFound and holds the
-	// provision, rather than binding a dangling reference into a create-once PVC
-	// and leaving a silently-Pending pod; adding the class (a platform/GitOps
-	// change) lets the next poll proceed.
+	// spec.dataVolume.storage.volumeAttributesClassName.
+	//
+	// Always-present: the node reconciler resolves it on EVERY reconcile, before
+	// the Failed and Paused early-returns and independently of whether any plan
+	// or task runs — so a Failed, Paused, state-sync-gated, or steady-state
+	// Running node (which builds no plan at all, including one that predates this
+	// field) still carries it. It is NOT conditioned on ensure-data-pvc having
+	// run; that task only consumes the condition to hold provisioning.
+	//
+	// That includes the case where no VAC is selected: that steady state is
+	// True/NoVolumeAttributesClass (the mode-default storage is used), never
+	// absence, so a consumer never has to read "not configured" out of a missing
+	// condition. A named class that is not in the cluster reports
+	// False/VolumeAttributesClassNotFound and holds provisioning rather than
+	// leaving a silently-Pending pod; adding the class (a platform/GitOps change)
+	// lets the next poll proceed.
 	ConditionVolumeAttributesClassReady = "VolumeAttributesClassReady"
 
 	// ConditionSigningKeyReady indicates whether a referenced validator

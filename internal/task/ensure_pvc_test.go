@@ -7,15 +7,14 @@ import (
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -501,7 +500,13 @@ func TestEnsureDataPVC_Import_PVFailed_Terminal(t *testing.T) {
 	g.Expect(importReasonFor(node)).To(Equal(seiv1alpha1.ReasonPVCInvalid))
 }
 
-// --- VolumeAttributesClass pre-flight ---
+// --- VolumeAttributesClass gate ---
+//
+// The node reconciler owns the pre-flight and the VolumeAttributesClassReady
+// condition (see internal/controller/node/volumeattributesclass.go); it resolves
+// both before the plan executes. The task's job is narrower: hold provisioning
+// while that condition is not True, and never write it. These tests seed the
+// condition the way the reconciler would have.
 
 // vacNode returns a full-node SeiNode selecting the named VolumeAttributesClass.
 func vacNode(name string) *seiv1alpha1.SeiNode {
@@ -512,16 +517,18 @@ func vacNode(name string) *seiv1alpha1.SeiNode {
 	return n
 }
 
-func volumeAttributesClass(name string) *storagev1.VolumeAttributesClass {
-	return &storagev1.VolumeAttributesClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		DriverName: "ebs.csi.aws.com",
-	}
+// seedVACCondition stands in for the reconciler's resolve, which always runs
+// ahead of plan execution.
+func seedVACCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+		Type:               seiv1alpha1.ConditionVolumeAttributesClassReady,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: node.Generation,
+	})
 }
 
-// vacConditionFor returns the VolumeAttributesClassReady condition, or nil when
-// it is absent. A nil return is itself a failure for every case below: the
-// condition is always-present, so "not configured" is never signalled by absence.
 func vacConditionFor(node *seiv1alpha1.SeiNode) *metav1.Condition {
 	for i := range node.Status.Conditions {
 		if node.Status.Conditions[i].Type == seiv1alpha1.ConditionVolumeAttributesClassReady {
@@ -540,57 +547,85 @@ func dataPVCFor(t *testing.T, c client.Client, node *seiv1alpha1.SeiNode) (*core
 	return pvc, err
 }
 
-func TestEnsureDataPVC_VAC_Selected_Found_StampsAndReportsTrue(t *testing.T) {
+// A resolved-True selection provisions, and the claim carries the name. The
+// condition must come back byte-identical: the reconciler is its only writer, so
+// a task-side rewrite would be a second writer racing the same status patch.
+func TestEnsureDataPVC_VAC_ConditionTrue_StampsAndLeavesConditionAlone(t *testing.T) {
 	g := NewWithT(t)
 	node := vacNode("vac-alpha")
-	exec, c := newEnsurePVCExec(t, node, volumeAttributesClass("vac-alpha"))
+	seedVACCondition(node, metav1.ConditionTrue,
+		seiv1alpha1.ReasonVolumeAttributesClassFound, "resolved by the reconciler")
+	before := *vacConditionFor(node)
+
+	exec, c := newEnsurePVCExec(t, node)
 
 	g.Expect(exec.Execute(context.Background())).To(Succeed())
 	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
-
-	cond := vacConditionFor(node)
-	g.Expect(cond).NotTo(BeNil())
-	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonVolumeAttributesClassFound))
-	g.Expect(cond.ObservedGeneration).To(Equal(node.Generation))
 
 	pvc, err := dataPVCFor(t, c, node)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(pvc.Spec.VolumeAttributesClassName).NotTo(BeNil())
 	g.Expect(*pvc.Spec.VolumeAttributesClassName).To(Equal("vac-alpha"))
+
+	g.Expect(*vacConditionFor(node)).To(Equal(before),
+		"the task must not write the condition — the reconciler is its single writer")
 }
 
-// The landmine the pre-flight defuses: the PVC is created once, so a dangling
-// VAC reference would bind permanently and leave a silently-Pending pod. The
-// provision is held (transient, not terminal) so adding the class — a
-// platform/GitOps change — lets the next poll proceed.
-func TestEnsureDataPVC_VAC_Selected_Missing_HoldsProvisionAndReportsFalse(t *testing.T) {
+// The landmine the gate defuses: the PVC is created once, so a claim must not be
+// created against a class that did not pre-flight True. The hold is transient,
+// so the platform adding the class releases it on the next poll.
+func TestEnsureDataPVC_VAC_ConditionNotTrue_HoldsProvision(t *testing.T) {
+	for _, tc := range []struct{ name, reason string }{
+		{"class missing", seiv1alpha1.ReasonVolumeAttributesClassNotFound},
+		{"class unreadable", seiv1alpha1.ReasonVolumeAttributesClassLookupError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := vacNode("vac-absent")
+			seedVACCondition(node, metav1.ConditionFalse, tc.reason, "resolved by the reconciler")
+
+			exec, c := newEnsurePVCExec(t, node)
+
+			err := exec.Execute(context.Background())
+			g.Expect(err).To(HaveOccurred())
+			var termErr *TerminalError
+			g.Expect(err).NotTo(BeAssignableToTypeOf(termErr),
+				"a missing class is fixed by adding it, so the task must retry rather than park the node in Failed")
+			g.Expect(err.Error()).To(ContainSubstring("vac-absent"))
+			g.Expect(err.Error()).To(ContainSubstring(tc.reason))
+
+			_, getErr := dataPVCFor(t, c, node)
+			g.Expect(apierrors.IsNotFound(getErr)).To(BeTrue(),
+				"no PVC may be created while the selection has not pre-flighted True — the claim binds the name once")
+		})
+	}
+}
+
+// Fails closed on an unresolved condition. Unreachable while the reconciler
+// resolves ahead of plan execution; pinned so a reordering cannot silently
+// start provisioning against an unverified name.
+func TestEnsureDataPVC_VAC_ConditionAbsent_HoldsProvision(t *testing.T) {
 	g := NewWithT(t)
-	node := vacNode("vac-absent")
-	exec, c := newEnsurePVCExec(t, node) // no VAC in the cluster
+	node := vacNode("vac-alpha")
+	g.Expect(vacConditionFor(node)).To(BeNil())
+
+	exec, c := newEnsurePVCExec(t, node)
 
 	err := exec.Execute(context.Background())
 	g.Expect(err).To(HaveOccurred())
-	var termErr *TerminalError
-	g.Expect(err).NotTo(BeAssignableToTypeOf(termErr),
-		"a missing class is fixed by adding it, so the task must retry rather than fail the plan")
-	g.Expect(err.Error()).To(ContainSubstring("vac-absent"))
-
-	cond := vacConditionFor(node)
-	g.Expect(cond).NotTo(BeNil())
-	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonVolumeAttributesClassNotFound))
-	g.Expect(cond.Message).To(ContainSubstring("vac-absent"),
-		"the message must name the class the platform has to add")
+	g.Expect(err.Error()).To(ContainSubstring("has not resolved"))
 
 	_, getErr := dataPVCFor(t, c, node)
-	g.Expect(apierrors.IsNotFound(getErr)).To(BeTrue(),
-		"no PVC may be created while the selected class is missing — the claim binds the name once")
+	g.Expect(apierrors.IsNotFound(getErr)).To(BeTrue())
 }
 
-func TestEnsureDataPVC_VAC_Selected_AppearsLater_Proceeds(t *testing.T) {
+// The handoff: the reconciler re-resolves each reconcile, so the same task
+// proceeds once the platform has added the class.
+func TestEnsureDataPVC_VAC_ConditionFlipsTrue_Proceeds(t *testing.T) {
 	g := NewWithT(t)
 	node := vacNode("vac-late")
+	seedVACCondition(node, metav1.ConditionFalse,
+		seiv1alpha1.ReasonVolumeAttributesClassNotFound, "not found yet")
 
 	s := ensurePVCScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
@@ -602,77 +637,59 @@ func TestEnsureDataPVC_VAC_Selected_AppearsLater_Proceeds(t *testing.T) {
 	exec, err := deserializeEnsureDataPVC("ensure-1", raw, cfg)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(exec.Execute(context.Background())).To(HaveOccurred())
-	g.Expect(vacConditionFor(node).Reason).To(Equal(seiv1alpha1.ReasonVolumeAttributesClassNotFound))
 
-	// The platform adds the class (GitOps).
-	g.Expect(c.Create(context.Background(), volumeAttributesClass("vac-late"))).To(Succeed())
+	// The platform adds the class; the next reconcile's resolve flips the gate.
+	seedVACCondition(node, metav1.ConditionTrue,
+		seiv1alpha1.ReasonVolumeAttributesClassFound, "found")
 
 	exec, err = deserializeEnsureDataPVC("ensure-1", raw, cfg)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(exec.Execute(context.Background())).To(Succeed())
 	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
-	g.Expect(vacConditionFor(node).Reason).To(Equal(seiv1alpha1.ReasonVolumeAttributesClassFound))
 
 	pvc, getErr := dataPVCFor(t, c, node)
 	g.Expect(getErr).NotTo(HaveOccurred())
 	g.Expect(*pvc.Spec.VolumeAttributesClassName).To(Equal("vac-late"))
 }
 
-// DR-001: with NO selection at all the condition is still PRESENT and True.
-// Absence would force a consumer to read "not configured" out of a missing
-// condition, which the Conditions standard forbids.
-func TestEnsureDataPVC_VAC_NoSelection_ReportsPresentAndTrue(t *testing.T) {
-	g := NewWithT(t)
-	node := ensurePVCNode()
-	g.Expect(node.Spec.DataVolume).To(BeNil())
-	exec, c := newEnsurePVCExec(t, node)
-
-	g.Expect(exec.Execute(context.Background())).To(Succeed())
-	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
-
-	cond := vacConditionFor(node)
-	g.Expect(cond).NotTo(BeNil(), "the condition must be present even with no selection")
-	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonNoVolumeAttributesClass))
-
-	pvc, err := dataPVCFor(t, c, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(pvc.Spec.VolumeAttributesClassName).To(BeNil(),
-		"with no selection the claim carries no volumeAttributesClassName at all")
-}
-
-// A size selection alone is the other no-VAC steady state, and it must not be
-// mistaken for one.
-func TestEnsureDataPVC_VAC_SizeOnly_ReportsPresentAndTrue(t *testing.T) {
-	g := NewWithT(t)
-	node := ensurePVCNode()
-	node.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{
-		Storage: &seiv1alpha1.DataVolumeStorage{
+// A selection-free node can never be held by the gate, even with no condition
+// resolved at all — there is no reference to verify, and a false block here
+// would stall every node that never asked for a class.
+func TestEnsureDataPVC_VAC_NoSelection_NeverHeld(t *testing.T) {
+	for name, dv := range map[string]*seiv1alpha1.DataVolumeSpec{
+		"dataVolume absent": nil,
+		"size only": {Storage: &seiv1alpha1.DataVolumeStorage{
 			Resources: &seiv1alpha1.VolumeClaimResources{
 				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("500Gi")},
 			},
-		},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := ensurePVCNode()
+			node.Spec.DataVolume = dv
+			exec, c := newEnsurePVCExec(t, node)
+
+			g.Expect(exec.Execute(context.Background())).To(Succeed())
+			g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+			pvc, err := dataPVCFor(t, c, node)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(pvc.Spec.VolumeAttributesClassName).To(BeNil(),
+				"with no selection the claim carries no volumeAttributesClassName at all")
+		})
 	}
-	exec, c := newEnsurePVCExec(t, node)
-
-	g.Expect(exec.Execute(context.Background())).To(Succeed())
-
-	cond := vacConditionFor(node)
-	g.Expect(cond).NotTo(BeNil())
-	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonNoVolumeAttributesClass))
-
-	pvc, err := dataPVCFor(t, c, node)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(pvc.Spec.VolumeAttributesClassName).To(BeNil())
 }
 
 // Req 3.3: a node that imports a pre-existing volume keeps the importer's
-// parameters. The condition is still present — NotApplicable, not absent.
-func TestEnsureDataPVC_VAC_Import_NotApplicableAndPVCUntouched(t *testing.T) {
+// parameters. The sentinel is what makes this test bite — a nil-to-nil assertion
+// would pass whether or not anything is preserved.
+func TestEnsureDataPVC_VAC_Import_PreservesImporterSelection(t *testing.T) {
 	g := NewWithT(t)
+	const importerVAC = "importer-owned-class"
 	node := importNode("data-imported")
 	pvc := validImportedPVC("data-imported", "default", "2000Gi")
+	pvc.Spec.VolumeAttributesClassName = ptr.To(importerVAC)
 	pv := validImportedPV("pv-data-imported", "2000Gi")
 
 	exec, c := newEnsurePVCExec(t, node, pvc, pv)
@@ -680,64 +697,14 @@ func TestEnsureDataPVC_VAC_Import_NotApplicableAndPVCUntouched(t *testing.T) {
 	g.Expect(exec.Execute(context.Background())).To(Succeed())
 	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
 
-	cond := vacConditionFor(node)
-	g.Expect(cond).NotTo(BeNil(), "an import node must still carry the condition")
-	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonVolumeAttributesClassNotApplicable))
-
 	got := &corev1.PersistentVolumeClaim{}
 	g.Expect(c.Get(context.Background(), types.NamespacedName{
 		Name: "data-imported", Namespace: "default",
 	}, got)).To(Succeed())
-	g.Expect(got.Spec.VolumeAttributesClassName).To(BeNil(),
-		"the controller must never stamp a VAC onto an imported volume")
-}
-
-// A lookup failure that is not absence (including a cluster that does not serve
-// storage.k8s.io VolumeAttributesClasses) holds the provision and says so.
-func TestEnsureDataPVC_VAC_LookupError_HoldsProvision(t *testing.T) {
-	g := NewWithT(t)
-	node := vacNode("vac-alpha")
-
-	s := ensurePVCScheme(t)
-	base := fake.NewClientBuilder().WithScheme(s).Build()
-	c := &vacFailingClient{Client: base}
-	cfg := ExecutionConfig{
-		KubeClient: c, APIReader: c, Scheme: s, Resource: node, Platform: platformtest.Config(),
-	}
-	raw, _ := json.Marshal(EnsureDataPVCParams{NodeName: node.Name, Namespace: node.Namespace})
-	exec, err := deserializeEnsureDataPVC("ensure-1", raw, cfg)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	runErr := exec.Execute(context.Background())
-	g.Expect(runErr).To(HaveOccurred())
-	var termErr *TerminalError
-	g.Expect(runErr).NotTo(BeAssignableToTypeOf(termErr))
-
-	cond := vacConditionFor(node)
-	g.Expect(cond).NotTo(BeNil())
-	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonVolumeAttributesClassLookupError))
-
-	_, getErr := dataPVCFor(t, base, node)
-	g.Expect(apierrors.IsNotFound(getErr)).To(BeTrue(),
-		"an unreadable class must not be treated as an absent selection")
-}
-
-// vacFailingClient fails every VolumeAttributesClass read with a non-NotFound
-// error, standing in for an API the cluster does not serve.
-type vacFailingClient struct {
-	client.Client
-}
-
-func (v *vacFailingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if _, ok := obj.(*storagev1.VolumeAttributesClass); ok {
-		return &meta.NoKindMatchError{
-			GroupKind:        schema.GroupKind{Group: storagev1.GroupName, Kind: "VolumeAttributesClass"},
-			SearchedVersions: []string{"v1"},
-		}
-	}
-	return v.Client.Get(ctx, key, obj, opts...)
+	g.Expect(got.Spec.VolumeAttributesClassName).NotTo(BeNil(),
+		"the controller must not strip the importer's volume attributes")
+	g.Expect(*got.Spec.VolumeAttributesClassName).To(Equal(importerVAC),
+		"the importer's class must survive untouched")
 }
 
 // --- Poll cadence regression guard ---

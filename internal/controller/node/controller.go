@@ -127,6 +127,13 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// requeues (see end of reconcile) without aborting the steps below.
 	stateSyncBlocked := r.reconcileStateSyncGate(node)
 
+	// Same discipline, same placement, same reason: the always-present
+	// VolumeAttributesClassReady condition is resolved here so it rides the
+	// existing flush on every path — including the paths that run no plan at
+	// all, which is where its first home inside ensure-data-pvc left it absent.
+	// Read-only; enforcement is the ensure-data-pvc task's provisioning hold.
+	r.reconcileVolumeAttributesClass(ctx, node)
+
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
 		if err := flushStatus(); err != nil {
