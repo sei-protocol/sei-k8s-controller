@@ -847,6 +847,41 @@ func p2pConfigPatch(node *seiv1alpha1.SeiNode) map[string]map[string]any {
 // Callers own the NodeUpdateInProgress condition — stamp it before calling
 // so the reason/message reflects the actual trigger. FailedPhase stays
 // empty so a failure retries on next reconcile.
+//
+// WHY STAMPING BEFORE A FALLIBLE CALL IS SAFE HERE, AND WHAT WOULD BREAK IT.
+// Stamping first means the condition is mutated upstream of this function's
+// error return. The node reconciler now flushes status on the way out even on an
+// error exit (see the backstop in internal/controller/node/controller.go), so
+// that stamp is PERSISTED if this returns an error — leaving
+// NodeUpdateInProgress=True with no plan on status, which handleTerminalPlan
+// cannot clear because it only fires on a terminal plan. Stale-True, not
+// self-healing.
+//
+// That is tolerable only because this cannot fail for the inputs the five
+// callers actually pass. The one error path is buildPlannedTask's
+// marshalParams, a plain json.Marshal. The safety argument is about those
+// specific params, NOT about the types the API package happens to declare:
+// marshalParams takes `any` and does receive user-derived content on other
+// paths — genesis overrides land in AssembleAndUploadGenesisTask.Overrides
+// (group.go:50) straight from SeiNetwork.spec.genesis.overrides, typed
+// map[string]apiextensionsv1.JSON. A package-wide "no float fields declared"
+// claim proves nothing here and should not be relied on: apiextensions.JSON
+// carries arbitrary JSON, and resource.Quantity marshals as a string rather
+// than a number, so neither is covered by reasoning about Go float types.
+//
+// What holds instead is the call path. Every update progression
+// (full/archive/validator/replay/seed buildRunningPlan) resolves through
+// paramsForUpdateTask to either an empty sidecar task struct
+// (ConfigValidateTask, MarkReadyTask), a controller-built struct of node
+// name/namespace strings (ApplyStatefulSet, ApplyService, ReplacePod,
+// ObserveImage, and the validator/seed key-validation params, which reduce a
+// Secret reference to strings), or ConfigPatchTask wrapping p2pConfigPatch,
+// whose leaves are spec.externalAddress and a strings.Join of resolved peers —
+// both strings. No unsupported value can reach json.Marshal from here.
+//
+// So: adding a progression entry whose params carry an apiextensions.JSON,
+// a float, a channel, or a func makes this genuinely fallible, and the stamp
+// must then move after the assemble rather than before it.
 func assembleUpdatePlan(node *seiv1alpha1.SeiNode, prog []string, patch map[string]map[string]any) (*seiv1alpha1.TaskPlan, error) {
 	// First observation must also restore the base: an unobserved node may
 	// carry removed piece-1 overlay keys. This does not trigger a plan; it
