@@ -30,6 +30,8 @@ func platformWithSidecar(image string) platform.Config {
 
 // runningFullNode returns a SeiNode in the Running phase with currentImage matching spec.image.
 func runningFullNode() *seiv1alpha1.SeiNode {
+	// These image-update fixtures model nodes with an established empty baseline.
+	emptyHash, _ := configValuesHash(nil)
 	return &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "full-0", Namespace: "default", Generation: 1},
 		Spec: seiv1alpha1.SeiNodeSpec{
@@ -38,8 +40,9 @@ func runningFullNode() *seiv1alpha1.SeiNode {
 			FullNode: &seiv1alpha1.FullNodeSpec{},
 		},
 		Status: seiv1alpha1.SeiNodeStatus{
-			Phase:        seiv1alpha1.PhaseRunning,
-			CurrentImage: "sei:v1.0.0",
+			Phase:                   seiv1alpha1.PhaseRunning,
+			CurrentImage:            "sei:v1.0.0",
+			CurrentConfigValuesHash: emptyHash,
 		},
 	}
 }
