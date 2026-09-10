@@ -222,8 +222,6 @@ func StateSyncBlocksPlan(node *seiv1alpha1.SeiNode) bool {
 	return cond != nil && cond.Status != metav1.ConditionTrue
 }
 
-// handleTerminalPlan handles completed or failed plans: clears conditions
-// and nils the plan so the planner can build the next one if needed.
 // shouldExplainUnobservedConfig gates the baseline notice on no-op reconciles.
 func shouldExplainUnobservedConfig(node *seiv1alpha1.SeiNode) bool {
 	// handleTerminalPlan writes UpdateFailed before clearing a failed plan.
@@ -234,6 +232,8 @@ func shouldExplainUnobservedConfig(node *seiv1alpha1.SeiNode) bool {
 		len(node.Spec.ConfigValues) > 0 && !terminalReason
 }
 
+// handleTerminalPlan handles completed or failed plans: clears conditions
+// and nils the plan so the planner can build the next one if needed.
 func handleTerminalPlan(ctx context.Context, node *seiv1alpha1.SeiNode) {
 	plan := node.Status.Plan
 	if plan == nil {
