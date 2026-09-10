@@ -231,7 +231,7 @@ func TestClassifyPlanIncludesConfigUpdates(t *testing.T) {
 	}{
 		{"config", []string{TaskConfigApply, TaskConfigPatch, TaskConfigValidate, TaskMarkReady, sidecar.TaskTypeRestartSeid}, "config-update"},
 		{"image", []string{TaskConfigPatch, TaskConfigValidate, task.TaskTypeObserveImage, TaskMarkReady}, "node-update"},
-		{"init", []string{task.TaskTypeEnsureDataPVC, TaskConfigApply, TaskMarkReady}, "init"},
+		{"bootstrap", []string{task.TaskTypeEnsureDataPVC, TaskConfigApply, TaskMarkReady}, "init"},
 		{"reapproval", []string{TaskMarkReady}, "mark-ready-reapply"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
