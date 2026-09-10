@@ -17,7 +17,7 @@ import (
 // configure-state-sync. This happens on first-observation image updates and
 // every configValues edit, including removals. It also resets out-of-band
 // giga-store migration keys written by the StateSync workflow (known defect B1;
-// see docs/notes/b1-severity.md).
+// see the B1 severity analysis on PR #534).
 func buildConfigUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	plan, err := assembleUpdatePlan(node, []string{
 		TaskConfigPatch, TaskConfigValidate, TaskMarkReady, sidecar.TaskTypeRestartSeid,
