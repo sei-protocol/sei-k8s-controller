@@ -25,6 +25,10 @@ func (r *SeiNetworkReconciler) reconcilePlan(ctx context.Context, network *seiv1
 
 	// Drive active plan.
 	if network.Status.Plan != nil && network.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
+		if validatorLost(network) {
+			r.abandonPlanForLostValidator(ctx, network)
+			return planner.ResultRequeueImmediate, nil
+		}
 		return r.drivePlan(ctx, network)
 	}
 
@@ -106,6 +110,36 @@ func (r *SeiNetworkReconciler) failPlan(ctx context.Context, network *seiv1alpha
 
 	r.Recorder.Event(network, corev1.EventTypeWarning, "PlanFailed", "Plan failed")
 	logger.Info("plan failed")
+}
+
+// validatorLost reports whether a child of the active ceremony plan no longer
+// exists. Creates are gated while PlanInProgress=True and replicas are fixed
+// once the ceremony starts, so fewer incumbents than replicas under an active
+// plan means a founding validator was deleted mid-ceremony.
+func validatorLost(network *seiv1alpha1.SeiNetwork) bool {
+	return int32(len(network.Status.IncumbentNodes)) < network.Spec.Replicas
+}
+
+// abandonPlanForLostValidator drops the active ceremony plan so the gate
+// reopens and reconcileSeiNodes recreates the missing child. The ceremony's
+// tasks address the founding set by name and would otherwise retry forever
+// against a node the gate never lets come back. The recreated node carries a
+// fresh identity, so genesis must be reassembled: clearing the plan with the
+// ceremony still incomplete makes the planner rebuild it once every replica
+// exists again. All mutations are in-memory.
+func (r *SeiNetworkReconciler) abandonPlanForLostValidator(ctx context.Context, network *seiv1alpha1.SeiNetwork) {
+	msg := fmt.Sprintf("%d of %d founding validators present; genesis ceremony restarts once the set is recreated",
+		len(network.Status.IncumbentNodes), network.Spec.Replicas)
+
+	setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+		ReasonValidatorLost, msg)
+
+	network.Status.Plan = nil
+	clearPlanInProgress(network, ReasonValidatorLost, "Plan abandoned: a founding validator was deleted during the genesis ceremony")
+
+	r.Recorder.Event(network, corev1.EventTypeWarning, ReasonValidatorLost, msg)
+	log.FromContext(ctx).Info("plan abandoned: validator lost during genesis ceremony",
+		"incumbents", len(network.Status.IncumbentNodes), "replicas", network.Spec.Replicas)
 }
 
 func setPlanInProgress(network *seiv1alpha1.SeiNetwork, reason, message string) {

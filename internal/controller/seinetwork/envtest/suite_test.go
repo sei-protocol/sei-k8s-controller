@@ -46,6 +46,7 @@ var (
 	testCtx   context.Context
 	testCncl  context.CancelFunc
 	testFaker *envtestpkg.StatusFaker
+	testStub  *envtestpkg.StubSidecarClient
 )
 
 func TestMain(m *testing.M) {
@@ -115,6 +116,7 @@ func run(m *testing.M) (int, error) {
 	// hand out closures that resolve to this instance, so tasks submitted
 	// by either reconciler are observable to the other.
 	stubSC := envtestpkg.NewStubSidecarClient()
+	testStub = stubSC
 	buildStubSC := func() (task.SidecarClient, error) { //nolint:unparam // signature pinned by task.ExecutionConfig field
 		return stubSC, nil
 	}

@@ -179,10 +179,10 @@ func TestConfigValues_ReplacementValidatorReceivesExistingValues(t *testing.T) {
 	}, "the initial validator carries the network's config values")
 
 	// The child is stamped at creation, before the ceremony runs. A validator
-	// deleted mid-ceremony is not replaced — reconcileSeiNodes defers creates
-	// while PlanInProgress=True and the ceremony retries against the missing
-	// node — so replacement is exercised only once the ceremony is over. The
-	// gate flips after await-nodes-running, the genesis+boot chain that exceeds
+	// deleted mid-ceremony restarts the ceremony instead (see
+	// TestGenesisCeremony_ValidatorLostMidCeremony_Recovers), so the plain
+	// replacement path is exercised only once the ceremony is over. The gate
+	// flips after await-nodes-running, the genesis+boot chain that exceeds
 	// pollTimeout under CI load.
 	waitForStatusWithin(t, convergeTimeout, client.ObjectKeyFromObject(network), func(n *seiv1alpha1.SeiNetwork) bool {
 		return apimeta.IsStatusConditionTrue(n.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete) &&

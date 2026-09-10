@@ -151,6 +151,11 @@ func setNodesReadyCondition(network *seiv1alpha1.SeiNetwork, ready, desired int3
 // RolloutInProgress seeds AllUpToDate instead.
 const ReasonNotStarted = "NotStarted"
 
+// ReasonValidatorLost marks a genesis ceremony abandoned because a founding
+// validator was deleted mid-plan. Unlike CeremonyFailed it is not terminal:
+// the set is recreated and the ceremony rebuilt on the next reconciles.
+const ReasonValidatorLost = "ValidatorLost"
+
 // seedAlwaysPresentConditions stamps the seeded always-present conditions so
 // the full set — GenesisCeremonyComplete, NodesReady, RolloutInProgress,
 // Paused, PlanInProgress — is present after the first reconcile and no
