@@ -291,3 +291,72 @@ func TestSyncStatefulSet_PausedReplicasZero(t *testing.T) {
 	g.Expect(sts.Spec.Replicas).NotTo(BeNil())
 	g.Expect(*sts.Spec.Replicas).To(Equal(int32(0)))
 }
+
+// TestSyncStatefulSet_SetsControllerReferenceToNode is the middle hop of the
+// SeiNetwork -> SeiNode -> StatefulSet -> pod ownership chain. Without this
+// reference nothing links the workload to the node that renders it, so
+// deleting a SeiNetwork garbage-collects the SeiNodes and leaves their
+// StatefulSets — and their validator pods — running.
+//
+// The pod hop below is set by the StatefulSet controller, not by us; asserting
+// the selector here is the closest this layer gets to it, since a StatefulSet
+// with no selector owns no pods.
+func TestSyncStatefulSet_SetsControllerReferenceToNode(t *testing.T) {
+	g := NewWithT(t)
+	s := newSyncTestScheme(t)
+
+	node := newGenesisNode("owned-sts", testNamespace)
+	node.UID = "node-uid-owned"
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(node).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
+		Build()
+
+	_, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	live := &appsv1.StatefulSet{}
+	g.Expect(c.Get(context.Background(),
+		types.NamespacedName{Name: "owned-sts", Namespace: testNamespace}, live)).To(Succeed())
+
+	ref := metav1.GetControllerOf(live)
+	g.Expect(ref).NotTo(BeNil(), "the StatefulSet must name its SeiNode as controller")
+	g.Expect(ref.Kind).To(Equal("SeiNode"))
+	g.Expect(ref.Name).To(Equal(node.Name))
+	g.Expect(ref.UID).To(Equal(node.UID))
+
+	g.Expect(live.Spec.Selector).NotTo(BeNil())
+	g.Expect(live.Spec.Selector.MatchLabels).NotTo(BeEmpty(),
+		"a StatefulSet with no selector owns no pods, so the pod hop would be broken")
+}
+
+// A re-Apply must not drop the controller reference. SyncStatefulSet renders a
+// fresh object every call and Server-Side-Applies it with ForceOwnership, so a
+// render that stopped carrying the reference would silently strip it from the
+// live object and break the chain on an already-running node.
+func TestSyncStatefulSet_ReApplyKeepsControllerReference(t *testing.T) {
+	g := NewWithT(t)
+	s := newSyncTestScheme(t)
+	ctx := context.Background()
+
+	node := newGenesisNode("reapply-sts", testNamespace)
+	node.UID = "node-uid-reapply"
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(node).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
+		Build()
+
+	first, err := SyncStatefulSet(ctx, c, s, node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+	node.Status.StatefulSet = &seiv1alpha1.StatefulSetRef{Name: first.Name, UID: first.UID}
+
+	_, err = SyncStatefulSet(ctx, c, s, node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	live := &appsv1.StatefulSet{}
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "reapply-sts", Namespace: testNamespace}, live)).To(Succeed())
+	g.Expect(metav1.GetControllerOf(live)).NotTo(BeNil(),
+		"re-Apply must not strip the SeiNode controller reference")
+}

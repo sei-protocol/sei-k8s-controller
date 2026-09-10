@@ -20,9 +20,20 @@ import (
 // reconcileSeiNodes ensures the desired child SeiNodes exist with the desired
 // spec (image/sidecar/overrides/labels propagated in-place every reconcile)
 // and refreshes IncumbentNodes for the genesis planner. Mutations are skipped
-// while a plan is in progress (guarding the ceremony's child-Peers writes) or
-// while paused.
+// while the network is being deleted (so the cascade is not fought), while a
+// plan is in progress (guarding the ceremony's child-Peers writes), or while
+// paused.
 func (r *SeiNetworkReconciler) reconcileSeiNodes(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
+	// A deleting network mutates no child. Its children are being deleted with
+	// it, so a create or an update here would recreate exactly what the cascade
+	// is removing. Reconcile already routes a deleting network to
+	// handleDeletion before it reaches this function; the guard lives here too
+	// because this is the mutation site, and a later reordering upstream must
+	// not be able to reintroduce the resurrect.
+	if !network.DeletionTimestamp.IsZero() {
+		return r.populateIncumbentNodes(ctx, network)
+	}
+
 	if network.Spec.Paused {
 		return r.populateIncumbentNodes(ctx, network)
 	}
@@ -138,7 +149,48 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 		return err
 	}
 
+	// A child on its way out is left entirely alone. Under a Delete teardown the
+	// network disappears before its children do — each holds the SeiNode
+	// finalizer — so `kubectl delete --wait` returns, and the next run can
+	// recreate this network while the previous generation's validators are still
+	// terminating. Adopting one would rescue from the collector exactly the stale
+	// validator the teardown just removed; re-speccing one would enroll a doomed
+	// node in the new genesis ceremony. Once it is collected the Owns watch wakes
+	// this reconcile and the Get above takes the create path.
+	if !existing.DeletionTimestamp.IsZero() {
+		log.FromContext(ctx).Info("child SeiNode is terminating; deferring until it is collected",
+			"seinode", existing.Name)
+		return nil
+	}
+
 	updated := false
+	// The network's controller reference is reconciled on every pass, not only
+	// at create, because a live child can be missing it: a Retain teardown
+	// orphans children deliberately, and the next run recreates the same-named
+	// SeiNetwork on top of them. Without re-adoption the controller manages a
+	// child it does not own — it propagates image and labels below, while
+	// garbage collection has no edge to walk, so a later Delete teardown leaves
+	// the stale validator running and the next run collides with it.
+	//
+	// Only a child with no controller at all is adopted. ctrl.SetControllerReference
+	// builds the reference but does not decide this: its already-owned check
+	// matches an existing reference on name alone, so left to itself it would
+	// rewrite a stale UID in place and take a child belonging to a previous
+	// generation of this same-named network. A child that still names another
+	// controller is a genuine conflict — two owners over one validator — and
+	// fails loud rather than being fought over.
+	switch controller := metav1.GetControllerOf(existing); {
+	case controller == nil:
+		if err := ctrl.SetControllerReference(network, existing, r.Scheme); err != nil {
+			return fmt.Errorf("adopting SeiNode %s: %w", existing.Name, err)
+		}
+		r.Recorder.Eventf(network, corev1.EventTypeNormal, "SeiNodeAdopted",
+			"Set owner reference on existing SeiNode %s", existing.Name)
+		updated = true
+	case controller.UID != network.UID:
+		return fmt.Errorf("SeiNode %s is controlled by %s %s (uid %s), so this SeiNetwork (uid %s) will not adopt it",
+			existing.Name, controller.Kind, controller.Name, controller.UID, network.UID)
+	}
 	if !maps.Equal(existing.Labels, desired.Labels) {
 		existing.Labels = desired.Labels
 		updated = true

@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	// testSyncerName is a network name; testSyncerOrd0 is its ordinal-0 child.
+	testSyncerName = "syncer"
 	testSyncerOrd0 = "syncer-0"
 
 	testNetworkName = "genesis-net"
