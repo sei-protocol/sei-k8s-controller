@@ -181,12 +181,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return err
 	}
 	if plan == nil {
-		// handleTerminalPlan writes UpdateFailed before clearing a failed plan.
-		// Preserve that diagnostic on this and subsequent no-op reconciles.
-		condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
-		terminalReason := condition != nil && condition.Reason == reasonUpdateFailed
-		if node.Status.Phase == seiv1alpha1.PhaseRunning && node.Status.CurrentConfigValuesHash == "" &&
-			len(node.Spec.ConfigValues) > 0 && !terminalReason {
+		if shouldExplainUnobservedConfig(node) {
 			setNodeUpdateCondition(node, metav1.ConditionFalse, "ConfigBaselineUnobserved",
 				"configValues changes are deferred until an image update regenerates configuration and establishes an observed baseline")
 		}
@@ -229,6 +224,16 @@ func StateSyncBlocksPlan(node *seiv1alpha1.SeiNode) bool {
 
 // handleTerminalPlan handles completed or failed plans: clears conditions
 // and nils the plan so the planner can build the next one if needed.
+// shouldExplainUnobservedConfig gates the baseline notice on no-op reconciles.
+func shouldExplainUnobservedConfig(node *seiv1alpha1.SeiNode) bool {
+	// handleTerminalPlan writes UpdateFailed before clearing a failed plan.
+	// Preserve that diagnostic on this and subsequent no-op reconciles.
+	condition := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+	terminalReason := condition != nil && condition.Reason == reasonUpdateFailed
+	return node.Status.Phase == seiv1alpha1.PhaseRunning && node.Status.CurrentConfigValuesHash == "" &&
+		len(node.Spec.ConfigValues) > 0 && !terminalReason
+}
+
 func handleTerminalPlan(ctx context.Context, node *seiv1alpha1.SeiNode) {
 	plan := node.Status.Plan
 	if plan == nil {
