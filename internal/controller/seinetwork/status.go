@@ -162,6 +162,12 @@ const ReasonValidatorLost = "ValidatorLost"
 // irreversible teardown never reads like routine excess-replica removal.
 const ReasonFoundingSetTornDown = "FoundingSetTornDown"
 
+// ReasonAdoptedSet latches GenesisCeremonyComplete=True when a ceremony plan
+// over adopted (Retain-released) validators is abandoned after a loss: those
+// validators already carry a genesis, and rebuilding the ceremony over a set
+// that includes a marker-less replacement would republish a divergent one.
+const ReasonAdoptedSet = "AdoptedSet"
+
 // seedAlwaysPresentConditions stamps the seeded always-present conditions so
 // the full set — GenesisCeremonyComplete, NodesReady, RolloutInProgress,
 // Paused, PlanInProgress — is present after the first reconcile and no

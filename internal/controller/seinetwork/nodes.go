@@ -85,6 +85,8 @@ func (r *SeiNetworkReconciler) syncPausedToChildren(ctx context.Context, network
 // with the network's current genesis lifecycle state:
 //
 //   - True  / Complete       — ceremony finished (latched)
+//   - True  / AdoptedSet     — ceremony over adopted validators abandoned after
+//     a loss; they already carry a genesis, so none is rebuilt (latched)
 //   - False / InProgress     — ceremony executing under an active plan
 //   - False / CeremonyFailed — last ceremony plan failed; resting between
 //     failure and the auto-retry plan (set by failPlan, sticky until the

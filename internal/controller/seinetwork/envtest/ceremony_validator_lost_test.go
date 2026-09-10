@@ -53,8 +53,8 @@ func TestGenesisCeremony_ValidatorLostMidCeremony_Recovers(t *testing.T) {
 	// so the scenario stays about the ceremony. This also means the test
 	// proves the set is recreated and the ceremony rebuilt, not that a real
 	// cluster's teardown clears the sidecar's genesis markers — that rests on
-	// the SeiNode finalizer deleting the data PVC, which is exercised by the
-	// node controller's own tests.
+	// the SeiNode finalizer deleting the data PVC, which the node controller
+	// covers in TestNodeDeletion_SnapshotNode_WithoutRetain_DeletesPVC.
 	originalUIDs := map[string]types.UID{}
 	for i := range 2 {
 		childKey := types.NamespacedName{Name: fmt.Sprintf("%s-%d", network.Name, i), Namespace: ns}

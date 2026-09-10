@@ -142,9 +142,11 @@ func validatorLost(network *seiv1alpha1.SeiNetwork) bool {
 // teardown released it with its consensus identity and chain data, and the
 // recreated network runs a ceremony over it that the markers turn into a
 // no-op. That identity cannot be regenerated, so an adopted set is never torn
-// down — the plan is abandoned, the loss is surfaced, and the lost node is
-// recreated to join the existing chain. Status mutations are in-memory; child
-// deletes go to the API server.
+// down: the plan is abandoned, the loss is surfaced, and GenesisCeremonyComplete
+// latches True/AdoptedSet so no ceremony is rebuilt — a rebuilt one would let a
+// marker-less replacement reassemble and republish genesis over the live
+// chain's. The lost node is recreated through the plain replacement path.
+// Status mutations are in-memory; child deletes go to the API server.
 func (r *SeiNetworkReconciler) abandonPlanForLostValidator(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
 	survivors, err := r.listChildSeiNodes(ctx, network)
 	if err != nil {
@@ -175,15 +177,16 @@ func (r *SeiNetworkReconciler) abandonPlanForLostValidator(ctx context.Context, 
 				"Deleted founding SeiNode %s: the genesis ceremony (plan %s) restarts over a recreated set",
 				node.Name, network.Status.Plan.ID)
 		}
-		msg = fmt.Sprintf("%d of %d founding validators present; plan %s abandoned, the set is torn down and the genesis ceremony restarts once it is recreated",
-			len(network.Status.IncumbentNodes), network.Spec.Replicas, network.Status.Plan.ID)
+		msg = fmt.Sprintf("%d of %d founding validators present; plan %s abandoned, %d surviving founding SeiNodes deleted, the genesis ceremony restarts once the set is recreated",
+			len(network.Status.IncumbentNodes), network.Spec.Replicas, network.Status.Plan.ID, deleted)
+		setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
+			ReasonValidatorLost, msg)
 	} else {
-		msg = fmt.Sprintf("%d of %d validators present; plan %s abandoned, adopted validators are kept and the missing node is recreated",
+		msg = fmt.Sprintf("%d of %d validators present; plan %s abandoned, adopted validators are kept, the ceremony is not rebuilt and the missing node is recreated",
 			len(network.Status.IncumbentNodes), network.Spec.Replicas, network.Status.Plan.ID)
+		setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue,
+			ReasonAdoptedSet, msg)
 	}
-
-	setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
-		ReasonValidatorLost, msg)
 
 	network.Status.Plan = nil
 	clearPlanInProgress(network, ReasonValidatorLost, "Plan abandoned: a founding validator was deleted during the genesis ceremony")

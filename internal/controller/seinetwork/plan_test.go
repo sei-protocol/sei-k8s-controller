@@ -77,6 +77,7 @@ func TestReconcilePlan_ValidatorLostMidCeremony_AbandonsPlan(t *testing.T) {
 	ctx := context.Background()
 
 	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
 	network.Status.Plan = &seiv1alpha1.TaskPlan{ID: testPlanID, Phase: seiv1alpha1.TaskPlanActive}
 	network.Status.IncumbentNodes = []string{testNode0, testNode1}
 	setPlanInProgress(network, "PlanStarted", "Plan execution started")
@@ -84,6 +85,7 @@ func TestReconcilePlan_ValidatorLostMidCeremony_AbandonsPlan(t *testing.T) {
 	survivor0 := generateSeiNode(network, 0)
 	survivor1 := generateSeiNode(network, 1)
 	for _, s := range []*seiv1alpha1.SeiNode{survivor0, survivor1} {
+		s.CreationTimestamp = metav1.NewTime(network.CreationTimestamp.Add(time.Minute))
 		g.Expect(controllerutil.SetControllerReference(network, s, newPlanTestScheme(t))).To(Succeed())
 	}
 
@@ -119,9 +121,11 @@ func TestReconcilePlan_ValidatorLostMidCeremony_AbandonsPlan(t *testing.T) {
 // A same-named SeiNetwork recreated over children a Retain teardown released
 // adopts them and runs a (marker-no-op) ceremony over established
 // validators. Their consensus identities cannot be regenerated, so a loss
-// under that plan abandons it and surfaces ValidatorLost but deletes nothing:
-// the adopted survivors predate the network, and that is the positive signal
-// the teardown requires.
+// under that plan abandons it but deletes nothing: the adopted survivors
+// predate the network, and that is the positive signal the teardown requires.
+// GenesisCeremonyComplete latches True/AdoptedSet so the planner does not
+// rebuild a ceremony that a marker-less replacement could turn into a genesis
+// republish over the live chain.
 func TestReconcilePlan_ValidatorLostOverAdoptedSet_KeepsSurvivors(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
@@ -152,8 +156,19 @@ func TestReconcilePlan_ValidatorLostOverAdoptedSet_KeepsSurvivors(t *testing.T) 
 	g.Expect(network.Status.Plan).To(BeNil())
 	genesisCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete)
 	g.Expect(genesisCond).NotTo(BeNil())
-	g.Expect(genesisCond.Reason).To(Equal(ReasonValidatorLost))
+	g.Expect(genesisCond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(genesisCond.Reason).To(Equal(ReasonAdoptedSet))
 	g.Expect(genesisCond.Message).To(ContainSubstring("adopted validators are kept"))
+
+	planCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
+	g.Expect(planCond).NotTo(BeNil())
+	g.Expect(planCond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(planCond.Reason).To(Equal(ReasonValidatorLost))
+
+	// Latched True: the seed leaves it alone and the planner will not rebuild.
+	r.setGenesisCeremonyCondition(network)
+	genesisCond = apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete)
+	g.Expect(genesisCond.Reason).To(Equal(ReasonAdoptedSet))
 }
 
 // The full founding set under an active plan is the normal ceremony; the
