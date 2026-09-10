@@ -23,9 +23,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) + (has(self.seed) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, validator, or seed must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
 // +kubebuilder:validation:XValidation:rule="!has(self.overrides) || !('chain.freeze_height' in self.overrides)",message="set the freeze height via fullNode.freeze or archive.freeze, not overrides: user overrides outrank controller-derived ones"
-// +kubebuilder:validation:XValidation:rule="!has(self.configValues) || !self.configValues.exists(c, c.key == 'chain.freeze_height')",message="set the freeze height via fullNode.freeze or archive.freeze, not configValues: user configValues outrank controller-derived ones"
 // +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
-// +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.configValues) || !self.configValues.exists(c, c.key in ['chain.halt_height', 'chain.halt_time'])",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
 // dataVolume.storage size is create-only: presence parity here (a sub-type rule
 // skips a first-time set), value on the sub-type. Size only — import still adds.
@@ -73,6 +71,16 @@ type SeiNodeSpec struct {
 	// is currently undefined. The intended rule is a post-config-apply TOML
 	// overlay, so ConfigValues wins when both set the same dotted path;
 	// Overrides feeds the allow-listed ConfigIntent on the init path.
+	//
+	// Deliberately unguarded: unlike Overrides, this field carries no
+	// allow-list and no denylist, so a ConfigValue may name chain.freeze_height,
+	// chain.halt_height, or chain.halt_time even on a frozen node. That is
+	// spec 002-config-override-substrate, Requirement 1 criterion 7 ("apply a
+	// config value for any key, without a check against the sei-config
+	// allow-list") and its Assumptions: the config-value path does not apply
+	// the freeze and halt guards the existing Overrides field applies, and the
+	// operator owns the result. Do not add a key guard here without amending
+	// the spec first.
 	// +kubebuilder:validation:MaxItems=100
 	// +optional
 	// +listType=map
