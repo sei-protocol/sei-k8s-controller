@@ -38,8 +38,12 @@ CRD field selects.
   `corev1.VolumeResourceRequirements` but request-only, since a volume claim has
   no limit dimension), and the VAC selection as a sibling name field at
   `spec.dataVolume.storage.volumeAttributesClassName` (mirroring the PVC field).
-  The size has one home, the volume-claim field — not two. Exact field names are finalized in PR 4/PR 5,
-  but the record fixes the shape so implementation does not settle it by default.
+  The size has one home, the volume-claim field — not two. The size leaf is no
+  longer provisional: PR 4 shipped it as `DataVolumeStorage.Resources` →
+  `VolumeClaimResources.Requests["storage"]` (`api/v1alpha1/seinode_types.go`),
+  with CEL positively requiring the `storage` key. Only the
+  `volumeAttributesClassName` leaf is still open; PR 5 finalizes that one name,
+  and the record fixes its shape so implementation does not settle it by default.
   Because `SeiNetwork.spec.dataVolume` is the same type, the selection inherits
   that field's spec-level create-only CEL (`seinetwork_types.go:29`), which
   rejects a change, an unset, **and a first-time set**. So at the network level

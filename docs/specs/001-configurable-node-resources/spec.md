@@ -164,18 +164,18 @@ in the field shape I already know, so that my knowledge transfers.
 
 ### Requirement 3: Selectable storage parameters
 
-**Objective:** As a benchmark engineer, I want to select a supported storage type
-and its fields per node group, so that I compare storage-bound scenarios.
+**Objective:** As a benchmark engineer, I want to select a supported storage
+performance offering per node group, so that I compare storage-bound scenarios.
 
 **Traces to:** User Story 3
 
 #### Acceptance Criteria
 
-1. THE harness SHALL expose a fixed set of supported gp3 VolumeAttributesClass offerings.
-2. WHEN the operator selects a supported offering, THE harness SHALL accept the standard performance fields for that offering, such as the IOPS and the throughput, and resolve them to a supported VolumeAttributesClass name.
+1. THE harness SHALL expose a fixed set of supported gp3 performance offerings, each offering being a supported pair of the standard performance fields, the IOPS and the throughput, backed by one VolumeAttributesClass.
+2. WHEN the operator supplies an IOPS and throughput pair drawn from that supported set, THE harness SHALL resolve the pair to the name of the VolumeAttributesClass that encodes it. The operator supplies the parameters; the harness resolves the name.
 3. WHEN the operator sets a storage selection, THE controller SHALL apply the named VolumeAttributesClass to the volume of every node in the group whose data volume it provisions; a node that imports a pre-existing volume keeps the importer's parameters.
-4. IF the operator selects an offering outside the supported set, THEN THE harness SHALL refuse the selection.
-5. IF the operator selects an offering outside the supported set, THEN THE harness SHALL name the supported VolumeAttributesClass set.
+4. IF the operator supplies an IOPS and throughput pair outside the supported set, THEN THE harness SHALL refuse the selection.
+5. IF the operator supplies an IOPS and throughput pair outside the supported set, THEN THE harness SHALL name the supported set, each offering's pair alongside the VolumeAttributesClass name it resolves to.
 6. THE supported set SHALL hold gp3 EBS VolumeAttributesClasses whose named offerings encode the supported IOPS and throughput values. The StorageClass fixes the gp3 base volume type; the VolumeAttributesClass carries the tunable performance parameters.
 
 ### Requirement 4: A default lighter than the mainnet shape
