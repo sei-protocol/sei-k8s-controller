@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -709,4 +710,38 @@ func TestReconcile_ExplicitFlushPaths_WriteStatusOnce(t *testing.T) {
 				fmt.Sprintf("%s flushes explicitly; the backstop must add no second write (got %d)", name, counting.writes))
 		})
 	}
+}
+
+// The adoption commit is the one callee that writes node status mid-reconcile.
+// It goes through the caller's writer so the watermark advances with it; a
+// commit that patched on its own would leave the backstop preconditioning on a
+// superseded resourceVersion, and this otherwise-successful reconcile would
+// come back as a conflict. Driven through the full Reconcile — the existing
+// adoption tests call reconcileWorkflow directly and cannot see the backstop.
+func TestReconcile_WorkflowAdoption_CommitsOnceThroughTheCallersWriter(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := vacNode("vac-adopt", "")
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.CurrentImage = node.Spec.Image
+	// Witnesses on the recipe, not on node status: reconcileStateSyncGate runs
+	// earlier in this same reconcile and clears resolvedStateSyncers for a node
+	// with no snapshot source, which would fail the plan build closed.
+	wf := workflowFor("ss-adopt", "vac-adopt", time.Now())
+	wf.Spec.StateSync = &seiv1alpha1.StateSyncWorkflow{RpcServers: []string{"a:26657", "b:26657"}}
+
+	r, _ := newNodeReconciler(t, node, wf)
+	counting := &countingStatusClient{Client: r.Client}
+	r.Client = counting
+
+	_, err := r.Reconcile(ctx, nodeReqFor("vac-adopt", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred(),
+		"an adopting reconcile must not come back as a conflict from the backstop")
+
+	adopted := getSeiNode(t, ctx, counting, "vac-adopt", testNamespace)
+	g.Expect(adopted.Status.AdoptedWorkflow).NotTo(BeNil(), "the adoption pointer must be committed")
+	g.Expect(vacCondition(adopted)).NotTo(BeNil(), "and the resolved condition rides that same commit")
+	g.Expect(counting.writes).To(Equal(1),
+		fmt.Sprintf("the adoption commit is the only status write; got %d", counting.writes))
 }
