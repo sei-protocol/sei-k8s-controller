@@ -89,6 +89,10 @@ func (m *mockSidecarClient) Healthz(_ context.Context) (bool, error) {
 	return true, m.healthzErr
 }
 
+func (m *mockSidecarClient) Status(_ context.Context) (*sidecar.StatusResponse, error) {
+	return &sidecar.StatusResponse{Status: sidecar.Ready}, nil
+}
+
 func (m *mockSidecarClient) GetNodeID(_ context.Context) (string, error) {
 	return m.nodeID, m.nodeIDErr
 }

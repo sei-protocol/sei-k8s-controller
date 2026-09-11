@@ -27,7 +27,10 @@ func (m *recordingSidecar) GetTask(context.Context, uuid.UUID) (*sidecar.TaskRes
 	return nil, fmt.Errorf("still running")
 }
 
-func (m *recordingSidecar) Healthz(context.Context) (bool, error)     { return true, nil }
+func (m *recordingSidecar) Healthz(context.Context) (bool, error) { return true, nil }
+func (m *recordingSidecar) Status(context.Context) (*sidecar.StatusResponse, error) {
+	return &sidecar.StatusResponse{Status: sidecar.Ready}, nil
+}
 func (m *recordingSidecar) GetNodeID(context.Context) (string, error) { return "node", nil }
 
 // TestRegistry_WorkflowHoldTasksArePolled guards the released-onto-wiped-data

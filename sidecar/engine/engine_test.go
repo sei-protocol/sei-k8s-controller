@@ -42,12 +42,12 @@ func waitForStatus(t *testing.T, eng *Engine, want string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if eng.Status().Status == want {
+		if eng.Status(context.Background()).Status == want {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for status %q, got %q", want, eng.Status().Status)
+	t.Fatalf("timed out waiting for status %q, got %q", want, eng.Status(context.Background()).Status)
 }
 
 func waitForResult(t *testing.T, eng *Engine, id string) *TaskResult {
@@ -374,15 +374,15 @@ func TestStatusReflectsReady(t *testing.T) {
 		TaskMarkReady: func(_ context.Context, _ map[string]any) (json.RawMessage, error) { return nil, nil },
 	})
 
-	if eng.Status().Status != "Initializing" {
-		t.Fatalf("expected Initializing initially, got %q", eng.Status().Status)
+	if eng.Status(context.Background()).Status != "Initializing" {
+		t.Fatalf("expected Initializing initially, got %q", eng.Status(context.Background()).Status)
 	}
 
 	_, _ = eng.Submit(Task{Type: TaskMarkReady})
 	waitForStatus(t, eng, "Ready")
 
-	if eng.Status().Status != "Ready" {
-		t.Fatalf("expected Ready after mark-ready, got %q", eng.Status().Status)
+	if eng.Status(context.Background()).Status != "Ready" {
+		t.Fatalf("expected Ready after mark-ready, got %q", eng.Status(context.Background()).Status)
 	}
 }
 

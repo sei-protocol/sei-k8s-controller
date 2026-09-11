@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -159,6 +160,42 @@ func TestStatusResponse(t *testing.T) {
 	}
 	if resp.Status != "Ready" {
 		t.Fatalf("expected Ready after mark-ready, got %q", resp.Status)
+	}
+}
+
+// The committed height rides the status snapshot only when it is readable:
+// an unreadable height must be absent from the wire, never a zero.
+func TestStatusResponse_CommittedHeight(t *testing.T) {
+	eng := newTestEngine(t, map[engine.TaskType]engine.TaskHandler{})
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
+
+	rec := serveHTTP(srv, http.MethodGet, "/v0/status", "")
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	if _, present := raw["committedHeight"]; present {
+		t.Fatalf("committedHeight must be absent with no height source, got %s", raw["committedHeight"])
+	}
+
+	eng.CommittedHeight = func(context.Context) (int64, error) { return 0, errors.New("rpc down") }
+	rec = serveHTTP(srv, http.MethodGet, "/v0/status", "")
+	raw = nil
+	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	if _, present := raw["committedHeight"]; present {
+		t.Fatalf("committedHeight must be absent when the read fails, got %s", raw["committedHeight"])
+	}
+
+	eng.CommittedHeight = func(context.Context) (int64, error) { return 42, nil }
+	rec = serveHTTP(srv, http.MethodGet, "/v0/status", "")
+	var resp engine.StatusResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	if resp.CommittedHeight == nil || *resp.CommittedHeight != 42 {
+		t.Fatalf("expected committedHeight 42, got %v", resp.CommittedHeight)
 	}
 }
 

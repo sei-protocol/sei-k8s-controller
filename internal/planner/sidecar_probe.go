@@ -58,6 +58,24 @@ func probeSidecarHealth(ctx context.Context, node *seiv1alpha1.SeiNode, client t
 	setSidecarReadyCondition(node, status, reason, message)
 }
 
+// observeCommittedHeight stamps the sidecar-reported committed height and the
+// time it was read onto the node status. A failed read, or a sidecar that
+// omits the field, leaves both untouched: the read time then ages, which is
+// how the network controller tells "unreadable" from "stalled".
+func observeCommittedHeight(ctx context.Context, node *seiv1alpha1.SeiNode, client task.SidecarClient) {
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	resp, err := client.Status(readCtx)
+	if err != nil || resp == nil || resp.CommittedHeight == nil {
+		return
+	}
+	height := *resp.CommittedHeight
+	now := metav1.Now()
+	node.Status.CommittedHeight = &height
+	node.Status.CommittedHeightReadTime = &now
+}
+
 func setSidecarReadyCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason, message string) {
 	apimeta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
 		Type:               seiv1alpha1.ConditionSidecarReady,

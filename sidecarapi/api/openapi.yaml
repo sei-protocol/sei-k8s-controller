@@ -228,6 +228,14 @@ components:
         status:
           type: string
           enum: [Initializing, Ready]
+        committedHeight:
+          type: integer
+          format: int64
+          description: >-
+            The latest block height the co-located seid has committed, read from
+            its CometBFT /status at request time. Absent when the height is
+            unreadable (seid down, RPC not yet listening, or a sidecar image
+            that predates the field); absence is not zero.
 
     TaskSubmitResponse:
       type: object

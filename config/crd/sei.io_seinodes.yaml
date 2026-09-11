@@ -1287,6 +1287,23 @@ spec:
                 - name
                 - uid
                 type: object
+              committedHeight:
+                description: |-
+                  CommittedHeight is the latest block height seid reported as committed
+                  the last time the controller read the sidecar's status. Nil means the
+                  height has never been readable: seid down, RPC not listening, or a
+                  sidecar image that predates the field. A value is only as fresh as
+                  CommittedHeightReadTime; consumers must treat a stale read time as
+                  unreadable rather than as a stall.
+                format: int64
+                type: integer
+              committedHeightReadTime:
+                description: |-
+                  CommittedHeightReadTime is when CommittedHeight was last read
+                  successfully. Unchanged on a failed read, so the gap since it measures
+                  how long the height has been unreadable.
+                format: date-time
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current

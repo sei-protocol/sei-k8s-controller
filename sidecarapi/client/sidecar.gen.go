@@ -42,7 +42,9 @@ type ErrorResponse struct {
 
 // StatusResponse defines model for StatusResponse.
 type StatusResponse struct {
-	Status StatusResponseStatus `json:"status"`
+	// CommittedHeight The latest block height the co-located seid has committed, read from its CometBFT /status at request time. Absent when the height is unreadable (seid down, RPC not yet listening, or a sidecar image that predates the field); absence is not zero.
+	CommittedHeight *int64               `json:"committedHeight,omitempty"`
+	Status          StatusResponseStatus `json:"status"`
 }
 
 // StatusResponseStatus defines model for StatusResponse.Status.

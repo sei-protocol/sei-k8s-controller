@@ -74,7 +74,10 @@ func (f *fakeSidecar) GetTask(_ context.Context, id uuid.UUID) (*sidecar.TaskRes
 	return &sidecar.TaskResult{Id: id, Type: typ, Status: sidecar.Completed}, nil
 }
 
-func (f *fakeSidecar) Healthz(context.Context) (bool, error)     { return true, nil }
+func (f *fakeSidecar) Healthz(context.Context) (bool, error) { return true, nil }
+func (f *fakeSidecar) Status(context.Context) (*sidecar.StatusResponse, error) {
+	return &sidecar.StatusResponse{Status: sidecar.Ready}, nil
+}
 func (f *fakeSidecar) GetNodeID(context.Context) (string, error) { return "fake-node-id", nil }
 
 // startNodeManager spins up a manager running the SeiNode controller with the

@@ -143,6 +143,7 @@ type SidecarClient interface {
 	SubmitTask(ctx context.Context, req sidecar.TaskRequest) (uuid.UUID, error)
 	GetTask(ctx context.Context, id uuid.UUID) (*sidecar.TaskResult, error)
 	Healthz(ctx context.Context) (bool, error)
+	Status(ctx context.Context) (*sidecar.StatusResponse, error)
 	GetNodeID(ctx context.Context) (string, error)
 }
 

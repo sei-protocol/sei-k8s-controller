@@ -60,6 +60,12 @@ type Engine struct {
 	// Config is set once during single-threaded startup before Submit
 	// is reachable; read-only thereafter. No synchronization.
 	Config ExecutionConfig
+
+	// CommittedHeight reads the co-located seid's latest committed height for
+	// the status snapshot. Nil, or an error, leaves the field off the response:
+	// an unreadable height must read as absent, never as zero. Set once during
+	// single-threaded startup alongside Config.
+	CommittedHeight func(ctx context.Context) (int64, error)
 }
 
 // cancelEntry is a registered task's cancel func tagged with the generation that
@@ -418,12 +424,18 @@ func (e *Engine) Livez() error {
 }
 
 // Status returns the engine's current state.
-func (e *Engine) Status() StatusResponse {
+func (e *Engine) Status(ctx context.Context) StatusResponse {
 	status := "Initializing"
 	if e.ready.Load() {
 		status = "Ready"
 	}
-	return StatusResponse{Status: status}
+	resp := StatusResponse{Status: status}
+	if e.CommittedHeight != nil {
+		if h, err := e.CommittedHeight(ctx); err == nil {
+			resp.CommittedHeight = &h
+		}
+	}
+	return resp
 }
 
 // RecentResults returns the most recent task results across all states.

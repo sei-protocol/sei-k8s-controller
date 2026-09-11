@@ -166,6 +166,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		client, err := p.BuildSidecarClient(node)
 		if err == nil {
 			probeSidecarHealth(ctx, node, client)
+			observeCommittedHeight(ctx, node, client)
 		}
 	}
 

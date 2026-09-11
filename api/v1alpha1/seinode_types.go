@@ -728,6 +728,21 @@ type SeiNodeStatus struct {
 	// +optional
 	CurrentNodeIsolation NodeIsolation `json:"currentNodeIsolation,omitempty"`
 
+	// CommittedHeight is the latest block height seid reported as committed
+	// the last time the controller read the sidecar's status. Nil means the
+	// height has never been readable: seid down, RPC not listening, or a
+	// sidecar image that predates the field. A value is only as fresh as
+	// CommittedHeightReadTime; consumers must treat a stale read time as
+	// unreadable rather than as a stall.
+	// +optional
+	CommittedHeight *int64 `json:"committedHeight,omitempty"`
+
+	// CommittedHeightReadTime is when CommittedHeight was last read
+	// successfully. Unchanged on a failed read, so the gap since it measures
+	// how long the height has been unreadable.
+	// +optional
+	CommittedHeightReadTime *metav1.Time `json:"committedHeightReadTime,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional

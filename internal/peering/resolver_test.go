@@ -43,7 +43,10 @@ func (m *mockSidecar) SubmitTask(context.Context, sidecar.TaskRequest) (uuid.UUI
 func (m *mockSidecar) GetTask(context.Context, uuid.UUID) (*sidecar.TaskResult, error) {
 	return nil, nil
 }
-func (m *mockSidecar) Healthz(context.Context) (bool, error)     { return true, nil }
+func (m *mockSidecar) Healthz(context.Context) (bool, error) { return true, nil }
+func (m *mockSidecar) Status(context.Context) (*sidecar.StatusResponse, error) {
+	return &sidecar.StatusResponse{Status: sidecar.Ready}, nil
+}
 func (m *mockSidecar) GetNodeID(context.Context) (string, error) { return m.nodeID, m.nodeIDErr }
 
 // mockEC2 satisfies EC2Resolver.

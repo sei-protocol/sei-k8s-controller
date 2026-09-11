@@ -156,6 +156,7 @@ var serveCmd = cli.Command{
 
 		eng := engine.NewEngine(ctx, handlers, store)
 		eng.Config = execCfg
+		eng.CommittedHeight = rpc.NewStatusClient("", nil).LatestHeight
 		// Rehydrate after Config is installed so sign-tx handlers see
 		// the full dep set via the goroutine-spawn happens-before edge.
 		eng.RehydrateStaleTasks()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
@@ -16,8 +17,10 @@ import (
 )
 
 type fakeSidecarClient struct {
-	healthy bool
-	err     error
+	healthy   bool
+	err       error
+	status    *sidecar.StatusResponse
+	statusErr error
 }
 
 func (f *fakeSidecarClient) SubmitTask(context.Context, sidecar.TaskRequest) (uuid.UUID, error) {
@@ -26,7 +29,10 @@ func (f *fakeSidecarClient) SubmitTask(context.Context, sidecar.TaskRequest) (uu
 func (f *fakeSidecarClient) GetTask(context.Context, uuid.UUID) (*sidecar.TaskResult, error) {
 	return nil, sidecar.ErrNotFound
 }
-func (f *fakeSidecarClient) Healthz(context.Context) (bool, error)     { return f.healthy, f.err }
+func (f *fakeSidecarClient) Healthz(context.Context) (bool, error) { return f.healthy, f.err }
+func (f *fakeSidecarClient) Status(context.Context) (*sidecar.StatusResponse, error) {
+	return f.status, f.statusErr
+}
 func (f *fakeSidecarClient) GetNodeID(context.Context) (string, error) { return "", nil }
 
 func findSidecarReady(node *seiv1alpha1.SeiNode) *metav1.Condition {
@@ -88,4 +94,39 @@ func TestResolvePlan_Initializing_DoesNotProbe(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(findSidecarReady(node)).To(BeNil(),
 		"probe must be skipped when not Running — init plan owns the sidecar")
+}
+
+func TestObserveCommittedHeight_StampsHeightAndReadTime(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	h := int64(1234)
+
+	observeCommittedHeight(context.Background(), node,
+		&fakeSidecarClient{status: &sidecar.StatusResponse{Status: sidecar.Ready, CommittedHeight: &h}})
+
+	g.Expect(node.Status.CommittedHeight).To(HaveValue(Equal(int64(1234))))
+	g.Expect(node.Status.CommittedHeightReadTime).NotTo(BeNil())
+}
+
+// A failed read, or a sidecar whose status omits the field (an older image),
+// must leave the prior reading in place so its read time ages into "stale"
+// rather than being overwritten with a zero.
+func TestObserveCommittedHeight_UnreadableLeavesPriorReading(t *testing.T) {
+	g := NewWithT(t)
+	prior := int64(77)
+	priorAt := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+
+	for name, fc := range map[string]*fakeSidecarClient{
+		"error":         {statusErr: errors.New("boom")},
+		"field-omitted": {status: &sidecar.StatusResponse{Status: sidecar.Ready}},
+	} {
+		node := runningFullNode()
+		node.Status.CommittedHeight = &prior
+		node.Status.CommittedHeightReadTime = &priorAt
+
+		observeCommittedHeight(context.Background(), node, fc)
+
+		g.Expect(node.Status.CommittedHeight).To(HaveValue(Equal(int64(77))), name)
+		g.Expect(node.Status.CommittedHeightReadTime.Time).To(Equal(priorAt.Time), name)
+	}
 }
