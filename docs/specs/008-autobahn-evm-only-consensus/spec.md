@@ -286,5 +286,5 @@ so that the README's block gas limit is a declared value and not a patch.
 - Exposing the generator's tuning (`max_txs_per_block`, `block_interval`, `allow_empty_blocks`, BlockDB retention) as fields. Deferred until a benchmark needs a value the default does not give.
 - `seid start` flags. PLT-1250.
 - The `Producing` condition and the idle-chain Ready rule. Spec 007 and PLT-1251.
-- A generic non-TOML file substrate. The originator's instruction chose the typed path.
+- A generic non-TOML file substrate. The typed field keeps the ceremony coupling inside the controller and preserves the TOML-only guarantee of `configValues`.
 - `seictl` flags and the `harbor-dev` recipe for these fields. They follow this spec's landing.
