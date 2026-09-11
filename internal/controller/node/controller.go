@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -36,6 +37,17 @@ const (
 	nodeFinalizerName     = "sei.io/seinode-finalizer"
 	seiNodeControllerName = "seinode"
 	statusPollInterval    = 30 * time.Second
+	// heightReadTimeout bounds one sidecar status read. The sidecar answers
+	// /v0/status within its own budget (rpc.statusTimeout + rpc.heightTimeout,
+	// 2.5s), so a read that runs this long is a sidecar that is not there;
+	// after one the node sits out heightReadBackoff before the next attempt
+	// so a cell-wide sidecar outage costs the single reconcile worker one
+	// timeout per node per backoff, not per poll. The backoff skips one poll,
+	// no more: the network counts a stamp as fresh for three polls
+	// (seinetwork.heightReadingMaxAge), so a sidecar that blips once and
+	// recovers is re-read before its last stamp ages out.
+	heightReadTimeout = 3 * time.Second
+	heightReadBackoff = statusPollInterval
 )
 
 // PlatformConfig is an alias for platform.Config, used throughout the node
@@ -59,7 +71,18 @@ type SeiNodeReconciler struct {
 	// passed so the sidecar client and Resource resolve to it. Wired by
 	// cmd/main.go with the same factories as the node plan executor.
 	WorkflowConfigFor func(ctx context.Context, node *seiv1alpha1.SeiNode, wf *seiv1alpha1.SeiNodeTaskWorkflow) task.ExecutionConfig
+	// HeightReader reads a Running node's committed height each steady-state
+	// poll. Nil (tests) skips the read and leaves status.committedHeight as
+	// it was.
+	HeightReader HeightReader
+
+	// heightReadRetryAt holds, per node UID, the earliest time the height
+	// read may run again after a failure.
+	heightReadRetryAt sync.Map
 }
+
+// HeightReader returns a node's committed height from its sidecar.
+type HeightReader func(ctx context.Context, node *seiv1alpha1.SeiNode) (int64, error)
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get;update;patch
@@ -287,6 +310,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		}
 	}
 
+	r.observeCommittedHeight(ctx, node, suppressDrift)
+
 	if err := flushStatus(); err != nil {
 		if execErr != nil {
 			log.FromContext(ctx).Error(execErr, "plan execution error lost due to status flush failure")
@@ -301,6 +326,32 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	r.emitPhaseTransition(ctx, node, observedPhase)
 
 	return steadyStateRequeue(node, result, suppressDrift, stateSyncBlocked), nil
+}
+
+// observeCommittedHeight stamps status.committedHeight/committedHeightTime
+// from the sidecar on a Running node with no active plan — the same cadence
+// steadyStateRequeue polls on. A failed read keeps the previous stamp so the
+// network controller ages it out by time rather than seeing a false zero.
+func (r *SeiNodeReconciler) observeCommittedHeight(ctx context.Context, node *seiv1alpha1.SeiNode, suppressDrift bool) {
+	if r.HeightReader == nil || suppressDrift || node.Status.Phase != seiv1alpha1.PhaseRunning ||
+		(node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive) {
+		return
+	}
+	if retryAt, ok := r.heightReadRetryAt.Load(node.UID); ok && time.Now().Before(retryAt.(time.Time)) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, heightReadTimeout)
+	defer cancel()
+	h, err := r.HeightReader(ctx, node)
+	if err != nil {
+		r.heightReadRetryAt.Store(node.UID, time.Now().Add(heightReadBackoff))
+		log.FromContext(ctx).V(1).Info("committed height unreadable", "error", err, "retryAfter", heightReadBackoff)
+		return
+	}
+	r.heightReadRetryAt.Delete(node.UID)
+	now := metav1.Now()
+	node.Status.CommittedHeight = &h
+	node.Status.CommittedHeightTime = &now
 }
 
 // steadyStateRequeue picks the requeue cadence once plan work is done: a
@@ -434,6 +485,7 @@ func (r *SeiNodeReconciler) ensureNodeFinalizer(ctx context.Context, node *seiv1
 }
 
 func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	r.heightReadRetryAt.Delete(node.UID)
 	if !controllerutil.ContainsFinalizer(node, nodeFinalizerName) {
 		return ctrl.Result{}, nil
 	}

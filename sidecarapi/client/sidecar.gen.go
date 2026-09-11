@@ -42,7 +42,12 @@ type ErrorResponse struct {
 
 // StatusResponse defines model for StatusResponse.
 type StatusResponse struct {
-	Status StatusResponseStatus `json:"status"`
+	// CommittedHeight seid's latest committed block height, read from the local RPC
+	// (CometBFT /status, or eth_blockNumber in EVM-only mode) at
+	// request time. Absent when no local RPC answered; never zero
+	// as a stand-in for unreadable.
+	CommittedHeight *int64               `json:"committedHeight,omitempty"`
+	Status          StatusResponseStatus `json:"status"`
 }
 
 // StatusResponseStatus defines model for StatusResponse.Status.

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -172,6 +173,20 @@ func main() {
 		Scheme:   mgr.GetScheme(),
 		Recorder: nodeRecorder,
 		Platform: platformCfg,
+		HeightReader: func(ctx context.Context, node *seiv1alpha1.SeiNode) (int64, error) {
+			c, err := newSidecarClient(node)
+			if err != nil {
+				return 0, err
+			}
+			st, err := c.Status(ctx)
+			if err != nil {
+				return 0, err
+			}
+			if st.CommittedHeight == nil {
+				return 0, errors.New("sidecar reported no committed height")
+			}
+			return *st.CommittedHeight, nil
+		},
 		Planner: &planner.NodeResolver{
 			BuildSidecarClient: buildSidecarClient,
 			Platform:           platformCfg,

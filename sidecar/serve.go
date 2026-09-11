@@ -167,6 +167,7 @@ var serveCmd = cli.Command{
 		}
 		serveLog.Info("sidecar HTTP", logArgs...)
 		srv := server.NewServer(bindAddr, eng, homeDir, authnMode)
+		srv.SetHeightReader(rpc.NewHeightReader(rpc.DefaultEndpoint, rpc.DefaultEVMEndpoint, nil))
 		srvErr := srv.ListenAndServe(ctx)
 
 		if closeErr := store.Close(); closeErr != nil {

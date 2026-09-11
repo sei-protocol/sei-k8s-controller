@@ -38,6 +38,48 @@ does not rebuild that framework. It corrects what `Ready` means, adds a producin
 signal that reliably reflects block production, marks the running task, and records
 a per-task event on the resource that owns the plan.
 
+## Amendment: Producing is decoupled from the phase (PLT-1251)
+
+Spec 008 makes Autobahn a first-class engine, and Autobahn ships with
+`allow_empty_blocks` off: a healthy Autobahn network sits at a fixed height between
+workloads. Under Requirement 1 as written that network would leave `Ready` past the
+grace window with nothing wrong, and every consumer that gates on the phase — plan
+rollouts, `restart-seid`, `WaitReady`, the benchmark skill — would treat idle as
+failure. This amendment supersedes the phase coupling; the rest of the spec stands.
+
+- The phase and the `NodesReady` condition keep their pre-007 meaning:
+  infrastructure and process readiness derived from the children. A network can
+  be `Ready` with `Producing=False`. Requirement 1 criteria 1–3, the `Degraded`
+  wording in the edge cases and in SC-012/SC-013, the `WaitReady` fail-fast, and
+  the `computeGroupPhase` clock input do not apply.
+- The `Producing` condition is the sole production signal. Requirement 2 applies
+  as written. The reason set gains two members: `Idle` — the observed height has
+  not advanced past the window on a network whose engine commits only when
+  transactions arrive (Autobahn with `spec.consensus.autobahn.allowEmptyBlocks`
+  off, its default), the expected state between workloads; and
+  `NoNodes` — no child exists yet, the seeded value. `HeightStalled` is reserved
+  for engines that commit continuously (Tendermint), where an unchanged height
+  past the window is a fault.
+- Within the window an unchanged height is still `HeightAdvancing`: the window is
+  a multiple of the poll interval, not the block time, so a sub-second chain and a
+  30-second sample always disagree for part of each cycle.
+- The observed height moves down only when every child that has ever reported,
+  stale readings included, sits below it: a network rebuilt from genesis under
+  the same name starts over. A drop in the fresh maximum alone does not reset it;
+  that is what a leading child's reading aging out looks like, and resetting on
+  it would let the leader's return score as an advance on a halted chain.
+- Children that have never reported a height are bootstrap, not fault: before
+  any child has a reading the reason is `AwaitingFirstBlock`. `SignalUnreadable`
+  is reserved for children that reported once and then went quiet.
+- The observed height is written on every advance rather than coalesced; the
+  network already polls on the status interval, and the child predicate drops
+  height-only child updates so the write does not fan out into extra reconciles.
+
+The benchmark gate therefore reads: `Ready`, then `Producing=True` once load
+starts. An operator who sees `Ready` with `Producing=False/Idle` on Autobahn has a
+healthy network waiting for transactions; `HeightStalled` or `SignalUnreadable`
+still name a fault or a controller outage as Requirement 2 describes.
+
 ## Semantic Anchors
 
 This spec names each anchor once. The body below does not restate it. Each row

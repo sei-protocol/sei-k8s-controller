@@ -3,6 +3,7 @@ package seinetwork
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -70,6 +71,7 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 
 	setNodesReadyCondition(network, readyReplicas, network.Spec.Replicas, nodes)
 	setRolloutInProgressCondition(network, upToDateReplicas, network.Spec.Replicas, len(nodes))
+	setProducingCondition(network, nodes, time.Now())
 
 	return r.Status().Patch(ctx, network, statusBase)
 }
@@ -230,6 +232,8 @@ func (r *SeiNetworkReconciler) seedAlwaysPresentConditions(network *seiv1alpha1.
 		"Pending", "no child nodes observed yet")
 	seedConditionIfAbsent(network, seiv1alpha1.ConditionRolloutInProgress,
 		"AllUpToDate", "no child nodes observed yet")
+	seedConditionIfAbsent(network, seiv1alpha1.ConditionProducing,
+		seiv1alpha1.ReasonNoNodes, "no child nodes observed yet")
 }
 
 // setPausedCondition mirrors spec.paused and emits an event on each

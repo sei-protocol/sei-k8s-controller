@@ -34,7 +34,18 @@ type Server struct {
 	engine  *engine.Engine
 	mux     *http.ServeMux
 	handler http.Handler // mux, possibly wrapped by trustedHeaderMiddleware
+	// heightReader supplies StatusResponse.CommittedHeight. Nil leaves the
+	// field absent.
+	heightReader HeightReader
 }
+
+// HeightReader reports seid's committed height from a local RPC.
+type HeightReader interface {
+	CommittedHeight(ctx context.Context) (int64, error)
+}
+
+// SetHeightReader installs the source of StatusResponse.CommittedHeight.
+func (s *Server) SetHeightReader(r HeightReader) { s.heightReader = r }
 
 // TaskRequest is the JSON body for POST /v0/tasks. When ID is provided,
 // the engine uses it as the task's canonical identifier; otherwise a
@@ -111,8 +122,14 @@ func (s *Server) handleLivez(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusServiceUnavailable)
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.engine.Status())
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	status := s.engine.Status()
+	if s.heightReader != nil {
+		if h, err := s.heightReader.CommittedHeight(r.Context()); err == nil {
+			status.CommittedHeight = &h
+		}
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {

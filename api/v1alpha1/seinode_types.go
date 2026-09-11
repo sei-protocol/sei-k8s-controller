@@ -752,6 +752,17 @@ type SeiNodeStatus struct {
 	// +optional
 	PhaseTransitionTime *metav1.Time `json:"phaseTransitionTime,omitempty"`
 
+	// CommittedHeight is seid's latest committed block height as last read
+	// through the sidecar. Unset until the first successful read; it keeps
+	// its last value when a read fails, so consumers must weigh it by
+	// CommittedHeightTime rather than treat an old value as current.
+	// +optional
+	CommittedHeight *int64 `json:"committedHeight,omitempty"`
+
+	// CommittedHeightTime is when CommittedHeight was last read successfully.
+	// +optional
+	CommittedHeightTime *metav1.Time `json:"committedHeightTime,omitempty"`
+
 	// Plan tracks the active task sequence for this node. A planner generates
 	// the plan based on the node's current state and conditions.
 	// +optional
