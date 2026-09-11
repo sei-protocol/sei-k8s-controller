@@ -58,6 +58,13 @@ func (p *genesisGroupPlanner) BuildPlan(
 	if cp := network.Spec.Genesis.ConsensusParams; cp != nil {
 		assembleParams.ConsensusParams = json.RawMessage(cp.Raw)
 	}
+	if ab := network.Spec.Consensus.AutobahnSettings(); ab != nil {
+		assembleParams.AutobahnConfig = &sidecar.AutobahnConfigParams{
+			BlockInterval:    ab.BlockInterval,
+			AllowEmptyBlocks: ab.AllowEmptyBlocks,
+			MaxTxsPerBlock:   ab.MaxTxsPerBlock,
+		}
+	}
 	if err := assembleParams.Validate(); err != nil {
 		return nil, err
 	}

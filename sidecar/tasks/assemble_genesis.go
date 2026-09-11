@@ -94,7 +94,8 @@ type AssembleGenesisResult struct {
 // ConsensusParams is one JSON object shaped like genesis.consensus_params,
 // deep-merged over what collect-gentxs produced. Autobahn makes the ceremony
 // also generate autobahn.json from every node's identity.json and upload it
-// under the chain prefix before genesis.json.
+// under the chain prefix before genesis.json; AutobahnConfig replaces the
+// gen-autobahn-config defaults it names in that file.
 type AssembleGenesisRequest struct {
 	AccountBalance  string                     `json:"accountBalance"`
 	Namespace       string                     `json:"namespace"`
@@ -103,6 +104,7 @@ type AssembleGenesisRequest struct {
 	Overrides       map[string]json.RawMessage `json:"overrides,omitempty"`
 	ConsensusParams json.RawMessage            `json:"consensusParams,omitempty"`
 	Autobahn        bool                       `json:"autobahn,omitempty"`
+	AutobahnConfig  *AutobahnConfigOverrides   `json:"autobahnConfig,omitempty"`
 }
 
 // identityManifest is the identity.json each validator uploads.
@@ -202,7 +204,7 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 		}
 
 		if cfg.Autobahn {
-			if err := a.uploadAutobahnConfig(ctx, nodes, identities); err != nil {
+			if err := a.uploadAutobahnConfig(ctx, nodes, identities, cfg.AutobahnConfig); err != nil {
 				return nil, err
 			}
 		}
@@ -779,7 +781,7 @@ func (a *GenesisAssembler) downloadIdentities(ctx context.Context, nodes []strin
 // manifests and uploads it to <chainID>/autobahn.json. It runs before
 // uploadGenesis so a node that sees genesis.json can rely on autobahn.json
 // being present.
-func (a *GenesisAssembler) uploadAutobahnConfig(ctx context.Context, nodes []string, identities map[string]identityManifest) error {
+func (a *GenesisAssembler) uploadAutobahnConfig(ctx context.Context, nodes []string, identities map[string]identityManifest, overrides *AutobahnConfigOverrides) error {
 	validators := make([]autobahnValidator, 0, len(nodes))
 	for _, nodeName := range nodes {
 		id := identities[nodeName].Autobahn
@@ -794,7 +796,7 @@ func (a *GenesisAssembler) uploadAutobahnConfig(ctx context.Context, nodes []str
 		})
 	}
 
-	data, err := buildAutobahnConfig(validators)
+	data, err := buildAutobahnConfig(validators, overrides)
 	if err != nil {
 		return fmt.Errorf("assemble-genesis: %w", err)
 	}

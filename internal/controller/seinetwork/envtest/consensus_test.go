@@ -22,7 +22,11 @@ func TestConsensus_PropagatesToValidators(t *testing.T) {
 	ns := makeNamespace(t)
 
 	network := fixtures.NewNetwork(ns, "consensus-autobahn", fixtures.WithReplicas(2))
-	network.Spec.Consensus = &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}
+	allow := true
+	network.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{
+		ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true},
+		Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "1s", AllowEmptyBlocks: &allow},
+	}
 	network.Spec.Genesis.ConsensusParams = &apiextensionsv1.JSON{Raw: []byte(`{"block":{"max_gas":"35000000"}}`)}
 	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
 
@@ -43,18 +47,54 @@ func TestConsensus_PropagatesToValidators(t *testing.T) {
 	g.Expect(testCli.Get(testCtx, client.ObjectKeyFromObject(network), stored)).To(Succeed())
 	g.Expect(stored.Spec.Genesis.ConsensusParams).NotTo(BeNil())
 	g.Expect(string(stored.Spec.Genesis.ConsensusParams.Raw)).To(MatchJSON(`{"block":{"max_gas":"35000000"}}`))
+	g.Expect(stored.Spec.Consensus.Autobahn).NotTo(BeNil())
+	g.Expect(stored.Spec.Consensus.Autobahn.BlockInterval).To(Equal("1s"))
 }
 
 func TestConsensus_NetworkShapes(t *testing.T) {
 	ns := makeNamespace(t)
+	one := int64(1)
+	zero := int64(0)
+	overCap := int64(2001)
 	cases := []struct {
 		name      string
-		consensus *seiv1alpha1.ConsensusSpec
+		consensus *seiv1alpha1.NetworkConsensusSpec
 		errorText string
 	}{
 		{name: "omitted"},
-		{name: "autobahn", consensus: &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}},
-		{name: "tendermint-evm-only", consensus: &seiv1alpha1.ConsensusSpec{EvmOnly: true}, errorText: "evmOnly requires engine Autobahn"},
+		{name: "autobahn", consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}}},
+		{name: "tendermint-evm-only", consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{EvmOnly: true}}, errorText: "evmOnly requires engine Autobahn"},
+		{name: "autobahn-knobs", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "250ms", MaxTxsPerBlock: &one},
+		}},
+		{name: "tendermint-knobs", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			Autobahn: &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "250ms"},
+		}, errorText: "autobahn settings require engine Autobahn"},
+		{name: "bad-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "400"},
+		}, errorText: "blockInterval"},
+		{name: "zero-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "0s"},
+		}, errorText: "blockInterval must be a positive duration"},
+		{name: "zero-composite-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "0h0m0s"},
+		}, errorText: "blockInterval must be a positive duration"},
+		{name: "fractional-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "1.5s"},
+		}},
+		{name: "zero-max-txs", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{MaxTxsPerBlock: &zero},
+		}, errorText: "maxTxsPerBlock"},
+		{name: "over-cap-max-txs", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{MaxTxsPerBlock: &overCap},
+		}, errorText: "maxTxsPerBlock"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,12 +121,46 @@ func TestConsensus_NetworkEffectiveValueCreateOnly(t *testing.T) {
 	key := client.ObjectKeyFromObject(network)
 
 	g.Expect(updateNetworkWithRetry(t, key, func(cur *seiv1alpha1.SeiNetwork) {
-		cur.Spec.Consensus = &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineTendermint}
+		cur.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineTendermint}}
 	})).To(Succeed(), "making the default explicit is not a change")
 
 	err := updateNetworkWithRetry(t, key, func(cur *seiv1alpha1.SeiNetwork) {
-		cur.Spec.Consensus = &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}
+		cur.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}}
 	})
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("spec.consensus.engine is create-only"))
+}
+
+// The autobahn knobs are in the ceremony artifact every node already holds:
+// changing, adding or dropping the block is rejected after creation.
+func TestConsensus_AutobahnKnobsCreateOnly(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	network := fixtures.NewNetwork(ns, "autobahn-knobs-immutable")
+	network.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{
+		ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+		Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "1s"},
+	}
+	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+	key := client.ObjectKeyFromObject(network)
+
+	for name, mutate := range map[string]func(*seiv1alpha1.SeiNetwork){
+		"change": func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn.BlockInterval = "2s" },
+		"add":    func(cur *seiv1alpha1.SeiNetwork) { v := true; cur.Spec.Consensus.Autobahn.AllowEmptyBlocks = &v },
+		"drop":   func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn = nil },
+	} {
+		err := updateNetworkWithRetry(t, key, mutate)
+		g.Expect(err).To(HaveOccurred(), name)
+		g.Expect(err.Error()).To(ContainSubstring("spec.consensus.autobahn is create-only"), name)
+	}
+
+	plain := fixtures.NewNetwork(ns, "autobahn-knobs-absent")
+	plain.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}}
+	g.Expect(testCli.Create(testCtx, plain)).To(Succeed())
+	err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(plain), func(cur *seiv1alpha1.SeiNetwork) {
+		cur.Spec.Consensus.Autobahn = &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "1s"}
+	})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("spec.consensus.autobahn is create-only"))
 }

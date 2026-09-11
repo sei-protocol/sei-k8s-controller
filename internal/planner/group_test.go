@@ -250,6 +250,66 @@ func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
 	}
 }
 
+// spec.consensus.autobahn rides the assemble task as autobahnConfig and reaches
+// the sidecar wire request; the sidecar decodes it into the same field names.
+func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
+	allow := true
+	maxTxs := int64(1500)
+	group := &seiv1alpha1.SeiNetwork{
+		ObjectMeta: metav1.ObjectMeta{Name: "ab-group", Namespace: "default"},
+		Spec: seiv1alpha1.SeiNetworkSpec{
+			Replicas: 1,
+			Genesis: seiv1alpha1.GenesisCeremonyConfig{
+				ChainID: sourceChainID, AccountBalance: testAccountBalance,
+			},
+			Consensus: &seiv1alpha1.NetworkConsensusSpec{
+				ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+				Autobahn: &seiv1alpha1.AutobahnCeremonySpec{
+					BlockInterval:    "1s",
+					AllowEmptyBlocks: &allow,
+					MaxTxsPerBlock:   &maxTxs,
+				},
+			},
+		},
+		Status: seiv1alpha1.SeiNetworkStatus{IncumbentNodes: []string{testNodeName}},
+	}
+
+	p, err := ForGroup(group)
+	if err != nil {
+		t.Fatalf("ForGroup: %v", err)
+	}
+	plan, err := p.BuildPlan(group)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+
+	var params sidecar.AssembleAndUploadGenesisTask
+	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !params.Autobahn || params.AutobahnConfig == nil {
+		t.Fatalf("Autobahn=%v AutobahnConfig=%v", params.Autobahn, params.AutobahnConfig)
+	}
+	if params.AutobahnConfig.BlockInterval != "1s" || params.AutobahnConfig.AllowEmptyBlocks == nil || !*params.AutobahnConfig.AllowEmptyBlocks ||
+		params.AutobahnConfig.MaxTxsPerBlock == nil || *params.AutobahnConfig.MaxTxsPerBlock != 1500 {
+		t.Errorf("AutobahnConfig = %+v", *params.AutobahnConfig)
+	}
+
+	req := params.ToTaskRequest()
+	wire, err := json.Marshal((*req.Params)["autobahnConfig"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(wire) != `{"blockInterval":"1s","allowEmptyBlocks":true,"maxTxsPerBlock":1500}` {
+		t.Errorf("wire autobahnConfig = %s", wire)
+	}
+
+	group.Spec.Consensus.Autobahn.BlockInterval = "fast"
+	if _, err := p.BuildPlan(group); err == nil {
+		t.Error("an unparseable blockInterval must fail plan construction")
+	}
+}
+
 func TestBuildGroupAssemblyPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
 	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "det-group", Namespace: "default"},

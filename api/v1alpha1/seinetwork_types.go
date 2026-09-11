@@ -31,6 +31,7 @@ import (
 // accepted no-op while a real engine or evmOnly change is caught.
 // +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.engine) ? self.consensus.engine : 'Tendermint') == (has(oldSelf.consensus) && has(oldSelf.consensus.engine) ? oldSelf.consensus.engine : 'Tendermint')",message="spec.consensus.engine is create-only: the engine is baked into the ceremony's autobahn.json and every validator's home directory; recreate the network to change it"
 // +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.evmOnly) ? self.consensus.evmOnly : false) == (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly) ? oldSelf.consensus.evmOnly : false)",message="spec.consensus.evmOnly is create-only: the application is baked into every validator's home directory; recreate the network to change it"
+// +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.autobahn)) ? (has(oldSelf.consensus) && has(oldSelf.consensus.autobahn) && self.consensus.autobahn == oldSelf.consensus.autobahn) : !(has(oldSelf.consensus) && has(oldSelf.consensus.autobahn))",message="spec.consensus.autobahn is create-only: its values are written into the ceremony's autobahn.json, which every validator and follower already holds; recreate the network to change them"
 // +kubebuilder:validation:XValidation:rule="!(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly) || !has(self.configOverrides) || !('network.rpc.listen_address' in self.configOverrides || 'api.rest.enable' in self.configOverrides || 'api.grpc.enable' in self.configOverrides || 'api.grpc_web.enable' in self.configOverrides)",message="an EVM-only network owns network.rpc.listen_address and api.{rest,grpc,grpc_web}.enable: the EVM-only executor serves no CometBFT RPC, REST or gRPC"
 // dataVolume is create-only (change, unset, first-time set all rejected).
 // Presence parity only here; values are pinned on the shared DataVolume* types,
@@ -61,10 +62,11 @@ type SeiNetworkSpec struct {
 	// +required
 	Genesis GenesisCeremonyConfig `json:"genesis"`
 
-	// Consensus selects the engine every validator runs. Absent means Tendermint.
-	// Create-only on its effective value; propagated to every validator child.
+	// Consensus selects the engine every validator runs and, under Autobahn,
+	// tunes the ceremony's autobahn.json. Absent means Tendermint. Create-only;
+	// engine and evmOnly propagate to every validator child.
 	// +optional
-	Consensus *ConsensusSpec `json:"consensus,omitempty"`
+	Consensus *NetworkConsensusSpec `json:"consensus,omitempty"`
 
 	// Replicas is the number of genesis validators to create. Each gets a
 	// DISTINCT generated identity, so replicas>1 is the normal safe case

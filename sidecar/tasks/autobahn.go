@@ -239,26 +239,60 @@ func checkHTTPURL(s string) error {
 	return nil
 }
 
-// buildAutobahnConfig renders autobahn.json for the given validators exactly as
+// autobahnProtocolMaxTxsPerBlock mirrors sei-tendermint autobahn/types.MaxTxsPerBlock,
+// the ceiling the producer clamps max_txs_per_block to.
+const autobahnProtocolMaxTxsPerBlock = 2_000
+
+// AutobahnConfigOverrides replaces gen-autobahn-config defaults in the rendered
+// autobahn.json. Unset fields keep the default.
+type AutobahnConfigOverrides struct {
+	BlockInterval    string `json:"blockInterval,omitempty"`
+	AllowEmptyBlocks *bool  `json:"allowEmptyBlocks,omitempty"`
+	MaxTxsPerBlock   *int64 `json:"maxTxsPerBlock,omitempty"`
+}
+
+// buildAutobahnConfig renders autobahn.json for the given validators as
 // `seid tendermint gen-autobahn-config <dirs> --output autobahn.json` does with
 // its default flags: 2000 txs/block, empty blocks off, 400ms blocks, 1500ms
 // view timeout, 10s dial interval, state persisted under data/autobahn with a
-// 30s BlockDB retention. Validators keep the order given, which is the
-// ceremony's ordinal order.
-func buildAutobahnConfig(validators []autobahnValidator) ([]byte, error) {
+// 30s BlockDB retention. Overrides replace the defaults they name, checked
+// against the provider's AutobahnFileConfig.Validate bounds. Validators keep
+// the order given, which is the ceremony's ordinal order.
+func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConfigOverrides) ([]byte, error) {
 	if len(validators) == 0 {
 		return nil, fmt.Errorf("autobahn: no validators")
 	}
 	retention := (30 * time.Second).String()
 	cfg := autobahnFileConfig{
 		Validators:         validators,
-		MaxTxsPerBlock:     2_000,
+		MaxTxsPerBlock:     autobahnProtocolMaxTxsPerBlock,
 		AllowEmptyBlocks:   false,
 		BlockInterval:      (400 * time.Millisecond).String(),
 		ViewTimeout:        (1500 * time.Millisecond).String(),
 		PersistentStateDir: "data/autobahn",
 		DialInterval:       (10 * time.Second).String(),
 		BlockDB:            autobahnBlockDBConfig{Retention: &retention},
+	}
+	if overrides != nil {
+		if overrides.BlockInterval != "" {
+			d, err := time.ParseDuration(overrides.BlockInterval)
+			if err != nil {
+				return nil, fmt.Errorf("autobahn: block_interval %q: %w", overrides.BlockInterval, err)
+			}
+			if d <= 0 {
+				return nil, fmt.Errorf("autobahn: block_interval must be > 0, got %q", overrides.BlockInterval)
+			}
+			cfg.BlockInterval = d.String()
+		}
+		if overrides.AllowEmptyBlocks != nil {
+			cfg.AllowEmptyBlocks = *overrides.AllowEmptyBlocks
+		}
+		if overrides.MaxTxsPerBlock != nil {
+			if *overrides.MaxTxsPerBlock < 1 || *overrides.MaxTxsPerBlock > autobahnProtocolMaxTxsPerBlock {
+				return nil, fmt.Errorf("autobahn: max_txs_per_block must be in [1, %d], got %d", autobahnProtocolMaxTxsPerBlock, *overrides.MaxTxsPerBlock)
+			}
+			cfg.MaxTxsPerBlock = uint64(*overrides.MaxTxsPerBlock)
+		}
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

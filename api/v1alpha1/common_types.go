@@ -323,6 +323,81 @@ type ConsensusSpec struct {
 	EvmOnly bool `json:"evmOnly,omitempty"`
 }
 
+// AutobahnCeremonySpec is the operator-settable slice of the ceremony's
+// autobahn.json. Each field replaces one value gen-autobahn-config writes with
+// its default flags; an omitted field keeps that default. Every validator and
+// follower reads the same artifact, so these are network-wide and create-only.
+// +kubebuilder:validation:XValidation:rule="!has(self.blockInterval) || duration(self.blockInterval) > duration('0s')",message="blockInterval must be a positive duration"
+type AutobahnCeremonySpec struct {
+	// BlockInterval is autobahn.json block_interval, a Go duration string such
+	// as 400ms (the gen-autobahn-config default). Must be positive.
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
+	// +optional
+	BlockInterval string `json:"blockInterval,omitempty"`
+
+	// AllowEmptyBlocks is autobahn.json allow_empty_blocks. Default false: the
+	// chain sits at its last height until a transaction arrives, so an idle
+	// Autobahn network at height 0 is healthy, not stuck.
+	// +optional
+	AllowEmptyBlocks *bool `json:"allowEmptyBlocks,omitempty"`
+
+	// MaxTxsPerBlock is autobahn.json max_txs_per_block. Default 2000, which is
+	// also the protocol ceiling (autobahn/types.MaxTxsPerBlock): the producer
+	// clamps any larger value to 2000, so only lowering it has an effect.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=2000
+	// +optional
+	MaxTxsPerBlock *int64 `json:"maxTxsPerBlock,omitempty"`
+}
+
+// NetworkConsensusSpec is ConsensusSpec plus the ceremony inputs only a
+// SeiNetwork can carry: a SeiNode consumes the ceremony's autobahn.json, it
+// never generates one.
+// +kubebuilder:validation:XValidation:rule="!has(self.autobahn) || (has(self.engine) && self.engine == 'Autobahn')",message="autobahn settings require engine Autobahn: they are written into the ceremony's autobahn.json, which only an Autobahn ceremony produces"
+type NetworkConsensusSpec struct {
+	ConsensusSpec `json:",inline"`
+
+	// Autobahn tunes the autobahn.json the genesis ceremony writes. Omitted
+	// fields keep gen-autobahn-config's defaults. Create-only.
+	// +optional
+	Autobahn *AutobahnCeremonySpec `json:"autobahn,omitempty"`
+}
+
+// Node returns the per-node slice of the spec, the shape every validator child
+// carries; nil for a nil spec.
+func (n *NetworkConsensusSpec) Node() *ConsensusSpec {
+	if n == nil {
+		return nil
+	}
+	return n.ConsensusSpec.DeepCopy()
+}
+
+// IsAutobahn reports whether the effective engine is Autobahn; false for nil.
+func (n *NetworkConsensusSpec) IsAutobahn() bool {
+	return n != nil && n.ConsensusSpec.IsAutobahn()
+}
+
+// EffectiveEngine returns the engine the network runs; Tendermint for nil.
+func (n *NetworkConsensusSpec) EffectiveEngine() ConsensusEngine {
+	if n == nil {
+		return ConsensusEngineTendermint
+	}
+	return n.ConsensusSpec.EffectiveEngine()
+}
+
+// IsEvmOnly reports the effective evmOnly value; false for nil.
+func (n *NetworkConsensusSpec) IsEvmOnly() bool {
+	return n != nil && n.ConsensusSpec.IsEvmOnly()
+}
+
+// AutobahnSettings returns the ceremony overrides; nil when none are set.
+func (n *NetworkConsensusSpec) AutobahnSettings() *AutobahnCeremonySpec {
+	if n == nil {
+		return nil
+	}
+	return n.Autobahn
+}
+
 // EffectiveEngine returns the engine a nil or empty spec resolves to.
 func (c *ConsensusSpec) EffectiveEngine() ConsensusEngine {
 	if c == nil || c.Engine == "" {
