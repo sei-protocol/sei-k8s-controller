@@ -259,7 +259,7 @@ so that the README's block gas limit is a declared value and not a patch.
 - **SC-003**: The rendered `config.toml` and `app.toml` of an EVM-only validator match Requirement 3 item 2, its pod carries no `cosmos-exporter` container, a `spec.configOverrides` entry naming `network.rpc.listen_address` or `api.grpc.enable` is rejected at admission, and a `spec.configValues` entry naming an engine key is applied and produces one Warning event.
   *Verifier:* judgement — a platform engineer reads the files from a pod, applies the conflicting `configOverrides` entry, then the conflicting `configValues` entry.
 - **SC-008**: Once the controller pins the `sei-config` release that carries the engine keys, a `spec.overrides` entry naming `autobahn-config-file` or `evm-only` is rejected at admission on a SeiNode of either engine.
-  *Verifier:* `go test ./api/... -run 'TestSeiNode.*Overrides.*Engine'` — the CEL fixture that asserts the denial; until the pin lands, the test is absent and this criterion is open.
+  *Verifier:* judgement — a platform engineer applies a SeiNode whose `spec.overrides` names `evm-only` against the CRD from the pinned release and records the rejection message; until the pin lands this criterion is open.
 
 - **SC-004**: `UpCheckForNode` returns today's listener for every existing fixture and the `8545` source for an EVM-only fixture, and the readiness-probe renderer and the `restart-seid` parameter both call it.
   *Verifier:* judgement — a platform engineer runs the `internal/noderesource` probe tests and the `sidecar/tasks` restart tests after the change and confirms no existing expectation moved.
