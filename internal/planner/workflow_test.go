@@ -8,6 +8,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 const (
@@ -255,4 +258,19 @@ func taskParams(t *testing.T, plan *seiv1alpha1.TaskPlan, taskType string) []byt
 	}
 	t.Fatalf("task %q not found in plan", taskType)
 	return nil
+}
+
+// stop-seid carries the node's up-check so its honesty check reads the same
+// listener the readiness probe and restart-seid do.
+func TestStateSyncWorkflow_StopSeidCarriesUpCheck(t *testing.T) {
+	g := NewWithT(t)
+	node := fullNodeForWorkflow(nil)
+	plan, err := buildPlan(t, node, stateSyncWorkflow([]string{wfWitnessA, wfWitnessB}, nil))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var params struct {
+		UpCheck wire.UpCheck `json:"upCheck"`
+	}
+	g.Expect(json.Unmarshal(taskParams(t, plan, sidecar.TaskTypeStopSeid), &params)).To(Succeed())
+	g.Expect(params.UpCheck).To(Equal(noderesource.UpCheckForNode(node)))
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
@@ -119,9 +120,10 @@ func (p *stateSyncWorkflowPlanner) BuildPlan(node *seiv1alpha1.SeiNode, wf *seiv
 		taskType string
 		params   any
 	}
+	stopUpCheck := noderesource.UpCheckForNode(node)
 	steps := []step{
 		{taskTypeMarkNotReady, sidecar.MarkNotReadyTask{}},
-		{taskTypeStopSeid, sidecar.StopSeidTask{}},
+		{taskTypeStopSeid, sidecar.StopSeidTask{UpCheck: &stopUpCheck}},
 		{taskTypeResetData, sidecar.ResetDataTask{}},
 	}
 	// config-patch is included only when the recipe carries a migration (a

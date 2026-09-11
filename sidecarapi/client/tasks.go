@@ -264,12 +264,16 @@ func (t RestartSeidTask) Validate() error {
 }
 
 func (t RestartSeidTask) ToTaskRequest() TaskRequest {
-	req := TaskRequest{Type: t.TaskType()}
-	if t.UpCheck != nil {
+	return upCheckTaskRequest(t.TaskType(), t.UpCheck)
+}
+
+func upCheckTaskRequest(taskType string, check *wire.UpCheck) TaskRequest {
+	req := TaskRequest{Type: taskType}
+	if check != nil {
 		p := map[string]any{"upCheck": map[string]any{
-			"scheme": string(t.UpCheck.Scheme),
-			"port":   t.UpCheck.Port,
-			"path":   t.UpCheck.Path,
+			"scheme": string(check.Scheme),
+			"port":   check.Port,
+			"path":   check.Path,
 		}}
 		req.Params = &p
 	}
@@ -295,14 +299,27 @@ func (t MarkNotReadyTask) ToTaskRequest() TaskRequest {
 
 // StopSeidTask SIGTERMs the co-located seid process and confirms it exited,
 // without waiting for it to come back up. Paired with a prior mark-not-ready,
-// the restarted container blocks at the gate instead of booting.
-type StopSeidTask struct{}
+// the restarted container blocks at the gate instead of booting. UpCheck is
+// the honesty check that refuses to report a stop while seid still answers;
+// nil means HTTP GET /status on the local CometBFT RPC port.
+type StopSeidTask struct {
+	UpCheck *wire.UpCheck
+}
 
 func (t StopSeidTask) TaskType() string { return TaskTypeStopSeid }
-func (t StopSeidTask) Validate() error  { return nil }
+
+func (t StopSeidTask) Validate() error {
+	if t.UpCheck == nil {
+		return nil
+	}
+	if err := t.UpCheck.Validate(); err != nil {
+		return fmt.Errorf("stop-seid: %w", err)
+	}
+	return nil
+}
 
 func (t StopSeidTask) ToTaskRequest() TaskRequest {
-	return TaskRequest{Type: t.TaskType()}
+	return upCheckTaskRequest(t.TaskType(), t.UpCheck)
 }
 
 // ResetDataTask clears the chain data directory (data/ only), rewrites an empty
