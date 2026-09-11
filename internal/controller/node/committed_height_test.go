@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,30 @@ func TestObserveCommittedHeight(t *testing.T) {
 		(&SeiNodeReconciler{HeightReader: failing}).observeCommittedHeight(context.Background(), node, false)
 		g.Expect(node.Status.CommittedHeight).To(HaveValue(Equal(int64(7))))
 		g.Expect(*node.Status.CommittedHeightTime).To(Equal(prevTime))
+	})
+
+	t.Run("read failure backs off; a later success clears it", func(t *testing.T) {
+		g := NewWithT(t)
+		calls := 0
+		err := errors.New("sidecar down")
+		r := &SeiNodeReconciler{HeightReader: func(context.Context, *seiv1alpha1.SeiNode) (int64, error) {
+			calls++
+			return 9, err
+		}}
+		node := stamped(7)
+		node.UID = "n1"
+		r.observeCommittedHeight(context.Background(), node, false)
+		r.observeCommittedHeight(context.Background(), node, false)
+		g.Expect(calls).To(Equal(1), "second poll inside the backoff does not hit the sidecar")
+		g.Expect(node.Status.CommittedHeight).To(HaveValue(Equal(int64(7))))
+
+		r.heightReadRetryAt.Store(node.UID, time.Now().Add(-time.Second))
+		err = nil
+		r.observeCommittedHeight(context.Background(), node, false)
+		g.Expect(calls).To(Equal(2))
+		g.Expect(node.Status.CommittedHeight).To(HaveValue(Equal(int64(9))))
+		_, pending := r.heightReadRetryAt.Load(node.UID)
+		g.Expect(pending).To(BeFalse(), "success clears the backoff")
 	})
 
 	t.Run("skipped when not Running, drift suppressed, plan active, or no reader", func(t *testing.T) {

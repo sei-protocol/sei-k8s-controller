@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -36,9 +37,14 @@ const (
 	nodeFinalizerName     = "sei.io/seinode-finalizer"
 	seiNodeControllerName = "seinode"
 	statusPollInterval    = 30 * time.Second
-	// heightReadTimeout bounds one sidecar status read; it must stay well
-	// under statusPollInterval so a hung sidecar cannot stretch the poll.
-	heightReadTimeout = 5 * time.Second
+	// heightReadTimeout bounds one sidecar status read. The sidecar answers
+	// /v0/status within its own budget (rpc.statusTimeout + rpc.heightTimeout,
+	// 2.5s), so a read that runs this long is a sidecar that is not there;
+	// after one the node sits out heightReadBackoff before the next attempt
+	// so a cell-wide sidecar outage costs the single reconcile worker one
+	// timeout per node per backoff, not per poll.
+	heightReadTimeout = 3 * time.Second
+	heightReadBackoff = 4 * statusPollInterval
 )
 
 // PlatformConfig is an alias for platform.Config, used throughout the node
@@ -66,6 +72,10 @@ type SeiNodeReconciler struct {
 	// poll. Nil (tests) skips the read and leaves status.committedHeight as
 	// it was.
 	HeightReader HeightReader
+
+	// heightReadRetryAt holds, per node UID, the earliest time the height
+	// read may run again after a failure.
+	heightReadRetryAt sync.Map
 }
 
 // HeightReader returns a node's committed height from its sidecar.
@@ -324,13 +334,18 @@ func (r *SeiNodeReconciler) observeCommittedHeight(ctx context.Context, node *se
 		(node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive) {
 		return
 	}
+	if retryAt, ok := r.heightReadRetryAt.Load(node.UID); ok && time.Now().Before(retryAt.(time.Time)) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(ctx, heightReadTimeout)
 	defer cancel()
 	h, err := r.HeightReader(ctx, node)
 	if err != nil {
-		log.FromContext(ctx).V(1).Info("committed height unreadable", "error", err)
+		r.heightReadRetryAt.Store(node.UID, time.Now().Add(heightReadBackoff))
+		log.FromContext(ctx).V(1).Info("committed height unreadable", "error", err, "retryAfter", heightReadBackoff)
 		return
 	}
+	r.heightReadRetryAt.Delete(node.UID)
 	now := metav1.Now()
 	node.Status.CommittedHeight = &h
 	node.Status.CommittedHeightTime = &now
@@ -467,6 +482,7 @@ func (r *SeiNodeReconciler) ensureNodeFinalizer(ctx context.Context, node *seiv1
 }
 
 func (r *SeiNodeReconciler) handleNodeDeletion(ctx context.Context, node *seiv1alpha1.SeiNode) (ctrl.Result, error) {
+	r.heightReadRetryAt.Delete(node.UID)
 	if !controllerutil.ContainsFinalizer(node, nodeFinalizerName) {
 		return ctrl.Result{}, nil
 	}

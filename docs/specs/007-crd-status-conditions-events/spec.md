@@ -63,9 +63,14 @@ failure. This amendment supersedes the phase coupling; the rest of the spec stan
 - Within the window an unchanged height is still `HeightAdvancing`: the window is
   a multiple of the poll interval, not the block time, so a sub-second chain and a
   30-second sample always disagree for part of each cycle.
-- A fresh reading below the recorded observed height resets the observed height
-  to it rather than reading as a stall: a network rebuilt from genesis under the
-  same name starts over.
+- The observed height moves down only when every child that has ever reported,
+  stale readings included, sits below it: a network rebuilt from genesis under
+  the same name starts over. A drop in the fresh maximum alone does not reset it;
+  that is what a leading child's reading aging out looks like, and resetting on
+  it would let the leader's return score as an advance on a halted chain.
+- Children that have never reported a height are bootstrap, not fault: before
+  any child has a reading the reason is `AwaitingFirstBlock`. `SignalUnreadable`
+  is reserved for children that reported once and then went quiet.
 - The observed height is written on every advance rather than coalesced; the
   network already polls on the status interval, and the child predicate drops
   height-only child updates so the write does not fan out into extra reconciles.

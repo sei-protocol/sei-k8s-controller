@@ -169,14 +169,60 @@ func TestProducing_AutobahnWithEmptyBlocksStalls(t *testing.T) {
 		"an engine that commits empty blocks has no idle state")
 }
 
+func TestProducing_NeverRead_AwaitingFirstBlock(t *testing.T) {
+	g := NewWithT(t)
+	network := &seiv1alpha1.SeiNetwork{}
+	nodes := []seiv1alpha1.SeiNode{
+		{Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseInitializing}},
+		{Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhasePending}},
+	}
+	setProducingCondition(network, nodes, time.Now())
+	c := producing(network)
+	g.Expect(c.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(c.Reason).To(Equal(seiv1alpha1.ReasonAwaitingFirstBlock), "bootstrap is not a fault")
+	g.Expect(network.Status.ObservedHeight).To(BeNil())
+}
+
 func TestProducing_LowerHeightResetsHighWaterMark(t *testing.T) {
 	g := NewWithT(t)
 	start := time.Now()
 	network := &seiv1alpha1.SeiNetwork{Status: seiv1alpha1.SeiNetworkStatus{
 		ObservedHeight: &seiv1alpha1.ObservedHeight{Height: 9000, Time: metav1.NewTime(start.Add(-time.Hour))},
 	}}
-	setProducingCondition(network, []seiv1alpha1.SeiNode{nodeAtHeight(3, start)}, start)
+	// Every reporting child, including the one whose reading is stale, sits
+	// below the mark: the chain was rebuilt from genesis.
+	nodes := []seiv1alpha1.SeiNode{
+		nodeAtHeight(3, start),
+		nodeAtHeight(2, start.Add(-2*heightReadingMaxAge)),
+	}
+	setProducingCondition(network, nodes, start)
 	g.Expect(network.Status.ObservedHeight.Height).To(Equal(int64(3)))
 	g.Expect(network.Status.ObservedHeight.Time.Time).To(BeTemporally("==", start))
 	g.Expect(producing(network).Status).To(Equal(metav1.ConditionTrue), "fresh mark is inside the window")
+}
+
+func TestProducing_LeaderAgingOutDoesNotResetMark(t *testing.T) {
+	g := NewWithT(t)
+	start := time.Now()
+	network := &seiv1alpha1.SeiNetwork{Spec: seiv1alpha1.SeiNetworkSpec{}}
+
+	// Two children; the leader at 100, a lagger at 99. The chain halts.
+	leaderRead := start
+	setProducingCondition(network, []seiv1alpha1.SeiNode{nodeAtHeight(100, leaderRead), nodeAtHeight(99, start)}, start)
+	g.Expect(producing(network).Reason).To(Equal(seiv1alpha1.ReasonHeightAdvancing))
+
+	// The leader's reading ages out while the lagger keeps reporting 99: the
+	// fresh maximum drops, but 100 is still on record, so the mark holds.
+	later := start.Add(heightReadingMaxAge + time.Second)
+	setProducingCondition(network, []seiv1alpha1.SeiNode{nodeAtHeight(100, leaderRead), nodeAtHeight(99, later)}, later)
+	g.Expect(network.Status.ObservedHeight.Height).To(Equal(int64(100)))
+	g.Expect(network.Status.ObservedHeight.Time.Time).To(BeTemporally("==", start))
+
+	// The leader comes back at 100 past the window: not an advance.
+	past := start.Add(producingWindow + time.Second)
+	setProducingCondition(network, []seiv1alpha1.SeiNode{nodeAtHeight(100, past), nodeAtHeight(99, past)}, past)
+	c := producing(network)
+	g.Expect(c.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(c.Reason).To(Equal(seiv1alpha1.ReasonHeightStalled))
+	g.Expect(c.Message).To(ContainSubstring("observed height 100 has not advanced"))
 }
