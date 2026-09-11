@@ -23,6 +23,13 @@ import (
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) + (has(self.seed) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, validator, or seed must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
 // +kubebuilder:validation:XValidation:rule="!has(self.overrides) || !('chain.freeze_height' in self.overrides)",message="set the freeze height via fullNode.freeze or archive.freeze, not overrides: user overrides outrank controller-derived ones"
+// consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint,
+// evmOnly: false}), the has()-guarded comparison the freeze height uses below.
+// +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.engine) ? self.consensus.engine : 'Tendermint') == (has(oldSelf.consensus) && has(oldSelf.consensus.engine) ? oldSelf.consensus.engine : 'Tendermint')",message="spec.consensus.engine is create-only: the engine is baked into the ceremony's autobahn.json and this node's home directory; replace the node to change it"
+// +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.evmOnly) ? self.consensus.evmOnly : false) == (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly) ? oldSelf.consensus.evmOnly : false)",message="spec.consensus.evmOnly is create-only: the application is baked into this node's home directory; replace the node to change it"
+// +kubebuilder:validation:XValidation:rule="!(has(self.consensus) && has(self.consensus.engine) && self.consensus.engine == 'Autobahn') || !((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze)))",message="a freeze height is not supported under engine Autobahn: seid refuses the combination at start"
+// +kubebuilder:validation:XValidation:rule="!has(self.seed) || !(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)",message="a seed cannot be evmOnly: a seed runs no application, and seid refuses the combination"
+// +kubebuilder:validation:XValidation:rule="!(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly) || !has(self.overrides) || !('network.rpc.listen_address' in self.overrides || 'api.rest.enable' in self.overrides || 'api.grpc.enable' in self.overrides || 'api.grpc_web.enable' in self.overrides)",message="an EVM-only node owns network.rpc.listen_address and api.{rest,grpc,grpc_web}.enable: the EVM-only executor serves no CometBFT RPC, REST or gRPC"
 // +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
 // dataVolume.storage size is create-only: presence parity here (a sub-type rule
@@ -69,6 +76,13 @@ type SeiNodeSpec struct {
 	// These are applied on top of mode defaults during config-apply.
 	// +optional
 	Overrides map[string]string `json:"overrides,omitempty"`
+
+	// Consensus selects the engine this node runs. Absent means Tendermint. A
+	// follower of an Autobahn chain sets engine Autobahn so configure-genesis
+	// fetches the chain's autobahn.json beside genesis.json. Create-only on its
+	// effective value.
+	// +optional
+	Consensus *ConsensusSpec `json:"consensus,omitempty"`
 
 	// ConfigValues supplies typed values by config file and dotted TOML path.
 	// Applied after base configuration and controller-derived peer patches,

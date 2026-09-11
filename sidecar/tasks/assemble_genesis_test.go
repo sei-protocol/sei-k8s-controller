@@ -377,3 +377,94 @@ func TestAssembleGenesisRequest_OverridesRoundTrip(t *testing.T) {
 			string(got.Overrides["staking.params.max_validators"]), "50")
 	}
 }
+
+func TestAssembler_ApplyConsensusParams_DeepMergesTopLevel(t *testing.T) {
+	homeDir := t.TempDir()
+	genFile := genesisWithAppState(t, homeDir, `{}`)
+	a := NewGenesisAssembler(homeDir, "b", "r", "test-chain-1", nil, nil)
+
+	if err := a.applyConsensusParams(json.RawMessage(`{"block":{"max_gas":"35000000"}}`)); err != nil {
+		t.Fatalf("applyConsensusParams: %v", err)
+	}
+	data, err := os.ReadFile(genFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		ConsensusParams struct {
+			Block struct {
+				MaxBytes string `json:"max_bytes"`
+				MaxGas   string `json:"max_gas"`
+			} `json:"block"`
+			Validator struct {
+				PubKeyTypes []string `json:"pub_key_types"`
+			} `json:"validator"`
+		} `json:"consensus_params"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.ConsensusParams.Block.MaxGas != "35000000" {
+		t.Errorf("max_gas = %q, want 35000000", doc.ConsensusParams.Block.MaxGas)
+	}
+	if doc.ConsensusParams.Block.MaxBytes != "22020096" {
+		t.Errorf("sibling max_bytes must survive the merge, got %q", doc.ConsensusParams.Block.MaxBytes)
+	}
+	if len(doc.ConsensusParams.Validator.PubKeyTypes) != 1 {
+		t.Errorf("untouched sections must survive the merge, got %+v", doc.ConsensusParams.Validator)
+	}
+}
+
+func TestAssembler_ApplyConsensusParams_Rejections(t *testing.T) {
+	for name, params := range map[string]string{
+		"array":   `[1]`,
+		"null":    `{"block":null}`,
+		"invalid": `{"block":{"max_gas":"not-a-number"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			genesisWithAppState(t, homeDir, `{}`)
+			a := NewGenesisAssembler(homeDir, "b", "r", "test-chain-1", nil, nil)
+			if err := a.applyConsensusParams(json.RawMessage(params)); err == nil {
+				t.Fatalf("%s must be rejected", params)
+			}
+		})
+	}
+}
+
+func TestAssembler_UploadAutobahnConfig_UsesIdentityManifests(t *testing.T) {
+	mock := newMockS3Uploader()
+	a := NewGenesisAssembler(t.TempDir(), "my-bucket", "us-west-2", "test-chain-1", nil, mockUploaderFactory(mock))
+	pub := func(prefix, b string) string { return prefix + ":ed25519:public:" + strings.Repeat(b, 32) }
+	identities := map[string]identityManifest{
+		"val-0": {Autobahn: &autobahnIdentity{ValidatorPubKey: pub("validator", "aa"), NodePubKey: pub("node", "bb"), AutobahnAddress: "val-0-0.val-0.ns.svc.cluster.local:26656", EVMRPCURL: "http://val-0-0.val-0.ns.svc.cluster.local:8545"}},
+		"val-1": {Autobahn: &autobahnIdentity{ValidatorPubKey: pub("validator", "cc"), NodePubKey: pub("node", "dd"), AutobahnAddress: "val-1-0.val-1.ns.svc.cluster.local:26656", EVMRPCURL: "http://val-1-0.val-1.ns.svc.cluster.local:8545"}},
+	}
+
+	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities); err != nil {
+		t.Fatalf("uploadAutobahnConfig: %v", err)
+	}
+	uploaded, ok := mock.uploads["my-bucket/test-chain-1/autobahn.json"]
+	if !ok {
+		t.Fatal("autobahn.json was not uploaded")
+	}
+	var cfg autobahnFileConfig
+	if err := json.Unmarshal(uploaded, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Validators) != 2 || cfg.Validators[0].ValidatorKey != pub("validator", "aa") || cfg.Validators[1].Address != "val-1-0.val-1.ns.svc.cluster.local:26656" {
+		t.Errorf("validators = %+v", cfg.Validators)
+	}
+
+	// A validator whose identity.json predates Autobahn fails the ceremony
+	// before anything is uploaded.
+	mock2 := newMockS3Uploader()
+	a2 := NewGenesisAssembler(t.TempDir(), "my-bucket", "us-west-2", "test-chain-1", nil, mockUploaderFactory(mock2))
+	err := a2.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-2"}, identities)
+	if err == nil || !strings.Contains(err.Error(), "val-2") {
+		t.Fatalf("expected an error naming val-2, got %v", err)
+	}
+	if len(mock2.uploads) != 0 {
+		t.Error("nothing may be uploaded when an identity is missing its autobahn section")
+	}
+}

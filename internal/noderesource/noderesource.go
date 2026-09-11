@@ -374,7 +374,7 @@ func NodeMode(node *seiv1alpha1.SeiNode) string {
 // listener, so its liveness probe kills it. Named for the property rather than
 // the mode so the call sites read as intent.
 func servesSeidRPC(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.Seed == nil
+	return node.Spec.Seed == nil && !node.Spec.Consensus.IsEvmOnly()
 }
 
 // NeedsLongStartup returns true when the node's bootstrap strategy involves
@@ -1145,6 +1145,9 @@ func readinessProbeForNode(node *seiv1alpha1.SeiNode) *corev1.Probe {
 // kubelet dials the pod IP and the sidecar dials loopback, so agreement also
 // rests on seid binding 0.0.0.0, the shipped default.
 func UpCheckForNode(node *seiv1alpha1.SeiNode) wire.UpCheck {
+	if node.Spec.Consensus.IsEvmOnly() {
+		return wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortEVMHTTP, Path: pathRoot}
+	}
 	if !servesSeidRPC(node) {
 		return wire.UpCheck{Scheme: wire.UpCheckTCP, Port: seiconfig.PortP2P}
 	}
@@ -1155,6 +1158,9 @@ func UpCheckForNode(node *seiv1alpha1.SeiNode) wire.UpCheck {
 const (
 	pathStatus    = "/status"
 	pathLagStatus = "/lag_status"
+	// pathRoot is the EVM-only listener's bare GET, which answers 200 once the
+	// JSON-RPC server is up; that mode serves no CometBFT RPC.
+	pathRoot = "/"
 )
 
 // httpReadinessProbe reports a node as ready when seid answers path with a 2xx.

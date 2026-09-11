@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	seiconfig "github.com/sei-protocol/sei-config"
 	"github.com/sei-protocol/seilog"
 
@@ -54,8 +56,14 @@ type GenesisS3Config struct {
 // downloaded genesis.json must match. When non-empty it gates the S3 download:
 // a mismatch fails closed. When empty (what the current controller sends) the
 // download is unverified, preserving today's behavior.
+//
+// Autobahn also fetches <chainID>/autobahn.json from the same prefix into
+// config/autobahn.json. The ceremony uploads it before genesis.json, so its
+// absence once genesis.json is present is a terminal ceremony failure, not a
+// race to retry.
 type ConfigureGenesisRequest struct {
 	ExpectedGenesisHash string `json:"expectedGenesisHash,omitempty"`
+	Autobahn            bool   `json:"autobahn,omitempty"`
 }
 
 // GenesisFetcher writes genesis.json to the config directory. It first checks
@@ -97,6 +105,15 @@ func (g *GenesisFetcher) Handler() engine.TaskHandler {
 
 		// Try embedded genesis first.
 		if _, err := seiconfig.GenesisForChain(g.chainID); err == nil {
+			if req.Autobahn {
+				return &engine.TaskError{
+					Task:      "configure-genesis",
+					Operation: "autobahn",
+					Message:   fmt.Sprintf("chain %q has an embedded genesis but no autobahn.json", g.chainID),
+					Hint:      "engine Autobahn is only supported on chains whose genesis ceremony ran under this controller",
+					Retryable: false,
+				}
+			}
 			return g.writeEmbeddedGenesis()
 		}
 
@@ -107,8 +124,54 @@ func (g *GenesisFetcher) Handler() engine.TaskHandler {
 
 		key := g.chainID + "/genesis.json"
 		genesisLog.Info("chain not embedded, fetching from S3", "chainId", g.chainID, "bucket", g.genesisBucket, "key", key)
-		return g.fetchFromS3(ctx, GenesisS3Config{Bucket: g.genesisBucket, Key: key, Region: g.genesisRegion}, req.ExpectedGenesisHash)
+		if err := g.fetchFromS3(ctx, GenesisS3Config{Bucket: g.genesisBucket, Key: key, Region: g.genesisRegion}, req.ExpectedGenesisHash); err != nil {
+			return err
+		}
+		if req.Autobahn {
+			if err := g.fetchAutobahnConfig(ctx); err != nil {
+				return err
+			}
+		}
+		return writeMarker(g.homeDir, genesisMarkerFile)
 	})
+}
+
+// fetchAutobahnConfig downloads <chainID>/autobahn.json into config/. It runs
+// after genesis.json landed, so a missing object means the ceremony that
+// produced this genesis never generated the artifact: terminal.
+func (g *GenesisFetcher) fetchAutobahnConfig(ctx context.Context) error {
+	key := g.chainID + "/" + autobahnArtifactName
+	genesisLog.Info("downloading autobahn.json from S3", "bucket", g.genesisBucket, "key", key)
+	s3Client, err := g.s3ClientFactory(ctx, g.genesisRegion)
+	if err != nil {
+		return fmt.Errorf("building S3 client: %w", err)
+	}
+
+	output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(g.genesisBucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		te := seis3.ClassifyS3Error("configure-genesis", g.genesisBucket, key, g.genesisRegion, err)
+		var noSuchKey *s3types.NoSuchKey
+		if errors.As(err, &noSuchKey) {
+			te.Hint = "genesis.json is present but autobahn.json is not; the ceremony uploads autobahn.json first, so this chain's genesis was assembled without engine Autobahn"
+		}
+		return te
+	}
+	defer func() { _ = output.Body.Close() }()
+
+	destPath := filepath.Join(g.homeDir, "config", autobahnArtifactName)
+	f, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", destPath, err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := io.Copy(f, output.Body); err != nil {
+		return fmt.Errorf("writing %s: %w", destPath, err)
+	}
+	genesisLog.Info("autobahn.json download complete (S3)")
+	return nil
 }
 
 // Fetch downloads genesis.json from S3, skipping if the marker file exists.
@@ -119,7 +182,10 @@ func (g *GenesisFetcher) Fetch(ctx context.Context, cfg GenesisS3Config) error {
 		genesisLog.Debug("already completed, skipping")
 		return nil
 	}
-	return g.fetchFromS3(ctx, cfg, "")
+	if err := g.fetchFromS3(ctx, cfg, ""); err != nil {
+		return err
+	}
+	return writeMarker(g.homeDir, genesisMarkerFile)
 }
 
 // fetchFromS3 downloads genesis.json, tee-ing the bytes through SHA-256 as they
@@ -173,7 +239,7 @@ func (g *GenesisFetcher) fetchFromS3(ctx context.Context, cfg GenesisS3Config, e
 		genesisLog.Info("genesis hash verified", "sha256", gotHash)
 	}
 	genesisLog.Info("genesis download complete (S3)")
-	return writeMarker(g.homeDir, genesisMarkerFile)
+	return nil
 }
 
 func (g *GenesisFetcher) writeEmbeddedGenesis() error {

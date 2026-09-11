@@ -154,8 +154,13 @@ func (t SnapshotUploadOnceTask) ToTaskRequest() TaskRequest {
 // sidecar fails closed on mismatch. When empty the download is unverified —
 // callers that omit it (and the field is omitted from the wire request) keep
 // the sidecar's pre-verification behavior.
+//
+// Autobahn also fetches {bucket}/{chainID}/autobahn.json into config/. The
+// ceremony uploads that artifact before genesis.json, so the sidecar treats
+// its absence after genesis.json landed as terminal.
 type ConfigureGenesisTask struct {
 	ExpectedGenesisHash string
+	Autobahn            bool
 }
 
 func (t ConfigureGenesisTask) TaskType() string { return TaskTypeConfigureGenesis }
@@ -163,10 +168,16 @@ func (t ConfigureGenesisTask) TaskType() string { return TaskTypeConfigureGenesi
 func (t ConfigureGenesisTask) Validate() error { return nil }
 
 func (t ConfigureGenesisTask) ToTaskRequest() TaskRequest {
-	if t.ExpectedGenesisHash == "" {
+	p := map[string]any{}
+	if t.ExpectedGenesisHash != "" {
+		p["expectedGenesisHash"] = t.ExpectedGenesisHash
+	}
+	if t.Autobahn {
+		p["autobahn"] = true
+	}
+	if len(p) == 0 {
 		return TaskRequest{Type: t.TaskType()}
 	}
-	p := map[string]any{"expectedGenesisHash": t.ExpectedGenesisHash}
 	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
@@ -554,8 +565,14 @@ func (t GenerateGentxTask) ToTaskRequest() TaskRequest {
 
 // UploadGenesisArtifactsTask uploads identity.json and gentx.json to S3.
 // S3 coordinates are derived by the sidecar from its environment.
+//
+// Autobahn widens identity.json with the validator's Autobahn public inputs
+// (validator and node public keys, advertised P2P address, EVM-RPC URL) for
+// the assembler's gen-autobahn-config step; Namespace is then required.
 type UploadGenesisArtifactsTask struct {
-	NodeName string
+	NodeName  string
+	Namespace string
+	Autobahn  bool
 }
 
 func (t UploadGenesisArtifactsTask) TaskType() string { return TaskTypeUploadGenesisArtifacts }
@@ -564,12 +581,19 @@ func (t UploadGenesisArtifactsTask) Validate() error {
 	if t.NodeName == "" {
 		return fmt.Errorf("upload-genesis-artifacts: missing required field NodeName")
 	}
+	if t.Autobahn && t.Namespace == "" {
+		return fmt.Errorf("upload-genesis-artifacts: Namespace is required when Autobahn is set")
+	}
 	return nil
 }
 
 func (t UploadGenesisArtifactsTask) ToTaskRequest() TaskRequest {
 	p := map[string]any{
 		"nodeName": t.NodeName,
+	}
+	if t.Autobahn {
+		p["namespace"] = t.Namespace
+		p["autobahn"] = true
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
@@ -646,12 +670,19 @@ func validateGenesisAccounts(prefix string, accounts []GenesisAccountEntry) erro
 // returned in-band on the task result as {"genesisHash":"<bare-hex>"}, which
 // the controller reads over the trusted GET /v0/tasks/{id} channel. It is
 // never written to S3, where the prefix is attacker-writable.
+//
+// ConsensusParams is one JSON object shaped like genesis.consensus_params,
+// deep-merged over the assembled genesis. Autobahn makes the assembler
+// generate autobahn.json from every validator's identity.json and upload it
+// before genesis.json.
 type AssembleAndUploadGenesisTask struct {
-	AccountBalance string
-	Namespace      string
-	Nodes          []GenesisNodeParam
-	Accounts       []GenesisAccountEntry
-	Overrides      map[string]json.RawMessage
+	AccountBalance  string
+	Namespace       string
+	Nodes           []GenesisNodeParam
+	Accounts        []GenesisAccountEntry
+	Overrides       map[string]json.RawMessage
+	ConsensusParams json.RawMessage
+	Autobahn        bool
 }
 
 func (t AssembleAndUploadGenesisTask) TaskType() string { return TaskTypeAssembleGenesis }
@@ -665,6 +696,12 @@ func (t AssembleAndUploadGenesisTask) Validate() error {
 	}
 	if len(t.Nodes) == 0 {
 		return fmt.Errorf("assemble-and-upload-genesis: at least one node is required")
+	}
+	if len(t.ConsensusParams) > 0 {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(t.ConsensusParams, &obj); err != nil {
+			return fmt.Errorf("assemble-and-upload-genesis: ConsensusParams must be a JSON object: %w", err)
+		}
 	}
 	return validateGenesisAccounts("assemble-and-upload-genesis", t.Accounts)
 }
@@ -688,6 +725,12 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 			overrides[k] = v
 		}
 		p["overrides"] = overrides
+	}
+	if len(t.ConsensusParams) > 0 {
+		p["consensusParams"] = t.ConsensusParams
+	}
+	if t.Autobahn {
+		p["autobahn"] = true
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req

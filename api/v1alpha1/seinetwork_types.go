@@ -26,6 +26,12 @@ import (
 //
 // +kubebuilder:validation:XValidation:rule="self.genesis == oldSelf.genesis",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
 // +kubebuilder:validation:XValidation:rule="self.replicas == oldSelf.replicas",message="spec.replicas is fixed at the genesis ceremony; the validator set is minted into genesis state and cannot be grown or shrunk by editing the spec"
+// consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint,
+// evmOnly: false}), so adding an explicit default to an existing object is an
+// accepted no-op while a real engine or evmOnly change is caught.
+// +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.engine) ? self.consensus.engine : 'Tendermint') == (has(oldSelf.consensus) && has(oldSelf.consensus.engine) ? oldSelf.consensus.engine : 'Tendermint')",message="spec.consensus.engine is create-only: the engine is baked into the ceremony's autobahn.json and every validator's home directory; recreate the network to change it"
+// +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.evmOnly) ? self.consensus.evmOnly : false) == (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly) ? oldSelf.consensus.evmOnly : false)",message="spec.consensus.evmOnly is create-only: the application is baked into every validator's home directory; recreate the network to change it"
+// +kubebuilder:validation:XValidation:rule="!(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly) || !has(self.configOverrides) || !('network.rpc.listen_address' in self.configOverrides || 'api.rest.enable' in self.configOverrides || 'api.grpc.enable' in self.configOverrides || 'api.grpc_web.enable' in self.configOverrides)",message="an EVM-only network owns network.rpc.listen_address and api.{rest,grpc,grpc_web}.enable: the EVM-only executor serves no CometBFT RPC, REST or gRPC"
 // dataVolume is create-only (change, unset, first-time set all rejected).
 // Presence parity only here; values are pinned on the shared DataVolume* types,
 // covering both Kinds. A structural == cannot stay once a Quantity lives here (a
@@ -54,6 +60,11 @@ type SeiNetworkSpec struct {
 	// path. Immutable once set; enforced by spec-level CEL.
 	// +required
 	Genesis GenesisCeremonyConfig `json:"genesis"`
+
+	// Consensus selects the engine every validator runs. Absent means Tendermint.
+	// Create-only on its effective value; propagated to every validator child.
+	// +optional
+	Consensus *ConsensusSpec `json:"consensus,omitempty"`
 
 	// Replicas is the number of genesis validators to create. Each gets a
 	// DISTINCT generated identity, so replicas>1 is the normal safe case
@@ -204,6 +215,15 @@ type GenesisCeremonyConfig struct {
 	// matching the type at that path in the underlying genesis schema.
 	// +optional
 	Overrides map[string]apiextensionsv1.JSON `json:"overrides,omitempty"`
+
+	// ConsensusParams is one nested JSON object shaped like genesis.json's
+	// top-level consensus_params (e.g. {"block": {"max_gas": "35000000"}}),
+	// deep-merged over what seid init wrote after app_state overrides. It is the
+	// typed route to a key overrides cannot reach: overrides address app_state
+	// only. A null anywhere in the object is rejected at plan-build.
+	// +optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	ConsensusParams *apiextensionsv1.JSON `json:"consensusParams,omitempty"`
 
 	// MaxCeremonyDuration is the maximum time from network creation to genesis
 	// assembly completion. Default: "15m".

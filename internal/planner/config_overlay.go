@@ -68,10 +68,15 @@ func withConfigValues(plan *seiv1alpha1.TaskPlan, node *seiv1alpha1.SeiNode) (*s
 		return nil, err
 	}
 	plan.ConfigValuesHash = hash
-	if len(node.Spec.ConfigValues) == 0 {
+	engine := consensusOverlay(node)
+	if len(node.Spec.ConfigValues) == 0 && engine == nil {
 		return plan, nil
 	}
 	patch, err := configValuesOverlay(node.Spec.ConfigValues)
+	if err != nil {
+		return nil, err
+	}
+	patch, err = mergeOverlayPatches(patch, engine)
 	if err != nil {
 		return nil, err
 	}

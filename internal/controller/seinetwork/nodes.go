@@ -266,6 +266,8 @@ func (r *SeiNetworkReconciler) ensureSeiNode(ctx context.Context, network *seiv1
 	//     spec, so a sync branch would fail the entire update, taking the image
 	//     and podLabels sync down with it. The parent's spec.resources is
 	//     create-only for the same reason, so there is nothing to sync anyway.
+	//   - Consensus is create-only on both Kinds: the engine is baked into the
+	//     ceremony artifact and the child's home directory.
 	if updated {
 		return r.Update(ctx, existing)
 	}
@@ -297,6 +299,7 @@ func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.
 		ConfigValues: cloneConfigValues(network.Spec.ConfigValues),
 		Sidecar:      network.Spec.Sidecar.DeepCopy(),
 		Scheduling:   network.Spec.Scheduling.DeepCopy(),
+		Consensus:    network.Spec.Consensus.DeepCopy(),
 		DataVolume:   network.Spec.DataVolume.DeepCopy(),
 		Resources:    network.Spec.Resources.DeepCopy(),
 		PodLabels:    podLabels,

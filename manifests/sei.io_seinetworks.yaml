@@ -75,6 +75,9 @@ spec:
               controller synthesizes each child SeiNode's validator spec from these
               scalars (see generateSeiNode).
 
+              consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint,
+              evmOnly: false}), so adding an explicit default to an existing object is an
+              accepted no-op while a real engine or evmOnly change is caught.
               dataVolume is create-only (change, unset, first-time set all rejected).
               Presence parity only here; values are pinned on the shared DataVolume* types,
               covering both Kinds. A structural == cannot stay once a Quantity lives here (a
@@ -169,6 +172,34 @@ spec:
                 - fileName
                 - key
                 x-kubernetes-list-type: map
+              consensus:
+                description: |-
+                  Consensus selects the engine every validator runs. Absent means Tendermint.
+                  Create-only on its effective value; propagated to every validator child.
+                properties:
+                  engine:
+                    description: |-
+                      Engine is the consensus engine. Tendermint when omitted. Autobahn makes the
+                      genesis ceremony generate autobahn.json from every validator's identity and
+                      points config.toml's autobahn-config-file at it on validators and followers.
+                    enum:
+                    - Tendermint
+                    - Autobahn
+                    type: string
+                  evmOnly:
+                    description: |-
+                      EvmOnly replaces the ABCI application with the EVM-only executor (chain ID
+                      713715). It requires engine Autobahn and is rejected on a seed. The node
+                      serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
+                      are off, no cosmos-exporter is attached, and Ready proves that listener
+                      answers, not sync distance.
+                    type: boolean
+                type: object
+                x-kubernetes-validations:
+                - message: 'evmOnly requires engine Autobahn: the EVM-only executor
+                    runs only under Autobahn consensus'
+                  rule: '!(has(self.evmOnly) && self.evmOnly) || (has(self.engine)
+                    && self.engine == ''Autobahn'')'
               dataVolume:
                 description: |-
                   DataVolume configures the data PersistentVolumeClaim for each genesis
@@ -382,6 +413,14 @@ spec:
                     minLength: 1
                     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
+                  consensusParams:
+                    description: |-
+                      ConsensusParams is one nested JSON object shaped like genesis.json's
+                      top-level consensus_params (e.g. {"block": {"max_gas": "35000000"}}),
+                      deep-merged over what seid init wrote after app_state overrides. It is the
+                      typed route to a key overrides cannot reach: overrides address app_state
+                      only. A null anywhere in the object is rejected at plan-build.
+                    x-kubernetes-preserve-unknown-fields: true
                   maxCeremonyDuration:
                     description: |-
                       MaxCeremonyDuration is the maximum time from network creation to genesis
@@ -609,6 +648,25 @@ spec:
                 set is minted into genesis state and cannot be grown or shrunk by
                 editing the spec
               rule: self.replicas == oldSelf.replicas
+            - message: 'spec.consensus.engine is create-only: the engine is baked
+                into the ceremony''s autobahn.json and every validator''s home directory;
+                recreate the network to change it'
+              rule: '(has(self.consensus) && has(self.consensus.engine) ? self.consensus.engine
+                : ''Tendermint'') == (has(oldSelf.consensus) && has(oldSelf.consensus.engine)
+                ? oldSelf.consensus.engine : ''Tendermint'')'
+            - message: 'spec.consensus.evmOnly is create-only: the application is
+                baked into every validator''s home directory; recreate the network
+                to change it'
+              rule: '(has(self.consensus) && has(self.consensus.evmOnly) ? self.consensus.evmOnly
+                : false) == (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly)
+                ? oldSelf.consensus.evmOnly : false)'
+            - message: 'an EVM-only network owns network.rpc.listen_address and api.{rest,grpc,grpc_web}.enable:
+                the EVM-only executor serves no CometBFT RPC, REST or gRPC'
+              rule: '!(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)
+                || !has(self.configOverrides) || !(''network.rpc.listen_address''
+                in self.configOverrides || ''api.rest.enable'' in self.configOverrides
+                || ''api.grpc.enable'' in self.configOverrides || ''api.grpc_web.enable''
+                in self.configOverrides)'
             - message: 'spec.dataVolume is create-only: each validator''s data PVC
                 is created once (ensure-data-pvc is Get-then-Create with no update
                 path) and nothing replaces a node on storage drift, so a later edit

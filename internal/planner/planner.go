@@ -666,7 +666,7 @@ func paramsForTaskType(
 	case TaskSnapshotRestore:
 		return snapshotRestoreTask(snap)
 	case TaskConfigureGenesis:
-		return sidecar.ConfigureGenesisTask{}
+		return sidecar.ConfigureGenesisTask{Autobahn: node.Spec.Consensus.IsAutobahn()}
 	case TaskConfigApply:
 		if configIntent != nil {
 			return configIntent
@@ -706,7 +706,11 @@ func genesisCeremonyTaskParams(node *seiv1alpha1.SeiNode, taskType string) any {
 			AccountBalance: gc.AccountBalance,
 		}
 	case TaskUploadGenesisArtifacts:
-		return sidecar.UploadGenesisArtifactsTask{NodeName: node.Name}
+		return sidecar.UploadGenesisArtifactsTask{
+			NodeName:  node.Name,
+			Namespace: node.Namespace,
+			Autobahn:  node.Spec.Consensus.IsAutobahn(),
+		}
 	case TaskSetGenesisPeers:
 		return sidecar.SetGenesisPeersTask{}
 	default:
