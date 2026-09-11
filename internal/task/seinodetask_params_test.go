@@ -8,6 +8,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
@@ -256,8 +257,8 @@ func TestSeiNodeTaskParamsFor_MarkReady_NilPayload_ParamsBuildFailed(t *testing.
 	}
 }
 
-// kind=RestartSeid maps to the sidecar restart-seid task with an empty payload —
-// no target needed, no source building (mirrors MarkReady).
+// kind=RestartSeid maps to the sidecar restart-seid task; with no target the
+// payload carries no up-check and the sidecar falls back to /status.
 func TestSeiNodeTaskParamsFor_RestartSeid(t *testing.T) {
 	cr := &seiv1alpha1.SeiNodeTask{
 		Spec: seiv1alpha1.SeiNodeTaskSpec{
@@ -328,5 +329,30 @@ func TestFailureReason(t *testing.T) {
 	// A plain error with no reason defaults to ParamsBuildFailed.
 	if got := FailureReason(errors.New("bare")); got != ReasonParamsBuildFailed {
 		t.Errorf("FailureReason(bare error) = %q, want %q", got, ReasonParamsBuildFailed)
+	}
+}
+
+// With a target the restart-seid payload carries that node's up-check, so a
+// SeiNodeTask restart on a seed waits on P2P rather than an RPC it never binds.
+func TestSeiNodeTaskParamsFor_RestartSeid_CarriesTargetUpCheck(t *testing.T) {
+	cr := &seiv1alpha1.SeiNodeTask{
+		Spec: seiv1alpha1.SeiNodeTaskSpec{
+			Kind:        seiv1alpha1.SeiNodeTaskKindRestartSeid,
+			RestartSeid: &seiv1alpha1.RestartSeidPayload{},
+		},
+	}
+	seed := &seiv1alpha1.SeiNode{Spec: seiv1alpha1.SeiNodeSpec{Seed: &seiv1alpha1.SeedSpec{}}}
+
+	p, err := SeiNodeTaskParamsFor(cr, seed)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	payload, ok := p.Payload.(sidecar.RestartSeidTask)
+	if !ok {
+		t.Fatalf("Payload = %T, want sidecar.RestartSeidTask", p.Payload)
+	}
+	want := noderesource.UpCheckForNode(seed)
+	if payload.UpCheck == nil || *payload.UpCheck != want {
+		t.Errorf("UpCheck = %v, want %v", payload.UpCheck, want)
 	}
 }

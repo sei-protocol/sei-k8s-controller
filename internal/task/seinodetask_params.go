@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
@@ -90,7 +91,7 @@ func SeiNodeTaskParamsFor(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNo
 	case seiv1alpha1.SeiNodeTaskKindAwaitNodesAtHeight:
 		return awaitNodesAtHeightParams(cr)
 	case seiv1alpha1.SeiNodeTaskKindRestartSeid:
-		return restartSeidParams(cr)
+		return restartSeidParams(cr, target)
 	case seiv1alpha1.SeiNodeTaskKindMarkReady:
 		return markReadyParams(cr)
 	default:
@@ -204,14 +205,20 @@ func awaitNodesAtHeightParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, e
 	}}, nil
 }
 
-// restartSeidParams builds the empty sidecar restart-seid payload. CEL requires
-// spec.restartSeid for kind=RestartSeid; this guard covers the early-validation
-// path (taskParamsForKind runs before the spec is admission-checked in tests).
-func restartSeidParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
+// restartSeidParams builds the sidecar restart-seid payload, carrying the
+// target's up-check so the sidecar waits on the listener this node actually
+// binds. CEL requires spec.restartSeid for kind=RestartSeid; the nil guard
+// covers the early-validation path, where target is also nil.
+func restartSeidParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (SeiNodeTaskParams, error) {
 	if cr.Spec.RestartSeid == nil {
 		return SeiNodeTaskParams{}, paramsErr("spec.restartSeid is required for kind=RestartSeid")
 	}
-	return SeiNodeTaskParams{sidecar.TaskTypeRestartSeid, sidecar.RestartSeidTask{}}, nil
+	payload := sidecar.RestartSeidTask{}
+	if target != nil {
+		up := noderesource.UpCheckForNode(target)
+		payload.UpCheck = &up
+	}
+	return SeiNodeTaskParams{sidecar.TaskTypeRestartSeid, payload}, nil
 }
 
 // markReadyParams builds the empty sidecar mark-ready payload. CEL requires

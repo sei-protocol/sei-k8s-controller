@@ -1141,8 +1141,9 @@ func readinessProbeForNode(node *seiv1alpha1.SeiNode) *corev1.Probe {
 // UpCheckForNode returns the signal that proves seid answers for this node's
 // mode: TCP on the P2P port for a seed, HTTP GET /status on the RPC port for
 // every mode that serves RPC. The readiness probe and the sidecar's
-// restart-seid up-check both derive from it, so a pod can never read Ready
-// against one listener while a restart waits on another.
+// restart-seid/stop-seid up-checks derive their port and path from it. The
+// kubelet dials the pod IP and the sidecar dials loopback, so agreement also
+// rests on seid binding 0.0.0.0, the shipped default.
 func UpCheckForNode(node *seiv1alpha1.SeiNode) wire.UpCheck {
 	if !servesSeidRPC(node) {
 		return wire.UpCheck{Scheme: wire.UpCheckTCP, Port: seiconfig.PortP2P}

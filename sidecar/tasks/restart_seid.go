@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -170,7 +171,7 @@ func upCheckProbe(check wire.UpCheck) func(ctx context.Context) bool {
 			_ = conn.Close()
 			return true
 		}
-	default:
+	case wire.UpCheckHTTP:
 		client := &http.Client{Timeout: restartSeidUpCheckTimeout}
 		url := "http://" + addr + check.Path
 		return func(ctx context.Context) bool {
@@ -182,9 +183,12 @@ func upCheckProbe(check wire.UpCheck) func(ctx context.Context) bool {
 			if err != nil {
 				return false
 			}
+			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 			return resp.StatusCode >= 200 && resp.StatusCode < 300
 		}
+	default:
+		return func(context.Context) bool { return false }
 	}
 }
 
