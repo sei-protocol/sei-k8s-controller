@@ -205,6 +205,10 @@ spec:
                         minimum: 1
                         type: integer
                     type: object
+                    x-kubernetes-validations:
+                    - message: blockInterval must be a positive duration
+                      rule: '!has(self.blockInterval) || duration(self.blockInterval)
+                        > duration(''0s'')'
                   engine:
                     description: |-
                       Engine is the consensus engine. Tendermint when omitted. Autobahn makes the

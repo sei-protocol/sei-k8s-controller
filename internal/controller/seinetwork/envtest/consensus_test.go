@@ -75,6 +75,18 @@ func TestConsensus_NetworkShapes(t *testing.T) {
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
 			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "400"},
 		}, errorText: "blockInterval"},
+		{name: "zero-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "0s"},
+		}, errorText: "blockInterval must be a positive duration"},
+		{name: "zero-composite-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "0h0m0s"},
+		}, errorText: "blockInterval must be a positive duration"},
+		{name: "fractional-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "1.5s"},
+		}},
 		{name: "zero-max-txs", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
 			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{MaxTxsPerBlock: &zero},

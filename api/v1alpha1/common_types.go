@@ -327,6 +327,7 @@ type ConsensusSpec struct {
 // autobahn.json. Each field replaces one value gen-autobahn-config writes with
 // its default flags; an omitted field keeps that default. Every validator and
 // follower reads the same artifact, so these are network-wide and create-only.
+// +kubebuilder:validation:XValidation:rule="!has(self.blockInterval) || duration(self.blockInterval) > duration('0s')",message="blockInterval must be a positive duration"
 type AutobahnCeremonySpec struct {
 	// BlockInterval is autobahn.json block_interval, a Go duration string such
 	// as 400ms (the gen-autobahn-config default). Must be positive.
@@ -374,6 +375,14 @@ func (n *NetworkConsensusSpec) Node() *ConsensusSpec {
 // IsAutobahn reports whether the effective engine is Autobahn; false for nil.
 func (n *NetworkConsensusSpec) IsAutobahn() bool {
 	return n != nil && n.ConsensusSpec.IsAutobahn()
+}
+
+// EffectiveEngine returns the engine the network runs; Tendermint for nil.
+func (n *NetworkConsensusSpec) EffectiveEngine() ConsensusEngine {
+	if n == nil {
+		return ConsensusEngineTendermint
+	}
+	return n.ConsensusSpec.EffectiveEngine()
 }
 
 // IsEvmOnly reports the effective evmOnly value; false for nil.
