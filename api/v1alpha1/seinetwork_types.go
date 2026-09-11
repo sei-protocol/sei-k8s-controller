@@ -331,6 +331,12 @@ type SeiNetworkStatus struct {
 	// +optional
 	GenesisHash string `json:"genesisHash,omitempty"`
 
+	// ObservedHeight is the highest committed height any reachable child has
+	// reported, with the time the network controller recorded that advance.
+	// The Producing condition is derived from it.
+	// +optional
+	ObservedHeight *ObservedHeight `json:"observedHeight,omitempty"`
+
 	// GenesisS3URI is the S3 URI of the uploaded genesis. Followers boot from
 	// this URI.
 	// +optional
@@ -498,9 +504,46 @@ const (
 	PlacementScheduled Placement = "Scheduled"
 )
 
+// ObservedHeight records the network's committed-height high-water mark.
+type ObservedHeight struct {
+	// Height is the highest committed height read from any child whose
+	// reading was fresh at the time.
+	Height int64 `json:"height"`
+
+	// Time is when Height last advanced. The Producing stall window runs
+	// from it.
+	Time metav1.Time `json:"time"`
+}
+
+// Reasons for the Producing condition.
+const (
+	// ReasonHeightAdvancing: the observed height advanced within the window.
+	ReasonHeightAdvancing = "HeightAdvancing"
+	// ReasonAwaitingFirstBlock: no child has committed a block yet and the
+	// network is still inside its grace window.
+	ReasonAwaitingFirstBlock = "AwaitingFirstBlock"
+	// ReasonHeightStalled: the observed height has not advanced for longer
+	// than the window on a chain expected to produce continuously.
+	ReasonHeightStalled = "HeightStalled"
+	// ReasonIdle: the observed height is not advancing on an Autobahn network
+	// with empty blocks disabled, which commits only when transactions arrive.
+	// Expected between workloads; not a fault.
+	ReasonIdle = "Idle"
+	// ReasonSignalUnreadable: no child has a fresh committed-height reading,
+	// so the controller cannot tell whether the chain is producing.
+	ReasonSignalUnreadable = "SignalUnreadable"
+	// ReasonNoNodes: no child SeiNodes exist yet.
+	ReasonNoNodes = "NoNodes"
+)
+
 // Status condition types for SeiNetwork.
 const (
-	ConditionNodesReady              = "NodesReady"
+	ConditionNodesReady = "NodesReady"
+	// ConditionProducing reports whether the chain is committing blocks,
+	// derived from children's committed heights rather than pod readiness.
+	// Ready/NodesReady stay infrastructure readiness; a Ready network can be
+	// Producing=False (idle Autobahn, or a stalled chain).
+	ConditionProducing               = "Producing"
 	ConditionGenesisCeremonyComplete = "GenesisCeremonyComplete"
 	ConditionPlanInProgress          = "PlanInProgress"
 	// ConditionRolloutInProgress is a DERIVED projection (not a state machine):
@@ -522,6 +565,8 @@ const (
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Height",type=integer,JSONPath=`.status.observedHeight.height`
+// +kubebuilder:printcolumn:name="Producing",type=string,JSONPath=`.status.conditions[?(@.type=="Producing")].reason`
 // +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.spec.paused`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

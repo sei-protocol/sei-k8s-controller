@@ -133,6 +133,10 @@ type TaskResult struct {
 // StatusResponse is the shape returned by the status endpoint.
 type StatusResponse struct {
 	Status string `json:"status"`
+	// CommittedHeight is seid's latest committed block height, read from the
+	// local RPC at request time. Absent when no local RPC answered, so a
+	// consumer never mistakes an unreadable node for one at height zero.
+	CommittedHeight *int64 `json:"committedHeight,omitempty"`
 }
 
 // ExecutionConfig carries process-wide deps the engine exposes to handlers.

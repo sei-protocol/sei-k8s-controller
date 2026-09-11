@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -515,5 +516,34 @@ func TestNodeID_MissingKeyFile(t *testing.T) {
 	rec := serveHTTP(srv, http.MethodGet, "/v0/node-id", "")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+}
+
+type fixedHeight struct {
+	h   int64
+	err error
+}
+
+func (f fixedHeight) CommittedHeight(context.Context) (int64, error) { return f.h, f.err }
+
+func TestStatusCommittedHeight(t *testing.T) {
+	eng := newTestEngine(t, nil)
+	srv := NewServer(":0", eng, t.TempDir(), AuthnModeUnauthenticated)
+
+	rec := serveHTTP(srv, http.MethodGet, "/v0/status", "")
+	if strings.Contains(rec.Body.String(), "committedHeight") {
+		t.Fatalf("no reader installed: expected committedHeight absent, got %s", rec.Body.String())
+	}
+
+	srv.SetHeightReader(fixedHeight{h: 77})
+	rec = serveHTTP(srv, http.MethodGet, "/v0/status", "")
+	if !strings.Contains(rec.Body.String(), `"committedHeight":77`) {
+		t.Fatalf("expected committedHeight 77, got %s", rec.Body.String())
+	}
+
+	srv.SetHeightReader(fixedHeight{err: errors.New("down")})
+	rec = serveHTTP(srv, http.MethodGet, "/v0/status", "")
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "committedHeight") {
+		t.Fatalf("unreadable height: expected 200 without committedHeight, got %d %s", rec.Code, rec.Body.String())
 	}
 }

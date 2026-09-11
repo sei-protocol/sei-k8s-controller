@@ -398,6 +398,17 @@ func (n *NetworkConsensusSpec) AutobahnSettings() *AutobahnCeremonySpec {
 	return n.Autobahn
 }
 
+// CommitsOnDemand reports whether the network commits blocks only when
+// transactions arrive, so an unchanging height is idleness rather than a
+// stall: Autobahn with allow_empty_blocks off (its default). Tendermint and
+// Autobahn with empty blocks enabled commit continuously.
+func (n *NetworkConsensusSpec) CommitsOnDemand() bool {
+	if !n.IsAutobahn() {
+		return false
+	}
+	return n.Autobahn == nil || n.Autobahn.AllowEmptyBlocks == nil || !*n.Autobahn.AllowEmptyBlocks
+}
+
 // EffectiveEngine returns the engine a nil or empty spec resolves to.
 func (c *ConsensusSpec) EffectiveEngine() ConsensusEngine {
 	if c == nil || c.Engine == "" {

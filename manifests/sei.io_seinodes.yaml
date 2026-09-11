@@ -1346,6 +1346,19 @@ spec:
                 - name
                 - uid
                 type: object
+              committedHeight:
+                description: |-
+                  CommittedHeight is seid's latest committed block height as last read
+                  through the sidecar. Unset until the first successful read; it keeps
+                  its last value when a read fails, so consumers must weigh it by
+                  CommittedHeightTime rather than treat an old value as current.
+                format: int64
+                type: integer
+              committedHeightTime:
+                description: CommittedHeightTime is when CommittedHeight was last
+                  read successfully.
+                format: date-time
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current

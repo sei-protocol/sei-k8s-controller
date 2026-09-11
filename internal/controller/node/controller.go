@@ -36,6 +36,9 @@ const (
 	nodeFinalizerName     = "sei.io/seinode-finalizer"
 	seiNodeControllerName = "seinode"
 	statusPollInterval    = 30 * time.Second
+	// heightReadTimeout bounds one sidecar status read; it must stay well
+	// under statusPollInterval so a hung sidecar cannot stretch the poll.
+	heightReadTimeout = 5 * time.Second
 )
 
 // PlatformConfig is an alias for platform.Config, used throughout the node
@@ -59,7 +62,14 @@ type SeiNodeReconciler struct {
 	// passed so the sidecar client and Resource resolve to it. Wired by
 	// cmd/main.go with the same factories as the node plan executor.
 	WorkflowConfigFor func(ctx context.Context, node *seiv1alpha1.SeiNode, wf *seiv1alpha1.SeiNodeTaskWorkflow) task.ExecutionConfig
+	// HeightReader reads a Running node's committed height each steady-state
+	// poll. Nil (tests) skips the read and leaves status.committedHeight as
+	// it was.
+	HeightReader HeightReader
 }
+
+// HeightReader returns a node's committed height from its sidecar.
+type HeightReader func(ctx context.Context, node *seiv1alpha1.SeiNode) (int64, error)
 
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sei.io,resources=seinodes/status,verbs=get;update;patch
@@ -287,6 +297,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		}
 	}
 
+	r.observeCommittedHeight(ctx, node, suppressDrift)
+
 	if err := flushStatus(); err != nil {
 		if execErr != nil {
 			log.FromContext(ctx).Error(execErr, "plan execution error lost due to status flush failure")
@@ -301,6 +313,27 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	r.emitPhaseTransition(ctx, node, observedPhase)
 
 	return steadyStateRequeue(node, result, suppressDrift, stateSyncBlocked), nil
+}
+
+// observeCommittedHeight stamps status.committedHeight/committedHeightTime
+// from the sidecar on a Running node with no active plan — the same cadence
+// steadyStateRequeue polls on. A failed read keeps the previous stamp so the
+// network controller ages it out by time rather than seeing a false zero.
+func (r *SeiNodeReconciler) observeCommittedHeight(ctx context.Context, node *seiv1alpha1.SeiNode, suppressDrift bool) {
+	if r.HeightReader == nil || suppressDrift || node.Status.Phase != seiv1alpha1.PhaseRunning ||
+		(node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, heightReadTimeout)
+	defer cancel()
+	h, err := r.HeightReader(ctx, node)
+	if err != nil {
+		log.FromContext(ctx).V(1).Info("committed height unreadable", "error", err)
+		return
+	}
+	now := metav1.Now()
+	node.Status.CommittedHeight = &h
+	node.Status.CommittedHeightTime = &now
 }
 
 // steadyStateRequeue picks the requeue cadence once plan work is done: a
