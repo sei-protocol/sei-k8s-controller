@@ -42,9 +42,12 @@ const (
 	// 2.5s), so a read that runs this long is a sidecar that is not there;
 	// after one the node sits out heightReadBackoff before the next attempt
 	// so a cell-wide sidecar outage costs the single reconcile worker one
-	// timeout per node per backoff, not per poll.
+	// timeout per node per backoff, not per poll. The backoff skips one poll,
+	// no more: the network counts a stamp as fresh for three polls
+	// (seinetwork.heightReadingMaxAge), so a sidecar that blips once and
+	// recovers is re-read before its last stamp ages out.
 	heightReadTimeout = 3 * time.Second
-	heightReadBackoff = 4 * statusPollInterval
+	heightReadBackoff = statusPollInterval
 )
 
 // PlatformConfig is an alias for platform.Config, used throughout the node

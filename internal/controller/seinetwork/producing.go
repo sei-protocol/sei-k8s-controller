@@ -12,7 +12,9 @@ import (
 const (
 	// heightReadingMaxAge is how old a child's committedHeightTime may be and
 	// still count. Three node status polls: one missed poll is noise, three
-	// means the node has stopped answering.
+	// means the node has stopped answering. Must exceed the node controller's
+	// poll interval plus its failed-read backoff (node.heightReadBackoff), or
+	// a single failed read ages a live node's stamp out before it is re-read.
 	heightReadingMaxAge = 90 * time.Second
 
 	// producingWindow is how long the observed height may sit unchanged

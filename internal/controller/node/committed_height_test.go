@@ -88,3 +88,13 @@ func TestObserveCommittedHeight(t *testing.T) {
 		}
 	})
 }
+
+// A failed read must be retried, and the retry given time to land, before the
+// network stops trusting the last good stamp (seinetwork.heightReadingMaxAge,
+// 90s); otherwise one blip reads as SignalUnreadable for the whole backoff.
+func TestHeightReadBackoff_StaysInsideFreshnessWindow(t *testing.T) {
+	const networkFreshnessWindow = 90 * time.Second
+	if got := statusPollInterval + heightReadBackoff + heightReadTimeout; got >= networkFreshnessWindow {
+		t.Fatalf("poll + backoff + timeout = %s, must stay below the network's %s freshness window", got, networkFreshnessWindow)
+	}
+}
