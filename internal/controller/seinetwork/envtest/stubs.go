@@ -82,6 +82,18 @@ func (s *StubSidecarClient) SubmitTask(_ context.Context, req sidecar.TaskReques
 	return id, nil
 }
 
+// SetCompleteAfter changes the completion delay under the same lock GetTask
+// reads it with. GetTask compares the current delay against each record's
+// submittedAt at poll time, so a change applies to already-submitted tasks
+// too: restoring zero in cleanup completes anything still pending. Tests that
+// need a plan to stay open long enough to observe (or disturb) it set a
+// delay, then restore zero in cleanup.
+func (s *StubSidecarClient) SetCompleteAfter(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.CompleteAfter = d
+}
+
 // GetTask reports Completed once CompleteAfter has elapsed since
 // submission, Running before that, and returns sidecar.ErrNotFound for
 // IDs the stub never saw (matching the real client's contract — the

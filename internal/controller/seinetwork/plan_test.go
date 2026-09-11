@@ -3,10 +3,14 @@ package seinetwork
 import (
 	"context"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -58,4 +62,146 @@ func TestFailPlan_LatchesCeremonyFailedAndClearsPlan(t *testing.T) {
 	planCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
 	g.Expect(planCond).NotTo(BeNil())
 	g.Expect(planCond.Status).To(Equal(metav1.ConditionFalse))
+}
+
+// A founding validator deleted while the ceremony plan is active must not
+// wedge the network: reconcileSeiNodes defers creates under PlanInProgress
+// and the ceremony's tasks retry by name against the missing node forever.
+// reconcilePlan abandons the plan and deletes the survivors instead — their
+// fetched genesis no longer matches what the replacement's gentx would
+// assemble — so PlanInProgress drops to False, the whole set is recreated, and
+// GenesisCeremonyComplete records ValidatorLost so the planner rebuilds the
+// ceremony once the set is whole again.
+func TestReconcilePlan_ValidatorLostMidCeremony_AbandonsPlan(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	network.Status.Plan = &seiv1alpha1.TaskPlan{ID: testPlanID, Phase: seiv1alpha1.TaskPlanActive}
+	network.Status.IncumbentNodes = []string{testNode0, testNode1}
+	setPlanInProgress(network, "PlanStarted", "Plan execution started")
+
+	survivor0 := generateSeiNode(network, 0)
+	survivor1 := generateSeiNode(network, 1)
+	for _, s := range []*seiv1alpha1.SeiNode{survivor0, survivor1} {
+		s.CreationTimestamp = metav1.NewTime(network.CreationTimestamp.Add(time.Minute))
+		g.Expect(controllerutil.SetControllerReference(network, s, newPlanTestScheme(t))).To(Succeed())
+	}
+
+	r := newPlanTestReconciler(t, network, survivor0, survivor1)
+	result, err := r.reconcilePlan(ctx, network)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+	for _, s := range []*seiv1alpha1.SeiNode{survivor0, survivor1} {
+		err := r.Get(ctx, client.ObjectKeyFromObject(s), &seiv1alpha1.SeiNode{})
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "surviving founding child %s should be deleted", s.Name)
+	}
+
+	g.Expect(network.Status.Plan).To(BeNil())
+
+	genesisCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete)
+	g.Expect(genesisCond).NotTo(BeNil())
+	g.Expect(genesisCond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(genesisCond.Reason).To(Equal(ReasonValidatorLost))
+
+	planCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
+	g.Expect(planCond).NotTo(BeNil())
+	g.Expect(planCond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(planCond.Reason).To(Equal(ReasonValidatorLost))
+
+	// The seed must keep ValidatorLost, like CeremonyFailed, until the rebuilt
+	// plan starts — resetting to NotStarted would erase why the plan vanished.
+	r.setGenesisCeremonyCondition(network)
+	genesisCond = apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete)
+	g.Expect(genesisCond.Reason).To(Equal(ReasonValidatorLost))
+}
+
+// A same-named SeiNetwork recreated over children a Retain teardown released
+// adopts them and runs a (marker-no-op) ceremony over established
+// validators. Their consensus identities cannot be regenerated, so a loss
+// under that plan abandons it but deletes nothing: the adopted survivors
+// predate the network, and that is the positive signal the teardown requires.
+// GenesisCeremonyComplete latches True/AdoptedSet so the planner does not
+// rebuild a ceremony that a marker-less replacement could turn into a genesis
+// republish over the live chain.
+func TestReconcilePlan_ValidatorLostOverAdoptedSet_KeepsSurvivors(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.CreationTimestamp = metav1.NewTime(time.Now())
+	network.Status.Plan = &seiv1alpha1.TaskPlan{ID: testPlanID, Phase: seiv1alpha1.TaskPlanActive}
+	network.Status.IncumbentNodes = []string{testNode0, testNode1}
+	setPlanInProgress(network, "PlanStarted", "Plan execution started")
+
+	adopted0 := generateSeiNode(network, 0)
+	adopted1 := generateSeiNode(network, 1)
+	for _, s := range []*seiv1alpha1.SeiNode{adopted0, adopted1} {
+		s.CreationTimestamp = metav1.NewTime(network.CreationTimestamp.Add(-time.Hour))
+		g.Expect(controllerutil.SetControllerReference(network, s, newPlanTestScheme(t))).To(Succeed())
+	}
+
+	r := newPlanTestReconciler(t, network, adopted0, adopted1)
+	result, err := r.reconcilePlan(ctx, network)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+	for _, s := range []*seiv1alpha1.SeiNode{adopted0, adopted1} {
+		g.Expect(r.Get(ctx, client.ObjectKeyFromObject(s), &seiv1alpha1.SeiNode{})).To(Succeed(),
+			"adopted validator %s must survive", s.Name)
+	}
+
+	g.Expect(network.Status.Plan).To(BeNil())
+	genesisCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete)
+	g.Expect(genesisCond).NotTo(BeNil())
+	g.Expect(genesisCond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(genesisCond.Reason).To(Equal(ReasonAdoptedSet))
+	g.Expect(genesisCond.Message).To(ContainSubstring("adopted validators are kept"))
+
+	planCond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionPlanInProgress)
+	g.Expect(planCond).NotTo(BeNil())
+	g.Expect(planCond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(planCond.Reason).To(Equal(ReasonValidatorLost))
+
+	// Latched True: the seed leaves it alone and the planner will not rebuild.
+	r.setGenesisCeremonyCondition(network)
+	genesisCond = apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionGenesisCeremonyComplete)
+	g.Expect(genesisCond.Reason).To(Equal(ReasonAdoptedSet))
+}
+
+// The full founding set under an active plan is the normal ceremony; the
+// plan is driven, not abandoned.
+func TestReconcilePlan_FullSetMidCeremony_KeepsPlan(t *testing.T) {
+	g := NewWithT(t)
+
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	network.Status.Plan = &seiv1alpha1.TaskPlan{ID: testPlanID, Phase: seiv1alpha1.TaskPlanActive}
+	network.Status.IncumbentNodes = []string{testNode0, testNode1, "genesis-net-2"}
+
+	g.Expect(validatorLost(network)).To(BeFalse())
+}
+
+// A child held in Terminating by its finalizer is already lost to the
+// ceremony: it is not an incumbent, so the loss is detected as soon as the
+// delete lands rather than once the finalizer releases, and no ceremony is
+// built over a node that is on its way out.
+func TestPopulateIncumbentNodes_ExcludesTerminatingChildren(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	network := newTestNetwork(testNetworkName, testGroupNS)
+	live := generateSeiNode(network, 0)
+	terminating := generateSeiNode(network, 1)
+	terminating.Finalizers = []string{"sei.io/test-hold"}
+	for _, s := range []*seiv1alpha1.SeiNode{live, terminating} {
+		g.Expect(controllerutil.SetControllerReference(network, s, newPlanTestScheme(t))).To(Succeed())
+	}
+
+	r := newPlanTestReconciler(t, network, live, terminating)
+	g.Expect(r.Delete(ctx, terminating)).To(Succeed())
+
+	g.Expect(r.populateIncumbentNodes(ctx, network)).To(Succeed())
+	g.Expect(network.Status.IncumbentNodes).To(ConsistOf(live.Name))
 }

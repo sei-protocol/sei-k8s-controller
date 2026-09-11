@@ -85,10 +85,15 @@ func (r *SeiNetworkReconciler) syncPausedToChildren(ctx context.Context, network
 // with the network's current genesis lifecycle state:
 //
 //   - True  / Complete       — ceremony finished (latched)
+//   - True  / AdoptedSet     — ceremony over adopted validators abandoned after
+//     a loss; they already carry a genesis, so none is rebuilt (latched)
 //   - False / InProgress     — ceremony executing under an active plan
 //   - False / CeremonyFailed — last ceremony plan failed; resting between
 //     failure and the auto-retry plan (set by failPlan, sticky until the
 //     retry plan starts and PlanInProgress flips back to True)
+//   - False / ValidatorLost  — ceremony abandoned because a founding validator
+//     was deleted mid-plan; sticky like CeremonyFailed until the rebuilt plan
+//     starts
 //   - False / NotStarted     — ceremony not yet started
 //
 // Every SeiNetwork runs the ceremony (genesis is required), so there is no
@@ -107,7 +112,8 @@ func (r *SeiNetworkReconciler) setGenesisCeremonyCondition(network *seiv1alpha1.
 			"InProgress", "genesis ceremony is executing under an active plan")
 		return
 	}
-	if hasConditionReason(network, seiv1alpha1.ConditionGenesisCeremonyComplete, "CeremonyFailed") {
+	if hasConditionReason(network, seiv1alpha1.ConditionGenesisCeremonyComplete, "CeremonyFailed") ||
+		hasConditionReason(network, seiv1alpha1.ConditionGenesisCeremonyComplete, ReasonValidatorLost) {
 		return
 	}
 	setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
@@ -116,7 +122,10 @@ func (r *SeiNetworkReconciler) setGenesisCeremonyCondition(network *seiv1alpha1.
 
 // populateIncumbentNodes lists child SeiNodes and records their names on the
 // network status. This is the genesis planner's child-list feed, refreshed
-// each reconcile — NOT rollout state.
+// each reconcile — NOT rollout state. A terminating child is not an
+// incumbent: its finalizer can hold it for a while, and a ceremony built over
+// it would enroll a node that is on its way out and whose replacement carries
+// a different identity.
 func (r *SeiNetworkReconciler) populateIncumbentNodes(ctx context.Context, network *seiv1alpha1.SeiNetwork) error {
 	nodes, err := r.listChildSeiNodes(ctx, network)
 	if err != nil {
@@ -124,6 +133,9 @@ func (r *SeiNetworkReconciler) populateIncumbentNodes(ctx context.Context, netwo
 	}
 	names := make([]string, 0, len(nodes))
 	for i := range nodes {
+		if !nodes[i].DeletionTimestamp.IsZero() {
+			continue
+		}
 		names = append(names, nodes[i].Name)
 	}
 	network.Status.IncumbentNodes = names

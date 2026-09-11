@@ -20,6 +20,8 @@ const (
 
 	testNetworkName = "genesis-net"
 	testNode0       = "genesis-net-0"
+	testNode1       = "genesis-net-1"
+	testPlanID      = "ceremony"
 	testGroupNS     = "sei"
 	testAPIVersion  = "sei.io/v1alpha1"
 	testKind        = "SeiNetwork"
