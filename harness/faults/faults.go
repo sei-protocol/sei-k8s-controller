@@ -5,11 +5,14 @@
 // experiment run by hand and one run by the nightly suite exercise the same
 // fault.
 //
-// Every fault is bounded to f=1 on a four-validator network: it targets
-// validator 0 (sei.io/node=<chainID>-0) or exactly one pod (mode: one), so a
-// 2/3 quorum holds and the chain must stay live under it. Duration-bearing
-// faults self-expire through spec.duration; one-shot kills (pod-failure,
-// container-kill) carry no duration and end when the kill lands.
+// Every fault but one is bounded to f=1 on a four-validator network: it
+// targets validator 0 (sei.io/node=<chainID>-0) or exactly one pod (mode:
+// one), so a 2/3 quorum holds and the chain must stay live under it. The
+// exception is flagged MeshWide (network-latency): it degrades every
+// validator symmetrically and is survivable because the slowdown is uniform,
+// not because quorum is preserved. Duration-bearing faults self-expire
+// through spec.duration; one-shot kills (pod-failure, container-kill) carry
+// no duration and end when the kill lands.
 package faults
 
 import (
@@ -48,15 +51,15 @@ type Fault struct {
 	// OneShot marks a kill fault: no spec.duration and no AllRecovered
 	// condition, so callers skip the self-expiry check and the recovery gate.
 	OneShot bool
+	// MeshWide marks a fault whose selector covers the whole validator pool
+	// (mode: all, no sei.io/node pin) instead of a single validator.
+	MeshWide bool
 	// Summary is one line on what the fault does and to whom.
 	Summary string
 
 	file string
 }
 
-// Catalog is every fault in the package, in the order the nightly suite runs
-// them. Deferred faults (dns-chaos, disk-io-latency) are not here; see
-// test/integration/chaos_deferred_test.go for why.
 const (
 	kindNetworkChaos = "NetworkChaos"
 	kindStressChaos  = "StressChaos"
@@ -64,6 +67,10 @@ const (
 	kindPodChaos     = "PodChaos"
 )
 
+// Catalog is every fault in the package, in the order the nightly suite runs
+// them. Deferred faults (dns-chaos, disk-io-latency) are not here; see
+// test/integration/chaos_deferred_test.go for why. Treat it as read-only:
+// the integration suite iterates this slice.
 var Catalog = []Fault{
 	{Name: "network-partition", Kind: kindNetworkChaos,
 		Summary: "isolate validator-0 from validators 1-3 in both directions", file: "network_partition.yaml.tmpl"},
@@ -73,7 +80,7 @@ var Catalog = []Fault{
 		Summary: "burn CPU inside one validator pod", file: "cpu_stress.yaml.tmpl"},
 	{Name: "time-skew", Kind: kindTimeChaos,
 		Summary: "skew the clock of one validator", file: "time_skew.yaml.tmpl"},
-	{Name: "network-latency", Kind: kindNetworkChaos,
+	{Name: "network-latency", Kind: kindNetworkChaos, MeshWide: true,
 		Summary: "add latency on the validator mesh", file: "network_latency.yaml.tmpl"},
 	{Name: "bandwidth-limit", Kind: kindNetworkChaos,
 		Summary: "cap bandwidth between one validator and the rest", file: "bandwidth_limit.yaml.tmpl"},
@@ -120,7 +127,7 @@ func (f Fault) Render(p Params) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fault %s: %w", f.Name, err)
 	}
-	tmpl, err := template.New(f.Name).Option("missingkey=error").Parse(string(src))
+	tmpl, err := template.New(f.Name).Parse(string(src))
 	if err != nil {
 		return nil, fmt.Errorf("fault %s: %w", f.Name, err)
 	}

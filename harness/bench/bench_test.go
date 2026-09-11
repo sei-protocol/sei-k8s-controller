@@ -83,3 +83,23 @@ func TestRender_RejectsIncompleteParams(t *testing.T) {
 		})
 	}
 }
+
+func TestRender_QuotesScalarParams(t *testing.T) {
+	g := NewWithT(t)
+	p := full()
+	p.Workload = "123"
+	p.Namespace = "true"
+	out, err := Render(p)
+	g.Expect(err).NotTo(HaveOccurred())
+	job := decode(t, out)
+	g.Expect(job.Namespace).To(Equal("true"))
+	g.Expect(job.Spec.Template.Spec.Containers[0].Env).To(ContainElement(HaveField("Value", "123")))
+}
+
+func TestRender_RejectsNegativeDeadline(t *testing.T) {
+	g := NewWithT(t)
+	p := full()
+	p.DeadlineSeconds = -1
+	_, err := Render(p)
+	g.Expect(err).To(MatchError(ContainSubstring("deadlineSeconds")))
+}

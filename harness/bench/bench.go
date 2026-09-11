@@ -53,7 +53,8 @@ type Params struct {
 const DeadlineSlackMinutes = 15
 
 // Render templates the Job manifest. It rejects empty RunID, ChainID, Image
-// and ProfileCM and a non-positive DurationMinutes.
+// and ProfileCM, a non-positive DurationMinutes and a negative
+// DeadlineSeconds.
 func Render(p Params) ([]byte, error) {
 	switch {
 	case p.RunID == "":
@@ -66,6 +67,8 @@ func Render(p Params) ([]byte, error) {
 		return nil, fmt.Errorf("seiload job: profileCM is required")
 	case p.DurationMinutes <= 0:
 		return nil, fmt.Errorf("seiload job: durationMinutes must be positive, got %d", p.DurationMinutes)
+	case p.DeadlineSeconds < 0:
+		return nil, fmt.Errorf("seiload job: deadlineSeconds must not be negative, got %d", p.DeadlineSeconds)
 	}
 	if p.DeadlineSeconds == 0 {
 		p.DeadlineSeconds = (p.DurationMinutes + DeadlineSlackMinutes) * 60
@@ -73,7 +76,7 @@ func Render(p Params) ([]byte, error) {
 	if p.Workload == "" {
 		p.Workload = DefaultWorkload
 	}
-	tmpl, err := template.New("seiload-job").Option("missingkey=error").Parse(jobTmpl)
+	tmpl, err := template.New("seiload-job").Parse(jobTmpl)
 	if err != nil {
 		return nil, fmt.Errorf("seiload job: %w", err)
 	}
