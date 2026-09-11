@@ -153,6 +153,11 @@ func (r *SeiNetworkReconciler) abandonPlanForLostValidator(ctx context.Context, 
 		return err
 	}
 
+	// Strictly-older means adopted. metav1.Time is second-granular and minted
+	// children routinely land in the network's creation second, so equal must
+	// read as minted; a retained child only ties if its ceremony, the Retain
+	// teardown and the recreate all fit in one second, and any single older
+	// survivor selects the non-destructive branch.
 	minted := true
 	for i := range survivors {
 		if survivors[i].CreationTimestamp.Before(&network.CreationTimestamp) {
@@ -182,7 +187,7 @@ func (r *SeiNetworkReconciler) abandonPlanForLostValidator(ctx context.Context, 
 		setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionFalse,
 			ReasonValidatorLost, msg)
 	} else {
-		msg = fmt.Sprintf("%d of %d validators present; plan %s abandoned, adopted validators are kept, the ceremony is not rebuilt and the missing node is recreated",
+		msg = fmt.Sprintf("%d of %d validators present; plan %s abandoned, adopted validators are kept, the ceremony is not rebuilt and the missing node is recreated with a fresh identity that the existing genesis does not name (its validator slot is not restored)",
 			len(network.Status.IncumbentNodes), network.Spec.Replicas, network.Status.Plan.ID)
 		setCondition(network, seiv1alpha1.ConditionGenesisCeremonyComplete, metav1.ConditionTrue,
 			ReasonAdoptedSet, msg)
