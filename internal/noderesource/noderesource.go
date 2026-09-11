@@ -19,6 +19,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 const (
@@ -1127,14 +1128,34 @@ func goMemLimitEnv(node *seiv1alpha1.SeiNode, res corev1.ResourceRequirements) (
 // roughly 6/min; alerts on those series need that baseline subtracted, and
 // inbound connections alone do not prove a seed is publicly reachable.
 func readinessProbeForNode(node *seiv1alpha1.SeiNode) *corev1.Probe {
-	if !servesSeidRPC(node) {
-		return tcpReadinessProbe(seiconfig.PortP2P)
+	if servesSeidRPC(node) && node.Spec.Freeze() == nil {
+		return httpReadinessProbe(pathLagStatus, seiconfig.PortRPC)
 	}
-	if node.Spec.Freeze() != nil {
-		return httpReadinessProbe("/status", seiconfig.PortRPC)
+	up := UpCheckForNode(node)
+	if up.Scheme == wire.UpCheckTCP {
+		return tcpReadinessProbe(up.Port)
 	}
-	return httpReadinessProbe("/lag_status", seiconfig.PortRPC)
+	return httpReadinessProbe(up.Path, up.Port)
 }
+
+// UpCheckForNode returns the signal that proves seid answers for this node's
+// mode: TCP on the P2P port for a seed, HTTP GET /status on the RPC port for
+// every mode that serves RPC. The readiness probe and the sidecar's
+// restart-seid/stop-seid up-checks derive their port and path from it. The
+// kubelet dials the pod IP and the sidecar dials loopback, so agreement also
+// rests on seid binding 0.0.0.0, the shipped default.
+func UpCheckForNode(node *seiv1alpha1.SeiNode) wire.UpCheck {
+	if !servesSeidRPC(node) {
+		return wire.UpCheck{Scheme: wire.UpCheckTCP, Port: seiconfig.PortP2P}
+	}
+	return wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortRPC, Path: pathStatus}
+}
+
+// CometBFT RPC paths the readiness probe and up-check read.
+const (
+	pathStatus    = "/status"
+	pathLagStatus = "/lag_status"
+)
 
 // httpReadinessProbe reports a node as ready when seid answers path with a 2xx.
 func httpReadinessProbe(path string, port int32) *corev1.Probe {

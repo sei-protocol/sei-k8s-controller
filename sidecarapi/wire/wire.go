@@ -123,3 +123,44 @@ const (
 	NoopFewerThanTwoSnapshots NoopReason = "fewer-than-2-snapshots"
 	NoopAlreadyUploaded       NoopReason = "already-uploaded"
 )
+
+// UpCheckScheme names how a seid liveness signal is read.
+type UpCheckScheme string
+
+const (
+	UpCheckTCP  UpCheckScheme = "tcp"
+	UpCheckHTTP UpCheckScheme = "http"
+)
+
+// UpCheck is the signal that says "seid answers again" after an in-place
+// restart. The controller derives it from the node's mode, so the sidecar and
+// the pod's readiness probe read the same source: TCP on the P2P port for a
+// seed, HTTP GET on the RPC port otherwise. Path is set for HTTP and empty for
+// TCP. An absent UpCheck means the pre-mode default, HTTP GET /status on 26657.
+type UpCheck struct {
+	Scheme UpCheckScheme `json:"scheme"`
+	Port   int32         `json:"port"`
+	Path   string        `json:"path,omitempty"`
+}
+
+// Validate reports a malformed UpCheck. It is part of the wire contract: the
+// controller rejects the task before submit and the sidecar rejects it on
+// receipt with the same rule.
+func (u UpCheck) Validate() error {
+	if u.Port < 1 || u.Port > 65535 {
+		return fmt.Errorf("upCheck: port %d is outside 1-65535", u.Port)
+	}
+	switch u.Scheme {
+	case UpCheckTCP:
+		if u.Path != "" {
+			return fmt.Errorf("upCheck: path %q is meaningless for scheme tcp", u.Path)
+		}
+	case UpCheckHTTP:
+		if !strings.HasPrefix(u.Path, "/") {
+			return fmt.Errorf("upCheck: http path %q must start with /", u.Path)
+		}
+	default:
+		return fmt.Errorf("upCheck: unknown scheme %q (want tcp or http)", u.Scheme)
+	}
+	return nil
+}

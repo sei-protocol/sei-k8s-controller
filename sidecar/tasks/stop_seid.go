@@ -12,6 +12,7 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/actions"
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/engine"
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/rpc"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 var stopSeidLog = seilog.NewLogger("seictl", "task", "stop-seid")
@@ -82,7 +83,8 @@ func (s seidStopper) gracefulStop(ctx context.Context, pid int) error {
 // prior mark-not-ready so the restarted container blocks at the gate instead of
 // booting onto the data directory reset-data is about to clear.
 type StopSeider struct {
-	stopper seidStopper
+	stopper  seidStopper
+	probeFor func(check wire.UpCheck) func(ctx context.Context) bool
 }
 
 // NewStopSeider builds a StopSeider with the real /proc + syscall + local-RPC
@@ -98,13 +100,22 @@ func NewStopSeider() *StopSeider {
 			log:              stopSeidLog,
 			op:               "stop",
 		},
+		probeFor: upCheckProbe,
 	}
 }
 
-// Handler returns an engine.TaskHandler for the stop-seid task type. Params are
-// empty: stop-seid is a fire-and-confirm operation.
+// Handler returns an engine.TaskHandler for the stop-seid task type. The
+// optional upCheck selects the listener the honesty check consults when /proc
+// shows no seid; absent, it is the local CometBFT /status.
 func (s *StopSeider) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, _ struct{}) error {
-		return s.stopper.stop(ctx)
+	return engine.TypedHandler(func(ctx context.Context, params restartSeidParams) error {
+		stopper := s.stopper
+		if params.UpCheck != nil {
+			if err := params.UpCheck.Validate(); err != nil {
+				return fmt.Errorf("stop-seid: %w", err)
+			}
+			stopper.probeUp = s.probeFor(*params.UpCheck)
+		}
+		return stopper.stop(ctx)
 	})
 }

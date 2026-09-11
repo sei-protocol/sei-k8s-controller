@@ -7,6 +7,7 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 // Readiness-probe selection for a frozen node, and the bound on that change:
@@ -148,4 +149,40 @@ func TestResourceLabels_MarkFrozenNodes(t *testing.T) {
 	}})
 	g.Expect(unfrozen).NotTo(HaveKey("sei.io/frozen"),
 		"an unfrozen node must not carry the label; the alerts key off its absence")
+}
+
+// The restart-seid up-check and the readiness probe read the same listener for
+// every mode whose readiness is "seid answers": a seed's TCP P2P port, a frozen
+// node's /status. An unfrozen RPC node's probe adds sync distance on top
+// (/lag_status) but still lives on the same port as its up-check.
+func TestUpCheckForNode_MatchesReadinessListener(t *testing.T) {
+	tests := []struct {
+		name string
+		spec seiv1alpha1.SeiNodeSpec
+		want wire.UpCheck
+	}{
+		{roleSeed, seiv1alpha1.SeiNodeSpec{Seed: &seiv1alpha1.SeedSpec{}},
+			wire.UpCheck{Scheme: wire.UpCheckTCP, Port: seiconfig.PortP2P}},
+		{"full", seiv1alpha1.SeiNodeSpec{},
+			wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortRPC, Path: pathStatus}},
+		{"frozen", seiv1alpha1.SeiNodeSpec{FullNode: &seiv1alpha1.FullNodeSpec{Freeze: &seiv1alpha1.FreezeSpec{Height: 100}}},
+			wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortRPC, Path: pathStatus}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := &seiv1alpha1.SeiNode{Spec: tt.spec}
+			up := UpCheckForNode(node)
+			g.Expect(up).To(Equal(tt.want))
+			g.Expect(up.Validate()).To(Succeed())
+
+			probe := readinessProbeForNode(node)
+			switch up.Scheme {
+			case wire.UpCheckTCP:
+				g.Expect(probe.TCPSocket.Port.IntVal).To(Equal(up.Port))
+			case wire.UpCheckHTTP:
+				g.Expect(probe.HTTPGet.Port.IntVal).To(Equal(up.Port))
+			}
+		})
+	}
 }

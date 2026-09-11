@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 // fakeSignaler implements actions.ProcessSignaler for restart-seid tests.
@@ -143,7 +149,7 @@ func TestRestartSeider_WaitForUpContextCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	err := r.waitForUp(ctx)
+	err := r.waitForUp(ctx, r.probeUp)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -188,5 +194,82 @@ func TestIsSeidStart(t *testing.T) {
 				t.Errorf("isSeidStart(%q) = %v, want %v", tt.cmdline, got, tt.want)
 			}
 		})
+	}
+}
+
+// A request that names an up-check waits on that check, not the default
+// /status probe, and the stop phase's honesty check uses the same probe.
+func TestRestartSeider_UpCheckFromParams(t *testing.T) {
+	sig := &fakeSignaler{findPID: 42}
+	sig.alive.Store(false)
+
+	var got wire.UpCheck
+	r := &RestartSeider{
+		signaler: sig,
+		probeUp:  neverUp,
+		probeFor: func(c wire.UpCheck) func(context.Context) bool {
+			got = c
+			return upAfter(0)
+		},
+		gracePeriod: time.Second,
+		upTimeout:   time.Second,
+		upInterval:  time.Millisecond,
+	}
+
+	params := map[string]any{"upCheck": map[string]any{"scheme": "tcp", "port": 26656}}
+	if _, err := r.Handler()(context.Background(), params); err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if got != (wire.UpCheck{Scheme: wire.UpCheckTCP, Port: 26656}) {
+		t.Fatalf("unexpected up-check %+v", got)
+	}
+}
+
+func TestRestartSeider_RejectsMalformedUpCheck(t *testing.T) {
+	sig := &fakeSignaler{findPID: 42}
+	r := &RestartSeider{signaler: sig, probeUp: upAfter(0), probeFor: upCheckProbe,
+		gracePeriod: time.Second, upTimeout: time.Second, upInterval: time.Millisecond}
+
+	params := map[string]any{"upCheck": map[string]any{"scheme": "http", "port": 8545}}
+	if _, err := r.Handler()(context.Background(), params); err == nil {
+		t.Fatal("expected validation error for http up-check without path")
+	}
+	if len(sig.signals) != 0 {
+		t.Fatalf("seid must not be signalled on a rejected request, got %v", sig.signals)
+	}
+}
+
+// upCheckProbe reads real loopback listeners: a TCP connect and an HTTP GET
+// answered 2xx count as up; a closed port and a 5xx do not.
+func TestUpCheckProbe_Loopback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/down" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer srv.Close()
+	_, portStr, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	closed, _ := net.Listen("tcp", "127.0.0.1:0")
+	_, closedStr, _ := net.SplitHostPort(closed.Addr().String())
+	closedPort, _ := strconv.Atoi(closedStr)
+	_ = closed.Close()
+
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		check wire.UpCheck
+		want  bool
+	}{
+		{"tcp open", wire.UpCheck{Scheme: wire.UpCheckTCP, Port: int32(port)}, true},
+		{"tcp closed", wire.UpCheck{Scheme: wire.UpCheckTCP, Port: int32(closedPort)}, false},
+		{"http 200", wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: int32(port), Path: "/"}, true},
+		{"http 503", wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: int32(port), Path: "/down"}, false},
+		{"http closed", wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: int32(closedPort), Path: "/"}, false},
+	}
+	for _, tc := range cases {
+		if got := upCheckProbe(tc.check)(ctx); got != tc.want {
+			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
+		}
 	}
 }

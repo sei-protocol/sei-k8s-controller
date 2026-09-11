@@ -56,3 +56,28 @@ func TestParseVoteOption(t *testing.T) {
 		}
 	}
 }
+
+func TestUpCheckValidate(t *testing.T) {
+	cases := []struct {
+		name  string
+		check UpCheck
+		ok    bool
+	}{
+		{"tcp", UpCheck{Scheme: UpCheckTCP, Port: 26656}, true},
+		{"http", UpCheck{Scheme: UpCheckHTTP, Port: 26657, Path: "/status"}, true},
+		{"tcp with path", UpCheck{Scheme: UpCheckTCP, Port: 26656, Path: "/"}, false},
+		{"http no path", UpCheck{Scheme: UpCheckHTTP, Port: 8545}, false},
+		{"http relative path", UpCheck{Scheme: UpCheckHTTP, Port: 8545, Path: "status"}, false},
+		{"port zero", UpCheck{Scheme: UpCheckTCP, Port: 0}, false},
+		{"port high", UpCheck{Scheme: UpCheckTCP, Port: 70000}, false},
+		{"unknown scheme", UpCheck{Scheme: "grpc", Port: 9090}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.check.Validate()
+			if (err == nil) != tc.ok {
+				t.Fatalf("Validate() = %v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
+}

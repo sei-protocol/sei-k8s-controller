@@ -2,11 +2,14 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 // newStopSeider builds a StopSeider wired to a test signaler and probe.
@@ -72,5 +75,26 @@ func TestStopSeider_NotFoundRPCUpRefuses(t *testing.T) {
 	}
 	if len(sig.signals) != 0 {
 		t.Errorf("expected no signals on refusal, got %v", sig.signals)
+	}
+}
+
+// A request-selected up-check replaces the default /status honesty check.
+func TestStopSeider_UsesRequestUpCheck(t *testing.T) {
+	sig := &fakeSignaler{findErr: errors.New("not found")}
+	var selected bool
+	s := newStopSeider(sig, neverUp, time.Second)
+	s.probeFor = func(check wire.UpCheck) func(context.Context) bool {
+		selected = check == wire.UpCheck{Scheme: wire.UpCheckTCP, Port: 26656}
+		return func(context.Context) bool { return true }
+	}
+	params := map[string]any{"upCheck": map[string]any{"scheme": "tcp", "port": 26656}}
+	if _, err := s.Handler()(context.Background(), params); err == nil {
+		t.Fatal("expected the honesty check to refuse a stop while the selected listener answers")
+	}
+	if !selected {
+		t.Fatal("probeFor did not receive the request's up-check")
+	}
+	if _, err := s.Handler()(context.Background(), map[string]any{"upCheck": map[string]any{"scheme": "tcp", "port": 0}}); err == nil {
+		t.Fatal("expected a malformed up-check to be rejected")
 	}
 }
