@@ -3,11 +3,8 @@
 package integration
 
 import (
-	"bytes"
 	"context"
-	_ "embed"
 	"testing"
-	"text/template"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -17,6 +14,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/yaml"
+
+	"github.com/sei-protocol/sei-k8s-controller/harness/faults"
 )
 
 // injectWindow bounds fault injection independently of the per-scenario
@@ -33,48 +32,10 @@ import (
 // time for the under-fault liveness check.
 const injectWindow = 90 * time.Second
 
-//go:embed faults/network_partition.yaml.tmpl
-var networkPartitionTmpl string
-
-//go:embed faults/packet_loss.yaml.tmpl
-var packetLossTmpl string
-
-//go:embed faults/cpu_stress.yaml.tmpl
-var cpuStressTmpl string
-
-//go:embed faults/time_skew.yaml.tmpl
-var timeSkewTmpl string
-
-//go:embed faults/network_latency.yaml.tmpl
-var networkLatencyTmpl string
-
-//go:embed faults/bandwidth_limit.yaml.tmpl
-var bandwidthLimitTmpl string
-
-//go:embed faults/memory_stress.yaml.tmpl
-var memoryStressTmpl string
-
-//go:embed faults/byzantine.yaml.tmpl
-var byzantineTmpl string
-
-//go:embed faults/pod_failure.yaml.tmpl
-var podFailureTmpl string
-
-//go:embed faults/container_kill.yaml.tmpl
-var containerKillTmpl string
-
 // chaosGVR is the GroupVersionResource for a Chaos-Mesh fault kind. Faults are
 // applied unstructured so the chaos-mesh API stays out of the module's deps.
 func chaosGVR(resource string) schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: resource}
-}
-
-// faultParams are the per-run values templated into a fault CR.
-type faultParams struct {
-	ChainID   string
-	RunID     string
-	Namespace string
-	Duration  string
 }
 
 // fault is a rendered Chaos-Mesh fault CR plus the resource name its dynamic
@@ -107,18 +68,18 @@ func dynClient(t *testing.T) dynamic.Interface {
 	return dc
 }
 
-// renderFault templates a fault CR and decodes it to an unstructured object.
-func renderFault(t *testing.T, resource, tmpl string, p faultParams) fault {
+// renderFault renders a catalog fault and decodes it to an unstructured object.
+func renderFault(t *testing.T, cf faults.Fault, p faults.Params) fault {
 	t.Helper()
-	var buf bytes.Buffer
-	if err := template.Must(template.New("fault").Parse(tmpl)).Execute(&buf, p); err != nil {
+	out, err := cf.Render(p)
+	if err != nil {
 		t.Fatalf("render fault: %v", err)
 	}
 	var m map[string]any
-	if err := yaml.Unmarshal(buf.Bytes(), &m); err != nil {
+	if err := yaml.Unmarshal(out, &m); err != nil {
 		t.Fatalf("unmarshal fault: %v", err)
 	}
-	return fault{resource: resource, obj: &unstructured.Unstructured{Object: m}}
+	return fault{resource: cf.Resource(), obj: &unstructured.Unstructured{Object: m}}
 }
 
 // applyFault creates the fault CR and registers best-effort deletion. Deletion

@@ -3,15 +3,12 @@
 package integration
 
 import (
-	"bytes"
 	"context"
-	_ "embed"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
-	"text/template"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -21,28 +18,15 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/yaml"
 
+	"github.com/sei-protocol/sei-k8s-controller/harness/bench"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
-
-//go:embed seiload_job.yaml.tmpl
-var seiloadJobTmpl string
 
 // seiloadProfilesCM is the platform-owned ConfigMap holding the profile
 // templates (placeholders __SEI_CHAIN_ID__ / __RPC_ENDPOINTS__). The harness
 // reads it from the cluster rather than vendoring the profile, so the load
 // shape stays owned by platform.
 const seiloadProfilesCM = "seiload-profiles"
-
-// seiloadParams are the per-run values templated into the seiload Job manifest.
-type seiloadParams struct {
-	RunID           string
-	ChainID         string
-	Commit          string
-	Image           string
-	DurationMinutes int
-	ProfileCM       string
-	DeadlineSeconds int
-}
 
 // clientset builds a client-go clientset from the ambient config — the harness
 // uses it for the Job/ConfigMap operations the SDK does not cover.
@@ -105,16 +89,15 @@ func createProfileCM(ctx context.Context, t *testing.T, cs *kubernetes.Clientset
 	})
 }
 
-// renderJob templates the embedded seiload Job manifest with the per-run params.
-// The manifest owns seiload's shape; only per-run values are injected.
-func renderJob(t *testing.T, p seiloadParams) *batchv1.Job {
+// renderJob renders the shared seiload Job manifest with the per-run params.
+func renderJob(t *testing.T, p bench.Params) *batchv1.Job {
 	t.Helper()
-	var buf bytes.Buffer
-	if err := template.Must(template.New("job").Parse(seiloadJobTmpl)).Execute(&buf, p); err != nil {
+	out, err := bench.Render(p)
+	if err != nil {
 		t.Fatalf("render seiload job: %v", err)
 	}
 	var job batchv1.Job
-	if err := yaml.Unmarshal(buf.Bytes(), &job); err != nil {
+	if err := yaml.Unmarshal(out, &job); err != nil {
 		t.Fatalf("unmarshal seiload job: %v", err)
 	}
 	return &job
@@ -143,16 +126,13 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 	profileJSON := renderProfile(ctx, t, cs, ns, s.seiloadProfile, s.chainID, ch.evmEndpoints())
 	createProfileCM(ctx, t, cs, ns, profileCM, s.runID, profileJSON)
 
-	job := renderJob(t, seiloadParams{
+	job := renderJob(t, bench.Params{
 		RunID:           s.runID,
 		ChainID:         s.chainID,
 		Commit:          s.seiloadCommit,
 		Image:           s.seiloadImage,
 		DurationMinutes: s.durationMin,
 		ProfileCM:       profileCM,
-		// Self-terminating cap independent of the harness ctx: the load plus
-		// generous slack for image pull + the post-summary flush.
-		DeadlineSeconds: (s.durationMin + 15) * 60,
 	})
 	job.Namespace = ns
 	if _, err := cs.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
