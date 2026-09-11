@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/cosmos/btcutil/bech32"
 	seiconfig "github.com/sei-protocol/sei-config"
@@ -674,7 +675,8 @@ func validateGenesisAccounts(prefix string, accounts []GenesisAccountEntry) erro
 // ConsensusParams is one JSON object shaped like genesis.consensus_params,
 // deep-merged over the assembled genesis. Autobahn makes the assembler
 // generate autobahn.json from every validator's identity.json and upload it
-// before genesis.json.
+// before genesis.json; AutobahnConfig replaces the listed gen-autobahn-config
+// defaults in that file and is ignored unless Autobahn is set.
 type AssembleAndUploadGenesisTask struct {
 	AccountBalance  string
 	Namespace       string
@@ -683,6 +685,39 @@ type AssembleAndUploadGenesisTask struct {
 	Overrides       map[string]json.RawMessage
 	ConsensusParams json.RawMessage
 	Autobahn        bool
+	AutobahnConfig  *AutobahnConfigParams
+}
+
+// AutobahnMaxTxsPerBlockCeiling is sei-tendermint's autobahn/types.MaxTxsPerBlock,
+// the value the producer clamps max_txs_per_block to and gen-autobahn-config's default.
+const AutobahnMaxTxsPerBlockCeiling = 2_000
+
+// AutobahnConfigParams overrides autobahn.json values the ceremony would
+// otherwise write with gen-autobahn-config's defaults. A nil pointer or empty
+// string keeps the default. BlockInterval is a Go duration string.
+type AutobahnConfigParams struct {
+	BlockInterval    string `json:"blockInterval,omitempty"`
+	AllowEmptyBlocks *bool  `json:"allowEmptyBlocks,omitempty"`
+	MaxTxsPerBlock   *int64 `json:"maxTxsPerBlock,omitempty"`
+}
+
+func (a *AutobahnConfigParams) validate() error {
+	if a == nil {
+		return nil
+	}
+	if a.BlockInterval != "" {
+		d, err := time.ParseDuration(a.BlockInterval)
+		if err != nil {
+			return fmt.Errorf("AutobahnConfig.BlockInterval %q: %w", a.BlockInterval, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("AutobahnConfig.BlockInterval %q must be positive", a.BlockInterval)
+		}
+	}
+	if a.MaxTxsPerBlock != nil && (*a.MaxTxsPerBlock < 1 || *a.MaxTxsPerBlock > AutobahnMaxTxsPerBlockCeiling) {
+		return fmt.Errorf("AutobahnConfig.MaxTxsPerBlock %d must be in [1, %d]", *a.MaxTxsPerBlock, AutobahnMaxTxsPerBlockCeiling)
+	}
+	return nil
 }
 
 func (t AssembleAndUploadGenesisTask) TaskType() string { return TaskTypeAssembleGenesis }
@@ -702,6 +737,12 @@ func (t AssembleAndUploadGenesisTask) Validate() error {
 		if err := json.Unmarshal(t.ConsensusParams, &obj); err != nil {
 			return fmt.Errorf("assemble-and-upload-genesis: ConsensusParams must be a JSON object: %w", err)
 		}
+	}
+	if t.AutobahnConfig != nil && !t.Autobahn {
+		return fmt.Errorf("assemble-and-upload-genesis: AutobahnConfig requires Autobahn")
+	}
+	if err := t.AutobahnConfig.validate(); err != nil {
+		return fmt.Errorf("assemble-and-upload-genesis: %w", err)
 	}
 	return validateGenesisAccounts("assemble-and-upload-genesis", t.Accounts)
 }
@@ -731,6 +772,9 @@ func (t AssembleAndUploadGenesisTask) ToTaskRequest() TaskRequest {
 	}
 	if t.Autobahn {
 		p["autobahn"] = true
+		if t.AutobahnConfig != nil {
+			p["autobahnConfig"] = t.AutobahnConfig
+		}
 	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req

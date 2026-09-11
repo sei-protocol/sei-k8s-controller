@@ -134,7 +134,7 @@ func TestBuildAutobahnConfig_MatchesGenAutobahnConfigDefaults(t *testing.T) {
 		{ValidatorKey: "validator:ed25519:public:aa", NodeKey: "node:ed25519:public:bb", Address: "a:26656", EVMRPC: "http://a:8545"},
 		{ValidatorKey: "validator:ed25519:public:cc", NodeKey: "node:ed25519:public:dd", Address: "b:26656", EVMRPC: "http://b:8545"},
 	}
-	data, err := buildAutobahnConfig(validators)
+	data, err := buildAutobahnConfig(validators, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,66 @@ func TestBuildAutobahnConfig_MatchesGenAutobahnConfigDefaults(t *testing.T) {
 		t.Errorf("validators round-trip mismatch: %+v", vals)
 	}
 
-	if _, err := buildAutobahnConfig(nil); err == nil {
+	if _, err := buildAutobahnConfig(nil, nil); err == nil {
 		t.Error("an empty validator set must be rejected")
+	}
+
+	empty, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(empty, data) {
+		t.Error("an empty overrides struct must render the same artifact as nil")
+	}
+}
+
+func TestBuildAutobahnConfig_Overrides(t *testing.T) {
+	validators := []autobahnValidator{
+		{ValidatorKey: "validator:ed25519:public:aa", NodeKey: "node:ed25519:public:bb", Address: "a:26656", EVMRPC: "http://a:8545"},
+	}
+	allow := true
+	maxTxs := int64(1500)
+	data, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{
+		BlockInterval:    "1s",
+		AllowEmptyBlocks: &allow,
+		MaxTxsPerBlock:   &maxTxs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"max_txs_per_block":  "1500",
+		"allow_empty_blocks": "true",
+		"block_interval":     `"1s"`,
+		"view_timeout":       `"1.5s"`,
+		"dial_interval":      `"10s"`,
+	}
+	for key, value := range want {
+		if string(got[key]) != value {
+			t.Errorf("%s = %s, want %s", key, got[key], value)
+		}
+	}
+
+	disallow := false
+	zero := int64(0)
+	overCap := int64(2001)
+	for name, o := range map[string]*AutobahnConfigOverrides{
+		"above protocol cap":   {MaxTxsPerBlock: &overCap},
+		"unparseable duration": {BlockInterval: "fast"},
+		"bare number":          {BlockInterval: "400"},
+		"zero duration":        {BlockInterval: "0s"},
+		"negative duration":    {BlockInterval: "-1s"},
+		"zero max txs":         {MaxTxsPerBlock: &zero},
+	} {
+		if _, err := buildAutobahnConfig(validators, o); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	if _, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{AllowEmptyBlocks: &disallow}); err != nil {
+		t.Errorf("explicit false must be accepted: %v", err)
 	}
 }

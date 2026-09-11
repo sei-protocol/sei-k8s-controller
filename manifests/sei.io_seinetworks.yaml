@@ -174,9 +174,37 @@ spec:
                 x-kubernetes-list-type: map
               consensus:
                 description: |-
-                  Consensus selects the engine every validator runs. Absent means Tendermint.
-                  Create-only on its effective value; propagated to every validator child.
+                  Consensus selects the engine every validator runs and, under Autobahn,
+                  tunes the ceremony's autobahn.json. Absent means Tendermint. Create-only;
+                  engine and evmOnly propagate to every validator child.
                 properties:
+                  autobahn:
+                    description: |-
+                      Autobahn tunes the autobahn.json the genesis ceremony writes. Omitted
+                      fields keep gen-autobahn-config's defaults. Create-only.
+                    properties:
+                      allowEmptyBlocks:
+                        description: |-
+                          AllowEmptyBlocks is autobahn.json allow_empty_blocks. Default false: the
+                          chain sits at its last height until a transaction arrives, so an idle
+                          Autobahn network at height 0 is healthy, not stuck.
+                        type: boolean
+                      blockInterval:
+                        description: |-
+                          BlockInterval is autobahn.json block_interval, a Go duration string such
+                          as 400ms (the gen-autobahn-config default). Must be positive.
+                        pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                        type: string
+                      maxTxsPerBlock:
+                        description: |-
+                          MaxTxsPerBlock is autobahn.json max_txs_per_block. Default 2000, which is
+                          also the protocol ceiling (autobahn/types.MaxTxsPerBlock): the producer
+                          clamps any larger value to 2000, so only lowering it has an effect.
+                        format: int64
+                        maximum: 2000
+                        minimum: 1
+                        type: integer
+                    type: object
                   engine:
                     description: |-
                       Engine is the consensus engine. Tendermint when omitted. Autobahn makes the
@@ -196,6 +224,11 @@ spec:
                     type: boolean
                 type: object
                 x-kubernetes-validations:
+                - message: 'autobahn settings require engine Autobahn: they are written
+                    into the ceremony''s autobahn.json, which only an Autobahn ceremony
+                    produces'
+                  rule: '!has(self.autobahn) || (has(self.engine) && self.engine ==
+                    ''Autobahn'')'
                 - message: 'evmOnly requires engine Autobahn: the EVM-only executor
                     runs only under Autobahn consensus'
                   rule: '!(has(self.evmOnly) && self.evmOnly) || (has(self.engine)
@@ -660,6 +693,12 @@ spec:
               rule: '(has(self.consensus) && has(self.consensus.evmOnly) ? self.consensus.evmOnly
                 : false) == (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly)
                 ? oldSelf.consensus.evmOnly : false)'
+            - message: 'spec.consensus.autobahn is create-only: its values are written
+                into the ceremony''s autobahn.json, which every validator and follower
+                already holds; recreate the network to change them'
+              rule: '(has(self.consensus) && has(self.consensus.autobahn)) ? (has(oldSelf.consensus)
+                && has(oldSelf.consensus.autobahn) && self.consensus.autobahn == oldSelf.consensus.autobahn)
+                : !(has(oldSelf.consensus) && has(oldSelf.consensus.autobahn))'
             - message: 'an EVM-only network owns network.rpc.listen_address and api.{rest,grpc,grpc_web}.enable:
                 the EVM-only executor serves no CometBFT RPC, REST or gRPC'
               rule: '!(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)

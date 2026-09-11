@@ -193,7 +193,19 @@ a manual step.
 2. When the engine is `Autobahn`, the assembler SHALL materialise one node directory per validator from the identity manifests, run `seid tendermint gen-autobahn-config <dirs> --output autobahn.json`, and upload the result to `{bucket}/{chainID}/autobahn.json` **before** it uploads `genesis.json`. `genesis.json` is the ceremony's commit point that every `configure-genesis` polls for, so the artifact is present whenever the commit point is.
 3. When any identity manifest lacks a field the generator reads, the assembler SHALL fail before writing either artifact, naming the validator and the field.
 4. When the engine is `Autobahn`, the `configure-genesis` task SHALL download `autobahn.json` to `config/autobahn.json` after `genesis.json`, on validators and followers alike. An absent artifact after a present `genesis.json` is a broken ceremony, not a race, and the task SHALL fail terminally naming the object key, so the plan fails on that attempt rather than at the end of the `configure-genesis` retry budget.
-5. The assembler SHALL invoke the generator with its defaults, so the artifact carries `max_txs_per_block` 2000, `allow_empty_blocks` false, `block_interval` 400ms, `persistent_state_dir` `data/autobahn`, and BlockDB retention 30s. Exposing these as fields is deferred.
+5. The assembler SHALL render the artifact with the generator's defaults — `max_txs_per_block` 2000, `allow_empty_blocks` false, `block_interval` 400ms, `view_timeout` 1.5s, `dial_interval` 10s, `persistent_state_dir` `data/autobahn`, BlockDB retention 30s — except where `SeiNetwork.spec.consensus.autobahn` names a value:
+
+   ```yaml
+   spec:
+     consensus:
+       engine: Autobahn
+       autobahn:
+         blockInterval: 400ms     # Go duration, > 0
+         allowEmptyBlocks: false
+         maxTxsPerBlock: 2000     # 1..2000; 2000 is the protocol ceiling the producer clamps to
+   ```
+
+   The block is network-only (a `SeiNode` consumes `autobahn.json`, it never generates one), requires `engine: Autobahn`, and is create-only as a whole: its values are already in every validator's and follower's copy of the artifact. The planner carries it to the assembler as typed fields on the `assemble-and-upload-genesis` task, never as file content. `view_timeout`, `dial_interval` and BlockDB settings stay at their defaults.
 
 ### Requirement 3: The controller writes the engine keys
 
@@ -292,7 +304,7 @@ so that the README's block gas limit is a declared value and not a patch.
 
 ## Out of scope
 
-- Exposing the generator's tuning (`max_txs_per_block`, `block_interval`, `allow_empty_blocks`, BlockDB retention) as fields. Deferred until a benchmark needs a value the default does not give.
+- Exposing the remaining generator tuning (`view_timeout`, `dial_interval`, `max_txs_per_second`, BlockDB retention) as fields. Deferred until a benchmark needs a value the default does not give.
 - `seid start` flags. PLT-1250.
 - The `Producing` condition and the idle-chain Ready rule. Spec 007 and PLT-1251.
 - A generic non-TOML file substrate. The typed field keeps the ceremony coupling inside the controller and preserves the TOML-only guarantee of `configValues`.

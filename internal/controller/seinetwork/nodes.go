@@ -299,7 +299,7 @@ func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.
 		ConfigValues: cloneConfigValues(network.Spec.ConfigValues),
 		Sidecar:      network.Spec.Sidecar.DeepCopy(),
 		Scheduling:   network.Spec.Scheduling.DeepCopy(),
-		Consensus:    network.Spec.Consensus.DeepCopy(),
+		Consensus:    network.Spec.Consensus.Node(),
 		DataVolume:   network.Spec.DataVolume.DeepCopy(),
 		Resources:    network.Spec.Resources.DeepCopy(),
 		PodLabels:    podLabels,

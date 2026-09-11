@@ -441,7 +441,7 @@ func TestAssembler_UploadAutobahnConfig_UsesIdentityManifests(t *testing.T) {
 		"val-1": {Autobahn: &autobahnIdentity{ValidatorPubKey: pub("validator", "cc"), NodePubKey: pub("node", "dd"), AutobahnAddress: "val-1-0.val-1.ns.svc.cluster.local:26656", EVMRPCURL: "http://val-1-0.val-1.ns.svc.cluster.local:8545"}},
 	}
 
-	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities); err != nil {
+	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, nil); err != nil {
 		t.Fatalf("uploadAutobahnConfig: %v", err)
 	}
 	uploaded, ok := mock.uploads["my-bucket/test-chain-1/autobahn.json"]
@@ -460,7 +460,7 @@ func TestAssembler_UploadAutobahnConfig_UsesIdentityManifests(t *testing.T) {
 	// before anything is uploaded.
 	mock2 := newMockS3Uploader()
 	a2 := NewGenesisAssembler(t.TempDir(), "my-bucket", "us-west-2", "test-chain-1", nil, mockUploaderFactory(mock2))
-	err := a2.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-2"}, identities)
+	err := a2.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-2"}, identities, nil)
 	if err == nil || !strings.Contains(err.Error(), "val-2") {
 		t.Fatalf("expected an error naming val-2, got %v", err)
 	}
