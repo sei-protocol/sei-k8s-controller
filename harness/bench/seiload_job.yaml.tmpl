@@ -2,6 +2,9 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: seiload-{{.RunID}}
+{{- if .Namespace}}
+  namespace: "{{.Namespace}}"
+{{- end}}
   labels:
     app.kubernetes.io/name: seiload
     sei.io/harness-run: "{{.RunID}}"
@@ -49,7 +52,7 @@ spec:
             - name: SEILOAD_COMMIT_ID
               value: "{{.Commit}}"
             - name: SEILOAD_WORKLOAD
-              value: nightly
+              value: "{{.Workload}}"
           volumeMounts:
             - name: profile
               mountPath: /etc/seiload

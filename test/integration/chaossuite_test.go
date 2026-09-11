@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/sei-protocol/sei-k8s-controller/harness/faults"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
@@ -22,41 +23,13 @@ import (
 // the surviving validators, not for the killed pod's restart.
 const oneShotObserveWindow = 90 * time.Second
 
-// Chaos-Mesh fault GVR resource names (the dynamic client's plural form).
-const (
-	rNetworkChaos = "networkchaos"
-	rStressChaos  = "stresschaos"
-	rTimeChaos    = "timechaos"
-	rPodChaos     = "podchaos"
-)
-
-// chaosScenario is one fault ported from the platform chaos suite: a name, the
-// fault CR's GVR resource, and its template. oneShot marks a kill fault
-// (pod-kill / container-kill) — no spec.duration and no AllRecovered, so it
-// skips the self-expiry tripwire and the recovery gate.
-type chaosScenario struct {
-	name     string
-	resource string
-	tmpl     string
-	oneShot  bool
-}
-
-// chaosScenarios is the ported fault set. Growing toward the platform suite's
-// 14; each is added once it passes in-cluster.
-var chaosScenarios = []chaosScenario{
-	{name: "network-partition", resource: rNetworkChaos, tmpl: networkPartitionTmpl},
-	{name: "packet-loss", resource: rNetworkChaos, tmpl: packetLossTmpl},
-	{name: "cpu-stress", resource: rStressChaos, tmpl: cpuStressTmpl},
-	{name: "time-skew", resource: rTimeChaos, tmpl: timeSkewTmpl},
-	{name: "network-latency", resource: rNetworkChaos, tmpl: networkLatencyTmpl},
-	{name: "bandwidth-limit", resource: rNetworkChaos, tmpl: bandwidthLimitTmpl},
-	{name: "memory-stress", resource: rStressChaos, tmpl: memoryStressTmpl},
-	{name: "byzantine", resource: rNetworkChaos, tmpl: byzantineTmpl},
-	{name: "pod-failure", resource: rPodChaos, tmpl: podFailureTmpl, oneShot: true},
-	{name: "container-kill", resource: rPodChaos, tmpl: containerKillTmpl, oneShot: true},
-	// dns-chaos and disk-io-latency are deferred — see deferredChaosScenarios
-	// in chaos_deferred_test.go for why and the re-add condition.
-}
+// chaosScenarios is the ported fault set, shared with seictl through
+// harness/faults so engineers' GitOps experiments and this suite inject the
+// same manifests. Growing toward the platform suite's 14; each is added once
+// it passes in-cluster. dns-chaos and disk-io-latency are deferred — see
+// deferredChaosScenarios in chaos_deferred_test.go for why and the re-add
+// condition.
+var chaosScenarios = faults.Catalog
 
 // TestNightlyChaosSuite runs each fault against its own fresh chain: provision → inject
 // the Chaos-Mesh fault → gate it injected → assert the chain stays live under it
@@ -86,8 +59,8 @@ func TestNightlyChaosSuite(t *testing.T) {
 	}
 
 	for _, sc := range chaosScenarios {
-		t.Run(sc.name, func(t *testing.T) {
-			id := base + "-" + sc.name
+		t.Run(sc.Name, func(t *testing.T) {
+			id := base + "-" + sc.Name
 			// The validator-0 selector value sei.io/node=<id>-0 is a k8s label
 			// value (capped at 63 chars); fail loud rather than on an opaque
 			// admission rejection at fault-apply time.
@@ -121,7 +94,7 @@ func TestNightlyChaosSuite(t *testing.T) {
 			}
 			faultNS := ch.network.Namespace()
 
-			f := renderFault(t, sc.resource, sc.tmpl, faultParams{
+			f := renderFault(t, sc, faults.Params{
 				ChainID:   s.chainID,
 				RunID:     s.runID,
 				Namespace: faultNS,
@@ -129,12 +102,12 @@ func TestNightlyChaosSuite(t *testing.T) {
 			})
 			// Duration-bearing faults must self-expire (else gateRecovered hangs
 			// to the deadline). One-shot kills carry no duration by design.
-			if !sc.oneShot && !f.hasDuration() {
-				t.Fatalf("fault %s has no spec.duration — gateRecovered would hang until the deadline", sc.name)
+			if !sc.OneShot && !f.hasDuration() {
+				t.Fatalf("fault %s has no spec.duration — gateRecovered would hang until the deadline", sc.Name)
 			}
 			applyFault(ctx, t, dc, faultNS, f)
-			gateInjected(ctx, t, dc, faultNS, f, sc.oneShot)
-			t.Logf("%s: fault injected", sc.name)
+			gateInjected(ctx, t, dc, faultNS, f, sc.OneShot)
+			t.Logf("%s: fault injected", sc.Name)
 
 			hc := &http.Client{Timeout: 10 * time.Second}
 			follower := ch.rpcNodes[0]
@@ -144,7 +117,7 @@ func TestNightlyChaosSuite(t *testing.T) {
 			// after it lifts. catching_up==false alone is insufficient: a stalled
 			// node reports it at a frozen height.
 			window := faultDur * 2 / 3
-			if sc.oneShot {
+			if sc.OneShot {
 				window = oneShotObserveWindow
 			}
 			underFault, cancelUF := context.WithTimeout(ctx, window)
@@ -156,9 +129,9 @@ func TestNightlyChaosSuite(t *testing.T) {
 
 			// Duration-bearing faults self-expire; gate recovery (catches stuck
 			// finalizers). One-shot kills have no AllRecovered.
-			if !sc.oneShot {
+			if !sc.OneShot {
 				gateRecovered(ctx, t, dc, faultNS, f)
-				t.Logf("%s: fault recovered", sc.name)
+				t.Logf("%s: fault recovered", sc.Name)
 			}
 			// Recovery: every validator — including the faulted/killed one — must
 			// return to Ready, not just the unfaulted survivors. The follower
