@@ -184,3 +184,62 @@ func TestGenesisFetcher_NoChainID(t *testing.T) {
 		t.Fatal("expected error when chainID is empty")
 	}
 }
+
+func TestGenesisFetcher_Autobahn_DownloadsArtifactBeforeMarker(t *testing.T) {
+	homeDir := t.TempDir()
+	const chainID = "custom-devnet-1"
+	genesis := []byte(`{"chain_id":"custom-devnet-1","app_state":{}}`)
+	autobahn := []byte(`{"validators":[]}`)
+	s3 := &mockS3GetObject{objects: map[string][]byte{
+		chainID + "/genesis.json":  genesis,
+		chainID + "/autobahn.json": autobahn,
+	}}
+	factory := func(_ context.Context, _ string) (S3GetObjectAPI, error) { return s3, nil }
+	fetcher := NewGenesisFetcher(homeDir, chainID, "genesis-bucket", "us-east-2", factory)
+
+	if _, err := fetcher.Handler()(context.Background(), map[string]any{"autobahn": true}); err != nil {
+		t.Fatalf("autobahn fetch: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(homeDir, "config", "autobahn.json"))
+	if err != nil {
+		t.Fatalf("reading autobahn.json: %v", err)
+	}
+	if string(got) != string(autobahn) {
+		t.Errorf("autobahn.json = %q, want %q", got, autobahn)
+	}
+	if !markerExists(homeDir, genesisMarkerFile) {
+		t.Error("marker must be written once both artifacts are present")
+	}
+}
+
+func TestGenesisFetcher_Autobahn_MissingArtifactIsTerminalWithoutMarker(t *testing.T) {
+	genesis := []byte(`{"chain_id":"custom-devnet-1","app_state":{}}`)
+	fetcher, _, homeDir := genesisFetchFixture(t, genesis)
+
+	_, err := fetcher.Handler()(context.Background(), map[string]any{"autobahn": true})
+	if err == nil {
+		t.Fatal("expected an error when autobahn.json is absent")
+	}
+	var te *engine.TaskError
+	if !errors.As(err, &te) {
+		t.Fatalf("expected *engine.TaskError, got %T: %v", err, err)
+	}
+	if te.Retryable {
+		t.Error("a ceremony that never produced autobahn.json must not be retried")
+	}
+	if _, statErr := os.Stat(filepath.Join(homeDir, "config", "genesis.json")); statErr != nil {
+		t.Error("genesis.json download should have completed before the autobahn fetch")
+	}
+	if markerExists(homeDir, genesisMarkerFile) {
+		t.Error("marker must not be written when a required artifact is missing")
+	}
+}
+
+func TestGenesisFetcher_Autobahn_EmbeddedChainRejected(t *testing.T) {
+	fetcher := NewGenesisFetcher(t.TempDir(), "pacific-1", "test-bucket", "us-east-2", nil)
+	_, err := fetcher.Handler()(context.Background(), map[string]any{"autobahn": true})
+	var te *engine.TaskError
+	if !errors.As(err, &te) || te.Retryable {
+		t.Fatalf("expected a terminal TaskError for an embedded chain under Autobahn, got %v", err)
+	}
+}

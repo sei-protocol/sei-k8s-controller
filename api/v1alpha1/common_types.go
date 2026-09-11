@@ -293,3 +293,50 @@ type SchedulingConfig struct {
 	// +optional
 	NodeIsolation NodeIsolation `json:"nodeIsolation,omitempty"`
 }
+
+// ConsensusEngine selects the consensus engine seid runs.
+// +kubebuilder:validation:Enum=Tendermint;Autobahn
+type ConsensusEngine string
+
+const (
+	ConsensusEngineTendermint ConsensusEngine = "Tendermint"
+	ConsensusEngineAutobahn   ConsensusEngine = "Autobahn"
+)
+
+// ConsensusSpec selects the consensus engine and the application it drives.
+// It is create-only on both Kinds: the engine is baked into the ceremony's
+// artifact and the node's home directory.
+// +kubebuilder:validation:XValidation:rule="!(has(self.evmOnly) && self.evmOnly) || (has(self.engine) && self.engine == 'Autobahn')",message="evmOnly requires engine Autobahn: the EVM-only executor runs only under Autobahn consensus"
+type ConsensusSpec struct {
+	// Engine is the consensus engine. Tendermint when omitted. Autobahn makes the
+	// genesis ceremony generate autobahn.json from every validator's identity and
+	// points config.toml's autobahn-config-file at it on validators and followers.
+	// +optional
+	Engine ConsensusEngine `json:"engine,omitempty"`
+
+	// EvmOnly replaces the ABCI application with the EVM-only executor (chain ID
+	// 713715). It requires engine Autobahn and is rejected on a seed. The node
+	// serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
+	// are off, no cosmos-exporter is attached, and Ready proves that listener
+	// answers, not sync distance.
+	// +optional
+	EvmOnly bool `json:"evmOnly,omitempty"`
+}
+
+// EffectiveEngine returns the engine a nil or empty spec resolves to.
+func (c *ConsensusSpec) EffectiveEngine() ConsensusEngine {
+	if c == nil || c.Engine == "" {
+		return ConsensusEngineTendermint
+	}
+	return c.Engine
+}
+
+// IsAutobahn reports whether the effective engine is Autobahn.
+func (c *ConsensusSpec) IsAutobahn() bool {
+	return c.EffectiveEngine() == ConsensusEngineAutobahn
+}
+
+// IsEvmOnly reports the effective evmOnly value; false for a nil spec.
+func (c *ConsensusSpec) IsEvmOnly() bool {
+	return c != nil && c.EvmOnly
+}

@@ -22,8 +22,14 @@ var artifactLog = seilog.NewLogger("seictl", "task", "upload-genesis-artifacts")
 const artifactUploadMarkerFile = ".sei-sidecar-artifact-upload-done"
 
 // UploadArtifactsRequest holds the typed parameters for the upload-genesis-artifacts task.
+//
+// Autobahn widens identity.json with the validator's Autobahn public inputs
+// (see autobahnIdentity); Namespace is then required to derive the advertised
+// P2P address and EVM-RPC URL.
 type UploadArtifactsRequest struct {
-	NodeName string `json:"nodeName"`
+	NodeName  string `json:"nodeName"`
+	Namespace string `json:"namespace,omitempty"`
+	Autobahn  bool   `json:"autobahn,omitempty"`
 }
 
 // GenesisArtifactUploader uploads the gentx file and a node identity
@@ -62,6 +68,9 @@ func (u *GenesisArtifactUploader) Handler() engine.TaskHandler {
 		if cfg.NodeName == "" {
 			return fmt.Errorf("upload-genesis-artifacts: missing required param 'nodeName'")
 		}
+		if cfg.Autobahn && cfg.Namespace == "" {
+			return fmt.Errorf("upload-genesis-artifacts: 'namespace' is required when autobahn is set")
+		}
 
 		uploader, err := u.s3UploaderFactory(ctx, u.region)
 		if err != nil {
@@ -75,7 +84,7 @@ func (u *GenesisArtifactUploader) Handler() engine.TaskHandler {
 			return err
 		}
 
-		if err := u.uploadIdentity(ctx, uploader, u.bucket, nodePrefix); err != nil {
+		if err := u.uploadIdentity(ctx, uploader, u.bucket, nodePrefix, cfg); err != nil {
 			return err
 		}
 
@@ -124,8 +133,9 @@ func (u *GenesisArtifactUploader) uploadGentx(ctx context.Context, uploader seis
 
 // uploadIdentity reads node_key.json, extracts the node ID, and uploads
 // a minimal identity manifest. The assembler uses this to know which
-// nodes participated.
-func (u *GenesisArtifactUploader) uploadIdentity(ctx context.Context, uploader seis3.Uploader, bucket, nodePrefix string) error {
+// nodes participated. Under Autobahn the manifest also carries the inputs
+// gen-autobahn-config needs from this validator.
+func (u *GenesisArtifactUploader) uploadIdentity(ctx context.Context, uploader seis3.Uploader, bucket, nodePrefix string, cfg UploadArtifactsRequest) error {
 	nodeKeyPath := filepath.Join(u.homeDir, "config", "node_key.json")
 	nodeKeyData, err := os.ReadFile(nodeKeyPath)
 	if err != nil {
@@ -134,6 +144,13 @@ func (u *GenesisArtifactUploader) uploadIdentity(ctx context.Context, uploader s
 
 	identity := map[string]any{
 		"node_key": json.RawMessage(nodeKeyData),
+	}
+	if cfg.Autobahn {
+		autobahn, err := readAutobahnIdentity(u.homeDir, cfg.NodeName, cfg.Namespace)
+		if err != nil {
+			return fmt.Errorf("upload-genesis-artifacts: autobahn identity: %w", err)
+		}
+		identity["autobahn"] = autobahn
 	}
 	data, err := json.Marshal(identity)
 	if err != nil {

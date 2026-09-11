@@ -90,12 +90,25 @@ type AssembleGenesisResult struct {
 // leaf value is replaced verbatim with the supplied json.RawMessage. The
 // controller enforces immutability of these keys post-bootstrap via CEL;
 // the sidecar applies them once during the genesis ceremony.
+//
+// ConsensusParams is one JSON object shaped like genesis.consensus_params,
+// deep-merged over what collect-gentxs produced. Autobahn makes the ceremony
+// also generate autobahn.json from every node's identity.json and upload it
+// under the chain prefix before genesis.json.
 type AssembleGenesisRequest struct {
-	AccountBalance string                     `json:"accountBalance"`
-	Namespace      string                     `json:"namespace"`
-	Nodes          []AssembleNodeEntry        `json:"nodes"`
-	Accounts       []GenesisAccountEntry      `json:"accounts,omitempty"`
-	Overrides      map[string]json.RawMessage `json:"overrides,omitempty"`
+	AccountBalance  string                     `json:"accountBalance"`
+	Namespace       string                     `json:"namespace"`
+	Nodes           []AssembleNodeEntry        `json:"nodes"`
+	Accounts        []GenesisAccountEntry      `json:"accounts,omitempty"`
+	Overrides       map[string]json.RawMessage `json:"overrides,omitempty"`
+	ConsensusParams json.RawMessage            `json:"consensusParams,omitempty"`
+	Autobahn        bool                       `json:"autobahn,omitempty"`
+}
+
+// identityManifest is the identity.json each validator uploads.
+type identityManifest struct {
+	NodeKey  json.RawMessage   `json:"node_key"`
+	Autobahn *autobahnIdentity `json:"autobahn,omitempty"`
 }
 
 // nodeNames returns the list of node name strings from the Nodes entries.
@@ -175,8 +188,23 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return nil, err
 		}
 
+		if err := a.applyConsensusParams(cfg.ConsensusParams); err != nil {
+			return nil, err
+		}
+
 		if err := a.populateGenesisValidators(); err != nil {
 			return nil, err
+		}
+
+		identities, err := a.downloadIdentities(ctx, nodes)
+		if err != nil {
+			return nil, err
+		}
+
+		if cfg.Autobahn {
+			if err := a.uploadAutobahnConfig(ctx, nodes, identities); err != nil {
+				return nil, err
+			}
 		}
 
 		genesisHash, err := a.uploadGenesis(ctx, cfg)
@@ -184,7 +212,7 @@ func (a *GenesisAssembler) Handler() engine.TaskHandler {
 			return nil, err
 		}
 
-		if err := a.uploadPeers(ctx, cfg, nodes); err != nil {
+		if err := a.uploadPeers(ctx, cfg, nodes, identities); err != nil {
 			return nil, err
 		}
 
@@ -628,18 +656,101 @@ func (a *GenesisAssembler) uploadGenesis(ctx context.Context, cfg AssembleGenesi
 	return genesisHash, nil
 }
 
-// uploadPeers builds a peers.json from each node's identity.json and uploads
-// it to S3 alongside genesis.json. Each entry is a full Tendermint peer address
-// using in-cluster DNS: <nodeID>@<name>-0.<name>.<namespace>.svc.cluster.local:26656
-func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg AssembleGenesisRequest, nodes []string) error {
+// applyConsensusParams deep-merges params over genesis.consensus_params in
+// place, then re-reads the file through the provider's GenesisDoc parser so a
+// value seid would refuse fails the ceremony here rather than at seid start.
+func (a *GenesisAssembler) applyConsensusParams(params json.RawMessage) error {
+	if len(params) == 0 {
+		return nil
+	}
+
+	genFile := filepath.Join(a.homeDir, "config", "genesis.json")
+	data, err := os.ReadFile(genFile)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: reading genesis for consensus params: %w", err)
+	}
+
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("assemble-genesis: parsing genesis for consensus params: %w", err)
+	}
+
+	var current map[string]any
+	if existing, ok := doc["consensus_params"]; ok && string(existing) != "null" {
+		if err := json.Unmarshal(existing, &current); err != nil {
+			return fmt.Errorf("assemble-genesis: parsing consensus_params: %w", err)
+		}
+	}
+	if current == nil {
+		current = map[string]any{}
+	}
+
+	var patch map[string]any
+	if err := json.Unmarshal(params, &patch); err != nil {
+		return fmt.Errorf("assemble-genesis: consensusParams must be a JSON object: %w", err)
+	}
+	if err := deepMergeJSON(current, patch, "consensus_params"); err != nil {
+		return fmt.Errorf("assemble-genesis: %w", err)
+	}
+
+	merged, err := json.Marshal(current)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: marshaling consensus_params: %w", err)
+	}
+	doc["consensus_params"] = merged
+
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: marshaling genesis after consensus params: %w", err)
+	}
+	if err := os.WriteFile(genFile, out, 0o600); err != nil {
+		return fmt.Errorf("assemble-genesis: writing genesis after consensus params: %w", err)
+	}
+
+	if _, err := tmtypes.GenesisDocFromFile(genFile); err != nil {
+		return fmt.Errorf("assemble-genesis: consensusParams rejected by genesis validation: %w", err)
+	}
+
+	assembleLog.Info("applied genesis consensus params", "keys", len(patch))
+	return nil
+}
+
+// deepMergeJSON merges patch into dst: nested objects on both sides recurse,
+// any other value replaces. A null anywhere in patch is rejected because
+// consensus_params has no key for which null is a meaningful value.
+func deepMergeJSON(dst, patch map[string]any, path string) error {
+	for key, value := range patch {
+		keyPath := path + "." + key
+		if value == nil {
+			return fmt.Errorf("%s: null is not allowed", keyPath)
+		}
+		patchObj, patchIsObj := value.(map[string]any)
+		dstObj, dstIsObj := dst[key].(map[string]any)
+		if patchIsObj && dstIsObj {
+			if err := deepMergeJSON(dstObj, patchObj, keyPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if patchIsObj {
+			if err := deepMergeJSON(map[string]any{}, patchObj, keyPath); err != nil {
+				return err
+			}
+		}
+		dst[key] = value
+	}
+	return nil
+}
+
+// downloadIdentities fetches every node's identity.json from the chain prefix.
+func (a *GenesisAssembler) downloadIdentities(ctx context.Context, nodes []string) (map[string]identityManifest, error) {
 	s3Client, err := a.s3ClientFactory(ctx, a.region)
 	if err != nil {
-		return fmt.Errorf("assemble-genesis: building S3 client for peers: %w", err)
+		return nil, fmt.Errorf("assemble-genesis: building S3 client for identities: %w", err)
 	}
 
 	prefix := a.chainID + "/"
-	var peers []string
-
+	identities := make(map[string]identityManifest, len(nodes))
 	for _, nodeName := range nodes {
 		key := fmt.Sprintf("%s%s/identity.json", prefix, nodeName)
 		output, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
@@ -647,20 +758,76 @@ func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg AssembleGenesisR
 			Key:    aws.String(key),
 		})
 		if err != nil {
-			return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
+			return nil, seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
 		}
 		data, err := io.ReadAll(output.Body)
 		_ = output.Body.Close()
 		if err != nil {
-			return fmt.Errorf("assemble-genesis: reading identity for %s: %w", nodeName, err)
+			return nil, fmt.Errorf("assemble-genesis: reading identity for %s: %w", nodeName, err)
 		}
 
-		var identity struct {
-			NodeKey json.RawMessage `json:"node_key"`
-		}
+		var identity identityManifest
 		if err := json.Unmarshal(data, &identity); err != nil {
-			return fmt.Errorf("assemble-genesis: parsing identity for %s: %w", nodeName, err)
+			return nil, fmt.Errorf("assemble-genesis: parsing identity for %s: %w", nodeName, err)
 		}
+		identities[nodeName] = identity
+	}
+	return identities, nil
+}
+
+// uploadAutobahnConfig generates autobahn.json from the validators' identity
+// manifests and uploads it to <chainID>/autobahn.json. It runs before
+// uploadGenesis so a node that sees genesis.json can rely on autobahn.json
+// being present.
+func (a *GenesisAssembler) uploadAutobahnConfig(ctx context.Context, nodes []string, identities map[string]identityManifest) error {
+	validators := make([]autobahnValidator, 0, len(nodes))
+	for _, nodeName := range nodes {
+		id := identities[nodeName].Autobahn
+		if err := validateAutobahnIdentity(nodeName, id); err != nil {
+			return fmt.Errorf("assemble-genesis: autobahn: %w", err)
+		}
+		validators = append(validators, autobahnValidator{
+			ValidatorKey: id.ValidatorPubKey,
+			NodeKey:      id.NodePubKey,
+			Address:      id.AutobahnAddress,
+			EVMRPC:       id.EVMRPCURL,
+		})
+	}
+
+	data, err := buildAutobahnConfig(validators)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: %w", err)
+	}
+
+	uploader, err := a.s3UploaderFactory(ctx, a.region)
+	if err != nil {
+		return fmt.Errorf("assemble-genesis: building S3 uploader for autobahn config: %w", err)
+	}
+
+	key := a.chainID + "/" + autobahnArtifactName
+	assembleLog.Info("uploading autobahn config", "key", key, "validators", len(validators))
+
+	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
+		Bucket:      aws.String(a.bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("application/json"),
+	})
+	if err != nil {
+		return seis3.ClassifyS3Error("assemble-and-upload-genesis", a.bucket, key, a.region, err)
+	}
+	return nil
+}
+
+// uploadPeers builds a peers.json from each node's identity.json and uploads
+// it to S3 alongside genesis.json. Each entry is a full Tendermint peer address
+// using in-cluster DNS: <nodeID>@<name>-0.<name>.<namespace>.svc.cluster.local:26656
+func (a *GenesisAssembler) uploadPeers(ctx context.Context, cfg AssembleGenesisRequest, nodes []string, identities map[string]identityManifest) error {
+	prefix := a.chainID + "/"
+	var peers []string
+
+	for _, nodeName := range nodes {
+		identity := identities[nodeName]
 
 		var nodeKey struct {
 			ID string `json:"id"`

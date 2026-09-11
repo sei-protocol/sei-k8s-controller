@@ -167,6 +167,10 @@ func TestUpCheckForNode_MatchesReadinessListener(t *testing.T) {
 			wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortRPC, Path: pathStatus}},
 		{"frozen", seiv1alpha1.SeiNodeSpec{FullNode: &seiv1alpha1.FullNodeSpec{Freeze: &seiv1alpha1.FreezeSpec{Height: 100}}},
 			wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortRPC, Path: pathStatus}},
+		{"autobahn", seiv1alpha1.SeiNodeSpec{Validator: &seiv1alpha1.ValidatorSpec{}, Consensus: &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}},
+			wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortRPC, Path: pathStatus}},
+		{"evm-only", seiv1alpha1.SeiNodeSpec{Validator: &seiv1alpha1.ValidatorSpec{}, Consensus: &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}},
+			wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortEVMHTTP, Path: pathRoot}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

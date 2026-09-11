@@ -53,6 +53,10 @@ func (p *genesisGroupPlanner) BuildPlan(
 		Nodes:          nodeParams,
 		Accounts:       accounts,
 		Overrides:      toRawMessages(network.Spec.Genesis.Overrides),
+		Autobahn:       network.Spec.Consensus.IsAutobahn(),
+	}
+	if cp := network.Spec.Genesis.ConsensusParams; cp != nil {
+		assembleParams.ConsensusParams = json.RawMessage(cp.Raw)
 	}
 	if err := assembleParams.Validate(); err != nil {
 		return nil, err

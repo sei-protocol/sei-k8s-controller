@@ -2139,6 +2139,24 @@ func TestCosmosExporter_AbsentOnSeed(t *testing.T) {
 	g.Expect(containers[0].Name).To(Equal(containerNameSeid))
 }
 
+// An EVM-only node runs no gRPC either, so cosmos-exporter stays off and the
+// readiness probe moves to the EVM-only listener's bare GET.
+func TestCosmosExporter_AbsentOnEvmOnly(t *testing.T) {
+	g := NewWithT(t)
+
+	node := nodeForRole(roleValidator)
+	node.Spec.Consensus = &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}
+	sts := mustGenerateStatefulSet(t, node, platformtest.Config())
+
+	containers := sts.Spec.Template.Spec.Containers
+	g.Expect(findContainer(containers, containerNameCosmosExporter)).To(BeNil())
+	seid := findContainer(containers, containerNameSeid)
+	g.Expect(seid).NotTo(BeNil())
+	g.Expect(seid.ReadinessProbe.HTTPGet).NotTo(BeNil())
+	g.Expect(seid.ReadinessProbe.HTTPGet.Path).To(Equal(pathRoot))
+	g.Expect(seid.ReadinessProbe.HTTPGet.Port.IntVal).To(Equal(seiconfig.PortEVMHTTP))
+}
+
 // A seed needs the peer store and two DBs it never writes — not the full-state
 // volume StorageSizeDefault sizes for.
 func TestDefaultStorageForMode_Seed(t *testing.T) {
