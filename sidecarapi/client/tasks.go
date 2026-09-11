@@ -245,14 +245,34 @@ func (t MarkReadyTask) ToTaskRequest() TaskRequest {
 
 // RestartSeidTask restarts the co-located seid process in place so it
 // re-reads config.toml without bouncing the sidecar. The task completes
-// once seid's local RPC is serving again.
-type RestartSeidTask struct{}
+// once UpCheck answers again; a nil UpCheck means HTTP GET /status on the
+// local CometBFT RPC port, which a seed never serves.
+type RestartSeidTask struct {
+	UpCheck *wire.UpCheck
+}
 
 func (t RestartSeidTask) TaskType() string { return TaskTypeRestartSeid }
-func (t RestartSeidTask) Validate() error  { return nil }
+
+func (t RestartSeidTask) Validate() error {
+	if t.UpCheck == nil {
+		return nil
+	}
+	if err := t.UpCheck.Validate(); err != nil {
+		return fmt.Errorf("restart-seid: %w", err)
+	}
+	return nil
+}
 
 func (t RestartSeidTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
+	if t.UpCheck != nil {
+		p := map[string]any{"upCheck": map[string]any{
+			"scheme": string(t.UpCheck.Scheme),
+			"port":   t.UpCheck.Port,
+			"path":   t.UpCheck.Path,
+		}}
+		req.Params = &p
+	}
 	return req
 }
 

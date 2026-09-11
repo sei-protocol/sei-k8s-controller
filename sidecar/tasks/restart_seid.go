@@ -3,6 +3,8 @@ package tasks
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/actions"
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/engine"
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/rpc"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 var restartSeidLog = seilog.NewLogger("seictl", "task", "restart-seid")
@@ -39,6 +42,9 @@ const (
 	restartSeidUpTimeout = 5 * time.Minute
 
 	restartSeidUpPollInterval = 1 * time.Second
+
+	// restartSeidUpCheckTimeout bounds one probe of a caller-supplied UpCheck.
+	restartSeidUpCheckTimeout = 5 * time.Second
 
 	// restartSeidExitPollInterval is how often gracefulStop checks whether seid
 	// has exited after SIGTERM.
@@ -111,21 +117,28 @@ func isSeidStart(cmdline []byte) bool {
 // force-kill opt-in is intentionally omitted until a non-validator forced
 // restart needs it.
 //
-// Completion means "seid's RPC is serving /status again," NOT "caught up /
+// Completion means "seid answers its up-check again," NOT "caught up /
 // voting." Callers that need in-service-and-voting must gate height / caught-up
 // separately (downstream AwaitNodesAtHeight).
 //
-// The three OS interactions are injectable for testing:
+// The OS interactions are injectable for testing:
 //   - signaler: process discovery + SIGTERM (defaults to a /proc + syscall
 //     implementation that corroborates `seid start`).
-//   - probeUp: returns true once seid's local RPC answers /status (defaults to
+//   - probeUp: the up-check used when the request carries none (defaults to
 //     a local CometBFT /status probe).
+//   - probeFor: builds the up-check for a request that names one.
 type RestartSeider struct {
 	signaler    actions.ProcessSignaler
 	probeUp     func(ctx context.Context) bool
+	probeFor    func(check wire.UpCheck) func(ctx context.Context) bool
 	gracePeriod time.Duration
 	upTimeout   time.Duration
 	upInterval  time.Duration
+}
+
+// restartSeidParams is the restart-seid request body.
+type restartSeidParams struct {
+	UpCheck *wire.UpCheck `json:"upCheck,omitempty"`
 }
 
 // NewRestartSeider builds a RestartSeider with the real /proc + syscall +
@@ -135,9 +148,43 @@ func NewRestartSeider() *RestartSeider {
 	return &RestartSeider{
 		signaler:    seidStartFinder{},
 		probeUp:     func(ctx context.Context) bool { return seidRPCUp(ctx, statusClient) },
+		probeFor:    upCheckProbe,
 		gracePeriod: restartSeidGracePeriod,
 		upTimeout:   restartSeidUpTimeout,
 		upInterval:  restartSeidUpPollInterval,
+	}
+}
+
+// upCheckProbe reads a caller-supplied UpCheck against loopback: a TCP connect
+// for scheme tcp, an HTTP GET answered 2xx for scheme http.
+func upCheckProbe(check wire.UpCheck) func(ctx context.Context) bool {
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(check.Port)))
+	switch check.Scheme {
+	case wire.UpCheckTCP:
+		return func(ctx context.Context) bool {
+			dialer := net.Dialer{Timeout: restartSeidUpCheckTimeout}
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if err != nil {
+				return false
+			}
+			_ = conn.Close()
+			return true
+		}
+	default:
+		client := &http.Client{Timeout: restartSeidUpCheckTimeout}
+		url := "http://" + addr + check.Path
+		return func(ctx context.Context) bool {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return false
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return false
+			}
+			_ = resp.Body.Close()
+			return resp.StatusCode >= 200 && resp.StatusCode < 300
+		}
 	}
 }
 
@@ -151,24 +198,33 @@ func seidRPCUp(ctx context.Context, c *rpc.StatusClient) bool {
 	return true
 }
 
-// Handler returns an engine.TaskHandler for the restart-seid task type.
-// Params are empty: restart-seid is a fire-and-confirm operation.
+// Handler returns an engine.TaskHandler for the restart-seid task type. The
+// optional upCheck selects the signal that ends the wait; the same probe
+// serves the stop-phase honesty check so both phases agree on what "up" means.
 func (r *RestartSeider) Handler() engine.TaskHandler {
-	return engine.TypedHandler(func(ctx context.Context, _ struct{}) error {
-		if err := r.stopSeid(ctx); err != nil {
+	return engine.TypedHandler(func(ctx context.Context, params restartSeidParams) error {
+		probe := r.probeUp
+		if params.UpCheck != nil {
+			if err := params.UpCheck.Validate(); err != nil {
+				return fmt.Errorf("restart-seid: %w", err)
+			}
+			probe = r.probeFor(*params.UpCheck)
+			restartSeidLog.Info("using caller-supplied up-check", "scheme", params.UpCheck.Scheme, "port", params.UpCheck.Port, "path", params.UpCheck.Path)
+		}
+		if err := r.stopSeid(ctx, probe); err != nil {
 			return err
 		}
-		return r.waitForUp(ctx)
+		return r.waitForUp(ctx, probe)
 	})
 }
 
 // stopSeid SIGTERMs seid and waits for it to exit gracefully via the shared
 // seidStopper (graceful-only, never SIGKILL; honesty check when /proc shows
 // nothing but the RPC serves). restart-seid proceeds to waitForUp afterwards.
-func (r *RestartSeider) stopSeid(ctx context.Context) error {
+func (r *RestartSeider) stopSeid(ctx context.Context, probe func(context.Context) bool) error {
 	return seidStopper{
 		signaler:         r.signaler,
-		probeUp:          r.probeUp,
+		probeUp:          probe,
 		gracePeriod:      r.gracePeriod,
 		exitPollInterval: restartSeidExitPollInterval,
 		log:              restartSeidLog,
@@ -176,17 +232,17 @@ func (r *RestartSeider) stopSeid(ctx context.Context) error {
 	}.stop(ctx)
 }
 
-// waitForUp polls seid's local RPC until it serves /status or the timeout
-// elapses. Success here is the completion signal for the in-place restart.
-func (r *RestartSeider) waitForUp(ctx context.Context) error {
+// waitForUp polls probe until it answers or the timeout elapses. Success here
+// is the completion signal for the in-place restart.
+func (r *RestartSeider) waitForUp(ctx context.Context, probe func(context.Context) bool) error {
 	deadline := time.Now().Add(r.upTimeout)
 	ticker := time.NewTicker(r.upInterval)
 	defer ticker.Stop()
 
-	restartSeidLog.Info("waiting for seid RPC to come back up", "timeout", r.upTimeout)
+	restartSeidLog.Info("waiting for seid to come back up", "timeout", r.upTimeout)
 	for {
-		if r.probeUp(ctx) {
-			restartSeidLog.Info("seid RPC is up; restart complete")
+		if probe(ctx) {
+			restartSeidLog.Info("seid is up; restart complete")
 			return nil
 		}
 		select {
@@ -194,7 +250,7 @@ func (r *RestartSeider) waitForUp(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			if time.Now().After(deadline) {
-				return fmt.Errorf("seid RPC did not come up within %s after restart", r.upTimeout)
+				return fmt.Errorf("seid did not come up within %s after restart", r.upTimeout)
 			}
 		}
 	}

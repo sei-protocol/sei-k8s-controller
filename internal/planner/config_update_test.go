@@ -12,8 +12,10 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 const (
@@ -246,4 +248,21 @@ func TestConfigUpdateWaitsForRestartBeforeObserving(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
 	g.Expect(node.Status.CurrentConfigValuesHash).To(Equal(plan.ConfigValuesHash))
+}
+
+// The restart-seid request names the node's up-check so the sidecar waits on
+// the listener the readiness probe reads, not on a hard-coded /status.
+func TestConfigUpdateRestartCarriesUpCheck(t *testing.T) {
+	g := NewWithT(t)
+	node := runningFullNode()
+	node.Status.CurrentConfigValuesHash = configUpdateOldHash
+	plan, err := buildConfigUpdatePlan(node)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var params struct {
+		UpCheck wire.UpCheck `json:"upCheck"`
+	}
+	g.Expect(json.Unmarshal(taskParams(t, plan, sidecar.TaskTypeRestartSeid), &params)).To(Succeed())
+	g.Expect(params.UpCheck).To(Equal(noderesource.UpCheckForNode(node)))
+	g.Expect(params.UpCheck).To(Equal(wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortRPC, Path: "/status"}))
 }

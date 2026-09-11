@@ -679,7 +679,8 @@ func paramsForTaskType(
 	case TaskMarkReady:
 		return sidecar.MarkReadyTask{}
 	case sidecar.TaskTypeRestartSeid:
-		return sidecar.RestartSeidTask{}
+		up := noderesource.UpCheckForNode(node)
+		return sidecar.RestartSeidTask{UpCheck: &up}
 
 	// Genesis ceremony tasks — only valid when Validator.GenesisCeremony is set.
 	case TaskGenerateIdentity, TaskGenerateGentx, TaskUploadGenesisArtifacts, TaskSetGenesisPeers:
