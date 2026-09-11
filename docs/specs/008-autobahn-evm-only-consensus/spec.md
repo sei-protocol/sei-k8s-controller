@@ -20,19 +20,12 @@ the README's block gas limit lives at `consensus_params.block.max_gas`, a
 top-level genesis key that `spec.genesis.overrides` — an `app_state` patch —
 cannot reach.
 
-**Input**: Linear PLT-1249, the `sei-chain` `integration_test/autobahn/README.md`
-at the `sei-load v0.0.1` pin, and the Benchmark Party Slack thread of 2026-09-10.
-The fence below holds the originator's words. The writing rules govern this
-document; the fence is the one place they do not.
+**Input**: Linear PLT-1249 and the `sei-chain` `integration_test/autobahn/README.md`
+at the `sei-load v0.0.1` pin.
 
-```text
-I'm generally aligned with the go typed approach and the thinking. Could we make
-nodes choose their health check source conditionally?
-```
-
-This spec follows that instruction. It adds a typed, create-only consensus field
-rather than a generic non-TOML file substrate, and it makes the health source a
-function of the node's engine and mode rather than a constant.
+This spec adds a typed, create-only consensus field rather than a generic
+non-TOML file substrate, and it makes the health source a function of the
+node's engine and mode rather than a constant.
 
 ## Semantic Anchors
 
@@ -274,7 +267,7 @@ so that the README's block gas limit is a declared value and not a patch.
 
 - The engine is an enumeration, not a boolean, because a third engine or mode is plausible and the AIP guidance prefers a name over a flag. `evmOnly` stays a boolean because it is a mode of one engine, not a peer of it.
 - The consensus field is create-only on the SeiNetwork through the same CEL shape `spec.genesis` uses, because the artifact and the executor are baked at the ceremony. On a SeiNode it is a plain field; a follower can be recreated.
-- The Autobahn artifact rides the S3 genesis prefix rather than a ConfigMap. The ceremony already publishes `genesis.json` there and every node's `configure-genesis` already reads it by `chainId`, so a follower needs no reference to a ConfigMap in another namespace and no new RBAC. The Slack thread proposed a `SeiNode.spec.autobahnConfigRef`; this spec drops it in favour of the S3 path, and the follower's `spec.consensus.engine` is the declaration that it should fetch.
+- The Autobahn artifact rides the S3 genesis prefix rather than a ConfigMap. The ceremony already publishes `genesis.json` there and every node's `configure-genesis` already reads it by `chainId`, so a follower needs no reference to a ConfigMap in another namespace and no new RBAC. A `SeiNode.spec.autobahnConfigRef` is not needed: the follower's `spec.consensus.engine` is the declaration that it should fetch.
 - The `docker/rpcnode` script in `sei-chain` regenerates the artifact on the follower from the validator directories. On Harbor the follower downloads the assembler's copy instead, because a follower never holds the validators' identity material and the generator's output is deterministic for the same inputs.
 - The generator's `address` field accepts a hostname; `tcp.ParseHostPort` splits host and port and resolves the hostname at dial time. The per-pod Service DNS the peer-collection task already uses therefore serves as the Autobahn address.
 - The identity manifest currently carries `node_key.json` whole. Widening it with the two public keys and two addresses is additive; the assembler ignores unknown fields on a Tendermint network.
