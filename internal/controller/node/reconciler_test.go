@@ -275,7 +275,7 @@ func TestNodeReconcile_RunningFullNode_SetsEndpoint(t *testing.T) {
 	g.Expect(has8545).To(BeTrue(), "headless Service should expose :8545")
 }
 
-func TestNodeReconcile_RunningValidator_NoEndpoint(t *testing.T) {
+func TestNodeReconcile_RunningValidator_TendermintRpcEndpoint(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
 
@@ -294,7 +294,9 @@ func TestNodeReconcile_RunningValidator_NoEndpoint(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 
 	got := getSeiNode(t, ctx, c, "genesis-val-0", "sei")
-	g.Expect(got.Status.Endpoint).To(BeNil())
+	g.Expect(got.Status.Endpoint).To(Equal(&seiv1alpha1.NodeEndpointStatus{
+		TendermintRpc: "http://genesis-val-0.sei.svc:26657",
+	}))
 }
 
 func TestNodeReconcile_Endpoint_StableAcrossReconciles(t *testing.T) {

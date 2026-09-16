@@ -416,9 +416,8 @@ spec:
                           HttpEnabled opens the EVM JSON-RPC HTTP listener on 8545. Default true:
                           the listener is the node's only RPC surface, and a validator-mode base
                           config would otherwise leave it closed. When false the node publishes no
-                          EVM endpoint, its pod readiness falls back to the P2P transport being
-                          bound, and its EvmServing condition stays False/HttpDisabled — so an
-                          owning SeiNetwork never counts it among readyReplicas. Create-only.
+                          EVM endpoint and its readiness falls back to the P2P transport being
+                          bound. Create-only.
                         type: boolean
                     type: object
                   mode:
@@ -892,12 +891,13 @@ spec:
                 properties:
                   nodes:
                     description: |-
-                      Nodes lists per-pod URL bundles, keyed by SeiNode name, for the
-                      protocols that require pod affinity (EVM JSON-RPC, EVM WebSocket). On a
-                      Default-engine network there is one entry per .status.perPodServices
-                      Service. On an EvmOnly network each entry mirrors the child SeiNode's
-                      .status.endpoint, and a child whose listener is not serving has no
-                      entry, so a consumer gets a URL the child stands behind or none.
+                      Nodes lists per-pod URL bundles, keyed by SeiNode name, for consumers
+                      that need pod affinity (stateful EVM sequences, or a specific validator's
+                      CometBFT RPC). Each entry mirrors the child SeiNode's .status.endpoint —
+                      only the URLs that child's mode and engine actually serve — and a child
+                      that publishes no endpoint (not yet Running, or an EvmOnly listener that
+                      is not serving) has no entry, so a consumer gets a URL the child stands
+                      behind or none.
                     items:
                       description: |-
                         NodeEndpoint is the per-pod URL bundle for a single SeiNode replica.
@@ -915,6 +915,14 @@ spec:
                           description: Name is the SeiNode resource name (also the
                             headless Service name).
                           minLength: 1
+                          type: string
+                        tendermintRest:
+                          description: TendermintRest is the per-pod Cosmos REST (LCD)
+                            URL (http://).
+                          type: string
+                        tendermintRpc:
+                          description: TendermintRpc is the per-pod CometBFT RPC URL
+                            (http://).
                           type: string
                       required:
                       - name

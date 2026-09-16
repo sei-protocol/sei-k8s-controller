@@ -79,16 +79,17 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 }
 
 // childReady is the network's notion of a ready child: Running, and — for an
-// EVM-only child — EvmServing True. Running alone says seid is up; it does not
-// say the EVM JSON-RPC surface the network publishes for that child answers,
-// and a network must not read Ready while pointing consumers at a refused
-// listener. An EVM-only child with its listener disabled never serves, so it
-// never counts as ready (EvmServing stays False/HttpDisabled).
+// EVM-only child whose listener is enabled — EvmServing True. Running alone
+// says seid is up; it does not say the EVM JSON-RPC surface the network
+// publishes for that child answers, and a network must not read Ready while
+// pointing consumers at a refused listener. An EVM-only child with its
+// listener disabled serves nothing to publish, so Running is the whole story.
 func childReady(node *seiv1alpha1.SeiNode) bool {
 	if node.Status.Phase != seiv1alpha1.PhaseRunning {
 		return false
 	}
-	if !node.Spec.EffectiveExecutionEngine().IsEvmOnly() {
+	engine := node.Spec.EffectiveExecutionEngine()
+	if !engine.IsEvmOnly() || !engine.EvmHTTPEnabled() {
 		return true
 	}
 	return apimeta.IsStatusConditionTrue(node.Status.Conditions, seiv1alpha1.ConditionEvmServing)

@@ -21,8 +21,10 @@ func servesEVM(node *seiv1alpha1.SeiNode) bool {
 // composeNodeEndpoints derives the in-cluster URL bundle for this node from its
 // headless Service DNS (<name>.<namespace>.svc) and the seiconfig port set.
 //
-// Under the Default engine the bundle is identity-derived for fullNode and
-// archive and nil for every other mode. Under the EvmOnly engine the bundle is
+// Under the Default engine the bundle is identity-derived: the full set for
+// fullNode and archive, CometBFT RPC alone for a validator (its base config
+// binds RPC on 0.0.0.0 and disables REST and EVM), and nil for every other
+// mode (seed and replayer serve no RPC). Under the EvmOnly engine the bundle is
 // the EVM JSON-RPC URL alone (Tendermint RPC/REST are disabled, and the
 // validator-mode WebSocket listener is off) and is published only while
 // EvmServing is True — a consumer that reads a URL here can dial it. Returns
@@ -38,7 +40,12 @@ func composeNodeEndpoints(node *seiv1alpha1.SeiNode) *seiv1alpha1.NodeEndpointSt
 		}
 	}
 	if !servesEVM(node) {
-		return nil
+		if node.Spec.Validator == nil {
+			return nil
+		}
+		return &seiv1alpha1.NodeEndpointStatus{
+			TendermintRpc: httpURL(name, ns, seiconfig.PortRPC),
+		}
 	}
 	return &seiv1alpha1.NodeEndpointStatus{
 		EvmJsonRpc:     httpURL(name, ns, seiconfig.PortEVMHTTP),

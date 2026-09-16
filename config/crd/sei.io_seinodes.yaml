@@ -389,9 +389,8 @@ spec:
                           HttpEnabled opens the EVM JSON-RPC HTTP listener on 8545. Default true:
                           the listener is the node's only RPC surface, and a validator-mode base
                           config would otherwise leave it closed. When false the node publishes no
-                          EVM endpoint, its pod readiness falls back to the P2P transport being
-                          bound, and its EvmServing condition stays False/HttpDisabled — so an
-                          owning SeiNetwork never counts it among readyReplicas. Create-only.
+                          EVM endpoint and its readiness falls back to the P2P transport being
+                          bound. Create-only.
                         type: boolean
                     type: object
                   mode:
@@ -1546,9 +1545,9 @@ spec:
                   tendermintRpc:
                     description: |-
                       TendermintRpc is the Tendermint / CometBFT RPC URL (http://). Populated
-                      only for fullNode/archive (gated by servesEVM); not surfaced for
-                      validator/replayer — validators do bind RPC on 0.0.0.0 but we don't
-                      advertise it.
+                      for fullNode, archive, and Default-engine validators (validator mode
+                      binds RPC on 0.0.0.0); not for seed, replayer, or EvmOnly nodes, which
+                      leave the listener closed.
                     type: string
                 type: object
               phase:
