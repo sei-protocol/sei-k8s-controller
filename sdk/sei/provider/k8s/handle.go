@@ -358,9 +358,7 @@ func taskFailureReason(task *seiv1alpha1.SeiNodeTask) string {
 }
 
 // translateTaskOutputs maps the CRD outputs to the SDK-native shape. Returns nil
-// when the task recorded no outputs. Only UpdateNodeImage is surfaced — the only
-// kind the controller's populateOutputs writes; gov/await kinds coordinate via
-// chain queries (chain-as-medium), so the SDK exposes no always-empty fields.
+// when the task recorded no outputs.
 func translateTaskOutputs(out *seiv1alpha1.SeiNodeTaskOutputs) *sei.TaskOutputs {
 	if out == nil {
 		return nil
@@ -374,6 +372,11 @@ func translateTaskOutputs(out *seiv1alpha1.SeiNodeTaskOutputs) *sei.TaskOutputs 
 	}
 	if o := out.GovParamChange; o != nil {
 		t.GovParamChange = &sei.GovProposalOutputs{TxHash: o.TxHash, Height: o.Height, ProposalID: o.ProposalID}
+	}
+	if o := out.GovUpdateInstantiateConfig; o != nil {
+		t.GovUpdateInstantiateConfig = &sei.GovProposalOutputs{
+			TxHash: o.TxHash, Height: o.Height, ProposalID: o.ProposalID,
+		}
 	}
 	if o := out.GovVote; o != nil {
 		t.GovVote = &sei.GovVoteOutputs{TxHash: o.TxHash, Height: o.Height}

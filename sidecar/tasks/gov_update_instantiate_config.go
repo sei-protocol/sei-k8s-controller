@@ -79,7 +79,7 @@ func (g *GovInstantiateConfigUpdater) Handler() engine.TaskHandler {
 		if err != nil {
 			return nil, err
 		}
-		out, classifyErr := classifyGovResult(engine.TaskGovInstantiateConfig, result)
+		out, classifyErr := classifyGovResult(engine.TaskGovUpdateInstantiateConfig, result)
 		classifyErr = requireProposalID(out, classifyErr)
 		govUpdateInstantiateConfigLog.Info("proposal broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),

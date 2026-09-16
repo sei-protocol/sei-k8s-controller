@@ -59,10 +59,10 @@ const (
 	TaskTypeAssembleGenesis        = string(wire.TaskAssembleAndUploadGenesis)
 	TaskTypeSetGenesisPeers        = string(wire.TaskSetGenesisPeers)
 
-	TaskTypeGovVote              = string(wire.TaskGovVote)
-	TaskTypeGovSoftwareUpgrade   = string(wire.TaskGovSoftwareUpgrade)
-	TaskTypeGovParamChange       = string(wire.TaskGovParamChange)
-	TaskTypeGovInstantiateConfig = string(wire.TaskGovInstantiateConfig)
+	TaskTypeGovVote                    = string(wire.TaskGovVote)
+	TaskTypeGovSoftwareUpgrade         = string(wire.TaskGovSoftwareUpgrade)
+	TaskTypeGovParamChange             = string(wire.TaskGovParamChange)
+	TaskTypeGovUpdateInstantiateConfig = string(wire.TaskGovUpdateInstantiateConfig)
 
 	TaskTypeMarkNotReady = string(wire.TaskMarkNotReady)
 	TaskTypeStopSeid     = string(wire.TaskStopSeid)
@@ -1091,7 +1091,7 @@ type GovUpdateInstantiateConfigTask struct {
 }
 
 func (t GovUpdateInstantiateConfigTask) TaskType() string {
-	return TaskTypeGovInstantiateConfig
+	return TaskTypeGovUpdateInstantiateConfig
 }
 
 func (t GovUpdateInstantiateConfigTask) Validate() error {

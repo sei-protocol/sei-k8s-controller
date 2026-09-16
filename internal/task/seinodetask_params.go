@@ -194,7 +194,7 @@ func govUpdateInstantiateConfigParams(
 		})
 	}
 	return SeiNodeTaskParams{
-		sidecar.TaskTypeGovInstantiateConfig,
+		sidecar.TaskTypeGovUpdateInstantiateConfig,
 		sidecar.GovUpdateInstantiateConfigTask{
 			ChainID:        p.ChainID,
 			KeyName:        resolveSigningUID(p.KeyName, target),

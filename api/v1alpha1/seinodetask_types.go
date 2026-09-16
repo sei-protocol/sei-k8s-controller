@@ -129,6 +129,8 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartSeid' || has(self.restartSeid)",message="spec.restartSeid is required when kind=RestartSeid"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'MarkReady' || has(self.markReady)",message="spec.markReady is required when kind=MarkReady"
 // +kubebuilder:validation:XValidation:rule="self.kind == oldSelf.kind",message="spec.kind is immutable"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'GovUpdateInstantiateConfig' || self.target == oldSelf.target",message="spec.target is immutable for kind=GovUpdateInstantiateConfig"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'GovUpdateInstantiateConfig' || self.govUpdateInstantiateConfig == oldSelf.govUpdateInstantiateConfig",message="spec.govUpdateInstantiateConfig is immutable"
 type SeiNodeTaskSpec struct {
 	// Kind selects the task implementation. Immutable after creation.
 	// The matching payload sub-spec (govSoftwareUpgrade, govVote, etc.)
@@ -540,7 +542,9 @@ type SeiNodeTaskStatus struct {
 	Task *SeiNodeTaskExecution `json:"task,omitempty"`
 
 	// Outputs surfaces typed per-kind results. Exactly one sub-field is
-	// populated, matching spec.kind. Populated only on phase=Complete.
+	// populated, matching spec.kind, whenever the task has returned structured
+	// output. A governance tx hash is preserved on pending and failed inclusion
+	// paths so operators can determine whether recreation is safe.
 	// +optional
 	Outputs *SeiNodeTaskOutputs `json:"outputs,omitempty"`
 
@@ -594,7 +598,7 @@ type SeiNodeTaskExecution struct {
 }
 
 // SeiNodeTaskOutputs holds typed per-kind results. Exactly one sub-field is
-// populated, matching the spec union. Populated only on phase=Complete.
+// populated, matching the spec union, whenever structured output is available.
 type SeiNodeTaskOutputs struct {
 	// GovSoftwareUpgrade outputs for kind=GovSoftwareUpgrade.
 	// +optional

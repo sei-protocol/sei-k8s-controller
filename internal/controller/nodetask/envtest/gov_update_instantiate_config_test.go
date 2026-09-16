@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 )
@@ -82,4 +83,41 @@ func TestCELGovUpdateInstantiateConfigInvalidPermissionRejected(t *testing.T) {
 	err := testCli.Create(testCtx, task)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("permission"))
+}
+
+func TestCELGovUpdateInstantiateConfigPayloadImmutable(t *testing.T) {
+	g := NewWithT(t)
+	namespace := makeNamespace(t)
+	task := baseTask(
+		namespace,
+		"gov-update-instantiate-payload-immutable",
+		seiv1alpha1.SeiNodeTaskKindGovUpdateInstantiateConfig,
+	)
+	task.Spec.GovUpdateInstantiateConfig = validGovUpdateInstantiateConfig()
+	g.Expect(testCli.Create(testCtx, task)).To(Succeed())
+
+	patch := client.MergeFrom(task.DeepCopy())
+	task.Spec.GovUpdateInstantiateConfig.Updates[0].Permission = "everybody"
+	err := testCli.Patch(testCtx, task, patch)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("govUpdateInstantiateConfig is immutable"))
+}
+
+func TestCELGovUpdateInstantiateConfigTargetImmutable(t *testing.T) {
+	g := NewWithT(t)
+	namespace := makeNamespace(t)
+	task := baseTask(
+		namespace,
+		"gov-update-instantiate-target-immutable",
+		seiv1alpha1.SeiNodeTaskKindGovUpdateInstantiateConfig,
+	)
+	task.Spec.GovUpdateInstantiateConfig = validGovUpdateInstantiateConfig()
+	g.Expect(testCli.Create(testCtx, task)).To(Succeed())
+
+	patch := client.MergeFrom(task.DeepCopy())
+	task.Spec.Target.NodeRef.Name = "another-validator"
+	err := testCli.Patch(testCtx, task, patch)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(
+		"spec.target is immutable for kind=GovUpdateInstantiateConfig"))
 }

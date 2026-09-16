@@ -92,8 +92,8 @@ func TestSeiNodeTaskParamsForGovUpdateInstantiateConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if params.Type != sidecar.TaskTypeGovInstantiateConfig {
-		t.Errorf("Type = %q, want %q", params.Type, sidecar.TaskTypeGovInstantiateConfig)
+	if params.Type != sidecar.TaskTypeGovUpdateInstantiateConfig {
+		t.Errorf("Type = %q, want %q", params.Type, sidecar.TaskTypeGovUpdateInstantiateConfig)
 	}
 	task, ok := params.Payload.(sidecar.GovUpdateInstantiateConfigTask)
 	if !ok {

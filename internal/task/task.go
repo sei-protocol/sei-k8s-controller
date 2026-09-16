@@ -216,18 +216,18 @@ var registry = map[string]taskDeserializer{
 	// which is exactly what keeps seid from booting onto a half-wiped dir. A
 	// fire-and-forget classification here would be a released-onto-wiped-data
 	// bug. stop-seid and reset-data likewise report real terminal state.
-	sidecar.TaskTypeMarkNotReady:           sidecarTask[sidecar.MarkNotReadyTask](false),
-	sidecar.TaskTypeStopSeid:               sidecarTask[sidecar.StopSeidTask](false),
-	sidecar.TaskTypeResetData:              sidecarTask[sidecar.ResetDataTask](false),
-	sidecar.TaskTypeGenerateIdentity:       sidecarTask[sidecar.GenerateIdentityTask](false),
-	sidecar.TaskTypeGenerateGentx:          sidecarTask[sidecar.GenerateGentxTask](false),
-	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[sidecar.UploadGenesisArtifactsTask](false),
-	sidecar.TaskTypeAssembleGenesis:        sidecarTask[sidecar.AssembleAndUploadGenesisTask](false),
-	sidecar.TaskTypeSetGenesisPeers:        sidecarTask[sidecar.SetGenesisPeersTask](false),
-	sidecar.TaskTypeGovVote:                sidecarTask[sidecar.GovVoteTask](false),
-	sidecar.TaskTypeGovSoftwareUpgrade:     sidecarTask[sidecar.GovSoftwareUpgradeTask](false),
-	sidecar.TaskTypeGovParamChange:         sidecarTask[sidecar.GovParamChangeTask](false),
-	sidecar.TaskTypeGovInstantiateConfig:   sidecarTask[sidecar.GovUpdateInstantiateConfigTask](false),
+	sidecar.TaskTypeMarkNotReady:               sidecarTask[sidecar.MarkNotReadyTask](false),
+	sidecar.TaskTypeStopSeid:                   sidecarTask[sidecar.StopSeidTask](false),
+	sidecar.TaskTypeResetData:                  sidecarTask[sidecar.ResetDataTask](false),
+	sidecar.TaskTypeGenerateIdentity:           sidecarTask[sidecar.GenerateIdentityTask](false),
+	sidecar.TaskTypeGenerateGentx:              sidecarTask[sidecar.GenerateGentxTask](false),
+	sidecar.TaskTypeUploadGenesisArtifacts:     sidecarTask[sidecar.UploadGenesisArtifactsTask](false),
+	sidecar.TaskTypeAssembleGenesis:            sidecarTask[sidecar.AssembleAndUploadGenesisTask](false),
+	sidecar.TaskTypeSetGenesisPeers:            sidecarTask[sidecar.SetGenesisPeersTask](false),
+	sidecar.TaskTypeGovVote:                    sidecarTask[sidecar.GovVoteTask](false),
+	sidecar.TaskTypeGovSoftwareUpgrade:         sidecarTask[sidecar.GovSoftwareUpgradeTask](false),
+	sidecar.TaskTypeGovParamChange:             sidecarTask[sidecar.GovParamChangeTask](false),
+	sidecar.TaskTypeGovUpdateInstantiateConfig: sidecarTask[sidecar.GovUpdateInstantiateConfigTask](false),
 
 	// Controller-side group tasks
 	TaskTypeAwaitNodesRunning:  deserializeAwaitNodesRunning,

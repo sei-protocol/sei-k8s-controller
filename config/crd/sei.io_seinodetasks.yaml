@@ -521,6 +521,11 @@ spec:
               rule: self.kind != 'MarkReady' || has(self.markReady)
             - message: spec.kind is immutable
               rule: self.kind == oldSelf.kind
+            - message: spec.target is immutable for kind=GovUpdateInstantiateConfig
+              rule: self.kind != 'GovUpdateInstantiateConfig' || self.target == oldSelf.target
+            - message: spec.govUpdateInstantiateConfig is immutable
+              rule: self.kind != 'GovUpdateInstantiateConfig' || self.govUpdateInstantiateConfig
+                == oldSelf.govUpdateInstantiateConfig
           status:
             description: SeiNodeTaskStatus defines the observed state of a SeiNodeTask.
             properties:
@@ -592,7 +597,9 @@ spec:
               outputs:
                 description: |-
                   Outputs surfaces typed per-kind results. Exactly one sub-field is
-                  populated, matching spec.kind. Populated only on phase=Complete.
+                  populated, matching spec.kind, whenever the task has returned structured
+                  output. A governance tx hash is preserved on pending and failed inclusion
+                  paths so operators can determine whether recreation is safe.
                 properties:
                   awaitCondition:
                     description: AwaitCondition outputs for kind=AwaitCondition.

@@ -59,8 +59,8 @@ func TestGovUpdateInstantiateConfigTaskValidate(t *testing.T) {
 func TestGovUpdateInstantiateConfigTaskToTaskRequest(t *testing.T) {
 	task := validGovUpdateInstantiateConfigTask()
 	req := task.ToTaskRequest()
-	if req.Type != TaskTypeGovInstantiateConfig {
-		t.Errorf("Type = %q, want %q", req.Type, TaskTypeGovInstantiateConfig)
+	if req.Type != TaskTypeGovUpdateInstantiateConfig {
+		t.Errorf("Type = %q, want %q", req.Type, TaskTypeGovUpdateInstantiateConfig)
 	}
 	if req.Params == nil {
 		t.Fatal("Params is nil")
