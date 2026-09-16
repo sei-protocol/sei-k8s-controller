@@ -59,16 +59,14 @@ func (e *replacePodExecution) Execute(ctx context.Context) error {
 	}
 
 	// Revision gate runs before the selector/replica guards: a not-yet-observed
-	// or not-yet-populated revision is a transient wait, and an already-rolled
-	// StatefulSet is a complete no-op — neither should reach pod deletion.
+	// or not-yet-populated revision is a transient wait and must not reach pod
+	// deletion. Staleness is judged per pod against UpdateRevision, never from
+	// CurrentRevision == UpdateRevision: a rollback to a revision still in
+	// history makes those equal while the pods carry the abandoned revision.
 	if sts.Status.ObservedGeneration < sts.Generation {
 		return nil
 	}
 	if sts.Status.UpdateRevision == "" {
-		return nil
-	}
-	if sts.Status.CurrentRevision == sts.Status.UpdateRevision {
-		e.complete()
 		return nil
 	}
 
