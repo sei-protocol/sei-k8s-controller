@@ -348,6 +348,14 @@ type AutobahnCeremonySpec struct {
 	// +kubebuilder:validation:Maximum=2000
 	// +optional
 	MaxTxsPerBlock *int64 `json:"maxTxsPerBlock,omitempty"`
+
+	// EnableEvmProxy is autobahn.json enable_evm_proxy. Default true: a
+	// validator forwards each EVM transaction to the validator that owns the
+	// sender's mempool shard. False sequences it locally instead, the mode
+	// benchmarked against the forwarding hop. Omitted leaves the key out of the
+	// artifact so seid applies its own default.
+	// +optional
+	EnableEvmProxy *bool `json:"enableEvmProxy,omitempty"`
 }
 
 // NetworkConsensusSpec is ConsensusSpec plus the ceremony inputs only a

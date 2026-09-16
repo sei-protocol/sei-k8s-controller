@@ -201,6 +201,14 @@ spec:
                           as 400ms (the gen-autobahn-config default). Must be positive.
                         pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                         type: string
+                      enableEvmProxy:
+                        description: |-
+                          EnableEvmProxy is autobahn.json enable_evm_proxy. Default true: a
+                          validator forwards each EVM transaction to the validator that owns the
+                          sender's mempool shard. False sequences it locally instead, the mode
+                          benchmarked against the forwarding hop. Omitted leaves the key out of the
+                          artifact so seid applies its own default.
+                        type: boolean
                       maxTxsPerBlock:
                         description: |-
                           MaxTxsPerBlock is autobahn.json max_txs_per_block. Default 2000, which is

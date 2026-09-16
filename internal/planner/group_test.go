@@ -255,6 +255,7 @@ func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
 func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 	allow := true
 	maxTxs := int64(1500)
+	noProxy := false
 	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "ab-group", Namespace: "default"},
 		Spec: seiv1alpha1.SeiNetworkSpec{
@@ -268,6 +269,7 @@ func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 					BlockInterval:    "1s",
 					AllowEmptyBlocks: &allow,
 					MaxTxsPerBlock:   &maxTxs,
+					EnableEvmProxy:   &noProxy,
 				},
 			},
 		},
@@ -291,7 +293,8 @@ func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 		t.Fatalf("Autobahn=%v AutobahnConfig=%v", params.Autobahn, params.AutobahnConfig)
 	}
 	if params.AutobahnConfig.BlockInterval != "1s" || params.AutobahnConfig.AllowEmptyBlocks == nil || !*params.AutobahnConfig.AllowEmptyBlocks ||
-		params.AutobahnConfig.MaxTxsPerBlock == nil || *params.AutobahnConfig.MaxTxsPerBlock != 1500 {
+		params.AutobahnConfig.MaxTxsPerBlock == nil || *params.AutobahnConfig.MaxTxsPerBlock != 1500 ||
+		params.AutobahnConfig.EnableEvmProxy == nil || *params.AutobahnConfig.EnableEvmProxy {
 		t.Errorf("AutobahnConfig = %+v", *params.AutobahnConfig)
 	}
 
@@ -300,7 +303,7 @@ func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(wire) != `{"blockInterval":"1s","allowEmptyBlocks":true,"maxTxsPerBlock":1500}` {
+	if string(wire) != `{"blockInterval":"1s","allowEmptyBlocks":true,"maxTxsPerBlock":1500,"enableEvmProxy":false}` {
 		t.Errorf("wire autobahnConfig = %s", wire)
 	}
 

@@ -63,6 +63,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 			BlockInterval:    ab.BlockInterval,
 			AllowEmptyBlocks: ab.AllowEmptyBlocks,
 			MaxTxsPerBlock:   ab.MaxTxsPerBlock,
+			EnableEvmProxy:   ab.EnableEvmProxy,
 		}
 	}
 	if err := assembleParams.Validate(); err != nil {
