@@ -407,12 +407,13 @@ type Endpoints struct {
 	// +optional
 	TendermintRest string `json:"tendermintRest,omitempty"`
 
-	// Nodes lists per-pod URL bundles, keyed by SeiNode name, for the
-	// protocols that require pod affinity (EVM JSON-RPC, EVM WebSocket). Each
-	// entry mirrors the child SeiNode's .status.endpoint; a child that
-	// publishes no EVM URL (an EVM-only node whose listener is not serving, or
-	// a Default-engine validator) has no entry, so a consumer gets a URL a
-	// child stands behind or none.
+	// Nodes lists per-pod URL bundles, keyed by SeiNode name, for consumers
+	// that need pod affinity (stateful EVM sequences, or a specific validator's
+	// CometBFT RPC). Each entry mirrors the child SeiNode's .status.endpoint —
+	// only the URLs that child's mode and engine actually serve — and a child
+	// that publishes no endpoint (not yet Running, or an EvmOnly listener that
+	// is not serving) has no entry, so a consumer gets a URL the child stands
+	// behind or none.
 	// +listType=map
 	// +listMapKey=name
 	// +optional
@@ -434,6 +435,14 @@ type NodeEndpoint struct {
 	// EvmWs is the per-pod EVM WebSocket URL (ws://).
 	// +optional
 	EvmWs string `json:"evmWs,omitempty"`
+
+	// TendermintRpc is the per-pod CometBFT RPC URL (http://).
+	// +optional
+	TendermintRpc string `json:"tendermintRpc,omitempty"`
+
+	// TendermintRest is the per-pod Cosmos REST (LCD) URL (http://).
+	// +optional
+	TendermintRest string `json:"tendermintRest,omitempty"`
 }
 
 // InternalServiceStatus reports the resolved in-cluster ClusterIP Service

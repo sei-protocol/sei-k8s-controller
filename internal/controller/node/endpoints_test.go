@@ -63,9 +63,20 @@ func TestComposeNodeEndpoints_Archive(t *testing.T) {
 	}))
 }
 
-func TestComposeNodeEndpoints_ValidatorNil(t *testing.T) {
+// A Default-engine validator binds CometBFT RPC on 0.0.0.0 but disables REST
+// and both EVM listeners, so RPC is the only URL it stands behind.
+func TestComposeNodeEndpoints_ValidatorTendermintRpcOnly(t *testing.T) {
 	g := NewWithT(t)
 	node := endpointNode("genesis-val-0", "sei", seiv1alpha1.SeiNodeSpec{Validator: &seiv1alpha1.ValidatorSpec{}})
+
+	g.Expect(composeNodeEndpoints(node)).To(Equal(&seiv1alpha1.NodeEndpointStatus{
+		TendermintRpc: "http://genesis-val-0.sei.svc:26657",
+	}))
+}
+
+func TestComposeNodeEndpoints_SeedNil(t *testing.T) {
+	g := NewWithT(t)
+	node := endpointNode("seed-0", "sei", seiv1alpha1.SeiNodeSpec{Seed: &seiv1alpha1.SeedSpec{}})
 
 	g.Expect(composeNodeEndpoints(node)).To(BeNil())
 }

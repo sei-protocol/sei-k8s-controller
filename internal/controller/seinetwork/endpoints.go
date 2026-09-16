@@ -7,22 +7,20 @@ import (
 )
 
 // composeEndpoints builds Endpoints from the resolved InternalService and the
-// children's own .status.endpoint. Returns nil when there is neither an
-// InternalService nor any child publishing an EVM URL, so omitempty leaves
-// .status.endpoints absent.
+// children's own .status.endpoint. Returns nil when there is nothing to
+// publish, so omitempty leaves .status.endpoints absent.
 //
 // Aggregate scalars (TendermintRpc, TendermintRest) come from InternalService,
 // except on an EvmOnly network: its children run with rpc.laddr and the REST
 // API disabled, so the Service ports exist but nothing answers behind them.
+//
 // Per-pod NodeEndpoint entries mirror each child's .status.endpoint in child
-// order and are omitted for a child that publishes no EVM URL — the child
-// controller is the one that knows whether its listener answers (see
-// SeiNode's EvmServing condition), and PerPodServices is a Service inventory,
-// not evidence that anything is bound behind it. EVM JSON-RPC and EVM
-// WebSocket are surfaced per-pod only — the aggregate ClusterIP does not
-// load-balance correctly for stateful EVM sequences (filters, mempool,
-// finalized-tag, subscriptions). Consumers that need pod affinity pin to
-// Nodes[N].
+// order; a child that publishes none is omitted. The child controller is the
+// one that knows which listeners its mode and engine actually open (and, for
+// EvmOnly, whether the listener answers — see SeiNode's EvmServing
+// condition), so every URL here is one the child stands behind. A per-pod
+// Service is inventory, not evidence that anything is bound behind it, and is
+// deliberately not used to synthesize URLs.
 func composeEndpoints(network *seiv1alpha1.SeiNetwork, nodes []seiv1alpha1.SeiNode) *seiv1alpha1.Endpoints {
 	out := &seiv1alpha1.Endpoints{}
 
@@ -30,22 +28,28 @@ func composeEndpoints(network *seiv1alpha1.SeiNetwork, nodes []seiv1alpha1.SeiNo
 		out.TendermintRpc = httpURL(internal.Name, internal.Namespace, internal.Ports.Rpc)
 		out.TendermintRest = httpURL(internal.Name, internal.Namespace, internal.Ports.Rest)
 	}
-
-	for i := range nodes {
-		node := &nodes[i]
-		ep := node.Status.Endpoint
-		if ep == nil || (ep.EvmJsonRpc == "" && ep.EvmWs == "") {
-			continue
-		}
-		out.Nodes = append(out.Nodes, seiv1alpha1.NodeEndpoint{
-			Name:       node.Name,
-			EvmJsonRpc: ep.EvmJsonRpc,
-			EvmWs:      ep.EvmWs,
-		})
-	}
+	out.Nodes = childEndpoints(nodes)
 
 	if out.TendermintRpc == "" && len(out.Nodes) == 0 {
 		return nil
+	}
+	return out
+}
+
+func childEndpoints(nodes []seiv1alpha1.SeiNode) []seiv1alpha1.NodeEndpoint {
+	var out []seiv1alpha1.NodeEndpoint
+	for i := range nodes {
+		ep := nodes[i].Status.Endpoint
+		if ep == nil || *ep == (seiv1alpha1.NodeEndpointStatus{}) {
+			continue
+		}
+		out = append(out, seiv1alpha1.NodeEndpoint{
+			Name:           nodes[i].Name,
+			EvmJsonRpc:     ep.EvmJsonRpc,
+			EvmWs:          ep.EvmWs,
+			TendermintRpc:  ep.TendermintRpc,
+			TendermintRest: ep.TendermintRest,
+		})
 	}
 	return out
 }

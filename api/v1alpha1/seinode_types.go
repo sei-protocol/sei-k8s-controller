@@ -880,9 +880,9 @@ type NodeEndpointStatus struct {
 	EvmWs string `json:"evmWs,omitempty"`
 
 	// TendermintRpc is the Tendermint / CometBFT RPC URL (http://). Populated
-	// only for fullNode/archive (gated by servesEVM); not surfaced for
-	// validator/replayer — validators do bind RPC on 0.0.0.0 but we don't
-	// advertise it.
+	// for fullNode, archive, and Default-engine validators (validator mode
+	// binds RPC on 0.0.0.0); not for seed, replayer, or EvmOnly nodes, which
+	// leave the listener closed.
 	// +optional
 	TendermintRpc string `json:"tendermintRpc,omitempty"`
 

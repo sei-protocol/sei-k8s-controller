@@ -27,15 +27,26 @@ func internalServiceStatus() *seiv1alpha1.InternalServiceStatus {
 	}
 }
 
-// childWithEndpoint is a child SeiNode that publishes an EVM endpoint bundle,
-// as the node controller writes it for a serving full node.
-func childWithEndpoint(name string) seiv1alpha1.SeiNode {
+func perPodService(name string) seiv1alpha1.PerPodServiceStatus {
+	return seiv1alpha1.PerPodServiceStatus{
+		Name:      name,
+		Namespace: testNamespace,
+		Ports:     seiv1alpha1.PerPodServicePorts{EvmHttp: seiconfig.PortEVMHTTP, EvmWs: seiconfig.PortEVMWS},
+	}
+}
+
+func evmOnlyNetwork() *seiv1alpha1.SeiNetwork {
+	group := &seiv1alpha1.SeiNetwork{}
+	group.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	return group
+}
+
+// servingChild is an EVM-only child SeiNode whose listener answers, as the
+// node controller publishes it: JSON-RPC only.
+func servingChild(name string) seiv1alpha1.SeiNode {
 	child := childWithoutEndpoint(name)
 	child.Status.Endpoint = &seiv1alpha1.NodeEndpointStatus{
-		EvmJsonRpc:     "http://" + name + "." + testNamespace + ".svc:8545",
-		EvmWs:          "ws://" + name + "." + testNamespace + ".svc:8546",
-		TendermintRpc:  "http://" + name + "." + testNamespace + ".svc:26657",
-		TendermintRest: "http://" + name + "." + testNamespace + ".svc:1317",
+		EvmJsonRpc: "http://" + name + "." + testNamespace + ".svc:8545",
 	}
 	return child
 }
@@ -63,71 +74,88 @@ func TestComposeEndpoints_TendermintScalarsFromInternalService(t *testing.T) {
 	g.Expect(got.Nodes).To(BeEmpty())
 }
 
-func TestComposeEndpoints_NodesMirrorChildEndpointsInOrder(t *testing.T) {
+// validatorChild is a Running Default-engine validator as the node controller
+// publishes it: CometBFT RPC only (REST and EVM are closed in validator mode).
+func validatorChild(name string) seiv1alpha1.SeiNode {
+	child := childWithoutEndpoint(name)
+	child.Status.Endpoint = &seiv1alpha1.NodeEndpointStatus{
+		TendermintRpc: "http://" + name + "." + testNamespace + ".svc:26657",
+	}
+	return child
+}
+
+// A Default-engine network mirrors each child's own endpoint, in child order.
+// Per-pod Services are inventory and never synthesize URLs: a child that has
+// not published an endpoint (not Running yet) has no entry even though its
+// Service exists, and validator entries carry RPC only — no 8545/8546 URL at
+// a listener validator mode leaves closed.
+func TestComposeEndpoints_DefaultEngineNodesMirrorChildEndpoints(t *testing.T) {
 	g := NewWithT(t)
 	group := &seiv1alpha1.SeiNetwork{}
 	group.Status.InternalService = internalServiceStatus()
+	group.Status.PerPodServices = []seiv1alpha1.PerPodServiceStatus{
+		perPodService("pacific-1-wave-0"),
+		perPodService("pacific-1-wave-1"),
+		perPodService("pacific-1-wave-2"),
+	}
 	children := []seiv1alpha1.SeiNode{
-		childWithEndpoint("pacific-1-wave-0"),
-		childWithEndpoint("pacific-1-wave-1"),
-		childWithEndpoint("pacific-1-wave-2"),
+		validatorChild("pacific-1-wave-2"),
+		childWithoutEndpoint("pacific-1-wave-1"),
+		validatorChild("pacific-1-wave-0"),
 	}
 
 	got := composeEndpoints(group, children)
 
 	g.Expect(got).NotTo(BeNil())
+	g.Expect(got.TendermintRpc).To(Equal("http://pacific-1-wave-internal.pacific-1.svc:26657"))
 	g.Expect(got.Nodes).To(Equal([]seiv1alpha1.NodeEndpoint{
-		{
-			Name:       "pacific-1-wave-0",
-			EvmJsonRpc: "http://pacific-1-wave-0.pacific-1.svc:8545",
-			EvmWs:      "ws://pacific-1-wave-0.pacific-1.svc:8546",
-		},
-		{
-			Name:       "pacific-1-wave-1",
-			EvmJsonRpc: "http://pacific-1-wave-1.pacific-1.svc:8545",
-			EvmWs:      "ws://pacific-1-wave-1.pacific-1.svc:8546",
-		},
-		{
-			Name:       "pacific-1-wave-2",
-			EvmJsonRpc: "http://pacific-1-wave-2.pacific-1.svc:8545",
-			EvmWs:      "ws://pacific-1-wave-2.pacific-1.svc:8546",
-		},
+		{Name: "pacific-1-wave-2", TendermintRpc: "http://pacific-1-wave-2.pacific-1.svc:26657"},
+		{Name: "pacific-1-wave-0", TendermintRpc: "http://pacific-1-wave-0.pacific-1.svc:26657"},
 	}))
 }
 
-func TestComposeEndpoints_NodesOrderMirrorsChildren(t *testing.T) {
-	// Inputs in non-sorted order; composeEndpoints must preserve it (no re-sort).
+func TestComposeEndpoints_DefaultEngineNilWhenOnlyServicesObserved(t *testing.T) {
 	g := NewWithT(t)
 	group := &seiv1alpha1.SeiNetwork{}
-	group.Status.InternalService = internalServiceStatus()
-	children := []seiv1alpha1.SeiNode{
-		childWithEndpoint("pacific-1-wave-2"),
-		childWithEndpoint("pacific-1-wave-0"),
-		childWithEndpoint("pacific-1-wave-5"),
-	}
+	group.Status.PerPodServices = []seiv1alpha1.PerPodServiceStatus{perPodService("pacific-1-wave-0")}
 
-	got := composeEndpoints(group, children)
-
-	names := []string{got.Nodes[0].Name, got.Nodes[1].Name, got.Nodes[2].Name}
-	g.Expect(names).To(Equal([]string{"pacific-1-wave-2", "pacific-1-wave-0", "pacific-1-wave-5"}))
+	g.Expect(composeEndpoints(group, []seiv1alpha1.SeiNode{childWithoutEndpoint("pacific-1-wave-0")})).To(BeNil())
 }
 
-// A child that publishes no endpoint — an EVM-only validator whose listener is
-// not serving, or a Default-engine validator — gets no entry, even though its
-// per-pod Service exists. The Service is inventory, not a serving signal.
-func TestComposeEndpoints_OmitsChildrenWithoutEndpoint(t *testing.T) {
+func TestComposeEndpoints_EvmOnlyNodesMirrorChildEndpointsInOrder(t *testing.T) {
+	// Inputs in non-sorted order; composeEndpoints must preserve it (no re-sort).
 	g := NewWithT(t)
-	group := &seiv1alpha1.SeiNetwork{}
-	group.Status.InternalService = internalServiceStatus()
+	children := []seiv1alpha1.SeiNode{
+		servingChild("pacific-1-wave-2"),
+		servingChild("pacific-1-wave-0"),
+		servingChild("pacific-1-wave-5"),
+	}
+
+	got := composeEndpoints(evmOnlyNetwork(), children)
+
+	g.Expect(got).NotTo(BeNil())
+	g.Expect(got.Nodes).To(Equal([]seiv1alpha1.NodeEndpoint{
+		{Name: "pacific-1-wave-2", EvmJsonRpc: "http://pacific-1-wave-2.pacific-1.svc:8545"},
+		{Name: "pacific-1-wave-0", EvmJsonRpc: "http://pacific-1-wave-0.pacific-1.svc:8545"},
+		{Name: "pacific-1-wave-5", EvmJsonRpc: "http://pacific-1-wave-5.pacific-1.svc:8545"},
+	}))
+}
+
+// An EVM-only child whose listener is not serving publishes no endpoint and
+// gets no entry, even though its per-pod Service exists. The Service is
+// inventory, not a serving signal.
+func TestComposeEndpoints_EvmOnlyOmitsChildrenWithoutEndpoint(t *testing.T) {
+	g := NewWithT(t)
+	group := evmOnlyNetwork()
 	group.Status.PerPodServices = []seiv1alpha1.PerPodServiceStatus{
-		{Name: "pacific-1-wave-0", Namespace: testNamespace},
-		{Name: "pacific-1-wave-1", Namespace: testNamespace},
-		{Name: "pacific-1-wave-2", Namespace: testNamespace},
+		perPodService("pacific-1-wave-0"),
+		perPodService("pacific-1-wave-1"),
+		perPodService("pacific-1-wave-2"),
 	}
 	empty := childWithoutEndpoint("pacific-1-wave-2")
 	empty.Status.Endpoint = &seiv1alpha1.NodeEndpointStatus{}
 	children := []seiv1alpha1.SeiNode{
-		childWithEndpoint("pacific-1-wave-0"),
+		servingChild("pacific-1-wave-0"),
 		childWithoutEndpoint("pacific-1-wave-1"),
 		empty,
 	}
@@ -139,36 +167,16 @@ func TestComposeEndpoints_OmitsChildrenWithoutEndpoint(t *testing.T) {
 	g.Expect(got.Nodes[0].Name).To(Equal("pacific-1-wave-0"))
 }
 
-// An EVM-only child publishes JSON-RPC alone; the entry carries no WS URL
-// rather than a synthesized one.
-func TestComposeEndpoints_EvmOnlyChildCarriesOnlyWhatItPublishes(t *testing.T) {
-	g := NewWithT(t)
-	child := childWithoutEndpoint("pacific-1-wave-0")
-	child.Status.Endpoint = &seiv1alpha1.NodeEndpointStatus{EvmJsonRpc: "http://pacific-1-wave-0.pacific-1.svc:8545"}
-
-	got := composeEndpoints(&seiv1alpha1.SeiNetwork{}, []seiv1alpha1.SeiNode{child})
-
-	g.Expect(got).NotTo(BeNil())
-	g.Expect(got.TendermintRpc).To(BeEmpty())
-	g.Expect(got.Nodes).To(Equal([]seiv1alpha1.NodeEndpoint{{
-		Name:       "pacific-1-wave-0",
-		EvmJsonRpc: "http://pacific-1-wave-0.pacific-1.svc:8545",
-	}}))
-}
-
 // An EvmOnly network's children run with CometBFT RPC and REST disabled, so
 // the InternalService ports are dead and the aggregate scalars stay empty.
 func TestComposeEndpoints_EvmOnlyNetworkOmitsTendermintScalars(t *testing.T) {
 	g := NewWithT(t)
-	group := &seiv1alpha1.SeiNetwork{}
-	group.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	group := evmOnlyNetwork()
 	group.Status.InternalService = internalServiceStatus()
 
 	g.Expect(composeEndpoints(group, nil)).To(BeNil(), "no serving child, no dead aggregate URL")
 
-	child := childWithoutEndpoint("pacific-1-wave-0")
-	child.Status.Endpoint = &seiv1alpha1.NodeEndpointStatus{EvmJsonRpc: "http://pacific-1-wave-0.pacific-1.svc:8545"}
-	got := composeEndpoints(group, []seiv1alpha1.SeiNode{child})
+	got := composeEndpoints(group, []seiv1alpha1.SeiNode{servingChild("pacific-1-wave-0")})
 	g.Expect(got).NotTo(BeNil())
 	g.Expect(got.TendermintRpc).To(BeEmpty())
 	g.Expect(got.TendermintRest).To(BeEmpty())
@@ -183,13 +191,11 @@ func TestComposeEndpoints_EvmOnlyNetworkOmitsTendermintScalars(t *testing.T) {
 	g.Expect(composeEndpoints(legacy, nil)).To(BeNil(), "deprecated bool resolves to the same gate")
 }
 
-func TestComposeEndpoints_NilWhenOnlyServicesObserved(t *testing.T) {
+func TestComposeEndpoints_EvmOnlyNilWhenOnlyServicesObserved(t *testing.T) {
 	// Per-pod Services exist but no child has reached a serving endpoint yet.
 	g := NewWithT(t)
-	group := &seiv1alpha1.SeiNetwork{}
-	group.Status.PerPodServices = []seiv1alpha1.PerPodServiceStatus{
-		{Name: "pacific-1-wave-0", Namespace: testNamespace},
-	}
+	group := evmOnlyNetwork()
+	group.Status.PerPodServices = []seiv1alpha1.PerPodServiceStatus{perPodService("pacific-1-wave-0")}
 
 	got := composeEndpoints(group, []seiv1alpha1.SeiNode{childWithoutEndpoint("pacific-1-wave-0")})
 
