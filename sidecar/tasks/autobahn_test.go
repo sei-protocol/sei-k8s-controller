@@ -198,10 +198,12 @@ func TestBuildAutobahnConfig_Overrides(t *testing.T) {
 	}
 	allow := true
 	maxTxs := int64(1500)
+	noProxy := false
 	data, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{
 		BlockInterval:    "1s",
 		AllowEmptyBlocks: &allow,
 		MaxTxsPerBlock:   &maxTxs,
+		EnableEvmProxy:   &noProxy,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -213,6 +215,7 @@ func TestBuildAutobahnConfig_Overrides(t *testing.T) {
 	want := map[string]string{
 		"max_txs_per_block":  "1500",
 		"allow_empty_blocks": "true",
+		"enable_evm_proxy":   "false",
 		"block_interval":     `"1s"`,
 		"view_timeout":       `"1.5s"`,
 		"dial_interval":      `"10s"`,

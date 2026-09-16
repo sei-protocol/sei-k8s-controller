@@ -65,6 +65,7 @@ type autobahnFileConfig struct {
 	MaxTxsPerBlock     uint64                `json:"max_txs_per_block"`
 	MaxTxsPerSecond    *uint64               `json:"max_txs_per_second"`
 	AllowEmptyBlocks   bool                  `json:"allow_empty_blocks"`
+	EnableEvmProxy     *bool                 `json:"enable_evm_proxy,omitempty"`
 	BlockInterval      string                `json:"block_interval"`
 	ViewTimeout        string                `json:"view_timeout"`
 	PersistentStateDir string                `json:"persistent_state_dir"`
@@ -249,15 +250,17 @@ type AutobahnConfigOverrides struct {
 	BlockInterval    string `json:"blockInterval,omitempty"`
 	AllowEmptyBlocks *bool  `json:"allowEmptyBlocks,omitempty"`
 	MaxTxsPerBlock   *int64 `json:"maxTxsPerBlock,omitempty"`
+	EnableEvmProxy   *bool  `json:"enableEvmProxy,omitempty"`
 }
 
 // buildAutobahnConfig renders autobahn.json for the given validators as
 // `seid tendermint gen-autobahn-config <dirs> --output autobahn.json` does with
 // its default flags: 2000 txs/block, empty blocks off, 400ms blocks, 1500ms
 // view timeout, 10s dial interval, state persisted under data/autobahn with a
-// 30s BlockDB retention. Overrides replace the defaults they name, checked
-// against the provider's AutobahnFileConfig.Validate bounds. Validators keep
-// the order given, which is the ceremony's ordinal order.
+// 30s BlockDB retention, enable_evm_proxy absent so the provider's Or(true)
+// applies. Overrides replace the defaults they name, checked against the
+// provider's AutobahnFileConfig.Validate bounds. Validators keep the order
+// given, which is the ceremony's ordinal order.
 func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConfigOverrides) ([]byte, error) {
 	if len(validators) == 0 {
 		return nil, fmt.Errorf("autobahn: no validators")
@@ -292,6 +295,9 @@ func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConf
 				return nil, fmt.Errorf("autobahn: max_txs_per_block must be in [1, %d], got %d", autobahnProtocolMaxTxsPerBlock, *overrides.MaxTxsPerBlock)
 			}
 			cfg.MaxTxsPerBlock = uint64(*overrides.MaxTxsPerBlock)
+		}
+		if overrides.EnableEvmProxy != nil {
+			cfg.EnableEvmProxy = overrides.EnableEvmProxy
 		}
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")

@@ -694,11 +694,14 @@ const AutobahnMaxTxsPerBlockCeiling = 2_000
 
 // AutobahnConfigParams overrides autobahn.json values the ceremony would
 // otherwise write with gen-autobahn-config's defaults. A nil pointer or empty
-// string keeps the default. BlockInterval is a Go duration string.
+// string keeps the default. BlockInterval is a Go duration string. A nil
+// EnableEvmProxy leaves enable_evm_proxy out of the artifact entirely, so
+// seid's own default (true) applies.
 type AutobahnConfigParams struct {
 	BlockInterval    string `json:"blockInterval,omitempty"`
 	AllowEmptyBlocks *bool  `json:"allowEmptyBlocks,omitempty"`
 	MaxTxsPerBlock   *int64 `json:"maxTxsPerBlock,omitempty"`
+	EnableEvmProxy   *bool  `json:"enableEvmProxy,omitempty"`
 }
 
 func (a *AutobahnConfigParams) validate() error {

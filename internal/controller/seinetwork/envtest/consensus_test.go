@@ -225,6 +225,7 @@ func TestConsensus_AutobahnKnobsCreateOnly(t *testing.T) {
 	for name, mutate := range map[string]func(*seiv1alpha1.SeiNetwork){
 		"change": func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn.BlockInterval = "2s" },
 		"add":    func(cur *seiv1alpha1.SeiNetwork) { v := true; cur.Spec.Consensus.Autobahn.AllowEmptyBlocks = &v },
+		"proxy":  func(cur *seiv1alpha1.SeiNetwork) { v := false; cur.Spec.Consensus.Autobahn.EnableEvmProxy = &v },
 		"drop":   func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn = nil },
 	} {
 		err := updateNetworkWithRetry(t, key, mutate)
