@@ -127,7 +127,7 @@ func TestBuildGovUpdateInstantiateConfigMsg(t *testing.T) {
 // This threads the proposal through the sign path. Reaching BroadcastSync
 // proves makeSignTxCodec registers UpdateInstantiateConfigProposal as gov
 // Content; without that registration the Any cannot be encoded.
-func TestGovUpdateInstantiateConfigHandlerHappyPath(t *testing.T) {
+func TestGovUpdateInstantiateConfigSignPathHappyPath(t *testing.T) {
 	cfg, _ := newGuardCfg(t, "arctic-1")
 	txClient := &fakeTxClient{
 		accountNumber: 17,
@@ -162,5 +162,30 @@ func TestGovUpdateInstantiateConfigHandlerHappyPath(t *testing.T) {
 	}
 	if txClient.broadcasts != 1 {
 		t.Errorf("broadcasts = %d, want 1", txClient.broadcasts)
+	}
+}
+
+func TestGovUpdateInstantiateConfigHandlerDecodesTypedRequest(t *testing.T) {
+	keyring, _ := testKeyring(t)
+	t.Setenv("SEI_CHAIN_ID", "")
+	handler := NewGovInstantiateConfigUpdater(
+		engine.ExecutionConfig{Keyring: keyring}).Handler()
+
+	ctx := engine.WithTaskID(context.Background(), "00000000-0000-0000-0000-0000000000ac")
+	_, err := handler(ctx, map[string]any{
+		"chainId":        "arctic-1",
+		"keyName":        "node_admin",
+		"title":          "Disable CosmWasm Contract Instantiation",
+		"description":    "Set code 1 to Nobody.",
+		"updates":        []any{map[string]any{"codeId": float64(1), "permission": "nobody"}},
+		"initialDeposit": "10000000usei",
+		"fees":           "30000usei",
+		"gas":            float64(1_200_000),
+	})
+	if err == nil {
+		t.Fatal("expected chain-identity guard error")
+	}
+	if !strings.Contains(err.Error(), "SEI_CHAIN_ID not set") {
+		t.Fatalf("err = %v, want chain-identity guard after typed decode", err)
 	}
 }
