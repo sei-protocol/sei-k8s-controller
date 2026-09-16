@@ -296,7 +296,9 @@ func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConf
 			}
 			cfg.MaxTxsPerBlock = uint64(*overrides.MaxTxsPerBlock)
 		}
-		cfg.EnableEvmProxy = overrides.EnableEvmProxy
+		if overrides.EnableEvmProxy != nil {
+			cfg.EnableEvmProxy = overrides.EnableEvmProxy
+		}
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
