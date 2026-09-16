@@ -293,17 +293,18 @@ func generateSeiNode(network *seiv1alpha1.SeiNetwork, ordinal int) *seiv1alpha1.
 	podLabels[seinetworkLabel] = network.Name
 
 	spec := seiv1alpha1.SeiNodeSpec{
-		ChainID:      gc.ChainID,
-		Image:        network.Spec.Image,
-		Overrides:    maps.Clone(network.Spec.ConfigOverrides),
-		ConfigValues: cloneConfigValues(network.Spec.ConfigValues),
-		Sidecar:      network.Spec.Sidecar.DeepCopy(),
-		Scheduling:   network.Spec.Scheduling.DeepCopy(),
-		Consensus:    network.Spec.Consensus.Node(),
-		DataVolume:   network.Spec.DataVolume.DeepCopy(),
-		Resources:    network.Spec.Resources.DeepCopy(),
-		PodLabels:    podLabels,
-		Paused:       network.Spec.Paused,
+		ChainID:         gc.ChainID,
+		Image:           network.Spec.Image,
+		Overrides:       maps.Clone(network.Spec.ConfigOverrides),
+		ConfigValues:    cloneConfigValues(network.Spec.ConfigValues),
+		Sidecar:         network.Spec.Sidecar.DeepCopy(),
+		Scheduling:      network.Spec.Scheduling.DeepCopy(),
+		Consensus:       network.Spec.Consensus.Node(),
+		ExecutionEngine: network.Spec.ExecutionEngine.DeepCopy(),
+		DataVolume:      network.Spec.DataVolume.DeepCopy(),
+		Resources:       network.Spec.Resources.DeepCopy(),
+		PodLabels:       podLabels,
+		Paused:          network.Spec.Paused,
 		Validator: &seiv1alpha1.ValidatorSpec{
 			GenesisCeremony: &seiv1alpha1.GenesisCeremonyNodeConfig{
 				ChainID:        gc.ChainID,

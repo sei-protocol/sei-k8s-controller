@@ -16,6 +16,7 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 const (
@@ -2155,6 +2156,27 @@ func TestCosmosExporter_AbsentOnEvmOnly(t *testing.T) {
 	g.Expect(seid.ReadinessProbe.HTTPGet).NotTo(BeNil())
 	g.Expect(seid.ReadinessProbe.HTTPGet.Path).To(Equal(pathRoot))
 	g.Expect(seid.ReadinessProbe.HTTPGet.Port.IntVal).To(Equal(seiconfig.PortEVMHTTP))
+}
+
+// The typed executionEngine field selects the same probe; with the HTTP
+// listener off there is nothing to GET, so readiness falls back to the P2P
+// transport being bound, as for a seed.
+func TestUpCheckForNode_ExecutionEngine(t *testing.T) {
+	g := NewWithT(t)
+	evmOnly := nodeForRole(roleValidator)
+	evmOnly.Spec.Consensus = &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}
+	evmOnly.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	g.Expect(UpCheckForNode(evmOnly)).To(Equal(wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortEVMHTTP, Path: pathRoot}))
+
+	httpOff := evmOnly.DeepCopy()
+	httpOff.Spec.ExecutionEngine.EvmOnly = &seiv1alpha1.EvmOnlyExecutionSpec{HttpEnabled: new(false)}
+	g.Expect(UpCheckForNode(httpOff)).To(Equal(wire.UpCheck{Scheme: wire.UpCheckTCP, Port: seiconfig.PortP2P}))
+	sts := mustGenerateStatefulSet(t, httpOff, platformtest.Config())
+	g.Expect(findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)).To(BeNil())
+
+	explicitDefault := evmOnly.DeepCopy()
+	explicitDefault.Spec.ExecutionEngine.Mode = seiv1alpha1.ExecutionEngineDefault
+	g.Expect(UpCheckForNode(explicitDefault)).To(Equal(wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortRPC, Path: pathStatus}))
 }
 
 // A seed needs the peer store and two DBs it never writes — not the full-state

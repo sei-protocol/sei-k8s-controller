@@ -23,13 +23,20 @@ import (
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) ? 1 : 0) + (has(self.archive) ? 1 : 0) + (has(self.replayer) ? 1 : 0) + (has(self.validator) ? 1 : 0) + (has(self.seed) ? 1 : 0) == 1",message="exactly one of fullNode, archive, replayer, validator, or seed must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.replayer) || (has(self.peers) && size(self.peers) > 0)",message="peers is required when replayer mode is set"
 // +kubebuilder:validation:XValidation:rule="!has(self.overrides) || !('chain.freeze_height' in self.overrides)",message="set the freeze height via fullNode.freeze or archive.freeze, not overrides: user overrides outrank controller-derived ones"
-// consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint,
-// evmOnly: false}), the has()-guarded comparison the freeze height uses below.
+// consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint}),
+// the has()-guarded comparison the freeze height uses below.
 // +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.engine) ? self.consensus.engine : 'Tendermint') == (has(oldSelf.consensus) && has(oldSelf.consensus.engine) ? oldSelf.consensus.engine : 'Tendermint')",message="spec.consensus.engine is create-only: the engine is baked into the ceremony's autobahn.json and this node's home directory; replace the node to change it"
-// +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.evmOnly) ? self.consensus.evmOnly : false) == (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly) ? oldSelf.consensus.evmOnly : false)",message="spec.consensus.evmOnly is create-only: the application is baked into this node's home directory; replace the node to change it"
+// The execution engine is create-only on its EFFECTIVE value, which reads
+// spec.executionEngine when present and falls back to the deprecated
+// spec.consensus.evmOnly otherwise — so migrating an existing node from the bool
+// to the typed field is an accepted no-op while a real mode change is caught.
+// +kubebuilder:validation:XValidation:rule="(has(self.executionEngine) ? (has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') : (has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)) == (has(oldSelf.executionEngine) ? (has(oldSelf.executionEngine.mode) && oldSelf.executionEngine.mode == 'EvmOnly') : (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly) && oldSelf.consensus.evmOnly))",message="the execution engine (spec.executionEngine.mode, or the deprecated spec.consensus.evmOnly) is create-only: the application is baked into this node's home directory; replace the node to change it"
+// +kubebuilder:validation:XValidation:rule="(has(self.executionEngine) && has(self.executionEngine.evmOnly) && has(self.executionEngine.evmOnly.httpEnabled) ? self.executionEngine.evmOnly.httpEnabled : true) == (has(oldSelf.executionEngine) && has(oldSelf.executionEngine.evmOnly) && has(oldSelf.executionEngine.evmOnly.httpEnabled) ? oldSelf.executionEngine.evmOnly.httpEnabled : true)",message="spec.executionEngine.evmOnly.httpEnabled is create-only: only a bootstrap plan writes app.toml; replace the node to change it"
+// +kubebuilder:validation:XValidation:rule="!(has(self.executionEngine) && has(self.consensus) && has(self.consensus.evmOnly)) || ((has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') == self.consensus.evmOnly)",message="spec.executionEngine.mode and the deprecated spec.consensus.evmOnly disagree: set mode EvmOnly with evmOnly true, or drop evmOnly"
+// +kubebuilder:validation:XValidation:rule="!(has(self.executionEngine) && has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') || (has(self.consensus) && has(self.consensus.engine) && self.consensus.engine == 'Autobahn')",message="executionEngine mode EvmOnly requires consensus engine Autobahn: the EVM-only executor runs only under Autobahn consensus"
 // +kubebuilder:validation:XValidation:rule="!(has(self.consensus) && has(self.consensus.engine) && self.consensus.engine == 'Autobahn') || !((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze)))",message="a freeze height is not supported under engine Autobahn: seid refuses the combination at start"
-// +kubebuilder:validation:XValidation:rule="!has(self.seed) || !(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)",message="a seed cannot be evmOnly: a seed runs no application, and seid refuses the combination"
-// +kubebuilder:validation:XValidation:rule="!(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly) || !has(self.overrides) || !('network.rpc.listen_address' in self.overrides || 'api.rest.enable' in self.overrides || 'api.grpc.enable' in self.overrides || 'api.grpc_web.enable' in self.overrides)",message="an EVM-only node owns network.rpc.listen_address and api.{rest,grpc,grpc_web}.enable: the EVM-only executor serves no CometBFT RPC, REST or gRPC"
+// +kubebuilder:validation:XValidation:rule="!has(self.seed) || !(has(self.executionEngine) ? (has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') : (has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly))",message="a seed cannot be EVM-only: a seed runs no application, and seid refuses the combination"
+// +kubebuilder:validation:XValidation:rule="!(has(self.executionEngine) ? (has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') : (has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)) || !has(self.overrides) || !('network.rpc.listen_address' in self.overrides || 'api.rest.enable' in self.overrides || 'api.grpc.enable' in self.overrides || 'api.grpc_web.enable' in self.overrides || 'evm.http_enabled' in self.overrides)",message="an EVM-only node owns network.rpc.listen_address, api.{rest,grpc,grpc_web}.enable and evm.http_enabled: the EVM-only executor serves no CometBFT RPC, REST or gRPC, and its EVM listener is set via spec.executionEngine.evmOnly.httpEnabled"
 // +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
 // dataVolume.storage size is create-only: presence parity here (a sub-type rule
@@ -83,6 +90,12 @@ type SeiNodeSpec struct {
 	// effective value.
 	// +optional
 	Consensus *ConsensusSpec `json:"consensus,omitempty"`
+
+	// ExecutionEngine selects the application seid runs: Default, or the
+	// EVM-only executor. Absent falls back to the deprecated
+	// spec.consensus.evmOnly. Create-only on its effective value.
+	// +optional
+	ExecutionEngine *ExecutionEngineSpec `json:"executionEngine,omitempty"`
 
 	// ConfigValues supplies typed values by config file and dotted TOML path.
 	// Applied after base configuration and controller-derived peer patches,
@@ -611,6 +624,32 @@ const (
 	// restart count) — the Paused-condition precedent. Written only by the
 	// SeiNode controller (single writer).
 	ConditionWorkflowInProgress = "WorkflowInProgress"
+
+	// ConditionEvmServing reports whether this node's EVM JSON-RPC listener
+	// answers, read from the pod's readiness — which, on an EVM-only node, IS
+	// the probe of that listener. Always-present: False/NotApplicable on a node
+	// whose engine and mode serve no EVM, False/HttpDisabled when the EVM-only
+	// listener is configured off, False/ListenerRefused while no ready pod
+	// serves it, True/Serving otherwise. An EVM-only node publishes
+	// status.endpoint only while this is True, so a consumer never reads a URL
+	// nothing answers on.
+	ConditionEvmServing = "EvmServing"
+)
+
+// Reasons for the EvmServing condition. Stable enum (public API for
+// alerting/runbooks per CLAUDE.md "Conditions").
+const (
+	// ReasonEvmServing: a ready pod serves the EVM JSON-RPC listener.
+	ReasonEvmServing = "Serving"
+	// ReasonEvmListenerRefused: the node should serve EVM but no pod is ready
+	// on the listener — seid is down, still starting, or refusing connections.
+	ReasonEvmListenerRefused = "ListenerRefused"
+	// ReasonEvmHttpDisabled: the EVM-only executor runs with
+	// executionEngine.evmOnly.httpEnabled false, so there is no listener.
+	ReasonEvmHttpDisabled = "HttpDisabled"
+	// ReasonEvmNotApplicable: the node's engine and mode serve no EVM
+	// (Default engine on a validator, seed or replayer).
+	ReasonEvmNotApplicable = "NotApplicable"
 )
 
 // Reasons for the WorkflowInProgress condition. Stable enum (public API for
@@ -808,30 +847,35 @@ type SeiNodeStatus struct {
 	StatefulSet *StatefulSetRef `json:"statefulSet,omitempty"`
 
 	// Endpoint is the in-cluster discoverable address(es) for this node, derived
-	// from its headless Service and mode. It is a DISCOVERABILITY signal, not a
-	// serve-readiness guarantee: the URL is published once the node is
-	// PhaseRunning and (for EVM) the mode serves EVM, but the seid listener may
-	// take additional time to bind — consumers MUST probe before driving load.
+	// from its headless Service, engine and mode. Under the Default engine it is
+	// a DISCOVERABILITY signal, not a serve-readiness guarantee: the URL is
+	// published once the node is PhaseRunning and the mode serves EVM, but the
+	// seid listener may take additional time to bind — consumers MUST probe
+	// before driving load. An EVM-only node publishes its single URL only while
+	// EvmServing is True and clears it otherwise, because that listener is the
+	// node's whole RPC surface and a URL nothing answers on is worse than none.
 	// omitempty leaves .status.endpoint absent for nodes that surface nothing.
 	// +optional
 	Endpoint *NodeEndpointStatus `json:"endpoint,omitempty"`
 }
 
 // NodeEndpointStatus carries the in-cluster URLs this SeiNode serves, derived
-// from its headless Service and operating mode. EVM URLs are populated only
-// when the node's mode serves EVM HTTP/WS (fullNode, archive); validator and
-// replayer modes leave them empty (validator mode disables EVM). All URLs
-// resolve to the node's headless Service at <name>.<namespace>.svc. Field names
-// match SeiNetwork's NodeEndpoint leaf (evmJsonRpc, evmWs) so consumers parse
-// one shape across both CRDs.
+// from its headless Service, execution engine and operating mode. Under the
+// Default engine, EVM URLs are populated only when the node's mode serves EVM
+// HTTP/WS (fullNode, archive); validator and replayer modes leave them empty
+// (validator mode disables EVM). An EVM-only node carries EvmJsonRpc alone.
+// All URLs resolve to the node's headless Service at <name>.<namespace>.svc.
+// Field names match SeiNetwork's NodeEndpoint leaf (evmJsonRpc, evmWs) so
+// consumers parse one shape across both CRDs.
 type NodeEndpointStatus struct {
 	// EvmJsonRpc is the EVM JSON-RPC HTTP URL (http://). Empty unless the
-	// node's mode serves EVM (fullNode, archive).
+	// node serves EVM (fullNode, archive, or an EVM-only node whose listener
+	// answers).
 	// +optional
 	EvmJsonRpc string `json:"evmJsonRpc,omitempty"`
 
 	// EvmWs is the EVM WebSocket URL (ws://). Empty unless the node's mode
-	// serves EVM (fullNode, archive).
+	// serves EVM under the Default engine (fullNode, archive).
 	// +optional
 	EvmWs string `json:"evmWs,omitempty"`
 
@@ -846,6 +890,12 @@ type NodeEndpointStatus struct {
 	// fullNode/archive; validators disable the REST API.
 	// +optional
 	TendermintRest string `json:"tendermintRest,omitempty"`
+}
+
+// EffectiveExecutionEngine returns the engine this node runs, resolved from
+// spec.executionEngine with the deprecated spec.consensus.evmOnly as fallback.
+func (s *SeiNodeSpec) EffectiveExecutionEngine() ExecutionEngineSpec {
+	return ResolveExecutionEngine(s.ExecutionEngine, s.Consensus)
 }
 
 // StatefulSetRef identifies a StatefulSet owned and managed by a

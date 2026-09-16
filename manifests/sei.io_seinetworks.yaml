@@ -81,9 +81,13 @@ spec:
               controller synthesizes each child SeiNode's validator spec from these
               scalars (see generateSeiNode).
 
-              consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint,
-              evmOnly: false}), so adding an explicit default to an existing object is an
-              accepted no-op while a real engine or evmOnly change is caught.
+              consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint}),
+              so adding an explicit default to an existing object is an accepted no-op while
+              a real engine change is caught.
+              The execution engine is create-only on its EFFECTIVE value, which reads
+              spec.executionEngine when present and falls back to the deprecated
+              spec.consensus.evmOnly otherwise — so migrating an existing network from the
+              bool to the typed field is an accepted no-op while a real mode change is caught.
               dataVolume is create-only (change, unset, first-time set all rejected).
               Presence parity only here; values are pinned on the shared DataVolume* types,
               covering both Kinds. A structural == cannot stay once a Quantity lives here (a
@@ -182,7 +186,7 @@ spec:
                 description: |-
                   Consensus selects the engine every validator runs and, under Autobahn,
                   tunes the ceremony's autobahn.json. Absent means Tendermint. Create-only;
-                  engine and evmOnly propagate to every validator child.
+                  engine and the deprecated evmOnly propagate to every validator child.
                 properties:
                   autobahn:
                     description: |-
@@ -231,6 +235,11 @@ spec:
                       serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
                       are off, no cosmos-exporter is attached, and Ready proves that listener
                       answers, not sync distance.
+
+                      Deprecated: EVM-only is an execution engine, not a consensus setting. Set
+                      spec.executionEngine.mode to EvmOnly instead; this field is still honored
+                      when spec.executionEngine is absent, and must agree with it when both are
+                      set.
                     type: boolean
                 type: object
                 x-kubernetes-validations:
@@ -383,6 +392,36 @@ spec:
                 - Delete
                 - Retain
                 type: string
+              executionEngine:
+                description: |-
+                  ExecutionEngine selects the application every validator runs: Default,
+                  or the EVM-only executor. Absent falls back to the deprecated
+                  spec.consensus.evmOnly. Create-only on its effective value; propagates
+                  to every validator child.
+                properties:
+                  evmOnly:
+                    description: EvmOnly tunes the EVM-only executor. Only valid with
+                      mode EvmOnly.
+                    properties:
+                      httpEnabled:
+                        description: |-
+                          HttpEnabled opens the EVM JSON-RPC HTTP listener on 8545. Default true:
+                          the listener is the node's only RPC surface, and a validator-mode base
+                          config would otherwise leave it closed. When false the node publishes no
+                          EVM endpoint and its readiness falls back to the P2P transport being
+                          bound. Create-only.
+                        type: boolean
+                    type: object
+                  mode:
+                    description: Mode is the execution engine. Default when omitted.
+                    enum:
+                    - Default
+                    - EvmOnly
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: evmOnly settings require mode EvmOnly
+                  rule: '!has(self.evmOnly) || (has(self.mode) && self.mode == ''EvmOnly'')'
               genesis:
                 description: |-
                   Genesis is REQUIRED. The ceremony that bootstraps this chain.
@@ -697,24 +736,48 @@ spec:
               rule: '(has(self.consensus) && has(self.consensus.engine) ? self.consensus.engine
                 : ''Tendermint'') == (has(oldSelf.consensus) && has(oldSelf.consensus.engine)
                 ? oldSelf.consensus.engine : ''Tendermint'')'
-            - message: 'spec.consensus.evmOnly is create-only: the application is
-                baked into every validator''s home directory; recreate the network
-                to change it'
-              rule: '(has(self.consensus) && has(self.consensus.evmOnly) ? self.consensus.evmOnly
-                : false) == (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly)
-                ? oldSelf.consensus.evmOnly : false)'
+            - message: 'the execution engine (spec.executionEngine.mode, or the deprecated
+                spec.consensus.evmOnly) is create-only: the application is baked into
+                every validator''s home directory; recreate the network to change
+                it'
+              rule: '(has(self.executionEngine) ? (has(self.executionEngine.mode)
+                && self.executionEngine.mode == ''EvmOnly'') : (has(self.consensus)
+                && has(self.consensus.evmOnly) && self.consensus.evmOnly)) == (has(oldSelf.executionEngine)
+                ? (has(oldSelf.executionEngine.mode) && oldSelf.executionEngine.mode
+                == ''EvmOnly'') : (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly)
+                && oldSelf.consensus.evmOnly))'
+            - message: 'spec.executionEngine.evmOnly.httpEnabled is create-only: only
+                a bootstrap plan writes app.toml; recreate the network to change it'
+              rule: '(has(self.executionEngine) && has(self.executionEngine.evmOnly)
+                && has(self.executionEngine.evmOnly.httpEnabled) ? self.executionEngine.evmOnly.httpEnabled
+                : true) == (has(oldSelf.executionEngine) && has(oldSelf.executionEngine.evmOnly)
+                && has(oldSelf.executionEngine.evmOnly.httpEnabled) ? oldSelf.executionEngine.evmOnly.httpEnabled
+                : true)'
+            - message: 'spec.executionEngine.mode and the deprecated spec.consensus.evmOnly
+                disagree: set mode EvmOnly with evmOnly true, or drop evmOnly'
+              rule: '!(has(self.executionEngine) && has(self.consensus) && has(self.consensus.evmOnly))
+                || ((has(self.executionEngine.mode) && self.executionEngine.mode ==
+                ''EvmOnly'') == self.consensus.evmOnly)'
+            - message: 'executionEngine mode EvmOnly requires consensus engine Autobahn:
+                the EVM-only executor runs only under Autobahn consensus'
+              rule: '!(has(self.executionEngine) && has(self.executionEngine.mode)
+                && self.executionEngine.mode == ''EvmOnly'') || (has(self.consensus)
+                && has(self.consensus.engine) && self.consensus.engine == ''Autobahn'')'
             - message: 'spec.consensus.autobahn is create-only: its values are written
                 into the ceremony''s autobahn.json, which every validator and follower
                 already holds; recreate the network to change them'
               rule: '(has(self.consensus) && has(self.consensus.autobahn)) ? (has(oldSelf.consensus)
                 && has(oldSelf.consensus.autobahn) && self.consensus.autobahn == oldSelf.consensus.autobahn)
                 : !(has(oldSelf.consensus) && has(oldSelf.consensus.autobahn))'
-            - message: 'an EVM-only network owns network.rpc.listen_address and api.{rest,grpc,grpc_web}.enable:
-                the EVM-only executor serves no CometBFT RPC, REST or gRPC'
-              rule: '!(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)
-                || !has(self.configOverrides) || !(''network.rpc.listen_address''
-                in self.configOverrides || ''api.rest.enable'' in self.configOverrides
-                || ''api.grpc.enable'' in self.configOverrides || ''api.grpc_web.enable''
+            - message: 'an EVM-only network owns network.rpc.listen_address, api.{rest,grpc,grpc_web}.enable
+                and evm.http_enabled: the EVM-only executor serves no CometBFT RPC,
+                REST or gRPC, and its EVM listener is set via spec.executionEngine.evmOnly.httpEnabled'
+              rule: '!(has(self.executionEngine) ? (has(self.executionEngine.mode)
+                && self.executionEngine.mode == ''EvmOnly'') : (has(self.consensus)
+                && has(self.consensus.evmOnly) && self.consensus.evmOnly)) || !has(self.configOverrides)
+                || !(''network.rpc.listen_address'' in self.configOverrides || ''api.rest.enable''
+                in self.configOverrides || ''api.grpc.enable'' in self.configOverrides
+                || ''api.grpc_web.enable'' in self.configOverrides || ''evm.http_enabled''
                 in self.configOverrides)'
             - message: 'spec.dataVolume is create-only: each validator''s data PVC
                 is created once (ensure-data-pvc is Get-then-Create with no update
@@ -820,9 +883,12 @@ spec:
                 properties:
                   nodes:
                     description: |-
-                      Nodes lists per-pod URL bundles, keyed by SeiNode name. The list
-                      mirrors .status.perPodServices and exposes the protocols that
-                      require pod affinity (EVM JSON-RPC, EVM WebSocket).
+                      Nodes lists per-pod URL bundles, keyed by SeiNode name, for the
+                      protocols that require pod affinity (EVM JSON-RPC, EVM WebSocket). Each
+                      entry mirrors the child SeiNode's .status.endpoint; a child that
+                      publishes no EVM URL (an EVM-only node whose listener is not serving, or
+                      a Default-engine validator) has no entry, so a consumer gets a URL a
+                      child stands behind or none.
                     items:
                       description: |-
                         NodeEndpoint is the per-pod URL bundle for a single SeiNode replica.
@@ -949,6 +1015,13 @@ spec:
                       - Pending
                       - Scheduled
                       type: string
+                    ready:
+                      description: |-
+                        Ready reports whether the child is serving: PhaseRunning and, on an
+                        EVM-only node, its EvmServing condition True. Always
+                        serialized (true or false, never absent) so a consumer reading
+                        .status.nodes[].ready gets a concrete answer. Feeds ReadyReplicas.
+                      type: boolean
                     workerNode:
                       description: |-
                         WorkerNode is the Kubernetes node (one EC2 instance on this platform)
@@ -958,6 +1031,7 @@ spec:
                       type: string
                   required:
                   - name
+                  - ready
                   type: object
                 type: array
                 x-kubernetes-list-map-keys:

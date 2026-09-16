@@ -374,7 +374,7 @@ func NodeMode(node *seiv1alpha1.SeiNode) string {
 // listener, so its liveness probe kills it. Named for the property rather than
 // the mode so the call sites read as intent.
 func servesSeidRPC(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.Seed == nil && !node.Spec.Consensus.IsEvmOnly()
+	return node.Spec.Seed == nil && !node.Spec.EffectiveExecutionEngine().IsEvmOnly()
 }
 
 // NeedsLongStartup returns true when the node's bootstrap strategy involves
@@ -1139,13 +1139,15 @@ func readinessProbeForNode(node *seiv1alpha1.SeiNode) *corev1.Probe {
 }
 
 // UpCheckForNode returns the signal that proves seid answers for this node's
-// mode: TCP on the P2P port for a seed, HTTP GET /status on the RPC port for
-// every mode that serves RPC. The readiness probe and the sidecar's
+// engine and mode: HTTP GET / on the EVM listener for an EVM-only node whose
+// listener is enabled, TCP on the P2P port for a seed or an EVM-only node with
+// its listener off (nothing else is bound), HTTP GET /status on the RPC port
+// for every mode that serves RPC. The readiness probe and the sidecar's
 // restart-seid/stop-seid up-checks derive their port and path from it. The
 // kubelet dials the pod IP and the sidecar dials loopback, so agreement also
 // rests on seid binding 0.0.0.0, the shipped default.
 func UpCheckForNode(node *seiv1alpha1.SeiNode) wire.UpCheck {
-	if node.Spec.Consensus.IsEvmOnly() {
+	if engine := node.Spec.EffectiveExecutionEngine(); engine.IsEvmOnly() && engine.EvmHTTPEnabled() {
 		return wire.UpCheck{Scheme: wire.UpCheckHTTP, Port: seiconfig.PortEVMHTTP, Path: pathRoot}
 	}
 	if !servesSeidRPC(node) {

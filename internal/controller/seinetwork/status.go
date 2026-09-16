@@ -34,7 +34,8 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	nodeStatuses := make([]seiv1alpha1.GroupNodeStatus, 0, len(nodes))
 	for i := range nodes {
 		node := &nodes[i]
-		if node.Status.Phase == seiv1alpha1.PhaseRunning {
+		ready := childReady(node)
+		if ready {
 			readyReplicas++
 		}
 		if node.Status.CurrentImage == network.Spec.Image {
@@ -47,6 +48,7 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 		nodeStatuses = append(nodeStatuses, seiv1alpha1.GroupNodeStatus{
 			Name:         node.Name,
 			Phase:        node.Status.Phase,
+			Ready:        ready,
 			CurrentImage: node.Status.CurrentImage,
 			WorkerNode:   workerNodes[node.Name],
 			Placement:    placement,
@@ -65,7 +67,7 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	network.Status.UpToDateReplicas = upToDateReplicas
 	network.Status.Nodes = nodeStatuses
 	network.Status.PerPodServices = populatePerPodServices(log.FromContext(ctx), nodes)
-	network.Status.Endpoints = composeEndpoints(network)
+	network.Status.Endpoints = composeEndpoints(network, nodes)
 
 	network.Status.Phase = computeGroupPhase(network, readyReplicas, network.Spec.Replicas, nodes)
 
@@ -74,6 +76,23 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	setProducingCondition(network, nodes, time.Now())
 
 	return r.Status().Patch(ctx, network, statusBase)
+}
+
+// childReady is the network's notion of a ready child: Running, and — for an
+// EVM-only child whose listener is enabled — EvmServing True. Running alone
+// says seid is up; it does not say the EVM JSON-RPC surface the network
+// publishes for that child answers, and a network must not read Ready while
+// pointing consumers at a refused listener. An EVM-only child with its
+// listener disabled serves nothing to publish, so Running is the whole story.
+func childReady(node *seiv1alpha1.SeiNode) bool {
+	if node.Status.Phase != seiv1alpha1.PhaseRunning {
+		return false
+	}
+	engine := node.Spec.EffectiveExecutionEngine()
+	if !engine.IsEvmOnly() || !engine.EvmHTTPEnabled() {
+		return true
+	}
+	return apimeta.IsStatusConditionTrue(node.Status.Conditions, seiv1alpha1.ConditionEvmServing)
 }
 
 // childWorkerNodes maps each child SeiNode name to the worker node its pod is

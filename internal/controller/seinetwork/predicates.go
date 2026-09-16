@@ -2,6 +2,8 @@ package seinetwork
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -9,7 +11,9 @@ import (
 )
 
 // childPhaseChangedPredicate filters Update events from owned SeiNodes to
-// only pass through phase transitions (e.g. Initializing → Running). This
+// only pass through phase transitions (e.g. Initializing → Running), and
+// changes to the child's EvmServing verdict or published endpoint, which feed
+// the network's readiness and endpoint reports. This
 // prevents the high-frequency task retry status patches on child nodes from
 // triggering network reconciliation, which would bypass the executor's
 // exponential backoff on retried network-level tasks.
@@ -33,7 +37,14 @@ func childPhaseChangedPredicate() predicate.Predicate {
 			if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
 				return true
 			}
-			return oldNode.Status.Phase != newNode.Status.Phase
+			if oldNode.Status.Phase != newNode.Status.Phase {
+				return true
+			}
+			if apimeta.IsStatusConditionTrue(oldNode.Status.Conditions, seiv1alpha1.ConditionEvmServing) !=
+				apimeta.IsStatusConditionTrue(newNode.Status.Conditions, seiv1alpha1.ConditionEvmServing) {
+				return true
+			}
+			return !apiequality.Semantic.DeepEqual(oldNode.Status.Endpoint, newNode.Status.Endpoint)
 		},
 	}
 }

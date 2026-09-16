@@ -19,13 +19,16 @@ const (
 	consensusAppFile      = "app.toml"
 	keyAutobahnConfigFile = "autobahn-config-file"
 	keyEnable             = "enable"
+	keyHTTPEnabled        = "http_enabled"
 )
 
-// consensusOverlay renders spec.consensus as the seid keys the engine needs,
-// in the same merge-patch shape as configValues so it rides the overlay
-// splice after base regeneration. Tendermint renders nothing. EVM-only also
-// closes the CometBFT RPC, REST, gRPC and gRPC-web listeners seid would
-// otherwise open for an application it does not run.
+// consensusOverlay renders spec.consensus and spec.executionEngine as the seid
+// keys the engine needs, in the same merge-patch shape as configValues so it
+// rides the overlay splice after base regeneration. Tendermint with the
+// Default engine renders nothing. EVM-only also closes the CometBFT RPC, REST,
+// gRPC and gRPC-web listeners seid would otherwise open for an application it
+// does not run, and sets the EVM HTTP listener explicitly: the validator-mode
+// base config leaves it closed, and on this engine it is the only RPC surface.
 func consensusOverlay(node *seiv1alpha1.SeiNode) *task.ConfigPatchTask {
 	c := node.Spec.Consensus
 	if !c.IsAutobahn() {
@@ -37,7 +40,8 @@ func consensusOverlay(node *seiv1alpha1.SeiNode) *task.ConfigPatchTask {
 	patch := &task.ConfigPatchTask{Files: map[string]map[string]any{
 		consensusConfigFile: configTOML,
 	}}
-	if !c.IsEvmOnly() {
+	engine := node.Spec.EffectiveExecutionEngine()
+	if !engine.IsEvmOnly() {
 		return patch
 	}
 	configTOML["evm-only"] = true
@@ -46,6 +50,7 @@ func consensusOverlay(node *seiv1alpha1.SeiNode) *task.ConfigPatchTask {
 		"api":      map[string]any{keyEnable: false},
 		"grpc":     map[string]any{keyEnable: false},
 		"grpc-web": map[string]any{keyEnable: false},
+		"evm":      map[string]any{keyHTTPEnabled: engine.EvmHTTPEnabled()},
 	}
 	return patch
 }
@@ -83,7 +88,7 @@ func mergeTables(dst, src map[string]any, file, prefix string) error {
 			continue
 		}
 		if _, taken := dst[key]; taken {
-			return fmt.Errorf("configValues %s:%s: this key is set by spec.consensus and cannot be overridden", file, path)
+			return fmt.Errorf("configValues %s:%s: this key is set by spec.consensus or spec.executionEngine and cannot be overridden", file, path)
 		}
 		if isMap {
 			dst[key] = maps.Clone(incoming)
