@@ -66,7 +66,7 @@ func TestConsensus_SeedCannotBeEvmOnly(t *testing.T) {
 	node.Spec.Consensus = &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}
 	err := testCli.Create(testCtx, node)
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("seed cannot be evmOnly"))
+	g.Expect(err.Error()).To(ContainSubstring("a seed cannot be EVM-only"))
 
 	node.Spec.Consensus.EvmOnly = false
 	g.Expect(testCli.Create(testCtx, node)).To(Succeed(), "an Autobahn seed is an ordinary seed")
@@ -127,5 +127,135 @@ func TestConsensus_EffectiveValueCreateOnly(t *testing.T) {
 		cur.Spec.Consensus.EvmOnly = true
 	})
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("spec.consensus.evmOnly is create-only"))
+	g.Expect(err.Error()).To(ContainSubstring("the execution engine (spec.executionEngine.mode, or the deprecated spec.consensus.evmOnly) is create-only"))
+}
+
+// --- spec.executionEngine ---
+
+func executionEngineNode(ns, name string, engine *seiv1alpha1.ExecutionEngineSpec, consensus *seiv1alpha1.ConsensusSpec) *seiv1alpha1.SeiNode {
+	node := consensusFullNode(ns, name, consensus)
+	node.Spec.ExecutionEngine = engine
+	return node
+}
+
+func autobahn() *seiv1alpha1.ConsensusSpec {
+	return &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}
+}
+
+func evmOnlyEngine(httpEnabled *bool) *seiv1alpha1.ExecutionEngineSpec {
+	e := &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	if httpEnabled != nil {
+		e.EvmOnly = &seiv1alpha1.EvmOnlyExecutionSpec{HttpEnabled: httpEnabled}
+	}
+	return e
+}
+
+func TestExecutionEngine_Shapes(t *testing.T) {
+	ns := makeNamespace(t)
+	off := false
+	cases := []struct {
+		name      string
+		engine    *seiv1alpha1.ExecutionEngineSpec
+		consensus *seiv1alpha1.ConsensusSpec
+		errorText string
+	}{
+		{name: "empty", engine: &seiv1alpha1.ExecutionEngineSpec{}},
+		{name: "default", engine: &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineDefault}},
+		{name: "evm-only-autobahn", engine: evmOnlyEngine(nil), consensus: autobahn()},
+		{name: "evm-only-http-off", engine: evmOnlyEngine(&off), consensus: autobahn()},
+		{name: "evm-only-tendermint", engine: evmOnlyEngine(nil), errorText: "executionEngine mode EvmOnly requires consensus engine Autobahn"},
+		{name: "unknown-mode", engine: &seiv1alpha1.ExecutionEngineSpec{Mode: "Wasm"}, errorText: "supported values"},
+		{name: "evm-only-settings-under-default", engine: &seiv1alpha1.ExecutionEngineSpec{
+			Mode:    seiv1alpha1.ExecutionEngineDefault,
+			EvmOnly: &seiv1alpha1.EvmOnlyExecutionSpec{HttpEnabled: &off},
+		}, errorText: "evmOnly settings require mode EvmOnly"},
+		// Both representations set and agreeing is fine; disagreeing is not.
+		{name: "typed-and-legacy-agree", engine: evmOnlyEngine(nil), consensus: &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}},
+		{name: "typed-default-legacy-true", engine: &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineDefault},
+			consensus: &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}, errorText: "disagree"},
+		{name: "typed-empty-legacy-true", engine: &seiv1alpha1.ExecutionEngineSpec{},
+			consensus: &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}, errorText: "disagree"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			err := testCli.Create(testCtx, executionEngineNode(ns, "engine-"+tc.name, tc.engine, tc.consensus))
+			if tc.errorText == "" {
+				g.Expect(err).NotTo(HaveOccurred())
+				return
+			}
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(err.Error()).To(ContainSubstring(tc.errorText))
+		})
+	}
+}
+
+func TestExecutionEngine_SeedCannotBeEvmOnly(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+
+	node := seedNode(ns, "seed-evm-only-typed", "seed-0-node-key")
+	node.Spec.Consensus = autobahn()
+	node.Spec.ExecutionEngine = evmOnlyEngine(nil)
+	err := testCli.Create(testCtx, node)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("a seed cannot be EVM-only"))
+}
+
+func TestExecutionEngine_EvmOnlyOwnsListenerOverrides(t *testing.T) {
+	ns := makeNamespace(t)
+	for _, key := range []string{"network.rpc.listen_address", "api.rest.enable", "api.grpc.enable", "api.grpc_web.enable", "evm.http_enabled"} {
+		t.Run(key, func(t *testing.T) {
+			g := NewWithT(t)
+			node := executionEngineNode(ns, "evm-only-override-typed", evmOnlyEngine(nil), autobahn())
+			node.Spec.Overrides = map[string]string{key: "x"}
+			err := testCli.Create(testCtx, node)
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(err.Error()).To(ContainSubstring("EVM-only node owns"))
+		})
+	}
+}
+
+// Migrating a node from the deprecated bool to the typed field is a no-op on
+// the effective engine and is admitted; a real mode change, or a change to
+// httpEnabled, is create-only.
+func TestExecutionEngine_EffectiveValueCreateOnly(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	off := false
+
+	legacy := consensusFullNode(ns, "engine-migrate", &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true})
+	g.Expect(testCli.Create(testCtx, legacy)).To(Succeed())
+	key := client.ObjectKeyFromObject(legacy)
+
+	g.Expect(updateNodeWithRetry(t, key, func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.ExecutionEngine = evmOnlyEngine(nil)
+	})).To(Succeed(), "adding the typed field that agrees with the bool is not a change")
+
+	g.Expect(updateNodeWithRetry(t, key, func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.Consensus.EvmOnly = false
+	})).To(Succeed(), "dropping the deprecated bool once the typed field carries the mode is not a change")
+
+	err := updateNodeWithRetry(t, key, func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.ExecutionEngine.Mode = seiv1alpha1.ExecutionEngineDefault
+	})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("is create-only"))
+
+	err = updateNodeWithRetry(t, key, func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.ExecutionEngine.EvmOnly = &seiv1alpha1.EvmOnlyExecutionSpec{HttpEnabled: &off}
+	})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("spec.executionEngine.evmOnly.httpEnabled is create-only"))
+
+	plain := consensusFullNode(ns, "engine-plain", autobahn())
+	g.Expect(testCli.Create(testCtx, plain)).To(Succeed())
+	g.Expect(updateNodeWithRetry(t, client.ObjectKeyFromObject(plain), func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineDefault}
+	})).To(Succeed(), "spelling out Default is not a change")
+	err = updateNodeWithRetry(t, client.ObjectKeyFromObject(plain), func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.ExecutionEngine = evmOnlyEngine(nil)
+	})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("is create-only"))
 }

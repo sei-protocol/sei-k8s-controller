@@ -64,8 +64,12 @@ spec:
               swapping between two frozen modes at different heights. Both leave a Running
               node carrying the frozen readiness probe with no freeze height in app.toml,
               because only a bootstrap plan writes config.
-              consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint,
-              evmOnly: false}), the has()-guarded comparison the freeze height uses below.
+              consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint}),
+              the has()-guarded comparison the freeze height uses below.
+              The execution engine is create-only on its EFFECTIVE value, which reads
+              spec.executionEngine when present and falls back to the deprecated
+              spec.consensus.evmOnly otherwise — so migrating an existing node from the bool
+              to the typed field is an accepted no-op while a real mode change is caught.
               dataVolume.storage size is create-only: presence parity here (a sub-type rule
               skips a first-time set), value on the sub-type. Size only — import still adds.
               The VAC selection's presence half — its own rule rather than a term on the
@@ -235,6 +239,11 @@ spec:
                       serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
                       are off, no cosmos-exporter is attached, and Ready proves that listener
                       answers, not sync distance.
+
+                      Deprecated: EVM-only is an execution engine, not a consensus setting. Set
+                      spec.executionEngine.mode to EvmOnly instead; this field is still honored
+                      when spec.executionEngine is absent, and must agree with it when both are
+                      set.
                     type: boolean
                 type: object
                 x-kubernetes-validations:
@@ -365,6 +374,35 @@ spec:
                     exclusive: an imported PVC keeps the importer''s class and size,
                     and the controller never mutates it'
                   rule: '!(has(self.import) && has(self.storage))'
+              executionEngine:
+                description: |-
+                  ExecutionEngine selects the application seid runs: Default, or the
+                  EVM-only executor. Absent falls back to the deprecated
+                  spec.consensus.evmOnly. Create-only on its effective value.
+                properties:
+                  evmOnly:
+                    description: EvmOnly tunes the EVM-only executor. Only valid with
+                      mode EvmOnly.
+                    properties:
+                      httpEnabled:
+                        description: |-
+                          HttpEnabled opens the EVM JSON-RPC HTTP listener on 8545. Default true:
+                          the listener is the node's only RPC surface, and a validator-mode base
+                          config would otherwise leave it closed. When false the node publishes no
+                          EVM endpoint and its readiness falls back to the P2P transport being
+                          bound. Create-only.
+                        type: boolean
+                    type: object
+                  mode:
+                    description: Mode is the execution engine. Default when omitted.
+                    enum:
+                    - Default
+                    - EvmOnly
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: evmOnly settings require mode EvmOnly
+                  rule: '!has(self.evmOnly) || (has(self.mode) && self.mode == ''EvmOnly'')'
               externalAddress:
                 description: |-
                   ExternalAddress is the routable P2P host:port written into seid's
@@ -1250,27 +1288,51 @@ spec:
               rule: '(has(self.consensus) && has(self.consensus.engine) ? self.consensus.engine
                 : ''Tendermint'') == (has(oldSelf.consensus) && has(oldSelf.consensus.engine)
                 ? oldSelf.consensus.engine : ''Tendermint'')'
-            - message: 'spec.consensus.evmOnly is create-only: the application is
-                baked into this node''s home directory; replace the node to change
-                it'
-              rule: '(has(self.consensus) && has(self.consensus.evmOnly) ? self.consensus.evmOnly
-                : false) == (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly)
-                ? oldSelf.consensus.evmOnly : false)'
+            - message: 'the execution engine (spec.executionEngine.mode, or the deprecated
+                spec.consensus.evmOnly) is create-only: the application is baked into
+                this node''s home directory; replace the node to change it'
+              rule: '(has(self.executionEngine) ? (has(self.executionEngine.mode)
+                && self.executionEngine.mode == ''EvmOnly'') : (has(self.consensus)
+                && has(self.consensus.evmOnly) && self.consensus.evmOnly)) == (has(oldSelf.executionEngine)
+                ? (has(oldSelf.executionEngine.mode) && oldSelf.executionEngine.mode
+                == ''EvmOnly'') : (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly)
+                && oldSelf.consensus.evmOnly))'
+            - message: 'spec.executionEngine.evmOnly.httpEnabled is create-only: only
+                a bootstrap plan writes app.toml; replace the node to change it'
+              rule: '(has(self.executionEngine) && has(self.executionEngine.evmOnly)
+                && has(self.executionEngine.evmOnly.httpEnabled) ? self.executionEngine.evmOnly.httpEnabled
+                : true) == (has(oldSelf.executionEngine) && has(oldSelf.executionEngine.evmOnly)
+                && has(oldSelf.executionEngine.evmOnly.httpEnabled) ? oldSelf.executionEngine.evmOnly.httpEnabled
+                : true)'
+            - message: 'spec.executionEngine.mode and the deprecated spec.consensus.evmOnly
+                disagree: set mode EvmOnly with evmOnly true, or drop evmOnly'
+              rule: '!(has(self.executionEngine) && has(self.consensus) && has(self.consensus.evmOnly))
+                || ((has(self.executionEngine.mode) && self.executionEngine.mode ==
+                ''EvmOnly'') == self.consensus.evmOnly)'
+            - message: 'executionEngine mode EvmOnly requires consensus engine Autobahn:
+                the EVM-only executor runs only under Autobahn consensus'
+              rule: '!(has(self.executionEngine) && has(self.executionEngine.mode)
+                && self.executionEngine.mode == ''EvmOnly'') || (has(self.consensus)
+                && has(self.consensus.engine) && self.consensus.engine == ''Autobahn'')'
             - message: 'a freeze height is not supported under engine Autobahn: seid
                 refuses the combination at start'
               rule: '!(has(self.consensus) && has(self.consensus.engine) && self.consensus.engine
                 == ''Autobahn'') || !((has(self.fullNode) && has(self.fullNode.freeze))
                 || (has(self.archive) && has(self.archive.freeze)))'
-            - message: 'a seed cannot be evmOnly: a seed runs no application, and
+            - message: 'a seed cannot be EVM-only: a seed runs no application, and
                 seid refuses the combination'
-              rule: '!has(self.seed) || !(has(self.consensus) && has(self.consensus.evmOnly)
-                && self.consensus.evmOnly)'
-            - message: 'an EVM-only node owns network.rpc.listen_address and api.{rest,grpc,grpc_web}.enable:
-                the EVM-only executor serves no CometBFT RPC, REST or gRPC'
-              rule: '!(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)
-                || !has(self.overrides) || !(''network.rpc.listen_address'' in self.overrides
-                || ''api.rest.enable'' in self.overrides || ''api.grpc.enable'' in
-                self.overrides || ''api.grpc_web.enable'' in self.overrides)'
+              rule: '!has(self.seed) || !(has(self.executionEngine) ? (has(self.executionEngine.mode)
+                && self.executionEngine.mode == ''EvmOnly'') : (has(self.consensus)
+                && has(self.consensus.evmOnly) && self.consensus.evmOnly))'
+            - message: 'an EVM-only node owns network.rpc.listen_address, api.{rest,grpc,grpc_web}.enable
+                and evm.http_enabled: the EVM-only executor serves no CometBFT RPC,
+                REST or gRPC, and its EVM listener is set via spec.executionEngine.evmOnly.httpEnabled'
+              rule: '!(has(self.executionEngine) ? (has(self.executionEngine.mode)
+                && self.executionEngine.mode == ''EvmOnly'') : (has(self.consensus)
+                && has(self.consensus.evmOnly) && self.consensus.evmOnly)) || !has(self.overrides)
+                || !(''network.rpc.listen_address'' in self.overrides || ''api.rest.enable''
+                in self.overrides || ''api.grpc.enable'' in self.overrides || ''api.grpc_web.enable''
+                in self.overrides || ''evm.http_enabled'' in self.overrides)'
             - message: 'a frozen node cannot also set chain.halt_height or chain.halt_time:
                 seid refuses to load the combination'
               rule: '!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive)
@@ -1455,21 +1517,25 @@ spec:
               endpoint:
                 description: |-
                   Endpoint is the in-cluster discoverable address(es) for this node, derived
-                  from its headless Service and mode. It is a DISCOVERABILITY signal, not a
-                  serve-readiness guarantee: the URL is published once the node is
-                  PhaseRunning and (for EVM) the mode serves EVM, but the seid listener may
-                  take additional time to bind — consumers MUST probe before driving load.
+                  from its headless Service, engine and mode. Under the Default engine it is
+                  a DISCOVERABILITY signal, not a serve-readiness guarantee: the URL is
+                  published once the node is PhaseRunning and the mode serves EVM, but the
+                  seid listener may take additional time to bind — consumers MUST probe
+                  before driving load. An EVM-only node publishes its single URL only while
+                  EvmServing is True and clears it otherwise, because that listener is the
+                  node's whole RPC surface and a URL nothing answers on is worse than none.
                   omitempty leaves .status.endpoint absent for nodes that surface nothing.
                 properties:
                   evmJsonRpc:
                     description: |-
                       EvmJsonRpc is the EVM JSON-RPC HTTP URL (http://). Empty unless the
-                      node's mode serves EVM (fullNode, archive).
+                      node serves EVM (fullNode, archive, or an EVM-only node whose listener
+                      answers).
                     type: string
                   evmWs:
                     description: |-
                       EvmWs is the EVM WebSocket URL (ws://). Empty unless the node's mode
-                      serves EVM (fullNode, archive).
+                      serves EVM under the Default engine (fullNode, archive).
                     type: string
                   tendermintRest:
                     description: |-

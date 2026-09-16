@@ -34,7 +34,8 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	nodeStatuses := make([]seiv1alpha1.GroupNodeStatus, 0, len(nodes))
 	for i := range nodes {
 		node := &nodes[i]
-		if node.Status.Phase == seiv1alpha1.PhaseRunning {
+		ready := childReady(node)
+		if ready {
 			readyReplicas++
 		}
 		if node.Status.CurrentImage == network.Spec.Image {
@@ -47,6 +48,7 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 		nodeStatuses = append(nodeStatuses, seiv1alpha1.GroupNodeStatus{
 			Name:         node.Name,
 			Phase:        node.Status.Phase,
+			Ready:        ready,
 			CurrentImage: node.Status.CurrentImage,
 			WorkerNode:   workerNodes[node.Name],
 			Placement:    placement,
@@ -65,7 +67,7 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	network.Status.UpToDateReplicas = upToDateReplicas
 	network.Status.Nodes = nodeStatuses
 	network.Status.PerPodServices = populatePerPodServices(log.FromContext(ctx), nodes)
-	network.Status.Endpoints = composeEndpoints(network)
+	network.Status.Endpoints = composeEndpoints(network, nodes)
 
 	network.Status.Phase = computeGroupPhase(network, readyReplicas, network.Spec.Replicas, nodes)
 
@@ -74,6 +76,23 @@ func (r *SeiNetworkReconciler) updateStatus(ctx context.Context, network *seiv1a
 	setProducingCondition(network, nodes, time.Now())
 
 	return r.Status().Patch(ctx, network, statusBase)
+}
+
+// childReady is the network's notion of a ready child: Running, and — for an
+// EVM-only child whose listener is enabled — EvmServing True. Running alone
+// says seid is up; it does not say the EVM JSON-RPC surface the network
+// publishes for that child answers, and a network must not read Ready while
+// pointing consumers at a refused listener. An EVM-only child with its
+// listener disabled serves nothing to publish, so Running is the whole story.
+func childReady(node *seiv1alpha1.SeiNode) bool {
+	if node.Status.Phase != seiv1alpha1.PhaseRunning {
+		return false
+	}
+	engine := node.Spec.EffectiveExecutionEngine()
+	if !engine.IsEvmOnly() || !engine.EvmHTTPEnabled() {
+		return true
+	}
+	return apimeta.IsStatusConditionTrue(node.Status.Conditions, seiv1alpha1.ConditionEvmServing)
 }
 
 // childWorkerNodes maps each child SeiNode name to the worker node its pod is
@@ -145,22 +164,32 @@ func computeGroupPhase(network *seiv1alpha1.SeiNetwork, ready, desired int32, no
 		return seiv1alpha1.GroupPhaseReady
 	}
 
-	var failedCount int32
+	var failedCount, notServingCount int32
 	for i := range nodes {
-		if nodes[i].Status.Phase == seiv1alpha1.PhaseFailed {
+		switch {
+		case nodes[i].Status.Phase == seiv1alpha1.PhaseFailed:
 			failedCount++
+		case childNotServing(&nodes[i]):
+			notServingCount++
 		}
 	}
 
-	if failedCount > 0 {
-		if failedCount == int32(len(nodes)) {
-			return seiv1alpha1.GroupPhaseFailed
-		}
-		if ready > 0 {
-			return seiv1alpha1.GroupPhaseDegraded
-		}
+	if failedCount == int32(len(nodes)) {
+		return seiv1alpha1.GroupPhaseFailed
+	}
+	// A Running child that has stopped serving is a degradation of an
+	// established network, not a node still coming up; fold it in with Failed
+	// so the Degraded phase — not Initializing — is what alerting sees.
+	if (failedCount > 0 || notServingCount > 0) && ready > 0 {
+		return seiv1alpha1.GroupPhaseDegraded
 	}
 	return seiv1alpha1.GroupPhaseInitializing
+}
+
+// childNotServing is a Running child the network does not count as ready:
+// an EVM-only child whose EvmServing condition is not True.
+func childNotServing(node *seiv1alpha1.SeiNode) bool {
+	return node.Status.Phase == seiv1alpha1.PhaseRunning && !childReady(node)
 }
 
 func setNodesReadyCondition(network *seiv1alpha1.SeiNetwork, ready, desired int32, nodes []seiv1alpha1.SeiNode) {
@@ -172,18 +201,27 @@ func setNodesReadyCondition(network *seiv1alpha1.SeiNetwork, ready, desired int3
 		status = metav1.ConditionFalse
 		initializing := int32(0)
 		failed := int32(0)
+		notServing := int32(0)
 		for i := range nodes {
 			switch nodes[i].Status.Phase {
 			case seiv1alpha1.PhaseFailed:
 				failed++
 			case seiv1alpha1.PhasePending, seiv1alpha1.PhaseInitializing:
 				initializing++
+			case seiv1alpha1.PhaseRunning:
+				if childNotServing(&nodes[i]) {
+					notServing++
+				}
 			}
 		}
-		if failed > 0 {
+		switch {
+		case failed > 0:
 			reason = "NodesFailed"
 			message = fmt.Sprintf("%d/%d nodes ready (%d failed, %d initializing)", ready, desired, failed, initializing)
-		} else {
+		case notServing > 0:
+			reason = "NodesNotServing"
+			message = fmt.Sprintf("%d/%d nodes ready (%d running but not serving, %d initializing)", ready, desired, notServing, initializing)
+		default:
 			reason = "NodesInitializing"
 			message = fmt.Sprintf("%d/%d nodes ready (%d initializing)", ready, desired, initializing)
 		}

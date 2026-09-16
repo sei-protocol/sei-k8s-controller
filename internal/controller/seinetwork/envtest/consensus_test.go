@@ -51,6 +51,83 @@ func TestConsensus_PropagatesToValidators(t *testing.T) {
 	g.Expect(stored.Spec.Consensus.Autobahn.BlockInterval).To(Equal("1s"))
 }
 
+// The typed spec.executionEngine is stamped onto every validator child verbatim
+// so the child's effective engine is read from the same field the network set.
+func TestExecutionEngine_PropagatesToValidators(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	off := false
+
+	network := fixtures.NewNetwork(ns, "engine-evm-only", fixtures.WithReplicas(2))
+	network.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{
+		ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+	}
+	network.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{
+		Mode:    seiv1alpha1.ExecutionEngineEvmOnly,
+		EvmOnly: &seiv1alpha1.EvmOnlyExecutionSpec{HttpEnabled: &off},
+	}
+	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+
+	for _, name := range []string{network.Name + "-0", network.Name + "-1"} {
+		key := types.NamespacedName{Name: name, Namespace: ns}
+		waitFor(t, func() bool {
+			child := &seiv1alpha1.SeiNode{}
+			if err := testCli.Get(testCtx, key, child); err != nil {
+				return false
+			}
+			return child.Spec.ExecutionEngine != nil &&
+				child.Spec.ExecutionEngine.Mode == seiv1alpha1.ExecutionEngineEvmOnly &&
+				child.Spec.ExecutionEngine.EvmOnly != nil &&
+				child.Spec.ExecutionEngine.EvmOnly.HttpEnabled != nil &&
+				!*child.Spec.ExecutionEngine.EvmOnly.HttpEnabled &&
+				child.Spec.Consensus != nil && !child.Spec.Consensus.EvmOnly
+		}, name+" carries the network's execution engine")
+	}
+}
+
+func TestExecutionEngine_NetworkShapes(t *testing.T) {
+	ns := makeNamespace(t)
+	autobahn := &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}}
+	evmOnly := &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	cases := []struct {
+		name      string
+		engine    *seiv1alpha1.ExecutionEngineSpec
+		consensus *seiv1alpha1.NetworkConsensusSpec
+		errorText string
+	}{
+		{name: "evm-only-autobahn", engine: evmOnly, consensus: autobahn},
+		{name: "evm-only-tendermint", engine: evmOnly, errorText: "executionEngine mode EvmOnly requires consensus engine Autobahn"},
+		{name: "typed-default-legacy-true", engine: &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineDefault},
+			consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}},
+			errorText: "disagree"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			network := fixtures.NewNetwork(ns, "engine-"+tc.name)
+			network.Spec.Consensus = tc.consensus
+			network.Spec.ExecutionEngine = tc.engine
+			err := testCli.Create(testCtx, network)
+			if tc.errorText == "" {
+				g.Expect(err).NotTo(HaveOccurred())
+				return
+			}
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(err.Error()).To(ContainSubstring(tc.errorText))
+		})
+	}
+
+	g := NewWithT(t)
+	network := fixtures.NewNetwork(ns, "engine-immutable")
+	network.Spec.Consensus = autobahn
+	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+	err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+		cur.Spec.ExecutionEngine = evmOnly
+	})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("is create-only"))
+}
+
 func TestConsensus_NetworkShapes(t *testing.T) {
 	ns := makeNamespace(t)
 	one := int64(1)

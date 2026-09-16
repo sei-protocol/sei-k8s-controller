@@ -2,6 +2,7 @@ package seinetwork
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -242,4 +243,81 @@ func TestSeedAlwaysPresentConditions(t *testing.T) {
 			g.Expect(cond.Reason).To(Equal(tc.wantReason))
 		})
 	}
+}
+
+func runningChild(engine *seiv1alpha1.ExecutionEngineSpec, evmServing *metav1.ConditionStatus) *seiv1alpha1.SeiNode {
+	node := &seiv1alpha1.SeiNode{
+		Spec: seiv1alpha1.SeiNodeSpec{
+			Validator:       &seiv1alpha1.ValidatorSpec{},
+			Consensus:       &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			ExecutionEngine: engine,
+		},
+		Status: seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhaseRunning},
+	}
+	if evmServing != nil {
+		apimeta.SetStatusCondition(&node.Status.Conditions, metav1.Condition{
+			Type: seiv1alpha1.ConditionEvmServing, Status: *evmServing, Reason: "test",
+		})
+	}
+	return node
+}
+
+// Running is the whole story for a Default-engine child; an EVM-only child
+// with its listener enabled must also be EvmServing, since that is the surface
+// the network publishes for it.
+func TestChildReady(t *testing.T) {
+	g := NewWithT(t)
+	off := false
+	evmOnly := &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	evmOnlyHTTPOff := &seiv1alpha1.ExecutionEngineSpec{
+		Mode:    seiv1alpha1.ExecutionEngineEvmOnly,
+		EvmOnly: &seiv1alpha1.EvmOnlyExecutionSpec{HttpEnabled: &off},
+	}
+
+	g.Expect(childReady(runningChild(nil, nil))).To(BeTrue(), "default engine: Running suffices")
+	g.Expect(childReady(runningChild(evmOnly, nil))).To(BeFalse(), "evm-only: no EvmServing yet")
+	g.Expect(childReady(runningChild(evmOnly, new(metav1.ConditionFalse)))).To(BeFalse(), "evm-only: listener refused")
+	g.Expect(childReady(runningChild(evmOnly, new(metav1.ConditionTrue)))).To(BeTrue(), "evm-only: serving")
+	g.Expect(childReady(runningChild(evmOnlyHTTPOff, new(metav1.ConditionFalse)))).To(BeTrue(), "evm-only, http off: nothing to publish, Running suffices")
+
+	legacy := runningChild(nil, nil)
+	legacy.Spec.Consensus.EvmOnly = true //nolint:staticcheck // deliberately exercising the deprecated field's compatibility path
+	g.Expect(childReady(legacy)).To(BeFalse(), "deprecated bool resolves to the same gate")
+
+	pending := runningChild(nil, nil)
+	pending.Status.Phase = seiv1alpha1.PhaseInitializing
+	g.Expect(childReady(pending)).To(BeFalse())
+}
+
+// A consumer reading status.nodes[].ready must see false written out, not a
+// missing key it has to interpret.
+func TestGroupNodeStatus_ReadyFalseSerializes(t *testing.T) {
+	g := NewWithT(t)
+	raw, err := json.Marshal(seiv1alpha1.GroupNodeStatus{Name: "n-0", Ready: false})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(string(raw)).To(ContainSubstring(`"ready":false`))
+}
+
+// A Running EVM-only child that has lost its listener degrades an established
+// network; it must not read as a network still coming up.
+func TestComputeGroupPhase_NotServingChildIsDegraded(t *testing.T) {
+	g := NewWithT(t)
+	evmOnly := &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	nodes := []seiv1alpha1.SeiNode{
+		*runningChild(evmOnly, new(metav1.ConditionTrue)),
+		*runningChild(evmOnly, new(metav1.ConditionTrue)),
+		*runningChild(evmOnly, new(metav1.ConditionFalse)),
+	}
+	network := emptyNetwork()
+	g.Expect(computeGroupPhase(network, 2, 3, nodes)).To(Equal(seiv1alpha1.GroupPhaseDegraded))
+
+	setNodesReadyCondition(network, 2, 3, nodes)
+	cond := apimeta.FindStatusCondition(network.Status.Conditions, seiv1alpha1.ConditionNodesReady)
+	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(cond.Reason).To(Equal("NodesNotServing"))
+	g.Expect(cond.Message).To(Equal("2/3 nodes ready (1 running but not serving, 0 initializing)"))
+
+	// Nothing serving yet is still bring-up, not degradation.
+	nodes[0], nodes[1] = *runningChild(evmOnly, nil), *runningChild(evmOnly, nil)
+	g.Expect(computeGroupPhase(network, 0, 3, nodes)).To(Equal(seiv1alpha1.GroupPhaseInitializing))
 }

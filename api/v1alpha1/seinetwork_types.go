@@ -26,13 +26,20 @@ import (
 //
 // +kubebuilder:validation:XValidation:rule="self.genesis == oldSelf.genesis",message="spec.genesis is immutable once set; the ceremony's outputs (chain ID, validator gentxs, account balances) are baked into chain state and cannot be retroactively rewritten by editing the spec"
 // +kubebuilder:validation:XValidation:rule="self.replicas == oldSelf.replicas",message="spec.replicas is fixed at the genesis ceremony; the validator set is minted into genesis state and cannot be grown or shrunk by editing the spec"
-// consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint,
-// evmOnly: false}), so adding an explicit default to an existing object is an
-// accepted no-op while a real engine or evmOnly change is caught.
+// consensus is create-only on its EFFECTIVE value (absent == {engine: Tendermint}),
+// so adding an explicit default to an existing object is an accepted no-op while
+// a real engine change is caught.
 // +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.engine) ? self.consensus.engine : 'Tendermint') == (has(oldSelf.consensus) && has(oldSelf.consensus.engine) ? oldSelf.consensus.engine : 'Tendermint')",message="spec.consensus.engine is create-only: the engine is baked into the ceremony's autobahn.json and every validator's home directory; recreate the network to change it"
-// +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.evmOnly) ? self.consensus.evmOnly : false) == (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly) ? oldSelf.consensus.evmOnly : false)",message="spec.consensus.evmOnly is create-only: the application is baked into every validator's home directory; recreate the network to change it"
+// The execution engine is create-only on its EFFECTIVE value, which reads
+// spec.executionEngine when present and falls back to the deprecated
+// spec.consensus.evmOnly otherwise — so migrating an existing network from the
+// bool to the typed field is an accepted no-op while a real mode change is caught.
+// +kubebuilder:validation:XValidation:rule="(has(self.executionEngine) ? (has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') : (has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)) == (has(oldSelf.executionEngine) ? (has(oldSelf.executionEngine.mode) && oldSelf.executionEngine.mode == 'EvmOnly') : (has(oldSelf.consensus) && has(oldSelf.consensus.evmOnly) && oldSelf.consensus.evmOnly))",message="the execution engine (spec.executionEngine.mode, or the deprecated spec.consensus.evmOnly) is create-only: the application is baked into every validator's home directory; recreate the network to change it"
+// +kubebuilder:validation:XValidation:rule="(has(self.executionEngine) && has(self.executionEngine.evmOnly) && has(self.executionEngine.evmOnly.httpEnabled) ? self.executionEngine.evmOnly.httpEnabled : true) == (has(oldSelf.executionEngine) && has(oldSelf.executionEngine.evmOnly) && has(oldSelf.executionEngine.evmOnly.httpEnabled) ? oldSelf.executionEngine.evmOnly.httpEnabled : true)",message="spec.executionEngine.evmOnly.httpEnabled is create-only: only a bootstrap plan writes app.toml; recreate the network to change it"
+// +kubebuilder:validation:XValidation:rule="!(has(self.executionEngine) && has(self.consensus) && has(self.consensus.evmOnly)) || ((has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') == self.consensus.evmOnly)",message="spec.executionEngine.mode and the deprecated spec.consensus.evmOnly disagree: set mode EvmOnly with evmOnly true, or drop evmOnly"
+// +kubebuilder:validation:XValidation:rule="!(has(self.executionEngine) && has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') || (has(self.consensus) && has(self.consensus.engine) && self.consensus.engine == 'Autobahn')",message="executionEngine mode EvmOnly requires consensus engine Autobahn: the EVM-only executor runs only under Autobahn consensus"
 // +kubebuilder:validation:XValidation:rule="(has(self.consensus) && has(self.consensus.autobahn)) ? (has(oldSelf.consensus) && has(oldSelf.consensus.autobahn) && self.consensus.autobahn == oldSelf.consensus.autobahn) : !(has(oldSelf.consensus) && has(oldSelf.consensus.autobahn))",message="spec.consensus.autobahn is create-only: its values are written into the ceremony's autobahn.json, which every validator and follower already holds; recreate the network to change them"
-// +kubebuilder:validation:XValidation:rule="!(has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly) || !has(self.configOverrides) || !('network.rpc.listen_address' in self.configOverrides || 'api.rest.enable' in self.configOverrides || 'api.grpc.enable' in self.configOverrides || 'api.grpc_web.enable' in self.configOverrides)",message="an EVM-only network owns network.rpc.listen_address and api.{rest,grpc,grpc_web}.enable: the EVM-only executor serves no CometBFT RPC, REST or gRPC"
+// +kubebuilder:validation:XValidation:rule="!(has(self.executionEngine) ? (has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') : (has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)) || !has(self.configOverrides) || !('network.rpc.listen_address' in self.configOverrides || 'api.rest.enable' in self.configOverrides || 'api.grpc.enable' in self.configOverrides || 'api.grpc_web.enable' in self.configOverrides || 'evm.http_enabled' in self.configOverrides)",message="an EVM-only network owns network.rpc.listen_address, api.{rest,grpc,grpc_web}.enable and evm.http_enabled: the EVM-only executor serves no CometBFT RPC, REST or gRPC, and its EVM listener is set via spec.executionEngine.evmOnly.httpEnabled"
 // dataVolume is create-only (change, unset, first-time set all rejected).
 // Presence parity only here; values are pinned on the shared DataVolume* types,
 // covering both Kinds. A structural == cannot stay once a Quantity lives here (a
@@ -64,9 +71,16 @@ type SeiNetworkSpec struct {
 
 	// Consensus selects the engine every validator runs and, under Autobahn,
 	// tunes the ceremony's autobahn.json. Absent means Tendermint. Create-only;
-	// engine and evmOnly propagate to every validator child.
+	// engine and the deprecated evmOnly propagate to every validator child.
 	// +optional
 	Consensus *NetworkConsensusSpec `json:"consensus,omitempty"`
+
+	// ExecutionEngine selects the application every validator runs: Default,
+	// or the EVM-only executor. Absent falls back to the deprecated
+	// spec.consensus.evmOnly. Create-only on its effective value; propagates
+	// to every validator child.
+	// +optional
+	ExecutionEngine *ExecutionEngineSpec `json:"executionEngine,omitempty"`
 
 	// Replicas is the number of genesis validators to create. Each gets a
 	// DISTINCT generated identity, so replicas>1 is the normal safe case
@@ -375,8 +389,8 @@ type SeiNetworkStatus struct {
 
 // Endpoints lists composed in-cluster URLs for consuming this network.
 // Aggregate URLs sit at top-level scalars; per-pod URLs live in Nodes,
-// keyed by SeiNode name. When .status.phase == Ready, Nodes is non-empty
-// and each entry has at least Name plus its protocol URLs populated.
+// keyed by SeiNode name. Each Nodes entry has Name plus the protocol URLs
+// its child publishes; children publishing none are omitted.
 //
 // Stateless protocols (Tendermint RPC, Tendermint REST) are surfaced only
 // at the aggregate level — kube-proxy round-robins safely. Stateful
@@ -393,9 +407,12 @@ type Endpoints struct {
 	// +optional
 	TendermintRest string `json:"tendermintRest,omitempty"`
 
-	// Nodes lists per-pod URL bundles, keyed by SeiNode name. The list
-	// mirrors .status.perPodServices and exposes the protocols that
-	// require pod affinity (EVM JSON-RPC, EVM WebSocket).
+	// Nodes lists per-pod URL bundles, keyed by SeiNode name, for the
+	// protocols that require pod affinity (EVM JSON-RPC, EVM WebSocket). Each
+	// entry mirrors the child SeiNode's .status.endpoint; a child that
+	// publishes no EVM URL (an EVM-only node whose listener is not serving, or
+	// a Default-engine validator) has no entry, so a consumer gets a URL a
+	// child stands behind or none.
 	// +listType=map
 	// +listMapKey=name
 	// +optional
@@ -464,6 +481,13 @@ type PerPodServicePorts struct {
 	EvmWs   int32 `json:"evmWs"`
 }
 
+// EffectiveExecutionEngine returns the engine every validator runs, resolved
+// from spec.executionEngine with the deprecated spec.consensus.evmOnly as
+// fallback.
+func (s *SeiNetworkSpec) EffectiveExecutionEngine() ExecutionEngineSpec {
+	return ResolveExecutionEngine(s.ExecutionEngine, s.Consensus.Node())
+}
+
 // GroupNodeStatus is a summary of a child SeiNode's state.
 type GroupNodeStatus struct {
 	// Name is the SeiNode resource name.
@@ -471,6 +495,12 @@ type GroupNodeStatus struct {
 
 	// Phase is the SeiNode's current phase.
 	Phase SeiNodePhase `json:"phase,omitempty"`
+
+	// Ready reports whether the child is serving: PhaseRunning and, on an
+	// EVM-only node, its EvmServing condition True. Always
+	// serialized (true or false, never absent) so a consumer reading
+	// .status.nodes[].ready gets a concrete answer. Feeds ReadyReplicas.
+	Ready bool `json:"ready"`
 
 	// CurrentImage is the seid image the child reports running
 	// (mirrored from the child's status.currentImage). Compared against

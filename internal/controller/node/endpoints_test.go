@@ -70,6 +70,51 @@ func TestComposeNodeEndpoints_ValidatorNil(t *testing.T) {
 	g.Expect(composeNodeEndpoints(node)).To(BeNil())
 }
 
+func evmOnlyValidator(name string, httpEnabled *bool) *seiv1alpha1.SeiNode {
+	engine := &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	if httpEnabled != nil {
+		engine.EvmOnly = &seiv1alpha1.EvmOnlyExecutionSpec{HttpEnabled: httpEnabled}
+	}
+	return endpointNode(name, "sei", seiv1alpha1.SeiNodeSpec{
+		Validator:       &seiv1alpha1.ValidatorSpec{},
+		Consensus:       &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+		ExecutionEngine: engine,
+	})
+}
+
+// An EVM-only validator publishes the JSON-RPC URL alone, and only while
+// EvmServing is True — the Tendermint surfaces are closed and the WS listener
+// is off in validator mode, so neither is advertised.
+func TestComposeNodeEndpoints_EvmOnlyFollowsEvmServing(t *testing.T) {
+	g := NewWithT(t)
+	node := evmOnlyValidator("evm-val-0", nil)
+
+	g.Expect(composeNodeEndpoints(node)).To(BeNil(), "no condition yet")
+
+	setEvmServing(node, metav1.ConditionFalse, seiv1alpha1.ReasonEvmListenerRefused, "")
+	g.Expect(composeNodeEndpoints(node)).To(BeNil(), "listener refused")
+
+	setEvmServing(node, metav1.ConditionTrue, seiv1alpha1.ReasonEvmServing, "")
+	g.Expect(composeNodeEndpoints(node)).To(Equal(&seiv1alpha1.NodeEndpointStatus{
+		EvmJsonRpc: "http://evm-val-0.sei.svc:8545",
+	}))
+}
+
+// The deprecated consensus.evmOnly bool resolves to the same engine and the
+// same endpoint contract.
+func TestComposeNodeEndpoints_LegacyEvmOnlyBool(t *testing.T) {
+	g := NewWithT(t)
+	node := endpointNode("evm-val-0", "sei", seiv1alpha1.SeiNodeSpec{
+		Validator: &seiv1alpha1.ValidatorSpec{},
+		Consensus: &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true},
+	})
+	setEvmServing(node, metav1.ConditionTrue, seiv1alpha1.ReasonEvmServing, "")
+
+	g.Expect(composeNodeEndpoints(node)).To(Equal(&seiv1alpha1.NodeEndpointStatus{
+		EvmJsonRpc: "http://evm-val-0.sei.svc:8545",
+	}))
+}
+
 // Replayer must return nil. noderesource.NodeMode collapses replayer -> ModeFull,
 // so a mode-string gate would mis-classify it as EVM-serving; servesEVM gates on
 // the spec sub-spec to avoid that. This is the ModeFull-collapse regression guard.

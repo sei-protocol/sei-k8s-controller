@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -226,6 +227,18 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	// Read-only; enforcement is the ensure-data-pvc task's provisioning hold.
 	r.reconcileVolumeAttributesClass(ctx, node)
 
+	// Same discipline again for EvmServing: a spec-derived False (NotApplicable,
+	// HttpDisabled) or a pod-derived answer, seeded on every path so an EVM-only
+	// node never carries an endpoint its condition does not vouch for. The
+	// EvmOnly endpoint is recomputed right here for the same reason: the
+	// Failed, Paused, and workflow-occupied paths below never reach
+	// resolveDriftPlan, and a stale JSON-RPC URL on any of them is exactly
+	// what the condition exists to prevent.
+	r.reconcileEvmServing(ctx, node)
+	if node.Spec.EffectiveExecutionEngine().IsEvmOnly() {
+		node.Status.Endpoint = composeNodeEndpoints(node)
+	}
+
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
 		if err := flushStatus(); err != nil {
@@ -406,10 +419,12 @@ func (r *SeiNodeReconciler) resolveDriftPlan(
 		result, execErr = r.PlanExecutor.ExecutePlan(ctx, node, node.Status.Plan)
 	}
 
-	// Set only when Running and never cleared on a transient non-Running: the
-	// URLs are identity-derived, so a Running->update->Running cycle keeps them
-	// stable and clearing would flap .status.endpoint for consumers.
-	if node.Status.Phase == seiv1alpha1.PhaseRunning {
+	// Default engine: set only when Running and never cleared on a transient
+	// non-Running — the URLs are identity-derived, so a Running->update->Running
+	// cycle keeps them stable and clearing would flap .status.endpoint for
+	// consumers. The EvmOnly endpoint is owned by Reconcile, next to
+	// EvmServing, so it tracks the condition on every path.
+	if !node.Spec.EffectiveExecutionEngine().IsEvmOnly() && node.Status.Phase == seiv1alpha1.PhaseRunning {
 		node.Status.Endpoint = composeNodeEndpoints(node)
 	}
 	return result, execErr, nil
@@ -472,6 +487,7 @@ func (r *SeiNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Watches(&seiv1alpha1.SeiNodeTaskWorkflow{}, &workflowTargetHandler{}).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(podToSeiNode), builder.WithPredicates(podReadyChanged)).
 		Named(seiNodeControllerName).
 		Complete(r)
 }

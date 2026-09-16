@@ -319,8 +319,97 @@ type ConsensusSpec struct {
 	// serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
 	// are off, no cosmos-exporter is attached, and Ready proves that listener
 	// answers, not sync distance.
+	//
+	// Deprecated: EVM-only is an execution engine, not a consensus setting. Set
+	// spec.executionEngine.mode to EvmOnly instead; this field is still honored
+	// when spec.executionEngine is absent, and must agree with it when both are
+	// set.
 	// +optional
 	EvmOnly bool `json:"evmOnly,omitempty"`
+}
+
+// ExecutionEngineMode names the application seid runs under consensus.
+// +kubebuilder:validation:Enum=Default;EvmOnly
+type ExecutionEngineMode string
+
+const (
+	// ExecutionEngineDefault is the full Cosmos SDK application with its
+	// CometBFT RPC, REST, gRPC and (mode permitting) EVM JSON-RPC listeners.
+	ExecutionEngineDefault ExecutionEngineMode = "Default"
+	// ExecutionEngineEvmOnly is the EVM-only executor: the node serves only the
+	// EVM JSON-RPC listener and requires engine Autobahn.
+	ExecutionEngineEvmOnly ExecutionEngineMode = "EvmOnly"
+)
+
+// ExecutionEngineSpec selects the application seid runs. Create-only on its
+// effective value on both Kinds: the application is baked into the node's home
+// directory. It supersedes ConsensusSpec.EvmOnly; when both are set they must
+// agree, and the controller reads this field.
+// +kubebuilder:validation:XValidation:rule="!has(self.evmOnly) || (has(self.mode) && self.mode == 'EvmOnly')",message="evmOnly settings require mode EvmOnly"
+type ExecutionEngineSpec struct {
+	// Mode is the execution engine. Default when omitted.
+	// +optional
+	Mode ExecutionEngineMode `json:"mode,omitempty"`
+
+	// EvmOnly tunes the EVM-only executor. Only valid with mode EvmOnly.
+	// +optional
+	EvmOnly *EvmOnlyExecutionSpec `json:"evmOnly,omitempty"`
+}
+
+// EvmOnlyExecutionSpec is the operator-settable slice of the EVM-only
+// executor's configuration. The controller owns evm.http_enabled in app.toml
+// for this mode, so it is set here rather than through configValues or
+// overrides.
+type EvmOnlyExecutionSpec struct {
+	// HttpEnabled opens the EVM JSON-RPC HTTP listener on 8545. Default true:
+	// the listener is the node's only RPC surface, and a validator-mode base
+	// config would otherwise leave it closed. When false the node publishes no
+	// EVM endpoint and its readiness falls back to the P2P transport being
+	// bound. Create-only.
+	// +optional
+	HttpEnabled *bool `json:"httpEnabled,omitempty"`
+}
+
+// EffectiveMode returns the mode an empty spec resolves to.
+func (e ExecutionEngineSpec) EffectiveMode() ExecutionEngineMode {
+	if e.Mode == "" {
+		return ExecutionEngineDefault
+	}
+	return e.Mode
+}
+
+// IsEvmOnly reports whether the effective mode is EvmOnly.
+func (e ExecutionEngineSpec) IsEvmOnly() bool {
+	return e.EffectiveMode() == ExecutionEngineEvmOnly
+}
+
+// EvmHTTPEnabled reports whether the EVM-only executor opens its HTTP
+// listener: true unless evmOnly.httpEnabled is explicitly false. Meaningful
+// only when IsEvmOnly; the Default engine's listeners follow the node mode.
+func (e ExecutionEngineSpec) EvmHTTPEnabled() bool {
+	if e.EvmOnly == nil || e.EvmOnly.HttpEnabled == nil {
+		return true
+	}
+	return *e.EvmOnly.HttpEnabled
+}
+
+// ResolveExecutionEngine returns the engine a spec runs, preferring the typed
+// field and falling back to the deprecated consensus.evmOnly bool. The result
+// is normalized: Mode is always set, and EvmOnly carries the effective
+// httpEnabled when the mode is EvmOnly.
+func ResolveExecutionEngine(engine *ExecutionEngineSpec, consensus *ConsensusSpec) ExecutionEngineSpec {
+	if engine == nil {
+		if !consensus.IsEvmOnly() {
+			return ExecutionEngineSpec{Mode: ExecutionEngineDefault}
+		}
+		engine = &ExecutionEngineSpec{Mode: ExecutionEngineEvmOnly}
+	}
+	out := ExecutionEngineSpec{Mode: engine.EffectiveMode()}
+	if out.Mode == ExecutionEngineEvmOnly {
+		http := engine.EvmHTTPEnabled()
+		out.EvmOnly = &EvmOnlyExecutionSpec{HttpEnabled: &http}
+	}
+	return out
 }
 
 // AutobahnCeremonySpec is the operator-settable slice of the ceremony's
@@ -383,11 +472,6 @@ func (n *NetworkConsensusSpec) EffectiveEngine() ConsensusEngine {
 		return ConsensusEngineTendermint
 	}
 	return n.ConsensusSpec.EffectiveEngine()
-}
-
-// IsEvmOnly reports the effective evmOnly value; false for nil.
-func (n *NetworkConsensusSpec) IsEvmOnly() bool {
-	return n != nil && n.ConsensusSpec.IsEvmOnly()
 }
 
 // AutobahnSettings returns the ceremony overrides; nil when none are set.

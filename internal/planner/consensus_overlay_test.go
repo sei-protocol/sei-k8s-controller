@@ -22,6 +22,15 @@ func consensusTestNode(engine seiv1alpha1.ConsensusEngine, evmOnly bool) *seiv1a
 	return n
 }
 
+func executionEngineTestNode(mode seiv1alpha1.ExecutionEngineMode, httpEnabled *bool) *seiv1alpha1.SeiNode {
+	n := consensusTestNode(seiv1alpha1.ConsensusEngineAutobahn, false)
+	n.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{Mode: mode}
+	if httpEnabled != nil {
+		n.Spec.ExecutionEngine.EvmOnly = &seiv1alpha1.EvmOnlyExecutionSpec{HttpEnabled: httpEnabled}
+	}
+	return n
+}
+
 func overlayPatches(t *testing.T, plan *seiv1alpha1.TaskPlan) []task.ConfigPatchTask {
 	t.Helper()
 	var patches []task.ConfigPatchTask
@@ -36,6 +45,22 @@ func overlayPatches(t *testing.T, plan *seiv1alpha1.TaskPlan) []task.ConfigPatch
 		patches = append(patches, patch)
 	}
 	return patches
+}
+
+func evmOnlyOverlay(httpEnabled bool) map[string]map[string]any {
+	return map[string]map[string]any{
+		consensusConfigFile: {
+			keyAutobahnConfigFile: AutobahnConfigPath,
+			"evm-only":            true,
+			"rpc":                 map[string]any{"laddr": ""},
+		},
+		consensusAppFile: {
+			"api":      map[string]any{keyEnable: false},
+			"grpc":     map[string]any{keyEnable: false},
+			"grpc-web": map[string]any{keyEnable: false},
+			"evm":      map[string]any{keyHTTPEnabled: httpEnabled},
+		},
+	}
 }
 
 func TestConsensusOverlay(t *testing.T) {
@@ -54,19 +79,25 @@ func TestConsensusOverlay(t *testing.T) {
 			},
 		},
 		{
-			name: "EVM-only also closes CometBFT RPC, REST, gRPC and gRPC-web",
-			node: consensusTestNode(seiv1alpha1.ConsensusEngineAutobahn, true),
+			name:   "deprecated consensus.evmOnly also closes CometBFT RPC, REST, gRPC and gRPC-web and opens EVM HTTP",
+			node:   consensusTestNode(seiv1alpha1.ConsensusEngineAutobahn, true),
+			expect: evmOnlyOverlay(true),
+		},
+		{
+			name:   "executionEngine EvmOnly renders the same overlay",
+			node:   executionEngineTestNode(seiv1alpha1.ExecutionEngineEvmOnly, nil),
+			expect: evmOnlyOverlay(true),
+		},
+		{
+			name:   "executionEngine EvmOnly with httpEnabled false closes the EVM listener",
+			node:   executionEngineTestNode(seiv1alpha1.ExecutionEngineEvmOnly, new(false)),
+			expect: evmOnlyOverlay(false),
+		},
+		{
+			name: "executionEngine Default under Autobahn renders only the ceremony artifact",
+			node: executionEngineTestNode(seiv1alpha1.ExecutionEngineDefault, nil),
 			expect: map[string]map[string]any{
-				consensusConfigFile: {
-					keyAutobahnConfigFile: AutobahnConfigPath,
-					"evm-only":            true,
-					"rpc":                 map[string]any{"laddr": ""},
-				},
-				consensusAppFile: {
-					"api":      map[string]any{keyEnable: false},
-					"grpc":     map[string]any{keyEnable: false},
-					"grpc-web": map[string]any{keyEnable: false},
-				},
+				consensusConfigFile: {keyAutobahnConfigFile: AutobahnConfigPath},
 			},
 		},
 	}
@@ -145,6 +176,7 @@ func TestConsensusOverlayRejectsUserValueOnControllerKey(t *testing.T) {
 		"top-level": {FileName: consensusConfigFile, Key: keyAutobahnConfigFile, Value: apiextensionsv1.JSON{Raw: []byte(`"/tmp/x.json"`)}},
 		"nested":    {FileName: consensusAppFile, Key: "grpc.enable", Value: apiextensionsv1.JSON{Raw: []byte(`true`)}},
 		"table":     {FileName: consensusConfigFile, Key: "rpc", Value: apiextensionsv1.JSON{Raw: []byte(`{"laddr":"tcp://0.0.0.0:26657"}`)}},
+		"evm-http":  {FileName: consensusAppFile, Key: "evm.http_enabled", Value: apiextensionsv1.JSON{Raw: []byte(`false`)}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			node := consensusTestNode(seiv1alpha1.ConsensusEngineAutobahn, true)
