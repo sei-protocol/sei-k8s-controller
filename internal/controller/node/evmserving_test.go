@@ -149,6 +149,36 @@ func TestEvmServing_LossClearsEndpoint(t *testing.T) {
 	g.Expect(node.Status.Endpoint).To(BeNil())
 }
 
+// The Failed and Paused early-returns never reach resolveDriftPlan, so the
+// EvmOnly endpoint has to be recomputed beside the condition or a stale URL
+// rides the flush on exactly the paths where the pod is most likely unready.
+func TestEvmServing_EarlyReturnPathsClearStaleEndpoint(t *testing.T) {
+	stale := &seiv1alpha1.NodeEndpointStatus{EvmJsonRpc: "http://evm-val-0." + testNamespace + ".svc:8545"}
+	for _, tc := range []struct {
+		name  string
+		setup func(n *seiv1alpha1.SeiNode)
+	}{
+		{"paused", func(n *seiv1alpha1.SeiNode) { n.Spec.Paused = true; n.Status.Phase = seiv1alpha1.PhaseRunning }},
+		{"terminal failed", func(n *seiv1alpha1.SeiNode) { n.Status.Phase = seiv1alpha1.PhaseFailed }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			ctx := context.Background()
+			node := evmServingNode(&seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly})
+			node.Status.Endpoint = stale.DeepCopy()
+			tc.setup(node)
+			r, c := newNodeReconciler(t, node, seidPod(node, false))
+
+			_, err := r.Reconcile(ctx, nodeReqFor(node.Name, testNamespace))
+			g.Expect(err).NotTo(HaveOccurred())
+
+			persisted := getSeiNode(t, ctx, c, node.Name, testNamespace)
+			g.Expect(evmServingCondition(persisted).Reason).To(Equal(seiv1alpha1.ReasonEvmListenerRefused))
+			g.Expect(persisted.Status.Endpoint).To(BeNil(), "a dead JSON-RPC URL must not survive the %s flush", tc.name)
+		})
+	}
+}
+
 func TestPodReadyChanged_AdmitsOnlyReadyFlips(t *testing.T) {
 	g := NewWithT(t)
 	node := evmServingNode(nil)

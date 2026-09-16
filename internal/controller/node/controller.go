@@ -229,8 +229,15 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 
 	// Same discipline again for EvmServing: a spec-derived False (NotApplicable,
 	// HttpDisabled) or a pod-derived answer, seeded on every path so an EVM-only
-	// node never carries an endpoint its condition does not vouch for.
+	// node never carries an endpoint its condition does not vouch for. The
+	// EvmOnly endpoint is recomputed right here for the same reason: the
+	// Failed, Paused, and workflow-occupied paths below never reach
+	// resolveDriftPlan, and a stale JSON-RPC URL on any of them is exactly
+	// what the condition exists to prevent.
 	r.reconcileEvmServing(ctx, node)
+	if node.Spec.EffectiveExecutionEngine().IsEvmOnly() {
+		node.Status.Endpoint = composeNodeEndpoints(node)
+	}
 
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
@@ -415,9 +422,9 @@ func (r *SeiNodeReconciler) resolveDriftPlan(
 	// Default engine: set only when Running and never cleared on a transient
 	// non-Running — the URLs are identity-derived, so a Running->update->Running
 	// cycle keeps them stable and clearing would flap .status.endpoint for
-	// consumers. EvmOnly engine: tracks EvmServing on every reconcile, so the
-	// endpoint is present exactly while the listener answers.
-	if node.Spec.EffectiveExecutionEngine().IsEvmOnly() || node.Status.Phase == seiv1alpha1.PhaseRunning {
+	// consumers. The EvmOnly endpoint is owned by Reconcile, next to
+	// EvmServing, so it tracks the condition on every path.
+	if !node.Spec.EffectiveExecutionEngine().IsEvmOnly() && node.Status.Phase == seiv1alpha1.PhaseRunning {
 		node.Status.Endpoint = composeNodeEndpoints(node)
 	}
 	return result, execErr, nil

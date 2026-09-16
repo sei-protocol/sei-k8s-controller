@@ -164,22 +164,32 @@ func computeGroupPhase(network *seiv1alpha1.SeiNetwork, ready, desired int32, no
 		return seiv1alpha1.GroupPhaseReady
 	}
 
-	var failedCount int32
+	var failedCount, notServingCount int32
 	for i := range nodes {
-		if nodes[i].Status.Phase == seiv1alpha1.PhaseFailed {
+		switch {
+		case nodes[i].Status.Phase == seiv1alpha1.PhaseFailed:
 			failedCount++
+		case childNotServing(&nodes[i]):
+			notServingCount++
 		}
 	}
 
-	if failedCount > 0 {
-		if failedCount == int32(len(nodes)) {
-			return seiv1alpha1.GroupPhaseFailed
-		}
-		if ready > 0 {
-			return seiv1alpha1.GroupPhaseDegraded
-		}
+	if failedCount == int32(len(nodes)) {
+		return seiv1alpha1.GroupPhaseFailed
+	}
+	// A Running child that has stopped serving is a degradation of an
+	// established network, not a node still coming up; fold it in with Failed
+	// so the Degraded phase — not Initializing — is what alerting sees.
+	if (failedCount > 0 || notServingCount > 0) && ready > 0 {
+		return seiv1alpha1.GroupPhaseDegraded
 	}
 	return seiv1alpha1.GroupPhaseInitializing
+}
+
+// childNotServing is a Running child the network does not count as ready:
+// an EVM-only child whose EvmServing condition is not True.
+func childNotServing(node *seiv1alpha1.SeiNode) bool {
+	return node.Status.Phase == seiv1alpha1.PhaseRunning && !childReady(node)
 }
 
 func setNodesReadyCondition(network *seiv1alpha1.SeiNetwork, ready, desired int32, nodes []seiv1alpha1.SeiNode) {
@@ -191,18 +201,27 @@ func setNodesReadyCondition(network *seiv1alpha1.SeiNetwork, ready, desired int3
 		status = metav1.ConditionFalse
 		initializing := int32(0)
 		failed := int32(0)
+		notServing := int32(0)
 		for i := range nodes {
 			switch nodes[i].Status.Phase {
 			case seiv1alpha1.PhaseFailed:
 				failed++
 			case seiv1alpha1.PhasePending, seiv1alpha1.PhaseInitializing:
 				initializing++
+			case seiv1alpha1.PhaseRunning:
+				if childNotServing(&nodes[i]) {
+					notServing++
+				}
 			}
 		}
-		if failed > 0 {
+		switch {
+		case failed > 0:
 			reason = "NodesFailed"
 			message = fmt.Sprintf("%d/%d nodes ready (%d failed, %d initializing)", ready, desired, failed, initializing)
-		} else {
+		case notServing > 0:
+			reason = "NodesNotServing"
+			message = fmt.Sprintf("%d/%d nodes ready (%d running but not serving, %d initializing)", ready, desired, notServing, initializing)
+		default:
 			reason = "NodesInitializing"
 			message = fmt.Sprintf("%d/%d nodes ready (%d initializing)", ready, desired, initializing)
 		}
