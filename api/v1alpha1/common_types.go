@@ -364,8 +364,9 @@ type EvmOnlyExecutionSpec struct {
 	// HttpEnabled opens the EVM JSON-RPC HTTP listener on 8545. Default true:
 	// the listener is the node's only RPC surface, and a validator-mode base
 	// config would otherwise leave it closed. When false the node publishes no
-	// EVM endpoint and its readiness falls back to the P2P transport being
-	// bound. Create-only.
+	// EVM endpoint, its pod readiness falls back to the P2P transport being
+	// bound, and its EvmServing condition stays False/HttpDisabled — so an
+	// owning SeiNetwork never counts it among readyReplicas. Create-only.
 	// +optional
 	HttpEnabled *bool `json:"httpEnabled,omitempty"`
 }
