@@ -86,6 +86,8 @@ func SeiNodeTaskParamsFor(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNo
 		return govSoftwareUpgradeParams(cr, target)
 	case seiv1alpha1.SeiNodeTaskKindGovParamChange:
 		return govParamChangeParams(cr, target)
+	case seiv1alpha1.SeiNodeTaskKindGovUpdateInstantiateConfig:
+		return govUpdateInstantiateConfigParams(cr, target)
 	case seiv1alpha1.SeiNodeTaskKindAwaitCondition:
 		return awaitConditionParams(cr)
 	case seiv1alpha1.SeiNodeTaskKindAwaitNodesAtHeight:
@@ -173,6 +175,38 @@ func govParamChangeParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNo
 		Fees:           p.Fees,
 		Gas:            p.Gas,
 	}}, nil
+}
+
+func govUpdateInstantiateConfigParams(
+	cr *seiv1alpha1.SeiNodeTask,
+	target *seiv1alpha1.SeiNode,
+) (SeiNodeTaskParams, error) {
+	p := cr.Spec.GovUpdateInstantiateConfig
+	if p == nil {
+		return SeiNodeTaskParams{}, paramsErr(
+			"spec.govUpdateInstantiateConfig is required for kind=GovUpdateInstantiateConfig")
+	}
+	updates := make([]sidecar.InstantiateConfigUpdateInput, 0, len(p.Updates))
+	for _, update := range p.Updates {
+		updates = append(updates, sidecar.InstantiateConfigUpdateInput{
+			CodeID:     update.CodeID,
+			Permission: update.Permission,
+		})
+	}
+	return SeiNodeTaskParams{
+		sidecar.TaskTypeGovInstantiateConfig,
+		sidecar.GovUpdateInstantiateConfigTask{
+			ChainID:        p.ChainID,
+			KeyName:        resolveSigningUID(p.KeyName, target),
+			Title:          p.Title,
+			Description:    p.Description,
+			Updates:        updates,
+			InitialDeposit: p.InitialDeposit,
+			Memo:           p.Memo,
+			Fees:           p.Fees,
+			Gas:            p.Gas,
+		},
+	}, nil
 }
 
 func awaitConditionParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {

@@ -37,6 +37,27 @@ func govParamChangeCR(value string) *seiv1alpha1.SeiNodeTask {
 	}
 }
 
+func govUpdateInstantiateConfigCR() *seiv1alpha1.SeiNodeTask {
+	return &seiv1alpha1.SeiNodeTask{
+		Spec: seiv1alpha1.SeiNodeTaskSpec{
+			Kind: seiv1alpha1.SeiNodeTaskKindGovUpdateInstantiateConfig,
+			GovUpdateInstantiateConfig: &seiv1alpha1.GovUpdateInstantiateConfigPayload{
+				ChainID:     "arctic-1",
+				KeyName:     "node_admin",
+				Title:       "Disable CosmWasm Contract Instantiation",
+				Description: "Set existing code instantiate permissions to Nobody.",
+				Updates: []seiv1alpha1.GovInstantiateConfigUpdate{
+					{CodeID: 1, Permission: "nobody"},
+					{CodeID: 2, Permission: "everybody"},
+				},
+				InitialDeposit: "10000000usei",
+				Fees:           "30000usei",
+				Gas:            1_200_000,
+			},
+		},
+	}
+}
+
 // kind=GovParamChange maps to the sidecar gov-param-change task with the
 // proposal fields and a per-change value forwarded as RAW bytes (the single
 // string() conversion happens in the sidecar, not here).
@@ -63,6 +84,67 @@ func TestSeiNodeTaskParamsFor_GovParamChange(t *testing.T) {
 	// Validate() must pass on the produced task (the sidecar runs it next).
 	if err := task.Validate(); err != nil {
 		t.Errorf("produced task fails Validate(): %v", err)
+	}
+}
+
+func TestSeiNodeTaskParamsForGovUpdateInstantiateConfig(t *testing.T) {
+	params, err := SeiNodeTaskParamsFor(govUpdateInstantiateConfigCR(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if params.Type != sidecar.TaskTypeGovInstantiateConfig {
+		t.Errorf("Type = %q, want %q", params.Type, sidecar.TaskTypeGovInstantiateConfig)
+	}
+	task, ok := params.Payload.(sidecar.GovUpdateInstantiateConfigTask)
+	if !ok {
+		t.Fatalf("Payload = %T, want GovUpdateInstantiateConfigTask", params.Payload)
+	}
+	if task.ChainID != "arctic-1" || task.KeyName != "node_admin" || task.Gas != 1_200_000 {
+		t.Errorf("scalar fields not forwarded: %+v", task)
+	}
+	if len(task.Updates) != 2 ||
+		task.Updates[0].CodeID != 1 ||
+		task.Updates[0].Permission != "nobody" ||
+		task.Updates[1].CodeID != 2 ||
+		task.Updates[1].Permission != "everybody" {
+		t.Errorf("updates not forwarded in order: %+v", task.Updates)
+	}
+	if err := task.Validate(); err != nil {
+		t.Errorf("produced task fails Validate(): %v", err)
+	}
+
+	raw, err := json.Marshal(params.Payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	exec, err := Deserialize(params.Type, "guic-1", raw, ExecutionConfig{})
+	if err != nil {
+		t.Fatalf("Deserialize(%q) failed: %v", params.Type, err)
+	}
+	if exec == nil {
+		t.Fatal("Deserialize returned nil TaskExecution")
+	}
+}
+
+func TestSeiNodeTaskParamsForGovUpdateInstantiateConfigKeyNameDerived(t *testing.T) {
+	cr := govUpdateInstantiateConfigCR()
+	cr.Spec.GovUpdateInstantiateConfig.KeyName = ""
+	target := &seiv1alpha1.SeiNode{
+		Spec: seiv1alpha1.SeiNodeSpec{
+			Validator: &seiv1alpha1.ValidatorSpec{
+				OperatorKeyring: &seiv1alpha1.OperatorKeyringSource{
+					Secret: &seiv1alpha1.SecretOperatorKeyringSource{},
+				},
+			},
+		},
+	}
+	params, err := SeiNodeTaskParamsFor(cr, target)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := params.Payload.(sidecar.GovUpdateInstantiateConfigTask).KeyName
+	if got != seiv1alpha1.DefaultOperatorKeyName {
+		t.Errorf("derived KeyName = %q, want %q", got, seiv1alpha1.DefaultOperatorKeyName)
 	}
 }
 

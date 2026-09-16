@@ -39,6 +39,7 @@ const (
 	TaskGovVote                  = wire.TaskGovVote
 	TaskGovSoftwareUpgrade       = wire.TaskGovSoftwareUpgrade
 	TaskGovParamChange           = wire.TaskGovParamChange
+	TaskGovInstantiateConfig     = wire.TaskGovInstantiateConfig
 	TaskEvmLogicalDigest         = wire.TaskEvmLogicalDigest
 	TaskMarkNotReady             = wire.TaskMarkNotReady
 	TaskStopSeid                 = wire.TaskStopSeid

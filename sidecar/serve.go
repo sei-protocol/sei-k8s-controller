@@ -151,6 +151,7 @@ var serveCmd = cli.Command{
 			engine.TaskGovVote:                  tasks.NewGovVoter(execCfg).Handler(),
 			engine.TaskGovSoftwareUpgrade:       tasks.NewGovSoftwareUpgrader(execCfg).Handler(),
 			engine.TaskGovParamChange:           tasks.NewGovParamChanger(execCfg).Handler(),
+			engine.TaskGovInstantiateConfig:     tasks.NewGovInstantiateConfigUpdater(execCfg).Handler(),
 			engine.TaskEvmLogicalDigest:         tasks.NewEvmLogicalDigester(nil).Handler(),
 		}
 

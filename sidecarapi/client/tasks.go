@@ -59,9 +59,10 @@ const (
 	TaskTypeAssembleGenesis        = string(wire.TaskAssembleAndUploadGenesis)
 	TaskTypeSetGenesisPeers        = string(wire.TaskSetGenesisPeers)
 
-	TaskTypeGovVote            = string(wire.TaskGovVote)
-	TaskTypeGovSoftwareUpgrade = string(wire.TaskGovSoftwareUpgrade)
-	TaskTypeGovParamChange     = string(wire.TaskGovParamChange)
+	TaskTypeGovVote              = string(wire.TaskGovVote)
+	TaskTypeGovSoftwareUpgrade   = string(wire.TaskGovSoftwareUpgrade)
+	TaskTypeGovParamChange       = string(wire.TaskGovParamChange)
+	TaskTypeGovInstantiateConfig = string(wire.TaskGovInstantiateConfig)
 
 	TaskTypeMarkNotReady = string(wire.TaskMarkNotReady)
 	TaskTypeStopSeid     = string(wire.TaskStopSeid)
@@ -1046,6 +1047,107 @@ func (t GovParamChangeTask) ToTaskRequest() TaskRequest {
 		"title":          t.Title,
 		"description":    t.Description,
 		"changes":        t.Changes,
+		"initialDeposit": t.InitialDeposit,
+		"fees":           t.Fees,
+		"gas":            t.Gas,
+	}
+	if t.Memo != "" {
+		p["memo"] = t.Memo
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// InstantiateConfigUpdateInput is one per-code update in a wasm
+// UpdateInstantiateConfigProposal. Permission is "nobody", "everybody", or a
+// sei bech32 account address (which maps to OnlyAddress).
+type InstantiateConfigUpdateInput struct {
+	CodeID     uint64 `json:"codeId"`
+	Permission string `json:"permission"`
+}
+
+// GovUpdateInstantiateConfigTask submits a wasm
+// UpdateInstantiateConfigProposal. The proposal rewrites the instantiate
+// permission frozen into each referenced code's CodeInfo; changing the live
+// wasm instantiate-default parameter does not update existing code.
+//
+// REHYDRATION WARNING: MsgSubmitProposal is NOT chain-idempotent. The sidecar's
+// pre-broadcast TxMarker makes a same-task crash re-run adopt its in-flight tx,
+// but deleting and recreating the owning SeiNodeTask mints a new task ID and
+// therefore a duplicate proposal and deposit.
+type GovUpdateInstantiateConfigTask struct {
+	ChainID string
+	KeyName string
+
+	Title       string
+	Description string
+
+	Updates []InstantiateConfigUpdateInput
+
+	InitialDeposit string
+
+	Memo string
+	Fees string
+	Gas  uint64
+}
+
+func (t GovUpdateInstantiateConfigTask) TaskType() string {
+	return TaskTypeGovInstantiateConfig
+}
+
+func (t GovUpdateInstantiateConfigTask) Validate() error {
+	if t.ChainID == "" {
+		return errors.New("gov-update-instantiate-config: chainId required")
+	}
+	if t.KeyName == "" {
+		return errors.New("gov-update-instantiate-config: keyName required")
+	}
+	if t.Title == "" {
+		return errors.New("gov-update-instantiate-config: title required")
+	}
+	if t.Description == "" {
+		return errors.New("gov-update-instantiate-config: description required")
+	}
+	if len(t.Updates) == 0 {
+		return errors.New("gov-update-instantiate-config: at least one update required")
+	}
+	seen := make(map[uint64]struct{}, len(t.Updates))
+	for i, update := range t.Updates {
+		if update.CodeID == 0 {
+			return fmt.Errorf("gov-update-instantiate-config: updates[%d].codeId required (must be > 0)", i)
+		}
+		if _, ok := seen[update.CodeID]; ok {
+			return fmt.Errorf("gov-update-instantiate-config: duplicate codeId %d", update.CodeID)
+		}
+		seen[update.CodeID] = struct{}{}
+		switch update.Permission {
+		case "nobody", "everybody":
+		case "":
+			return fmt.Errorf("gov-update-instantiate-config: updates[%d].permission required", i)
+		default:
+			if err := validateSeiAccountAddress(update.Permission); err != nil {
+				return fmt.Errorf("gov-update-instantiate-config: updates[%d].permission: %w", i, err)
+			}
+		}
+	}
+	if t.InitialDeposit == "" {
+		return errors.New("gov-update-instantiate-config: initialDeposit required")
+	}
+	if t.Fees == "" {
+		return errors.New("gov-update-instantiate-config: fees required")
+	}
+	if t.Gas == 0 {
+		return errors.New("gov-update-instantiate-config: gas required (must be > 0)")
+	}
+	return nil
+}
+
+func (t GovUpdateInstantiateConfigTask) ToTaskRequest() TaskRequest {
+	p := map[string]any{
+		"chainId":        t.ChainID,
+		"keyName":        t.KeyName,
+		"title":          t.Title,
+		"description":    t.Description,
+		"updates":        t.Updates,
 		"initialDeposit": t.InitialDeposit,
 		"fees":           t.Fees,
 		"gas":            t.Gas,

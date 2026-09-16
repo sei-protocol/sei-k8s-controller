@@ -36,6 +36,7 @@ const (
 	TaskGovVote                  TaskType = "gov-vote"
 	TaskGovSoftwareUpgrade       TaskType = "gov-software-upgrade"
 	TaskGovParamChange           TaskType = "gov-param-change"
+	TaskGovInstantiateConfig     TaskType = "gov-update-instantiate-config"
 	TaskEvmLogicalDigest         TaskType = "evm-logical-digest"
 
 	// Workflow node-hold tasks (SeiNodeTaskWorkflow StateSync recipe). These

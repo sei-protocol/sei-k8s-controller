@@ -270,6 +270,84 @@ spec:
                 - upgradeHeight
                 - upgradeName
                 type: object
+              govUpdateInstantiateConfig:
+                description: |-
+                  GovUpdateInstantiateConfig is the payload for
+                  kind=GovUpdateInstantiateConfig.
+                properties:
+                  chainId:
+                    description: ChainID is the chain ID the proposal targets.
+                    minLength: 1
+                    type: string
+                  description:
+                    description: Description is the on-chain proposal description.
+                    minLength: 1
+                    type: string
+                  fees:
+                    description: Fees is the tx fee in usei coin notation.
+                    minLength: 1
+                    type: string
+                  gas:
+                    description: Gas is the tx gas limit.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  initialDeposit:
+                    description: |-
+                      InitialDeposit is the proposal deposit in coin notation. It must use
+                      usei and meet the target chain's minimum deposit to enter voting.
+                    minLength: 1
+                    type: string
+                  keyName:
+                    description: |-
+                      KeyName names the keyring entry that signs the proposal. Omit to derive
+                      it from the target SeiNode's operator keyring configuration.
+                    pattern: ^[a-zA-Z0-9_-]+$
+                    type: string
+                  memo:
+                    description: Memo is the optional tx memo. The sidecar appends
+                      a taskID tag.
+                    type: string
+                  title:
+                    description: Title is the on-chain proposal title.
+                    minLength: 1
+                    type: string
+                  updates:
+                    description: Updates is the non-empty set of per-code instantiate
+                      permission changes.
+                    items:
+                      description: |-
+                        GovInstantiateConfigUpdate is one per-code update in a wasm
+                        UpdateInstantiateConfigProposal.
+                      properties:
+                        codeId:
+                          description: CodeID identifies an existing wasm code.
+                          format: int64
+                          minimum: 1
+                          type: integer
+                        permission:
+                          description: |-
+                            Permission is "nobody", "everybody", or a sei bech32 account address
+                            (which maps to OnlyAddress). The sidecar performs the full address check.
+                          maxLength: 128
+                          minLength: 1
+                          pattern: ^(nobody|everybody|sei1[0-9a-z]+)$
+                          type: string
+                      required:
+                      - codeId
+                      - permission
+                      type: object
+                    minItems: 1
+                    type: array
+                required:
+                - chainId
+                - description
+                - fees
+                - gas
+                - initialDeposit
+                - title
+                - updates
+                type: object
               govVote:
                 description: GovVote is the payload for kind=GovVote.
                 properties:
@@ -333,6 +411,7 @@ spec:
                 - GovSoftwareUpgrade
                 - GovVote
                 - GovParamChange
+                - GovUpdateInstantiateConfig
                 - AwaitCondition
                 - UpdateNodeImage
                 - AwaitNodesAtHeight
@@ -415,19 +494,21 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: exactly one of govSoftwareUpgrade, govVote, govParamChange,
-                awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid,
-                or markReady must be set
+                govUpdateInstantiateConfig, awaitCondition, updateNodeImage, awaitNodesAtHeight,
+                restartSeid, or markReady must be set
               rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
-                1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.awaitCondition)
-                ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight)
-                ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady)
-                ? 1 : 0) == 1'
+                1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.govUpdateInstantiateConfig)
+                ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage)
+                ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid)
+                ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1'
             - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
               rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
             - message: spec.govVote is required when kind=GovVote
               rule: self.kind != 'GovVote' || has(self.govVote)
             - message: spec.govParamChange is required when kind=GovParamChange
               rule: self.kind != 'GovParamChange' || has(self.govParamChange)
+            - message: spec.govUpdateInstantiateConfig is required when kind=GovUpdateInstantiateConfig
+              rule: self.kind != 'GovUpdateInstantiateConfig' || has(self.govUpdateInstantiateConfig)
             - message: spec.awaitCondition is required when kind=AwaitCondition
               rule: self.kind != 'AwaitCondition' || has(self.awaitCondition)
             - message: spec.updateNodeImage is required when kind=UpdateNodeImage
@@ -567,6 +648,26 @@ spec:
                           ProposalID is the on-chain proposal ID parsed from the inclusion
                           response events. Empty when the sidecar could not determine
                           inclusion before result-persist.
+                        format: int64
+                        type: integer
+                      txHash:
+                        description: TxHash is the upper-case hex-encoded transaction
+                          hash.
+                        type: string
+                    type: object
+                  govUpdateInstantiateConfig:
+                    description: |-
+                      GovUpdateInstantiateConfig outputs for
+                      kind=GovUpdateInstantiateConfig.
+                    properties:
+                      height:
+                        description: Height is the block height at which the tx was
+                          included.
+                        format: int64
+                        type: integer
+                      proposalId:
+                        description: ProposalID is the on-chain proposal ID parsed
+                          from the inclusion result.
                         format: int64
                         type: integer
                       txHash:
