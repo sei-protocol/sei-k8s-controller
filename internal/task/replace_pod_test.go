@@ -246,6 +246,29 @@ func TestReplacePod_AlreadyAtUpdateRevision_NoOp(t *testing.T) {
 		types.NamespacedName{Name: currentPod.Name, Namespace: currentPod.Namespace}, got)).To(Succeed())
 }
 
+// Rollback to a revision still in history: the StatefulSet reports
+// CurrentRevision == UpdateRevision while the pod still carries the abandoned
+// revision. The task must delete that pod rather than treating the equal
+// revisions as an already-rolled StatefulSet.
+func TestReplacePod_RollbackWithEqualRevisions_DeletesStalePod(t *testing.T) {
+	g := NewWithT(t)
+	node := replacePodNode()
+	sts := stsForReplace("rev-a", "rev-a")
+	stalePod := podForReplace("rev-b", false)
+
+	cfg := replacePodCfg(t, node, sts, stalePod)
+	exec := newReplacePodExec(t, cfg)
+
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(exec.Status(context.Background())).To(Equal(ExecutionComplete))
+
+	got := &corev1.Pod{}
+	err := cfg.KubeClient.Get(context.Background(),
+		types.NamespacedName{Name: stalePod.Name, Namespace: stalePod.Namespace}, got)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(),
+		"expected rolled-back pod to be deleted, got err=%v", err)
+}
+
 // Pod already terminating (deletionTimestamp present) → task skips it.
 // We assert the pod's finalizer wasn't stripped (i.e. task didn't double-delete).
 func TestReplacePod_TerminatingPod_Skipped(t *testing.T) {

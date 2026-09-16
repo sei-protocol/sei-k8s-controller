@@ -59,16 +59,14 @@ func (e *replacePodExecution) Execute(ctx context.Context) error {
 	}
 
 	// Revision gate runs before the selector/replica guards: a not-yet-observed
-	// or not-yet-populated revision is a transient wait, and an already-rolled
-	// StatefulSet is a complete no-op — neither should reach pod deletion.
+	// or not-yet-populated revision is a transient wait and must not reach pod
+	// deletion. Staleness is judged per pod against UpdateRevision, never from
+	// CurrentRevision == UpdateRevision: a rollback to a revision still in
+	// history makes those equal while the pods carry the abandoned revision.
 	if sts.Status.ObservedGeneration < sts.Generation {
 		return nil
 	}
 	if sts.Status.UpdateRevision == "" {
-		return nil
-	}
-	if sts.Status.CurrentRevision == sts.Status.UpdateRevision {
-		e.complete()
 		return nil
 	}
 
@@ -151,10 +149,14 @@ func (e *replacePodExecution) ownedPods(ctx context.Context, node *seiv1alpha1.S
 	return owned, nil
 }
 
-// deletePod deletes the pod, tolerating an already-gone pod (NotFound) so the
-// task is idempotent across reconciles.
+// deletePod deletes exactly the observed pod: the UID precondition stops a
+// stale cache entry for the stable pod name from deleting its recreated
+// replacement. An already-gone pod (NotFound) or a UID mismatch (Conflict) is
+// tolerated so the task is idempotent across reconciles.
 func (e *replacePodExecution) deletePod(ctx context.Context, pod *corev1.Pod) error {
-	if err := e.cfg.KubeClient.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+	uid := pod.UID
+	err := e.cfg.KubeClient.Delete(ctx, pod, client.Preconditions{UID: &uid})
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 		return fmt.Errorf("deleting pod %q: %w", pod.Name, err)
 	}
 	return nil
