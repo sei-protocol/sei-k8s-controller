@@ -408,11 +408,11 @@ type Endpoints struct {
 	TendermintRest string `json:"tendermintRest,omitempty"`
 
 	// Nodes lists per-pod URL bundles, keyed by SeiNode name, for the
-	// protocols that require pod affinity (EVM JSON-RPC, EVM WebSocket). Each
-	// entry mirrors the child SeiNode's .status.endpoint; a child that
-	// publishes no EVM URL (an EVM-only node whose listener is not serving, or
-	// a Default-engine validator) has no entry, so a consumer gets a URL a
-	// child stands behind or none.
+	// protocols that require pod affinity (EVM JSON-RPC, EVM WebSocket). On a
+	// Default-engine network there is one entry per .status.perPodServices
+	// Service. On an EvmOnly network each entry mirrors the child SeiNode's
+	// .status.endpoint, and a child whose listener is not serving has no
+	// entry, so a consumer gets a URL the child stands behind or none.
 	// +listType=map
 	// +listMapKey=name
 	// +optional

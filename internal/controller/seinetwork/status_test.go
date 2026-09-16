@@ -263,8 +263,8 @@ func runningChild(engine *seiv1alpha1.ExecutionEngineSpec, evmServing *metav1.Co
 }
 
 // Running is the whole story for a Default-engine child; an EVM-only child
-// with its listener enabled must also be EvmServing, since that is the surface
-// the network publishes for it.
+// must also be EvmServing, since that is the surface the network publishes
+// for it — one with its listener disabled never gets there.
 func TestChildReady(t *testing.T) {
 	g := NewWithT(t)
 	off := false
@@ -278,7 +278,7 @@ func TestChildReady(t *testing.T) {
 	g.Expect(childReady(runningChild(evmOnly, nil))).To(BeFalse(), "evm-only: no EvmServing yet")
 	g.Expect(childReady(runningChild(evmOnly, new(metav1.ConditionFalse)))).To(BeFalse(), "evm-only: listener refused")
 	g.Expect(childReady(runningChild(evmOnly, new(metav1.ConditionTrue)))).To(BeTrue(), "evm-only: serving")
-	g.Expect(childReady(runningChild(evmOnlyHTTPOff, new(metav1.ConditionFalse)))).To(BeTrue(), "evm-only, http off: nothing to publish, Running suffices")
+	g.Expect(childReady(runningChild(evmOnlyHTTPOff, new(metav1.ConditionFalse)))).To(BeFalse(), "evm-only, http off: never serves, never ready")
 
 	legacy := runningChild(nil, nil)
 	legacy.Spec.Consensus.EvmOnly = true //nolint:staticcheck // deliberately exercising the deprecated field's compatibility path
