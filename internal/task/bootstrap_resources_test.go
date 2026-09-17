@@ -408,14 +408,14 @@ func TestBuildBootstrapPodSpec_NeverMountsNodeConfig(t *testing.T) {
 	snap := &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100}}
 	node := validatorNodeWithSecrets("", "", "")
 	node.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
-		ConfigRef: seiv1alpha1.ConfigFileRef{Name: "rpc-config-v1"},
-		AppRef:    seiv1alpha1.ConfigFileRef{Name: "rpc-config-v1"},
+		ConfigRef: seiv1alpha1.ConfigFileRef{Name: testNodeConfigMap},
+		AppRef:    seiv1alpha1.ConfigFileRef{Name: testNodeConfigMap},
 	}
 
 	spec := buildBootstrapPodSpec(node, snap, platformtest.Config())
 
 	for _, v := range spec.Volumes {
-		g.Expect(v.ConfigMap == nil || v.ConfigMap.Name != "rpc-config-v1").To(BeTrue(),
+		g.Expect(v.ConfigMap == nil || v.ConfigMap.Name != testNodeConfigMap).To(BeTrue(),
 			"bootstrap pod must not mount the operator config ConfigMap")
 	}
 	containers := append(append([]corev1.Container{}, spec.Containers...), spec.InitContainers...)

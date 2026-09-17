@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -17,9 +18,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 )
 
 const (
+	// testNodeConfigMap is the ConfigMap a spec.nodeConfig fixture references.
+	testNodeConfigMap = "rpc-config-v1"
+
 	stsUID         = types.UID("sts-uid-1")
 	testReplaceNs  = "default"
 	testReplaceSTS = "node-1"
@@ -382,7 +387,7 @@ func TestReplacePod_GuardNodeConfig(t *testing.T) {
 
 	configMap := func(data map[string]string) *corev1.ConfigMap {
 		return &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: "rpc-config-v1", Namespace: testReplaceNs},
+			ObjectMeta: metav1.ObjectMeta{Name: testNodeConfigMap, Namespace: testReplaceNs},
 			Data:       data,
 		}
 	}
@@ -394,24 +399,24 @@ func TestReplacePod_GuardNodeConfig(t *testing.T) {
 		wantTerm bool
 	}{
 		{"both keys valid", []client.Object{configMap(map[string]string{
-			"config.toml": validTOML, "app.toml": validTOML})}, "", false},
+			noderesource.ConfigTomlKey: validTOML, noderesource.AppTomlKey: validTOML})}, "", false},
 		{"configmap absent", nil, "not found", true},
 		{"app.toml missing", []client.Object{configMap(map[string]string{
-			"config.toml": validTOML})}, `no "app.toml" key`, true},
+			noderesource.ConfigTomlKey: validTOML})}, fmt.Sprintf("no %q key", noderesource.AppTomlKey), true},
 		{"config.toml missing", []client.Object{configMap(map[string]string{
-			"app.toml": validTOML})}, `no "config.toml" key`, true},
+			noderesource.AppTomlKey: validTOML})}, fmt.Sprintf("no %q key", noderesource.ConfigTomlKey), true},
 		{"app.toml empty", []client.Object{configMap(map[string]string{
-			"config.toml": validTOML, "app.toml": "   \n"})}, "is empty", true},
+			noderesource.ConfigTomlKey: validTOML, "app.toml": "   \n"})}, "is empty", true},
 		{"config.toml malformed", []client.Object{configMap(map[string]string{
-			"config.toml": "moniker = \n[[[", "app.toml": validTOML})}, "not valid TOML", true},
+			"config.toml": "moniker = \n[[[", noderesource.AppTomlKey: validTOML})}, "not valid TOML", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
 			node := replacePodNode()
 			node.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
-				ConfigRef: seiv1alpha1.ConfigFileRef{Name: "rpc-config-v1"},
-				AppRef:    seiv1alpha1.ConfigFileRef{Name: "rpc-config-v1"},
+				ConfigRef: seiv1alpha1.ConfigFileRef{Name: testNodeConfigMap},
+				AppRef:    seiv1alpha1.ConfigFileRef{Name: testNodeConfigMap},
 			}
 			cfg := replacePodCfg(t, node, tc.objs...)
 

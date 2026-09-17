@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/tomlpatch"
 )
 
@@ -129,8 +130,8 @@ func (e *replacePodExecution) guardNodeConfig(ctx context.Context, node *seiv1al
 		ref  seiv1alpha1.ConfigFileRef
 		file string
 	}{
-		{cfg.ConfigRef, "config.toml"},
-		{cfg.AppRef, "app.toml"},
+		{cfg.ConfigRef, noderesource.ConfigTomlKey},
+		{cfg.AppRef, noderesource.AppTomlKey},
 	}
 	for _, f := range files {
 		cm := &corev1.ConfigMap{}

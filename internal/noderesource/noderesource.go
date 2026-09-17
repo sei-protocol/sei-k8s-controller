@@ -136,8 +136,8 @@ const (
 
 	nodeConfigConfigVolumeName = "node-config-config"
 	nodeConfigAppVolumeName    = "node-config-app"
-	configTomlDataKey          = "config.toml"
-	appTomlDataKey             = "app.toml"
+	configTomlDataKey          = ConfigTomlKey
+	appTomlDataKey             = AppTomlKey
 
 	operatorKeyringVolumeName = "operator-keyring"
 	// keyring.New(BackendFile, rootDir) opens rootDir/keyring-file/.
@@ -1554,6 +1554,14 @@ func nodeKeyMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
 		ReadOnly:  true,
 	}}
 }
+
+// ConfigTomlKey and AppTomlKey are the ConfigMap keys a spec.nodeConfig
+// reference must carry. They are the mount contract, so anything that checks a
+// referenced ConfigMap reads them from here rather than restating them.
+const (
+	ConfigTomlKey = "config.toml"
+	AppTomlKey    = "app.toml"
+)
 
 // nodeConfigVolumes projects the operator's seid config files, one volume per
 // file so the two references may name different ConfigMaps. Items names the

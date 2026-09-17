@@ -12,7 +12,12 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
-const staticConfigMapName = "rpc-config-v1"
+const (
+	staticConfigMapName = "rpc-config-v1"
+	staticTestNamespace = "default"
+	staticTestChainID   = "atlantic-2"
+	staticTestImage     = "sei:v1.0.0"
+)
 
 func withNodeConfig(node *seiv1alpha1.SeiNode, name string) *seiv1alpha1.SeiNode {
 	node.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
@@ -25,8 +30,8 @@ func withNodeConfig(node *seiv1alpha1.SeiNode, name string) *seiv1alpha1.SeiNode
 // pendingNode is an un-provisioned node in the given mode, ready for an init plan.
 func pendingNode(configure func(*seiv1alpha1.SeiNode)) *seiv1alpha1.SeiNode {
 	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "node-0", Namespace: "default", Generation: 1},
-		Spec:       seiv1alpha1.SeiNodeSpec{ChainID: "atlantic-2", Image: "sei:v1.0.0"},
+		ObjectMeta: metav1.ObjectMeta{Name: testNodeName, Namespace: staticTestNamespace, Generation: 1},
+		Spec:       seiv1alpha1.SeiNodeSpec{ChainID: staticTestChainID, Image: staticTestImage},
 		Status:     seiv1alpha1.SeiNodeStatus{Phase: seiv1alpha1.PhasePending},
 	}
 	configure(node)
@@ -38,8 +43,8 @@ var staticModes = []struct {
 	configure func(*seiv1alpha1.SeiNode)
 }{
 	{"full", func(n *seiv1alpha1.SeiNode) { n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{} }},
-	{"archive", func(n *seiv1alpha1.SeiNode) { n.Spec.Archive = &seiv1alpha1.ArchiveSpec{} }},
-	{"validator", func(n *seiv1alpha1.SeiNode) { n.Spec.Validator = &seiv1alpha1.ValidatorSpec{} }},
+	{overlayTestArchive, func(n *seiv1alpha1.SeiNode) { n.Spec.Archive = &seiv1alpha1.ArchiveSpec{} }},
+	{overlayTestValidator, func(n *seiv1alpha1.SeiNode) { n.Spec.Validator = &seiv1alpha1.ValidatorSpec{} }},
 }
 
 // TestStaticInitPlanCarriesNoConfigWriter is the assertion the whole feature
@@ -90,7 +95,7 @@ func TestStaticNodeConfigRefusesBootstrap(t *testing.T) {
 	node := withNodeConfig(pendingNode(func(n *seiv1alpha1.SeiNode) {
 		n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{
 			Snapshot: &seiv1alpha1.SnapshotSource{
-				BootstrapImage: "sei:v1.0.0",
+				BootstrapImage: staticTestImage,
 				S3:             &seiv1alpha1.S3SnapshotSource{TargetHeight: 100},
 			},
 		}
@@ -213,8 +218,8 @@ func TestStaticValidateRefusesRuntimeDiscoveredConfig(t *testing.T) {
 		{"genesis ceremony", func(n *seiv1alpha1.SeiNode) {
 			n.Spec.Validator = &seiv1alpha1.ValidatorSpec{
 				GenesisCeremony: &seiv1alpha1.GenesisCeremonyNodeConfig{
-					ChainID:        "atlantic-2",
-					StakingAmount:  "1000000usei",
+					ChainID:        staticTestChainID,
+					StakingAmount:  testAccountBalance,
 					AccountBalance: "2000000usei",
 				},
 			}
@@ -223,7 +228,7 @@ func TestStaticValidateRefusesRuntimeDiscoveredConfig(t *testing.T) {
 			n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{
 				Snapshot: &seiv1alpha1.SnapshotSource{StateSync: &seiv1alpha1.StateSyncSource{}},
 			}
-		}, "state-sync"},
+		}, overlayTestStateSync},
 		{"autobahn consensus", func(n *seiv1alpha1.SeiNode) {
 			n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
 			n.Spec.Consensus = &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}
