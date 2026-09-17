@@ -107,6 +107,17 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha,scope=sidecar
           cache-to: type=gha,scope=sidecar,mode=max
+      # The test suite's //go:embed targets live outside the paths the other two
+      # images compile, so only this build catches a .dockerignore gap for them.
+      - name: Build integration-harness image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: test/integration/Dockerfile
+          push: false
+          platforms: linux/amd64
+          cache-from: type=gha,scope=integration-harness
+          cache-to: type=gha,scope=integration-harness,mode=max
 
   test:
     runs-on: ubuntu-latest
