@@ -73,20 +73,37 @@ func withoutManagedConfigTasks(node *seiv1alpha1.SeiNode, prog []string) []strin
 // is safe. ResolvePlan refuses a plan it names, so the invariant is guarded
 // once no matter which builder produced the plan.
 //
-// There is no per-pod exemption. A bootstrap Job pod carries no mount, but it
-// holds the same PVC as the production pod, and a rename from there detaches
-// the production pod's mount just as silently. staticConfigPlanner.Validate
-// refuses the bootstrap combination for that reason, and this is the backstop.
+// A revert plan is the one case where a writer belongs: it replaces the pod
+// with one the template no longer gives the mounts, so everything after that
+// replace-pod runs against a plain file. Nothing else is exempt. A bootstrap
+// Job pod carries no mount of its own, but it holds the same PVC as the
+// production pod, and a rename from there detaches the production pod's mount
+// just as silently; staticConfigPlanner.Validate refuses that combination.
 func mountedConfigWriterInPlan(node *seiv1alpha1.SeiNode, plan *seiv1alpha1.TaskPlan) string {
 	if !MountsNodeConfig(node) || plan == nil {
 		return ""
 	}
-	for _, t := range plan.Tasks {
+	lastMountedTask := len(plan.Tasks)
+	if revertingNodeConfig(node) {
+		for i, t := range plan.Tasks {
+			if t.Type == task.TaskTypeReplacePod {
+				lastMountedTask = i
+				break
+			}
+		}
+	}
+	for _, t := range plan.Tasks[:lastMountedTask] {
 		if slices.Contains(mountedConfigWriters, t.Type) {
 			return t.Type
 		}
 	}
 	return ""
+}
+
+// revertingNodeConfig reports whether the operator has taken the ConfigMaps
+// away from a node whose pod still mounts them.
+func revertingNodeConfig(node *seiv1alpha1.SeiNode) bool {
+	return node.Spec.NodeConfig == nil && node.Status.CurrentNodeConfig != nil
 }
 
 // staticConfigPlanner plans a node whose config.toml and app.toml come from
@@ -162,8 +179,9 @@ func (p *staticConfigPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv
 	return nil, nil
 }
 
-// buildUpdatePlan rolls the pod and nothing else. Kubelet pins a subPath mount
-// at pod start, so replacing the pod is what delivers new config. The
+// buildUpdatePlan rolls the pod. Kubelet pins a subPath mount at pod start, so
+// replacing the pod is what delivers new config. A revert also restores the
+// controller-managed base afterwards; see below. The
 // key-validation gates lead, as they do in every mode's update plan, so a
 // missing Secret fails controller-side rather than as a kubelet mount error on
 // the recreated pod.
@@ -183,8 +201,16 @@ func (p *staticConfigPlanner) buildUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1
 		task.TaskTypeApplyService,
 		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
-		TaskMarkReady,
 	)
+	if revertingNodeConfig(node) {
+		// The replacement pod has no mount, so the controller writes the base
+		// configuration it never wrote while the ConfigMaps were in place. A
+		// node created with nodeConfig has only what `seid init` left on the
+		// volume: no mode base, no freeze height, no snapshot-generation keys.
+		// Without this the node keeps those defaults and reports success.
+		prog = append(prog, TaskConfigApply, TaskConfigValidate)
+	}
+	prog = append(prog, TaskMarkReady)
 	return assembleStaticUpdatePlan(node, prog)
 }
 

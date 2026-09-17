@@ -2,6 +2,7 @@ package planner
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -150,12 +151,20 @@ func TestStaticRunningPlanRollsThePod(t *testing.T) {
 			g.Expect(types).To(ContainElement(task.TaskTypeObserveImage))
 			g.Expect(types).To(ContainElement(TaskMarkReady))
 
-			// The roll carries no config task at all: the writers detach the
-			// mount, and config-validate reports on a file the operator owns.
-			for _, writer := range mountedConfigWriters {
-				g.Expect(types).NotTo(ContainElement(writer))
+			if tc.spec == "" {
+				// A revert restores the controller-managed base, after the
+				// roll has replaced the pod with one that has no mount.
+				g.Expect(slices.Index(types, TaskConfigApply)).To(
+					BeNumerically(">", slices.Index(types, task.TaskTypeReplacePod)))
+			} else {
+				// Adopting or republishing carries no config task at all: the
+				// writers detach the mount, and config-validate reports on a
+				// file the operator owns.
+				for _, writer := range mountedConfigWriters {
+					g.Expect(types).NotTo(ContainElement(writer))
+				}
+				g.Expect(types).NotTo(ContainElement(TaskConfigValidate))
 			}
-			g.Expect(types).NotTo(ContainElement(TaskConfigValidate))
 
 			cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
 			g.Expect(cond).NotTo(BeNil())
@@ -332,10 +341,18 @@ func TestNodeConfigRevertRollsBeforeAnyConfigWrite(t *testing.T) {
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
 	types := planTaskTypes(node.Status.Plan)
+	replace := slices.Index(types, task.TaskTypeReplacePod)
+	g.Expect(replace).To(BeNumerically(">=", 0))
+
+	// Nothing writes config while the outgoing pod still has the mount.
 	for _, writer := range mountedConfigWriters {
-		g.Expect(types).NotTo(ContainElement(writer))
+		g.Expect(types[:replace]).NotTo(ContainElement(writer))
 	}
-	g.Expect(types).To(ContainElement(task.TaskTypeReplacePod))
+	// The replacement pod has none, so the base the controller never wrote is
+	// written there. A node created with nodeConfig otherwise keeps the files
+	// `seid init` left on the volume.
+	g.Expect(slices.Index(types, TaskConfigApply)).To(BeNumerically(">", replace))
+	g.Expect(types[len(types)-1]).To(Equal(TaskMarkReady))
 
 	// Once the roll drops the mount, the node returns to the mode planner and
 	// settles: no drift, no plan.

@@ -123,7 +123,11 @@
 //     arms, and mountedConfigWriterInPlan refuses any plan that still carries
 //     one, whichever builder produced it. There is no per-pod exemption: a
 //     bootstrap Job pod holds the same PVC, so staticConfigPlanner.Validate
-//     refuses that combination outright. config-validate is stripped too — it
+//     refuses that combination outright. The one exemption is a revert plan,
+//     which replaces the pod with one the template no longer gives the
+//     mounts and then writes the controller-managed base that was never
+//     written while the ConfigMaps were in place. config-validate is
+//     stripped too — it
 //     reports on a file the operator owns, and sei-config's legacy reader
 //     defaults a missing [sei] mode to full, so on a validator the verdict
 //     can be confidently wrong.
@@ -188,7 +192,9 @@
 // task at all, so they set no ConfigValuesHash. Kubelet pins a subPath mount
 // at pod start, which is why pod replacement is the only way new config
 // reaches seid, and replace-pod parses both ConfigMaps before it deletes
-// anything.
+// anything. Clearing spec.nodeConfig builds the same roll with config-apply
+// and config-validate appended after observe-image, so the node leaves with
+// the base configuration its mode expects rather than `seid init` defaults.
 //
 // When no drift is detected for a Running node, no plan is built. The node
 // sits in steady state with no active plan.
