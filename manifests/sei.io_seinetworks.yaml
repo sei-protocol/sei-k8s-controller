@@ -1134,6 +1134,14 @@ spec:
                   Plan tracks the active network-level task plan (genesis assembly,
                   deployment, etc.). Nil when no plan is in progress.
                 properties:
+                  clearsNodeConfig:
+                    description: |-
+                      ClearsNodeConfig marks a plan that takes the operator's ConfigMaps away
+                      from a node. On successful completion Status.CurrentNodeConfig is
+                      cleared. It is not cleared earlier: the plan writes the
+                      controller-managed base after the pod is replaced, and until that write
+                      lands the stamp is what keeps the node on the planner that will retry.
+                    type: boolean
                   configValuesHash:
                     description: |-
                       ConfigValuesHash identifies the configValues captured by this materialization

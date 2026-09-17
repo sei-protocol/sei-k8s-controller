@@ -79,7 +79,12 @@ func (e *observeImageExecution) Execute(ctx context.Context) error {
 	node.Status.CurrentImage = node.Spec.Image
 	node.Status.CurrentSidecarImage = EffectiveSidecarImage(node, e.cfg.Platform)
 	node.Status.CurrentNodeIsolation = noderesource.EffectiveNodeIsolation(node)
-	node.Status.CurrentNodeConfig = node.Spec.NodeConfig.DeepCopy()
+	// Only a gained mount is stamped here. A revert clears the stamp on plan
+	// completion instead, because the plan still has the base config to write
+	// and the stamp is what keeps the node on the planner that writes it.
+	if node.Spec.NodeConfig != nil {
+		node.Status.CurrentNodeConfig = node.Spec.NodeConfig.DeepCopy()
+	}
 	e.complete()
 	return nil
 }

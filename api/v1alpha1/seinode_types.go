@@ -413,6 +413,7 @@ type ConfigFileRef struct {
 	// ContainerCreating and `kubectl describe pod` names the missing key.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	Name string `json:"name"`
 }
 
@@ -554,6 +555,14 @@ type TaskPlan struct {
 	// Empty means this plan does not observe configuration.
 	// +optional
 	ConfigValuesHash string `json:"configValuesHash,omitempty"`
+
+	// ClearsNodeConfig marks a plan that takes the operator's ConfigMaps away
+	// from a node. On successful completion Status.CurrentNodeConfig is
+	// cleared. It is not cleared earlier: the plan writes the
+	// controller-managed base after the pod is replaced, and until that write
+	// lands the stamp is what keeps the node on the planner that will retry.
+	// +optional
+	ClearsNodeConfig bool `json:"clearsNodeConfig,omitempty"`
 
 	// FailedPhase is the SeiNodePhase the executor sets on the owning
 	// resource when the plan fails terminally. When empty, the executor

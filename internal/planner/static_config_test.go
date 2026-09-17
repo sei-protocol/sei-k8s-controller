@@ -352,7 +352,30 @@ func TestNodeConfigRevertRollsBeforeAnyConfigWrite(t *testing.T) {
 	// written there. A node created with nodeConfig otherwise keeps the files
 	// `seid init` left on the volume.
 	g.Expect(slices.Index(types, TaskConfigApply)).To(BeNumerically(">", replace))
+
+	// mark-ready is last, and seid's container blocks on the sidecar's
+	// /v0/healthz until it runs, so the write lands before seid reads the file.
+	// That is why the plan needs no restart-seid.
 	g.Expect(types[len(types)-1]).To(Equal(TaskMarkReady))
+
+	// The stamp survives the plan. observe-image runs before config-apply, so
+	// clearing it there would drop a node whose restore failed off this planner
+	// with no drift left to rebuild the plan.
+	g.Expect(slices.Index(types, task.TaskTypeObserveImage)).To(
+		BeNumerically("<", slices.Index(types, TaskConfigApply)))
+	g.Expect(node.Status.Plan.ClearsNodeConfig).To(BeTrue())
+	g.Expect(node.Status.CurrentNodeConfig).NotTo(BeNil())
+
+	// The node rejoins the controller-managed path, so it takes the overlay and
+	// the observed baseline with it.
+	g.Expect(node.Status.Plan.ConfigValuesHash).NotTo(BeEmpty())
+
+	// A restore that fails leaves the stamp in place, so the next reconcile
+	// resolves this planner again and rebuilds the revert.
+	node.Status.Plan = nil
+	g.Expect(MountsNodeConfig(node)).To(BeTrue())
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	g.Expect(planTaskTypes(node.Status.Plan)).To(ContainElement(TaskConfigApply))
 
 	// Once the roll drops the mount, the node returns to the mode planner and
 	// settles: no drift, no plan.

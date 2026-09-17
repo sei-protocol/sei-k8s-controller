@@ -110,9 +110,10 @@ func revertingNodeConfig(node *seiv1alpha1.SeiNode) bool {
 // operator-supplied ConfigMaps.
 //
 // It wraps the node's mode planner rather than replacing it, so the mode keeps
-// its own Validate and its own init and bootstrap plans. Those plans are
-// already safe: both production-pod progressions run through
-// withoutMountedConfigWriters. What the wrapper owns is the Running arm, which
+// its own Validate and its own init plan, which withoutManagedConfigTasks
+// strips for it. The bootstrap and genesis-ceremony progressions are not
+// filtered at all — Validate refuses both shapes, and mountedConfigWriterInPlan
+// refuses any plan that slips through. What the wrapper owns is the Running arm, which
 // the mode planners route through assembleUpdatePlan — an assembler that
 // force-inserts config-apply whenever the configValues baseline is unobserved,
 // which on one of these nodes is always.
@@ -202,16 +203,30 @@ func (p *staticConfigPlanner) buildUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1
 		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
 	)
-	if revertingNodeConfig(node) {
-		// The replacement pod has no mount, so the controller writes the base
-		// configuration it never wrote while the ConfigMaps were in place. A
-		// node created with nodeConfig has only what `seid init` left on the
-		// volume: no mode base, no freeze height, no snapshot-generation keys.
-		// Without this the node keeps those defaults and reports success.
-		prog = append(prog, TaskConfigApply, TaskConfigValidate)
+	if !revertingNodeConfig(node) {
+		prog = append(prog, TaskMarkReady)
+		return assembleStaticUpdatePlan(node, prog)
 	}
-	prog = append(prog, TaskMarkReady)
-	return assembleStaticUpdatePlan(node, prog)
+
+	// The replacement pod has no mount, so the controller writes the base
+	// configuration it never wrote while the ConfigMaps were in place. A node
+	// created with nodeConfig has only what `seid init` left on the volume: no
+	// mode base, no freeze height, no snapshot-generation keys. Without this
+	// the node keeps those defaults and reports success.
+	//
+	// seid has not started yet. Its container blocks on the sidecar's
+	// /v0/healthz, which reports ready only after mark-ready, so the write
+	// lands before seid reads the file and no restart is needed.
+	prog = append(prog, TaskConfigApply, TaskConfigValidate, TaskMarkReady)
+	plan, err := assembleStaticUpdatePlan(node, prog)
+	if err != nil {
+		return nil, err
+	}
+	plan.ClearsNodeConfig = true
+	// The node is back on the controller-managed path, so it takes the overlay
+	// and the observed baseline with it. withConfigValues splices the patch
+	// before config-validate, which this progression carries.
+	return withConfigValues(plan, node)
 }
 
 // assembleStaticUpdatePlan composes the progression into a TaskPlan. It is the
