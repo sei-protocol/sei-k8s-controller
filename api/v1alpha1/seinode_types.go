@@ -58,6 +58,15 @@ import (
 // requests.memory, and the controller derives the limit from the request, so the
 // footprint is frozen by freezing requests.
 // +kubebuilder:validation:XValidation:rule="(!has(self.resources) && !has(oldSelf.resources)) || (has(self.resources) && has(oldSelf.resources) && (has(self.resources.requests) == has(oldSelf.resources.requests)) && (!has(self.resources.requests) || ((('cpu' in self.resources.requests) == ('cpu' in oldSelf.resources.requests)) && (('memory' in self.resources.requests) == ('memory' in oldSelf.resources.requests)) && (!('cpu' in self.resources.requests) || !('cpu' in oldSelf.resources.requests) || quantity(string(self.resources.requests['cpu'])).compareTo(quantity(string(oldSelf.resources.requests['cpu']))) == 0) && (!('memory' in self.resources.requests) || !('memory' in oldSelf.resources.requests) || quantity(string(self.resources.requests['memory'])).compareTo(quantity(string(oldSelf.resources.requests['memory']))) == 0))))",message="spec.resources is create-only: the footprint is fixed at creation (a change is not rolled onto a running pod — the StatefulSet is OnDelete and drift detection is image-only), so replace the node to resize"
+// A node with spec.nodeConfig runs no task that writes config.toml or
+// app.toml, so every field whose only route to seid was one of those tasks is
+// rejected beside it. Accepting one would report success on an edit that never
+// reached the node — and for peers, status.resolvedPeers would keep updating
+// and keep looking correct while config.toml stayed as the operator wrote it.
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.configValues)",message="spec.nodeConfig and spec.configValues cannot both be set: a node reading its config from ConfigMaps runs no config-patch task, so the values would never reach seid; put them in the ConfigMap"
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.overrides)",message="spec.nodeConfig and spec.overrides cannot both be set: a node reading its config from ConfigMaps runs no config-apply task, so the overrides would never reach seid; put them in the ConfigMap"
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.peers)",message="spec.nodeConfig and spec.peers cannot both be set: nothing carries a resolved peer set into config.toml on a node reading its config from ConfigMaps; write p2p.persistent-peers in the ConfigMap"
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.externalAddress)",message="spec.nodeConfig and spec.externalAddress cannot both be set: nothing carries it into config.toml on a node reading its config from ConfigMaps; write p2p.external-address in the ConfigMap"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
@@ -121,6 +130,41 @@ type SeiNodeSpec struct {
 	// +listMapKey=fileName
 	// +listMapKey=key
 	ConfigValues []ConfigValue `json:"configValues,omitempty"`
+
+	// NodeConfig supplies this node's seid config files from existing
+	// ConfigMaps. The files mount read-only over the seid config directory, so
+	// they replace whatever the data volume already holds.
+	//
+	// A node with this field set takes the static-config plan: no task in its
+	// plan writes either file on the production pod. That is what keeps the
+	// mount attached. A rename onto a mounted path from another container
+	// detaches the mount, and seid then reads the writer's file.
+	//
+	// The operator owns both files verbatim. The controller supplies nothing:
+	// not the mode's base configuration, not persistent-peers, not
+	// external-address, not the freeze height, not the snapshot-generation
+	// keys. It does not validate them either — replace-pod parses both files
+	// before it deletes a pod, and that is the only check.
+	//
+	// The fields whose only route to seid was a config task are rejected
+	// beside this one: configValues, overrides, peers, externalAddress.
+	//
+	// The references are the unit of change. Kubelet pins a subPath mount at
+	// pod start, so editing a ConfigMap in place does not reach a running pod.
+	// Publish under a new name and the node rolls.
+	//
+	// Not supported with a bootstrap Job, a state-sync snapshot source, a
+	// genesis ceremony, or consensus engine Autobahn. Each of those writes
+	// config.toml at run time, and the plan is refused.
+	//
+	// The StatefulSet carries the references as soon as they are set, before
+	// any plan runs. A reference that does not resolve leaves the template
+	// unmountable: the controller will not replace the pod itself, but a
+	// drain, an eviction, or a manual delete recreates it into
+	// ContainerCreating, and StatefulSets are OnDelete so nothing rolls it
+	// back. Create the ConfigMaps first.
+	// +optional
+	NodeConfig *NodeConfig `json:"nodeConfig,omitempty"`
 
 	// Scheduling configures worker-node isolation.
 	// +optional
@@ -345,6 +389,31 @@ func (s *SeiNodeSpec) SnapshotSource() *SnapshotSource {
 	default:
 		return nil
 	}
+}
+
+// NodeConfig supplies a node's seid config files from existing ConfigMaps.
+// Both references are required: a node that takes its config.toml from a
+// ConfigMap and its app.toml from the controller would have two owners of one
+// directory, and the controller's writer would detach the mount delivering the
+// other file.
+type NodeConfig struct {
+	// ConfigRef holds config.toml.
+	ConfigRef ConfigFileRef `json:"configRef"`
+
+	// AppRef holds app.toml.
+	AppRef ConfigFileRef `json:"appRef"`
+}
+
+// ConfigFileRef names the ConfigMap holding one seid config file. Both
+// references may name the same ConfigMap.
+type ConfigFileRef struct {
+	// Name of an existing ConfigMap in the SeiNode's namespace. The file is
+	// read from the key matching its own name, config.toml or app.toml.
+	// Kubelet refuses the mount when that key is absent, so the pod stays in
+	// ContainerCreating and `kubectl describe pod` names the missing key.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
 }
 
 // NodeKeySecret returns the Secret supplying this node's P2P identity
@@ -780,6 +849,16 @@ type SeiNodeStatus struct {
 	// node on first reconcile.
 	// +optional
 	CurrentNodeIsolation NodeIsolation `json:"currentNodeIsolation,omitempty"`
+
+	// CurrentNodeConfig is the spec.nodeConfig the owned StatefulSet's pod was
+	// last rolled with, stamped jointly with CurrentImage on rollout
+	// completion. Unset means the pod mounts no operator-supplied config.
+	//
+	// Unset means the pod mounts no operator-supplied config. Unlike the fields
+	// above, unset is a real observation and not "not yet observed". It records
+	// the references, never the ConfigMaps' contents.
+	// +optional
+	CurrentNodeConfig *NodeConfig `json:"currentNodeConfig,omitempty"`
 
 	// +listType=map
 	// +listMapKey=type

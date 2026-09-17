@@ -262,6 +262,17 @@ func (r *SeiNodeReconciler) maybeAdoptWorkflow(
 		return false, ctrl.Result{}, false, nil
 	}
 
+	// Every recipe writes config.toml, and the target mounts it read-only from
+	// the operator's ConfigMap. Kept in lockstep with the planner-side refusal
+	// in stateSyncWorkflowPlanner.Validate.
+	if planner.MountsNodeConfig(node) {
+		for i := range candidates {
+			r.failWorkflow(ctx, &candidates[i], seiv1alpha1.ReasonWorkflowTargetRejected,
+				"target sets spec.nodeConfig; workflows rewrite config.toml, which the node mounts read-only")
+		}
+		return false, ctrl.Result{}, false, nil
+	}
+
 	winner := &candidates[0]
 	// Seed queued status on the losers regardless of whether the node is idle,
 	// so a workflow created mid-image-roll shows Pending + conditions.

@@ -14,6 +14,7 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 	"go.opentelemetry.io/otel/metric"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -183,7 +184,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return nil
 	}
 
-	mode, err := p.plannerForMode(node)
+	mode, err := p.plannerFor(node)
 	if err != nil {
 		return err
 	}
@@ -193,6 +194,15 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 	plan, err := mode.BuildPlan(node)
 	if err != nil {
+		return err
+	}
+	if writer := mountedConfigWriterInPlan(node, plan); writer != "" {
+		err := fmt.Errorf("plan carries %s on a node that mounts config.toml and app.toml from ConfigMaps: "+
+			"the task renames over the mount, which detaches it and leaves seid reading the task's file", writer)
+		// BuildPlan may already have stamped UpdateStarted. The plan is refused
+		// and never persisted, so clear the claim rather than leave a node
+		// reporting an update it does not have.
+		setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdatePlanBuildFailed, err.Error())
 		return err
 	}
 	if plan == nil {
@@ -337,6 +347,21 @@ func planFailureMessage(plan *seiv1alpha1.TaskPlan) string {
 		return fmt.Sprintf("task %s: %s", plan.FailedTaskDetail.Type, plan.FailedTaskDetail.Error)
 	}
 	return unknownValue
+}
+
+// plannerFor returns the NodePlanner for a SeiNode. A node whose config.toml
+// and app.toml come from operator ConfigMaps gets its mode planner wrapped in
+// staticConfigPlanner, which keeps the mode's own Validate and init plans and
+// replaces only the Running arm.
+func (r *NodeResolver) plannerFor(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
+	mode, err := r.plannerForMode(node)
+	if err != nil {
+		return nil, err
+	}
+	if !MountsNodeConfig(node) {
+		return mode, nil
+	}
+	return &staticConfigPlanner{base: mode, platform: r.Platform}, nil
 }
 
 // plannerForMode returns the appropriate NodePlanner for the SeiNode's
@@ -594,6 +619,7 @@ func buildBasePlan(
 	if err != nil {
 		return nil, err
 	}
+	sidecarProg = withoutManagedConfigTasks(node, sidecarProg)
 
 	// Infrastructure tasks run before sidecar tasks.
 	prog := make([]string, 0, 4+len(sidecarProg))
@@ -842,12 +868,36 @@ func nodeIsolationDrifted(node *seiv1alpha1.SeiNode) bool {
 	return noderesource.EffectiveNodeIsolation(node) != node.Status.CurrentNodeIsolation
 }
 
+// nodeConfigDrifted reports whether the operator's ConfigMap references
+// diverge from the ones the running pod mounts.
+//
+// There is no unobserved short-circuit here, unlike the three predicates
+// above: unset is the correct observation for a node that mounts nothing, and
+// no node carries spec.nodeConfig before the controller that reads it, so an
+// unset stamp cannot fleet-roll.
+//
+// Only the references are compared. Kubelet pins a subPath mount at pod start,
+// so editing a ConfigMap in place never reaches a running seid.
+func nodeConfigDrifted(node *seiv1alpha1.SeiNode) bool {
+	return !apiequality.Semantic.DeepEqual(node.Spec.NodeConfig, node.Status.CurrentNodeConfig)
+}
+
+// formatNodeConfig renders the ConfigMap references for the
+// NodeUpdateInProgress message an operator reads on a roll.
+func formatNodeConfig(cfg *seiv1alpha1.NodeConfig) string {
+	if cfg == nil {
+		return "none"
+	}
+	return fmt.Sprintf("config=%q app=%q", cfg.ConfigRef.Name, cfg.AppRef.Name)
+}
+
 // podTemplateDrifted reports whether an observed pod-template input has
-// drifted: seid image, sidecar image, or node isolation. The rendered nodepool
-// is not observed, so an app-config scheduling.dedicated.* change alone does
-// not roll.
+// drifted: seid image, sidecar image, node isolation, or the operator's config
+// ConfigMap. The rendered nodepool is not observed, so an app-config
+// scheduling.dedicated.* change alone does not roll.
 func podTemplateDrifted(node *seiv1alpha1.SeiNode, p platform.Config) bool {
-	return imageDrifted(node) || sidecarImageDrifted(node, p) || nodeIsolationDrifted(node)
+	return imageDrifted(node) || sidecarImageDrifted(node, p) ||
+		nodeIsolationDrifted(node) || nodeConfigDrifted(node)
 }
 
 // podTemplateDriftMessage formats the NodeUpdateInProgress message every mode
@@ -858,6 +908,7 @@ func podTemplateDriftMessage(node *seiv1alpha1.SeiNode, p platform.Config) strin
 	seid := imageDrifted(node)
 	sc := sidecarImageDrifted(node, p)
 	iso := nodeIsolationDrifted(node)
+	cfg := nodeConfigDrifted(node)
 	var parts []string
 	if seid {
 		parts = append(parts, fmt.Sprintf("seid spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage))
@@ -870,8 +921,16 @@ func podTemplateDriftMessage(node *seiv1alpha1.SeiNode, p platform.Config) strin
 		parts = append(parts, fmt.Sprintf("nodeIsolation spec=%s current=%s",
 			noderesource.EffectiveNodeIsolation(node), node.Status.CurrentNodeIsolation))
 	}
+	if cfg {
+		parts = append(parts, fmt.Sprintf("nodeConfig spec=%s current=%s",
+			formatNodeConfig(node.Spec.NodeConfig), formatNodeConfig(node.Status.CurrentNodeConfig)))
+	}
 	detail := strings.Join(parts, "; ")
 	switch {
+	case cfg && !seid && !sc && !iso:
+		return "node config drift detected: " + detail
+	case cfg:
+		return "node config and image drift detected: " + detail
 	case iso && !seid && !sc:
 		return "node isolation drift detected: " + detail
 	case iso:

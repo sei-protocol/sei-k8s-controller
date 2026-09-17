@@ -372,3 +372,65 @@ func TestReplacePod_MultiReplica_TerminalError(t *testing.T) {
 	g.Expect(err).To(BeAssignableToTypeOf(termErr))
 	g.Expect(err.Error()).To(ContainSubstring("multi-replica"))
 }
+
+// TestReplacePod_GuardNodeConfig covers the one-way action's precondition.
+// Plan build checked the spec, but reconciles pass before replace-pod runs,
+// and nothing reads these files before seid does — by then the previous pod is
+// gone.
+func TestReplacePod_GuardNodeConfig(t *testing.T) {
+	const validTOML = "moniker = \"node-1\"\n"
+
+	configMap := func(data map[string]string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "rpc-config-v1", Namespace: testReplaceNs},
+			Data:       data,
+		}
+	}
+
+	cases := []struct {
+		name     string
+		objs     []client.Object
+		wantErr  string
+		wantTerm bool
+	}{
+		{"both keys valid", []client.Object{configMap(map[string]string{
+			"config.toml": validTOML, "app.toml": validTOML})}, "", false},
+		{"configmap absent", nil, "not found", true},
+		{"app.toml missing", []client.Object{configMap(map[string]string{
+			"config.toml": validTOML})}, `no "app.toml" key`, true},
+		{"config.toml missing", []client.Object{configMap(map[string]string{
+			"app.toml": validTOML})}, `no "config.toml" key`, true},
+		{"app.toml empty", []client.Object{configMap(map[string]string{
+			"config.toml": validTOML, "app.toml": "   \n"})}, "is empty", true},
+		{"config.toml malformed", []client.Object{configMap(map[string]string{
+			"config.toml": "moniker = \n[[[", "app.toml": validTOML})}, "not valid TOML", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := replacePodNode()
+			node.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
+				ConfigRef: seiv1alpha1.ConfigFileRef{Name: "rpc-config-v1"},
+				AppRef:    seiv1alpha1.ConfigFileRef{Name: "rpc-config-v1"},
+			}
+			cfg := replacePodCfg(t, node, tc.objs...)
+
+			err := newReplacePodExecRaw(t, cfg).guardNodeConfig(context.Background(), node)
+
+			if !tc.wantTerm {
+				g.Expect(err).NotTo(HaveOccurred())
+				return
+			}
+			var termErr *TerminalError
+			g.Expect(err).To(BeAssignableToTypeOf(termErr))
+			g.Expect(err.Error()).To(ContainSubstring(tc.wantErr))
+		})
+	}
+
+	t.Run("no nodeConfig is a no-op", func(t *testing.T) {
+		g := NewWithT(t)
+		node := replacePodNode()
+		cfg := replacePodCfg(t, node)
+		g.Expect(newReplacePodExecRaw(t, cfg).guardNodeConfig(context.Background(), node)).To(Succeed())
+	})
+}
