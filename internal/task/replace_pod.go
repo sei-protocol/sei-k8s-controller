@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -12,6 +13,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/tomlpatch"
 )
 
 const TaskTypeReplacePod = "replace-pod"
@@ -74,6 +77,10 @@ func (e *replacePodExecution) Execute(ctx context.Context) error {
 		return err
 	}
 
+	if err := e.guardNodeConfig(ctx, node); err != nil {
+		return err
+	}
+
 	pods, err := e.ownedPods(ctx, node, sts)
 	if err != nil {
 		return err
@@ -98,6 +105,66 @@ func (e *replacePodExecution) Execute(ctx context.Context) error {
 	}
 
 	e.complete()
+	return nil
+}
+
+// guardNodeConfig re-reads the ConfigMaps that supply this node's seid config
+// files, and refuses to delete the pod when one of them cannot be mounted or
+// cannot be loaded.
+// Plan build already checked the spec, but reconciles pass between then and
+// now, and a ConfigMap pruned in that window would leave the replacement pod
+// in ContainerCreating with nothing to roll it back — StatefulSets are
+// OnDelete. Failing the plan leaves the running pod running.
+//
+// It parses the content too. Nothing else reads these files before seid does,
+// and by then the previous pod is gone, so unparseable TOML checked any later
+// costs the node its only working pod.
+func (e *replacePodExecution) guardNodeConfig(ctx context.Context, node *seiv1alpha1.SeiNode) error {
+	cfg := node.Spec.NodeConfig
+	if cfg == nil {
+		return nil
+	}
+	files := []struct {
+		ref  seiv1alpha1.ConfigFileRef
+		file string
+	}{
+		{cfg.ConfigRef, noderesource.ConfigTomlKey},
+		{cfg.AppRef, noderesource.AppTomlKey},
+	}
+	for _, f := range files {
+		cm := &corev1.ConfigMap{}
+		key := types.NamespacedName{Name: f.ref.Name, Namespace: node.Namespace}
+		if err := e.cfg.APIReader.Get(ctx, key, cm); err != nil {
+			if apierrors.IsNotFound(err) {
+				return Terminal(fmt.Errorf("configmap %q not found: the replacement pod could not mount %s", f.ref.Name, f.file))
+			}
+			return fmt.Errorf("getting configmap %q: %w", f.ref.Name, err)
+		}
+		content, ok := cm.Data[f.file]
+		if !ok {
+			raw, binary := cm.BinaryData[f.file]
+			if !binary {
+				return Terminal(fmt.Errorf("configmap %q has no %q key: the replacement pod could not mount it", f.ref.Name, f.file))
+			}
+			content = string(raw)
+		}
+		if err := validateTOML(content); err != nil {
+			return Terminal(fmt.Errorf("configmap %q key %q: %w", f.ref.Name, f.file, err))
+		}
+	}
+	return nil
+}
+
+// validateTOML rejects content seid cannot load. The replacement pod mounts
+// these bytes and nothing else reads them first, so an unparseable file would
+// otherwise reach a pod whose predecessor has already been deleted.
+func validateTOML(content string) error {
+	if strings.TrimSpace(content) == "" {
+		return fmt.Errorf("is empty")
+	}
+	if _, err := tomlpatch.UnmarshalTOML([]byte(content)); err != nil {
+		return fmt.Errorf("is not valid TOML: %w", err)
+	}
 	return nil
 }
 

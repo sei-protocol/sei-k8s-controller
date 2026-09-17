@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -17,9 +18,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 )
 
 const (
+	// testNodeConfigMap is the ConfigMap a spec.nodeConfig fixture references.
+	testNodeConfigMap = "rpc-config-v1"
+
 	stsUID         = types.UID("sts-uid-1")
 	testReplaceNs  = "default"
 	testReplaceSTS = "node-1"
@@ -394,4 +399,66 @@ func TestReplacePod_MultiReplica_TerminalError(t *testing.T) {
 	var termErr *TerminalError
 	g.Expect(err).To(BeAssignableToTypeOf(termErr))
 	g.Expect(err.Error()).To(ContainSubstring("multi-replica"))
+}
+
+// TestReplacePod_GuardNodeConfig covers the one-way action's precondition.
+// Plan build checked the spec, but reconciles pass before replace-pod runs,
+// and nothing reads these files before seid does — by then the previous pod is
+// gone.
+func TestReplacePod_GuardNodeConfig(t *testing.T) {
+	const validTOML = "moniker = \"node-1\"\n"
+
+	configMap := func(data map[string]string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: testNodeConfigMap, Namespace: testReplaceNs},
+			Data:       data,
+		}
+	}
+
+	cases := []struct {
+		name     string
+		objs     []client.Object
+		wantErr  string
+		wantTerm bool
+	}{
+		{"both keys valid", []client.Object{configMap(map[string]string{
+			noderesource.ConfigTomlKey: validTOML, noderesource.AppTomlKey: validTOML})}, "", false},
+		{"configmap absent", nil, "not found", true},
+		{"app.toml missing", []client.Object{configMap(map[string]string{
+			noderesource.ConfigTomlKey: validTOML})}, fmt.Sprintf("no %q key", noderesource.AppTomlKey), true},
+		{"config.toml missing", []client.Object{configMap(map[string]string{
+			noderesource.AppTomlKey: validTOML})}, fmt.Sprintf("no %q key", noderesource.ConfigTomlKey), true},
+		{"app.toml empty", []client.Object{configMap(map[string]string{
+			noderesource.ConfigTomlKey: validTOML, "app.toml": "   \n"})}, "is empty", true},
+		{"config.toml malformed", []client.Object{configMap(map[string]string{
+			"config.toml": "moniker = \n[[[", noderesource.AppTomlKey: validTOML})}, "not valid TOML", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := replacePodNode()
+			node.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
+				ConfigRef: seiv1alpha1.ConfigFileRef{Name: testNodeConfigMap},
+				AppRef:    seiv1alpha1.ConfigFileRef{Name: testNodeConfigMap},
+			}
+			cfg := replacePodCfg(t, node, tc.objs...)
+
+			err := newReplacePodExecRaw(t, cfg).guardNodeConfig(context.Background(), node)
+
+			if !tc.wantTerm {
+				g.Expect(err).NotTo(HaveOccurred())
+				return
+			}
+			var termErr *TerminalError
+			g.Expect(err).To(BeAssignableToTypeOf(termErr))
+			g.Expect(err.Error()).To(ContainSubstring(tc.wantErr))
+		})
+	}
+
+	t.Run("no nodeConfig is a no-op", func(t *testing.T) {
+		g := NewWithT(t)
+		node := replacePodNode()
+		cfg := replacePodCfg(t, node)
+		g.Expect(newReplacePodExecRaw(t, cfg).guardNodeConfig(context.Background(), node)).To(Succeed())
+	})
 }

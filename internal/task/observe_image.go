@@ -45,9 +45,9 @@ func deserializeObserveImage(id string, params json.RawMessage, cfg ExecutionCon
 }
 
 // Execute polls the StatefulSet rollout. If the rollout is complete, stamps
-// status.currentImage, status.currentSidecarImage and
-// status.currentNodeIsolation on the owning SeiNode
-// and marks the task complete. If the rollout is still in progress, returns
+// status.currentImage, status.currentSidecarImage,
+// status.currentNodeIsolation and status.currentNodeConfig on the owning
+// SeiNode and marks the task complete. If the rollout is still in progress, returns
 // nil — the executor will re-invoke on the next reconcile since the task
 // remains Pending.
 func (e *observeImageExecution) Execute(ctx context.Context) error {
@@ -79,6 +79,12 @@ func (e *observeImageExecution) Execute(ctx context.Context) error {
 	node.Status.CurrentImage = node.Spec.Image
 	node.Status.CurrentSidecarImage = EffectiveSidecarImage(node, e.cfg.Platform)
 	node.Status.CurrentNodeIsolation = noderesource.EffectiveNodeIsolation(node)
+	// Only a gained mount is stamped here. A revert clears the stamp on plan
+	// completion instead, because the plan still has the base config to write
+	// and the stamp is what keeps the node on the planner that writes it.
+	if node.Spec.NodeConfig != nil {
+		node.Status.CurrentNodeConfig = node.Spec.NodeConfig.DeepCopy()
+	}
 	e.complete()
 	return nil
 }

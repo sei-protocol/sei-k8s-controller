@@ -398,3 +398,31 @@ func TestBuildBootstrapPodSpec_DedicatedFollowsSingleTenantPool(t *testing.T) {
 	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-validator-dedicated"))
 	g.Expect(spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(2))
 }
+
+// TestBuildBootstrapPodSpec_NeverMountsNodeConfig is the other half of the
+// static-config split. The bootstrap Job pod keeps config-apply and
+// configure-state-sync in its progression, so it must never carry the mount
+// those tasks would rename over.
+func TestBuildBootstrapPodSpec_NeverMountsNodeConfig(t *testing.T) {
+	g := NewWithT(t)
+	snap := &seiv1alpha1.SnapshotSource{S3: &seiv1alpha1.S3SnapshotSource{TargetHeight: 100}}
+	node := validatorNodeWithSecrets("", "", "")
+	node.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
+		ConfigRef: seiv1alpha1.ConfigFileRef{Name: testNodeConfigMap},
+		AppRef:    seiv1alpha1.ConfigFileRef{Name: testNodeConfigMap},
+	}
+
+	spec := buildBootstrapPodSpec(node, snap, platformtest.Config())
+
+	for _, v := range spec.Volumes {
+		g.Expect(v.ConfigMap == nil || v.ConfigMap.Name != testNodeConfigMap).To(BeTrue(),
+			"bootstrap pod must not mount the operator config ConfigMap")
+	}
+	containers := append(append([]corev1.Container{}, spec.Containers...), spec.InitContainers...)
+	for _, c := range containers {
+		for _, m := range c.VolumeMounts {
+			g.Expect(m.MountPath).NotTo(ContainSubstring("/config/config.toml"), "container %s", c.Name)
+			g.Expect(m.MountPath).NotTo(ContainSubstring("/config/app.toml"), "container %s", c.Name)
+		}
+	}
+}

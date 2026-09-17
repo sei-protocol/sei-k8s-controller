@@ -134,6 +134,11 @@ const (
 	nodeKeyVolumeName = "node-key"
 	nodeKeyDataKey    = "node_key.json"
 
+	nodeConfigConfigVolumeName = "node-config-config"
+	nodeConfigAppVolumeName    = "node-config-app"
+	configTomlDataKey          = ConfigTomlKey
+	appTomlDataKey             = AppTomlKey
+
 	operatorKeyringVolumeName = "operator-keyring"
 	// keyring.New(BackendFile, rootDir) opens rootDir/keyring-file/.
 	// Used as the mount path for the projected .secret Secret.
@@ -882,11 +887,13 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 		Name:         homeVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}
-	volumes := make([]corev1.Volume, 0, 4+len(signingVolumes)+len(nodeVolumes)+len(keyringVolumes))
+	configVolumes := nodeConfigVolumes(node)
+	volumes := make([]corev1.Volume, 0, 4+len(signingVolumes)+len(nodeVolumes)+len(keyringVolumes)+len(configVolumes))
 	volumes = append(volumes, dataVolume, sidecarTmpVolume, homeVolume, proxyConfigVolume)
 	volumes = append(volumes, signingVolumes...)
 	volumes = append(volumes, nodeVolumes...)
 	volumes = append(volumes, keyringVolumes...)
+	volumes = append(volumes, configVolumes...)
 
 	dedicated := IsDedicatedNode(node)
 	pool := NodepoolForMode(NodeMode(node), p, dedicated)
@@ -1008,7 +1015,8 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 	env = append(env, keyringEnv...)
 
 	keyringMounts := operatorKeyringMounts(node)
-	mounts := make([]corev1.VolumeMount, 0, 3+len(keyringMounts))
+	configMounts := nodeConfigMounts(node)
+	mounts := make([]corev1.VolumeMount, 0, 3+len(keyringMounts)+len(configMounts))
 	mounts = append(mounts,
 		// The `home` emptyDir backs homeMountPath so the nested data-PVC mount
 		// has a writable-volume parent, rather than depending on the RO rootfs
@@ -1019,6 +1027,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 		corev1.VolumeMount{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
 	)
 	mounts = append(mounts, keyringMounts...)
+	mounts = append(mounts, configMounts...)
 
 	// No Command — the sidecar image's ENTRYPOINT is the command.
 	c := corev1.Container{
@@ -1318,12 +1327,14 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	signingMounts := signingKeyMounts(node)
 	nodeMounts := nodeKeyMounts(node)
+	configMounts := nodeConfigMounts(node)
 	seidMountEnabled := operatorKeyringSeidMountEnabled(node)
-	mounts := make([]corev1.VolumeMount, 0, 3+len(signingMounts)+len(nodeMounts))
+	mounts := make([]corev1.VolumeMount, 0, 3+len(signingMounts)+len(nodeMounts)+len(configMounts))
 	mounts = append(mounts, corev1.VolumeMount{Name: "data", MountPath: dataDir})
 	mounts = append(mounts, corev1.VolumeMount{Name: homeVolumeName, MountPath: homeMountPath})
 	mounts = append(mounts, signingMounts...)
 	mounts = append(mounts, nodeMounts...)
+	mounts = append(mounts, configMounts...)
 	if seidMountEnabled {
 		mounts = append(mounts, operatorKeyringMounts(node)...)
 	}
@@ -1542,6 +1553,73 @@ func nodeKeyMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
 		SubPath:   nodeKeyDataKey,
 		ReadOnly:  true,
 	}}
+}
+
+// ConfigTomlKey and AppTomlKey are the ConfigMap keys a spec.nodeConfig
+// reference must carry. They are the mount contract, so anything that checks a
+// referenced ConfigMap reads them from here rather than restating them.
+const (
+	ConfigTomlKey = "config.toml"
+	AppTomlKey    = "app.toml"
+)
+
+// nodeConfigVolumes projects the operator's seid config files, one volume per
+// file so the two references may name different ConfigMaps. Items names the
+// single key, so a ConfigMap missing it fails the kubelet mount and
+// `kubectl describe pod` says which key is absent.
+func nodeConfigVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
+	cfg := node.Spec.NodeConfig
+	if cfg == nil {
+		return nil
+	}
+	return []corev1.Volume{
+		nodeConfigVolume(nodeConfigConfigVolumeName, cfg.ConfigRef.Name, configTomlDataKey),
+		nodeConfigVolume(nodeConfigAppVolumeName, cfg.AppRef.Name, appTomlDataKey),
+	}
+}
+
+func nodeConfigVolume(volumeName, configMapName, dataKey string) corev1.Volume {
+	return corev1.Volume{
+		Name: volumeName,
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
+				DefaultMode:          ptr.To[int32](0o444),
+				Items:                []corev1.KeyToPath{{Key: dataKey, Path: dataKey}},
+			},
+		},
+	}
+}
+
+// nodeConfigMounts places the operator's files over the data volume's copies.
+// subPath matches signingKeyMounts and nodeKeyMounts: kubelet pins the content
+// at pod start, and seid re-reads config.toml only on a restart, so a
+// hot-refreshing directory mount would buy nothing.
+//
+// Both the seid container and the sidecar carry these mounts, and the
+// sidecar's is a safety property rather than a convenience. A rename onto a
+// mounted path from a container that does NOT hold the mount succeeds and
+// detaches it, after which seid reads the writer's file with nothing reporting
+// the swap. From a container that DOES hold the mount the same rename returns
+// EBUSY and fails the task.
+// TestNodeConfigMountsOnSidecarIsASafetyProperty guards the sidecar mount.
+func nodeConfigMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
+	if node.Spec.NodeConfig == nil {
+		return nil
+	}
+	return []corev1.VolumeMount{
+		nodeConfigMount(nodeConfigConfigVolumeName, configTomlDataKey),
+		nodeConfigMount(nodeConfigAppVolumeName, appTomlDataKey),
+	}
+}
+
+func nodeConfigMount(volumeName, dataKey string) corev1.VolumeMount {
+	return corev1.VolumeMount{
+		Name:      volumeName,
+		MountPath: dataDir + "/config/" + dataKey,
+		SubPath:   dataKey,
+		ReadOnly:  true,
+	}
 }
 
 // nodeKeySecretSource returns the Secret holding this node's P2P identity, from
