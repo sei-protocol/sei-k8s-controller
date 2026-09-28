@@ -115,11 +115,9 @@ linters:
       # allocates itself, so preallocating changes nothing.
       - linters: [prealloc, unparam]
         path: ^sidecar/
-      # goconst's remaining hits are wire and config literals: JSON field names
-      # in the EVM digest comparator (code, type, nonce, balance,
-      # gasUsed, storage), seid config.toml keys, which are hyphenated by
-      # convention and must read exactly as written (p2p, persistent-peers,
-      # statesync), and log attribute names. Same call as sidecarapi/client —
+      # goconst's remaining hits are wire and config literals: seid config.toml
+      # keys, which are hyphenated by convention and must read exactly as
+      # written (p2p, persistent-peers, statesync), and log attribute names. Same call as sidecarapi/client —
       # reading the literal in place is what makes these checkable against the
       # thing they mirror, and hoisting them trades that for a DRY score. One hit
       # suggests reusing conditionHeight for a JSON key and a log attribute that
