@@ -116,7 +116,7 @@ linters:
       - linters: [prealloc, unparam]
         path: ^sidecar/
       # goconst's remaining hits are wire and config literals: JSON field names
-      # in the EVM digest and shadow comparators (code, type, nonce, balance,
+      # in the EVM digest comparator (code, type, nonce, balance,
       # gasUsed, storage), seid config.toml keys, which are hyphenated by
       # convention and must read exactly as written (p2p, persistent-peers,
       # statesync), and log attribute names. Same call as sidecarapi/client —

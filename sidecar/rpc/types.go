@@ -25,21 +25,9 @@ type SyncInfo struct {
 // BlockResult is the inner "result" of the CometBFT /block response.
 type BlockResult struct {
 	BlockID BlockID `json:"block_id"`
-	Block   Block   `json:"block"`
 }
 
 // BlockID identifies a block by hash.
 type BlockID struct {
 	Hash string `json:"hash"`
-}
-
-// Block holds the subset of block fields we need.
-type Block struct {
-	Header BlockHeader `json:"header"`
-}
-
-// BlockHeader holds consensus-critical header fields for comparison.
-type BlockHeader struct {
-	AppHash         string `json:"app_hash"`
-	LastResultsHash string `json:"last_results_hash"`
 }
