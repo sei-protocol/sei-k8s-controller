@@ -26,7 +26,6 @@ const (
 	TaskConfigureStateSync         TaskType = "configure-state-sync"
 	TaskSnapshotUpload             TaskType = "snapshot-upload"
 	TaskSnapshotUploadOnce         TaskType = "snapshot-upload-once"
-	TaskResultExport               TaskType = "result-export"
 	TaskAwaitCondition             TaskType = "await-condition"
 	TaskGenerateIdentity           TaskType = "generate-identity"
 	TaskGenerateGentx              TaskType = "generate-gentx"

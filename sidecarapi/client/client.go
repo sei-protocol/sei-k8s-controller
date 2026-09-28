@@ -310,13 +310,6 @@ func (c *SidecarClient) SubmitConfigureStateSyncTask(ctx context.Context, task C
 	return c.SubmitTask(ctx, task.ToTaskRequest())
 }
 
-func (c *SidecarClient) SubmitResultExportTask(ctx context.Context, task ResultExportTask) (uuid.UUID, error) {
-	if err := task.Validate(); err != nil {
-		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)
-	}
-	return c.SubmitTask(ctx, task.ToTaskRequest())
-}
-
 func (c *SidecarClient) SubmitAwaitConditionTask(ctx context.Context, task AwaitConditionTask) (uuid.UUID, error) {
 	if err := task.Validate(); err != nil {
 		return uuid.Nil, fmt.Errorf("task validation failed: %w", err)

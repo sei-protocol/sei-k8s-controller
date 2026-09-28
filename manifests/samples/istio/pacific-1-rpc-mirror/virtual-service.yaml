@@ -1,9 +1,7 @@
 # VirtualService: Routes RPC traffic from the Istio ingress gateway
 # to the EC2 backend (primary) with 100% mirror to K8s-managed nodes.
 #
-# Mirrored responses are discarded by Envoy. The K8s nodes serve as
-# shadow validation targets -- the sidecar's result-compare task
-# verifies execution correctness independently.
+# Mirrored responses are discarded by Envoy.
 #
 # WebSocket traffic is handled separately because Istio cannot mirror
 # WebSocket connections. During the mirror phase, WebSocket goes 100%

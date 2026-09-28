@@ -510,7 +510,7 @@ var defaultNodeResourceProfiles = map[string]nodeResourceProfile{
 	roleValidator: {cpuRequest: cpuValidator, memory: memValidator},
 	// Absorbs public-RPC + snapshotter + state-syncer; full r7i.8xlarge envelope.
 	roleFullNode: {cpuRequest: cpuRPCClass, memory: memRPCClass},
-	// Shadow-replay; same footprint as fullNode (r7i.8xlarge).
+	// Same footprint as fullNode (r7i.8xlarge).
 	roleReplayer: {cpuRequest: cpuRPCClass, memory: memRPCClass},
 	// Full r7i.16xlarge envelope — the live-prod snapshotter shape (the sei-infra
 	// TF's m7i.8xlarge is stale).

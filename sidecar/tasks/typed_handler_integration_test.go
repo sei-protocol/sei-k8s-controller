@@ -293,28 +293,6 @@ func TestDeserialize_StateSync(t *testing.T) {
 	}
 }
 
-// TestDeserialize_ResultExport verifies that the result-export handler
-// correctly deserializes the bucket, region, and optional fields.
-func TestDeserialize_ResultExport(t *testing.T) {
-	handler := NewResultExporter(t.TempDir(), "test-1", "test-pod-0", nil).Handler()
-
-	params := map[string]any{
-		"bucket": "",
-		"region": "us-east-1",
-	}
-
-	_, err := handler(context.Background(), params)
-	if err == nil {
-		t.Fatal("expected error for empty bucket, got nil")
-	}
-	if strings.Contains(err.Error(), "parsing params") {
-		t.Fatalf("deserialization failed: %v", err)
-	}
-	if !strings.Contains(err.Error(), "missing required param 'bucket'") {
-		t.Errorf("expected bucket validation error, got: %v", err)
-	}
-}
-
 // TestDeserialize_GenerateGentx verifies that the generate-gentx handler
 // correctly deserializes all string params from the wire format.
 func TestDeserialize_GenerateGentx(t *testing.T) {
