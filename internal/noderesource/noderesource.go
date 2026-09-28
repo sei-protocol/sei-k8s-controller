@@ -676,10 +676,8 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 			Selector: &metav1.LabelSelector{
 				MatchLabels: SelectorLabels(node),
 			},
-			// Pod lifecycle is the SeiNode controller's responsibility (replace-pod).
-			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
-				Type: appsv1.OnDeleteStatefulSetStrategyType,
-			},
+			PodManagementPolicy: podManagementPolicy(node),
+			UpdateStrategy:      updateStrategy(node),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
@@ -691,6 +689,29 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 			},
 		},
 	}, nil
+}
+
+// updateStrategy returns who rolls the pod. For a controller-configured node
+// that is the controller (replace-pod), because config tasks must be ordered
+// around the roll. A node with spec.nodeConfig has no config tasks, so the
+// StatefulSet controller rolls it on any template change.
+func updateStrategy(node *seiv1alpha1.SeiNode) appsv1.StatefulSetUpdateStrategy {
+	if node.Spec.NodeConfig != nil {
+		return appsv1.StatefulSetUpdateStrategy{Type: appsv1.RollingUpdateStatefulSetStrategyType}
+	}
+	return appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
+}
+
+// podManagementPolicy is Parallel for a RollingUpdate node. Under OrderedReady
+// the StatefulSet controller will not update a pod that is not Ready, so a seid
+// halted at an upgrade height would never take the new image. The API server
+// refuses to change this field on an existing StatefulSet, which is why
+// spec.nodeConfig is fixed at creation. Empty leaves the API default.
+func podManagementPolicy(node *seiv1alpha1.SeiNode) appsv1.PodManagementPolicyType {
+	if node.Spec.NodeConfig != nil {
+		return appsv1.ParallelPodManagement
+	}
+	return ""
 }
 
 // assertOperatorKeyringContainment fails closed if a pod-spec lands

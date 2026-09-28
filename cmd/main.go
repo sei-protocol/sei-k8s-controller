@@ -169,10 +169,11 @@ func main() {
 	//nolint:staticcheck // TODO: migrate to GetEventRecorder (new events API)
 	nodeRecorder := mgr.GetEventRecorderFor("seinode-controller")
 	if err := (&nodecontroller.SeiNodeReconciler{
-		Client:   kc,
-		Scheme:   mgr.GetScheme(),
-		Recorder: nodeRecorder,
-		Platform: platformCfg,
+		Client:    kc,
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  nodeRecorder,
+		Platform:  platformCfg,
 		HeightReader: func(ctx context.Context, node *seiv1alpha1.SeiNode) (int64, error) {
 			c, err := newSidecarClient(node)
 			if err != nil {

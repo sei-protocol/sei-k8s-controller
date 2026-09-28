@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/google/uuid"
@@ -34,16 +33,9 @@ var mountedConfigWriters = []string{
 }
 
 // MountsNodeConfig reports whether this node's pod carries the ConfigMap
-// mounts, or is about to. The spec describes the pod the controller wants and
-// the stamp describes the pod that exists; a task that renames a mounted file
-// is a hazard under either, so every refusal keys on the union.
-//
-// Reverting a node to controller-managed config is the case that needs the
-// stamp: the spec no longer names a ConfigMap while the live pod still mounts
-// one, and the mode planner's own update plan submits config-patch before it
-// replaces the pod.
+// mounts. spec.nodeConfig is fixed at creation, so the spec alone answers it.
 func MountsNodeConfig(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.NodeConfig != nil || node.Status.CurrentNodeConfig != nil
+	return node.Spec.NodeConfig != nil
 }
 
 // withoutManagedConfigTasks removes the config tasks from a progression built
@@ -55,8 +47,9 @@ func MountsNodeConfig(node *seiv1alpha1.SeiNode) bool {
 // it reports on a file the operator wrote, through sei-config's legacy reader,
 // which falls back to mode "full" when app.toml carries no [sei] mode — so on
 // a validator it passes a config seid will refuse. A verdict that can be
-// confidently wrong is worse than no verdict. replace-pod parses both files
-// before it deletes anything, and that check is the one that matters.
+// confidently wrong is worse than no verdict. The check that matters is
+// noderesource.CheckNodeConfig, which holds the StatefulSet until both files
+// load.
 func withoutManagedConfigTasks(node *seiv1alpha1.SeiNode, prog []string) []string {
 	if !MountsNodeConfig(node) {
 		return prog
@@ -70,24 +63,11 @@ func withoutManagedConfigTasks(node *seiv1alpha1.SeiNode, prog []string) []strin
 // write config.toml or app.toml on a pod that mounts them, or "" when the plan
 // is safe. ResolvePlan refuses a plan it names, so the invariant is guarded
 // once no matter which builder produced the plan.
-//
-// A revert plan is the one case where a writer belongs: it replaces the pod
-// with one the template no longer gives the mounts, so everything after that
-// replace-pod runs against a plain file. Nothing else is exempt.
 func mountedConfigWriterInPlan(node *seiv1alpha1.SeiNode, plan *seiv1alpha1.TaskPlan) string {
 	if !MountsNodeConfig(node) || plan == nil {
 		return ""
 	}
-	lastMountedTask := len(plan.Tasks)
-	if revertingNodeConfig(node) {
-		for i, t := range plan.Tasks {
-			if t.Type == task.TaskTypeReplacePod {
-				lastMountedTask = i
-				break
-			}
-		}
-	}
-	for _, t := range plan.Tasks[:lastMountedTask] {
+	for _, t := range plan.Tasks {
 		if slices.Contains(mountedConfigWriters, t.Type) {
 			return t.Type
 		}
@@ -95,20 +75,13 @@ func mountedConfigWriterInPlan(node *seiv1alpha1.SeiNode, plan *seiv1alpha1.Task
 	return ""
 }
 
-// revertingNodeConfig reports whether the operator has taken the ConfigMaps
-// away from a node whose pod still mounts them.
-func revertingNodeConfig(node *seiv1alpha1.SeiNode) bool {
-	return node.Spec.NodeConfig == nil && node.Status.CurrentNodeConfig != nil
-}
-
 // staticConfigPlanner plans a node whose config.toml and app.toml come from
 // operator-supplied ConfigMaps.
 //
 // It wraps the node's mode planner rather than replacing it, so the mode keeps
 // its own Validate and its own init plan, which withoutManagedConfigTasks
-// strips for it. The genesis-ceremony progression is not
-// filtered at all — Validate refuses that shape, and mountedConfigWriterInPlan
-// refuses any plan that slips through. What the wrapper owns is the Running arm, which
+// strips for it. The node shapes whose configuration seid only learns at run
+// time are refused by the CRD. What the wrapper owns is the Running arm, which
 // the mode planners route through assembleUpdatePlan — an assembler that
 // force-inserts config-apply whenever the configValues baseline is unobserved,
 // which on one of these nodes is always.
@@ -119,29 +92,8 @@ type staticConfigPlanner struct {
 
 func (p *staticConfigPlanner) Mode() string { return p.base.Mode() }
 
-// Validate runs the mode's own checks first, then refuses the node shapes
-// whose configuration seid can only learn at run time. Each of them reaches
-// config.toml through a task this planner removes, so the ConfigMap would
-// silently win and the node would start on configuration nobody intended.
 func (p *staticConfigPlanner) Validate(node *seiv1alpha1.SeiNode) error {
-	if err := p.base.Validate(node); err != nil {
-		return err
-	}
-	if isGenesisCeremonyNode(node) {
-		return fmt.Errorf("nodeConfig is not supported on a genesis-ceremony validator: " +
-			"the founding validator set is assembled during the ceremony and written by set-genesis-peers, " +
-			"so it cannot be in a ConfigMap written beforehand")
-	}
-	if snap := node.Spec.SnapshotSource(); snap != nil && snap.StateSync != nil {
-		return fmt.Errorf("nodeConfig is not supported with a state-sync snapshot source: " +
-			"configure-state-sync discovers the trust height and hash from live witnesses at run time, " +
-			"so they cannot be in a ConfigMap written beforehand")
-	}
-	if node.Spec.Consensus.IsAutobahn() {
-		return fmt.Errorf("nodeConfig is not supported under consensus engine Autobahn: " +
-			"the engine's config.toml keys are controller-derived and reach the node through the overlay this planner removes")
-	}
-	return nil
+	return p.base.Validate(node)
 }
 
 // BuildPlan delegates every arm but Running to the mode planner.
@@ -154,7 +106,7 @@ func (p *staticConfigPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1
 
 // buildRunningPlan returns the update plan for a Running node, or nil if no
 // drift. There is no configValues arm: the CRD rejects configValues alongside
-// nodeConfig, so pod replacement is the only config-delivery mechanism here.
+// nodeConfig.
 func (p *staticConfigPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if podTemplateDrifted(node, p.platform) {
 		plan, err := p.buildUpdatePlan(node)
@@ -170,14 +122,15 @@ func (p *staticConfigPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv
 	return nil, nil
 }
 
-// buildUpdatePlan rolls the pod. Kubelet pins a subPath mount at pod start, so
-// replacing the pod is what delivers new config. A revert also restores the
-// controller-managed base afterwards; see below. The
-// key-validation gates lead, as they do in every mode's update plan, so a
-// missing Secret fails controller-side rather than as a kubelet mount error on
-// the recreated pod.
+// buildUpdatePlan follows the roll the StatefulSet controller performs. The
+// StatefulSet is RollingUpdate for these nodes, so the template change
+// apply-statefulset writes replaces the pod by itself; there is no
+// replace-pod. observe-image stamps the rolled images once the rollout lands,
+// and mark-ready opens the new sidecar's gate. The key-validation gates lead,
+// as they do in every mode's update plan, so a missing Secret fails
+// controller-side rather than as a kubelet mount error on the recreated pod.
 func (p *staticConfigPlanner) buildUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
-	prog := make([]string, 0, 9)
+	prog := make([]string, 0, 7)
 	if needsValidateSigningKey(node) {
 		prog = append(prog, task.TaskTypeValidateSigningKey)
 	}
@@ -190,33 +143,10 @@ func (p *staticConfigPlanner) buildUpdatePlan(node *seiv1alpha1.SeiNode) (*seiv1
 	prog = append(prog,
 		task.TaskTypeApplyStatefulSet,
 		task.TaskTypeApplyService,
-		task.TaskTypeReplacePod,
 		task.TaskTypeObserveImage,
+		TaskMarkReady,
 	)
-	if !revertingNodeConfig(node) {
-		prog = append(prog, TaskMarkReady)
-		return assembleStaticUpdatePlan(node, prog)
-	}
-
-	// The replacement pod has no mount, so the controller writes the base
-	// configuration it never wrote while the ConfigMaps were in place. A node
-	// created with nodeConfig has only what `seid init` left on the volume: no
-	// mode base, no freeze height, no snapshot-generation keys. Without this
-	// the node keeps those defaults and reports success.
-	//
-	// seid has not started yet. Its container blocks on the sidecar's
-	// /v0/healthz, which reports ready only after mark-ready, so the write
-	// lands before seid reads the file and no restart is needed.
-	prog = append(prog, TaskConfigApply, TaskConfigValidate, TaskMarkReady)
-	plan, err := assembleStaticUpdatePlan(node, prog)
-	if err != nil {
-		return nil, err
-	}
-	plan.ClearsNodeConfig = true
-	// The node is back on the controller-managed path, so it takes the overlay
-	// and the observed baseline with it. withConfigValues splices the patch
-	// before config-validate, which this progression carries.
-	return withConfigValues(plan, node)
+	return assembleStaticUpdatePlan(node, prog)
 }
 
 // assembleStaticUpdatePlan composes the progression into a TaskPlan. It is the

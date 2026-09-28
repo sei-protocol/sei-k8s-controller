@@ -57,6 +57,8 @@ type PlatformConfig = platform.Config
 // SeiNodeReconciler reconciles a SeiNode object.
 type SeiNodeReconciler struct {
 	client.Client
+	// APIReader is an uncached reader. Nil falls back to Client.
+	APIReader    client.Reader
 	Scheme       *runtime.Scheme
 	Recorder     record.EventRecorder
 	Platform     PlatformConfig

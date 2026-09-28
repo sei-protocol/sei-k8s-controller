@@ -2,15 +2,20 @@ package noderesource
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/tomlpatch"
 )
 
 // statefulSetFieldOwner is the SSA fieldManager recorded on every
@@ -28,10 +33,12 @@ const statefulSetFieldOwner = client.FieldOwner("seinode-controller")
 // surface as divergence.
 //
 // Behaviors:
+//
 //   - Spec.Paused=true forces Replicas=0 in the desired render.
 //     Pausing during an in-flight rollout effectively fast-forwards
 //     the rollout: pods terminate, and the next unpause brings up a
 //     fresh pod from the current (post-update) template.
+//
 //   - When Status.StatefulSet tracks a UID and the live object has a
 //     different one, the impostor is deleted and this call returns
 //     (nil, nil) without applying. The next reconcile observes the
@@ -40,6 +47,14 @@ const statefulSetFieldOwner = client.FieldOwner("seinode-controller")
 //     a clean apiserver state — applying onto a still-deleting object
 //     (DeletionTimestamp set) has undefined SSA semantics if a future
 //     finalizer ever lands on the resource.
+//
+//   - A node with spec.nodeConfig is held at its current StatefulSet while
+//     either referenced ConfigMap cannot be mounted or loaded; the call
+//     returns an error wrapping ErrNodeConfigUnresolved without applying.
+//     The StatefulSet rolls its pod as soon as the template changes, so
+//     applying a reference that does not resolve would replace a working
+//     pod with one stuck in ContainerCreating or crash-looping on bad TOML.
+//     configMaps reads the ConfigMaps; pass an uncached reader.
 //
 // Returns the live StatefulSet on a normal Apply path. Returns
 // (nil, nil) when the impostor was deleted this reconcile and callers
@@ -60,6 +75,7 @@ const statefulSetFieldOwner = client.FieldOwner("seinode-controller")
 func SyncStatefulSet(
 	ctx context.Context,
 	c client.Client,
+	configMaps client.Reader,
 	scheme *runtime.Scheme,
 	node *seiv1alpha1.SeiNode,
 	platform PlatformConfig,
@@ -109,6 +125,10 @@ func SyncStatefulSet(
 		}
 	}
 
+	if err := CheckNodeConfig(ctx, configMaps, node); err != nil {
+		return nil, err
+	}
+
 	// client.Apply decodes the apiserver response into desired in-place,
 	// so its UID and ResourceVersion reflect the live object after this
 	// call returns. No re-Get is needed (and a re-Get against the cache
@@ -119,4 +139,50 @@ func SyncStatefulSet(
 		return nil, fmt.Errorf("applying statefulset: %w", err)
 	}
 	return desired, nil
+}
+
+// ErrNodeConfigUnresolved marks a spec.nodeConfig whose ConfigMaps cannot be
+// mounted or loaded. SyncStatefulSet holds the StatefulSet while it holds.
+var ErrNodeConfigUnresolved = errors.New("nodeConfig unresolved")
+
+// CheckNodeConfig verifies that both ConfigMaps named by spec.nodeConfig exist,
+// carry their key, and parse as TOML. Nil for a node without nodeConfig.
+// Failures wrap ErrNodeConfigUnresolved; a failed read is returned as is.
+func CheckNodeConfig(ctx context.Context, r client.Reader, node *seiv1alpha1.SeiNode) error {
+	cfg := node.Spec.NodeConfig
+	if cfg == nil {
+		return nil
+	}
+	files := []struct {
+		ref  seiv1alpha1.ConfigFileRef
+		file string
+	}{
+		{cfg.ConfigRef, ConfigTomlKey},
+		{cfg.AppRef, AppTomlKey},
+	}
+	for _, f := range files {
+		cm := &corev1.ConfigMap{}
+		key := types.NamespacedName{Name: f.ref.Name, Namespace: node.Namespace}
+		if err := r.Get(ctx, key, cm); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("%w: configmap %q not found", ErrNodeConfigUnresolved, f.ref.Name)
+			}
+			return fmt.Errorf("getting configmap %q: %w", f.ref.Name, err)
+		}
+		content, ok := cm.Data[f.file]
+		if !ok {
+			raw, binary := cm.BinaryData[f.file]
+			if !binary {
+				return fmt.Errorf("%w: configmap %q has no %q key", ErrNodeConfigUnresolved, f.ref.Name, f.file)
+			}
+			content = string(raw)
+		}
+		if strings.TrimSpace(content) == "" {
+			return fmt.Errorf("%w: configmap %q key %q is empty", ErrNodeConfigUnresolved, f.ref.Name, f.file)
+		}
+		if _, err := tomlpatch.UnmarshalTOML([]byte(content)); err != nil {
+			return fmt.Errorf("%w: configmap %q key %q is not valid TOML: %w", ErrNodeConfigUnresolved, f.ref.Name, f.file, err)
+		}
+	}
+	return nil
 }

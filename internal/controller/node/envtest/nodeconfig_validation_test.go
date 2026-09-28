@@ -115,30 +115,88 @@ func TestNodeConfig_WithControllerManagedConfig_Rejected(t *testing.T) {
 	}
 }
 
-// The field is deliberately mutable, unlike the create-only pod-template
-// fields beside it: adopting a ConfigMap on a running node is the point.
-func TestNodeConfig_Mutable(t *testing.T) {
+// nodeConfig is fixed at creation in both directions: the StatefulSet's
+// podManagementPolicy follows it, and that field cannot change on an existing
+// StatefulSet. Republishing under a new ConfigMap name stays allowed.
+func TestNodeConfig_CreateOnly(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
-	// Created without it, then adopted.
-	node := nodeConfigNode(ns, "nc-mutable")
-	node.Spec.NodeConfig = nil
-	g.Expect(testCli.Create(testCtx, node)).To(Succeed())
-	key := client.ObjectKeyFromObject(node)
-
-	g.Expect(updateNodeWithRetry(t, key, func(cur *seiv1alpha1.SeiNode) {
-		cur.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
-			ConfigRef: seiv1alpha1.ConfigFileRef{Name: "rpc-config-v1"},
-			AppRef:    seiv1alpha1.ConfigFileRef{Name: "rpc-app-v1"},
-		}
-	})).To(Succeed(), "a running node must be able to adopt a ConfigMap")
+	withConfig := nodeConfigNode(ns, "nc-fixed")
+	g.Expect(testCli.Create(testCtx, withConfig)).To(Succeed())
+	key := client.ObjectKeyFromObject(withConfig)
 
 	g.Expect(updateNodeWithRetry(t, key, func(cur *seiv1alpha1.SeiNode) {
 		cur.Spec.NodeConfig.ConfigRef.Name = "rpc-config-v2"
 	})).To(Succeed(), "republishing under a new name must be accepted")
 
-	g.Expect(updateNodeWithRetry(t, key, func(cur *seiv1alpha1.SeiNode) {
+	err := updateNodeWithRetry(t, key, func(cur *seiv1alpha1.SeiNode) {
 		cur.Spec.NodeConfig = nil
-	})).To(Succeed(), "reverting to controller-managed config must be accepted")
+	})
+	g.Expect(err).To(HaveOccurred(), "removing nodeConfig must be rejected")
+	g.Expect(err.Error()).To(ContainSubstring("fixed at creation"))
+
+	without := nodeConfigNode(ns, "nc-never")
+	without.Spec.NodeConfig = nil
+	g.Expect(testCli.Create(testCtx, without)).To(Succeed())
+
+	err = updateNodeWithRetry(t, client.ObjectKeyFromObject(without), func(cur *seiv1alpha1.SeiNode) {
+		cur.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
+			ConfigRef: seiv1alpha1.ConfigFileRef{Name: "rpc-config-v1"},
+			AppRef:    seiv1alpha1.ConfigFileRef{Name: "rpc-app-v1"},
+		}
+	})
+	g.Expect(err).To(HaveOccurred(), "adding nodeConfig must be rejected")
+	g.Expect(err.Error()).To(ContainSubstring("fixed at creation"))
+}
+
+// These node shapes write config.toml at run time with values no ConfigMap
+// written beforehand can hold, so the CRD rejects them beside nodeConfig.
+func TestNodeConfig_RuntimeDiscoveredConfig_Rejected(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*seiv1alpha1.SeiNode)
+		wantMsg string
+	}{
+		{"genesis ceremony", func(n *seiv1alpha1.SeiNode) {
+			n.Spec.FullNode = nil
+			n.Spec.Validator = &seiv1alpha1.ValidatorSpec{
+				GenesisCeremony: &seiv1alpha1.GenesisCeremonyNodeConfig{
+					ChainID:        "envtest-1",
+					StakingAmount:  "1000000usei",
+					AccountBalance: "2000000usei",
+				},
+			}
+		}, "genesis-ceremony"},
+		{"state sync on a full node", func(n *seiv1alpha1.SeiNode) {
+			n.Spec.FullNode.Snapshot = &seiv1alpha1.SnapshotSource{StateSync: &seiv1alpha1.StateSyncSource{}}
+		}, "state-sync"},
+		{"state sync on a validator", func(n *seiv1alpha1.SeiNode) {
+			n.Spec.FullNode = nil
+			n.Spec.Validator = &seiv1alpha1.ValidatorSpec{
+				Snapshot: &seiv1alpha1.SnapshotSource{StateSync: &seiv1alpha1.StateSyncSource{}},
+			}
+		}, "state-sync"},
+		{"autobahn consensus", func(n *seiv1alpha1.SeiNode) {
+			n.Spec.Consensus = &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}
+		}, "Autobahn"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			ns := makeNamespace(t)
+
+			node := nodeConfigNode(ns, "nc-runtime")
+			tc.mutate(node)
+
+			err := testCli.Create(testCtx, node)
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(err.Error()).To(ContainSubstring(tc.wantMsg))
+
+			node = nodeConfigNode(ns, "nc-runtime-ok")
+			tc.mutate(node)
+			node.Spec.NodeConfig = nil
+			g.Expect(testCli.Create(testCtx, node)).To(Succeed(), "the shape itself is valid without nodeConfig")
+		})
+	}
 }

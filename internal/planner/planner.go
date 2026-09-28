@@ -14,7 +14,6 @@ import (
 	seiconfig "github.com/sei-protocol/sei-config"
 	"go.opentelemetry.io/otel/metric"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -846,36 +845,12 @@ func nodeIsolationDrifted(node *seiv1alpha1.SeiNode) bool {
 	return noderesource.EffectiveNodeIsolation(node) != node.Status.CurrentNodeIsolation
 }
 
-// nodeConfigDrifted reports whether the operator's ConfigMap references
-// diverge from the ones the running pod mounts.
-//
-// There is no unobserved short-circuit here, unlike the three predicates
-// above: unset is the correct observation for a node that mounts nothing, and
-// no node carries spec.nodeConfig before the controller that reads it, so an
-// unset stamp cannot fleet-roll.
-//
-// Only the references are compared. Kubelet pins a subPath mount at pod start,
-// so editing a ConfigMap in place never reaches a running seid.
-func nodeConfigDrifted(node *seiv1alpha1.SeiNode) bool {
-	return !apiequality.Semantic.DeepEqual(node.Spec.NodeConfig, node.Status.CurrentNodeConfig)
-}
-
-// formatNodeConfig renders the ConfigMap references for the
-// NodeUpdateInProgress message an operator reads on a roll.
-func formatNodeConfig(cfg *seiv1alpha1.NodeConfig) string {
-	if cfg == nil {
-		return "none"
-	}
-	return fmt.Sprintf("config=%q app=%q", cfg.ConfigRef.Name, cfg.AppRef.Name)
-}
-
 // podTemplateDrifted reports whether an observed pod-template input has
-// drifted: seid image, sidecar image, node isolation, or the operator's config
-// ConfigMap. The rendered nodepool is not observed, so an app-config
-// scheduling.dedicated.* change alone does not roll.
+// drifted: seid image, sidecar image, or node isolation. The rendered nodepool
+// is not observed, so an app-config scheduling.dedicated.* change alone does
+// not roll.
 func podTemplateDrifted(node *seiv1alpha1.SeiNode, p platform.Config) bool {
-	return imageDrifted(node) || sidecarImageDrifted(node, p) ||
-		nodeIsolationDrifted(node) || nodeConfigDrifted(node)
+	return imageDrifted(node) || sidecarImageDrifted(node, p) || nodeIsolationDrifted(node)
 }
 
 // podTemplateDriftMessage formats the NodeUpdateInProgress message every mode
@@ -886,7 +861,6 @@ func podTemplateDriftMessage(node *seiv1alpha1.SeiNode, p platform.Config) strin
 	seid := imageDrifted(node)
 	sc := sidecarImageDrifted(node, p)
 	iso := nodeIsolationDrifted(node)
-	cfg := nodeConfigDrifted(node)
 	var parts []string
 	if seid {
 		parts = append(parts, fmt.Sprintf("seid spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage))
@@ -899,16 +873,8 @@ func podTemplateDriftMessage(node *seiv1alpha1.SeiNode, p platform.Config) strin
 		parts = append(parts, fmt.Sprintf("nodeIsolation spec=%s current=%s",
 			noderesource.EffectiveNodeIsolation(node), node.Status.CurrentNodeIsolation))
 	}
-	if cfg {
-		parts = append(parts, fmt.Sprintf("nodeConfig spec=%s current=%s",
-			formatNodeConfig(node.Spec.NodeConfig), formatNodeConfig(node.Status.CurrentNodeConfig)))
-	}
 	detail := strings.Join(parts, "; ")
 	switch {
-	case cfg && !seid && !sc && !iso:
-		return "node config drift detected: " + detail
-	case cfg:
-		return "node config and image drift detected: " + detail
 	case iso && !seid && !sc:
 		return "node isolation drift detected: " + detail
 	case iso:

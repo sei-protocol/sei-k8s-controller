@@ -116,22 +116,17 @@
 //     mounts config.toml and app.toml read-only over the seid config
 //     directory, and a rename onto a mounted path from another mount
 //     namespace detaches the mount, leaving seid on the writer's file with
-//     nothing reporting the swap. MountsNodeConfig is the predicate — the
-//     union of the spec and the observed stamp, because a node mid-revert
-//     still has the mount. withoutManagedConfigTasks strips those tasks where
-//     the progression is assembled, staticConfigPlanner owns the Running
-//     arms, and mountedConfigWriterInPlan refuses any plan that still carries
-//     one, whichever builder produced it. The one exemption is a revert plan,
-//     which replaces the pod with one the template no longer gives the
-//     mounts and then writes the controller-managed base that was never
-//     written while the ConfigMaps were in place. config-validate is
-//     stripped too — it
+//     nothing reporting the swap. MountsNodeConfig is the predicate; the CRD
+//     fixes spec.nodeConfig at creation, so the spec alone answers it.
+//     withoutManagedConfigTasks strips those tasks where the progression is
+//     assembled, staticConfigPlanner owns the Running arms, and
+//     mountedConfigWriterInPlan refuses any plan that still carries one,
+//     whichever builder produced it. config-validate is stripped too — it
 //     reports on a file the operator owns, and sei-config's legacy reader
 //     defaults a missing [sei] mode to full, so on a validator the verdict
 //     can be confidently wrong.
-//     Guarded by TestMountedConfigWriterInPlan,
-//     TestStaticInitPlanCarriesNoConfigWriter and
-//     TestNodeConfigRevertRollsBeforeAnyConfigWrite.
+//     Guarded by TestMountedConfigWriterInPlan and
+//     TestStaticInitPlanCarriesNoConfigWriter.
 //
 // # Zero-Value & Sentinel Semantics
 //
@@ -181,16 +176,14 @@
 // empty — failures retry on the next reconcile rather than transitioning to
 // Failed.
 //
-// Static-config update plans roll a Running node whose spec.nodeConfig names
-// the ConfigMaps supplying config.toml and app.toml. staticConfigPlanner
-// builds them in place of the mode's own update plan: apply-statefulset,
-// apply-service, replace-pod, observe-image, mark-ready. They carry no config
-// task at all, so they set no ConfigValuesHash. Kubelet pins a subPath mount
-// at pod start, which is why pod replacement is the only way new config
-// reaches seid, and replace-pod parses both ConfigMaps before it deletes
-// anything. Clearing spec.nodeConfig builds the same roll with config-apply
-// and config-validate appended after observe-image, so the node leaves with
-// the base configuration its mode expects rather than `seid init` defaults.
+// Static-config update plans follow a Running node whose spec.nodeConfig names
+// the ConfigMaps supplying config.toml and app.toml. Its StatefulSet is
+// RollingUpdate with Parallel pod management, so the StatefulSet controller
+// replaces the pod on any template change; the controller holds the template
+// while either ConfigMap cannot be loaded (noderesource.CheckNodeConfig).
+// staticConfigPlanner builds the plan in place of the mode's own:
+// apply-statefulset, apply-service, observe-image, mark-ready. It carries no
+// config task and no replace-pod, and sets no ConfigValuesHash.
 //
 // When no drift is detected for a Running node, no plan is built. The node
 // sits in steady state with no active plan.

@@ -67,6 +67,16 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.overrides)",message="spec.nodeConfig and spec.overrides cannot both be set: a node reading its config from ConfigMaps runs no config-apply task, so the overrides would never reach seid; put them in the ConfigMap"
 // +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.peers)",message="spec.nodeConfig and spec.peers cannot both be set: nothing carries a resolved peer set into config.toml on a node reading its config from ConfigMaps; write p2p.persistent-peers in the ConfigMap"
 // +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.externalAddress)",message="spec.nodeConfig and spec.externalAddress cannot both be set: nothing carries it into config.toml on a node reading its config from ConfigMaps; write p2p.external-address in the ConfigMap"
+// The node shapes below reach config.toml through a task that writes
+// configuration seid can only learn at run time, so they are rejected beside
+// nodeConfig too.
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.validator) || !has(self.validator.genesisCeremony)",message="spec.nodeConfig is not supported on a genesis-ceremony validator: the founding validator set is assembled during the ceremony and written into config.toml at run time"
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || ((!has(self.fullNode) || !has(self.fullNode.snapshot) || !has(self.fullNode.snapshot.stateSync)) && (!has(self.validator) || !has(self.validator.snapshot) || !has(self.validator.snapshot.stateSync)) && (!has(self.replayer) || !has(self.replayer.snapshot.stateSync)))",message="spec.nodeConfig is not supported with a state-sync snapshot source: the trust height and hash are discovered from live witnesses and written into config.toml at run time"
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.consensus) || !has(self.consensus.engine) || self.consensus.engine != 'Autobahn'",message="spec.nodeConfig is not supported under consensus engine Autobahn: the engine's config.toml keys are controller-derived"
+// nodeConfig is fixed for the node's lifetime. The StatefulSet's
+// podManagementPolicy follows it, and the API server refuses to change that
+// field on an existing StatefulSet.
+// +kubebuilder:validation:XValidation:rule="has(self.nodeConfig) == has(oldSelf.nodeConfig)",message="spec.nodeConfig can be neither added to nor removed from an existing SeiNode: it is fixed at creation, so replace the node (dataVolume.import can carry its data over)"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
@@ -135,34 +145,30 @@ type SeiNodeSpec struct {
 	// ConfigMaps. The files mount read-only over the seid config directory, so
 	// they replace whatever the data volume already holds.
 	//
-	// A node with this field set takes the static-config plan: no task in its
-	// plan writes either file on the production pod. That is what keeps the
-	// mount attached. A rename onto a mounted path from another container
-	// detaches the mount, and seid then reads the writer's file.
-	//
 	// The operator owns both files verbatim. The controller supplies nothing:
 	// not the mode's base configuration, not persistent-peers, not
 	// external-address, not the freeze height, not the snapshot-generation
-	// keys. It does not validate them either — replace-pod parses both files
-	// before it deletes a pod, and that is the only check.
+	// keys. No task in the node's plan writes either file, which is what keeps
+	// the mounts attached: a rename onto a mounted path from another container
+	// detaches the mount, and seid then reads the writer's file.
 	//
 	// The fields whose only route to seid was a config task are rejected
-	// beside this one: configValues, overrides, peers, externalAddress.
+	// beside this one: configValues, overrides, peers, externalAddress. So are
+	// a state-sync snapshot source, a genesis ceremony and consensus engine
+	// Autobahn, each of which writes config.toml at run time.
 	//
-	// The references are the unit of change. Kubelet pins a subPath mount at
-	// pod start, so editing a ConfigMap in place does not reach a running pod.
-	// Publish under a new name and the node rolls.
+	// Set at creation or never: it can be neither added nor removed later.
 	//
-	// Not supported with a state-sync snapshot source, a genesis ceremony,
-	// or consensus engine Autobahn. Each of those writes
-	// config.toml at run time, and the plan is refused.
+	// Kubernetes rolls the pod, not the controller: the StatefulSet uses the
+	// RollingUpdate strategy with Parallel pod management, so any pod-template
+	// change (these references, the image, the sidecar) replaces the pod as
+	// soon as it is applied. The references are the unit of change. Kubelet
+	// pins a subPath mount at pod start, so editing a ConfigMap in place does
+	// not reach a running pod; publish under a new name and the node rolls.
 	//
-	// The StatefulSet carries the references as soon as they are set, before
-	// any plan runs. A reference that does not resolve leaves the template
-	// unmountable: the controller will not replace the pod itself, but a
-	// drain, an eviction, or a manual delete recreates it into
-	// ContainerCreating, and StatefulSets are OnDelete so nothing rolls it
-	// back. Create the ConfigMaps first.
+	// The controller holds the StatefulSet at its current template while
+	// either ConfigMap is missing, lacks its key, or does not parse as TOML,
+	// so a bad reference never replaces a working pod.
 	// +optional
 	NodeConfig *NodeConfig `json:"nodeConfig,omitempty"`
 
@@ -409,8 +415,8 @@ type NodeConfig struct {
 type ConfigFileRef struct {
 	// Name of an existing ConfigMap in the SeiNode's namespace. The file is
 	// read from the key matching its own name, config.toml or app.toml.
-	// Kubelet refuses the mount when that key is absent, so the pod stays in
-	// ContainerCreating and `kubectl describe pod` names the missing key.
+	// The controller holds the StatefulSet at its current template until the
+	// ConfigMap exists and carries that key.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
@@ -555,14 +561,6 @@ type TaskPlan struct {
 	// Empty means this plan does not observe configuration.
 	// +optional
 	ConfigValuesHash string `json:"configValuesHash,omitempty"`
-
-	// ClearsNodeConfig marks a plan that takes the operator's ConfigMaps away
-	// from a node. On successful completion Status.CurrentNodeConfig is
-	// cleared. It is not cleared earlier: the plan writes the
-	// controller-managed base after the pod is replaced, and until that write
-	// lands the stamp is what keeps the node on the planner that will retry.
-	// +optional
-	ClearsNodeConfig bool `json:"clearsNodeConfig,omitempty"`
 
 	// FailedPhase is the SeiNodePhase the executor sets on the owning
 	// resource when the plan fails terminally. When empty, the executor
@@ -858,16 +856,6 @@ type SeiNodeStatus struct {
 	// node on first reconcile.
 	// +optional
 	CurrentNodeIsolation NodeIsolation `json:"currentNodeIsolation,omitempty"`
-
-	// CurrentNodeConfig is the spec.nodeConfig the owned StatefulSet's pod was
-	// last rolled with, stamped jointly with CurrentImage on rollout
-	// completion. Unset means the pod mounts no operator-supplied config.
-	//
-	// Unset means the pod mounts no operator-supplied config. Unlike the fields
-	// above, unset is a real observation and not "not yet observed". It records
-	// the references, never the ConfigMaps' contents.
-	// +optional
-	CurrentNodeConfig *NodeConfig `json:"currentNodeConfig,omitempty"`
 
 	// +listType=map
 	// +listMapKey=type

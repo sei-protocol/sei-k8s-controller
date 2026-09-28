@@ -2,7 +2,6 @@ package planner
 
 import (
 	"context"
-	"slices"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -20,10 +19,10 @@ const (
 	staticTestImage     = "sei:v1.0.0"
 )
 
-func withNodeConfig(node *seiv1alpha1.SeiNode, name string) *seiv1alpha1.SeiNode {
+func withNodeConfig(node *seiv1alpha1.SeiNode) *seiv1alpha1.SeiNode {
 	node.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
-		ConfigRef: seiv1alpha1.ConfigFileRef{Name: name},
-		AppRef:    seiv1alpha1.ConfigFileRef{Name: name},
+		ConfigRef: seiv1alpha1.ConfigFileRef{Name: staticConfigMapName},
+		AppRef:    seiv1alpha1.ConfigFileRef{Name: staticConfigMapName},
 	}
 	return node
 }
@@ -55,7 +54,7 @@ func TestStaticInitPlanCarriesNoConfigWriter(t *testing.T) {
 	for _, mode := range staticModes {
 		t.Run(mode.name, func(t *testing.T) {
 			g := NewWithT(t)
-			node := withNodeConfig(pendingNode(mode.configure), staticConfigMapName)
+			node := withNodeConfig(pendingNode(mode.configure))
 
 			g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 			g.Expect(node.Status.Plan).NotTo(BeNil())
@@ -86,93 +85,38 @@ func TestInitPlanKeepsConfigWriterWithoutConfigSource(t *testing.T) {
 	}
 }
 
-// TestStaticRunningPlanRollsThePod covers every transition of the reference.
-// Pod replacement is the only config-delivery mechanism: kubelet pins a subPath
-// mount at pod start.
-func TestStaticRunningPlanRollsThePod(t *testing.T) {
-	cases := []struct {
-		name      string
-		spec      string
-		observed  string
-		wantRoll  bool
-		wantInMsg string
-	}{
-		{"adopted by a running node", staticConfigMapName, "", true, staticConfigMapName},
-		{"republished under a new name", "rpc-config-v2", staticConfigMapName, true, "rpc-config-v2"},
-		{"cleared", "", staticConfigMapName, true, staticConfigMapName},
-		{"unchanged", staticConfigMapName, staticConfigMapName, false, ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			g := NewWithT(t)
-			node := runningFullNode()
-			if tc.spec != "" {
-				withNodeConfig(node, tc.spec)
-			}
-			if tc.observed != "" {
-				node.Status.CurrentNodeConfig = &seiv1alpha1.NodeConfig{
-					ConfigRef: seiv1alpha1.ConfigFileRef{Name: tc.observed},
-					AppRef:    seiv1alpha1.ConfigFileRef{Name: tc.observed},
-				}
-			}
-
-			g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
-
-			if !tc.wantRoll {
-				g.Expect(node.Status.Plan).To(BeNil())
-				return
-			}
-			g.Expect(node.Status.Plan).NotTo(BeNil())
-			types := planTaskTypes(node.Status.Plan)
-			g.Expect(types).To(ContainElement(task.TaskTypeReplacePod))
-			g.Expect(types).To(ContainElement(task.TaskTypeObserveImage))
-			g.Expect(types).To(ContainElement(TaskMarkReady))
-
-			if tc.spec == "" {
-				// A revert restores the controller-managed base, after the
-				// roll has replaced the pod with one that has no mount.
-				g.Expect(slices.Index(types, TaskConfigApply)).To(
-					BeNumerically(">", slices.Index(types, task.TaskTypeReplacePod)))
-			} else {
-				// Adopting or republishing carries no config task at all: the
-				// writers detach the mount, and config-validate reports on a
-				// file the operator owns.
-				for _, writer := range mountedConfigWriters {
-					g.Expect(types).NotTo(ContainElement(writer))
-				}
-				g.Expect(types).NotTo(ContainElement(TaskConfigValidate))
-			}
-
-			cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
-			g.Expect(cond).NotTo(BeNil())
-			g.Expect(cond.Message).To(ContainSubstring(tc.wantInMsg))
-		})
-	}
-}
-
-// TestStaticRunningPlanDoesNotLoop pins the stamp that ends the roll.
-func TestStaticRunningPlanDoesNotLoop(t *testing.T) {
+// TestStaticRunningPlanFollowsTheRoll covers the Running arm. The StatefulSet
+// is RollingUpdate for these nodes, so the plan only applies the template and
+// waits for the StatefulSet controller's roll; it never deletes the pod itself
+// and never writes config.
+func TestStaticRunningPlanFollowsTheRoll(t *testing.T) {
 	g := NewWithT(t)
-	node := withNodeConfig(runningFullNode(), staticConfigMapName)
+	node := withNodeConfig(runningFullNode())
+	node.Spec.Image = "sei:v2.0.0"
 
 	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 	g.Expect(node.Status.Plan).NotTo(BeNil())
 
-	node.Status.CurrentNodeConfig = node.Spec.NodeConfig.DeepCopy()
-	node.Status.Plan = nil
-	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
-	g.Expect(node.Status.Plan).To(BeNil())
+	types := planTaskTypes(node.Status.Plan)
+	g.Expect(types).To(Equal([]string{
+		task.TaskTypeApplyStatefulSet,
+		task.TaskTypeApplyService,
+		task.TaskTypeObserveImage,
+		TaskMarkReady,
+	}))
+	g.Expect(node.Status.Plan.ConfigValuesHash).To(BeEmpty())
+
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Message).To(ContainSubstring("sei:v2.0.0"))
 }
 
-// TestNodeConfigUnsetDoesNotRollOnControllerUpgrade is the invariant that
-// replaces the unobserved short-circuit the other pod-template predicates
-// carry. Every node in the fleet looks like this on the first reconcile after
-// the controller ships.
-func TestNodeConfigUnsetDoesNotRollOnControllerUpgrade(t *testing.T) {
+// TestStaticRunningPlanNoDrift pins the steady state: a ConfigMap reference is
+// not an observed input, so a node with no image drift plans nothing.
+func TestStaticRunningPlanNoDrift(t *testing.T) {
 	g := NewWithT(t)
-	node := runningFullNode()
+	node := withNodeConfig(runningFullNode())
 
-	g.Expect(nodeConfigDrifted(node)).To(BeFalse())
 	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 	g.Expect(node.Status.Plan).To(BeNil())
 }
@@ -184,60 +128,18 @@ func TestStaticValidateRunsTheModesOwnChecks(t *testing.T) {
 	// A seed without a node-key Secret is refused by seedPlanner.Validate.
 	node := withNodeConfig(pendingNode(func(n *seiv1alpha1.SeiNode) {
 		n.Spec.Seed = &seiv1alpha1.SeedSpec{}
-	}), staticConfigMapName)
+	}))
 
 	err := (&NodeResolver{}).ResolvePlan(context.Background(), node)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(node.Status.Plan).To(BeNil())
 }
 
-// TestStaticValidateRefusesRuntimeDiscoveredConfig covers the node shapes whose
-// configuration seid can only learn while running. A ConfigMap written
-// beforehand cannot hold those values, and the task that would write them is
-// the one this planner removes.
-func TestStaticValidateRefusesRuntimeDiscoveredConfig(t *testing.T) {
-	cases := []struct {
-		name      string
-		configure func(*seiv1alpha1.SeiNode)
-		wantErr   string
-	}{
-		{"genesis ceremony", func(n *seiv1alpha1.SeiNode) {
-			n.Spec.Validator = &seiv1alpha1.ValidatorSpec{
-				GenesisCeremony: &seiv1alpha1.GenesisCeremonyNodeConfig{
-					ChainID:        staticTestChainID,
-					StakingAmount:  testAccountBalance,
-					AccountBalance: "2000000usei",
-				},
-			}
-		}, "genesis-ceremony"},
-		{"state-sync snapshot source", func(n *seiv1alpha1.SeiNode) {
-			n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{
-				Snapshot: &seiv1alpha1.SnapshotSource{StateSync: &seiv1alpha1.StateSyncSource{}},
-			}
-		}, overlayTestStateSync},
-		{"autobahn consensus", func(n *seiv1alpha1.SeiNode) {
-			n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{}
-			n.Spec.Consensus = &seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}
-		}, "Autobahn"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			g := NewWithT(t)
-			node := withNodeConfig(pendingNode(tc.configure), staticConfigMapName)
-
-			err := (&NodeResolver{}).ResolvePlan(context.Background(), node)
-			g.Expect(err).To(HaveOccurred())
-			g.Expect(err.Error()).To(ContainSubstring(tc.wantErr))
-			g.Expect(node.Status.Plan).To(BeNil())
-		})
-	}
-}
-
 // TestStaticWorkflowRefused pins the planner half of the lockstep pair with
 // SeiNodeReconciler's adoption-time refusal. Every recipe writes config.toml.
 func TestStaticWorkflowRefused(t *testing.T) {
 	g := NewWithT(t)
-	node := withNodeConfig(runningFullNode(), staticConfigMapName)
+	node := withNodeConfig(runningFullNode())
 	wf := &seiv1alpha1.SeiNodeTaskWorkflow{
 		Spec: seiv1alpha1.SeiNodeTaskWorkflowSpec{
 			StateSync: &seiv1alpha1.StateSyncWorkflow{},
@@ -274,7 +176,7 @@ func TestMountedConfigWriterInPlan(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
-			node := withNodeConfig(runningFullNode(), staticConfigMapName)
+			node := withNodeConfig(runningFullNode())
 			g.Expect(mountedConfigWriterInPlan(node, tc.plan)).To(Equal(tc.want))
 		})
 	}
@@ -284,77 +186,4 @@ func TestMountedConfigWriterInPlan(t *testing.T) {
 		g.Expect(mountedConfigWriterInPlan(runningFullNode(), plan(TaskConfigApply))).To(BeEmpty())
 	})
 
-	// A node mid-revert still has the mount, so the stamp gates it too.
-	t.Run("keys on the stamp as well as the spec", func(t *testing.T) {
-		g := NewWithT(t)
-		node := runningFullNode()
-		node.Status.CurrentNodeConfig = &seiv1alpha1.NodeConfig{
-			ConfigRef: seiv1alpha1.ConfigFileRef{Name: staticConfigMapName},
-			AppRef:    seiv1alpha1.ConfigFileRef{Name: staticConfigMapName},
-		}
-		g.Expect(MountsNodeConfig(node)).To(BeTrue())
-		g.Expect(mountedConfigWriterInPlan(node, plan(TaskConfigPatch))).To(Equal(TaskConfigPatch))
-	})
-}
-
-// TestNodeConfigRevertRollsBeforeAnyConfigWrite covers the revert. A node
-// whose spec no longer names ConfigMaps still has a pod that mounts them, and
-// the mode planner's own update plan submits config-patch before it replaces
-// the pod — a rename in the sidecar's own mount namespace, which fails EBUSY
-// and rebuilds the same plan every reconcile. The stamp keeps the node on the
-// static planner until the roll has actually dropped the mount.
-func TestNodeConfigRevertRollsBeforeAnyConfigWrite(t *testing.T) {
-	g := NewWithT(t)
-	node := runningFullNode()
-	node.Status.CurrentNodeConfig = &seiv1alpha1.NodeConfig{
-		ConfigRef: seiv1alpha1.ConfigFileRef{Name: staticConfigMapName},
-		AppRef:    seiv1alpha1.ConfigFileRef{Name: staticConfigMapName},
-	}
-
-	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
-	g.Expect(node.Status.Plan).NotTo(BeNil())
-
-	types := planTaskTypes(node.Status.Plan)
-	replace := slices.Index(types, task.TaskTypeReplacePod)
-	g.Expect(replace).To(BeNumerically(">=", 0))
-
-	// Nothing writes config while the outgoing pod still has the mount.
-	for _, writer := range mountedConfigWriters {
-		g.Expect(types[:replace]).NotTo(ContainElement(writer))
-	}
-	// The replacement pod has none, so the base the controller never wrote is
-	// written there. A node created with nodeConfig otherwise keeps the files
-	// `seid init` left on the volume.
-	g.Expect(slices.Index(types, TaskConfigApply)).To(BeNumerically(">", replace))
-
-	// mark-ready is last, and seid's container blocks on the sidecar's
-	// /v0/healthz until it runs, so the write lands before seid reads the file.
-	// That is why the plan needs no restart-seid.
-	g.Expect(types[len(types)-1]).To(Equal(TaskMarkReady))
-
-	// The stamp survives the plan. observe-image runs before config-apply, so
-	// clearing it there would drop a node whose restore failed off this planner
-	// with no drift left to rebuild the plan.
-	g.Expect(slices.Index(types, task.TaskTypeObserveImage)).To(
-		BeNumerically("<", slices.Index(types, TaskConfigApply)))
-	g.Expect(node.Status.Plan.ClearsNodeConfig).To(BeTrue())
-	g.Expect(node.Status.CurrentNodeConfig).NotTo(BeNil())
-
-	// The node rejoins the controller-managed path, so it takes the overlay and
-	// the observed baseline with it.
-	g.Expect(node.Status.Plan.ConfigValuesHash).NotTo(BeEmpty())
-
-	// A restore that fails leaves the stamp in place, so the next reconcile
-	// resolves this planner again and rebuilds the revert.
-	node.Status.Plan = nil
-	g.Expect(MountsNodeConfig(node)).To(BeTrue())
-	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
-	g.Expect(planTaskTypes(node.Status.Plan)).To(ContainElement(TaskConfigApply))
-
-	// Once the roll drops the mount, the node returns to the mode planner and
-	// settles: no drift, no plan.
-	node.Status.CurrentNodeConfig = nil
-	node.Status.Plan = nil
-	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
-	g.Expect(node.Status.Plan).To(BeNil())
 }
