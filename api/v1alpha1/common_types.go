@@ -121,14 +121,6 @@ type SnapshotSource struct {
 	// after snapshot restore.
 	// +optional
 	BackfillBlocks int64 `json:"backfillBlocks,omitempty"`
-
-	// BootstrapImage is a seid container image used for the bootstrap Job.
-	// When set, the controller runs a one-shot Job with this image and the
-	// seictl sidecar to prepare the node's data PVC before the main StatefulSet
-	// starts. The Job restores a snapshot, applies config, and syncs to the
-	// target height.
-	// +optional
-	BootstrapImage string `json:"bootstrapImage,omitempty"`
 }
 
 // S3SnapshotSource configures snapshot download from the platform

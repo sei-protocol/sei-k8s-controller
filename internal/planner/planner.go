@@ -377,10 +377,8 @@ func insertBefore(prog []string, target, taskType string) ([]string, error) {
 
 // buildSidecarProgression constructs the sidecar task sequence for the given
 // bootstrap mode, inserting optional tasks (genesis, state-sync) at the
-// correct positions. Used by both buildBasePlan and buildBootstrapPlan to
-// ensure they produce consistent sidecar progressions. persistent_peers is no
-// longer a sidecar task — the controller writes it via the config-apply
-// override (see commonOverrides).
+// correct positions. persistent_peers is no longer a sidecar task — the
+// controller writes it via the config-apply override (see commonOverrides).
 func buildSidecarProgression(snap *seiv1alpha1.SnapshotSource) ([]string, error) {
 	mode := bootstrapMode(snap)
 	prog := slices.Clone(baseProgression[mode])
@@ -395,14 +393,6 @@ func buildSidecarProgression(snap *seiv1alpha1.SnapshotSource) ([]string, error)
 		}
 	}
 	return prog, nil
-}
-
-// NeedsBootstrap returns true when the node requires a bootstrap Job to
-// populate the PVC before the StatefulSet takes over.
-func NeedsBootstrap(node *seiv1alpha1.SeiNode) bool {
-	snap := node.Spec.SnapshotSource()
-	return snap != nil && snap.BootstrapImage != "" &&
-		snap.S3 != nil && snap.S3.TargetHeight > 0
 }
 
 func needsValidateSigningKey(node *seiv1alpha1.SeiNode) bool {

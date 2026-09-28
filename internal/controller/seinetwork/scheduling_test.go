@@ -92,8 +92,8 @@ func TestUpdateStatus_ReportsWorkerNodePlacement(t *testing.T) {
 	g.Expect(r.Create(ctx, validatorPod("syncer-0-0", "syncer", "syncer-0", "ip-10-0-0-1", corev1.PodRunning))).To(Succeed())
 	// Unschedulable: exists, no binding.
 	g.Expect(r.Create(ctx, validatorPod("syncer-1-0", "syncer", "syncer-1", "", corev1.PodPending))).To(Succeed())
-	// A finished bootstrap Job pod keeps its nodeName but is not the validator.
-	g.Expect(r.Create(ctx, validatorPod("syncer-2-bootstrap", "syncer", "syncer-2", "ip-10-0-0-9", corev1.PodSucceeded))).To(Succeed())
+	// A finished pod keeps its nodeName but is not the validator.
+	g.Expect(r.Create(ctx, validatorPod("syncer-2-completed", "syncer", "syncer-2", "ip-10-0-0-9", corev1.PodSucceeded))).To(Succeed())
 	// Another network's pod on the same namespace must not leak in.
 	g.Expect(r.Create(ctx, validatorPod("other-0-0", "other", "syncer-2", "ip-10-0-0-8", corev1.PodRunning))).To(Succeed())
 

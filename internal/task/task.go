@@ -24,14 +24,6 @@ import (
 // produce a stable, collision-free ID for each task instance.
 var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
-// Controller-managed task types — the sidecar has no handlers for these.
-const (
-	TaskTypeDeployBootstrapSvc     = "deploy-bootstrap-service"
-	TaskTypeDeployBootstrapJob     = "deploy-bootstrap-job"
-	TaskTypeAwaitBootstrapComplete = "await-bootstrap-complete"
-	TaskTypeTeardownBootstrap      = "teardown-bootstrap"
-)
-
 // fieldOwner is the server-side apply field manager for resources
 // owned by the seinode-controller.
 var fieldOwner = client.FieldOwner("seinode-controller")
@@ -244,12 +236,6 @@ var registry = map[string]taskDeserializer{
 	TaskTypeValidateSigningKey:      deserializeValidateSigningKey,
 	TaskTypeValidateNodeKey:         deserializeValidateNodeKey,
 	TaskTypeValidateOperatorKeyring: deserializeValidateOperatorKeyring,
-
-	// Controller-side bootstrap tasks
-	TaskTypeDeployBootstrapSvc:     deserializeBootstrapService,
-	TaskTypeDeployBootstrapJob:     deserializeBootstrapJob,
-	TaskTypeAwaitBootstrapComplete: deserializeBootstrapAwait,
-	TaskTypeTeardownBootstrap:      deserializeBootstrapTeardown,
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD

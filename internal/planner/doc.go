@@ -167,6 +167,6 @@
 //
 // Sidecar tasks are submitted to the sidecar HTTP API and polled for
 // completion. Controller-side tasks (ensure-data-pvc, apply-statefulset,
-// apply-service, observe-image, deploy-bootstrap-job, etc.) execute inline
+// apply-service, observe-image, replace-pod, etc.) execute inline
 // against the Kubernetes API.
 package planner

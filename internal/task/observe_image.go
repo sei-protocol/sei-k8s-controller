@@ -86,7 +86,7 @@ func (e *observeImageExecution) Execute(ctx context.Context) error {
 // EffectiveSidecarImage returns the sidecar container image actually
 // rendered onto the StatefulSet: the per-SeiNode override if set, else
 // the controller-wide default from SEI_SIDECAR_IMAGE. Mirrors the
-// resolution at noderesource.go and bootstrap_resources.go.
+// resolution at noderesource.go.
 func EffectiveSidecarImage(node *seiv1alpha1.SeiNode, p platform.Config) string {
 	if node.Spec.Sidecar != nil && node.Spec.Sidecar.Image != "" {
 		return node.Spec.Sidecar.Image

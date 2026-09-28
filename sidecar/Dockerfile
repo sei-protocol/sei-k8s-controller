@@ -76,8 +76,7 @@ COPY --from=build /go/bin/sei-sidecar /usr/bin/sei-sidecar
 #
 # REMOVAL CONDITION — check the pods, not the controller version, because
 # OnDelete lets a pod created by the old controller outlive the controller bump:
-#   1. no rendered pod spec names `seictl` — StatefulSet template AND bootstrap
-#      Job, both render sites; and
+#   1. no rendered pod spec names `seictl` in the StatefulSet template; and
 #   2. no cell's controller-config still points images.sidecar at ghcr.
 # Per-node confirmation that a roll landed is .status.currentSidecarImage.
 # Deleting this makes a controller rollback below 186d65a a one-way door unless
