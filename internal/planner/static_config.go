@@ -10,14 +10,13 @@ import (
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
-	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // mountedConfigWriters are the sidecar tasks that write config.toml or
 // app.toml. None of them may run on a pod that mounts those files from the
 // operator's ConfigMaps.
 //
-// config-apply, config-reload, config-patch, configure-state-sync and
+// config-apply, config-patch, configure-state-sync and
 // set-genesis-peers all commit with os.Rename. A rename onto a mounted path
 // from another container succeeds and detaches the mount, after which seid
 // reads the writer's file instead of the operator's. generate-identity
@@ -28,7 +27,6 @@ import (
 // checks it automatically, because the sidecar is a separate module.
 var mountedConfigWriters = []string{
 	TaskConfigApply,
-	client.TaskTypeConfigReload,
 	TaskConfigPatch,
 	TaskConfigureStateSync,
 	TaskSetGenesisPeers,
@@ -75,10 +73,7 @@ func withoutManagedConfigTasks(node *seiv1alpha1.SeiNode, prog []string) []strin
 //
 // A revert plan is the one case where a writer belongs: it replaces the pod
 // with one the template no longer gives the mounts, so everything after that
-// replace-pod runs against a plain file. Nothing else is exempt. A bootstrap
-// Job pod carries no mount of its own, but it holds the same PVC as the
-// production pod, and a rename from there detaches the production pod's mount
-// just as silently; staticConfigPlanner.Validate refuses that combination.
+// replace-pod runs against a plain file. Nothing else is exempt.
 func mountedConfigWriterInPlan(node *seiv1alpha1.SeiNode, plan *seiv1alpha1.TaskPlan) string {
 	if !MountsNodeConfig(node) || plan == nil {
 		return ""
@@ -111,8 +106,8 @@ func revertingNodeConfig(node *seiv1alpha1.SeiNode) bool {
 //
 // It wraps the node's mode planner rather than replacing it, so the mode keeps
 // its own Validate and its own init plan, which withoutManagedConfigTasks
-// strips for it. The bootstrap and genesis-ceremony progressions are not
-// filtered at all — Validate refuses both shapes, and mountedConfigWriterInPlan
+// strips for it. The genesis-ceremony progression is not
+// filtered at all — Validate refuses that shape, and mountedConfigWriterInPlan
 // refuses any plan that slips through. What the wrapper owns is the Running arm, which
 // the mode planners route through assembleUpdatePlan — an assembler that
 // force-inserts config-apply whenever the configValues baseline is unobserved,
@@ -136,11 +131,6 @@ func (p *staticConfigPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 		return fmt.Errorf("nodeConfig is not supported on a genesis-ceremony validator: " +
 			"the founding validator set is assembled during the ceremony and written by set-genesis-peers, " +
 			"so it cannot be in a ConfigMap written beforehand")
-	}
-	if NeedsBootstrap(node) {
-		return fmt.Errorf("nodeConfig is not supported with a bootstrap Job: " +
-			"the Job pod holds the same data volume as the production pod and rewrites config.toml there, " +
-			"which detaches the production pod's mount and leaves seid reading the Job's file")
 	}
 	if snap := node.Spec.SnapshotSource(); snap != nil && snap.StateSync != nil {
 		return fmt.Errorf("nodeConfig is not supported with a state-sync snapshot source: " +

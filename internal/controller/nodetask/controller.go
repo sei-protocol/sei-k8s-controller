@@ -325,12 +325,16 @@ func (r *SeiNodeTaskReconciler) handleFailure(cr *seiv1alpha1.SeiNodeTask, exec 
 	}
 
 	if gr := decodeGovResult(exec); gr != nil {
+		// Preserve the structured result on every outcome, not only the two
+		// explicitly classified below. An unverifiable inclusion or a
+		// committed tx whose proposal ID could not be decoded still carries the
+		// tx hash an operator needs to determine whether recreation is safe.
+		populateGovOutputs(cr, gr)
 		switch gr.InclusionStatus {
 		case wire.InclusionPending:
 			// Undetermined: re-submit (same task ID → engine re-run → marker
 			// adopt re-checks) until the execution timeout, then latch Failed.
 			if r.execTimedOut(cr, now) {
-				populateGovOutputs(cr, gr)
 				cr.Status.Task.Status = seiv1alpha1.TaskFailed
 				cr.Status.Task.Err = msg
 				r.markFailed(cr, now, "InclusionUndetermined", msg)
@@ -339,7 +343,6 @@ func (r *SeiNodeTaskReconciler) handleFailure(cr *seiv1alpha1.SeiNodeTask, exec 
 			cr.Status.Task.Status = seiv1alpha1.TaskPending
 			return
 		case wire.InclusionCommittedFailed:
-			populateGovOutputs(cr, gr)
 			cr.Status.Task.Status = seiv1alpha1.TaskFailed
 			cr.Status.Task.Err = msg
 			r.markFailed(cr, now, "TxFailed", msg)

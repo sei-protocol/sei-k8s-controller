@@ -48,6 +48,30 @@ func newGovUpgradeTask() *seiv1alpha1.SeiNodeTask {
 	}
 }
 
+func newGovUpdateInstantiateConfigTask() *seiv1alpha1.SeiNodeTask {
+	return &seiv1alpha1.SeiNodeTask{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testTaskName, Namespace: testNS,
+			UID: "task-uid-gov-update-instantiate", Generation: 1,
+		},
+		Spec: seiv1alpha1.SeiNodeTaskSpec{
+			Kind: seiv1alpha1.SeiNodeTaskKindGovUpdateInstantiateConfig,
+			Target: seiv1alpha1.SeiNodeTaskTarget{
+				NodeRef:      seiv1alpha1.SeiNodeTaskNodeRef{Name: testNodeName},
+				RequirePhase: seiv1alpha1.PhaseRunning,
+			},
+			GovUpdateInstantiateConfig: &seiv1alpha1.GovUpdateInstantiateConfigPayload{
+				ChainID: testChainID, KeyName: testKeyName,
+				Title: "disable instantiate", Description: "set code 1 to nobody",
+				Updates: []seiv1alpha1.GovInstantiateConfigUpdate{
+					{CodeID: 1, Permission: "nobody"},
+				},
+				InitialDeposit: "10000000usei", Fees: testFees, Gas: 1_200_000,
+			},
+		},
+	}
+}
+
 func readyReasonOf(cr *seiv1alpha1.SeiNodeTask) string {
 	for _, c := range cr.Status.Conditions {
 		if c.Type == seiv1alpha1.ConditionSeiNodeTaskReady && c.Status == metav1.ConditionTrue {
@@ -95,6 +119,34 @@ func TestReconcile_GovUpgrade_Confirmed(t *testing.T) {
 	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.Height).To(Equal(int64(10)))
 }
 
+func TestReconcileGovUpdateInstantiateConfigConfirmed(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	fakeSC := newFakeSidecarClient()
+	r, c := newReconcilerWithSidecar(
+		t, time.Now(), fakeSC, newGovUpdateInstantiateConfigTask(), newRunningNode())
+
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	taskID, parseErr := uuid.Parse(getTask(t, ctx, c).Status.Task.ID)
+	g.Expect(parseErr).NotTo(HaveOccurred())
+
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	fakeSC.setResultPayload(taskID, sidecar.Completed, "",
+		json.RawMessage(`{"txHash":"WASM","height":10,"proposalId":259,"inclusionStatus":"committed_ok"}`))
+
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
+	g.Expect(readyReasonOf(got)).To(Equal("Confirmed"))
+	g.Expect(got.Status.Outputs.GovUpdateInstantiateConfig).NotTo(BeNil())
+	g.Expect(got.Status.Outputs.GovUpdateInstantiateConfig.ProposalID).To(Equal(uint64(259)))
+	g.Expect(got.Status.Outputs.GovUpdateInstantiateConfig.TxHash).To(Equal("WASM"))
+}
+
 func TestReconcile_GovUpgrade_CommittedFailed(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
@@ -140,6 +192,7 @@ func TestReconcile_GovUpgrade_Pending_ReSubmits(t *testing.T) {
 	got := getTask(t, ctx, c)
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseRunning))
 	g.Expect(got.Status.Task.Status).To(Equal(seiv1alpha1.TaskPending))
+	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.TxHash).To(Equal("ABC"))
 
 	before := fakeSC.submitCount()
 	_, err = r.Reconcile(ctx, req()) // R4: re-submits (same task ID → engine re-run)
@@ -155,6 +208,53 @@ func TestReconcile_GovUpgrade_Pending_ReSubmits(t *testing.T) {
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseComplete))
 	g.Expect(readyReasonOf(got)).To(Equal("Confirmed"))
 	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.ProposalID).To(Equal(uint64(7)))
+}
+
+func TestReconcileGovUpgradeUnverifiablePreservesTxHash(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	fakeSC := newFakeSidecarClient()
+	r, c := newReconcilerWithSidecar(t, time.Now(), fakeSC, newGovUpgradeTask(), newRunningNode())
+
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	taskID, _ := uuid.Parse(getTask(t, ctx, c).Status.Task.ID)
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	fakeSC.setResultPayload(taskID, sidecar.Failed, "inclusion unverifiable",
+		json.RawMessage(`{"txHash":"ABC","inclusionStatus":"unverifiable"}`))
+
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.TxHash).To(Equal("ABC"))
+}
+
+func TestReconcileGovUpgradeMissingProposalIDPreservesTxHash(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	fakeSC := newFakeSidecarClient()
+	r, c := newReconcilerWithSidecar(t, time.Now(), fakeSC, newGovUpgradeTask(), newRunningNode())
+
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	taskID, _ := uuid.Parse(getTask(t, ctx, c).Status.Task.ID)
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// The tx committed successfully, but the sidecar could not decode the
+	// proposal ID and therefore failed the task rather than reporting success.
+	fakeSC.setResultPayload(taskID, sidecar.Failed, "minted no proposal ID",
+		json.RawMessage(`{"txHash":"ABC","height":10,"inclusionStatus":"committed_ok"}`))
+
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.TxHash).To(Equal("ABC"))
+	g.Expect(got.Status.Outputs.GovSoftwareUpgrade.Height).To(Equal(int64(10)))
 }
 
 // A gov Failed with no result payload (e.g. CheckTx reject) is a generic

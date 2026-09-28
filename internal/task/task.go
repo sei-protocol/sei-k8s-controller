@@ -24,14 +24,6 @@ import (
 // produce a stable, collision-free ID for each task instance.
 var taskIDNamespace = uuid.MustParse("b7e89c3a-4f12-4d8b-9a6e-1c2d3e4f5a6b")
 
-// Controller-managed task types — the sidecar has no handlers for these.
-const (
-	TaskTypeDeployBootstrapSvc     = "deploy-bootstrap-service"
-	TaskTypeDeployBootstrapJob     = "deploy-bootstrap-job"
-	TaskTypeAwaitBootstrapComplete = "await-bootstrap-complete"
-	TaskTypeTeardownBootstrap      = "teardown-bootstrap"
-)
-
 // fieldOwner is the server-side apply field manager for resources
 // owned by the seinode-controller.
 var fieldOwner = client.FieldOwner("seinode-controller")
@@ -216,17 +208,18 @@ var registry = map[string]taskDeserializer{
 	// which is exactly what keeps seid from booting onto a half-wiped dir. A
 	// fire-and-forget classification here would be a released-onto-wiped-data
 	// bug. stop-seid and reset-data likewise report real terminal state.
-	sidecar.TaskTypeMarkNotReady:           sidecarTask[sidecar.MarkNotReadyTask](false),
-	sidecar.TaskTypeStopSeid:               sidecarTask[sidecar.StopSeidTask](false),
-	sidecar.TaskTypeResetData:              sidecarTask[sidecar.ResetDataTask](false),
-	sidecar.TaskTypeGenerateIdentity:       sidecarTask[sidecar.GenerateIdentityTask](false),
-	sidecar.TaskTypeGenerateGentx:          sidecarTask[sidecar.GenerateGentxTask](false),
-	sidecar.TaskTypeUploadGenesisArtifacts: sidecarTask[sidecar.UploadGenesisArtifactsTask](false),
-	sidecar.TaskTypeAssembleGenesis:        sidecarTask[sidecar.AssembleAndUploadGenesisTask](false),
-	sidecar.TaskTypeSetGenesisPeers:        sidecarTask[sidecar.SetGenesisPeersTask](false),
-	sidecar.TaskTypeGovVote:                sidecarTask[sidecar.GovVoteTask](false),
-	sidecar.TaskTypeGovSoftwareUpgrade:     sidecarTask[sidecar.GovSoftwareUpgradeTask](false),
-	sidecar.TaskTypeGovParamChange:         sidecarTask[sidecar.GovParamChangeTask](false),
+	sidecar.TaskTypeMarkNotReady:               sidecarTask[sidecar.MarkNotReadyTask](false),
+	sidecar.TaskTypeStopSeid:                   sidecarTask[sidecar.StopSeidTask](false),
+	sidecar.TaskTypeResetData:                  sidecarTask[sidecar.ResetDataTask](false),
+	sidecar.TaskTypeGenerateIdentity:           sidecarTask[sidecar.GenerateIdentityTask](false),
+	sidecar.TaskTypeGenerateGentx:              sidecarTask[sidecar.GenerateGentxTask](false),
+	sidecar.TaskTypeUploadGenesisArtifacts:     sidecarTask[sidecar.UploadGenesisArtifactsTask](false),
+	sidecar.TaskTypeAssembleGenesis:            sidecarTask[sidecar.AssembleAndUploadGenesisTask](false),
+	sidecar.TaskTypeSetGenesisPeers:            sidecarTask[sidecar.SetGenesisPeersTask](false),
+	sidecar.TaskTypeGovVote:                    sidecarTask[sidecar.GovVoteTask](false),
+	sidecar.TaskTypeGovSoftwareUpgrade:         sidecarTask[sidecar.GovSoftwareUpgradeTask](false),
+	sidecar.TaskTypeGovParamChange:             sidecarTask[sidecar.GovParamChangeTask](false),
+	sidecar.TaskTypeGovUpdateInstantiateConfig: sidecarTask[sidecar.GovUpdateInstantiateConfigTask](false),
 
 	// Controller-side group tasks
 	TaskTypeAwaitNodesRunning:  deserializeAwaitNodesRunning,
@@ -243,12 +236,6 @@ var registry = map[string]taskDeserializer{
 	TaskTypeValidateSigningKey:      deserializeValidateSigningKey,
 	TaskTypeValidateNodeKey:         deserializeValidateNodeKey,
 	TaskTypeValidateOperatorKeyring: deserializeValidateOperatorKeyring,
-
-	// Controller-side bootstrap tasks
-	TaskTypeDeployBootstrapSvc:     deserializeBootstrapService,
-	TaskTypeDeployBootstrapJob:     deserializeBootstrapJob,
-	TaskTypeAwaitBootstrapComplete: deserializeBootstrapAwait,
-	TaskTypeTeardownBootstrap:      deserializeBootstrapTeardown,
 }
 
 // Deserialize reconstructs a TaskExecution from its serialized CRD

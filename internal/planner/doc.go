@@ -31,7 +31,7 @@
 //
 // TaskPlan: the structure this package owns. Constructed by the plan builders
 //
-//	(buildBasePlan, buildBootstrapPlan, buildGenesisPlan, assembleUpdatePlan,
+//	(buildBasePlan, buildGenesisPlan, assembleUpdatePlan,
 //	assembleStaticUpdatePlan, buildMarkReadyPlan, the group
 //	builders); persisted by the controller into .status.plan; read by the
 //	planner on subsequent reconciles; mutated in-memory by Executor. Carries
@@ -121,9 +121,7 @@
 //     still has the mount. withoutManagedConfigTasks strips those tasks where
 //     the progression is assembled, staticConfigPlanner owns the Running
 //     arms, and mountedConfigWriterInPlan refuses any plan that still carries
-//     one, whichever builder produced it. There is no per-pod exemption: a
-//     bootstrap Job pod holds the same PVC, so staticConfigPlanner.Validate
-//     refuses that combination outright. The one exemption is a revert plan,
+//     one, whichever builder produced it. The one exemption is a revert plan,
 //     which replaces the pod with one the template no longer gives the
 //     mounts and then writes the controller-managed base that was never
 //     written while the ConfigMaps were in place. config-validate is
@@ -132,10 +130,8 @@
 //     defaults a missing [sei] mode to full, so on a validator the verdict
 //     can be confidently wrong.
 //     Guarded by TestMountedConfigWriterInPlan,
-//     TestStaticInitPlanCarriesNoConfigWriter,
-//     TestStaticNodeConfigRefusesBootstrap,
-//     TestNodeConfigRevertRollsBeforeAnyConfigWrite and
-//     TestBuildBootstrapPodSpec_NeverMountsNodeConfig.
+//     TestStaticInitPlanCarriesNoConfigWriter and
+//     TestNodeConfigRevertRollsBeforeAnyConfigWrite.
 //
 // # Zero-Value & Sentinel Semantics
 //
@@ -203,6 +199,6 @@
 //
 // Sidecar tasks are submitted to the sidecar HTTP API and polled for
 // completion. Controller-side tasks (ensure-data-pvc, apply-statefulset,
-// apply-service, observe-image, deploy-bootstrap-job, etc.) execute inline
+// apply-service, observe-image, replace-pod, etc.) execute inline
 // against the Kubernetes API.
 package planner

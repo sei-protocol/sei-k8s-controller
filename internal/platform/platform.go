@@ -93,10 +93,6 @@ type Config struct {
 	SnapshotBucket string
 	SnapshotRegion string
 
-	ResultExportBucket string
-	ResultExportRegion string
-	ResultExportPrefix string
-
 	GenesisBucket string
 	GenesisRegion string
 
@@ -128,22 +124,21 @@ type Config struct {
 
 // FileConfig is the controller's file-sourced application config (SEI_CONTROLLER_CONFIG).
 //
-// The infra sections (scheduling, storage, resources, snapshot, resultExport,
-// genesis, images) are the authoritative source for that config, resolved once
+// The infra sections (scheduling, storage, resources, snapshot, genesis,
+// images) are the authoritative source for that config, resolved once
 // at startup by Load. The stateSync section is read per-reconcile (it
 // hot-reloads); the infra sections are not (an infra change warrants a restart).
 //
 // Networking/gateway config is deliberately absent — it stays env-sourced
 // pending its removal from the controller in the GitOps networking move (PLT-451).
 type FileConfig struct {
-	StateSync    StateSyncConfig    `json:"stateSync"`
-	Scheduling   SchedulingConfig   `json:"scheduling"`
-	Storage      StorageConfig      `json:"storage"`
-	Resources    ResourcesConfig    `json:"resources"`
-	Snapshot     BucketConfig       `json:"snapshot"`
-	ResultExport ResultExportConfig `json:"resultExport"`
-	Genesis      BucketConfig       `json:"genesis"`
-	Images       ImagesConfig       `json:"images"`
+	StateSync  StateSyncConfig  `json:"stateSync"`
+	Scheduling SchedulingConfig `json:"scheduling"`
+	Storage    StorageConfig    `json:"storage"`
+	Resources  ResourcesConfig  `json:"resources"`
+	Snapshot   BucketConfig     `json:"snapshot"`
+	Genesis    BucketConfig     `json:"genesis"`
+	Images     ImagesConfig     `json:"images"`
 }
 
 // StateSyncConfig is the state-sync section of the application config.
@@ -191,8 +186,6 @@ type StorageConfig struct {
 //
 // The per-role blocks size the seid container: each is optional and falls back
 // to the code-authoritative default for that role in internal/noderesource.
-// Both the long-running node container and the transient genesis-bootstrap Job
-// take this per-role footprint (the Job via noderesource.ResourcesForNode).
 type ResourcesConfig struct {
 	// Per-role overrides, keyed to sei.io/role.
 	Validator ResourceOverride `json:"validator"`
@@ -219,13 +212,6 @@ type ResourceOverride struct {
 type BucketConfig struct {
 	Bucket string `json:"bucket"`
 	Region string `json:"region"`
-}
-
-// ResultExportConfig is the shadow-replay result-export bucket, region, and key prefix.
-type ResultExportConfig struct {
-	Bucket string `json:"bucket"`
-	Region string `json:"region"`
-	Prefix string `json:"prefix"`
 }
 
 // ImagesConfig holds the sidecar container images attached to every SeiNode pod.
@@ -307,9 +293,6 @@ func (c Config) Validate() error {
 		{"storage.sizeArchive", c.StorageSizeArchive},
 		{"snapshot.bucket", c.SnapshotBucket},
 		{"snapshot.region", c.SnapshotRegion},
-		{"resultExport.bucket", c.ResultExportBucket},
-		{"resultExport.region", c.ResultExportRegion},
-		{"resultExport.prefix", c.ResultExportPrefix},
 		{"genesis.bucket", c.GenesisBucket},
 		{"genesis.region", c.GenesisRegion},
 		{"images.sidecar", c.SidecarImage},

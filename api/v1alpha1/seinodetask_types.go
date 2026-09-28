@@ -7,7 +7,7 @@ import (
 
 // SeiNodeTaskKind discriminates the SeiNodeTask spec union. Exactly one of
 // the matching payload sub-structs in SeiNodeTaskSpec must be set.
-// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;GovParamChange;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;RestartSeid;MarkReady
+// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;GovParamChange;GovUpdateInstantiateConfig;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;RestartSeid;MarkReady
 type SeiNodeTaskKind string
 
 const (
@@ -28,6 +28,12 @@ const (
 	// upgrade — a param-change has no "applies once" safety net; see the
 	// REHYDRATION WARNING on the sidecar handler before composing with retries.
 	SeiNodeTaskKindGovParamChange SeiNodeTaskKind = "GovParamChange"
+
+	// SeiNodeTaskKindGovUpdateInstantiateConfig backs the sidecar
+	// `gov-update-instantiate-config` task. Submits a wasm
+	// UpdateInstantiateConfigProposal that rewrites the per-code instantiate
+	// permission frozen into each code's CodeInfo.
+	SeiNodeTaskKindGovUpdateInstantiateConfig SeiNodeTaskKind = "GovUpdateInstantiateConfig"
 
 	// SeiNodeTaskKindAwaitCondition backs the sidecar `await-condition` task.
 	// Polls a local node until a typed condition (e.g. height) is satisfied,
@@ -112,16 +118,19 @@ const (
 // Field names locked at v1alpha1 — see https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task-lld.md
 // (PR sei-protocol/sei-k8s-controller#277).
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, govParamChange, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.govUpdateInstantiateConfig) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, govParamChange, govUpdateInstantiateConfig, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must be set"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)",message="spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovVote' || has(self.govVote)",message="spec.govVote is required when kind=GovVote"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovParamChange' || has(self.govParamChange)",message="spec.govParamChange is required when kind=GovParamChange"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'GovUpdateInstantiateConfig' || has(self.govUpdateInstantiateConfig)",message="spec.govUpdateInstantiateConfig is required when kind=GovUpdateInstantiateConfig"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitCondition' || has(self.awaitCondition)",message="spec.awaitCondition is required when kind=AwaitCondition"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'UpdateNodeImage' || has(self.updateNodeImage)",message="spec.updateNodeImage is required when kind=UpdateNodeImage"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)",message="spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartSeid' || has(self.restartSeid)",message="spec.restartSeid is required when kind=RestartSeid"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'MarkReady' || has(self.markReady)",message="spec.markReady is required when kind=MarkReady"
 // +kubebuilder:validation:XValidation:rule="self.kind == oldSelf.kind",message="spec.kind is immutable"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'GovUpdateInstantiateConfig' || self.target == oldSelf.target",message="spec.target is immutable for kind=GovUpdateInstantiateConfig"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'GovUpdateInstantiateConfig' || self.govUpdateInstantiateConfig == oldSelf.govUpdateInstantiateConfig",message="spec.govUpdateInstantiateConfig is immutable"
 type SeiNodeTaskSpec struct {
 	// Kind selects the task implementation. Immutable after creation.
 	// The matching payload sub-spec (govSoftwareUpgrade, govVote, etc.)
@@ -155,6 +164,11 @@ type SeiNodeTaskSpec struct {
 	// GovParamChange is the payload for kind=GovParamChange.
 	// +optional
 	GovParamChange *GovParamChangePayload `json:"govParamChange,omitempty"`
+
+	// GovUpdateInstantiateConfig is the payload for
+	// kind=GovUpdateInstantiateConfig.
+	// +optional
+	GovUpdateInstantiateConfig *GovUpdateInstantiateConfigPayload `json:"govUpdateInstantiateConfig,omitempty"`
 
 	// AwaitCondition is the payload for kind=AwaitCondition.
 	// +optional
@@ -345,6 +359,66 @@ type GovParamChangeEntry struct {
 	Value apiextensionsv1.JSON `json:"value"`
 }
 
+// GovUpdateInstantiateConfigPayload mirrors
+// sidecar/client.GovUpdateInstantiateConfigTask. It submits a wasm
+// UpdateInstantiateConfigProposal to rewrite the instantiate permission stored
+// in each referenced code's CodeInfo.
+type GovUpdateInstantiateConfigPayload struct {
+	// ChainID is the chain ID the proposal targets.
+	// +kubebuilder:validation:MinLength=1
+	ChainID string `json:"chainId"`
+
+	// KeyName names the keyring entry that signs the proposal. Omit to derive
+	// it from the target SeiNode's operator keyring configuration.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9_-]+$`
+	KeyName string `json:"keyName,omitempty"`
+
+	// Title is the on-chain proposal title.
+	// +kubebuilder:validation:MinLength=1
+	Title string `json:"title"`
+
+	// Description is the on-chain proposal description.
+	// +kubebuilder:validation:MinLength=1
+	Description string `json:"description"`
+
+	// Updates is the non-empty set of per-code instantiate permission changes.
+	// +kubebuilder:validation:MinItems=1
+	Updates []GovInstantiateConfigUpdate `json:"updates"`
+
+	// InitialDeposit is the proposal deposit in coin notation. It must use
+	// usei and meet the target chain's minimum deposit to enter voting.
+	// +kubebuilder:validation:MinLength=1
+	InitialDeposit string `json:"initialDeposit"`
+
+	// Memo is the optional tx memo. The sidecar appends a taskID tag.
+	// +optional
+	Memo string `json:"memo,omitempty"`
+
+	// Fees is the tx fee in usei coin notation.
+	// +kubebuilder:validation:MinLength=1
+	Fees string `json:"fees"`
+
+	// Gas is the tx gas limit.
+	// +kubebuilder:validation:Minimum=1
+	Gas uint64 `json:"gas"`
+}
+
+// GovInstantiateConfigUpdate is one per-code update in a wasm
+// UpdateInstantiateConfigProposal.
+type GovInstantiateConfigUpdate struct {
+	// CodeID identifies an existing wasm code.
+	// +kubebuilder:validation:Minimum=1
+	CodeID uint64 `json:"codeId"`
+
+	// Permission is "nobody", "everybody", or a sei bech32 account address
+	// (which maps to OnlyAddress). The sidecar performs the full address check.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^(nobody|everybody|sei1[0-9a-z]+)$`
+	Permission string `json:"permission"`
+}
+
 // GovVotePayload mirrors seictl/sidecar/tasks/gov_vote.go::GovVoteRequest.
 type GovVotePayload struct {
 	// ChainID is the chain ID the vote targets.
@@ -468,7 +542,9 @@ type SeiNodeTaskStatus struct {
 	Task *SeiNodeTaskExecution `json:"task,omitempty"`
 
 	// Outputs surfaces typed per-kind results. Exactly one sub-field is
-	// populated, matching spec.kind. Populated only on phase=Complete.
+	// populated, matching spec.kind, whenever the task has returned structured
+	// output. A governance tx hash is preserved on pending and failed inclusion
+	// paths so operators can determine whether recreation is safe.
 	// +optional
 	Outputs *SeiNodeTaskOutputs `json:"outputs,omitempty"`
 
@@ -522,7 +598,7 @@ type SeiNodeTaskExecution struct {
 }
 
 // SeiNodeTaskOutputs holds typed per-kind results. Exactly one sub-field is
-// populated, matching the spec union. Populated only on phase=Complete.
+// populated, matching the spec union, whenever structured output is available.
 type SeiNodeTaskOutputs struct {
 	// GovSoftwareUpgrade outputs for kind=GovSoftwareUpgrade.
 	// +optional
@@ -535,6 +611,11 @@ type SeiNodeTaskOutputs struct {
 	// GovParamChange outputs for kind=GovParamChange.
 	// +optional
 	GovParamChange *GovParamChangeOutputs `json:"govParamChange,omitempty"`
+
+	// GovUpdateInstantiateConfig outputs for
+	// kind=GovUpdateInstantiateConfig.
+	// +optional
+	GovUpdateInstantiateConfig *GovUpdateInstantiateConfigOutputs `json:"govUpdateInstantiateConfig,omitempty"`
 
 	// AwaitCondition outputs for kind=AwaitCondition.
 	// +optional
@@ -581,6 +662,22 @@ type GovParamChangeOutputs struct {
 
 	// ProposalID is the on-chain proposal ID parsed from the inclusion
 	// response events.
+	// +optional
+	ProposalID uint64 `json:"proposalId,omitempty"`
+}
+
+// GovUpdateInstantiateConfigOutputs are the typed results for a completed
+// GovUpdateInstantiateConfig task.
+type GovUpdateInstantiateConfigOutputs struct {
+	// TxHash is the upper-case hex-encoded transaction hash.
+	// +optional
+	TxHash string `json:"txHash,omitempty"`
+
+	// Height is the block height at which the tx was included.
+	// +optional
+	Height int64 `json:"height,omitempty"`
+
+	// ProposalID is the on-chain proposal ID parsed from the inclusion result.
 	// +optional
 	ProposalID uint64 `json:"proposalId,omitempty"`
 }

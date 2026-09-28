@@ -25,7 +25,6 @@ var restoreLog = seilog.NewLogger("seictl", "task", "snapshot-restore")
 const restoreMarkerFile = ".sei-sidecar-snapshot-done"
 
 // SnapshotHeightFile records the snapshot height the node was restored from.
-// The result-export task uses this to know where to start exporting.
 const SnapshotHeightFile = ".sei-sidecar-snapshot-height"
 
 // snapshotHeightRe extracts the block height from S3 snapshot keys of the form

@@ -54,11 +54,6 @@ func (p *validatorPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 		}
 		return nil
 	}
-	if snap := node.Spec.Validator.Snapshot; snap != nil && snap.BootstrapImage != "" {
-		if snap.S3 == nil || snap.S3.TargetHeight <= 0 {
-			return fmt.Errorf("validator: bootstrapImage requires s3 with targetHeight > 0")
-		}
-	}
 	return nil
 }
 
@@ -107,9 +102,6 @@ func (p *validatorPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Ta
 	intent := &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeValidator,
 		Overrides: mergeOverrides(commonOverrides(node), node.Spec.Overrides),
-	}
-	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, v.Snapshot, intent)
 	}
 	return buildBasePlan(node, v.Snapshot, intent)
 }

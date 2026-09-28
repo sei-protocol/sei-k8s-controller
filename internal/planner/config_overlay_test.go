@@ -110,9 +110,6 @@ func TestConfigValuesInitOrdering(t *testing.T) {
 	}{
 		{overlayTestBase, func() (*seiv1alpha1.TaskPlan, error) { return buildBasePlan(n, nil, intent) }, 1},
 		{overlayTestStateSync, func() (*seiv1alpha1.TaskPlan, error) { return buildBasePlan(n, &seiv1alpha1.SnapshotSource{}, intent) }, 1},
-		{"bootstrap", func() (*seiv1alpha1.TaskPlan, error) {
-			return buildBootstrapPlan(n, &seiv1alpha1.SnapshotSource{}, intent)
-		}, 2},
 		{"ceremony", func() (*seiv1alpha1.TaskPlan, error) { return buildGenesisPlan(n) }, 1},
 	}
 	for _, tc := range cases {

@@ -28,10 +28,6 @@ resources:
 snapshot:
   bucket: file-snap-bucket
   region: file-snap-region
-resultExport:
-  bucket: file-export-bucket
-  region: file-export-region
-  prefix: file-export-prefix
 genesis:
   bucket: file-genesis-bucket
   region: file-genesis-region

@@ -153,8 +153,8 @@ type SeiNodeSpec struct {
 	// pod start, so editing a ConfigMap in place does not reach a running pod.
 	// Publish under a new name and the node rolls.
 	//
-	// Not supported with a bootstrap Job, a state-sync snapshot source, a
-	// genesis ceremony, or consensus engine Autobahn. Each of those writes
+	// Not supported with a state-sync snapshot source, a genesis ceremony,
+	// or consensus engine Autobahn. Each of those writes
 	// config.toml at run time, and the plan is refused.
 	//
 	// The StatefulSet carries the references as soon as they are set, before

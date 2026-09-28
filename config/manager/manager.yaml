@@ -35,8 +35,8 @@ spec:
         image: 189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-k8s-controller:8b3f1749067bd07140fccd6d05da7894754688ca
         name: manager
         env:
-          # Infra config (node pools, storage, resources, snapshot/genesis/
-          # result-export buckets, images) is sourced from the mounted
+          # Infra config (node pools, storage, resources, snapshot/genesis
+          # buckets, images) is sourced from the mounted
           # app-config ConfigMap (SEI_CONTROLLER_CONFIG below); see the
           # controller-app-config schema in bdchatham-designs (relocated per
           # Design 05 / PLT-497). Gateway config stays env-sourced

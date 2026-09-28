@@ -98,12 +98,9 @@ func TestRenderTask_RequirePhaseOverride(t *testing.T) {
 }
 
 func TestTranslateTaskOutputs(t *testing.T) {
-	// Only UpdateNodeImage is surfaced — the one kind the controller populates.
 	if got := translateTaskOutputs(nil); got != nil {
 		t.Errorf("nil outputs => %+v, want nil", got)
 	}
-	// An outputs object with no UpdateNodeImage (e.g. a gov task's empty outputs)
-	// translates to nil — the SDK never surfaces an always-empty field.
 	if got := translateTaskOutputs(&seiv1alpha1.SeiNodeTaskOutputs{}); got != nil {
 		t.Errorf("empty outputs => %+v, want nil", got)
 	}
@@ -113,5 +110,19 @@ func TestTranslateTaskOutputs(t *testing.T) {
 	got := translateTaskOutputs(out)
 	if got == nil || got.UpdateNodeImage == nil || got.UpdateNodeImage.AppliedImage != testNewImage {
 		t.Errorf("translate => %+v, want AppliedImage=img:v2", got)
+	}
+
+	out = &seiv1alpha1.SeiNodeTaskOutputs{
+		GovUpdateInstantiateConfig: &seiv1alpha1.GovUpdateInstantiateConfigOutputs{
+			TxHash: "ABC", Height: 123, ProposalID: 259,
+		},
+	}
+	got = translateTaskOutputs(out)
+	if got == nil || got.GovUpdateInstantiateConfig == nil {
+		t.Fatalf("translate => %+v, want GovUpdateInstantiateConfig outputs", got)
+	}
+	if proposal := got.GovUpdateInstantiateConfig; proposal.TxHash != "ABC" ||
+		proposal.Height != 123 || proposal.ProposalID != 259 {
+		t.Errorf("proposal outputs = %+v", proposal)
 	}
 }

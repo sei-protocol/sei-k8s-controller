@@ -689,22 +689,3 @@ func TestEmitStartupMetrics_RehydratesUploadedGauges(t *testing.T) {
 		t.Errorf("startup must not set last run success, got %v", got)
 	}
 }
-
-func TestNormalizePrefix(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"", ""},
-		{"state-sync", "state-sync/"},
-		{"state-sync/", "state-sync/"},
-		{"a/b/c", "a/b/c/"},
-		{"a/b/c/", "a/b/c/"},
-	}
-	for _, tt := range tests {
-		got := normalizePrefix(tt.input)
-		if got != tt.want {
-			t.Errorf("normalizePrefix(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}

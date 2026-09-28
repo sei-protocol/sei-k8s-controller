@@ -7,10 +7,4 @@ package v1alpha1
 type ReplayerSpec struct {
 	// Snapshot identifies the snapshot to restore from before replay begins.
 	Snapshot SnapshotSource `json:"snapshot"`
-
-	// ResultExport configures block-execution result export. Select one or more
-	// sub-structs (e.g., shadowResult) to enable an export mode. Useful for
-	// shadow replayers that compare execution results against the canonical chain.
-	// +optional
-	ResultExport *ResultExportConfig `json:"resultExport,omitempty"`
 }

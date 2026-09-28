@@ -23,6 +23,7 @@ import (
 	proposal "github.com/sei-protocol/sei-chain/sei-cosmos/x/params/types/proposal"
 	stakingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/staking/types"
 	upgradetypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/upgrade/types"
+	wasmtypes "github.com/sei-protocol/sei-chain/sei-wasmd/x/wasm/types"
 
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/engine"
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/rpc"
@@ -183,8 +184,8 @@ func isTxIndexingDisabled(err error) bool {
 }
 
 // newSignTxInterfaceRegistry registers only the proto interfaces sign-tx
-// needs. Adding more pulls in transitive deps (notably x/wasm via x/evm)
-// that break CGO_ENABLED=0 builds.
+// needs. Keep wasm registration scoped to the one proposal content type used
+// by GovUpdateInstantiateConfig rather than registering every wasm message.
 func newSignTxInterfaceRegistry() codectypes.InterfaceRegistry {
 	registry := codectypes.NewInterfaceRegistry()
 	cryptocodec.RegisterInterfaces(registry)
@@ -196,6 +197,10 @@ func newSignTxInterfaceRegistry() codectypes.InterfaceRegistry {
 	// x/params ParameterChangeProposal as a gov Content impl (gov-param-change
 	// task). proposal does not pull x/wasm, so CGO_ENABLED=0 builds stay clean.
 	proposal.RegisterInterfaces(registry)
+	registry.RegisterImplementations(
+		(*govtypes.Content)(nil),
+		&wasmtypes.UpdateInstantiateConfigProposal{},
+	)
 	return registry
 }
 

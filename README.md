@@ -78,7 +78,7 @@ spec:
 | Full node | `spec.fullNode` set | `configure-genesis` > `snapshot-restore` > `config-apply` > `mark-ready` |
 | Validator | `spec.validator` set | Same as full node, or genesis ceremony flow for new networks |
 | Archive | `spec.archive` set | State sync with archival pruning configuration |
-| Replayer | `spec.replayer` set | Snapshot restore with result export for shadow validation |
+| Replayer | `spec.replayer` set | Snapshot restore, then block-sync forward from peers |
 
 ### SeiNodeTask
 
@@ -88,7 +88,7 @@ lifecycle, signing topology, idempotency, and operational gotchas.
 
 ## Platform Configuration
 
-Infrastructure-level settings (node pools, storage, resources, snapshot/genesis/result-export buckets, sidecar images) are read from the mounted app-config file (`SEI_CONTROLLER_CONFIG` → `platform.FileConfig`), which is authoritative — the controller fails fast at startup if a required field is unset. See the [controller-app-config schema](https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/controller-app-config/controller-app-config.md) (in bdchatham-designs — relocated per Design 05 / PLT-497).
+Infrastructure-level settings (node pools, storage, resources, snapshot/genesis buckets, sidecar images) are read from the mounted app-config file (`SEI_CONTROLLER_CONFIG` → `platform.FileConfig`), which is authoritative — the controller fails fast at startup if a required field is unset. See the [controller-app-config schema](https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/controller-app-config/controller-app-config.md) (in bdchatham-designs — relocated per Design 05 / PLT-497).
 
 Gateway config (`SEI_GATEWAY_NAME`, `SEI_GATEWAY_NAMESPACE`, `SEI_GATEWAY_DOMAIN`) and the config-file path (`SEI_CONTROLLER_CONFIG`) remain environment variables.
 

@@ -32,8 +32,8 @@ type StatusFaker struct {
 //
 //   - status.observedGeneration = .Generation
 //   - status.currentRevision  = "stub-rev"
-//   - status.updateRevision   = "stub-rev"   (matches currentRevision so
-//     ReplacePod's "rollout complete" branch fires immediately)
+//   - status.updateRevision   = "stub-rev"   (non-empty, so ReplacePod passes
+//     its revision gate; envtest pods carry no revision hash, so none are deleted)
 //   - status.updatedReplicas  = *spec.replicas (ObserveImage's gate)
 //   - status.readyReplicas    = *spec.replicas
 //   - status.replicas         = *spec.replicas

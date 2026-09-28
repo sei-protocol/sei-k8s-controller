@@ -34,7 +34,8 @@ func isGovKind(k seiv1alpha1.SeiNodeTaskKind) bool {
 	switch k {
 	case seiv1alpha1.SeiNodeTaskKindGovVote,
 		seiv1alpha1.SeiNodeTaskKindGovSoftwareUpgrade,
-		seiv1alpha1.SeiNodeTaskKindGovParamChange:
+		seiv1alpha1.SeiNodeTaskKindGovParamChange,
+		seiv1alpha1.SeiNodeTaskKindGovUpdateInstantiateConfig:
 		return true
 	}
 	return false
@@ -57,6 +58,10 @@ func populateGovOutputs(cr *seiv1alpha1.SeiNodeTask, gr *wire.GovTxResult) {
 		}
 	case seiv1alpha1.SeiNodeTaskKindGovParamChange:
 		cr.Status.Outputs.GovParamChange = &seiv1alpha1.GovParamChangeOutputs{
+			TxHash: gr.TxHash, Height: gr.Height, ProposalID: gr.ProposalID,
+		}
+	case seiv1alpha1.SeiNodeTaskKindGovUpdateInstantiateConfig:
+		cr.Status.Outputs.GovUpdateInstantiateConfig = &seiv1alpha1.GovUpdateInstantiateConfigOutputs{
 			TxHash: gr.TxHash, Height: gr.Height, ProposalID: gr.ProposalID,
 		}
 	case seiv1alpha1.SeiNodeTaskKindGovVote:

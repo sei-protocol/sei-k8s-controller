@@ -139,10 +139,11 @@ type UpdateNodeImage struct {
 // TaskOutputs carries a completed task's typed results. A nil sub-field means
 // that kind produced no typed output.
 type TaskOutputs struct {
-	UpdateNodeImage    *UpdateNodeImageOutputs
-	GovSoftwareUpgrade *GovProposalOutputs
-	GovParamChange     *GovProposalOutputs
-	GovVote            *GovVoteOutputs
+	UpdateNodeImage            *UpdateNodeImageOutputs
+	GovSoftwareUpgrade         *GovProposalOutputs
+	GovParamChange             *GovProposalOutputs
+	GovUpdateInstantiateConfig *GovProposalOutputs
+	GovVote                    *GovVoteOutputs
 }
 
 // UpdateNodeImageOutputs are the results of an UpdateNodeImage task.
@@ -150,8 +151,7 @@ type UpdateNodeImageOutputs struct {
 	AppliedImage string // image now observed on target.status.currentImage
 }
 
-// GovProposalOutputs are the results of a gov proposal submission
-// (software-upgrade or param-change).
+// GovProposalOutputs are the results of a gov proposal submission.
 type GovProposalOutputs struct {
 	TxHash     string
 	Height     int64

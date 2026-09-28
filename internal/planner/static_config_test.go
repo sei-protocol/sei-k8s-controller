@@ -86,29 +86,6 @@ func TestInitPlanKeepsConfigWriterWithoutConfigSource(t *testing.T) {
 	}
 }
 
-// TestStaticNodeConfigRefusesBootstrap closes the one silent path. The
-// bootstrap Job pod carries no mount, but it holds the same data volume as the
-// production pod, which reconcileStatefulSet creates unconditionally. A rename
-// from the Job pod detaches the production pod's mount and seid then boots on
-// the Job's generated config, with the plan reporting success.
-func TestStaticNodeConfigRefusesBootstrap(t *testing.T) {
-	g := NewWithT(t)
-	node := withNodeConfig(pendingNode(func(n *seiv1alpha1.SeiNode) {
-		n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{
-			Snapshot: &seiv1alpha1.SnapshotSource{
-				BootstrapImage: staticTestImage,
-				S3:             &seiv1alpha1.S3SnapshotSource{TargetHeight: 100},
-			},
-		}
-	}), staticConfigMapName)
-	g.Expect(NeedsBootstrap(node)).To(BeTrue(), "fixture must need a bootstrap Job")
-
-	err := (&NodeResolver{}).ResolvePlan(context.Background(), node)
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("bootstrap Job"))
-	g.Expect(node.Status.Plan).To(BeNil())
-}
-
 // TestStaticRunningPlanRollsThePod covers every transition of the reference.
 // Pod replacement is the only config-delivery mechanism: kubelet pins a subPath
 // mount at pod start.
@@ -293,9 +270,6 @@ func TestMountedConfigWriterInPlan(t *testing.T) {
 		{"clean plan", plan(TaskConfigureGenesis, TaskConfigValidate, TaskMarkReady), ""},
 		{"config-apply", plan(TaskConfigureGenesis, TaskConfigApply, TaskMarkReady), TaskConfigApply},
 		{"config-patch", plan(task.TaskTypeApplyStatefulSet, TaskConfigPatch), TaskConfigPatch},
-		{"inside a bootstrap window is NOT exempt", plan(
-			task.TaskTypeDeployBootstrapJob, TaskConfigApply,
-			task.TaskTypeTeardownBootstrap, TaskMarkReady), TaskConfigApply},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

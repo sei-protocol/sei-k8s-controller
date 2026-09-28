@@ -66,10 +66,6 @@ func Load() (Config, error) {
 		SnapshotBucket: file.Snapshot.Bucket,
 		SnapshotRegion: file.Snapshot.Region,
 
-		ResultExportBucket: file.ResultExport.Bucket,
-		ResultExportRegion: file.ResultExport.Region,
-		ResultExportPrefix: file.ResultExport.Prefix,
-
 		GenesisBucket: file.Genesis.Bucket,
 		GenesisRegion: file.Genesis.Region,
 
