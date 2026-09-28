@@ -86,6 +86,17 @@ spec:
               limits is not compared here: the equality rule already pins limits.memory to
               requests.memory, and the controller derives the limit from the request, so the
               footprint is frozen by freezing requests.
+              A node with spec.nodeConfig runs no task that writes config.toml or
+              app.toml, so every field whose only route to seid was one of those tasks is
+              rejected beside it. Accepting one would report success on an edit that never
+              reached the node — and for peers, status.resolvedPeers would keep updating
+              and keep looking correct while config.toml stayed as the operator wrote it.
+              The node shapes below reach config.toml through a task that writes
+              configuration seid can only learn at run time, so they are rejected beside
+              nodeConfig too.
+              nodeConfig is fixed for the node's lifetime. The StatefulSet's
+              podManagementPolicy follows it, and the API server refuses to change that
+              field on an existing StatefulSet.
             properties:
               archive:
                 description: Archive configures an archive node with full history
@@ -549,6 +560,67 @@ spec:
                 maxLength: 512
                 minLength: 1
                 type: string
+              nodeConfig:
+                description: |-
+                  NodeConfig supplies this node's seid config files from existing
+                  ConfigMaps. The files mount read-only over the seid config directory, so
+                  they replace whatever the data volume already holds.
+
+                  The operator owns both files verbatim. The controller supplies nothing:
+                  not the mode's base configuration, not persistent-peers, not
+                  external-address, not the freeze height, not the snapshot-generation
+                  keys. No task in the node's plan writes either file, which is what keeps
+                  the mounts attached: a rename onto a mounted path from another container
+                  detaches the mount, and seid then reads the writer's file.
+
+                  The fields whose only route to seid was a config task are rejected
+                  beside this one: configValues, overrides, peers, externalAddress. So are
+                  a state-sync snapshot source, a genesis ceremony and consensus engine
+                  Autobahn, each of which writes config.toml at run time.
+
+                  Set at creation or never: it can be neither added nor removed later.
+
+                  Kubernetes rolls the pod, not the controller: the StatefulSet uses the
+                  RollingUpdate strategy with Parallel pod management, so any pod-template
+                  change (these references, the image, the sidecar) replaces the pod as
+                  soon as it is applied. The references are the unit of change. Kubelet
+                  pins a subPath mount at pod start, so editing a ConfigMap in place does
+                  not reach a running pod; publish under a new name and the node rolls.
+                  The controller does not read or check the ConfigMaps: a reference that
+                  cannot be mounted leaves the new pod in ContainerCreating.
+                properties:
+                  appRef:
+                    description: AppRef holds app.toml.
+                    properties:
+                      name:
+                        description: |-
+                          Name of an existing ConfigMap in the SeiNode's namespace. The file is
+                          read from the key matching its own name, config.toml or app.toml.
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  configRef:
+                    description: ConfigRef holds config.toml.
+                    properties:
+                      name:
+                        description: |-
+                          Name of an existing ConfigMap in the SeiNode's namespace. The file is
+                          read from the key matching its own name, config.toml or app.toml.
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - appRef
+                - configRef
+                type: object
               overrides:
                 additionalProperties:
                   type: string
@@ -1325,6 +1397,41 @@ spec:
                 == 0) && (!('memory' in self.resources.requests) || !('memory' in
                 oldSelf.resources.requests) || quantity(string(self.resources.requests['memory'])).compareTo(quantity(string(oldSelf.resources.requests['memory'])))
                 == 0))))
+            - message: 'spec.nodeConfig and spec.configValues cannot both be set:
+                a node reading its config from ConfigMaps runs no config-patch task,
+                so the values would never reach seid; put them in the ConfigMap'
+              rule: '!has(self.nodeConfig) || !has(self.configValues)'
+            - message: 'spec.nodeConfig and spec.overrides cannot both be set: a node
+                reading its config from ConfigMaps runs no config-apply task, so the
+                overrides would never reach seid; put them in the ConfigMap'
+              rule: '!has(self.nodeConfig) || !has(self.overrides)'
+            - message: 'spec.nodeConfig and spec.peers cannot both be set: nothing
+                carries a resolved peer set into config.toml on a node reading its
+                config from ConfigMaps; write p2p.persistent-peers in the ConfigMap'
+              rule: '!has(self.nodeConfig) || !has(self.peers)'
+            - message: 'spec.nodeConfig and spec.externalAddress cannot both be set:
+                nothing carries it into config.toml on a node reading its config from
+                ConfigMaps; write p2p.external-address in the ConfigMap'
+              rule: '!has(self.nodeConfig) || !has(self.externalAddress)'
+            - message: 'spec.nodeConfig is not supported on a genesis-ceremony validator:
+                the founding validator set is assembled during the ceremony and written
+                into config.toml at run time'
+              rule: '!has(self.nodeConfig) || !has(self.validator) || !has(self.validator.genesisCeremony)'
+            - message: 'spec.nodeConfig is not supported with a state-sync snapshot
+                source: the trust height and hash are discovered from live witnesses
+                and written into config.toml at run time'
+              rule: '!has(self.nodeConfig) || ((!has(self.fullNode) || !has(self.fullNode.snapshot)
+                || !has(self.fullNode.snapshot.stateSync)) && (!has(self.validator)
+                || !has(self.validator.snapshot) || !has(self.validator.snapshot.stateSync))
+                && (!has(self.replayer) || !has(self.replayer.snapshot.stateSync)))'
+            - message: 'spec.nodeConfig is not supported under consensus engine Autobahn:
+                the engine''s config.toml keys are controller-derived'
+              rule: '!has(self.nodeConfig) || !has(self.consensus) || !has(self.consensus.engine)
+                || self.consensus.engine != ''Autobahn'''
+            - message: 'spec.nodeConfig can be neither added to nor removed from an
+                existing SeiNode: it is fixed at creation, so replace the node (dataVolume.import
+                can carry its data over)'
+              rule: has(self.nodeConfig) == has(oldSelf.nodeConfig)
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:

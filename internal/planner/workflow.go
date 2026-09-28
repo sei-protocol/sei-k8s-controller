@@ -63,6 +63,11 @@ func (p *stateSyncWorkflowPlanner) Validate(node *seiv1alpha1.SeiNode, wf *seiv1
 	if node.Spec.FullNode == nil {
 		return fmt.Errorf("stateSync workflow refuses non-full/RPC target %s/%s", node.Namespace, node.Name)
 	}
+	// The recipe's config-patch and configure-state-sync both write config.toml,
+	// which a node with nodeConfig mounts read-only.
+	if MountsNodeConfig(node) {
+		return fmt.Errorf("stateSync workflow refuses static-config target %s/%s", node.Namespace, node.Name)
+	}
 	return nil
 }
 

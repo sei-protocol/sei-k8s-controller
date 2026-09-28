@@ -31,7 +31,8 @@
 //
 // TaskPlan: the structure this package owns. Constructed by the plan builders
 //
-//	(buildBasePlan, buildNodeUpdatePlan, buildMarkReadyPlan, the group
+//	(buildBasePlan, buildGenesisPlan, assembleUpdatePlan,
+//	assembleStaticUpdatePlan, buildMarkReadyPlan, the group
 //	builders); persisted by the controller into .status.plan; read by the
 //	planner on subsequent reconciles; mutated in-memory by Executor. Carries
 //	Phase, the ordered Tasks, TargetPhase, FailedPhase, and on failure
@@ -111,6 +112,21 @@
 //     witnesses (spec-declared rpcServers or the canonical-syncer registry).
 //     Genesis (snap == nil) carries no such task.
 //     Guarded by TestStateSyncGate_S3Restore_OneSyncer_FailsClosed.
+//   - No config writer reaches a node that mounts its config: spec.nodeConfig
+//     mounts config.toml and app.toml read-only over the seid config
+//     directory, and a rename onto a mounted path from another mount
+//     namespace detaches the mount, leaving seid on the writer's file with
+//     nothing reporting the swap. MountsNodeConfig is the predicate; the CRD
+//     fixes spec.nodeConfig at creation, so the spec alone answers it.
+//     withoutManagedConfigTasks strips those tasks where the progression is
+//     assembled, staticConfigPlanner owns the Running arms, and
+//     mountedConfigWriterInPlan refuses any plan that still carries one,
+//     whichever builder produced it. config-validate is stripped too — it
+//     reports on a file the operator owns, and sei-config's legacy reader
+//     defaults a missing [sei] mode to full, so on a validator the verdict
+//     can be confidently wrong.
+//     Guarded by TestMountedConfigWriterInPlan and
+//     TestStaticInitPlanCarriesNoConfigWriter.
 //
 // # Zero-Value & Sentinel Semantics
 //
@@ -159,6 +175,14 @@
 // creation and clears it when the plan completes or fails. FailedPhase is
 // empty — failures retry on the next reconcile rather than transitioning to
 // Failed.
+//
+// Static-config update plans follow a Running node whose spec.nodeConfig names
+// the ConfigMaps supplying config.toml and app.toml. Its StatefulSet is
+// RollingUpdate with Parallel pod management, so the StatefulSet controller
+// replaces the pod on any template change.
+// staticConfigPlanner builds the plan in place of the mode's own:
+// apply-statefulset, apply-service, observe-image, mark-ready. It carries no
+// config task and no replace-pod, and sets no ConfigValuesHash.
 //
 // When no drift is detected for a Running node, no plan is built. The node
 // sits in steady state with no active plan.

@@ -183,7 +183,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return nil
 	}
 
-	mode, err := p.plannerForMode(node)
+	mode, err := p.plannerFor(node)
 	if err != nil {
 		return err
 	}
@@ -193,6 +193,15 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 	plan, err := mode.BuildPlan(node)
 	if err != nil {
+		return err
+	}
+	if writer := mountedConfigWriterInPlan(node, plan); writer != "" {
+		err := fmt.Errorf("plan carries %s on a node that mounts config.toml and app.toml from ConfigMaps: "+
+			"the task renames over the mount, which detaches it and leaves seid reading the task's file", writer)
+		// BuildPlan may already have stamped UpdateStarted. The plan is refused
+		// and never persisted, so clear the claim rather than leave a node
+		// reporting an update it does not have.
+		setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdatePlanBuildFailed, err.Error())
 		return err
 	}
 	if plan == nil {
@@ -337,6 +346,21 @@ func planFailureMessage(plan *seiv1alpha1.TaskPlan) string {
 		return fmt.Sprintf("task %s: %s", plan.FailedTaskDetail.Type, plan.FailedTaskDetail.Error)
 	}
 	return unknownValue
+}
+
+// plannerFor returns the NodePlanner for a SeiNode. A node whose config.toml
+// and app.toml come from operator ConfigMaps gets its mode planner wrapped in
+// staticConfigPlanner, which keeps the mode's own Validate and init plans and
+// replaces only the Running arm.
+func (r *NodeResolver) plannerFor(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
+	mode, err := r.plannerForMode(node)
+	if err != nil {
+		return nil, err
+	}
+	if !MountsNodeConfig(node) {
+		return mode, nil
+	}
+	return &staticConfigPlanner{base: mode, platform: r.Platform}, nil
 }
 
 // plannerForMode returns the appropriate NodePlanner for the SeiNode's
@@ -572,6 +596,7 @@ func buildBasePlan(
 	if err != nil {
 		return nil, err
 	}
+	sidecarProg = withoutManagedConfigTasks(node, sidecarProg)
 
 	// Infrastructure tasks run before sidecar tasks.
 	prog := make([]string, 0, 4+len(sidecarProg))
