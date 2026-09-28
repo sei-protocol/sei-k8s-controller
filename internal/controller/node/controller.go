@@ -8,7 +8,6 @@ import (
 
 	"go.opentelemetry.io/otel/metric"
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -92,7 +91,6 @@ type HeightReader func(ctx context.Context, node *seiv1alpha1.SeiNode) (int64, e
 // +kubebuilder:rbac:groups=sei.io,resources=seinodetaskworkflows/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sei.io,resources=seinodetaskworkflows/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch
@@ -483,7 +481,6 @@ func (r *SeiNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&seiv1alpha1.SeiNode{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&appsv1.StatefulSet{}).
-		Owns(&batchv1.Job{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Watches(&seiv1alpha1.SeiNodeTaskWorkflow{}, &workflowTargetHandler{}).

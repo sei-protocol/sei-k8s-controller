@@ -191,8 +191,6 @@ type StorageConfig struct {
 //
 // The per-role blocks size the seid container: each is optional and falls back
 // to the code-authoritative default for that role in internal/noderesource.
-// Both the long-running node container and the transient genesis-bootstrap Job
-// take this per-role footprint (the Job via noderesource.ResourcesForNode).
 type ResourcesConfig struct {
 	// Per-role overrides, keyed to sei.io/role.
 	Validator ResourceOverride `json:"validator"`

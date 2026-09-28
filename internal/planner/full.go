@@ -21,11 +21,6 @@ func (p *fullNodePlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if node.Spec.FullNode == nil {
 		return fmt.Errorf("fullNode sub-spec is nil")
 	}
-	if snap := node.Spec.FullNode.Snapshot; snap != nil && snap.BootstrapImage != "" {
-		if snap.S3 == nil || snap.S3.TargetHeight <= 0 {
-			return fmt.Errorf("fullNode: bootstrapImage requires s3 with targetHeight > 0")
-		}
-	}
 	if err := validateSnapshotGeneration(node.Spec.FullNode.SnapshotGeneration); err != nil {
 		return fmt.Errorf("fullNode: %w", err)
 	}
@@ -40,9 +35,6 @@ func (p *fullNodePlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 	intent := &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeFull,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides(node)), node.Spec.Overrides),
-	}
-	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, fn.Snapshot, intent)
 	}
 	return buildBasePlan(node, fn.Snapshot, intent)
 }

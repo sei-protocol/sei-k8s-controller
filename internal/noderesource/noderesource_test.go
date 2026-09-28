@@ -1006,7 +1006,7 @@ func TestBuildNodePodSpec_Dedicated_AddsRequesterTermAndLabel(t *testing.T) {
 	terms := spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
 	g.Expect(terms).To(HaveLen(2))
 	// Defensive term keys on the exclusive label; requester term keys on
-	// sei.io/node Exists (spans StatefulSet + bootstrap pods).
+	// sei.io/node Exists (spans every Sei pod).
 	g.Expect(terms[0].LabelSelector.MatchExpressions[0].Key).To(Equal(DedicatedNodeKey))
 	g.Expect(terms[1].LabelSelector.MatchExpressions[0].Key).To(Equal(NodeLabel))
 	g.Expect(terms[1].LabelSelector.MatchExpressions[0].Operator).To(Equal(metav1.LabelSelectorOpExists))

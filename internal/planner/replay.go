@@ -45,9 +45,6 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 		Mode:      seiconfig.ModeFull,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides()), node.Spec.Overrides),
 	}
-	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, &node.Spec.Replayer.Snapshot, intent)
-	}
 	return buildBasePlan(node, &node.Spec.Replayer.Snapshot, intent)
 }
 
