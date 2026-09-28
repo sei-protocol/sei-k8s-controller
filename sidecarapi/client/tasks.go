@@ -50,7 +50,6 @@ const (
 	TaskTypeConfigureStateSync = string(wire.TaskConfigureStateSync)
 	TaskTypeSnapshotUpload     = string(wire.TaskSnapshotUpload)
 	TaskTypeSnapshotUploadOnce = string(wire.TaskSnapshotUploadOnce)
-	TaskTypeResultExport       = string(wire.TaskResultExport)
 	TaskTypeAwaitCondition     = string(wire.TaskAwaitCondition)
 
 	TaskTypeGenerateIdentity       = string(wire.TaskGenerateIdentity)
@@ -426,80 +425,6 @@ func (t ConfigReloadTask) ToTaskRequest() TaskRequest {
 		fields[k] = v
 	}
 	p := map[string]any{"fields": fields}
-	req := TaskRequest{Type: t.TaskType(), Params: &p}
-	return req
-}
-
-// ResultExportTask queries the local seid RPC for block results and uploads
-// them in paginated NDJSON files to S3. Setting CanonicalRPC enables comparison
-// mode — the sidecar compares local block results against the canonical chain —
-// and the remaining fields tune that comparison. By default the task completes
-// on the first divergence; ContinueOnDivergence surveys past divergences and
-// runs until stopped.
-type ResultExportTask struct {
-	Bucket       string
-	Prefix       string
-	Region       string
-	CanonicalRPC string
-
-	// Comparison-mode tuning — all require CanonicalRPC. MigrationMode keys the
-	// verdict on execution results for an AppHash-breaking migration shadow;
-	// ContinueOnDivergence surveys past divergences instead of halting on the
-	// first; ShadowEVMRPC + CanonicalEVMRPC enable Layer 2 (logical state) diff,
-	// with TraceRPC sourcing each block's touched keys.
-	MigrationMode        bool
-	ContinueOnDivergence bool
-	ShadowEVMRPC         string
-	CanonicalEVMRPC      string
-	TraceRPC             string
-}
-
-func (t ResultExportTask) TaskType() string { return TaskTypeResultExport }
-
-func (t ResultExportTask) Validate() error {
-	if t.Bucket == "" {
-		return fmt.Errorf("result-export: missing required field Bucket")
-	}
-	if t.Region == "" {
-		return fmt.Errorf("result-export: missing required field Region")
-	}
-	// The comparison-tuning fields are silently inert without CanonicalRPC (the
-	// plain export path never reads them), so reject that misconfiguration here
-	// rather than let it pass as a no-op.
-	if t.CanonicalRPC == "" &&
-		(t.MigrationMode || t.ContinueOnDivergence ||
-			t.ShadowEVMRPC != "" || t.CanonicalEVMRPC != "" || t.TraceRPC != "") {
-		return fmt.Errorf("result-export: comparison-mode fields require CanonicalRPC")
-	}
-	return nil
-}
-
-func (t ResultExportTask) ToTaskRequest() TaskRequest {
-	p := map[string]any{
-		"bucket": t.Bucket,
-		"region": t.Region,
-	}
-	if t.Prefix != "" {
-		p["prefix"] = t.Prefix
-	}
-	if t.CanonicalRPC != "" {
-		p["canonicalRpc"] = t.CanonicalRPC
-	}
-	if t.MigrationMode {
-		p["migrationMode"] = true
-	}
-	if t.ContinueOnDivergence {
-		p["continueOnDivergence"] = true
-	}
-	if t.ShadowEVMRPC != "" {
-		p["shadowEvmRpc"] = t.ShadowEVMRPC
-	}
-	if t.CanonicalEVMRPC != "" {
-		p["canonicalEvmRpc"] = t.CanonicalEVMRPC
-	}
-	if t.TraceRPC != "" {
-		p["traceRpc"] = t.TraceRPC
-	}
 	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
 }

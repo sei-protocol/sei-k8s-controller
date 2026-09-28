@@ -194,29 +194,6 @@ type FreezeSpec struct {
 	Height int64 `json:"height"`
 }
 
-// ResultExportConfig configures the node to export block-execution results.
-// One or more use-case sub-structs may be enabled. An empty ResultExportConfig
-// (no sub-struct set) is rejected by the planner as a likely user typo.
-type ResultExportConfig struct {
-	// ShadowResult configures the node to generate and export shadow-result
-	// pages, comparing local block execution results against a canonical
-	// chain via app-hash divergence detection.
-	// +optional
-	ShadowResult *ShadowResultConfig `json:"shadowResult,omitempty"`
-}
-
-// ShadowResultConfig configures shadow-result generation. The sidecar queries
-// the local RPC endpoint for block_results, uploads them in compressed NDJSON
-// pages to the platform result-export bucket, and compares each page's app-hash
-// against the canonical chain. The export task completes when divergence is
-// detected.
-type ShadowResultConfig struct {
-	// CanonicalRPC is the HTTP RPC endpoint of the canonical chain node
-	// to compare block-execution results against.
-	// +kubebuilder:validation:MinLength=1
-	CanonicalRPC string `json:"canonicalRpc"`
-}
-
 // SidecarConfig configures the sei-sidecar container.
 type SidecarConfig struct {
 	// Image overrides the sidecar container image for this node, in place of the

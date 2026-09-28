@@ -1,7 +1,5 @@
 package rpc
 
-import "encoding/json"
-
 // StatusResult is the inner "result" of the CometBFT /status response,
 // after the JSON-RPC envelope has been stripped by Client.Get.
 type StatusResult struct {
@@ -44,18 +42,4 @@ type Block struct {
 type BlockHeader struct {
 	AppHash         string `json:"app_hash"`
 	LastResultsHash string `json:"last_results_hash"`
-}
-
-// BlockResultsResult is the inner "result" of the CometBFT /block_results response.
-type BlockResultsResult struct {
-	TxsResults []TxResult `json:"txs_results"`
-}
-
-// TxResult holds a single transaction execution result.
-type TxResult struct {
-	Code      int             `json:"code"`
-	Log       string          `json:"log"`
-	GasUsed   string          `json:"gas_used"`
-	GasWanted string          `json:"gas_wanted"`
-	Events    json.RawMessage `json:"events"`
 }
