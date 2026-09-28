@@ -47,9 +47,7 @@ func MountsNodeConfig(node *seiv1alpha1.SeiNode) bool {
 // it reports on a file the operator wrote, through sei-config's legacy reader,
 // which falls back to mode "full" when app.toml carries no [sei] mode — so on
 // a validator it passes a config seid will refuse. A verdict that can be
-// confidently wrong is worse than no verdict. The check that matters is
-// noderesource.CheckNodeConfig, which holds the StatefulSet until both files
-// load.
+// confidently wrong is worse than no verdict. The files are the operator's.
 func withoutManagedConfigTasks(node *seiv1alpha1.SeiNode, prog []string) []string {
 	if !MountsNodeConfig(node) {
 		return prog

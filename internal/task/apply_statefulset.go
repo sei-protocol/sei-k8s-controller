@@ -54,7 +54,7 @@ func (e *applyStatefulSetExecution) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	sts, err := noderesource.SyncStatefulSet(ctx, e.cfg.KubeClient, e.cfg.APIReader, e.cfg.Scheme, node, e.cfg.Platform)
+	sts, err := noderesource.SyncStatefulSet(ctx, e.cfg.KubeClient, e.cfg.Scheme, node, e.cfg.Platform)
 	if err != nil {
 		return fmt.Errorf("applying statefulset: %w", err)
 	}

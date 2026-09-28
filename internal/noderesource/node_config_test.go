@@ -1,17 +1,11 @@
 package noderesource
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
@@ -158,95 +152,4 @@ func TestNodeConfigRollsViaStatefulSet(t *testing.T) {
 	plain := mustGenerateStatefulSet(t, newSnapshotNode("snap-0", "default"), platformtest.Config())
 	g.Expect(plain.Spec.UpdateStrategy.Type).To(Equal(appsv1.OnDeleteStatefulSetStrategyType))
 	g.Expect(plain.Spec.PodManagementPolicy).To(BeEmpty(), "the API default applies")
-}
-
-func nodeConfigMap(name string, data map[string]string) *corev1.ConfigMap {
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
-		Data:       data,
-	}
-}
-
-func TestCheckNodeConfig(t *testing.T) {
-	const validTOML = "moniker = \"node-1\"\n"
-	both := map[string]string{ConfigTomlKey: validTOML, AppTomlKey: validTOML}
-
-	cases := []struct {
-		name    string
-		objs    []client.Object
-		wantErr string
-	}{
-		{"both keys valid", []client.Object{
-			nodeConfigMap(testConfigMapName, both), nodeConfigMap(testAppConfigMapName, both)}, ""},
-		{"config configmap absent", []client.Object{nodeConfigMap(testAppConfigMapName, both)}, "not found"},
-		{"app configmap absent", []client.Object{nodeConfigMap(testConfigMapName, both)}, "not found"},
-		{"app.toml missing", []client.Object{
-			nodeConfigMap(testConfigMapName, both),
-			nodeConfigMap(testAppConfigMapName, map[string]string{ConfigTomlKey: validTOML})}, `no "app.toml" key`},
-		{"config.toml missing", []client.Object{
-			nodeConfigMap(testConfigMapName, map[string]string{AppTomlKey: validTOML}),
-			nodeConfigMap(testAppConfigMapName, both)}, `no "config.toml" key`},
-		{"app.toml empty", []client.Object{
-			nodeConfigMap(testConfigMapName, both),
-			nodeConfigMap(testAppConfigMapName, map[string]string{AppTomlKey: "   \n"})}, "is empty"},
-		{"config.toml malformed", []client.Object{
-			nodeConfigMap(testConfigMapName, map[string]string{ConfigTomlKey: "moniker = \n[[["}),
-			nodeConfigMap(testAppConfigMapName, both)}, "not valid TOML"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			g := NewWithT(t)
-			c := fake.NewClientBuilder().WithScheme(newSyncTestScheme(t)).WithObjects(tc.objs...).Build()
-
-			err := CheckNodeConfig(context.Background(), c, nodeConfigNode())
-			if tc.wantErr == "" {
-				g.Expect(err).NotTo(HaveOccurred())
-				return
-			}
-			g.Expect(errors.Is(err, ErrNodeConfigUnresolved)).To(BeTrue(), "got %v", err)
-			g.Expect(err.Error()).To(ContainSubstring(tc.wantErr))
-		})
-	}
-
-	t.Run("no nodeConfig reads nothing", func(t *testing.T) {
-		g := NewWithT(t)
-		c := fake.NewClientBuilder().WithScheme(newSyncTestScheme(t)).Build()
-		g.Expect(CheckNodeConfig(context.Background(), c, newSnapshotNode("snap-0", "default"))).To(Succeed())
-	})
-}
-
-// TestSyncStatefulSet_HoldsWhileNodeConfigUnresolved pins the pre-check. The
-// StatefulSet rolls on any template change, so applying a reference that
-// cannot be mounted would replace the working pod with a stuck one.
-func TestSyncStatefulSet_HoldsWhileNodeConfigUnresolved(t *testing.T) {
-	g := NewWithT(t)
-	ctx := context.Background()
-	s := newSyncTestScheme(t)
-	valid := map[string]string{ConfigTomlKey: "moniker = \"a\"\n", AppTomlKey: "pruning = \"default\"\n"}
-
-	node := nodeConfigNode()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(node, nodeConfigMap(testConfigMapName, valid), nodeConfigMap(testAppConfigMapName, valid)).
-		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
-		Build()
-
-	_, err := SyncStatefulSet(ctx, c, c, s, node, platformtest.Config())
-	g.Expect(err).NotTo(HaveOccurred())
-
-	node.Spec.NodeConfig.ConfigRef.Name = "rpc-config-v2"
-	_, err = SyncStatefulSet(ctx, c, c, s, node, platformtest.Config())
-	g.Expect(errors.Is(err, ErrNodeConfigUnresolved)).To(BeTrue(), "got %v", err)
-
-	live := &appsv1.StatefulSet{}
-	g.Expect(c.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, live)).To(Succeed())
-	cfgVol := findVolume(live.Spec.Template.Spec.Volumes, nodeConfigConfigVolumeName)
-	g.Expect(cfgVol).NotTo(BeNil())
-	g.Expect(cfgVol.ConfigMap.Name).To(Equal(testConfigMapName), "the live template is left as it was")
-
-	g.Expect(c.Create(ctx, nodeConfigMap("rpc-config-v2", valid))).To(Succeed())
-	_, err = SyncStatefulSet(ctx, c, c, s, node, platformtest.Config())
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(c.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, live)).To(Succeed())
-	g.Expect(findVolume(live.Spec.Template.Spec.Volumes, nodeConfigConfigVolumeName).ConfigMap.Name).To(Equal("rpc-config-v2"))
 }

@@ -179,8 +179,7 @@
 // Static-config update plans follow a Running node whose spec.nodeConfig names
 // the ConfigMaps supplying config.toml and app.toml. Its StatefulSet is
 // RollingUpdate with Parallel pod management, so the StatefulSet controller
-// replaces the pod on any template change; the controller holds the template
-// while either ConfigMap cannot be loaded (noderesource.CheckNodeConfig).
+// replaces the pod on any template change.
 // staticConfigPlanner builds the plan in place of the mode's own:
 // apply-statefulset, apply-service, observe-image, mark-ready. It carries no
 // config task and no replace-pod, and sets no ConfigValuesHash.

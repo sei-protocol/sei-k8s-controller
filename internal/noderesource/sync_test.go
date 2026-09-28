@@ -56,7 +56,7 @@ func TestSyncStatefulSet_FirstCreate(t *testing.T) {
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 
-	sts, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	sts, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).NotTo(BeNil(), "first-create must return the applied StatefulSet")
 	g.Expect(sts.Name).To(Equal("first-create"))
@@ -97,7 +97,7 @@ func TestSyncStatefulSet_ImpostorDeletes(t *testing.T) {
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 
-	sts, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	sts, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).To(BeNil(), "impostor branch returns nil so caller requeues without applying")
 
@@ -139,7 +139,7 @@ func TestSyncStatefulSet_ImpostorThenApply(t *testing.T) {
 
 	// Reconcile 1: detect mismatch, Delete, clear stale tracking,
 	// return nil.
-	sts, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	sts, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).To(BeNil())
 	g.Expect(node.Status.StatefulSet).To(BeNil(),
@@ -147,7 +147,7 @@ func TestSyncStatefulSet_ImpostorThenApply(t *testing.T) {
 
 	// Reconcile 2: Status was cleared, falls into adopt-on-observe.
 	// Get sees NotFound (impostor deleted), Apply creates fresh.
-	sts, err = SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	sts, err = SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).NotTo(BeNil(), "second reconcile must Apply fresh")
 	g.Expect(sts.UID).NotTo(Equal(types.UID(originalTestUID)))
@@ -184,13 +184,13 @@ func TestSyncStatefulSet_ImpostorClearPreventsChurn(t *testing.T) {
 
 	// Reconcile N (controller wrapper): impostor detected, Deleted,
 	// Status.StatefulSet cleared.
-	_, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	_, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(node.Status.StatefulSet).To(BeNil())
 
 	// Still inside reconcile N (plan task): SyncStatefulSet again.
 	// Status is nil, impostor check skipped, Get NotFound, Apply lands.
-	taskSTS, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	taskSTS, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(taskSTS).NotTo(BeNil(), "task call after impostor clear must Apply a fresh StatefulSet")
 	newUID := taskSTS.UID
@@ -200,7 +200,7 @@ func TestSyncStatefulSet_ImpostorClearPreventsChurn(t *testing.T) {
 	// when SyncStatefulSet returned nil in reconcile N). With the
 	// clear, this call adopts the freshly Applied STS rather than
 	// deleting it as another impostor.
-	adopted, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	adopted, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(adopted).NotTo(BeNil())
 	g.Expect(adopted.UID).To(Equal(newUID),
@@ -234,7 +234,7 @@ func TestSyncStatefulSet_MatchingUID(t *testing.T) {
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 
-	sts, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	sts, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).NotTo(BeNil())
 
@@ -264,7 +264,7 @@ func TestSyncStatefulSet_TrackedButMissing(t *testing.T) {
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 
-	sts, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	sts, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).NotTo(BeNil(), "tracked-but-missing must Apply fresh on the same reconcile")
 }
@@ -285,7 +285,7 @@ func TestSyncStatefulSet_PausedReplicasZero(t *testing.T) {
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 
-	sts, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	sts, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(sts).NotTo(BeNil())
 	g.Expect(sts.Spec.Replicas).NotTo(BeNil())
@@ -313,7 +313,7 @@ func TestSyncStatefulSet_SetsControllerReferenceToNode(t *testing.T) {
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 
-	_, err := SyncStatefulSet(context.Background(), c, c, s, node, platformtest.Config())
+	_, err := SyncStatefulSet(context.Background(), c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 
 	live := &appsv1.StatefulSet{}
@@ -348,11 +348,11 @@ func TestSyncStatefulSet_ReApplyKeepsControllerReference(t *testing.T) {
 		WithStatusSubresource(&seiv1alpha1.SeiNode{}).
 		Build()
 
-	first, err := SyncStatefulSet(ctx, c, c, s, node, platformtest.Config())
+	first, err := SyncStatefulSet(ctx, c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 	node.Status.StatefulSet = &seiv1alpha1.StatefulSetRef{Name: first.Name, UID: first.UID}
 
-	_, err = SyncStatefulSet(ctx, c, c, s, node, platformtest.Config())
+	_, err = SyncStatefulSet(ctx, c, s, node, platformtest.Config())
 	g.Expect(err).NotTo(HaveOccurred())
 
 	live := &appsv1.StatefulSet{}

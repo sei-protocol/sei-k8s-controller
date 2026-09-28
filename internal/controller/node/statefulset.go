@@ -2,13 +2,11 @@ package node
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
@@ -33,15 +31,7 @@ import (
 // SeiNode that still exists, not as the controller fighting an operator.
 func (r *SeiNodeReconciler) reconcileStatefulSet(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	tracked := node.Status.StatefulSet
-	sts, err := noderesource.SyncStatefulSet(ctx, r.Client, r.configMapReader(), r.Scheme, node, r.Platform)
-	if errors.Is(err, noderesource.ErrNodeConfigUnresolved) {
-		// The live StatefulSet keeps its template, so the running pod keeps
-		// running. Not a reconcile failure: the rest of the reconcile proceeds,
-		// and the steady-state poll re-checks.
-		r.Recorder.Eventf(node, corev1.EventTypeWarning, "NodeConfigUnresolved",
-			"Holding the StatefulSet at its current template: %v", err)
-		return nil
-	}
+	sts, err := noderesource.SyncStatefulSet(ctx, r.Client, r.Scheme, node, r.Platform)
 	if err != nil {
 		return fmt.Errorf("syncing statefulset: %w", err)
 	}
@@ -89,13 +79,4 @@ func (r *SeiNodeReconciler) backfillNodeIsolation(ctx context.Context, node *sei
 	}
 	node.Status.CurrentNodeIsolation = noderesource.PodNodeIsolation(pod)
 	return nil
-}
-
-// configMapReader reads the ConfigMaps a spec.nodeConfig names. Uncached, so
-// the controller does not hold an informer over every ConfigMap it can see.
-func (r *SeiNodeReconciler) configMapReader() client.Reader {
-	if r.APIReader != nil {
-		return r.APIReader
-	}
-	return r.Client
 }

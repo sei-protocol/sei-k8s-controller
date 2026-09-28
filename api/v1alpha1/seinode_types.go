@@ -165,10 +165,8 @@ type SeiNodeSpec struct {
 	// soon as it is applied. The references are the unit of change. Kubelet
 	// pins a subPath mount at pod start, so editing a ConfigMap in place does
 	// not reach a running pod; publish under a new name and the node rolls.
-	//
-	// The controller holds the StatefulSet at its current template while
-	// either ConfigMap is missing, lacks its key, or does not parse as TOML,
-	// so a bad reference never replaces a working pod.
+	// The controller does not read or check the ConfigMaps: a reference that
+	// cannot be mounted leaves the new pod in ContainerCreating.
 	// +optional
 	NodeConfig *NodeConfig `json:"nodeConfig,omitempty"`
 
@@ -415,8 +413,6 @@ type NodeConfig struct {
 type ConfigFileRef struct {
 	// Name of an existing ConfigMap in the SeiNode's namespace. The file is
 	// read from the key matching its own name, config.toml or app.toml.
-	// The controller holds the StatefulSet at its current template until the
-	// ConfigMap exists and carries that key.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
