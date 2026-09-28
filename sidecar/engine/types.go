@@ -22,7 +22,6 @@ const (
 	TaskConfigPatch                = wire.TaskConfigPatch
 	TaskConfigApply                = wire.TaskConfigApply
 	TaskConfigValidate             = wire.TaskConfigValidate
-	TaskConfigReload               = wire.TaskConfigReload
 	TaskMarkReady                  = wire.TaskMarkReady
 	TaskRestartSeid                = wire.TaskRestartSeid
 	TaskConfigureGenesis           = wire.TaskConfigureGenesis
@@ -39,7 +38,6 @@ const (
 	TaskGovSoftwareUpgrade         = wire.TaskGovSoftwareUpgrade
 	TaskGovParamChange             = wire.TaskGovParamChange
 	TaskGovUpdateInstantiateConfig = wire.TaskGovUpdateInstantiateConfig
-	TaskEvmLogicalDigest           = wire.TaskEvmLogicalDigest
 	TaskMarkNotReady               = wire.TaskMarkNotReady
 	TaskStopSeid                   = wire.TaskStopSeid
 	TaskResetData                  = wire.TaskResetData

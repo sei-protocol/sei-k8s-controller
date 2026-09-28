@@ -121,7 +121,6 @@ var serveCmd = cli.Command{
 			engine.TaskConfigPatch:                tasks.NewConfigPatcher(homeDir).Handler(),
 			engine.TaskConfigApply:                tasks.NewConfigApplier(homeDir).Handler(),
 			engine.TaskConfigValidate:             tasks.NewConfigValidator(homeDir).Handler(),
-			engine.TaskConfigReload:               tasks.NewConfigReloader(homeDir).Handler(),
 			engine.TaskMarkReady:                  tasks.MarkReadyHandler(),
 			engine.TaskMarkNotReady:               tasks.NewMarkNotReadier(store).Handler(),
 			engine.TaskRestartSeid:                tasks.NewRestartSeider().Handler(),
@@ -141,7 +140,6 @@ var serveCmd = cli.Command{
 			engine.TaskGovSoftwareUpgrade:         tasks.NewGovSoftwareUpgrader(execCfg).Handler(),
 			engine.TaskGovParamChange:             tasks.NewGovParamChanger(execCfg).Handler(),
 			engine.TaskGovUpdateInstantiateConfig: tasks.NewGovInstantiateConfigUpdater(execCfg).Handler(),
-			engine.TaskEvmLogicalDigest:           tasks.NewEvmLogicalDigester(nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)

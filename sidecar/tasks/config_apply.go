@@ -111,12 +111,6 @@ func resultError(result *seiconfig.ConfigResult) error {
 	return diagnosticsError(result.Diagnostics)
 }
 
-// validationError formats ValidationResult diagnostics as a structured JSON
-// error. Used by handlers that call seiconfig.Validate() directly (e.g. reload).
-func validationError(vr *seiconfig.ValidationResult) error {
-	return diagnosticsError(vr.Diagnostics)
-}
-
 // diagnosticsError converts a slice of Diagnostic findings into a structured
 // JSON error string suitable for returning to the controller.
 func diagnosticsError(diags []seiconfig.Diagnostic) error {

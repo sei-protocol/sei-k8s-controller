@@ -43,7 +43,6 @@ const (
 	TaskTypeConfigPatch        = string(wire.TaskConfigPatch)
 	TaskTypeConfigApply        = string(wire.TaskConfigApply)
 	TaskTypeConfigValidate     = string(wire.TaskConfigValidate)
-	TaskTypeConfigReload       = string(wire.TaskConfigReload)
 	TaskTypeMarkReady          = string(wire.TaskMarkReady)
 	TaskTypeRestartSeid        = string(wire.TaskRestartSeid)
 	TaskTypeConfigureGenesis   = string(wire.TaskConfigureGenesis)
@@ -401,31 +400,6 @@ func (t ConfigValidateTask) Validate() error  { return nil }
 
 func (t ConfigValidateTask) ToTaskRequest() TaskRequest {
 	req := TaskRequest{Type: t.TaskType()}
-	return req
-}
-
-// ConfigReloadTask patches hot-reloadable fields on disk and signals seid
-// to re-read its configuration.
-type ConfigReloadTask struct {
-	Fields map[string]string
-}
-
-func (t ConfigReloadTask) TaskType() string { return TaskTypeConfigReload }
-
-func (t ConfigReloadTask) Validate() error {
-	if len(t.Fields) == 0 {
-		return fmt.Errorf("config-reload: at least one field is required")
-	}
-	return nil
-}
-
-func (t ConfigReloadTask) ToTaskRequest() TaskRequest {
-	fields := make(map[string]any, len(t.Fields))
-	for k, v := range t.Fields {
-		fields[k] = v
-	}
-	p := map[string]any{"fields": fields}
-	req := TaskRequest{Type: t.TaskType(), Params: &p}
 	return req
 }
 

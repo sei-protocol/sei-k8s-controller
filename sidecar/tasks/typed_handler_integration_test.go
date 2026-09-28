@@ -147,30 +147,6 @@ func TestDeserialize_ConfigApply(t *testing.T) {
 	}
 }
 
-// TestDeserialize_ConfigReload verifies that the config-reload handler
-// correctly deserializes the fields map from the wire format.
-func TestDeserialize_ConfigReload(t *testing.T) {
-	// config-reload needs a valid on-disk config to read.
-	// We just check that deserialization doesn't fail when fields is empty
-	// (it'll fail with a validation error, not a parse error).
-	handler := NewConfigReloader(t.TempDir()).Handler()
-
-	params := map[string]any{
-		"fields": map[string]any{},
-	}
-
-	_, err := handler(context.Background(), params)
-	if err == nil {
-		t.Fatal("expected error for empty fields, got nil")
-	}
-	if strings.Contains(err.Error(), "parsing params") {
-		t.Fatalf("deserialization failed: %v", err)
-	}
-	if !strings.Contains(err.Error(), "at least one field") {
-		t.Errorf("expected 'at least one field' error, got: %v", err)
-	}
-}
-
 // TestNewSnapshotUploader_RejectsEmptyConfig verifies that the constructor
 // fails fast when bucket, region, or chainID is empty rather than producing
 // an uploader whose runLoop polls forever uploading nothing.
