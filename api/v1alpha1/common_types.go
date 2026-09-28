@@ -128,7 +128,7 @@ type SnapshotSource struct {
 // {SEI_SNAPSHOT_BUCKET}/{chainID}/state-sync/ and selects the latest
 // snapshot via latest.txt.
 type S3SnapshotSource struct {
-	// TargetHeight is the block height the node should sync to after restoring.
+	// TargetHeight selects the highest available snapshot at or below this height.
 	// +kubebuilder:validation:Minimum=1
 	TargetHeight int64 `json:"targetHeight"`
 }

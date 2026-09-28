@@ -477,8 +477,8 @@ spec:
                         description: S3 downloads a snapshot archive from an S3 bucket.
                         properties:
                           targetHeight:
-                            description: TargetHeight is the block height the node
-                              should sync to after restoring.
+                            description: TargetHeight selects the highest available
+                              snapshot at or below this height.
                             format: int64
                             minimum: 1
                             type: integer
@@ -712,8 +712,8 @@ spec:
                         description: S3 downloads a snapshot archive from an S3 bucket.
                         properties:
                           targetHeight:
-                            description: TargetHeight is the block height the node
-                              should sync to after restoring.
+                            description: TargetHeight selects the highest available
+                              snapshot at or below this height.
                             format: int64
                             minimum: 1
                             type: integer
@@ -1184,8 +1184,8 @@ spec:
                         description: S3 downloads a snapshot archive from an S3 bucket.
                         properties:
                           targetHeight:
-                            description: TargetHeight is the block height the node
-                              should sync to after restoring.
+                            description: TargetHeight selects the highest available
+                              snapshot at or below this height.
                             format: int64
                             minimum: 1
                             type: integer
