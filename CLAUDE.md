@@ -40,6 +40,8 @@ The rollout is controller-driven, not Kubernetes-driven: StatefulSets use `Updat
 
 `spec.sidecar.image` still overrides `images.sidecar` per node. Pin only images whose entrypoint matches what the controller renders.
 
+**Removing a task type is also an ordered deploy.** A persisted `status.plan` that references a type missing from the new controller's registry (`internal/task/task.go`) fails with `UnknownTaskTypeError`, which fails the plan and lands the node in terminal `Failed`. Recreating the SeiNode garbage-collects its owned data PVC. Before bumping a controller that drops a type, drain in-flight plans that use it, e.g. for the removed bootstrap types: `kubectl get seinodes -A -o json | jq '.items[] | select(.status.plan.tasks[]?.type | test("bootstrap")) | .metadata.name'`.
+
 Two startup refusals in `sidecar/` are load-bearing; do not soften them into defaults:
 
 - `SEI_HOME` is **required**, with no fallback. It previously defaulted to `/sei` while the controller mounts the data PVC at `$HOME/.sei`, so a dropped value produced a running, probe-passing sidecar writing genesis and config into an empty directory.
