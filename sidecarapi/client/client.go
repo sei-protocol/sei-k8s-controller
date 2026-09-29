@@ -18,6 +18,10 @@ const DefaultPort int32 = 7777
 // ErrNotFound is returned when the requested task does not exist (HTTP 404).
 var ErrNotFound = errors.New("sidecar: task not found")
 
+// ErrHashLogNotFound is returned when the hash log directory or the requested
+// hash log file does not exist (HTTP 404).
+var ErrHashLogNotFound = errors.New("sidecar: hash log not found")
+
 // SidecarClient wraps the generated ClientWithResponses with a simpler,
 // error-oriented API.
 type SidecarClient struct {
@@ -233,6 +237,52 @@ func (c *SidecarClient) GetNodeID(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("node-id response missing nodeId field")
 	}
 	return result.NodeID, nil
+}
+
+// ListHashLog returns the node's hash log files, lowest file index first.
+func (c *SidecarClient) ListHashLog(ctx context.Context) ([]HashLogFile, error) {
+	resp, err := c.inner.ListHashLogWithResponse(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing sidecar hash log: %w", err)
+	}
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		if resp.JSON200 == nil {
+			return nil, fmt.Errorf("sidecar hash log list returned 200 but empty body")
+		}
+		return resp.JSON200.Files, nil
+	case http.StatusNotFound:
+		return nil, ErrHashLogNotFound
+	default:
+		return nil, fmt.Errorf("sidecar hash log list returned %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
+	}
+}
+
+// ReadHashLogFile returns the bytes of the named hash log file from offset to
+// its current end. It returns no bytes when offset is at or past the end.
+func (c *SidecarClient) ReadHashLogFile(ctx context.Context, name string, offset int64) ([]byte, error) {
+	if offset < 0 {
+		return nil, fmt.Errorf("hash log read offset %d is negative", offset)
+	}
+	params := &GetHashLogFileParams{}
+	if offset > 0 {
+		r := fmt.Sprintf("bytes=%d-", offset)
+		params.Range = &r
+	}
+	resp, err := c.inner.GetHashLogFileWithResponse(ctx, name, params)
+	if err != nil {
+		return nil, fmt.Errorf("reading sidecar hash log file %s: %w", name, err)
+	}
+	switch resp.StatusCode() {
+	case http.StatusOK, http.StatusPartialContent:
+		return resp.Body, nil
+	case http.StatusRequestedRangeNotSatisfiable:
+		return nil, nil
+	case http.StatusNotFound:
+		return nil, ErrHashLogNotFound
+	default:
+		return nil, fmt.Errorf("sidecar hash log file %s returned %d: %s", name, resp.StatusCode(), bytes.TrimSpace(resp.Body))
+	}
 }
 
 // ---------------------------------------------------------------------------

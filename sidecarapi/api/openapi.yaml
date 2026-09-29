@@ -26,7 +26,7 @@ info:
       - `/v0/metrics` — Prometheus scrape
 
       `kube-rbac-proxy` must include all four in its `--allow-paths`.
-  version: 0.8.0
+  version: 0.9.0
   license:
     name: Apache-2.0
 
@@ -181,6 +181,80 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v0/hashlog:
+    get:
+      operationId: listHashLog
+      summary: List the node's hash log files
+      description: |
+        Lists the files in seid's hash log directory
+        (`$SEI_HOME/data/hash.log`), in file-index order. Sealed files are
+        immutable; the one unsealed file is the one seid is appending to.
+      security:
+        - remoteUserHeader: []
+      responses:
+        "200":
+          description: Hash log files, lowest index first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HashLogListResponse"
+        "404":
+          description: The hash log directory does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v0/hashlog/{name}:
+    get:
+      operationId: getHashLogFile
+      summary: Read one hash log file
+      description: |
+        Returns the file's raw CSV bytes. Honors `Range`, so a caller can
+        read only what was appended since its last read of an unsealed
+        file. A file listed as unsealed may be sealed (renamed) before it
+        is read, which returns 404; list again to find its sealed name.
+      security:
+        - remoteUserHeader: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Range
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Whole file.
+          content:
+            text/csv:
+              schema:
+                type: string
+        "206":
+          description: Requested byte range.
+          content:
+            text/csv:
+              schema:
+                type: string
+        "400":
+          description: The name is not a hash log file name.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: No such file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "416":
+          description: The range starts at or past the end of the file.
+
 components:
   securitySchemes:
     remoteUserHeader:
@@ -236,6 +310,30 @@ components:
             (CometBFT /status, or eth_blockNumber in EVM-only mode) at
             request time. Absent when no local RPC answered; never zero
             as a stand-in for unreadable.
+
+    HashLogFile:
+      type: object
+      required: [name, index, size, sealed]
+      properties:
+        name:
+          type: string
+        index:
+          type: integer
+          format: uint64
+        size:
+          type: integer
+          format: int64
+        sealed:
+          type: boolean
+
+    HashLogListResponse:
+      type: object
+      required: [files]
+      properties:
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/HashLogFile"
 
     TaskSubmitResponse:
       type: object
