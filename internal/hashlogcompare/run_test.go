@@ -8,10 +8,23 @@ import (
 
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
+
+// value reads the current value of a single gauge or counter series.
+func value(t *testing.T, m prometheus.Metric) float64 {
+	t.Helper()
+	var out dto.Metric
+	if err := m.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	if c := out.GetCounter(); c != nil {
+		return c.GetValue()
+	}
+	return out.GetGauge().GetValue()
+}
 
 func newTestRunner(migrating, reserve Source) (*pairRunner, *Metrics) {
 	m := NewMetrics(prometheus.NewRegistry())
@@ -39,12 +52,12 @@ func TestPairRunner_MatchingLogs(t *testing.T) {
 	pr, m := newTestRunner(migrating, reserve)
 
 	pr.poll(t.Context())
-	g.Expect(testutil.ToFloat64(m.ComparedHeights.WithLabelValues(pr.labels...))).To(Equal(8.0))
-	g.Expect(testutil.ToFloat64(m.LastComparedHeight.WithLabelValues(pr.labels...))).To(Equal(8.0))
-	g.Expect(testutil.ToFloat64(m.LastComparedTimestamp.WithLabelValues(pr.labels...))).To(Equal(1_800_000_000.0))
-	g.Expect(testutil.ToFloat64(m.Diverged.WithLabelValues(pr.labels...))).To(BeZero())
-	g.Expect(testutil.ToFloat64(m.Mismatches.WithLabelValues(pr.labels...))).To(BeZero())
-	g.Expect(testutil.ToFloat64(m.SourceHeight.WithLabelValues(append(pr.labels, RoleMigrating)...))).To(Equal(10.0))
+	g.Expect(value(t, m.ComparedHeights.WithLabelValues(pr.labels...))).To(Equal(8.0))
+	g.Expect(value(t, m.LastComparedHeight.WithLabelValues(pr.labels...))).To(Equal(8.0))
+	g.Expect(value(t, m.LastComparedTimestamp.WithLabelValues(pr.labels...))).To(Equal(1_800_000_000.0))
+	g.Expect(value(t, m.Diverged.WithLabelValues(pr.labels...))).To(BeZero())
+	g.Expect(value(t, m.Mismatches.WithLabelValues(pr.labels...))).To(BeZero())
+	g.Expect(value(t, m.SourceHeight.WithLabelValues(append(pr.labels, RoleMigrating)...))).To(Equal(10.0))
 }
 
 func TestPairRunner_EVMRootDifferenceIsNotAMismatch(t *testing.T) {
@@ -55,8 +68,8 @@ func TestPairRunner_EVMRootDifferenceIsNotAMismatch(t *testing.T) {
 	pr, m := newTestRunner(migrating, reserve)
 
 	pr.poll(t.Context())
-	g.Expect(testutil.ToFloat64(m.ComparedHeights.WithLabelValues(pr.labels...))).To(Equal(1.0))
-	g.Expect(testutil.ToFloat64(m.Diverged.WithLabelValues(pr.labels...))).To(BeZero())
+	g.Expect(value(t, m.ComparedHeights.WithLabelValues(pr.labels...))).To(Equal(1.0))
+	g.Expect(value(t, m.Diverged.WithLabelValues(pr.labels...))).To(BeZero())
 }
 
 func TestPairRunner_MismatchLatchesDiverged(t *testing.T) {
@@ -70,16 +83,16 @@ func TestPairRunner_MismatchLatchesDiverged(t *testing.T) {
 	mf.data = append(mf.data, row(4, "-bad")...)
 	rf.data = append(rf.data, row(4, "")...)
 	pr.poll(t.Context())
-	g.Expect(testutil.ToFloat64(m.Diverged.WithLabelValues(pr.labels...))).To(Equal(1.0))
-	g.Expect(testutil.ToFloat64(m.Mismatches.WithLabelValues(pr.labels...))).To(Equal(1.0))
-	g.Expect(testutil.ToFloat64(m.MismatchedColumns.WithLabelValues(append(pr.labels, "changeset")...))).To(Equal(1.0))
+	g.Expect(value(t, m.Diverged.WithLabelValues(pr.labels...))).To(Equal(1.0))
+	g.Expect(value(t, m.Mismatches.WithLabelValues(pr.labels...))).To(Equal(1.0))
+	g.Expect(value(t, m.MismatchedColumns.WithLabelValues(append(pr.labels, "changeset")...))).To(Equal(1.0))
 
 	mf.data = append(mf.data, row(5, "")...)
 	rf.data = append(rf.data, row(5, "")...)
 	pr.poll(t.Context())
-	g.Expect(testutil.ToFloat64(m.Diverged.WithLabelValues(pr.labels...))).To(Equal(1.0))
-	g.Expect(testutil.ToFloat64(m.Mismatches.WithLabelValues(pr.labels...))).To(Equal(1.0))
-	g.Expect(testutil.ToFloat64(m.LastComparedHeight.WithLabelValues(pr.labels...))).To(Equal(5.0))
+	g.Expect(value(t, m.Diverged.WithLabelValues(pr.labels...))).To(Equal(1.0))
+	g.Expect(value(t, m.Mismatches.WithLabelValues(pr.labels...))).To(Equal(1.0))
+	g.Expect(value(t, m.LastComparedHeight.WithLabelValues(pr.labels...))).To(Equal(5.0))
 }
 
 func TestPairRunner_MissingReserveLogIsSourceError(t *testing.T) {
@@ -90,8 +103,8 @@ func TestPairRunner_MissingReserveLogIsSourceError(t *testing.T) {
 
 	pr.poll(t.Context())
 	reserveNotFound := m.SourceErrors.WithLabelValues(append(pr.labels, RoleReserve, ReasonNotFound)...)
-	g.Expect(testutil.ToFloat64(reserveNotFound)).To(Equal(1.0))
-	g.Expect(testutil.ToFloat64(m.ComparedHeights.WithLabelValues(pr.labels...))).To(BeZero())
+	g.Expect(value(t, reserveNotFound)).To(Equal(1.0))
+	g.Expect(value(t, m.ComparedHeights.WithLabelValues(pr.labels...))).To(BeZero())
 }
 
 func TestInitPair_ExportsZeroSeries(t *testing.T) {
@@ -100,8 +113,13 @@ func TestInitPair_ExportsZeroSeries(t *testing.T) {
 	m := NewMetrics(reg)
 	m.initPair("c", "a", "b")
 
-	n, err := testutil.GatherAndCount(reg,
-		"sei_hashlog_compare_diverged", "sei_hashlog_compare_mismatches_total", "sei_hashlog_compare_source_errors_total")
+	families, err := reg.Gather()
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(n).To(Equal(1 + 1 + 2*4))
+	series := map[string]int{}
+	for _, f := range families {
+		series[f.GetName()] = len(f.GetMetric())
+	}
+	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_diverged", 1))
+	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_mismatches_total", 1))
+	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_source_errors_total", 2*4))
 }
