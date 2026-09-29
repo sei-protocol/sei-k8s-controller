@@ -1,6 +1,6 @@
 # sei-k8s-controller
 
-Kubernetes operator for managing Sei blockchain nodes, plus the per-node sidecar it drives. Two binaries across three Go modules. Three controllers: `SeiNetwork` (genesis-ceremony orchestration: bootstraps a chain's genesis.json and founding validator set, owns the child SeiNodes), `SeiNode` (individual node lifecycle), and `SeiNodeTask` (sidecar-driven task execution).
+Kubernetes operator for managing Sei blockchain nodes, plus the per-node sidecar it drives and a hash-log comparator. Three binaries across three Go modules. Three controllers: `SeiNetwork` (genesis-ceremony orchestration: bootstraps a chain's genesis.json and founding validator set, owns the child SeiNodes), `SeiNode` (individual node lifecycle), and `SeiNodeTask` (sidecar-driven task execution).
 
 ## Architecture
 
@@ -23,6 +23,10 @@ Three Go modules, wired by filesystem `replace` — **not** `go.work`. A workspa
 Anything that walks packages must loop `MODULES` in the Makefile. Go package patterns stop at a nested module boundary, so `go list ./...` in the root does **not** see `sidecarapi/` or `sidecar/` — a root-only lint or test passes while a whole module goes uncompiled.
 
 Two checks keep the controller tidyable, both in `make ci`. The `depguard` rule `contract-stays-light` in `.golangci.yml` denies the chain graph to anything under `sidecarapi/`, `_test.go` files included — that is the import a test added once before, and it stopped every consumer's `go mod tidy` from working. `make tidy-check` runs `go mod tidy -diff` per module, which catches the unresolvable graph that import produces. Neither covers a third-party dependency that transitively reaches the chain graph while still resolving; that is a dependency-review question, not a lint one.
+
+### The hashlog-comparator binary
+
+`cmd/hashlog-comparator` → `/hashlog-comparator`, shipped in the controller image (not its own ECR repo); run it by overriding the container command. It reads a node/reserve pair list from a config file, tails each node's hash log through the sidecar's `/v0/hashlog` endpoints behind kube-rbac-proxy, and exports `sei_hashlog_compare_*` metrics. Logic lives in `internal/hashlogcompare/`. It is independent of the manager: no CRD, no leader election, no controller-runtime.
 
 ### The sidecar binary
 
