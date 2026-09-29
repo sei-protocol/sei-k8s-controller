@@ -13,8 +13,10 @@ info:
       can submit txs as the validator's operator account. Acceptable
       only on validator-only pod networks.
     - **`trusted-header`:** A `kube-rbac-proxy` container fronts this
-      API on TLS `:8443` and performs TokenReview + a single coarse
-      `create seinodetasks.sei.io` SAR against the K8s API. The
+      API on TLS `:8443` and performs TokenReview + a SAR on
+      `seinodetasks.sei.io` against the K8s API, with the verb taken
+      from the HTTP method (GET → `get`, POST → `create`, DELETE →
+      `delete`). The
       sidecar binds loopback only and requires `X-Remote-User` on
       every request, except for four paths that bypass auth so
       probes and scrapes — none of which carry auth headers — keep
@@ -25,7 +27,7 @@ info:
       - `/v0/livez` — kubelet liveness probe
       - `/v0/metrics` — Prometheus scrape
 
-      `kube-rbac-proxy` must include all four in its `--allow-paths`.
+      `kube-rbac-proxy` must include all four in its `--ignore-paths`.
   version: 0.9.0
   license:
     name: Apache-2.0
@@ -58,7 +60,7 @@ paths:
       # sidecar's middleware requires X-Remote-User here. Stated explicitly
       # because this file is the contract of record: an empty security block
       # would read as "public" and invite adding this path to the proxy's
-      # --allow-paths and to the middleware bypass list, which would expose the
+      # --ignore-paths and to the middleware bypass list, which would expose the
       # status snapshot unauthenticated.
       security:
         - remoteUserHeader: []
