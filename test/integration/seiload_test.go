@@ -228,7 +228,9 @@ func includedTxCount(ctx context.Context, t *testing.T, hc *http.Client, tmRPC s
 }
 
 // blocksBetween reads every block in (from, to], height order not guaranteed.
-func blocksBetween(ctx context.Context, t *testing.T, hc *http.Client, tmRPC string, from, to int64) []loadregression.Block {
+func blocksBetween(
+	ctx context.Context, t *testing.T, hc *http.Client, tmRPC string, from, to int64,
+) []loadregression.Block {
 	t.Helper()
 	var out []loadregression.Block
 	for lo := from + 1; lo <= to; lo += blockchainPageSize {

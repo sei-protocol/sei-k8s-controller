@@ -113,7 +113,8 @@ func TestNightlyLoadRegression(t *testing.T) {
 	startHeight := mustLatestHeight(ctx, t, hc, tmRPC, "pre-load")
 
 	secretName := "seiload-root-" + s.runID
-	createKeySecret(ctx, t, cs, ns, secretName, map[string]string{runLabelKey: s.runID}, bench.RootKeySecretKey, root.PrivateKeyHex)
+	createKeySecret(ctx, t, cs, ns, secretName, map[string]string{runLabelKey: s.runID},
+		bench.RootKeySecretKey, root.PrivateKeyHex)
 
 	profileCM := "seiload-profile-" + s.runID
 	createProfileCM(ctx, t, cs, ns, profileCM, s.runID,
@@ -156,7 +157,8 @@ func TestNightlyLoadRegression(t *testing.T) {
 
 	// The window's last samples need a scrape or two to land in Prometheus.
 	time.Sleep(time.Until(to.Add(2 * loadregression.ResourceStep)))
-	resources, err := loadregression.ValidatorResources(ctx, promURL, ns, validatorPods(ctx, t, cs, ns, s.chainID), from, to)
+	pods := validatorPods(ctx, t, cs, ns, s.chainID)
+	resources, err := loadregression.ValidatorResources(ctx, promURL, ns, pods, from, to)
 	if err != nil {
 		t.Fatalf("UNEVALUABLE: validator resources from %s: %v", promURL, err)
 	}
@@ -211,7 +213,9 @@ func validatorPods(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, 
 // seiloadRunTimes returns when the finished seiload container started and
 // exited. Container start, not Job creation, anchors the window: image pull
 // and scheduling happen before it and are not load.
-func seiloadRunTimes(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns, jobName string) (time.Time, time.Time) {
+func seiloadRunTimes(
+	ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns, jobName string,
+) (started, finished time.Time) {
 	t.Helper()
 	pods, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: "batch.kubernetes.io/job-name=" + jobName,

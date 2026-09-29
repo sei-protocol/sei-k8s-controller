@@ -31,7 +31,9 @@ const resourceMinCoverage = 0.9
 // ValidatorResources reads the validators' CPU and memory over [from, to] from
 // the Prometheus at promURL. Every pod must have a series covering at least 90%
 // of the window, so a scrape gap is an error rather than a quietly short sample.
-func ValidatorResources(ctx context.Context, promURL, namespace string, pods []string, from, to time.Time) (Metrics, error) {
+func ValidatorResources(
+	ctx context.Context, promURL, namespace string, pods []string, from, to time.Time,
+) (Metrics, error) {
 	if len(pods) == 0 {
 		return nil, fmt.Errorf("no validator pods")
 	}
@@ -47,7 +49,8 @@ func ValidatorResources(ctx context.Context, promURL, namespace string, pods []s
 	sel := fmt.Sprintf(`{namespace=%q,pod=~%q,container="seid"}`, namespace, strings.Join(quoted, "|"))
 
 	// max by (pod) collapses duplicate scrapes of one container into one series.
-	cpu, err := queryRange(ctx, api, fmt.Sprintf("max by (pod) (rate(container_cpu_usage_seconds_total%s[1m]))", sel), from, to)
+	cpu, err := queryRange(ctx, api,
+		fmt.Sprintf("max by (pod) (rate(container_cpu_usage_seconds_total%s[1m]))", sel), from, to)
 	if err != nil {
 		return nil, fmt.Errorf("cpu: %w", err)
 	}
