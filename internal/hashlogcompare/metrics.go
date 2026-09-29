@@ -1,6 +1,8 @@
 package hashlogcompare
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -92,9 +94,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 }
 
 // initPair creates every series an alert reads, so a pair that has never
-// mismatched or errored exports 0 rather than nothing.
-func (m *Metrics) initPair(chain, migrating, reserve string) {
+// mismatched, errored or compared a height still exports it. The last-compared
+// timestamp starts at now, so a pair that never compares goes stale.
+func (m *Metrics) initPair(chain, migrating, reserve string, now time.Time) {
 	m.Diverged.WithLabelValues(chain, migrating, reserve).Set(0)
+	m.LastComparedTimestamp.WithLabelValues(chain, migrating, reserve).Set(float64(now.Unix()))
 	m.Mismatches.WithLabelValues(chain, migrating, reserve)
 	m.ComparedHeights.WithLabelValues(chain, migrating, reserve)
 	for _, role := range []string{RoleMigrating, RoleReserve} {

@@ -40,7 +40,7 @@ func newTestRunner(migrating, reserve Source) (*pairRunner, *Metrics) {
 		reserve:   NewReader(reserve),
 		state:     newPairState(),
 	}
-	m.initPair(pr.labels[0], pr.labels[1], pr.labels[2])
+	m.initPair(pr.labels[0], pr.labels[1], pr.labels[2], c.Now())
 	return pr, m
 }
 
@@ -111,7 +111,7 @@ func TestInitPair_ExportsZeroSeries(t *testing.T) {
 	g := NewWithT(t)
 	reg := prometheus.NewRegistry()
 	m := NewMetrics(reg)
-	m.initPair("c", "a", "b")
+	m.initPair("c", "a", "b", time.Unix(1_800_000_000, 0))
 
 	families, err := reg.Gather()
 	g.Expect(err).NotTo(HaveOccurred())
@@ -121,5 +121,7 @@ func TestInitPair_ExportsZeroSeries(t *testing.T) {
 	}
 	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_diverged", 1))
 	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_mismatches_total", 1))
+	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_last_compared_timestamp_seconds", 1))
+	g.Expect(value(t, m.LastComparedTimestamp.WithLabelValues("c", "a", "b"))).To(Equal(1_800_000_000.0))
 	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_source_errors_total", 2*4))
 }

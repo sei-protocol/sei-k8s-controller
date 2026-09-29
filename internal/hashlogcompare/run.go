@@ -40,7 +40,7 @@ func (c *Comparator) Run(ctx context.Context) error {
 			reserve:   NewReader(reserve),
 			state:     newPairState(),
 		}
-		c.Metrics.initPair(pr.labels[0], pr.labels[1], pr.labels[2])
+		c.Metrics.initPair(pr.labels[0], pr.labels[1], pr.labels[2], c.Now())
 		pairs = append(pairs, pr)
 	}
 
