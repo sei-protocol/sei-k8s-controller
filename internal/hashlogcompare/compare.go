@@ -8,8 +8,12 @@ import (
 )
 
 // maxBufferedRows bounds each side's unmatched rows while the other side is
-// behind or down. The staleness alert covers that case; this only caps memory.
-const maxBufferedRows = 50_000
+// behind or down, about an hour of blocks. The staleness alert covers that
+// case; this only caps memory. Overflow evicts evictBatchRows at a time.
+const (
+	maxBufferedRows = 10_000
+	evictBatchRows  = 1_000
+)
 
 // Hash-log column names every comparable row carries.
 const (
@@ -89,7 +93,15 @@ func (p *pairState) add(buf map[int64]map[string]string, height int64, hashes ma
 	}
 	buf[height] = hashes
 	if len(buf) > maxBufferedRows {
-		delete(buf, slices.Min(slices.Collect(maps.Keys(buf))))
+		evictOldest(buf, len(buf)-maxBufferedRows+evictBatchRows)
+	}
+}
+
+// evictOldest drops the n lowest heights from buf.
+func evictOldest(buf map[int64]map[string]string, n int) {
+	heights := slices.Sorted(maps.Keys(buf))
+	for _, h := range heights[:min(n, len(heights))] {
+		delete(buf, h)
 	}
 }
 

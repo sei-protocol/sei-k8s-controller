@@ -36,7 +36,7 @@ func run() error {
 	pollInterval := flag.Duration("poll-interval", 5*time.Second, "How often each pair is polled.")
 	requestTimeout := flag.Duration("request-timeout", 30*time.Second, "Timeout for one sidecar request.")
 	tokenPath := flag.String("token-path", sidecartransport.DefaultServiceAccountTokenPath,
-		"ServiceAccount token presented to each sidecar's kube-rbac-proxy.")
+		"ServiceAccount token presented to in-cluster sidecars' kube-rbac-proxy.")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -50,10 +50,17 @@ func run() error {
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	metrics := hashlogcompare.NewMetrics(reg)
 
-	doer := &http.Client{Transport: sidecartransport.New(sidecartransport.Config{TokenPath: *tokenPath})}
+	// Only in-cluster kube-rbac-proxy endpoints receive the ServiceAccount token;
+	// url endpoints are called without credentials.
+	inClusterDoer := &http.Client{Transport: sidecartransport.New(sidecartransport.Config{TokenPath: *tokenPath})}
+	externalDoer := &http.Client{}
 	comparator := &hashlogcompare.Comparator{
 		Pairs: cfg.Pairs,
 		NewSource: func(e hashlogcompare.Endpoint) (hashlogcompare.Source, error) {
+			doer := externalDoer
+			if e.InCluster() {
+				doer = inClusterDoer
+			}
 			return sidecar.NewSidecarClient(e.BaseURL(), sidecar.WithHTTPDoer(doer), sidecar.WithTimeout(*requestTimeout))
 		},
 		Metrics:      metrics,

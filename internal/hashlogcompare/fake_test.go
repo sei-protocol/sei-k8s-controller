@@ -35,6 +35,8 @@ type fakeFile struct {
 type fakeSource struct {
 	files   []*fakeFile
 	listErr error
+	// served counts the bytes returned by reads.
+	served int
 }
 
 func (f *fakeSource) ListHashLog(context.Context) ([]sidecar.HashLogFile, error) {
@@ -55,7 +57,19 @@ func (f *fakeSource) ReadHashLogFile(_ context.Context, name string, offset int6
 			if offset >= int64(len(ff.data)) {
 				return nil, nil
 			}
+			f.served += len(ff.data) - int(offset)
 			return slices.Clone(ff.data[offset:]), nil
+		}
+	}
+	return nil, sidecar.ErrHashLogNotFound
+}
+
+func (f *fakeSource) ReadHashLogHead(_ context.Context, name string, length int64) ([]byte, error) {
+	for _, ff := range f.files {
+		if ff.name == name {
+			n := min(int(length), len(ff.data))
+			f.served += n
+			return slices.Clone(ff.data[:n]), nil
 		}
 	}
 	return nil, sidecar.ErrHashLogNotFound

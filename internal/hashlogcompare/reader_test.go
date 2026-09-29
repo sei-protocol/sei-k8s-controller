@@ -24,6 +24,17 @@ func TestReader_StartsNearTipOnCompleteRow(t *testing.T) {
 	g.Expect(got[0].Hashes).To(HaveKeyWithValue("changeset", fmt.Sprintf("cs%d", got[0].Height)))
 }
 
+func TestReader_StartReadIsBounded(t *testing.T) {
+	g := NewWithT(t)
+	src := &fakeSource{}
+	src.add(1, testHeader+rows(1, 100_000))
+
+	got, _, err := NewReader(src).Poll(t.Context())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(got[len(got)-1].Height).To(Equal(int64(100_000)))
+	g.Expect(src.served).To(BeNumerically("<=", maxHeaderBytes+tipBacktrackBytes))
+}
+
 func TestReader_SmallFileReadsFromFirstRow(t *testing.T) {
 	g := NewWithT(t)
 	src := &fakeSource{}

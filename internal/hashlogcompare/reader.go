@@ -17,6 +17,8 @@ const (
 	tipBacktrackBytes = 16 << 10
 	// maxReadsPerPoll bounds the work one Poll does when a node has a backlog.
 	maxReadsPerPoll = 16
+	// maxHeaderBytes bounds the read a fresh reader makes for a file's header.
+	maxHeaderBytes = 64 << 10
 )
 
 // errCoverageGap means rows were lost between two reads (a file was pruned
@@ -27,6 +29,7 @@ var errCoverageGap = errors.New("hash log coverage gap")
 type Source interface {
 	ListHashLog(ctx context.Context) ([]sidecar.HashLogFile, error)
 	ReadHashLogFile(ctx context.Context, name string, offset int64) ([]byte, error)
+	ReadHashLogHead(ctx context.Context, name string, length int64) ([]byte, error)
 }
 
 // Row is one hash-log line: the block height and every hash column by header name.
@@ -126,7 +129,7 @@ func (r *Reader) start(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	latest := files[len(files)-1]
-	head, err := r.src.ReadHashLogFile(ctx, latest.Name, 0)
+	head, err := r.src.ReadHashLogHead(ctx, latest.Name, maxHeaderBytes)
 	if errors.Is(err, sidecar.ErrHashLogNotFound) {
 		return false, nil
 	}
@@ -135,6 +138,9 @@ func (r *Reader) start(ctx context.Context) (bool, error) {
 	}
 	nl := bytes.IndexByte(head, '\n')
 	if nl < 0 {
+		if len(head) >= maxHeaderBytes {
+			return false, fmt.Errorf("hash log %s header exceeds %d bytes", latest.Name, maxHeaderBytes)
+		}
 		return false, nil
 	}
 	header, err := parseHeader(head[:nl])
@@ -144,7 +150,7 @@ func (r *Reader) start(ctx context.Context) (bool, error) {
 	r.started = true
 	r.index, r.name, r.sealed, r.header = latest.Index, latest.Name, latest.Sealed, header
 	headerEnd := int64(nl + 1)
-	r.offset = max(headerEnd, int64(len(head))-tipBacktrackBytes)
+	r.offset = max(headerEnd, max(latest.Size, int64(len(head)))-tipBacktrackBytes)
 	r.skipPartial = r.offset > headerEnd
 	return true, nil
 }

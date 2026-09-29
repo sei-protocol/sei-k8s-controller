@@ -94,3 +94,16 @@ func TestPairState_UnalignedStartIsNotAGap(t *testing.T) {
 	g.Expect(res.MigratingGaps + res.ReserveGaps).To(BeZero())
 	g.Expect(p.migrating).To(BeEmpty())
 }
+
+func TestPairState_EvictsOldestInBatches(t *testing.T) {
+	g := NewWithT(t)
+	p := newPairState()
+	for h := int64(1); h <= maxBufferedRows+1; h++ {
+		p.add(p.migrating, h, map[string]string{})
+	}
+
+	g.Expect(p.migrating).To(HaveLen(maxBufferedRows - evictBatchRows))
+	g.Expect(p.migrating).NotTo(HaveKey(int64(evictBatchRows + 1)))
+	g.Expect(p.migrating).To(HaveKey(int64(evictBatchRows + 2)))
+	g.Expect(p.migrating).To(HaveKey(int64(maxBufferedRows + 1)))
+}

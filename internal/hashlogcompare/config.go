@@ -41,9 +41,15 @@ func (e Endpoint) Label() string {
 	return e.URL
 }
 
+// InCluster reports whether the endpoint is a SeiNode sidecar in this cluster,
+// reached through its kube-rbac-proxy.
+func (e Endpoint) InCluster() bool {
+	return e.URL == ""
+}
+
 // BaseURL is the sidecar address the comparator calls.
 func (e Endpoint) BaseURL() string {
-	if e.URL != "" {
+	if !e.InCluster() {
 		return e.URL
 	}
 	return noderesource.SidecarURLForNode(&seiv1alpha1.SeiNode{

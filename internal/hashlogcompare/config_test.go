@@ -34,6 +34,8 @@ pairs:
 	g.Expect(cfg.Pairs[0].Migrating.BaseURL()).To(Equal("http://rpc-node-0-0.rpc-node-0.arctic-1.svc.cluster.local:8443"))
 	g.Expect(cfg.Pairs[1].Reserve.Label()).To(Equal("http://10.0.0.1:7777"))
 	g.Expect(cfg.Pairs[1].Reserve.BaseURL()).To(Equal("http://10.0.0.1:7777"))
+	g.Expect(cfg.Pairs[0].Reserve.InCluster()).To(BeTrue())
+	g.Expect(cfg.Pairs[1].Reserve.InCluster()).To(BeFalse())
 }
 
 func TestLoadConfig_Rejects(t *testing.T) {
