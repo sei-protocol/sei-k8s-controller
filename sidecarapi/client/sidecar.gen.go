@@ -40,6 +40,19 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// HashLogFile defines model for HashLogFile.
+type HashLogFile struct {
+	Index  uint64 `json:"index"`
+	Name   string `json:"name"`
+	Sealed bool   `json:"sealed"`
+	Size   int64  `json:"size"`
+}
+
+// HashLogListResponse defines model for HashLogListResponse.
+type HashLogListResponse struct {
+	Files []HashLogFile `json:"files"`
+}
+
 // StatusResponse defines model for StatusResponse.
 type StatusResponse struct {
 	// CommittedHeight seid's latest committed block height, read from the local RPC
@@ -100,6 +113,11 @@ type TaskResultStatus string
 type TaskSubmitResponse struct {
 	// Id The assigned task UUID.
 	Id openapi_types.UUID `json:"id"`
+}
+
+// GetHashLogFileParams defines parameters for GetHashLogFile.
+type GetHashLogFileParams struct {
+	Range *string `json:"Range,omitempty"`
 }
 
 // SubmitTaskJSONRequestBody defines body for SubmitTask for application/json ContentType.
@@ -178,6 +196,12 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ListHashLog request
+	ListHashLog(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetHashLogFile request
+	GetHashLogFile(ctx context.Context, name string, params *GetHashLogFileParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// Healthz request
 	Healthz(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -197,6 +221,30 @@ type ClientInterface interface {
 
 	// GetTask request
 	GetTask(ctx context.Context, id openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) ListHashLog(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListHashLogRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetHashLogFile(ctx context.Context, name string, params *GetHashLogFileParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetHashLogFileRequest(c.Server, name, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) Healthz(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -281,6 +329,82 @@ func (c *Client) GetTask(ctx context.Context, id openapi_types.UUID, reqEditors 
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewListHashLogRequest generates requests for ListHashLog
+func NewListHashLogRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/hashlog")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetHashLogFileRequest generates requests for GetHashLogFile
+func NewGetHashLogFileRequest(server string, name string, params *GetHashLogFileParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "name", runtime.ParamLocationPath, name)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/hashlog/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		if params.Range != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithLocation("simple", false, "Range", runtime.ParamLocationHeader, *params.Range)
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Range", headerParam0)
+		}
+
+	}
+
+	return req, nil
 }
 
 // NewHealthzRequest generates requests for Healthz
@@ -515,6 +639,12 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ListHashLogWithResponse request
+	ListHashLogWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListHashLogResponse, error)
+
+	// GetHashLogFileWithResponse request
+	GetHashLogFileWithResponse(ctx context.Context, name string, params *GetHashLogFileParams, reqEditors ...RequestEditorFn) (*GetHashLogFileResponse, error)
+
 	// HealthzWithResponse request
 	HealthzWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*HealthzResponse, error)
 
@@ -534,6 +664,52 @@ type ClientWithResponsesInterface interface {
 
 	// GetTaskWithResponse request
 	GetTaskWithResponse(ctx context.Context, id openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetTaskResponse, error)
+}
+
+type ListHashLogResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *HashLogListResponse
+	JSON404      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r ListHashLogResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListHashLogResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetHashLogFileResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *ErrorResponse
+	JSON404      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetHashLogFileResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetHashLogFileResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
 }
 
 type HealthzResponse struct {
@@ -671,6 +847,24 @@ func (r GetTaskResponse) StatusCode() int {
 	return 0
 }
 
+// ListHashLogWithResponse request returning *ListHashLogResponse
+func (c *ClientWithResponses) ListHashLogWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListHashLogResponse, error) {
+	rsp, err := c.ListHashLog(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListHashLogResponse(rsp)
+}
+
+// GetHashLogFileWithResponse request returning *GetHashLogFileResponse
+func (c *ClientWithResponses) GetHashLogFileWithResponse(ctx context.Context, name string, params *GetHashLogFileParams, reqEditors ...RequestEditorFn) (*GetHashLogFileResponse, error) {
+	rsp, err := c.GetHashLogFile(ctx, name, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetHashLogFileResponse(rsp)
+}
+
 // HealthzWithResponse request returning *HealthzResponse
 func (c *ClientWithResponses) HealthzWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*HealthzResponse, error) {
 	rsp, err := c.Healthz(ctx, reqEditors...)
@@ -731,6 +925,72 @@ func (c *ClientWithResponses) GetTaskWithResponse(ctx context.Context, id openap
 		return nil, err
 	}
 	return ParseGetTaskResponse(rsp)
+}
+
+// ParseListHashLogResponse parses an HTTP response from a ListHashLogWithResponse call
+func ParseListHashLogResponse(rsp *http.Response) (*ListHashLogResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListHashLogResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest HashLogListResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetHashLogFileResponse parses an HTTP response from a GetHashLogFileWithResponse call
+func ParseGetHashLogFileResponse(rsp *http.Response) (*GetHashLogFileResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetHashLogFileResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseHealthzResponse parses an HTTP response from a HealthzWithResponse call

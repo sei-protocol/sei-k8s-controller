@@ -76,6 +76,8 @@ func NewServer(addr string, eng *engine.Engine, homeDir, authnMode string) *Serv
 	s.mux.HandleFunc("GET /v0/status", s.handleStatus)
 	s.mux.Handle("GET "+PathMetrics, promhttp.Handler())
 	s.mux.HandleFunc("GET /v0/node-id", s.handleNodeID)
+	s.mux.HandleFunc("GET /v0/hashlog", s.handleListHashLog)
+	s.mux.HandleFunc("GET /v0/hashlog/{name}", s.handleGetHashLogFile)
 	s.mux.HandleFunc("POST /v0/tasks", s.handlePostTask)
 	s.mux.HandleFunc("GET /v0/tasks", s.handleListTasks)
 	s.mux.HandleFunc("GET /v0/tasks/{id}", s.handleGetTask)

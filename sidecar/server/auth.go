@@ -45,7 +45,7 @@ const (
 // bypassPaths skip the X-Remote-User check in trusted-header mode.
 // Each path's caller does not carry K8s auth headers, so requiring
 // X-Remote-User would break the corresponding probe / scrape.
-// kube-rbac-proxy must include every path here in its --allow-paths.
+// kube-rbac-proxy must include every path here in its --ignore-paths.
 // The bypass paths, named so the route registrations in server.go and this list
 // cannot drift apart. kube-rbac-proxy's --ignore-paths and openapi.yaml carry
 // their own copies; those are still hand-synced.
@@ -65,7 +65,7 @@ var bypassPaths = map[string]struct{}{
 
 // BypassPaths returns the set of paths exempt from the X-Remote-User
 // check, sorted, so serve.go can log them at startup and the
-// controller-side PR can keep --allow-paths in sync.
+// controller-side PR can keep --ignore-paths in sync.
 func BypassPaths() []string {
 	out := make([]string, 0, len(bypassPaths))
 	for p := range bypassPaths {
