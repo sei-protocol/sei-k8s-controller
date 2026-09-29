@@ -264,10 +264,29 @@ func (c *SidecarClient) ReadHashLogFile(ctx context.Context, name string, offset
 	if offset < 0 {
 		return nil, fmt.Errorf("hash log read offset %d is negative", offset)
 	}
-	params := &GetHashLogFileParams{}
+	var rangeHeader string
 	if offset > 0 {
-		r := fmt.Sprintf("bytes=%d-", offset)
-		params.Range = &r
+		rangeHeader = fmt.Sprintf("bytes=%d-", offset)
+	}
+	return c.readHashLog(ctx, name, rangeHeader)
+}
+
+// ReadHashLogHead returns at most the first length bytes of the named hash log file.
+func (c *SidecarClient) ReadHashLogHead(ctx context.Context, name string, length int64) ([]byte, error) {
+	if length <= 0 {
+		return nil, fmt.Errorf("hash log head length %d is not positive", length)
+	}
+	data, err := c.readHashLog(ctx, name, fmt.Sprintf("bytes=0-%d", length-1))
+	if int64(len(data)) > length {
+		data = data[:length]
+	}
+	return data, err
+}
+
+func (c *SidecarClient) readHashLog(ctx context.Context, name, rangeHeader string) ([]byte, error) {
+	params := &GetHashLogFileParams{}
+	if rangeHeader != "" {
+		params.Range = &rangeHeader
 	}
 	resp, err := c.inner.GetHashLogFileWithResponse(ctx, name, params)
 	if err != nil {

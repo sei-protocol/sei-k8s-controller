@@ -100,3 +100,31 @@ func TestReadHashLogFile_NotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrHashLogNotFound", err)
 	}
 }
+
+func TestReadHashLogHead_SendsBoundedRange(t *testing.T) {
+	var gotRange string
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRange = r.Header.Get("Range")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("block_number,"))
+	}))
+
+	data, err := c.ReadHashLogHead(context.Background(), "0-v6.7.0.hlog.u", 13)
+	if err != nil || string(data) != "block_number," {
+		t.Fatalf("data = %q, err = %v", data, err)
+	}
+	if gotRange != "bytes=0-12" {
+		t.Errorf("Range = %q, want bytes=0-12", gotRange)
+	}
+}
+
+func TestReadHashLogHead_TruncatesFullResponse(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("block_number,blockHash\n1,aa\n"))
+	}))
+
+	data, err := c.ReadHashLogHead(context.Background(), "0-v6.7.0.hlog.u", 5)
+	if err != nil || string(data) != "block" {
+		t.Fatalf("data = %q, err = %v", data, err)
+	}
+}
