@@ -13,6 +13,8 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"strconv"
+	"strings"
 	"text/template"
 )
 
@@ -46,6 +48,27 @@ type Params struct {
 	// Workload is exported as SEILOAD_WORKLOAD, a label on the emitted
 	// metrics. Empty means DefaultWorkload.
 	Workload string
+	// RootKeySecret names a Secret whose RootKeySecretKey entry is mounted at
+	// /etc/seiload-key/root-key.hex, for a profile whose funding.rootKeyFile
+	// points there. Empty mounts nothing (mock_balances chains need no funding).
+	RootKeySecret string
+}
+
+// RootKeySecretKey is the Secret data key holding the hex root key.
+const RootKeySecretKey = "root-key.hex"
+
+// FillProfile substitutes a profile template's per-run placeholders: the
+// chain id for __SEI_CHAIN_ID__ and the JSON-quoted EVM endpoints for
+// __RPC_ENDPOINTS__. The template is only valid JSON once filled.
+func FillProfile(tmpl, chainID string, endpoints []string) string {
+	quoted := make([]string, len(endpoints))
+	for i, e := range endpoints {
+		quoted[i] = strconv.Quote(e)
+	}
+	return strings.NewReplacer(
+		"__SEI_CHAIN_ID__", chainID,
+		"__RPC_ENDPOINTS__", strings.Join(quoted, ","),
+	).Replace(tmpl)
 }
 
 // DeadlineSlackMinutes is added to DurationMinutes when deriving the Job's

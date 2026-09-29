@@ -225,8 +225,8 @@ func runReleaseTest(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 
 	// Hand the admin + vesting-fixture mnemonics to the harness via Secrets
 	// (secretKeyRef), labeled for the GC sweep and deleted on cleanup.
-	createMnemonicSecret(ctx, t, cs, ns, secretName, p.runLabels, p.admin.Mnemonic)
-	createMnemonicSecret(ctx, t, cs, ns, vestingSecretName, p.runLabels, p.vesting.Mnemonic)
+	createKeySecret(ctx, t, cs, ns, secretName, p.runLabels, keygen.SecretMnemonicKey, p.admin.Mnemonic)
+	createKeySecret(ctx, t, cs, ns, vestingSecretName, p.runLabels, keygen.SecretMnemonicKey, p.vesting.Mnemonic)
 
 	job := releaseJob(releaseParams{
 		name:              "release-test-" + namePart,
@@ -257,21 +257,22 @@ func runReleaseTest(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 	t.Logf("release-test job %s completed; harness log tail:\n%s", job.Name, podLogTail(ctx, cs, ns, job.Name))
 }
 
-// createMnemonicSecret writes the admin mnemonic to a Secret the release-test pod
-// reads via secretKeyRef. Labeled for the GC sweep and deleted on cleanup,
-// matching how the suite manages everything else it creates.
-func createMnemonicSecret(
+// createKeySecret writes a key (a mnemonic, the seiload root key) to a
+// single-entry Secret a harness pod mounts or reads via secretKeyRef. Labeled
+// for the GC sweep and deleted on cleanup, matching how the suites manage
+// everything else they create.
+func createKeySecret(
 	ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
-	ns, name string, labels map[string]string, mnemonic string,
+	ns, name string, labels map[string]string, key, value string,
 ) {
 	t.Helper()
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
 		Type:       corev1.SecretTypeOpaque,
-		Data:       map[string][]byte{keygen.SecretMnemonicKey: []byte(mnemonic)},
+		Data:       map[string][]byte{key: []byte(value)},
 	}
 	if _, err := cs.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create mnemonic secret %q: %v", name, err)
+		t.Fatalf("create secret %q: %v", name, err)
 	}
 	t.Cleanup(func() {
 		delCtx, cancel := context.WithTimeout(context.Background(), time.Minute)

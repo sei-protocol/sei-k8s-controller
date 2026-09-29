@@ -1,0 +1,42 @@
+{
+  "config": {
+    "scenarios": { "AMM": 75, "ERC20": 75, "EVMTransfer": 50 },
+    "tps": 200,
+    "accounts": 500,
+    "durationMinutes": 30,
+    "warmupMinutes": 2,
+    "validators": 4,
+    "rpcNodes": 2
+  },
+  "runs": [
+    {
+      "metrics": {
+        "includedTps": 200.01,
+        "blockIntervalP50Ms": 265.73,
+        "blockIntervalP90Ms": 318.67,
+        "cpuMeanCores": 0.712,
+        "memWorkingSetMaxMiB": 764.5
+      },
+      "seidImage": "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:nightly-20260928-c9b06d6",
+      "recordedAt": "2026-09-28T14:10:29Z"
+    },
+    {
+      "metrics": {
+        "includedTps": 200.0,
+        "blockIntervalP50Ms": 285.32,
+        "blockIntervalP90Ms": 313.57,
+        "cpuMeanCores": 0.72,
+        "memWorkingSetMaxMiB": 750.5
+      },
+      "seidImage": "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain:nightly-20260928-c9b06d6",
+      "recordedAt": "2026-09-28T14:54:21Z"
+    }
+  ],
+  "thresholds": {
+    "includedTps": { "direction": "down", "tolerancePct": 2 },
+    "blockIntervalP50Ms": { "direction": "up", "tolerancePct": 10, "toleranceAbs": 20 },
+    "blockIntervalP90Ms": { "direction": "up", "tolerancePct": 12, "toleranceAbs": 30 },
+    "cpuMeanCores": { "direction": "up", "tolerancePct": 8, "toleranceAbs": 0.03 },
+    "memWorkingSetMaxMiB": { "direction": "up", "tolerancePct": 5, "toleranceAbs": 24 }
+  }
+}

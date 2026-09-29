@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 
 	"github.com/sei-protocol/sei-k8s-controller/harness/bench"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
+	"github.com/sei-protocol/sei-k8s-controller/test/integration/loadregression"
 )
 
 // seiloadProfilesCM is the platform-owned ConfigMap holding the profile
@@ -58,13 +58,7 @@ func renderProfile(
 	if !ok {
 		t.Fatalf("profile %q.json absent from %s", profile, seiloadProfilesCM)
 	}
-	quoted := make([]string, len(endpoints))
-	for i, e := range endpoints {
-		quoted[i] = strconv.Quote(e)
-	}
-	tmpl = strings.ReplaceAll(tmpl, "__SEI_CHAIN_ID__", chainID)
-	tmpl = strings.ReplaceAll(tmpl, "__RPC_ENDPOINTS__", strings.Join(quoted, ","))
-	return tmpl
+	return bench.FillProfile(tmpl, chainID, endpoints)
 }
 
 // createProfileCM writes the rendered profile to a per-run ConfigMap stamped
@@ -89,8 +83,10 @@ func createProfileCM(ctx context.Context, t *testing.T, cs *kubernetes.Clientset
 	})
 }
 
-// renderJob renders the shared seiload Job manifest with the per-run params.
-func renderJob(t *testing.T, p bench.Params) *batchv1.Job {
+// runSeiloadJob renders the shared seiload Job manifest with the per-run params,
+// creates it in ns (deleted on cleanup) and waits for it to complete. It returns
+// the Job's name.
+func runSeiloadJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns string, p bench.Params) string {
 	t.Helper()
 	out, err := bench.Render(p)
 	if err != nil {
@@ -100,7 +96,18 @@ func renderJob(t *testing.T, p bench.Params) *batchv1.Job {
 	if err := yaml.Unmarshal(out, &job); err != nil {
 		t.Fatalf("unmarshal seiload job: %v", err)
 	}
-	return &job
+	job.Namespace = ns
+	if _, err := cs.BatchV1().Jobs(ns).Create(ctx, &job, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create seiload job: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		bg := metav1.DeletePropagationBackground
+		_ = cs.BatchV1().Jobs(ns).Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
+	})
+	waitJob(ctx, t, cs, ns, job.Name)
+	return job.Name
 }
 
 // runSeiload renders the platform profile, applies seiload's Job manifest, waits
@@ -126,7 +133,7 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 	profileJSON := renderProfile(ctx, t, cs, ns, s.seiloadProfile, s.chainID, ch.evmEndpoints())
 	createProfileCM(ctx, t, cs, ns, profileCM, s.runID, profileJSON)
 
-	job := renderJob(t, bench.Params{
+	runSeiloadJob(ctx, t, cs, ns, bench.Params{
 		RunID:           s.runID,
 		ChainID:         s.chainID,
 		Commit:          s.seiloadCommit,
@@ -134,18 +141,6 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 		DurationMinutes: s.durationMin,
 		ProfileCM:       profileCM,
 	})
-	job.Namespace = ns
-	if _, err := cs.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create seiload job: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		bg := metav1.DeletePropagationBackground
-		_ = cs.BatchV1().Jobs(ns).Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
-	})
-
-	waitJob(ctx, t, cs, ns, job.Name)
 
 	// Chain survived the load: every follower still caught up (a follower can't
 	// catch up to a halted chain, so this transitively covers validator quorum).
@@ -186,9 +181,9 @@ func mustLatestHeight(ctx context.Context, t *testing.T, hc *http.Client, tmRPC,
 // blockchainPageSize is CometBFT's cap on blocks per /blockchain response.
 const blockchainPageSize = 20
 
-// blockchainInfo models just enough of CometBFT /blockchain to sum per-block tx
-// counts; like /status, the Sei fork may return it with or without the JSON-RPC
-// envelope.
+// blockchainInfo models just enough of CometBFT /blockchain for per-block
+// height, time and tx count; like /status, the Sei fork may return it with or
+// without the JSON-RPC envelope.
 type blockchainInfo struct {
 	Result *struct {
 		BlockMetas []blockMeta `json:"block_metas"`
@@ -198,6 +193,10 @@ type blockchainInfo struct {
 
 type blockMeta struct {
 	NumTxs string `json:"num_txs"`
+	Header struct {
+		Height string    `json:"height"`
+		Time   time.Time `json:"time"`
+	} `json:"header"`
 }
 
 func (b *blockchainInfo) metas() []blockMeta {
@@ -217,37 +216,63 @@ func includedTxCount(ctx context.Context, t *testing.T, hc *http.Client, tmRPC s
 	t.Helper()
 	var total int64
 	for lo := from + 1; lo <= to; lo += blockchainPageSize {
-		hi := lo + blockchainPageSize - 1
-		hi = min(hi, to)
-		url := fmt.Sprintf("%s/blockchain?minHeight=%d&maxHeight=%d", tmRPC, lo, hi)
-		var page blockchainInfo
-		ok := false
-		for attempt := 0; attempt < 3 && !ok; attempt++ {
-			if attempt > 0 {
-				time.Sleep(2 * time.Second)
-			}
-			page = blockchainInfo{}
-			ok = getJSONInto(ctx, hc, url, &page)
-		}
-		if !ok {
-			t.Fatalf("read %s: unreachable, non-200, or undecodable after retries — cannot verify inclusion", url)
-		}
-		if got, want := int64(len(page.metas())), hi-lo+1; got != want {
-			t.Fatalf("%s returned %d block_metas, want %d — pruned range or error envelope; "+
-				"a short page cannot be trusted as zero", url, got, want)
-		}
-		for _, m := range page.metas() {
-			n, err := strconv.ParseInt(m.NumTxs, 10, 64)
-			if err != nil {
-				t.Fatalf("parse num_txs %q at %s: %v", m.NumTxs, url, err)
-			}
-			total += n
+		hi := min(lo+blockchainPageSize-1, to)
+		for _, b := range blockPage(ctx, t, hc, tmRPC, lo, hi) {
+			total += b.NumTxs
 		}
 		if total > 0 {
 			return total
 		}
 	}
 	return total
+}
+
+// blocksBetween reads every block in (from, to], height order not guaranteed.
+func blocksBetween(ctx context.Context, t *testing.T, hc *http.Client, tmRPC string, from, to int64) []loadregression.Block {
+	t.Helper()
+	var out []loadregression.Block
+	for lo := from + 1; lo <= to; lo += blockchainPageSize {
+		out = append(out, blockPage(ctx, t, hc, tmRPC, lo, min(lo+blockchainPageSize-1, to))...)
+	}
+	return out
+}
+
+// blockPage reads blocks [lo, hi] (at most blockchainPageSize) via /blockchain.
+// A page that stays unreachable after retries, or that returns fewer blocks
+// than requested (pruned range or an error envelope decoding to empty), fails
+// the test: a partial page read as complete would defeat any gate built on it.
+func blockPage(ctx context.Context, t *testing.T, hc *http.Client, tmRPC string, lo, hi int64) []loadregression.Block {
+	t.Helper()
+	url := fmt.Sprintf("%s/blockchain?minHeight=%d&maxHeight=%d", tmRPC, lo, hi)
+	var page blockchainInfo
+	ok := false
+	for attempt := 0; attempt < 3 && !ok; attempt++ {
+		if attempt > 0 {
+			time.Sleep(2 * time.Second)
+		}
+		page = blockchainInfo{}
+		ok = getJSONInto(ctx, hc, url, &page)
+	}
+	if !ok {
+		t.Fatalf("read %s: unreachable, non-200, or undecodable after retries", url)
+	}
+	if got, want := int64(len(page.metas())), hi-lo+1; got != want {
+		t.Fatalf("%s returned %d block_metas, want %d — pruned range or error envelope; "+
+			"a short page cannot be trusted", url, got, want)
+	}
+	out := make([]loadregression.Block, 0, len(page.metas()))
+	for _, m := range page.metas() {
+		n, err := strconv.ParseInt(m.NumTxs, 10, 64)
+		if err != nil {
+			t.Fatalf("parse num_txs %q at %s: %v", m.NumTxs, url, err)
+		}
+		h, err := strconv.ParseInt(m.Header.Height, 10, 64)
+		if err != nil {
+			t.Fatalf("parse height %q at %s: %v", m.Header.Height, url, err)
+		}
+		out = append(out, loadregression.Block{Height: h, Time: m.Header.Time, NumTxs: n})
+	}
+	return out
 }
 
 // waitJob blocks until the seiload Job reaches a terminal condition. A Failed

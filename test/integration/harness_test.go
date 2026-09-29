@@ -4,11 +4,12 @@
 // targets. Every suite the nightly schedule runs is named TestNightly<Suite>
 // (TestNightlyBenchmark, TestNightlyChaosSuite, TestNightlyChainUpgrade,
 // TestNightlyRelease, TestNightlyWorkflowStateSync, TestNightlyGigaStoreMigration,
-// TestNightlyGigaMixedRelease); a new suite joins the nightly schedule by taking
-// that name, with no other wiring required. TestGenesisCeremonyProducesBlocks is
-// the one suite deliberately outside the prefix — an onboarding-validation check,
-// run standalone, never nightly. Orchestration within one run is statement order
-// in one process; cross-step state is local Go values, not external config. A
+// TestNightlyGigaMixedRelease, TestNightlyLoadRegression); a new suite joins the
+// nightly schedule by taking that name, with no other wiring required.
+// TestGenesisCeremonyProducesBlocks is the one suite deliberately outside the
+// prefix — an onboarding-validation check, run standalone, never nightly.
+// Orchestration within one run is statement order in one process; cross-step
+// state is local Go values, not external config. A
 // suite whose required image can't be the shared SEID_IMAGE default (a different
 // flavor, or a pinned version pair) reads its own env var name, since one process
 // has one environment.

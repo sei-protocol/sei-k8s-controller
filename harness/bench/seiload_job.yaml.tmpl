@@ -57,6 +57,11 @@ spec:
             - name: profile
               mountPath: /etc/seiload
               readOnly: true
+{{- if .RootKeySecret}}
+            - name: root-key
+              mountPath: /etc/seiload-key
+              readOnly: true
+{{- end}}
           resources:
             requests:
               cpu: "2"
@@ -68,3 +73,10 @@ spec:
         - name: profile
           configMap:
             name: {{.ProfileCM}}
+{{- if .RootKeySecret}}
+        # Default 0644, not 0400: the pod has no fsGroup, so a root-owned 0400
+        # file is unreadable to uid 65532.
+        - name: root-key
+          secret:
+            secretName: "{{.RootKeySecret}}"
+{{- end}}
