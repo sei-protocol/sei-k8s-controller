@@ -1,0 +1,68 @@
+# Weekly dependency updates for the three Go modules, the Dockerfiles and the
+# GitHub Actions. Each ecosystem opens grouped pull requests, so a week's
+# routine bumps arrive together rather than one PR per dependency.
+#
+# Not updated here, on purpose:
+#   - github.com/sei-protocol/* modules (sei-chain, sei-config, seilog, ...).
+#     They move with Sei releases, and the sidecar pins sei-chain to a specific
+#     pseudo-version, so a bump is a reviewed decision, not a routine update.
+#   - modernc.org/sqlite in sidecar/. It embeds the SQLite engine that reads and
+#     writes sidecar.db on the node's data volume; sidecar/go.mod explains the
+#     pin. Bumping it needs the on-disk compatibility decided first.
+#   - sei-protocol/uci reusable workflows. Their pins move with the
+#     sei-agent-driver version floor.
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directories:
+      - "/"
+      - "/sidecar"
+      - "/sidecarapi"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "github.com/sei-protocol/*"
+      - dependency-name: "modernc.org/sqlite"
+    groups:
+      # controller-runtime and the k8s.io libraries must move together.
+      k8s:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+      aws:
+        patterns:
+          - "github.com/aws/*"
+      go-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "build"
+      include: "scope"
+
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+      - "/sidecar"
+      - "/test/integration"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker:
+        patterns: ["*"]
+    commit-message:
+      prefix: "build"
+      include: "scope"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "sei-protocol/uci*"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+      include: "scope"

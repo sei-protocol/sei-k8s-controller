@@ -14,10 +14,16 @@ on:
 permissions: {}
 
 jobs:
+  # A run Dependabot triggers (opening or updating its pull request) gets
+  # Dependabot secrets only, so the review would fail on the missing machine
+  # credential; it is skipped. GitHub picks the secrets by who triggered the
+  # run, so a person's push, or `@seidroid review`, on a Dependabot pull request
+  # still reviews it.
   seidroid-review:
     if: >-
       (github.event_name == 'pull_request' &&
-        github.event.action != 'closed') ||
+        github.event.action != 'closed' &&
+        github.actor != 'dependabot[bot]') ||
       (github.event_name == 'issue_comment' &&
         github.event.issue.pull_request != null &&
         contains(github.event.comment.body, '@seidroid review') &&
@@ -62,7 +68,13 @@ jobs:
   # head is a fork, so the close fails and the sandbox is left running. On a fork
   # pull request, comment `@seidroid review close` before merging.
   seidroid-review-reclaim:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    # Skipped only when Dependabot itself closes the pull request (a superseded
+    # update), because that run lacks the secrets. When a person merges or
+    # closes it, the run has them and reclaims any session a manual review made.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.actor != 'dependabot[bot]'
     uses: sei-protocol/uci/.github/workflows/seidroid-review.yml@v0.0.24
     permissions:
       contents: read
