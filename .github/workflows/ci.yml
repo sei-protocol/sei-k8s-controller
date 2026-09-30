@@ -24,14 +24,14 @@ jobs:
         # would never lint sidecarapi/ and would pass while it was broken.
         module: [".", "sidecarapi", "sidecar"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # only-new-issues below diffs against the merge base, which a shallow
           # clone does not contain — the filter then silently passes and the
           # module's whole pre-existing backlog is reported as new. A rebase or
           # force-push is what exposes it.
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # only-new-issues builds its filter from the pull-request patch, and on a
@@ -46,7 +46,7 @@ jobs:
             "+refs/heads/${BASE}:refs/remotes/origin/${BASE}"
         env:
           BASE: ${{ github.base_ref || github.event.repository.default_branch }}
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.1
           working-directory: ${{ matrix.module }}
@@ -59,8 +59,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # Every module must be tidy. Without this, the failure mode that
@@ -84,10 +84,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Build controller image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -95,7 +95,7 @@ jobs:
           cache-from: type=gha,scope=controller
           cache-to: type=gha,scope=controller,mode=max
       - name: Build sidecar image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: sidecar/Dockerfile
@@ -110,7 +110,7 @@ jobs:
       # The test suite's //go:embed targets live outside the paths the other two
       # images compile, so only this build catches a .dockerignore gap for them.
       - name: Build integration-harness image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: test/integration/Dockerfile
@@ -122,8 +122,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: make test
@@ -134,15 +134,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Cache envtest binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: bin
-          key: envtest-${{ runner.os }}-k8s-1.34.0-cr-0.25
+          key: envtest-${{ runner.os }}-k8s-1.34.0-cr-0.23
       - run: make test-integration
 
   verify-generated:
@@ -151,8 +151,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Install controller-gen

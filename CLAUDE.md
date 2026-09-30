@@ -8,7 +8,7 @@ Kubernetes operator for managing Sei blockchain nodes, plus the per-node sidecar
 - **CRD types**: `SeiNetwork`, `SeiNode`, `SeiNodeTask` (defined in `api/v1alpha1/`)
 - **Controllers**: `internal/controller/seinetwork/`, `internal/controller/node/`, `internal/controller/nodetask/`
 - **Entry point**: `cmd/main.go` — thin binary that creates a `manager.Manager` and registers both controllers
-- **Framework**: controller-runtime v0.25.1 / kubebuilder v4.12.0
+- **Framework**: controller-runtime v0.23.1 / kubebuilder v4.12.0
 
 ### Modules
 
