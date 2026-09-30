@@ -17,9 +17,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::189176372795:role/common/gha
           role-duration-seconds: 900
@@ -28,10 +28,10 @@ jobs:
       - id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build and push controller image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -43,7 +43,7 @@ jobs:
       # The integration test suite compiled to an image (go test -c -tags
       # integration), run by one nightly CronJob per target (-test.run TestX).
       - name: Build and push integration-harness image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: test/integration/Dockerfile
@@ -68,9 +68,9 @@ jobs:
     # generous because a cold-cache two-arch sei-chain compile is slow.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::189176372795:role/common/gha
           role-duration-seconds: 900
@@ -79,12 +79,12 @@ jobs:
       - id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # The per-node sidecar. Built from the repo root so the sidecarapi module
       # it resolves through a filesystem `replace` is in the context.
       - name: Build and push sidecar image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: sidecar/Dockerfile
