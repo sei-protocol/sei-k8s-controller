@@ -45,7 +45,7 @@
 # nor passes the integration tag.
 !test/integration/**/*_test.go
 
-# The importable fault catalog and seiload Job renderer (harness/faults,
-# harness/bench) //go:embed their *.yaml.tmpl manifests; the integration suite
-# imports both, so the harness build needs them in the context too.
-!harness/**/*.tmpl
+# The importable fault catalog and seiload Job renderer (test/manifests/faults,
+# test/manifests/bench) //go:embed their *.yaml.tmpl manifests; the integration
+# suite imports both, so the harness build needs them in the context too.
+!test/manifests/**/*.tmpl
