@@ -1,4 +1,4 @@
-# harness
+# manifests
 
 Shared, importable manifest renderers for the benchmark/chaos harness. The
 integration suite (`test/integration`) and external tools (`seictl chaos

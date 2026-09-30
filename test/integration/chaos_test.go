@@ -15,7 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/yaml"
 
-	"github.com/sei-protocol/sei-k8s-controller/harness/faults"
+	"github.com/sei-protocol/sei-k8s-controller/test/manifests/faults"
 )
 
 // injectWindow bounds fault injection independently of the per-scenario
