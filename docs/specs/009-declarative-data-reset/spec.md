@@ -67,7 +67,7 @@ states what the anchor does not reach.
 - **SeiNode**: the CRD for a single node.
 - **ConfigMap-configured node**: a SeiNode with `spec.nodeConfig` set. Its `config.toml` and `app.toml` come verbatim from operator ConfigMaps mounted read-only.
 - **Config change**: publishing a ConfigMap under a new name and pointing `spec.nodeConfig` at it. Kubernetes rolls the pod when the controller applies the new pod template.
-- **Reset counter**: the new `spec.dataVolume.resetGeneration` field, a non-negative integer.
+- **Reset counter**: the new `spec.dataResetGeneration` field, a non-negative integer. It is a SeiNode field, not a `DataVolumeSpec` field, because `DataVolumeSpec` is shared with the SeiNetwork, where no `spec.nodeConfig` gate applies.
 - **Handled counter**: the new `status.dataResetGeneration` field, the last reset counter value the controller finished resetting for.
 - **Pending reset**: the state in which the reset counter is greater than the handled counter.
 - **Data reset**: the sidecar `reset-data` task. It wipes `<home>/data/` and keeps `<home>/config/`, the node identity, and the sidecar database.
@@ -79,7 +79,7 @@ states what the anchor does not reach.
 ## Boundary Context
 
 - **Sits within**: the SeiNode spec, the SeiNode status, and the Running-phase plan the controller builds for a ConfigMap-configured node.
-- **Owns**: the reset counter, the handled counter, the `DataReset` condition, the ordering of the data reset against the start gate, and the preservation of the sign state across a reset.
+- **Owns**: the reset counter, the handled counter, the `DataResetInProgress` condition, the ordering of the data reset against the start gate, and the preservation of the sign state across a reset.
 - **Does not own**: the content of the ConfigMaps. The operator owns it, as `spec.nodeConfig` already states.
 - **Does not own**: fetching the trust point from live witnesses and rendering the reset commit. seictl owns that; this spec states the commit it MUST emit.
 - **Does not own**: operations that carry parameters or produce a result, such as a gov proposal, a vote, or a state dump. `SeiNodeTask` owns those.
@@ -93,7 +93,7 @@ states what the anchor does not reach.
 An operator state syncs a full node by merging one commit. The commit adds a
 ConfigMap with `[statesync] enable = true`, the `rpc-servers`, and a fresh trust
 point. It points `spec.nodeConfig.configRef` at the new ConfigMap and increments
-`spec.dataVolume.resetGeneration`. The node restarts once, on empty data, and
+`spec.dataResetGeneration`. The node restarts once, on empty data, and
 state syncs.
 
 **Why this priority**: state sync is a hard requirement for retiring sei-infra,
@@ -102,7 +102,7 @@ and a ConfigMap-configured node has no way to state sync today.
 **Independent Test**: on a running ConfigMap-configured full node, merge a reset
 commit. Confirm the pod rolls once, seid never serves on the old data with the new
 config, the data directory is empty before seid starts, the node state syncs, and
-`DataReset` reaches `True`.
+the handled counter reaches the new value.
 
 **Acceptance Scenarios**:
 
@@ -152,20 +152,24 @@ reset commit. Confirm the sign state after the reset still records height H.
 
 ### User Story 4 - Watch and wait on a reset (Priority: P2)
 
-An operator or a runbook waits for a reset to finish with
-`kubectl wait seinode/<name> --for=condition=DataReset=True`, and sees why it
-failed if it failed.
+An operator or a runbook waits for reset N to finish with
+`kubectl wait seinode/<name> --for=jsonpath='{.status.dataResetGeneration}'=N`,
+and reads the `DataResetInProgress` condition to see why a reset is stuck. The
+wait compares counters, not the condition: right after a merge the condition can
+still read `False` from the previous reset, because the controller has not yet
+seen the new counter, and `kubectl wait` does not check `observedGeneration`.
 
 **Why this priority**: the merge is the only operator action, so status is the
 only feedback an operator gets.
 
-**Independent Test**: merge a reset commit and read the `DataReset` condition
-through its transitions.
+**Independent Test**: merge a reset commit, wait on the handled counter, and
+read the `DataResetInProgress` condition through its transitions.
 
 **Acceptance Scenarios**:
 
-1. **Given** a pending reset, **When** the operator reads the condition, **Then** it is `False` with reason `ResetPending` or `ResetInProgress`, and its message names the reset counter value.
-2. **Given** a data reset task that fails, **When** the operator reads the condition, **Then** it is `False` with reason `ResetFailed` and seid is still held.
+1. **Given** a pending reset, **When** the operator reads the condition, **Then** it is `True` with reason `ResetPending` or `ResetRunning`, and its message names the reset counter value.
+2. **Given** a data reset task that fails, **When** the operator reads the condition, **Then** it is `True` with reason `ResetFailed`, its message carries the task error, and seid is still held.
+3. **Given** the operator merged reset N, **When** the wait on `status.dataResetGeneration` returns, **Then** the data reset for N has succeeded.
 
 ---
 
@@ -192,7 +196,7 @@ Confirm the API server rejects it.
 - The counter jumps by more than one: the controller runs one data reset and sets the handled counter to the spec value.
 - The counter increments again while a reset is in progress: the controller finishes the current reset, then sees the handled counter behind the spec and runs one more.
 - `spec.paused` is true: the reset waits, and the condition stays `ResetPending`.
-- The data reset fails: the start gate stays closed and seid stays held. The controller retries the reset on the next spec generation change.
+- The data reset fails: the start gate stays closed and seid stays held. The controller retries the reset with backoff while the reset stays pending, the same way a failed Running plan is retried on a later reconcile. The operator does not bump the counter to retry; a bump asks for a second wipe.
 - The trust point in the ConfigMap is older than the trust period when the commit merges: seid fails to state sync. The controller does not validate the trust point.
 
 ## Requirements *(mandatory)*
@@ -205,7 +209,7 @@ serves RPC. This spec orders those two pieces against a counter.
 
 #### Acceptance Criteria
 
-1. The SeiNode spec SHALL carry an optional `spec.dataVolume.resetGeneration` field, a 64-bit integer with a minimum of 0.
+1. The SeiNode spec SHALL carry an optional `spec.dataResetGeneration` field, a 64-bit integer with a minimum of 0.
 2. WHEN an update lowers the reset counter or removes a set reset counter, THE API server SHALL reject the update.
 3. WHEN a SeiNode without `spec.nodeConfig` sets the reset counter, THE API server SHALL reject it.
 4. The SeiNode status SHALL carry a `status.dataResetGeneration` field that the controller alone writes.
@@ -219,7 +223,7 @@ serves RPC. This spec orders those two pieces against a counter.
 3. WHEN a reset is pending and the pod template did not change, THE controller SHALL close the start gate and stop seid before it runs the data reset.
 4. WHEN the data reset succeeds, THE controller SHALL set the handled counter to the reset counter value before it issues `mark-ready`.
 5. WHILE the handled counter equals the reset counter, THE controller SHALL NOT run a data reset, across pod restarts and controller restarts.
-6. IF the data reset fails, THEN THE controller SHALL keep the start gate closed and leave the handled counter unchanged.
+6. IF the data reset fails, THEN THE controller SHALL keep the start gate closed, leave the handled counter unchanged, and retry the reset with backoff while the reset stays pending.
 7. WHILE `spec.paused` is true, THE controller SHALL NOT start a data reset.
 
 ### Requirement 3: A reset preserves the sign state
@@ -230,17 +234,18 @@ serves RPC. This spec orders those two pieces against a counter.
 2. WHEN the data reset runs on a node with no sign state, THE sidecar SHALL write the zero sign state that seid requires to start.
 3. THE data reset SHALL NOT delete or rewrite `priv_validator_key.json` or `node_key.json`.
 
-### Requirement 4: The controller reports the reset on a condition
+### Requirement 4: The controller reports the reset on a condition and a counter
 
 #### Acceptance Criteria
 
-1. The controller SHALL seed a `DataReset` condition on every ConfigMap-configured node.
-2. WHILE no reset is pending, THE condition SHALL be `True`, with reason `ResetComplete` once a reset has run and `NoResetRequested` before one has.
-3. WHILE a reset is pending and has not started, THE condition SHALL be `False` with reason `ResetPending`.
-4. WHILE the data reset runs, THE condition SHALL be `False` with reason `ResetInProgress`.
-5. IF the data reset fails, THEN THE condition SHALL be `False` with reason `ResetFailed`, and its message SHALL carry the task error.
+1. The controller SHALL seed a `DataResetInProgress` condition on every SeiNode, following the `<Subject>InProgress` convention: `True` is the exception, `False` is the steady state.
+2. WHILE no reset is pending, THE condition SHALL be `False`, with reason `ResetComplete` once a reset has run, `NoResetRequested` before one has, and `NotApplicable` on a node without `spec.nodeConfig`.
+3. WHILE a reset is pending and has not started, THE condition SHALL be `True` with reason `ResetPending`.
+4. WHILE the data reset runs, THE condition SHALL be `True` with reason `ResetRunning`.
+5. IF the data reset fails, THEN THE condition SHALL be `True` with reason `ResetFailed`, and its message SHALL carry the task error.
 6. The condition message SHALL name the reset counter value it refers to.
-7. WHEN the data reset starts, succeeds, or fails, THE controller SHALL record an event on the SeiNode.
+7. THE completion contract for reset N SHALL be `status.dataResetGeneration >= N`. Runbooks and seictl SHALL wait on that field, not on the condition.
+8. WHEN the data reset starts, succeeds, or fails, THE controller SHALL record an event on the SeiNode.
 
 ### Requirement 5: The config comes only from git
 
@@ -251,9 +256,9 @@ serves RPC. This spec orders those two pieces against a counter.
 
 ### Key Entities
 
-- **Reset counter** (`spec.dataVolume.resetGeneration`): the operator's request. It carries no parameters; what the node restarts into is the ConfigMap and the rest of the spec.
+- **Reset counter** (`spec.dataResetGeneration`): the operator's request. It carries no parameters; what the node restarts into is the ConfigMap and the rest of the spec.
 - **Handled counter** (`status.dataResetGeneration`): the controller's record of the last value it reset for.
-- **`DataReset` condition**: the progress and failure signal, with reasons `NoResetRequested`, `ResetPending`, `ResetInProgress`, `ResetComplete`, `ResetFailed`.
+- **`DataResetInProgress` condition**: the progress and failure signal, with reasons `NoResetRequested`, `NotApplicable`, `ResetPending`, `ResetRunning`, `ResetComplete`, `ResetFailed`.
 - **Reset commit**: the ConfigMap, the `spec.nodeConfig` reference, and the counter increment, in one commit.
 
 ## Success Criteria *(mandatory)*
@@ -261,7 +266,7 @@ serves RPC. This spec orders those two pieces against a counter.
 Every criterion names the command that checks it, or says `judgement` with the
 role that decides.
 
-- **SC-001**: The API server rejects an update that lowers or removes the reset counter, and one that sets it on a node without `spec.nodeConfig`.
+- **SC-001**: The API server rejects an update that lowers or removes the reset counter, and one that sets it on a node without `spec.nodeConfig`. The SeiNetwork schema carries no reset counter.
   *Verifier:* `go test ./api/... ./internal/...` — an envtest case applies each rejected update and asserts the admission error.
 - **SC-002**: With a reset pending, the controller does not issue `mark-ready` until the data reset has succeeded, and it sets the handled counter before it issues `mark-ready`.
   *Verifier:* `go test ./internal/controller/node/...` — a reconciler test with a fake sidecar asserts the task order `reset-data` → status write → `mark-ready`.
@@ -271,11 +276,11 @@ role that decides.
   *Verifier:* `go test ./internal/planner/...` — a planner test asserts the plan `mark-not-ready` → `stop-seid` → `reset-data` → `mark-ready`.
 - **SC-005**: A pod restart or a controller restart with the handled counter equal to the reset counter runs no data reset.
   *Verifier:* `go test ./internal/controller/node/...` — a reconciler test restarts the reconciler and deletes the pod, and asserts no `reset-data` task is submitted.
-- **SC-006**: A failed data reset keeps seid held and leaves the handled counter unchanged, and the condition reads `ResetFailed` with the task error.
-  *Verifier:* `go test ./internal/controller/node/...` — a reconciler test fails the fake sidecar's `reset-data` and asserts the gate, the status, and the condition.
+- **SC-006**: A failed data reset keeps seid held, leaves the handled counter unchanged, reads `ResetFailed` with the task error, and is retried with no spec change.
+  *Verifier:* `go test ./internal/controller/node/...` — a reconciler test fails the fake sidecar's `reset-data` once, asserts the gate, the status, and the condition, then lets it succeed on a later reconcile and asserts the handled counter advances.
 - **SC-007**: A data reset leaves an existing sign state's height, round, and step unchanged, and leaves the validator key and node key untouched.
   *Verifier:* `go test ./sidecar/tasks/...` — a `ResetDataer` test seeds a sign state at a non-zero height and both key files, runs the reset, and asserts them byte for byte.
-- **SC-008**: The `DataReset` condition moves through `ResetPending`, `ResetInProgress`, and `ResetComplete` for one reset, and names the counter value.
+- **SC-008**: The `DataResetInProgress` condition moves through `True/ResetPending`, `True/ResetRunning`, and `False/ResetComplete` for one reset, and names the counter value.
   *Verifier:* `go test ./internal/controller/node/...` — a reconciler test asserts the condition after each step.
 - **SC-009**: A giga reset commit leaves the migration keys in the running `app.toml` after a later unrelated config change.
   *Verifier:* judgement — a platform engineer runs the giga reset commit on a harbor node, merges an unrelated ConfigMap change, and reads `app.toml` in the pod.
