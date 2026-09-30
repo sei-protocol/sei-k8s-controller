@@ -14,7 +14,7 @@ GOLANGCI_LINT ?= $(shell which golangci-lint 2>/dev/null || echo $(HOME)/go/bin/
 # as a keyword and refuses oldSelf.import / self.import accessors. 1.32+
 # relaxed that.
 ENVTEST_K8S_VERSION ?= 1.34.0
-SETUP_ENVTEST_VERSION ?= release-0.23
+SETUP_ENVTEST_VERSION ?= release-0.25
 CONTROLLER_GEN_VERSION ?= v0.20.1
 
 LOCALBIN ?= $(CURDIR)/bin
