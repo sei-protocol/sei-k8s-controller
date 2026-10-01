@@ -167,6 +167,8 @@ func SignAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, in SignAn
 // has not yet committed block 1 (e.g. a validator that joined consensus after
 // the others had already advanced) has no queryable genesis state, so even a
 // funded genesis account reads as NotFound until it catches up.
+// The wait applies to every signer, so a key that was never funded fails only
+// after the full timeout; a slow NotFound failure means check the funding.
 func retrieveAccount(ctx context.Context, tc txClient, fromAddr sdk.AccAddress) (uint64, uint64, error) {
 	deadline := time.Now().Add(accountNotFoundTimeout)
 	for {
