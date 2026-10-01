@@ -153,12 +153,12 @@ func TestNightlyChainUpgrade(t *testing.T) {
 	hc := &http.Client{Timeout: 15 * time.Second}
 
 	// Genesis accounts become queryable only once block 1 commits, and the proposal
-	// task looks the proposer account up before it signs. WaitReady gates on the
-	// SeiNetwork phase plus one /status probe, both of which a chain still at height
-	// 0 satisfies, so wait out the first block here.
-	if err := pollHeightAtLeast(ctx, hc, tmRPC, 1); err != nil {
-		t.Fatalf("network %q first block: %v", chainID, err)
-	}
+	// and vote tasks look their signer account up on the validator's own seid before
+	// signing. WaitReady gates on the SeiNetwork phase plus one /status probe, both of
+	// which a chain still at height 0 satisfies, and the aggregate endpoint can be
+	// several blocks ahead of a validator that joined consensus late (3 of 4 is a
+	// quorum), so gate on each validator's local height.
+	awaitAllValidatorsAtHeight(ctx, t, c, chainID, ns, validators, "genesis-await", 1, runLabels)
 
 	// Schedule the upgrade comfortably ahead of the current height so the 60s
 	// voting period elapses and the proposal passes before the chain halts.
@@ -250,7 +250,7 @@ func TestNightlyChainUpgrade(t *testing.T) {
 	// (co-located, not the aggregate RPC), so it is immune to the halt black-hole
 	// and proves each validator individually — not merely "a pod is Ready".
 	target := upgradeHeight + postUpgradeProgress
-	awaitAllValidatorsAtHeight(ctx, t, c, chainID, ns, validators, target, runLabels)
+	awaitAllValidatorsAtHeight(ctx, t, c, chainID, ns, validators, "await", target, runLabels)
 	t.Logf("all %d validators advanced past the upgrade to height %d — TestNightlyChainUpgrade OK", validators, target)
 }
 
@@ -299,17 +299,18 @@ func voteAllValidators(
 }
 
 // awaitAllValidatorsAtHeight runs an AwaitNodesAtHeight task against each
-// validator in parallel — the semantic recovery gate: each validator's sidecar
-// confirms its own local height crossed target on the new binary.
+// validator in parallel: each validator's sidecar confirms its own local height
+// crossed target. step prefixes the task names so the gate can run more than
+// once per chain.
 func awaitAllValidatorsAtHeight(
 	ctx context.Context, t *testing.T, c *sei.Client, chainID, ns string,
-	validators int, target int64, labels map[string]string,
+	validators int, step string, target int64, labels map[string]string,
 ) {
 	t.Helper()
-	what := fmt.Sprintf("post-upgrade progress to %d", target)
+	what := fmt.Sprintf("%s: validators at height %d", step, target)
 	runTasksAcrossValidators(ctx, t, c, validators, what, func(i int) sei.TaskSpec {
 		return sei.TaskSpec{
-			Name:      taskName(chainID, fmt.Sprintf("await-%d", i)),
+			Name:      taskName(chainID, fmt.Sprintf("%s-%d", step, i)),
 			Namespace: ns,
 			Node:      validatorName(chainID, i),
 			Kind:      sei.TaskAwaitNodesAtHeight,

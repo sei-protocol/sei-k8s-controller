@@ -16,6 +16,7 @@ require (
 	github.com/sei-protocol/sei-k8s-controller/sidecarapi v0.0.0
 	github.com/sei-protocol/seilog v0.0.3
 	github.com/urfave/cli/v3 v3.13.0
+	google.golang.org/grpc v1.80.0
 	// Pinned, not floated. This driver embeds the SQLite engine that reads and
 	// writes sidecar.db on the node's data volume — the pre-broadcast idempotency
 	// marker for sign-tx tasks lives there. A `go mod tidy` in a fresh module
@@ -195,7 +196,6 @@ require (
 	google.golang.org/genproto v0.0.0-20260128011058-8636f8732409 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
-	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	k8s.io/component-base v0.35.0 // indirect

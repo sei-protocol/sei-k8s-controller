@@ -19,6 +19,9 @@ import (
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
 	rpctypes "github.com/sei-protocol/sei-chain/sei-tendermint/rpc/jsonrpc/types"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/engine"
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/rpc"
 )
@@ -30,6 +33,11 @@ type fakeTxClient struct {
 	accountNumber uint64
 	sequence      uint64
 	accountErr    error
+
+	// accountNotFoundCalls makes the first N AccountNumberSequence calls
+	// return a gRPC NotFound, modeling a node that has not committed block 1.
+	accountNotFoundCalls int
+	accountCalls         int
 
 	broadcastResp *sdk.TxResponse
 	broadcastErr  error
@@ -52,6 +60,10 @@ type fakeTxClient struct {
 func (f *fakeTxClient) AccountNumberSequence(_ context.Context, _ sdk.AccAddress) (uint64, uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.accountCalls++
+	if f.accountCalls <= f.accountNotFoundCalls {
+		return 0, 0, status.Error(codes.NotFound, "account not found: key not found")
+	}
 	return f.accountNumber, f.sequence, f.accountErr
 }
 
@@ -331,6 +343,68 @@ func TestAccountRetrieverFailure_Propagates(t *testing.T) {
 	if !strings.Contains(err.Error(), "account retrieve") {
 		t.Fatalf("error should mention account retrieve, got %q", err.Error())
 	}
+}
+
+func TestAccountNotFound_WaitsForSignerAccount(t *testing.T) {
+	shortenAccountNotFoundWait(t, time.Second)
+	cfg, addr := newGuardCfg(t, "pacific-1")
+	tc := &fakeTxClient{
+		accountNotFoundCalls: 3,
+		accountNumber:        17,
+		sequence:             42,
+		broadcastResp:        &sdk.TxResponse{Code: 0, TxHash: "h", Height: 0},
+		queryDefault:         &sdk.TxResponse{Code: 0, TxHash: "h", Height: 9},
+	}
+
+	if _, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
+		ChainID: "pacific-1",
+		KeyName: "node_admin",
+		Msg:     makeMsgVote(t, addr),
+		Fees:    "4000usei",
+		Gas:     200_000,
+		TaskID:  "00000000-0000-0000-0000-0000000000a1",
+	}, addr); err != nil {
+		t.Fatalf("want success once the account appears, got %v", err)
+	}
+	if tc.accountCalls != 4 {
+		t.Fatalf("want 4 account lookups (3 NotFound + 1 found), got %d", tc.accountCalls)
+	}
+	if tc.broadcasts != 1 {
+		t.Fatalf("want 1 broadcast, got %d", tc.broadcasts)
+	}
+}
+
+func TestAccountNotFound_GivesUpAfterTimeout(t *testing.T) {
+	shortenAccountNotFoundWait(t, 50*time.Millisecond)
+	cfg, addr := newGuardCfg(t, "pacific-1")
+	tc := &fakeTxClient{accountNotFoundCalls: 1 << 30}
+
+	_, err := signAndBroadcast(context.Background(), cfg, tc, SignAndBroadcastInput{
+		ChainID: "pacific-1",
+		KeyName: "node_admin",
+		Msg:     makeMsgVote(t, addr),
+		Fees:    "4000usei",
+		Gas:     200_000,
+		TaskID:  "00000000-0000-0000-0000-0000000000a2",
+	}, addr)
+	if status.Code(err) != codes.NotFound || IsTerminal(err) {
+		t.Fatalf("want non-Terminal NotFound after the wait, got %v", err)
+	}
+	if tc.accountCalls < 2 {
+		t.Fatalf("want the lookup retried before giving up, got %d calls", tc.accountCalls)
+	}
+	if tc.broadcasts != 0 {
+		t.Fatalf("broadcast must not run without an account; saw %d", tc.broadcasts)
+	}
+}
+
+func shortenAccountNotFoundWait(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	prevTimeout, prevInterval := accountNotFoundTimeout, accountNotFoundPollInterval
+	accountNotFoundTimeout, accountNotFoundPollInterval = timeout, 10*time.Millisecond
+	t.Cleanup(func() {
+		accountNotFoundTimeout, accountNotFoundPollInterval = prevTimeout, prevInterval
+	})
 }
 
 // TestSignedTxHasNoFeePayerOrGranter locks the signer-pays-its-own-fees
