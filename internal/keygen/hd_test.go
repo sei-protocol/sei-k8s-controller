@@ -3,11 +3,9 @@ package keygen
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"strings"
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/cosmos/btcutil/bech32"
 	bip39 "github.com/cosmos/go-bip39"
 	"golang.org/x/crypto/ripemd160" //nolint:staticcheck
 )
@@ -37,12 +35,13 @@ func TestComputeMasterFromSeed_BIP32Vector1(t *testing.T) {
 // to the canonical algorithm sei-cosmos implements.
 func TestDeriveIdentity_CosmosFundraiserVector(t *testing.T) {
 	const (
-		mnemonic = "measure slogan connect luggage stereo federal stuff stomach stumble security end differ"
-		wantSeed = "c237f7aa198c5bd560ac8daf5b8421d03855171465b2999b07159671e9186461e7d75dba6c7264b963108431f8674ac8d095b7a22878fa0ab8b582e5d6ea1986"
-		wantMstr = "c177fa4bd21420b6ba2246e4f7a43fbe76545d1204174cae942ffbd79a434d11"
-		wantPriv = "91bba8805845210665d7a9c5aff63ef69f7604fbeddb485706d31f04458f572c"
-		wantPub  = "0210ddc89abc90bbcbec8c63f5a4ebb016b58063b9d1a77854502042bdfcac5e51"
-		wantAddr = "72e7d6e9cfa899043a0783752a4876423f8effb8" // raw 20 bytes, ripemd160(sha256(pubkey))
+		mnemonic    = "measure slogan connect luggage stereo federal stuff stomach stumble security end differ"
+		wantSeed    = "c237f7aa198c5bd560ac8daf5b8421d03855171465b2999b07159671e9186461e7d75dba6c7264b963108431f8674ac8d095b7a22878fa0ab8b582e5d6ea1986"
+		wantMstr    = "c177fa4bd21420b6ba2246e4f7a43fbe76545d1204174cae942ffbd79a434d11"
+		wantPriv    = "91bba8805845210665d7a9c5aff63ef69f7604fbeddb485706d31f04458f572c"
+		wantPub     = "0210ddc89abc90bbcbec8c63f5a4ebb016b58063b9d1a77854502042bdfcac5e51"
+		wantAddr    = "72e7d6e9cfa899043a0783752a4876423f8effb8" // raw 20 bytes, ripemd160(sha256(pubkey))
+		wantSeiAddr = "sei1wtnad6w04zvsgws8sd6j5jrkgglcalacf3tjy3"
 	)
 	seed, err := bip39.NewSeedWithErrorChecking(mnemonic, "")
 	if err != nil {
@@ -79,20 +78,14 @@ func TestDeriveIdentity_CosmosFundraiserVector(t *testing.T) {
 		t.Fatalf("address bytes: got %s, want %s", got, wantAddr)
 	}
 
-	// Bech32-encode with the sei HRP — the prefix is a presentation detail
-	// over the same 20-byte address. Verifying it round-trips means the
-	// encoding step is correct; the actual sei1... string is computed
-	// deterministically from wantAddr above.
-	converted, err := bech32.ConvertBits(addr, 8, 5, true)
+	// Pin the exact bech32 so the production cosmosAddress path is covered
+	// end-to-end as a known-answer test, not just a prefix check.
+	seiAddr, err := cosmosAddress(priv)
 	if err != nil {
-		t.Fatalf("bech32 convert: %v", err)
+		t.Fatalf("cosmosAddress: %v", err)
 	}
-	seiAddr, err := bech32.Encode("sei", converted)
-	if err != nil {
-		t.Fatalf("bech32 encode: %v", err)
-	}
-	if !strings.HasPrefix(seiAddr, "sei1") {
-		t.Fatalf("expected sei1 prefix, got %s", seiAddr)
+	if seiAddr != wantSeiAddr {
+		t.Fatalf("sei address: got %s, want %s", seiAddr, wantSeiAddr)
 	}
 }
 

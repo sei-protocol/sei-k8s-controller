@@ -59,24 +59,33 @@ func Derive() (Identity, error) {
 	if err != nil {
 		return Identity{}, fmt.Errorf("derive %s: %w", cosmosHDPath, err)
 	}
+	address, err := cosmosAddress(privKey)
+	if err != nil {
+		return Identity{}, err
+	}
+	return Identity{Mnemonic: mnemonic, Address: address}, nil
+}
+
+// cosmosAddress maps a secp256k1 private key to its bech32 account address:
+// ripemd160(sha256(pubkey_compressed)), bech32-encoded with the sei prefix.
+func cosmosAddress(privKey []byte) (string, error) {
 	_, pub := btcec.PrivKeyFromBytes(privKey)
 	pubCompressed := pub.SerializeCompressed()
 
-	// Cosmos address = ripemd160(sha256(pubkey_compressed)), bech32-encoded.
 	sha := sha256.Sum256(pubCompressed)
 	hasher := ripemd160.New()
 	if _, err := hasher.Write(sha[:]); err != nil {
-		return Identity{}, fmt.Errorf("ripemd160: %w", err)
+		return "", fmt.Errorf("ripemd160: %w", err)
 	}
 	addrBytes := hasher.Sum(nil)
 
 	converted, err := bech32.ConvertBits(addrBytes, 8, 5, true)
 	if err != nil {
-		return Identity{}, fmt.Errorf("bech32 convert: %w", err)
+		return "", fmt.Errorf("bech32 convert: %w", err)
 	}
 	address, err := bech32.Encode(bech32AccountPrefix, converted)
 	if err != nil {
-		return Identity{}, fmt.Errorf("bech32 encode: %w", err)
+		return "", fmt.Errorf("bech32 encode: %w", err)
 	}
-	return Identity{Mnemonic: mnemonic, Address: address}, nil
+	return address, nil
 }
