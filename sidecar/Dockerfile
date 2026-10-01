@@ -13,7 +13,7 @@
 # architecture and cross-compiles with GOOS/GOARCH below. Without it, buildx
 # emulates this stage under QEMU for every non-native target, which means
 # compiling the whole sei-chain graph through emulation.
-FROM --platform=$BUILDPLATFORM docker.io/golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.27 AS build
 
 ENV GOWORK=off
 WORKDIR /workspace
@@ -76,8 +76,7 @@ COPY --from=build /go/bin/sei-sidecar /usr/bin/sei-sidecar
 #
 # REMOVAL CONDITION — check the pods, not the controller version, because
 # OnDelete lets a pod created by the old controller outlive the controller bump:
-#   1. no rendered pod spec names `seictl` — StatefulSet template AND bootstrap
-#      Job, both render sites; and
+#   1. no rendered pod spec names `seictl` in the StatefulSet template; and
 #   2. no cell's controller-config still points images.sidecar at ghcr.
 # Per-node confirmation that a roll landed is .status.currentSidecarImage.
 # Deleting this makes a controller rollback below 186d65a a one-way door unless

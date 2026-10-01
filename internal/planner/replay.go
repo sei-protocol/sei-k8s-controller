@@ -31,9 +31,6 @@ func (p *replayerPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	if len(node.Spec.Peers) == 0 {
 		return fmt.Errorf("replayer requires at least one peer source for block sync")
 	}
-	if err := validateResultExport(node.Spec.Replayer.ResultExport); err != nil {
-		return fmt.Errorf("replayer: %w", err)
-	}
 	return nil
 }
 
@@ -44,9 +41,6 @@ func (p *replayerPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.Tas
 	intent := &seiconfig.ConfigIntent{
 		Mode:      seiconfig.ModeFull,
 		Overrides: mergeOverrides(mergeOverrides(commonOverrides(node), p.controllerOverrides()), node.Spec.Overrides),
-	}
-	if NeedsBootstrap(node) {
-		return buildBootstrapPlan(node, &node.Spec.Replayer.Snapshot, intent)
 	}
 	return buildBasePlan(node, &node.Spec.Replayer.Snapshot, intent)
 }

@@ -10,8 +10,6 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
 	seiconfig "github.com/sei-protocol/sei-config"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,12 +24,6 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/internal/platform/platformtest"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
-)
-
-const (
-	testBootstrapImage   = "sei:bootstrap"
-	testBootstrapImageV1 = "sei:bootstrap-v1"
-	testSnapshotRegion   = "eu-central-1"
 )
 
 func mustBuildPlan(t *testing.T, node *seiv1alpha1.SeiNode) *seiv1alpha1.TaskPlan {
@@ -683,27 +675,6 @@ func TestReconcile_Pending_SetsInitializingWithPlan(t *testing.T) {
 	}
 }
 
-func TestReconcile_Pending_WithBootstrap_SetsInitializing(t *testing.T) {
-	mock := &mockSidecarClient{}
-	node := replayerNode()
-	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImage
-	r, c := newProgressionReconciler(t, mock, node)
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: node.Name, Namespace: node.Namespace}}
-
-	_, err := r.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Reconcile error: %v", err)
-	}
-
-	updated := fetchNode(t, c, node.Name, node.Namespace)
-	if updated.Status.Phase != seiv1alpha1.PhaseInitializing {
-		t.Errorf("Phase = %q, want %q", updated.Status.Phase, seiv1alpha1.PhaseInitializing)
-	}
-	if updated.Status.Plan == nil {
-		t.Fatal("expected plan to be created")
-	}
-}
-
 func TestExecutePlan_AllComplete_TransitionsToTargetPhase(t *testing.T) {
 	g := NewWithT(t)
 	mock := &mockSidecarClient{}
@@ -844,171 +815,6 @@ func TestReconcileInitializing_SidecarClientError_Requeues(t *testing.T) {
 	}
 	if result.RequeueAfter != planner.TaskPollInterval {
 		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, planner.TaskPollInterval)
-	}
-}
-
-// --- Bootstrap helpers ---
-
-func bootstrapReplayerNode() *seiv1alpha1.SeiNode {
-	n := replayerNode()
-	n.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImage
-	return n
-}
-
-// --- NeedsBootstrap tests ---
-
-func TestNeedsBootstrap(t *testing.T) {
-	tests := []struct {
-		name string
-		node *seiv1alpha1.SeiNode
-		want bool
-	}{
-		{"replayer with bootstrap image", bootstrapReplayerNode(), true},
-		{"replayer without bootstrap image", replayerNode(), false},
-		{"full node without bootstrap image", snapshotNode(), false},
-		{"genesis node", genesisNode(), false},
-		{"seed", seedNode(), false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := planner.NeedsBootstrap(tt.node); got != tt.want {
-				t.Errorf("NeedsBootstrap() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// A seed must never reach the bootstrap-Job path. bootstrapNodeMode has no seed
-// arm and would render one as a full node — RPC probes, cosmos-exporter, and no
-// ValidateSeedProbes call — and nothing there would fail to compile. The only
-// thing preventing it is a nil SnapshotSource, so pin that rather than leave the
-// invariant to a comment.
-func TestSeedNeverBootstraps(t *testing.T) {
-	node := seedNode()
-
-	if snap := node.Spec.SnapshotSource(); snap != nil {
-		t.Fatalf("a seed must have no snapshot source, got %+v", snap)
-	}
-	if planner.NeedsBootstrap(node) {
-		t.Error("a seed must never need a bootstrap Job")
-	}
-}
-
-// --- Bootstrap resource builder tests (task package) ---
-
-func TestTaskGenerateBootstrapJob(t *testing.T) {
-	node := replayerNode()
-	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
-	snap := node.Spec.SnapshotSource()
-	job, err := task.GenerateBootstrapJob(node, snap, platformtest.Config())
-	if err != nil {
-		t.Fatalf("GenerateBootstrapJob error: %v", err)
-	}
-
-	wantName := "test-replayer-bootstrap"
-	if job.Name != wantName {
-		t.Errorf("Job name = %q, want %q", job.Name, wantName)
-	}
-
-	spec := job.Spec.Template.Spec
-	if spec.RestartPolicy != corev1.RestartPolicyNever {
-		t.Errorf("RestartPolicy = %q, want Never", spec.RestartPolicy)
-	}
-	if spec.Containers[0].Image != testBootstrapImageV1 {
-		t.Errorf("main container image = %q, want %q", spec.Containers[0].Image, testBootstrapImageV1)
-	}
-}
-
-func TestTaskGenerateBootstrapJob_NilSnapshot(t *testing.T) {
-	node := replayerNode()
-	_, err := task.GenerateBootstrapJob(node, nil, platformtest.Config())
-	if err == nil {
-		t.Fatal("expected error for nil snapshot, got nil")
-	}
-}
-
-func TestTaskGenerateBootstrapJob_SidecarResources(t *testing.T) {
-	node := replayerNode()
-	node.Spec.Replayer.Snapshot.BootstrapImage = testBootstrapImageV1
-	node.Spec.Sidecar = &seiv1alpha1.SidecarConfig{
-		Resources: &corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("500m"),
-				corev1.ResourceMemory: resource.MustParse("512Mi"),
-			},
-		},
-	}
-	snap := node.Spec.SnapshotSource()
-	job, err := task.GenerateBootstrapJob(node, snap, platformtest.Config())
-	if err != nil {
-		t.Fatalf("GenerateBootstrapJob error: %v", err)
-	}
-	spec := job.Spec.Template.Spec
-
-	sc := spec.InitContainers[1]
-	cpuReq := sc.Resources.Requests[corev1.ResourceCPU]
-	if cpuReq.String() != "500m" {
-		t.Errorf("sidecar CPU request = %q, want %q", cpuReq.String(), "500m")
-	}
-}
-
-// TestTaskGenerateBootstrapJob_NeverHasIdentityVolumes is the safety
-// regression guard for the load-bearing invariants on validator identity
-// material. The bootstrap pod must never carry the consensus signing key
-// (slashing risk, LLD §3) AND must never carry the validator's permanent
-// node key (peer-reputation pollution risk — bootstrap pods crash, halt,
-// and restart, and that misbehavior must not attribute to the validator's
-// permanent libp2p identity).
-func TestTaskGenerateBootstrapJob_NeverHasIdentityVolumes(t *testing.T) {
-	node := &seiv1alpha1.SeiNode{
-		ObjectMeta: metav1.ObjectMeta{Name: "validator-0", Namespace: "default"},
-		Spec: seiv1alpha1.SeiNodeSpec{
-			ChainID: "atlantic-2",
-			Image:   "ghcr.io/sei-protocol/seid:latest",
-			Validator: &seiv1alpha1.ValidatorSpec{
-				Snapshot: &seiv1alpha1.SnapshotSource{
-					BootstrapImage: testBootstrapImageV1,
-					S3:             &seiv1alpha1.S3SnapshotSource{TargetHeight: 100000000},
-				},
-				SigningKey: &seiv1alpha1.SigningKeySource{
-					Secret: &seiv1alpha1.SecretSigningKeySource{SecretName: "validator-0-key"},
-				},
-				NodeKey: &seiv1alpha1.NodeKeySource{
-					Secret: &seiv1alpha1.SecretNodeKeySource{SecretName: "validator-0-nodekey"},
-				},
-			},
-		},
-	}
-	snap := node.Spec.SnapshotSource()
-	job, err := task.GenerateBootstrapJob(node, snap, platformtest.Config())
-	if err != nil {
-		t.Fatalf("GenerateBootstrapJob error: %v", err)
-	}
-	forbiddenVolumeNames := map[string]string{
-		"signing-key": "consensus signing material — slashing risk (LLD §3)",
-		"node-key":    "validator permanent node ID — peer-reputation pollution risk",
-	}
-	forbiddenSecretNames := map[string]string{
-		"validator-0-key":     "consensus signing Secret",
-		"validator-0-nodekey": "validator node-key Secret",
-	}
-	for _, v := range job.Spec.Template.Spec.Volumes {
-		if reason, forbidden := forbiddenVolumeNames[v.Name]; forbidden {
-			t.Fatalf("bootstrap Job pod-spec must NEVER include volume %q (%s); found %+v", v.Name, reason, v)
-		}
-		if v.Secret != nil {
-			if reason, forbidden := forbiddenSecretNames[v.Secret.SecretName]; forbidden {
-				t.Fatalf("bootstrap Job pod-spec must NEVER mount Secret %q (%s); found volume %q",
-					v.Secret.SecretName, reason, v.Name)
-			}
-		}
-	}
-	for _, c := range job.Spec.Template.Spec.Containers {
-		for _, m := range c.VolumeMounts {
-			if reason, forbidden := forbiddenVolumeNames[m.Name]; forbidden {
-				t.Fatalf("bootstrap Job container %q must NEVER mount %q (%s)", c.Name, m.Name, reason)
-			}
-		}
 	}
 }
 

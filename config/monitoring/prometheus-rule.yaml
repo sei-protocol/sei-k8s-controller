@@ -54,7 +54,7 @@ spec:
             team: platform
           annotations:
             summary: "SeiNode {{ $labels.namespace }}/{{ $labels.name }} stuck initializing"
-            description: "Node in Initializing phase for 30+ minutes with no active plan. Suppressed during genesis ceremonies and bootstrap."
+            description: "Node in Initializing phase for 30+ minutes with no active plan. Suppressed while a plan is active."
             runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#seinodestuckinitializing
 
         - alert: SeiNodeStuckPending

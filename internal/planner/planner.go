@@ -183,7 +183,7 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return nil
 	}
 
-	mode, err := p.plannerForMode(node)
+	mode, err := p.plannerFor(node)
 	if err != nil {
 		return err
 	}
@@ -193,6 +193,15 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 
 	plan, err := mode.BuildPlan(node)
 	if err != nil {
+		return err
+	}
+	if writer := mountedConfigWriterInPlan(node, plan); writer != "" {
+		err := fmt.Errorf("plan carries %s on a node that mounts config.toml and app.toml from ConfigMaps: "+
+			"the task renames over the mount, which detaches it and leaves seid reading the task's file", writer)
+		// BuildPlan may already have stamped UpdateStarted. The plan is refused
+		// and never persisted, so clear the claim rather than leave a node
+		// reporting an update it does not have.
+		setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdatePlanBuildFailed, err.Error())
 		return err
 	}
 	if plan == nil {
@@ -339,6 +348,21 @@ func planFailureMessage(plan *seiv1alpha1.TaskPlan) string {
 	return unknownValue
 }
 
+// plannerFor returns the NodePlanner for a SeiNode. A node whose config.toml
+// and app.toml come from operator ConfigMaps gets its mode planner wrapped in
+// staticConfigPlanner, which keeps the mode's own Validate and init plans and
+// replaces only the Running arm.
+func (r *NodeResolver) plannerFor(node *seiv1alpha1.SeiNode) (NodePlanner, error) {
+	mode, err := r.plannerForMode(node)
+	if err != nil {
+		return nil, err
+	}
+	if !MountsNodeConfig(node) {
+		return mode, nil
+	}
+	return &staticConfigPlanner{base: mode, platform: r.Platform}, nil
+}
+
 // plannerForMode returns the appropriate NodePlanner for the SeiNode's
 // mode sub-spec, threaded with the resolver's Platform config so each
 // planner can resolve the effective sidecar image for drift detection.
@@ -377,10 +401,8 @@ func insertBefore(prog []string, target, taskType string) ([]string, error) {
 
 // buildSidecarProgression constructs the sidecar task sequence for the given
 // bootstrap mode, inserting optional tasks (genesis, state-sync) at the
-// correct positions. Used by both buildBasePlan and buildBootstrapPlan to
-// ensure they produce consistent sidecar progressions. persistent_peers is no
-// longer a sidecar task — the controller writes it via the config-apply
-// override (see commonOverrides).
+// correct positions. persistent_peers is no longer a sidecar task — the
+// controller writes it via the config-apply override (see commonOverrides).
 func buildSidecarProgression(snap *seiv1alpha1.SnapshotSource) ([]string, error) {
 	mode := bootstrapMode(snap)
 	prog := slices.Clone(baseProgression[mode])
@@ -395,14 +417,6 @@ func buildSidecarProgression(snap *seiv1alpha1.SnapshotSource) ([]string, error)
 		}
 	}
 	return prog, nil
-}
-
-// NeedsBootstrap returns true when the node requires a bootstrap Job to
-// populate the PVC before the StatefulSet takes over.
-func NeedsBootstrap(node *seiv1alpha1.SeiNode) bool {
-	snap := node.Spec.SnapshotSource()
-	return snap != nil && snap.BootstrapImage != "" &&
-		snap.S3 != nil && snap.S3.TargetHeight > 0
 }
 
 func needsValidateSigningKey(node *seiv1alpha1.SeiNode) bool {
@@ -487,18 +501,6 @@ func validateSnapshotGeneration(sg *seiv1alpha1.SnapshotGenerationConfig) error 
 	}
 	if sg.Tendermint.Publish != nil && sg.Tendermint.KeepRecent < 2 {
 		return fmt.Errorf("snapshotGeneration.tendermint.keepRecent must be >= 2 when publish is set (upload algorithm requires the second-to-latest snapshot)")
-	}
-	return nil
-}
-
-// validateResultExport returns errors without a mode prefix; callers
-// wrap with their own (e.g., fmt.Errorf("replayer: %w", err)).
-func validateResultExport(re *seiv1alpha1.ResultExportConfig) error {
-	if re == nil {
-		return nil
-	}
-	if re.ShadowResult == nil {
-		return fmt.Errorf("resultExport is set but has no sub-struct (e.g., shadowResult); omit it to disable result export")
 	}
 	return nil
 }
@@ -594,6 +596,7 @@ func buildBasePlan(
 	if err != nil {
 		return nil, err
 	}
+	sidecarProg = withoutManagedConfigTasks(node, sidecarProg)
 
 	// Infrastructure tasks run before sidecar tasks.
 	prog := make([]string, 0, 4+len(sidecarProg))

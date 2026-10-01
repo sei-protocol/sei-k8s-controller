@@ -47,16 +47,6 @@ var serveCmd = cli.Command{
 		snapshotBucket := os.Getenv("SEI_SNAPSHOT_BUCKET")
 		snapshotRegion := os.Getenv("SEI_SNAPSHOT_REGION")
 
-		podName := os.Getenv("HOSTNAME")
-		if podName == "" {
-			if h, err := os.Hostname(); err == nil {
-				podName = h
-			}
-		}
-		if podName == "" {
-			podName = "unknown"
-		}
-
 		for _, kv := range []struct{ name, val string }{
 			{"SEI_CHAIN_ID", chainID},
 			{"SEI_GENESIS_BUCKET", genesisBucket},
@@ -131,7 +121,6 @@ var serveCmd = cli.Command{
 			engine.TaskConfigPatch:                tasks.NewConfigPatcher(homeDir).Handler(),
 			engine.TaskConfigApply:                tasks.NewConfigApplier(homeDir).Handler(),
 			engine.TaskConfigValidate:             tasks.NewConfigValidator(homeDir).Handler(),
-			engine.TaskConfigReload:               tasks.NewConfigReloader(homeDir).Handler(),
 			engine.TaskMarkReady:                  tasks.MarkReadyHandler(),
 			engine.TaskMarkNotReady:               tasks.NewMarkNotReadier(store).Handler(),
 			engine.TaskRestartSeid:                tasks.NewRestartSeider().Handler(),
@@ -141,7 +130,6 @@ var serveCmd = cli.Command{
 			engine.TaskConfigureStateSync:         tasks.NewStateSyncConfigurer(homeDir, nil).Handler(),
 			engine.TaskSnapshotUpload:             snapshotUploader.Handler(),
 			engine.TaskSnapshotUploadOnce:         snapshotUploader.OnceHandler(snapshotUploadTimeout),
-			engine.TaskResultExport:               tasks.NewResultExporter(homeDir, chainID, podName, nil).Handler(),
 			engine.TaskAwaitCondition:             tasks.NewConditionWaiter(nil).Handler(),
 			engine.TaskGenerateIdentity:           tasks.NewIdentityGenerator(homeDir).Handler(),
 			engine.TaskGenerateGentx:              tasks.NewGentxGenerator(homeDir).Handler(),
@@ -152,7 +140,6 @@ var serveCmd = cli.Command{
 			engine.TaskGovSoftwareUpgrade:         tasks.NewGovSoftwareUpgrader(execCfg).Handler(),
 			engine.TaskGovParamChange:             tasks.NewGovParamChanger(execCfg).Handler(),
 			engine.TaskGovUpdateInstantiateConfig: tasks.NewGovInstantiateConfigUpdater(execCfg).Handler(),
-			engine.TaskEvmLogicalDigest:           tasks.NewEvmLogicalDigester(nil).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)

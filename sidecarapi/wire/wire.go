@@ -19,14 +19,12 @@ const (
 	TaskConfigPatch                TaskType = "config-patch"
 	TaskConfigApply                TaskType = "config-apply"
 	TaskConfigValidate             TaskType = "config-validate"
-	TaskConfigReload               TaskType = "config-reload"
 	TaskMarkReady                  TaskType = "mark-ready"
 	TaskRestartSeid                TaskType = "restart-seid"
 	TaskConfigureGenesis           TaskType = "configure-genesis"
 	TaskConfigureStateSync         TaskType = "configure-state-sync"
 	TaskSnapshotUpload             TaskType = "snapshot-upload"
 	TaskSnapshotUploadOnce         TaskType = "snapshot-upload-once"
-	TaskResultExport               TaskType = "result-export"
 	TaskAwaitCondition             TaskType = "await-condition"
 	TaskGenerateIdentity           TaskType = "generate-identity"
 	TaskGenerateGentx              TaskType = "generate-gentx"
@@ -37,7 +35,6 @@ const (
 	TaskGovSoftwareUpgrade         TaskType = "gov-software-upgrade"
 	TaskGovParamChange             TaskType = "gov-param-change"
 	TaskGovUpdateInstantiateConfig TaskType = "gov-update-instantiate-config"
-	TaskEvmLogicalDigest           TaskType = "evm-logical-digest"
 
 	// Workflow node-hold tasks (SeiNodeTaskWorkflow StateSync recipe). These
 	// three compose the durable seid hold: mark-not-ready re-arms the start

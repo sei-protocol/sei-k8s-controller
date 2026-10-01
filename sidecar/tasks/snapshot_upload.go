@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -430,16 +429,6 @@ func addFileToTar(ctx context.Context, tw *tar.Writer, path, name string, info o
 	defer func() { _ = f.Close() }()
 	_, err = io.Copy(tw, f)
 	return err
-}
-
-func normalizePrefix(prefix string) string {
-	if prefix == "" {
-		return ""
-	}
-	if !strings.HasSuffix(prefix, "/") {
-		return prefix + "/"
-	}
-	return prefix
 }
 
 func (u *SnapshotUploader) readUploadState() uploadState {

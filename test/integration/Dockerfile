@@ -2,7 +2,7 @@
 # run by one in-cluster CronJob as the whole nightly set (args: -test.run
 # '^TestNightly'). The suites carry their fault/seiload templates via //go:embed,
 # so the binary is self-contained (no extra files to COPY).
-FROM golang:1.26 AS builder
+FROM golang:1.27 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 

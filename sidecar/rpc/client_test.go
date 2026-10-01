@@ -108,23 +108,6 @@ func TestClient_Get_MalformedJSON(t *testing.T) {
 	}
 }
 
-func TestClient_GetRaw_ReturnsFullBody(t *testing.T) {
-	body := `{"jsonrpc":"2.0","id":-1,"result":{"txs_results":[]}}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(body))
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL, nil)
-	raw, err := c.GetRaw(context.Background(), "/block_results?height=1")
-	if err != nil {
-		t.Fatalf("GetRaw: %v", err)
-	}
-	if string(raw) != body {
-		t.Errorf("expected full body %q, got %q", body, string(raw))
-	}
-}
-
 func TestClient_Get_RPCError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":-1,"error":{"code":-32603,"message":"Internal error","data":"height 999999 is not available"}}`))

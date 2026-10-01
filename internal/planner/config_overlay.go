@@ -61,7 +61,6 @@ func configValuesOverlay(values []seiv1alpha1.ConfigValue) (*task.ConfigPatchTas
 
 // withConfigValues captures the desired config and applies the overlay after
 // base regeneration and any state-sync/genesis peer writes, before validation.
-// Bootstrap plans have two validation stages and need the overlay in both.
 func withConfigValues(plan *seiv1alpha1.TaskPlan, node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	hash, err := configValuesHash(node.Spec.ConfigValues)
 	if err != nil {

@@ -100,13 +100,6 @@ func (c *Client) Get(ctx context.Context, path string) (json.RawMessage, error) 
 	return json.RawMessage(body), nil
 }
 
-// GetRaw performs an HTTP GET and returns the entire response body
-// without envelope unwrapping. Use for archival paths that store the
-// verbatim JSON-RPC response (e.g., S3 export).
-func (c *Client) GetRaw(ctx context.Context, path string) ([]byte, error) {
-	return c.doGet(ctx, path)
-}
-
 func (c *Client) doGet(ctx context.Context, path string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()

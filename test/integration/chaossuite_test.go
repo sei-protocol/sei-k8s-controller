@@ -14,8 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/sei-protocol/sei-k8s-controller/harness/faults"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
+	"github.com/sei-protocol/sei-k8s-controller/test/manifests/faults"
 )
 
 // oneShotObserveWindow bounds the under-fault liveness check for kill faults,
@@ -24,9 +24,9 @@ import (
 const oneShotObserveWindow = 90 * time.Second
 
 // chaosScenarios is the ported fault set, shared with seictl through
-// harness/faults so engineers' GitOps experiments and this suite inject the
-// same manifests. Growing toward the platform suite's 14; each is added once
-// it passes in-cluster. dns-chaos and disk-io-latency are deferred — see
+// test/manifests/faults so engineers' GitOps experiments and this suite inject
+// the same manifests. Growing toward the platform suite's 14; each is added
+// once it passes in-cluster. dns-chaos and disk-io-latency are deferred — see
 // deferredChaosScenarios in chaos_deferred_test.go for why and the re-add
 // condition.
 var chaosScenarios = faults.Catalog

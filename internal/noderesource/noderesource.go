@@ -134,6 +134,11 @@ const (
 	nodeKeyVolumeName = "node-key"
 	nodeKeyDataKey    = "node_key.json"
 
+	nodeConfigConfigVolumeName = "node-config-config"
+	nodeConfigAppVolumeName    = "node-config-app"
+	configTomlDataKey          = ConfigTomlKey
+	appTomlDataKey             = AppTomlKey
+
 	operatorKeyringVolumeName = "operator-keyring"
 	// keyring.New(BackendFile, rootDir) opens rootDir/keyring-file/.
 	// Used as the mount path for the projected .secret Secret.
@@ -271,9 +276,8 @@ func IsDedicatedNode(node *seiv1alpha1.SeiNode) bool {
 //     its selector matches nothing unless a dedicated pod exists.
 //   - The requester term is added only when dedicated is true: don't land on a
 //     node already hosting ANY Sei-managed pod. This protects the dedicated pod
-//     at its own schedule time. It keys on sei.io/node (present on both
-//     StatefulSet and bootstrap pods) via Exists, so it catches every Sei pod,
-//     not just those with a sei.io/role value.
+//     at its own schedule time. It keys on sei.io/node via Exists, so it
+//     catches every Sei pod, not just those with a sei.io/role value.
 //
 // Both terms match across all namespaces (an empty, non-nil NamespaceSelector)
 // because co-tenants routinely live in other namespaces (per-engineer
@@ -314,10 +318,8 @@ func BuildPodAntiAffinity(dedicated bool) *corev1.PodAntiAffinity {
 // pod cannot fall back onto a shared instance. With no single-tenant pool named
 // for the mode, the pod stays on the shared per-mode pool and the requester
 // anti-affinity term alone keeps it apart from other Sei pods — not from a
-// non-Sei co-tenant. Every pod the node's PVC is bound from (the StatefulSet
-// pod and the snapshot-bootstrap Job pod) must pick its pool here so they agree
-// on a pool, and so a WaitForFirstConsumer volume lands in a zone that pool
-// can serve.
+// non-Sei co-tenant. The StatefulSet pod picks its pool here so a
+// WaitForFirstConsumer volume lands in a zone that pool can serve.
 func NodepoolForMode(mode string, p PlatformConfig, dedicated bool) string {
 	if dedicated {
 		if pool := p.DedicatedNodepoolForMode(mode); pool != "" {
@@ -513,7 +515,7 @@ var defaultNodeResourceProfiles = map[string]nodeResourceProfile{
 	roleValidator: {cpuRequest: cpuValidator, memory: memValidator},
 	// Absorbs public-RPC + snapshotter + state-syncer; full r7i.8xlarge envelope.
 	roleFullNode: {cpuRequest: cpuRPCClass, memory: memRPCClass},
-	// Shadow-replay; same footprint as fullNode (r7i.8xlarge).
+	// Same footprint as fullNode (r7i.8xlarge).
 	roleReplayer: {cpuRequest: cpuRPCClass, memory: memRPCClass},
 	// Full r7i.16xlarge envelope — the live-prod snapshotter shape (the sei-infra
 	// TF's m7i.8xlarge is stale).
@@ -674,10 +676,8 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 			Selector: &metav1.LabelSelector{
 				MatchLabels: SelectorLabels(node),
 			},
-			// Pod lifecycle is the SeiNode controller's responsibility (replace-pod).
-			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
-				Type: appsv1.OnDeleteStatefulSetStrategyType,
-			},
+			PodManagementPolicy: podManagementPolicy(node),
+			UpdateStrategy:      updateStrategy(node),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
@@ -689,6 +689,29 @@ func GenerateStatefulSet(node *seiv1alpha1.SeiNode, p PlatformConfig) (*appsv1.S
 			},
 		},
 	}, nil
+}
+
+// updateStrategy returns who rolls the pod. For a controller-configured node
+// that is the controller (replace-pod), because config tasks must be ordered
+// around the roll. A node with spec.nodeConfig has no config tasks, so the
+// StatefulSet controller rolls it on any template change.
+func updateStrategy(node *seiv1alpha1.SeiNode) appsv1.StatefulSetUpdateStrategy {
+	if node.Spec.NodeConfig != nil {
+		return appsv1.StatefulSetUpdateStrategy{Type: appsv1.RollingUpdateStatefulSetStrategyType}
+	}
+	return appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
+}
+
+// podManagementPolicy is Parallel for a RollingUpdate node. Under OrderedReady
+// the StatefulSet controller will not update a pod that is not Ready, so a seid
+// halted at an upgrade height would never take the new image. The API server
+// refuses to change this field on an existing StatefulSet, which is why
+// spec.nodeConfig is fixed at creation. Empty leaves the API default.
+func podManagementPolicy(node *seiv1alpha1.SeiNode) appsv1.PodManagementPolicyType {
+	if node.Spec.NodeConfig != nil {
+		return appsv1.ParallelPodManagement
+	}
+	return ""
 }
 
 // assertOperatorKeyringContainment fails closed if a pod-spec lands
@@ -882,11 +905,13 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 		Name:         homeVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}
-	volumes := make([]corev1.Volume, 0, 4+len(signingVolumes)+len(nodeVolumes)+len(keyringVolumes))
+	configVolumes := nodeConfigVolumes(node)
+	volumes := make([]corev1.Volume, 0, 4+len(signingVolumes)+len(nodeVolumes)+len(keyringVolumes)+len(configVolumes))
 	volumes = append(volumes, dataVolume, sidecarTmpVolume, homeVolume, proxyConfigVolume)
 	volumes = append(volumes, signingVolumes...)
 	volumes = append(volumes, nodeVolumes...)
 	volumes = append(volumes, keyringVolumes...)
+	volumes = append(volumes, configVolumes...)
 
 	dedicated := IsDedicatedNode(node)
 	pool := NodepoolForMode(NodeMode(node), p, dedicated)
@@ -1008,7 +1033,8 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 	env = append(env, keyringEnv...)
 
 	keyringMounts := operatorKeyringMounts(node)
-	mounts := make([]corev1.VolumeMount, 0, 3+len(keyringMounts))
+	configMounts := nodeConfigMounts(node)
+	mounts := make([]corev1.VolumeMount, 0, 3+len(keyringMounts)+len(configMounts))
 	mounts = append(mounts,
 		// The `home` emptyDir backs homeMountPath so the nested data-PVC mount
 		// has a writable-volume parent, rather than depending on the RO rootfs
@@ -1019,6 +1045,7 @@ func buildSidecarContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) corev1.C
 		corev1.VolumeMount{Name: sidecarTmpVolumeName, MountPath: sidecarTmpMountPath},
 	)
 	mounts = append(mounts, keyringMounts...)
+	mounts = append(mounts, configMounts...)
 
 	// No Command — the sidecar image's ENTRYPOINT is the command.
 	c := corev1.Container{
@@ -1318,12 +1345,14 @@ func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []str
 func buildNodeMainContainer(node *seiv1alpha1.SeiNode) corev1.Container {
 	signingMounts := signingKeyMounts(node)
 	nodeMounts := nodeKeyMounts(node)
+	configMounts := nodeConfigMounts(node)
 	seidMountEnabled := operatorKeyringSeidMountEnabled(node)
-	mounts := make([]corev1.VolumeMount, 0, 3+len(signingMounts)+len(nodeMounts))
+	mounts := make([]corev1.VolumeMount, 0, 3+len(signingMounts)+len(nodeMounts)+len(configMounts))
 	mounts = append(mounts, corev1.VolumeMount{Name: "data", MountPath: dataDir})
 	mounts = append(mounts, corev1.VolumeMount{Name: homeVolumeName, MountPath: homeMountPath})
 	mounts = append(mounts, signingMounts...)
 	mounts = append(mounts, nodeMounts...)
+	mounts = append(mounts, configMounts...)
 	if seidMountEnabled {
 		mounts = append(mounts, operatorKeyringMounts(node)...)
 	}
@@ -1463,8 +1492,6 @@ func seidNonRootSecurityContext() *corev1.SecurityContext {
 }
 
 // signingKeyVolumes is called only from the production StatefulSet pod-spec.
-// The bootstrap Job pod-spec must never include these volumes — see the
-// safety invariant on task.GenerateBootstrapJob.
 func signingKeyVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
 	src := signingKeySecretSource(node)
 	if src == nil {
@@ -1509,7 +1536,6 @@ func signingKeySecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretSignin
 }
 
 // nodeKeyVolumes mounts the node-key Secret on the production pod only.
-// The bootstrap Job uses an ephemeral node ID generated by `seid init`.
 func nodeKeyVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
 	src := nodeKeySecretSource(node)
 	if src == nil {
@@ -1544,6 +1570,73 @@ func nodeKeyMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
 	}}
 }
 
+// ConfigTomlKey and AppTomlKey are the ConfigMap keys a spec.nodeConfig
+// reference must carry. They are the mount contract, so anything that checks a
+// referenced ConfigMap reads them from here rather than restating them.
+const (
+	ConfigTomlKey = "config.toml"
+	AppTomlKey    = "app.toml"
+)
+
+// nodeConfigVolumes projects the operator's seid config files, one volume per
+// file so the two references may name different ConfigMaps. Items names the
+// single key, so a ConfigMap missing it fails the kubelet mount and
+// `kubectl describe pod` says which key is absent.
+func nodeConfigVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
+	cfg := node.Spec.NodeConfig
+	if cfg == nil {
+		return nil
+	}
+	return []corev1.Volume{
+		nodeConfigVolume(nodeConfigConfigVolumeName, cfg.ConfigRef.Name, configTomlDataKey),
+		nodeConfigVolume(nodeConfigAppVolumeName, cfg.AppRef.Name, appTomlDataKey),
+	}
+}
+
+func nodeConfigVolume(volumeName, configMapName, dataKey string) corev1.Volume {
+	return corev1.Volume{
+		Name: volumeName,
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
+				DefaultMode:          ptr.To[int32](0o444),
+				Items:                []corev1.KeyToPath{{Key: dataKey, Path: dataKey}},
+			},
+		},
+	}
+}
+
+// nodeConfigMounts places the operator's files over the data volume's copies.
+// subPath matches signingKeyMounts and nodeKeyMounts: kubelet pins the content
+// at pod start, and seid re-reads config.toml only on a restart, so a
+// hot-refreshing directory mount would buy nothing.
+//
+// Both the seid container and the sidecar carry these mounts, and the
+// sidecar's is a safety property rather than a convenience. A rename onto a
+// mounted path from a container that does NOT hold the mount succeeds and
+// detaches it, after which seid reads the writer's file with nothing reporting
+// the swap. From a container that DOES hold the mount the same rename returns
+// EBUSY and fails the task.
+// TestNodeConfigMountsOnSidecarIsASafetyProperty guards the sidecar mount.
+func nodeConfigMounts(node *seiv1alpha1.SeiNode) []corev1.VolumeMount {
+	if node.Spec.NodeConfig == nil {
+		return nil
+	}
+	return []corev1.VolumeMount{
+		nodeConfigMount(nodeConfigConfigVolumeName, configTomlDataKey),
+		nodeConfigMount(nodeConfigAppVolumeName, appTomlDataKey),
+	}
+}
+
+func nodeConfigMount(volumeName, dataKey string) corev1.VolumeMount {
+	return corev1.VolumeMount{
+		Name:      volumeName,
+		MountPath: dataDir + "/config/" + dataKey,
+		SubPath:   dataKey,
+		ReadOnly:  true,
+	}
+}
+
 // nodeKeySecretSource returns the Secret holding this node's P2P identity, from
 // whichever mode sub-spec carries one (validator or seed). Mode-blind by
 // delegation, so the node-key volume and mount below serve both.
@@ -1553,9 +1646,8 @@ func nodeKeySecretSource(node *seiv1alpha1.SeiNode) *seiv1alpha1.SecretNodeKeySo
 
 // operatorKeyringVolumes projects the operator-keyring Secret as a directory
 // under $SEI_HOME/keyring-file/ — the Cosmos SDK file-backend layout.
-// Mounted on the sidecar container; the bootstrap pods never see this
-// material. The seid main container is also excluded unless the node has
-// opted in via .secret.SeidMount — see operatorKeyringSeidMountEnabled.
+// Mounted on the sidecar container. The seid main container is excluded
+// unless the node has opted in via .secret.SeidMount — see operatorKeyringSeidMountEnabled.
 func operatorKeyringVolumes(node *seiv1alpha1.SeiNode) []corev1.Volume {
 	src := operatorKeyringSecretSource(node)
 	if src == nil {

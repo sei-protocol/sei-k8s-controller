@@ -356,7 +356,7 @@ func (e *Engine) resolveStaleHandler(tr TaskResult) (TaskHandler, bool) {
 // executeRecovered runs execute under a recover so a handler panic becomes a
 // failed TaskResult instead of taking down the shared sidecar process. It
 // guards only the handler goroutine; a task that spawns its own goroutines must
-// recover within them (e.g. s3.streamGzip's writer).
+// recover within them.
 func (e *Engine) executeRecovered(ctx context.Context, taskType TaskType, handler TaskHandler, params map[string]any) (result json.RawMessage, err error) {
 	defer func() {
 		if r := recover(); r != nil {
