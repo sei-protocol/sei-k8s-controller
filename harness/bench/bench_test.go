@@ -44,7 +44,10 @@ func TestRender_Defaults(t *testing.T) {
 		"SEILOAD_RUN_ID": "r1", "SEILOAD_CHAIN_ID": "bench-a",
 		"SEILOAD_COMMIT_ID": "abc123", "SEILOAD_WORKLOAD": DefaultWorkload,
 	}))
+	g.Expect(job.Spec.Template.Labels).To(HaveKeyWithValue("sei.io/seiload-workload", DefaultWorkload))
+	g.Expect(job.Spec.Template.Spec.Volumes).To(HaveLen(1))
 	g.Expect(job.Spec.Template.Spec.Volumes[0].ConfigMap.Name).To(Equal("seiload-profile-r1"))
+	g.Expect(c.VolumeMounts).To(HaveLen(1))
 }
 
 func TestRender_Overrides(t *testing.T) {
@@ -59,6 +62,27 @@ func TestRender_Overrides(t *testing.T) {
 	g.Expect(job.Namespace).To(Equal("eng-x"))
 	g.Expect(*job.Spec.ActiveDeadlineSeconds).To(Equal(int64(99)))
 	g.Expect(job.Spec.Template.Spec.Containers[0].Env).To(ContainElement(HaveField("Value", "exp-42")))
+	g.Expect(job.Spec.Template.Labels).To(HaveKeyWithValue("sei.io/seiload-workload", "exp-42"))
+}
+
+func TestRender_RootKeySecret(t *testing.T) {
+	g := NewWithT(t)
+	p := full()
+	p.RootKeySecret = "seiload-root-r1"
+	out, err := Render(p)
+	g.Expect(err).NotTo(HaveOccurred())
+	pod := decode(t, out).Spec.Template.Spec
+
+	g.Expect(pod.SecurityContext.FSGroup).To(HaveValue(Equal(int64(65532))))
+	g.Expect(pod.Volumes).To(HaveLen(2))
+	sec := pod.Volumes[1].Secret
+	g.Expect(sec.SecretName).To(Equal("seiload-root-r1"))
+	g.Expect(sec.DefaultMode).To(HaveValue(Equal(int32(0o400))))
+	g.Expect(pod.Containers[0].VolumeMounts).To(ContainElement(SatisfyAll(
+		HaveField("Name", pod.Volumes[1].Name),
+		HaveField("MountPath", "/etc/seiload-key"),
+		HaveField("ReadOnly", true),
+	)))
 }
 
 func TestRender_RejectsIncompleteParams(t *testing.T) {
@@ -72,6 +96,7 @@ func TestRender_RejectsIncompleteParams(t *testing.T) {
 		{"missing image", func(p *Params) { p.Image = "" }, "image"},
 		{"missing profile", func(p *Params) { p.ProfileCM = "" }, "profileCM"},
 		{"zero duration", func(p *Params) { p.DurationMinutes = 0 }, "durationMinutes"},
+		{"workload not a label value", func(p *Params) { p.Workload = "exp/42" }, "workload"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

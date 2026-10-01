@@ -13,9 +13,10 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
-	"strconv"
 	"strings"
 	"text/template"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 //go:embed seiload_job.yaml.tmpl
@@ -45,8 +46,9 @@ type Params struct {
 	// Namespace is written to metadata when set; the harness leaves it empty
 	// and sets it on the decoded object instead.
 	Namespace string
-	// Workload is exported as SEILOAD_WORKLOAD, a label on the emitted
-	// metrics. Empty means DefaultWorkload.
+	// Workload is exported as SEILOAD_WORKLOAD and stamped on the pod as
+	// sei.io/seiload-workload, which the nightly PodMonitor copies onto every
+	// scraped series as workload. Empty means DefaultWorkload.
 	Workload string
 	// RootKeySecret names a Secret whose RootKeySecretKey entry is mounted at
 	// /etc/seiload-key/root-key.hex, for a profile whose funding.rootKeyFile
@@ -57,27 +59,13 @@ type Params struct {
 // RootKeySecretKey is the Secret data key holding the hex root key.
 const RootKeySecretKey = "root-key.hex"
 
-// FillProfile substitutes a profile template's per-run placeholders: the
-// chain id for __SEI_CHAIN_ID__ and the JSON-quoted EVM endpoints for
-// __RPC_ENDPOINTS__. The template is only valid JSON once filled.
-func FillProfile(tmpl, chainID string, endpoints []string) string {
-	quoted := make([]string, len(endpoints))
-	for i, e := range endpoints {
-		quoted[i] = strconv.Quote(e)
-	}
-	return strings.NewReplacer(
-		"__SEI_CHAIN_ID__", chainID,
-		"__RPC_ENDPOINTS__", strings.Join(quoted, ","),
-	).Replace(tmpl)
-}
-
 // DeadlineSlackMinutes is added to DurationMinutes when deriving the Job's
 // activeDeadlineSeconds: image pull plus the post-summary metrics flush.
 const DeadlineSlackMinutes = 15
 
 // Render templates the Job manifest. It rejects empty RunID, ChainID, Image
-// and ProfileCM, a non-positive DurationMinutes and a negative
-// DeadlineSeconds.
+// and ProfileCM, a non-positive DurationMinutes, a negative DeadlineSeconds
+// and a Workload that is not a valid label value.
 func Render(p Params) ([]byte, error) {
 	switch {
 	case p.RunID == "":
@@ -98,6 +86,10 @@ func Render(p Params) ([]byte, error) {
 	}
 	if p.Workload == "" {
 		p.Workload = DefaultWorkload
+	}
+	if errs := validation.IsValidLabelValue(p.Workload); len(errs) > 0 {
+		return nil, fmt.Errorf("seiload job: workload %q is not a valid label value: %s",
+			p.Workload, strings.Join(errs, "; "))
 	}
 	tmpl, err := template.New("seiload-job").Parse(jobTmpl)
 	if err != nil {

@@ -68,15 +68,22 @@ func Derive() (Identity, error) {
 	if _, err := hasher.Write(sha[:]); err != nil {
 		return Identity{}, fmt.Errorf("ripemd160: %w", err)
 	}
-	addrBytes := hasher.Sum(nil)
-
-	converted, err := bech32.ConvertBits(addrBytes, 8, 5, true)
+	address, err := bech32Address(hasher.Sum(nil))
 	if err != nil {
-		return Identity{}, fmt.Errorf("bech32 convert: %w", err)
+		return Identity{}, err
+	}
+	return Identity{Mnemonic: mnemonic, Address: address}, nil
+}
+
+// bech32Address encodes 20 address bytes as a sei-prefixed bech32 address.
+func bech32Address(addr []byte) (string, error) {
+	converted, err := bech32.ConvertBits(addr, 8, 5, true)
+	if err != nil {
+		return "", fmt.Errorf("bech32 convert: %w", err)
 	}
 	address, err := bech32.Encode(bech32AccountPrefix, converted)
 	if err != nil {
-		return Identity{}, fmt.Errorf("bech32 encode: %w", err)
+		return "", fmt.Errorf("bech32 encode: %w", err)
 	}
-	return Identity{Mnemonic: mnemonic, Address: address}, nil
+	return address, nil
 }

@@ -18,12 +18,15 @@ spec:
         # podMonitor selects this for Prometheus scrape (metrics continuity).
         app.kubernetes.io/name: seiload
         sei.io/harness-run: "{{.RunID}}"
+        sei.io/seiload-workload: "{{.Workload}}"
     spec:
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        # Group-owns mounted volumes so the 0400 root-key Secret is readable.
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -74,9 +77,8 @@ spec:
           configMap:
             name: {{.ProfileCM}}
 {{- if .RootKeySecret}}
-        # Default 0644, not 0400: the pod has no fsGroup, so a root-owned 0400
-        # file is unreadable to uid 65532.
         - name: root-key
           secret:
             secretName: "{{.RootKeySecret}}"
+            defaultMode: 0400
 {{- end}}

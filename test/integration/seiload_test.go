@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,13 +20,12 @@ import (
 
 	"github.com/sei-protocol/sei-k8s-controller/harness/bench"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
-	"github.com/sei-protocol/sei-k8s-controller/test/integration/loadregression"
 )
 
 // seiloadProfilesCM is the platform-owned ConfigMap holding the profile
-// templates (placeholders __SEI_CHAIN_ID__ / __RPC_ENDPOINTS__). The harness
-// reads it from the cluster rather than vendoring the profile, so the load
-// shape stays owned by platform.
+// templates (placeholders __SEI_CHAIN_ID__ / __RPC_ENDPOINTS__ /
+// __RECEIPT_ENDPOINT__). The harness reads it from the cluster rather than
+// vendoring the profile, so the load shape stays owned by platform.
 const seiloadProfilesCM = "seiload-profiles"
 
 // clientset builds a client-go clientset from the ambient config — the harness
@@ -44,10 +44,11 @@ func clientset(t *testing.T) *kubernetes.Clientset {
 }
 
 // renderProfile reads the platform profile template from seiload-profiles and
-// substitutes the per-run chain id + the fleet's EVM endpoints (JSON-quoted).
+// substitutes the per-run chain id, the EVM endpoints load is sent to
+// (JSON-quoted) and the EVM endpoint receipts are read from.
 func renderProfile(
 	ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
-	ns, profile, chainID string, endpoints []string,
+	ns, profile, chainID string, endpoints []string, receiptEndpoint string,
 ) string {
 	t.Helper()
 	cm, err := cs.CoreV1().ConfigMaps(ns).Get(ctx, seiloadProfilesCM, metav1.GetOptions{})
@@ -58,7 +59,14 @@ func renderProfile(
 	if !ok {
 		t.Fatalf("profile %q.json absent from %s", profile, seiloadProfilesCM)
 	}
-	return bench.FillProfile(tmpl, chainID, endpoints)
+	quoted := make([]string, len(endpoints))
+	for i, e := range endpoints {
+		quoted[i] = strconv.Quote(e)
+	}
+	tmpl = strings.ReplaceAll(tmpl, "__SEI_CHAIN_ID__", chainID)
+	tmpl = strings.ReplaceAll(tmpl, "__RPC_ENDPOINTS__", strings.Join(quoted, ","))
+	tmpl = strings.ReplaceAll(tmpl, "__RECEIPT_ENDPOINT__", receiptEndpoint)
+	return tmpl
 }
 
 // createProfileCM writes the rendered profile to a per-run ConfigMap stamped
@@ -83,10 +91,32 @@ func createProfileCM(ctx context.Context, t *testing.T, cs *kubernetes.Clientset
 	})
 }
 
-// runSeiloadJob renders the shared seiload Job manifest with the per-run params,
-// creates it in ns (deleted on cleanup) and waits for it to complete. It returns
-// the Job's name.
-func runSeiloadJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns string, p bench.Params) string {
+// createKeySecret writes a key (a mnemonic, the seiload root key) to a
+// single-entry Secret a harness pod mounts or reads via secretKeyRef. Labeled
+// for the GC sweep and deleted on cleanup, matching how the suites manage
+// everything else they create.
+func createKeySecret(
+	ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
+	ns, name string, labels map[string]string, key, value string,
+) {
+	t.Helper()
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{key: []byte(value)},
+	}
+	if _, err := cs.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create secret %q: %v", name, err)
+	}
+	t.Cleanup(func() {
+		delCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_ = cs.CoreV1().Secrets(ns).Delete(delCtx, name, metav1.DeleteOptions{})
+	})
+}
+
+// renderJob renders the shared seiload Job manifest with the per-run params.
+func renderJob(t *testing.T, p bench.Params) *batchv1.Job {
 	t.Helper()
 	out, err := bench.Render(p)
 	if err != nil {
@@ -96,18 +126,7 @@ func runSeiloadJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, 
 	if err := yaml.Unmarshal(out, &job); err != nil {
 		t.Fatalf("unmarshal seiload job: %v", err)
 	}
-	job.Namespace = ns
-	if _, err := cs.BatchV1().Jobs(ns).Create(ctx, &job, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create seiload job: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		bg := metav1.DeletePropagationBackground
-		_ = cs.BatchV1().Jobs(ns).Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
-	})
-	waitJob(ctx, t, cs, ns, job.Name)
-	return job.Name
+	return &job
 }
 
 // runSeiload renders the platform profile, applies seiload's Job manifest, waits
@@ -118,29 +137,49 @@ func runSeiloadJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, 
 // in blocks yields a Complete Job, live followers, and a green run despite being
 // effectively write-only. Fine-grained throughput gating stays in the metrics
 // layer (podMonitor + alerts); this asserts the floor: included > 0.
+//
+// Load goes to the first RPC follower only; inclusion (sei-load's and the
+// gate's) is read from the second, which takes no sends, so it measures the
+// chain rather than a loaded node. A non-empty s.seiloadRootKey is mounted as
+// sei-load's funding root key.
 func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch *chain, s spec) {
 	t.Helper()
 	// The seiload Job co-locates with the chain; the network's resolved
 	// namespace is authoritative (never re-resolve from env here).
 	ns := ch.network.Namespace()
+	if len(ch.rpcNodes) < 2 {
+		t.Fatalf("runSeiload needs 2 RPC followers (one for sends, one for receipts), got %d", len(ch.rpcNodes))
+	}
+	send, receipt := ch.rpcNodes[0], ch.rpcNodes[1]
 
 	// The inclusion window opens at the committed height before load starts.
 	hc := &http.Client{Timeout: 10 * time.Second}
-	tmRPC := ch.rpcNodes[0].TendermintRPC()
+	tmRPC := receipt.TendermintRPC()
 	startHeight := mustLatestHeight(ctx, t, hc, tmRPC, "pre-load")
 
 	profileCM := "seiload-profile-" + s.runID
-	profileJSON := renderProfile(ctx, t, cs, ns, s.seiloadProfile, s.chainID, ch.evmEndpoints())
+	profileJSON := renderProfile(ctx, t, cs, ns, s.seiloadProfile, s.chainID, []string{send.EVMRPC()}, receipt.EVMRPC())
 	createProfileCM(ctx, t, cs, ns, profileCM, s.runID, profileJSON)
 
-	runSeiloadJob(ctx, t, cs, ns, bench.Params{
+	var rootKeySecret string
+	if s.seiloadRootKey != "" {
+		rootKeySecret = "seiload-root-" + s.runID
+		createKeySecret(ctx, t, cs, ns, rootKeySecret, map[string]string{runLabelKey: s.runID},
+			bench.RootKeySecretKey, s.seiloadRootKey)
+	}
+
+	job := renderJob(t, bench.Params{
 		RunID:           s.runID,
 		ChainID:         s.chainID,
 		Commit:          s.seiloadCommit,
 		Image:           s.seiloadImage,
 		DurationMinutes: s.durationMin,
 		ProfileCM:       profileCM,
+		Workload:        s.seiloadWorkload,
+		RootKeySecret:   rootKeySecret,
 	})
+	job.Namespace = ns
+	runJob(ctx, t, cs, job)
 
 	// Chain survived the load: every follower still caught up (a follower can't
 	// catch up to a halted chain, so this transitively covers validator quorum).
@@ -181,9 +220,9 @@ func mustLatestHeight(ctx context.Context, t *testing.T, hc *http.Client, tmRPC,
 // blockchainPageSize is CometBFT's cap on blocks per /blockchain response.
 const blockchainPageSize = 20
 
-// blockchainInfo models just enough of CometBFT /blockchain for per-block
-// height, time and tx count; like /status, the Sei fork may return it with or
-// without the JSON-RPC envelope.
+// blockchainInfo models just enough of CometBFT /blockchain to sum per-block tx
+// counts; like /status, the Sei fork may return it with or without the JSON-RPC
+// envelope.
 type blockchainInfo struct {
 	Result *struct {
 		BlockMetas []blockMeta `json:"block_metas"`
@@ -193,10 +232,6 @@ type blockchainInfo struct {
 
 type blockMeta struct {
 	NumTxs string `json:"num_txs"`
-	Header struct {
-		Height string    `json:"height"`
-		Time   time.Time `json:"time"`
-	} `json:"header"`
 }
 
 func (b *blockchainInfo) metas() []blockMeta {
@@ -216,9 +251,31 @@ func includedTxCount(ctx context.Context, t *testing.T, hc *http.Client, tmRPC s
 	t.Helper()
 	var total int64
 	for lo := from + 1; lo <= to; lo += blockchainPageSize {
-		hi := min(lo+blockchainPageSize-1, to)
-		for _, b := range blockPage(ctx, t, hc, tmRPC, lo, hi) {
-			total += b.NumTxs
+		hi := lo + blockchainPageSize - 1
+		hi = min(hi, to)
+		url := fmt.Sprintf("%s/blockchain?minHeight=%d&maxHeight=%d", tmRPC, lo, hi)
+		var page blockchainInfo
+		ok := false
+		for attempt := 0; attempt < 3 && !ok; attempt++ {
+			if attempt > 0 {
+				time.Sleep(2 * time.Second)
+			}
+			page = blockchainInfo{}
+			ok = getJSONInto(ctx, hc, url, &page)
+		}
+		if !ok {
+			t.Fatalf("read %s: unreachable, non-200, or undecodable after retries — cannot verify inclusion", url)
+		}
+		if got, want := int64(len(page.metas())), hi-lo+1; got != want {
+			t.Fatalf("%s returned %d block_metas, want %d — pruned range or error envelope; "+
+				"a short page cannot be trusted as zero", url, got, want)
+		}
+		for _, m := range page.metas() {
+			n, err := strconv.ParseInt(m.NumTxs, 10, 64)
+			if err != nil {
+				t.Fatalf("parse num_txs %q at %s: %v", m.NumTxs, url, err)
+			}
+			total += n
 		}
 		if total > 0 {
 			return total
@@ -227,57 +284,24 @@ func includedTxCount(ctx context.Context, t *testing.T, hc *http.Client, tmRPC s
 	return total
 }
 
-// blocksBetween reads every block in (from, to], height order not guaranteed.
-func blocksBetween(
-	ctx context.Context, t *testing.T, hc *http.Client, tmRPC string, from, to int64,
-) []loadregression.Block {
+// runJob creates a one-shot harness Job (deleted on cleanup) and waits for it
+// to complete; a Failed Job fails the suite.
+func runJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *batchv1.Job) {
 	t.Helper()
-	var out []loadregression.Block
-	for lo := from + 1; lo <= to; lo += blockchainPageSize {
-		out = append(out, blockPage(ctx, t, hc, tmRPC, lo, min(lo+blockchainPageSize-1, to))...)
+	if _, err := cs.BatchV1().Jobs(job.Namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create job %q: %v", job.Name, err)
 	}
-	return out
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		bg := metav1.DeletePropagationBackground
+		_ = cs.BatchV1().Jobs(job.Namespace).Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
+	})
+	t.Logf("job %s launched (%s)", job.Name, job.Spec.Template.Spec.Containers[0].Image)
+	waitJob(ctx, t, cs, job.Namespace, job.Name)
 }
 
-// blockPage reads blocks [lo, hi] (at most blockchainPageSize) via /blockchain.
-// A page that stays unreachable after retries, or that returns fewer blocks
-// than requested (pruned range or an error envelope decoding to empty), fails
-// the test: a partial page read as complete would defeat any gate built on it.
-func blockPage(ctx context.Context, t *testing.T, hc *http.Client, tmRPC string, lo, hi int64) []loadregression.Block {
-	t.Helper()
-	url := fmt.Sprintf("%s/blockchain?minHeight=%d&maxHeight=%d", tmRPC, lo, hi)
-	var page blockchainInfo
-	ok := false
-	for attempt := 0; attempt < 3 && !ok; attempt++ {
-		if attempt > 0 {
-			time.Sleep(2 * time.Second)
-		}
-		page = blockchainInfo{}
-		ok = getJSONInto(ctx, hc, url, &page)
-	}
-	if !ok {
-		t.Fatalf("read %s: unreachable, non-200, or undecodable after retries", url)
-	}
-	if got, want := int64(len(page.metas())), hi-lo+1; got != want {
-		t.Fatalf("%s returned %d block_metas, want %d — pruned range or error envelope; "+
-			"a short page cannot be trusted", url, got, want)
-	}
-	out := make([]loadregression.Block, 0, len(page.metas()))
-	for _, m := range page.metas() {
-		n, err := strconv.ParseInt(m.NumTxs, 10, 64)
-		if err != nil {
-			t.Fatalf("parse num_txs %q at %s: %v", m.NumTxs, url, err)
-		}
-		h, err := strconv.ParseInt(m.Header.Height, 10, 64)
-		if err != nil {
-			t.Fatalf("parse height %q at %s: %v", m.Header.Height, url, err)
-		}
-		out = append(out, loadregression.Block{Height: h, Time: m.Header.Time, NumTxs: n})
-	}
-	return out
-}
-
-// waitJob blocks until the seiload Job reaches a terminal condition. A Failed
+// waitJob blocks until a harness Job reaches a terminal condition. A Failed
 // Job fails the suite; success returns. Bounded by ctx.
 func waitJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns, name string) {
 	t.Helper()

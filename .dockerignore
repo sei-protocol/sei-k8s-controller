@@ -49,7 +49,3 @@
 # harness/bench) //go:embed their *.yaml.tmpl manifests; the integration suite
 # imports both, so the harness build needs them in the context too.
 !harness/**/*.tmpl
-
-# test/integration/loadregression //go:embeds its sei-load profile and baseline;
-# the integration suite imports it, so the harness build needs them too.
-!test/integration/loadregression/*.json

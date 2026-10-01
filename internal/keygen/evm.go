@@ -5,12 +5,10 @@ import (
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/cosmos/btcutil/bech32"
 	"golang.org/x/crypto/sha3"
 )
 
-// EVMIdentity is a random secp256k1 key addressed the way Sei's EVM sees it.
-// PrivateKeyHex is the secret material; treat it accordingly.
+// EVMIdentity is a secp256k1 key addressed the way Sei's EVM sees it.
 type EVMIdentity struct {
 	// PrivateKeyHex is the 32-byte key, hex without a 0x prefix — the form
 	// sei-load's funding.rootKeyFile reads.
@@ -37,16 +35,14 @@ func DeriveEVM() (EVMIdentity, error) {
 func evmIdentityFromKey(priv *btcec.PrivateKey) (EVMIdentity, error) {
 	uncompressed := priv.PubKey().SerializeUncompressed()
 	h := sha3.NewLegacyKeccak256()
-	h.Write(uncompressed[1:])
+	if _, err := h.Write(uncompressed[1:]); err != nil {
+		return EVMIdentity{}, fmt.Errorf("keccak256: %w", err)
+	}
 	addr := h.Sum(nil)[12:]
 
-	converted, err := bech32.ConvertBits(addr, 8, 5, true)
+	cast, err := bech32Address(addr)
 	if err != nil {
-		return EVMIdentity{}, fmt.Errorf("bech32 convert: %w", err)
-	}
-	cast, err := bech32.Encode(bech32AccountPrefix, converted)
-	if err != nil {
-		return EVMIdentity{}, fmt.Errorf("bech32 encode: %w", err)
+		return EVMIdentity{}, err
 	}
 	return EVMIdentity{
 		PrivateKeyHex: hex.EncodeToString(priv.Serialize()),
