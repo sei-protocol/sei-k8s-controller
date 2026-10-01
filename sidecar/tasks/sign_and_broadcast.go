@@ -27,6 +27,8 @@ import (
 	signingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/types/tx/signing"
 
 	"github.com/sei-protocol/seilog"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/engine"
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/rpc"
@@ -44,6 +46,9 @@ const feeDenom = "usei"
 var (
 	inclusionPollTimeout  = 60 * time.Second
 	inclusionPollInterval = 500 * time.Millisecond
+
+	accountNotFoundTimeout      = 60 * time.Second
+	accountNotFoundPollInterval = time.Second
 )
 
 // SignAndBroadcastInput is the shared input contract for every sign-tx
@@ -157,6 +162,27 @@ func SignAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, in SignAn
 	return signAndBroadcast(ctx, cfg, tc, in, fromAddr)
 }
 
+// retrieveAccount fetches the signer's account number and sequence, waiting up
+// to accountNotFoundTimeout while the local seid reports NotFound. A node that
+// has not yet committed block 1 (e.g. a validator that joined consensus after
+// the others had already advanced) has no queryable genesis state, so even a
+// funded genesis account reads as NotFound until it catches up.
+func retrieveAccount(ctx context.Context, tc txClient, fromAddr sdk.AccAddress) (uint64, uint64, error) {
+	deadline := time.Now().Add(accountNotFoundTimeout)
+	for {
+		accNum, seq, err := tc.AccountNumberSequence(ctx, fromAddr)
+		if err == nil || status.Code(err) != codes.NotFound || !time.Now().Before(deadline) {
+			return accNum, seq, err
+		}
+		signTxLog.Info("signer account not found yet, waiting", "address", fromAddr.String(), "err", err)
+		select {
+		case <-ctx.Done():
+			return 0, 0, ctx.Err()
+		case <-time.After(accountNotFoundPollInterval):
+		}
+	}
+}
+
 // signAndBroadcast does the full sign+broadcast+poll cycle. Public callers
 // reach this through SignAndBroadcast which wires the production txClient;
 // tests call it directly with a fake.
@@ -191,7 +217,7 @@ func signAndBroadcast(ctx context.Context, cfg engine.ExecutionConfig, tc txClie
 		}
 	}
 
-	accNum, seq, err := tc.AccountNumberSequence(ctx, fromAddr)
+	accNum, seq, err := retrieveAccount(ctx, tc, fromAddr)
 	if err != nil {
 		return nil, fmt.Errorf("account retrieve %s: %w", fromAddr.String(), err)
 	}
