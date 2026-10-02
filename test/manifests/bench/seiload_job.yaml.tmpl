@@ -18,12 +18,15 @@ spec:
         # podMonitor selects this for Prometheus scrape (metrics continuity).
         app.kubernetes.io/name: seiload
         sei.io/harness-run: "{{.RunID}}"
+        sei.io/seiload-workload: "{{.Workload}}"
     spec:
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        # Group-owns mounted volumes so the 0400 root-key Secret is readable.
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -57,6 +60,11 @@ spec:
             - name: profile
               mountPath: /etc/seiload
               readOnly: true
+{{- if .RootKeySecret}}
+            - name: root-key
+              mountPath: /etc/seiload-key
+              readOnly: true
+{{- end}}
           resources:
             requests:
               cpu: "2"
@@ -68,3 +76,9 @@ spec:
         - name: profile
           configMap:
             name: {{.ProfileCM}}
+{{- if .RootKeySecret}}
+        - name: root-key
+          secret:
+            secretName: "{{.RootKeySecret}}"
+            defaultMode: 0400
+{{- end}}

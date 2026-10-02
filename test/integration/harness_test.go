@@ -97,10 +97,14 @@ type spec struct {
 	accounts      []sei.GenesisAccount // genesis-funded non-validator accounts (release funds an admin); nil funds none
 
 	// seiload inputs (load suite)
-	seiloadImage   string // sei-load benchmark image
-	seiloadProfile string // profile name in the seiload-profiles ConfigMap
-	seiloadCommit  string // sei-chain commit label for the run's metrics
-	durationMin    int    // seiload run length, minutes
+	seiloadImage    string // sei-load benchmark image
+	seiloadProfile  string // profile name in the seiload-profiles ConfigMap
+	seiloadCommit   string // sei-chain commit label for the run's metrics
+	seiloadWorkload string // the workload label on the run's metrics
+	seiloadRootKey  string // sei-load's hex funding root key (fund its address via accounts); "" for none
+	durationMin     int    // seiload run length, minutes
+	// share of accepted txs whose execution status seiload must read; 0 skips
+	minReceiptCoverage float64
 }
 
 // chain is the live provisioned topology a suite runs load against and asserts
@@ -108,16 +112,6 @@ type spec struct {
 type chain struct {
 	network  *sei.Network
 	rpcNodes []*sei.Node
-}
-
-// evmEndpoints returns the per-follower EVM JSON-RPC URLs that seiload's profile
-// fans its workload across.
-func (ch *chain) evmEndpoints() []string {
-	urls := make([]string, 0, len(ch.rpcNodes))
-	for _, n := range ch.rpcNodes {
-		urls = append(urls, n.EVMRPC())
-	}
-	return urls
 }
 
 // rpcNodeName is the load-bearing selector contract: chaos fault CRs target
@@ -360,10 +354,17 @@ func openClient(ctx context.Context, t *testing.T) *sei.Client {
 	return c
 }
 
+// The Flux-advanced seid image inputs, one per nightly image flavor.
+const (
+	seidImageEnv      = "SEID_IMAGE"       // vanilla
+	seidImageMockEnv  = "SEID_IMAGE_MOCK"  // mock_balances
+	seidImageChaosEnv = "SEID_IMAGE_CHAOS" // mock_chain_validation + mock_balances
+)
+
 // seidImageEnvVars are the image inputs Flux's image automation advances. The
 // upgrade-suite images are deliberately absent: they pin specific commits, carry
 // no date, and must not be read as stale.
-var seidImageEnvVars = []string{"SEID_IMAGE", "SEID_IMAGE_MOCK", "SEID_IMAGE_CHAOS"}
+var seidImageEnvVars = []string{seidImageEnv, seidImageMockEnv, seidImageChaosEnv}
 
 // nightlyTagDate extracts the date from a nightly tag. The alternation mirrors the
 // three filterTags patterns in the platform repo's

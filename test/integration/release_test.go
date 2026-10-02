@@ -225,8 +225,8 @@ func runReleaseTest(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 
 	// Hand the admin + vesting-fixture mnemonics to the harness via Secrets
 	// (secretKeyRef), labeled for the GC sweep and deleted on cleanup.
-	createMnemonicSecret(ctx, t, cs, ns, secretName, p.runLabels, p.admin.Mnemonic)
-	createMnemonicSecret(ctx, t, cs, ns, vestingSecretName, p.runLabels, p.vesting.Mnemonic)
+	createKeySecret(ctx, t, cs, ns, secretName, p.runLabels, keygen.SecretMnemonicKey, p.admin.Mnemonic)
+	createKeySecret(ctx, t, cs, ns, vestingSecretName, p.runLabels, keygen.SecretMnemonicKey, p.vesting.Mnemonic)
 
 	job := releaseJob(releaseParams{
 		name:              "release-test-" + namePart,
@@ -242,42 +242,8 @@ func runReleaseTest(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 		evmRPC:            p.node.EVMRPC(),
 		rest:              rest,
 	})
-	if _, err := cs.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create release-test job %q: %v", job.Name, err)
-	}
-	t.Cleanup(func() {
-		delCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		bg := metav1.DeletePropagationBackground
-		_ = cs.BatchV1().Jobs(ns).Delete(delCtx, job.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
-	})
-	t.Logf("release-test job %s launched (%s)", job.Name, p.image)
-
-	waitJob(ctx, t, cs, ns, job.Name)
+	runJob(ctx, t, cs, job)
 	t.Logf("release-test job %s completed; harness log tail:\n%s", job.Name, podLogTail(ctx, cs, ns, job.Name))
-}
-
-// createMnemonicSecret writes the admin mnemonic to a Secret the release-test pod
-// reads via secretKeyRef. Labeled for the GC sweep and deleted on cleanup,
-// matching how the suite manages everything else it creates.
-func createMnemonicSecret(
-	ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
-	ns, name string, labels map[string]string, mnemonic string,
-) {
-	t.Helper()
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
-		Type:       corev1.SecretTypeOpaque,
-		Data:       map[string][]byte{keygen.SecretMnemonicKey: []byte(mnemonic)},
-	}
-	if _, err := cs.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("create mnemonic secret %q: %v", name, err)
-	}
-	t.Cleanup(func() {
-		delCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		_ = cs.CoreV1().Secrets(ns).Delete(delCtx, name, metav1.DeleteOptions{})
-	})
 }
 
 // releaseParams are the per-run inputs to the release-test Job.
