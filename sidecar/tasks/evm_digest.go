@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 
 	"github.com/sei-protocol/seilog"
 
@@ -49,13 +48,15 @@ const (
 // data/flatkv or data/state_commit/flatkv. The handler resolves the layout
 // itself so callers supply only the height and backend.
 //
-// Scans are serialized on a per-sidecar mutex: a live scan reads the store
+// Scans are serialized per sidecar: a live scan reads the store
 // while seid writes it, and two concurrent scans on one node multiply the IO
 // and memory load the node must absorb.
 type EVMDigester struct {
 	homeDir  string
 	seidbBin string
-	mu       sync.Mutex
+	// sem holds one running scan; a queued task waits on it with its ctx, so
+	// a cancelled caller does not sit behind a minutes-long scan.
+	sem chan struct{}
 	// run executes seidb; a test seam. Defaults to exec.CommandContext.
 	run func(ctx context.Context, bin string, args ...string) (stdout, stderr []byte, err error)
 }
@@ -67,7 +68,7 @@ func NewEVMDigester(homeDir string) *EVMDigester {
 	if bin == "" {
 		bin = DefaultSeiDBBin
 	}
-	return &EVMDigester{homeDir: homeDir, seidbBin: bin}
+	return &EVMDigester{homeDir: homeDir, seidbBin: bin, sem: make(chan struct{}, 1)}
 }
 
 // Handler returns an engine.TaskHandler for the evm-digest task type.
@@ -111,8 +112,12 @@ func (d *EVMDigester) digest(ctx context.Context, params evmDigestParams) (json.
 			evmDigestBackendMemiavl, evmDigestBackendComposite)
 	}
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	select {
+	case d.sem <- struct{}{}:
+		defer func() { <-d.sem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	evmDigestLog.Info("starting evm digest scan", "height", params.Height,
 		"backend", params.Backend, "openMode", openMode)
@@ -201,8 +206,11 @@ func stderrTail(stderr []byte) string {
 }
 
 // execSeiDB runs the seidb binary, capturing stdout and stderr separately.
+// SEI_LOG_OUTPUT=stderr keeps any error-level storage log line off stdout,
+// which must carry only the JSON report.
 func execSeiDB(ctx context.Context, bin string, args ...string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = append(os.Environ(), "SEI_LOG_OUTPUT=stderr")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

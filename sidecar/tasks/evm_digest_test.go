@@ -27,6 +27,7 @@ func newTestDigester(t *testing.T, run func(ctx context.Context, bin string, arg
 	return &EVMDigester{
 		homeDir:  t.TempDir(),
 		seidbBin: "/fake/seidb",
+		sem:      make(chan struct{}, 1),
 		run:      run,
 	}
 }
@@ -227,6 +228,25 @@ func TestEVMDigest_SerializesScans(t *testing.T) {
 	if got := maxSeen.Load(); got != 1 {
 		t.Errorf("max concurrent scans = %d, want 1", got)
 	}
+}
+
+func TestEVMDigest_QueuedScanHonoursCancel(t *testing.T) {
+	d := newTestDigester(t, nil)
+	mustMkdirEVM(t, filepath.Join(d.homeDir, "data", "state_commit", "memiavl"))
+
+	d.sem <- struct{}{} // a scan is already holding the slot
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.Handler()(ctx, map[string]any{"height": 1, "backend": "memiavl"})
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // let the queued call block on sem
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("queued scan: want context.Canceled, got %v", err)
+	}
+	<-d.sem
 }
 
 // TestEVMDigest_ExecSeiDB exercises the real exec seam against a shell-double

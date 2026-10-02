@@ -44,14 +44,14 @@ func (c *Comparator) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	for _, r := range runners {
 		wg.Go(func() {
-			ticker := time.NewTicker(c.RoundInterval)
-			defer ticker.Stop()
 			for {
 				r.round(ctx)
+				timer := time.NewTimer(c.RoundInterval)
 				select {
 				case <-ctx.Done():
+					timer.Stop()
 					return
-				case <-ticker.C:
+				case <-timer.C:
 				}
 			}
 		})
