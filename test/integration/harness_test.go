@@ -103,6 +103,8 @@ type spec struct {
 	seiloadWorkload string // the workload label on the run's metrics
 	seiloadRootKey  string // sei-load's hex funding root key (fund its address via accounts); "" for none
 	durationMin     int    // seiload run length, minutes
+	// share of accepted txs whose execution status seiload must read; 0 skips
+	minReceiptCoverage float64
 }
 
 // chain is the live provisioned topology a suite runs load against and asserts

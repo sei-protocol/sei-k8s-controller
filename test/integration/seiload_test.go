@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -130,13 +131,15 @@ func renderJob(t *testing.T, p bench.Params) *batchv1.Job {
 }
 
 // runSeiload renders the platform profile, applies seiload's Job manifest, waits
-// for the Job to complete, and asserts (1) every follower is still caught up and
-// (2) the chain included transactions during the load window. The inclusion gate
-// is load-bearing because seiload exits 0 on its duration deadline regardless of
-// outcome: a chain that accepts every submission into mempools but includes none
-// in blocks yields a Complete Job, live followers, and a green run despite being
-// effectively write-only. Fine-grained throughput gating stays in the metrics
-// layer (podMonitor + alerts); this asserts the floor: included > 0.
+// for the Job to complete, and fails the run only when its data isn't valid:
+// (1) the chain halted or a follower lagged (assertChainLive), (2) seiload's run
+// was short, reverted too much or, where required, read too few execution
+// statuses (assertSeiloadRun), or (3) the chain included no transactions during
+// the load window. The inclusion gate is load-bearing because seiload exits 0
+// on its duration deadline regardless of outcome: a chain that accepts every
+// submission into mempools but includes none in blocks yields a Complete Job,
+// live followers, and a green run despite being effectively write-only.
+// Throughput and cost are judged by the metrics layer (podMonitor + alerts).
 //
 // Load goes to the first RPC follower only; inclusion (sei-load's and the
 // gate's) is read from the second, which takes no sends, so it measures the
@@ -181,13 +184,8 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 	job.Namespace = ns
 	runJob(ctx, t, cs, job)
 
-	// Chain survived the load: every follower still caught up (a follower can't
-	// catch up to a halted chain, so this transitively covers validator quorum).
-	for _, n := range ch.rpcNodes {
-		if err := sei.WaitCaughtUp(ctx, hc, n.TendermintRPC()); err != nil {
-			t.Errorf("post-load %s not caught up: %v", n.Name(), err)
-		}
-	}
+	assertChainLive(ctx, t, hc, ch)
+	assertSeiloadRun(ctx, t, cs, job, s)
 
 	// Chain included the load: at least one transaction landed in a block during
 	// the window.
@@ -213,8 +211,111 @@ func mustLatestHeight(ctx context.Context, t *testing.T, hc *http.Client, tmRPC,
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Fatalf("read %s height from %s: endpoint unreachable — cannot verify inclusion", phase, tmRPC)
+	t.Fatalf("read %s height from %s: endpoint unreachable — cannot verify the run", phase, tmRPC)
 	return 0
+}
+
+const (
+	// followerMaxLag is how many blocks a follower may trail the validators'
+	// head after load: read skew between two RPCs, not a stall.
+	followerMaxLag = 10
+	// maxRevertRatio is the share of executed transactions that may revert
+	// before a run stops describing its workload.
+	maxRevertRatio = 0.01
+	// seiloadSummaryLines is enough log tail to hold seiload's end-of-run summary.
+	seiloadSummaryLines = 200
+)
+
+// assertChainLive fails unless the validators still produce blocks and every
+// follower sits within followerMaxLag of their head. catching_up is a one-way
+// latch that a follower stalled after its first catch-up never re-flips, so
+// heights are compared directly.
+func assertChainLive(ctx context.Context, t *testing.T, hc *http.Client, ch *chain) {
+	t.Helper()
+	validators := ch.network.TendermintRPC()
+	advanceCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	if err := sei.WaitHeightAdvances(advanceCtx, hc, validators, 2); err != nil {
+		t.Errorf("post-load validators halted: %v", err)
+		return
+	}
+	head := mustLatestHeight(ctx, t, hc, validators, "post-load validator")
+	for _, n := range ch.rpcNodes {
+		h := mustLatestHeight(ctx, t, hc, n.TendermintRPC(), "post-load "+n.Name())
+		if lag := head - h; lag > followerMaxLag {
+			t.Errorf("post-load %s at height %d trails the validator head %d by %d blocks (> %d)",
+				n.Name(), h, head, lag, followerMaxLag)
+		}
+	}
+}
+
+// seiload's end-of-run summary lines: accepted transactions whose execution
+// status was read, and executed transactions that reverted.
+var (
+	statusReadLine = regexp.MustCompile(`Execution status was read for (\d+) of (\d+) accepted`)
+	revertedLine   = regexp.MustCompile(`Of the (\d+) the chain executed, (\d+) reverted`)
+)
+
+// summaryCounts returns the two counts line captures from seiload's log.
+func summaryCounts(line *regexp.Regexp, log string) (first, second int64, ok bool) {
+	m := line.FindStringSubmatch(log)
+	if m == nil {
+		return 0, 0, false
+	}
+	first, errFirst := strconv.ParseInt(m[1], 10, 64)
+	second, errSecond := strconv.ParseInt(m[2], 10, 64)
+	return first, second, errFirst == nil && errSecond == nil
+}
+
+// assertSeiloadRun fails a run whose data doesn't describe its workload:
+// seiload exiting before its duration, more than maxRevertRatio of executed
+// transactions reverting, or, when s.minReceiptCoverage is set, too few
+// accepted transactions with a read execution status. The counts come from
+// seiload's end-of-run summary, so a SEILOAD_IMAGE that stops printing it
+// fails here rather than passing unverified.
+func assertSeiloadRun(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *batchv1.Job, s spec) {
+	t.Helper()
+	pod, err := jobPod(ctx, cs, job.Namespace, job.Name)
+	if err != nil {
+		t.Errorf("%v — cannot verify the run", err)
+		return
+	}
+	window := time.Duration(s.durationMin) * time.Minute
+	for _, st := range pod.Status.ContainerStatuses {
+		term := st.State.Terminated
+		if term == nil {
+			t.Errorf("seiload container %s has not terminated — cannot verify its run length", st.Name)
+			continue
+		}
+		if ran := term.FinishedAt.Sub(term.StartedAt.Time); ran < window {
+			t.Errorf("seiload ran %s, short of its %s load window", ran.Round(time.Second), window)
+		}
+	}
+
+	log, err := podLog(ctx, cs, pod, seiloadSummaryLines)
+	if err != nil {
+		t.Errorf("read seiload log: %v — cannot verify the run", err)
+		return
+	}
+	executed, reverted, ok := summaryCounts(revertedLine, log)
+	switch {
+	case !ok:
+		t.Errorf("seiload summary has no revert count — cannot verify the run; log tail:\n%s", log)
+	case float64(reverted) > maxRevertRatio*float64(executed):
+		t.Errorf("%d of %d executed transactions reverted (> %.0f%%): the run did not exercise its workload",
+			reverted, executed, maxRevertRatio*100)
+	}
+	if s.minReceiptCoverage == 0 {
+		return
+	}
+	read, accepted, ok := summaryCounts(statusReadLine, log)
+	switch {
+	case !ok:
+		t.Errorf("seiload summary has no execution-status coverage — cannot verify the run; log tail:\n%s", log)
+	case float64(read) < s.minReceiptCoverage*float64(accepted):
+		t.Errorf("execution status read for %d of %d accepted transactions (< %.0f%%): inclusion was not measured",
+			read, accepted, s.minReceiptCoverage*100)
+	}
 }
 
 // blockchainPageSize is CometBFT's cap on blocks per /blockchain response.
@@ -338,16 +439,30 @@ func waitJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ns, na
 // podLogTail returns the tail of the seiload pod's log for a Job, best-effort —
 // the failure-time signal a Job condition message alone cannot give.
 func podLogTail(ctx context.Context, cs *kubernetes.Clientset, ns, jobName string) string {
+	pod, err := jobPod(ctx, cs, ns, jobName)
+	if err != nil {
+		return fmt.Sprintf("(%v)", err)
+	}
+	log, err := podLog(ctx, cs, pod, 50)
+	if err != nil {
+		return fmt.Sprintf("(read logs failed: %v)", err)
+	}
+	return log
+}
+
+// jobPod returns a harness Job's pod; the Jobs run one (backoffLimit 0).
+func jobPod(ctx context.Context, cs *kubernetes.Clientset, ns, jobName string) (*corev1.Pod, error) {
 	pods, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: "batch.kubernetes.io/job-name=" + jobName,
 	})
 	if err != nil || len(pods.Items) == 0 {
-		return fmt.Sprintf("(no pod for job %q: %v)", jobName, err)
+		return nil, fmt.Errorf("no pod for job %q: %v", jobName, err)
 	}
-	lines := int64(50)
-	raw, err := cs.CoreV1().Pods(ns).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{TailLines: &lines}).DoRaw(ctx)
-	if err != nil {
-		return fmt.Sprintf("(read logs failed: %v)", err)
-	}
-	return string(raw)
+	return &pods.Items[0], nil
+}
+
+// podLog returns the last lines of a pod's log.
+func podLog(ctx context.Context, cs *kubernetes.Clientset, pod *corev1.Pod, lines int64) (string, error) {
+	raw, err := cs.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{TailLines: &lines}).DoRaw(ctx)
+	return string(raw), err
 }

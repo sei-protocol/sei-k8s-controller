@@ -22,6 +22,9 @@ type benchmarkWorkload struct {
 	// fund runs on a real-balance chain: a throwaway sei-load root key is
 	// funded at genesis and the profile's funding block disperses from it.
 	fund bool
+	// minReceiptCoverage is the share of accepted transactions whose execution
+	// status sei-load must read for the run to count; 0 skips the check.
+	minReceiptCoverage float64
 }
 
 // steadyStateRootBalance funds the steady-state root at genesis. Its profile
@@ -30,8 +33,8 @@ type benchmarkWorkload struct {
 const steadyStateRootBalance = "1000000000000usei"
 
 // TestNightlyBenchmark runs each load workload against its own fresh validator
-// chain + RPC fleet and asserts the chain stayed live and included the load.
-// Throughput and cost are judged by alerts-nightly, per workload:
+// chain + RPC fleet and fails only when the run isn't valid data (see
+// runSeiload). Throughput and cost are judged by alerts-nightly, per workload:
 //
 //   - saturation: unlimited-rate EVM transfers on the mock_balances image, for
 //     peak throughput (the < 500 TPS floor).
@@ -64,17 +67,20 @@ func TestNightlyBenchmark(t *testing.T) {
 
 	workloads := []benchmarkWorkload{
 		{
+			// No receipt coverage floor: at saturation sei-load drops most
+			// status reads at its tracker cap by design.
 			name:        "saturation",
 			seidImage:   mustEnv(t, seidImageMockEnv),
 			profile:     envOr("SEILOAD_PROFILE", "nightly_evm_transfer"),
 			durationMin: envInt(t, "DURATION_MINUTES", 10),
 		},
 		{
-			name:        "steady-state",
-			seidImage:   mustEnv(t, seidImageEnv),
-			profile:     "nightly_steady_state",
-			durationMin: 30,
-			fund:        true,
+			name:               "steady-state",
+			seidImage:          mustEnv(t, seidImageEnv),
+			profile:            "nightly_steady_state",
+			durationMin:        30,
+			fund:               true,
+			minReceiptCoverage: 0.99,
 		},
 	}
 	for _, w := range workloads {
@@ -94,13 +100,14 @@ func TestNightlyBenchmark(t *testing.T) {
 				validators: 4,
 				rpcNodes:   2, // one takes the sends, the other serves receipts (see runSeiload)
 				// The load plus 80m for provisioning, catch-up checks and teardown.
-				timeout:         time.Duration(w.durationMin+80) * time.Minute,
-				seiloadImage:    seiloadImage,
-				seiloadProfile:  w.profile,
-				seiloadCommit:   commit,
-				seiloadWorkload: w.name,
-				durationMin:     w.durationMin,
-				storageConfig:   memiavlStorageConfig,
+				timeout:            time.Duration(w.durationMin+80) * time.Minute,
+				seiloadImage:       seiloadImage,
+				seiloadProfile:     w.profile,
+				seiloadCommit:      commit,
+				seiloadWorkload:    w.name,
+				durationMin:        w.durationMin,
+				minReceiptCoverage: w.minReceiptCoverage,
+				storageConfig:      memiavlStorageConfig,
 				// EVM tuning the followers need to absorb the load (matches the load
 				// scenario's rpc overrides).
 				rpcConfig: map[string]string{
