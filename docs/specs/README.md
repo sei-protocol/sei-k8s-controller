@@ -21,3 +21,4 @@ not re-litigated later. See `001-configurable-node-resources/decisions.md`.
 | [006](006-node-ec2-locality/spec.md) | Single-tenant scheduling for benchmark nodes | Draft |
 | [007](007-crd-status-conditions-events/spec.md) | Ready means the network produces blocks, and the plan marks the running task | Draft |
 | [008](008-autobahn-evm-only-consensus/spec.md) | A typed consensus engine on the SeiNetwork, and a health source that follows the engine | Draft |
+| [009](009-declarative-data-reset/spec.md) | Declarative data reset for ConfigMap-configured nodes | Draft |
