@@ -65,6 +65,7 @@ const (
 	TaskTypeMarkNotReady = string(wire.TaskMarkNotReady)
 	TaskTypeStopSeid     = string(wire.TaskStopSeid)
 	TaskTypeResetData    = string(wire.TaskResetData)
+	TaskTypeEVMDigest    = string(wire.TaskEVMDigest)
 )
 
 // Snapshot-upload outcome contract, re-exported from wire so CLI consumers
@@ -1053,6 +1054,49 @@ func (t GovUpdateInstantiateConfigTask) ToTaskRequest() TaskRequest {
 	}
 	if t.Memo != "" {
 		p["memo"] = t.Memo
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// EVM digest backends accepted by the evm-digest task, matching
+// `seidb evm-logical-digest --backend`.
+const (
+	EVMDigestBackendMemiavl   = "memiavl"
+	EVMDigestBackendComposite = "composite"
+)
+
+// EVMDigestTask runs `seidb evm-logical-digest` against the node's own store
+// directories at Height and returns the report JSON object on the task result.
+// Backend is memiavl for a reserve node and composite for a migrating one.
+// OpenMode is the --memiavl-open-mode value; empty defaults server-side
+// (currently "changelog").
+type EVMDigestTask struct {
+	Height   int64
+	Backend  string
+	OpenMode string
+}
+
+func (t EVMDigestTask) TaskType() string { return TaskTypeEVMDigest }
+
+func (t EVMDigestTask) Validate() error {
+	if t.Height <= 0 {
+		return errors.New("evm-digest: height required (must be > 0)")
+	}
+	switch t.Backend {
+	case EVMDigestBackendMemiavl, EVMDigestBackendComposite:
+	default:
+		return fmt.Errorf("evm-digest: backend must be %s or %s", EVMDigestBackendMemiavl, EVMDigestBackendComposite)
+	}
+	return nil
+}
+
+func (t EVMDigestTask) ToTaskRequest() TaskRequest {
+	p := map[string]any{
+		"height":  t.Height,
+		"backend": t.Backend,
+	}
+	if t.OpenMode != "" {
+		p["openMode"] = t.OpenMode
 	}
 	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
