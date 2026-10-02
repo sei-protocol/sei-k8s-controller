@@ -43,6 +43,10 @@ const (
 	TaskMarkNotReady TaskType = "mark-not-ready"
 	TaskStopSeid     TaskType = "stop-seid"
 	TaskResetData    TaskType = "reset-data"
+
+	// TaskEVMDigest runs `seidb evm-logical-digest` against the node's own
+	// store directories and returns the report JSON on the task result.
+	TaskEVMDigest TaskType = "evm-digest"
 )
 
 // VoteOption mirrors cosmos gov v1beta1 VoteOption values so callers can parse

@@ -1,6 +1,6 @@
 # sei-k8s-controller
 
-Kubernetes operator for managing Sei blockchain nodes, plus the per-node sidecar it drives and a hash-log comparator. Three binaries across three Go modules. Three controllers: `SeiNetwork` (genesis-ceremony orchestration: bootstraps a chain's genesis.json and founding validator set, owns the child SeiNodes), `SeiNode` (individual node lifecycle), and `SeiNodeTask` (sidecar-driven task execution).
+Kubernetes operator for managing Sei blockchain nodes, plus the per-node sidecar it drives and the state-comparison tools that watch it. Four binaries across three Go modules. Three controllers: `SeiNetwork` (genesis-ceremony orchestration: bootstraps a chain's genesis.json and founding validator set, owns the child SeiNodes), `SeiNode` (individual node lifecycle), and `SeiNodeTask` (sidecar-driven task execution).
 
 ## Architecture
 
@@ -27,6 +27,10 @@ Two checks keep the controller tidyable, both in `make ci`. The `depguard` rule 
 ### The hashlog-comparator binary
 
 `cmd/hashlog-comparator` → `/hashlog-comparator`, shipped in the controller image (not its own ECR repo); run it by overriding the container command. It reads a node/reserve pair list from a config file, tails each node's hash log through the sidecar's `/v0/hashlog` endpoints behind kube-rbac-proxy, and exports `sei_hashlog_compare_*` metrics. Logic lives in `internal/hashlogcompare/`. It is independent of the manager: no CRD, no leader election, no controller-runtime.
+
+### The evmdigest-comparator binary
+
+`cmd/evmdigest-comparator` → `/evmdigest-comparator`, shipped in the same controller image. It reads a chain/node list from a config file and runs digest rounds against every node's sidecar: each round picks a height below the lowest committed tip, submits an `evm-digest` task (`seidb evm-logical-digest` on the node's own store dirs), and compares `.version`, `.final.count`, `.final.digest` across nodes, exporting `sei_evmdigest_compare_*` metrics. Logic lives in `internal/evmdigestcompare/`; same independence from the manager as hashlog-comparator. The `seidb` binary the task execs ships in the *sidecar* image, built at the `SEIDB_REF` pin in `sidecar/Dockerfile` — the sidecar module's own sei-chain pin predates `evm-logical-digest`, so it is not a module dependency.
 
 ### The sidecar binary
 

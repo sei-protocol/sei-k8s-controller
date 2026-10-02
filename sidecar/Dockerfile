@@ -33,8 +33,30 @@ ARG TARGETARCH
 RUN cd sidecar && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -o /go/bin/sei-sidecar .
 
+# seidb — the sei-db store tool — runs the evm-digest task's
+# `seidb evm-logical-digest` scan on the node. It is built at a ref chosen
+# independently of the sidecar module's own sei-chain pin, which predates
+# evm-logical-digest entirely; building inside a source archive keeps
+# sei-chain's go.mod (including its replaces) as the main module.
+#
+# SEIDB_REF is pinned to the head of sei-chain#4419, which adds the
+# `--memiavl-open-mode changelog` scan the comparator loop relies on (the
+# alternative, replay, is ~6x slower and heavier on a live node). Move the
+# pin to a release tag once that PR merges. Pure Go — no wasmvm, no CGO.
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.27.1 AS seidb
+ARG SEIDB_REF=5890cc5bd633729d3f285722b4d4bc9e89b1f115
+ARG TARGETOS
+ARG TARGETARCH
+RUN mkdir -p /src/sei-chain && \
+    curl -fsSL "https://github.com/sei-protocol/sei-chain/archive/${SEIDB_REF}.tar.gz" \
+      | tar -xz --strip-components=1 -C /src/sei-chain && \
+    cd /src/sei-chain && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+      go build -o /go/bin/seidb ./sei-db/tools/cmd/seidb
+
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /go/bin/sei-sidecar /usr/bin/sei-sidecar
+COPY --from=seidb /go/bin/seidb /usr/bin/seidb
 
 # Compatibility shim, deliberately temporary. A pod spec's `command` REPLACES
 # the image ENTRYPOINT (and `args` replaces CMD); neither render site sets Args,
