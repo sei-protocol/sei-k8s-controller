@@ -65,6 +65,8 @@ const (
 	TaskTypeMarkNotReady = string(wire.TaskMarkNotReady)
 	TaskTypeStopSeid     = string(wire.TaskStopSeid)
 	TaskTypeResetData    = string(wire.TaskResetData)
+
+	TaskTypeEVMLogicalDigest = string(wire.TaskEVMLogicalDigest)
 )
 
 // Snapshot-upload outcome contract, re-exported from wire so CLI consumers
@@ -343,6 +345,31 @@ func (t ResetDataTask) Validate() error  { return nil }
 
 func (t ResetDataTask) ToTaskRequest() TaskRequest {
 	return TaskRequest{Type: t.TaskType()}
+}
+
+// EVMLogicalDigestTask scans the node's local EVM state at Height and returns a
+// wire.EVMLogicalDigestResult. Backend selects the node's store layout: memiavl
+// for a reserve, composite for a FlatKV-migrating node.
+type EVMLogicalDigestTask struct {
+	Backend wire.EVMDigestBackend
+	Height  int64
+}
+
+func (t EVMLogicalDigestTask) TaskType() string { return TaskTypeEVMLogicalDigest }
+
+func (t EVMLogicalDigestTask) Validate() error {
+	if err := t.Backend.Validate(); err != nil {
+		return fmt.Errorf("evm-logical-digest: %w", err)
+	}
+	if t.Height <= 0 {
+		return fmt.Errorf("evm-logical-digest: height must be positive, got %d", t.Height)
+	}
+	return nil
+}
+
+func (t EVMLogicalDigestTask) ToTaskRequest() TaskRequest {
+	p := map[string]any{"backend": string(t.Backend), "height": t.Height}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
 }
 
 // SetGenesisPeersTask requests the sidecar to publish this node's peer

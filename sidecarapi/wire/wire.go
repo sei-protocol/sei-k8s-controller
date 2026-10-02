@@ -43,7 +43,52 @@ const (
 	TaskMarkNotReady TaskType = "mark-not-ready"
 	TaskStopSeid     TaskType = "stop-seid"
 	TaskResetData    TaskType = "reset-data"
+
+	// TaskEVMLogicalDigest scans the node's local EVM state at one height with
+	// `seidb evm-logical-digest` and returns the backend-independent digest.
+	TaskEVMLogicalDigest TaskType = "evm-logical-digest"
 )
+
+// EVMDigestBackend names the store layout an evm-logical-digest task reads.
+type EVMDigestBackend string
+
+const (
+	// EVMDigestMemIAVL reads a memIAVL-only node (a reserve).
+	EVMDigestMemIAVL EVMDigestBackend = "memiavl"
+	// EVMDigestComposite reads a FlatKV-migrating node: FlatKV plus memIAVL.
+	EVMDigestComposite EVMDigestBackend = "composite"
+)
+
+// Validate rejects a backend the digest task does not support.
+func (b EVMDigestBackend) Validate() error {
+	switch b {
+	case EVMDigestMemIAVL, EVMDigestComposite:
+		return nil
+	default:
+		return fmt.Errorf("unknown evm digest backend %q (want memiavl or composite)", b)
+	}
+}
+
+// EVMDigestBucket is one normalized bucket of an EVM logical digest.
+type EVMDigestBucket struct {
+	Count  uint64 `json:"count"`
+	Digest string `json:"digest"`
+}
+
+// EVMLogicalDigestResult is the evm-logical-digest task result. Two nodes hold
+// the same EVM state at a height when Version and Final are equal; the other
+// buckets narrow down where a mismatch lives.
+type EVMLogicalDigestResult struct {
+	Backend         EVMDigestBackend `json:"backend"`
+	RequestedHeight int64            `json:"requestedHeight"`
+	Version         int64            `json:"version"`
+	Account         EVMDigestBucket  `json:"account"`
+	Code            EVMDigestBucket  `json:"code"`
+	Storage         EVMDigestBucket  `json:"storage"`
+	Misc            EVMDigestBucket  `json:"misc"`
+	Final           EVMDigestBucket  `json:"final"`
+	DurationSeconds float64          `json:"durationSeconds"`
+}
 
 // VoteOption mirrors cosmos gov v1beta1 VoteOption values so callers can parse
 // and validate a vote string without importing sei-chain. The values are the

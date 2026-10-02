@@ -17,11 +17,13 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager ./cmd/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o hashlog-comparator ./cmd/hashlog-comparator/
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o evm-digest-comparator ./cmd/evm-digest-comparator/
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/manager .
 COPY --from=builder /workspace/hashlog-comparator .
+COPY --from=builder /workspace/evm-digest-comparator .
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

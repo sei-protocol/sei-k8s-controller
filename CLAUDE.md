@@ -28,6 +28,10 @@ Two checks keep the controller tidyable, both in `make ci`. The `depguard` rule 
 
 `cmd/hashlog-comparator` → `/hashlog-comparator`, shipped in the controller image (not its own ECR repo); run it by overriding the container command. It reads a node/reserve pair list from a config file, tails each node's hash log through the sidecar's `/v0/hashlog` endpoints behind kube-rbac-proxy, and exports `sei_hashlog_compare_*` metrics. Logic lives in `internal/hashlogcompare/`. It is independent of the manager: no CRD, no leader election, no controller-runtime.
 
+### The evm-digest-comparator binary
+
+`cmd/evm-digest-comparator` → `/evm-digest-comparator`, shipped in the controller image the same way. It reads groups of nodes (migrating `composite` nodes and `memiavl` reserves of one chain) from a config file and, in rounds, picks one height a little below the group's lowest committed tip, submits an `evm-logical-digest` task to every node's sidecar, and compares `version`, `final.count` and `final.digest`. It exports `sei_evm_digest_compare_*` metrics. The scan itself is `seidb evm-logical-digest`, which the sidecar image ships at a pinned sei-chain commit (`SEI_CHAIN_SEIDB_REF` in `sidecar/Dockerfile`). Its kube-rbac-proxy grant needs `get`, `create` and `delete` on `seinodetasks` for the listed nodes (status, submit, cancel). Logic lives in `internal/evmdigestcompare/`.
+
 ### The sidecar binary
 
 `sidecar/main.go` → `sei-sidecar`, published to ECR as `sei/sei-sidecar`. The controller renders **no `Command`** for the sidecar container (`internal/noderesource/`), so the image's ENTRYPOINT — `sei-sidecar serve` — is what runs. The image owns its entrypoint; renaming the binary is an image-only change.
