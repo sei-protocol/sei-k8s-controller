@@ -7,6 +7,8 @@ import (
 	"github.com/leanovate/gopter"
 	"github.com/leanovate/gopter/gen"
 	"github.com/leanovate/gopter/prop"
+
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 func genNonEmptyString() gopter.Gen {
@@ -215,6 +217,28 @@ func TestWorkflowHoldTasksRoundTrip(t *testing.T) {
 				t.Errorf("Params = %v, want nil (empty-payload task)", req.Params)
 			}
 		})
+	}
+}
+
+func TestEVMLogicalDigestRoundTrip(t *testing.T) {
+	task := EVMLogicalDigestTask{Backend: wire.EVMDigestComposite, Height: 42}
+	if err := task.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	req := task.ToTaskRequest()
+	if req.Type != TaskTypeEVMLogicalDigest {
+		t.Errorf("Type = %q, want %q", req.Type, TaskTypeEVMLogicalDigest)
+	}
+	if req.Params == nil || (*req.Params)["backend"] != "composite" || (*req.Params)["height"] != int64(42) {
+		t.Errorf("Params = %v", req.Params)
+	}
+	for _, bad := range []EVMLogicalDigestTask{
+		{Backend: "flatkv", Height: 42},
+		{Backend: wire.EVMDigestMemIAVL},
+	} {
+		if err := bad.Validate(); err == nil {
+			t.Errorf("Validate(%+v) = nil, want error", bad)
+		}
 	}
 }
 

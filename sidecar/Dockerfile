@@ -33,8 +33,27 @@ ARG TARGETARCH
 RUN cd sidecar && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -o /go/bin/sei-sidecar .
 
+# seidb, run by the evm-logical-digest task against the node's own state-commit
+# directories. Built from sei-chain at a pinned commit rather than from the
+# version this module links: the digest needs `--memiavl-open-mode changelog`,
+# which postdates that pin. Bump SEI_CHAIN_SEIDB_REF deliberately; the task's
+# argv and JSON contract follow it.
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.27 AS seidb
+
+ARG SEI_CHAIN_SEIDB_REF=5890cc5bd633729d3f285722b4d4bc9e89b1f115
+WORKDIR /sei-chain
+RUN git init -q . \
+    && git fetch -q --depth 1 https://github.com/sei-protocol/sei-chain.git "${SEI_CHAIN_SEIDB_REF}" \
+    && git checkout -q FETCH_HEAD
+
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -trimpath -o /go/bin/seidb ./sei-db/tools/cmd/seidb
+
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /go/bin/sei-sidecar /usr/bin/sei-sidecar
+COPY --from=seidb /go/bin/seidb /usr/bin/seidb
 
 # Compatibility shim, deliberately temporary. A pod spec's `command` REPLACES
 # the image ENTRYPOINT (and `args` replaces CMD); neither render site sets Args,

@@ -140,6 +140,7 @@ var serveCmd = cli.Command{
 			engine.TaskGovSoftwareUpgrade:         tasks.NewGovSoftwareUpgrader(execCfg).Handler(),
 			engine.TaskGovParamChange:             tasks.NewGovParamChanger(execCfg).Handler(),
 			engine.TaskGovUpdateInstantiateConfig: tasks.NewGovInstantiateConfigUpdater(execCfg).Handler(),
+			engine.TaskEVMLogicalDigest:           tasks.NewEVMLogicalDigester(homeDir, tasks.DefaultSeidbPath).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)
