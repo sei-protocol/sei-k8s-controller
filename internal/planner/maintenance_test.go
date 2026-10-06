@@ -330,3 +330,32 @@ func TestClassifyPlan_HeldInitIsInit(t *testing.T) {
 	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 	g.Expect(classifyPlan(node.Status.Plan)).To(Equal("init"))
 }
+
+// 009 Req 5.9, 010 Req 3: a hold that arrives while a reset runs makes the
+// guard refuse the reset plan's final mark-ready. The wipe ran and was
+// recorded, so the reset reads ResetComplete with the start deferred, and the
+// next plan is the hold plan.
+func TestHold_ArrivesMidReset(t *testing.T) {
+	g := NewWithT(t)
+	s := testScheme(t)
+	node := heldNode("", "")
+	node.Spec.DataResetGeneration = 1
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	plan := node.Status.Plan
+	g.Expect(isDataResetPlan(plan)).To(BeTrue())
+	completeTasksBefore(plan, 4)
+
+	node.Spec.Maintenance = &seiv1alpha1.MaintenanceSpec{Hold: holdImmediate}
+
+	mock := &mockSidecarClient{}
+	_, err := nodeExecutor(fake.NewClientBuilder().WithScheme(s), s, mock).ExecutePlan(context.Background(), node, plan)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
+	g.Expect(node.Status.DataResetGeneration).To(Equal(int64(1)))
+
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	cond := dataResetCondition(node)
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonResetComplete))
+	g.Expect(cond.Message).To(ContainSubstring("maintenance hold"))
+	g.Expect(isMaintenancePlan(node.Status.Plan)).To(BeTrue())
+}
