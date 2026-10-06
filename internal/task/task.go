@@ -219,6 +219,7 @@ var registry = map[string]taskDeserializer{
 	sidecar.TaskTypeAssembleGenesis:            sidecarTask[sidecar.AssembleAndUploadGenesisTask](false),
 	sidecar.TaskTypeSetGenesisPeers:            sidecarTask[sidecar.SetGenesisPeersTask](false),
 	sidecar.TaskTypeGovVote:                    sidecarTask[sidecar.GovVoteTask](false),
+	sidecar.TaskTypeUnjail:                     sidecarTask[sidecar.UnjailTask](false),
 	sidecar.TaskTypeGovSoftwareUpgrade:         sidecarTask[sidecar.GovSoftwareUpgradeTask](false),
 	sidecar.TaskTypeGovParamChange:             sidecarTask[sidecar.GovParamChangeTask](false),
 	sidecar.TaskTypeGovUpdateInstantiateConfig: sidecarTask[sidecar.GovUpdateInstantiateConfigTask](false),

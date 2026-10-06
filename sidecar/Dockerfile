@@ -39,12 +39,14 @@ RUN cd sidecar && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 # evm-logical-digest entirely; building inside a source archive keeps
 # sei-chain's go.mod (including its replaces) as the main module.
 #
-# SEIDB_REF is pinned to the head of sei-chain#4419, which adds the
-# `--memiavl-open-mode changelog` scan the comparator loop relies on (the
-# alternative, replay, is ~6x slower and heavier on a live node). Move the
-# pin to a release tag once that PR merges. Pure Go — no wasmvm, no CGO.
+# SEIDB_REF is pinned to the main-branch merge commit of sei-chain#4419, which
+# adds the `--memiavl-open-mode changelog` scan the comparator loop relies on
+# (the alternative, replay, is ~6x slower and heavier on a live node), plus
+# `--inspect-plan`, `--json`, and `kvrepair-export`. A merged commit, not a PR
+# head: the FlatKV migration runbook requires seidb built from one. No release
+# tag descends from it yet. Pure Go — no wasmvm, no CGO.
 FROM --platform=$BUILDPLATFORM docker.io/golang:1.27.1 AS seidb
-ARG SEIDB_REF=5890cc5bd633729d3f285722b4d4bc9e89b1f115
+ARG SEIDB_REF=53168c2d1ebc10ba3dd0b237b8be24f25b4657aa
 ARG TARGETOS
 ARG TARGETARCH
 RUN mkdir -p /src/sei-chain && \

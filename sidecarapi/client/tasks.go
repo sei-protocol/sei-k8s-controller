@@ -69,6 +69,7 @@ const (
 	TaskTypeAwaitSeidStart         = string(wire.TaskAwaitSeidStart)
 	TaskTypeResetDataKeepSignState = string(wire.TaskResetDataKeepSignState)
 	TaskTypeEVMDigest              = string(wire.TaskEVMDigest)
+	TaskTypeUnjail                 = string(wire.TaskUnjail)
 )
 
 // Snapshot-upload outcome contract, re-exported from wire so CLI consumers
@@ -801,6 +802,50 @@ func (t GovVoteTask) ToTaskRequest() TaskRequest {
 		"option":     t.Option,
 		"fees":       t.Fees,
 		"gas":        t.Gas,
+	}
+	if t.Memo != "" {
+		p["memo"] = t.Memo
+	}
+	return TaskRequest{Type: t.TaskType(), Params: &p}
+}
+
+// UnjailTask submits MsgUnjail for the validator whose operator account
+// KeyName names. The sidecar refuses before broadcast when the account has no
+// validator, the validator's self-delegation is missing or below its min
+// self-delegation, or the validator is not jailed, still in its jail period,
+// or tombstoned.
+type UnjailTask struct {
+	ChainID string
+	KeyName string
+	Memo    string
+	Fees    string
+	Gas     uint64
+}
+
+func (t UnjailTask) TaskType() string { return TaskTypeUnjail }
+
+func (t UnjailTask) Validate() error {
+	if t.ChainID == "" {
+		return errors.New("unjail: chainId required")
+	}
+	if t.KeyName == "" {
+		return errors.New("unjail: keyName required")
+	}
+	if t.Fees == "" {
+		return errors.New("unjail: fees required")
+	}
+	if t.Gas == 0 {
+		return errors.New("unjail: gas required (must be > 0)")
+	}
+	return nil
+}
+
+func (t UnjailTask) ToTaskRequest() TaskRequest {
+	p := map[string]any{
+		"chainId": t.ChainID,
+		"keyName": t.KeyName,
+		"fees":    t.Fees,
+		"gas":     t.Gas,
 	}
 	if t.Memo != "" {
 		p["memo"] = t.Memo

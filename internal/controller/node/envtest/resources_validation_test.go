@@ -370,3 +370,75 @@ func TestSeidResources_BareIntSurvivesControllerReencode(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred(),
 		"a typed re-encode of a bare-int footprint must not trip the create-only rule (the finalizer Update depends on it)")
 }
+
+// Spec 011 Requirement 1: on a node with spec.nodeConfig the footprint is
+// mutable, up or down, and the value rules still apply. A node without it keeps
+// the create-only gate above (011 Req 1.2).
+func TestSeidResources_NodeConfigMutable(t *testing.T) {
+	footprintNode := func(ns, name string) *seiv1alpha1.SeiNode {
+		node := nodeConfigNode(ns, name)
+		node.Spec.Resources = &seiv1alpha1.Resources{Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("4"),
+			corev1.ResourceMemory: resource.MustParse("32Gi"),
+		}}
+		return node
+	}
+
+	// 011 Req 1.1
+	t.Run("raising CPU is accepted", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := footprintNode(ns, "res-nc-cpu")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("16")
+		})
+		g.Expect(err).NotTo(HaveOccurred())
+	})
+
+	// 011 Req 1.1
+	t.Run("lowering memory is accepted", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := footprintNode(ns, "res-nc-mem")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.Resources.Requests[corev1.ResourceMemory] = resource.MustParse("16Gi")
+		})
+		g.Expect(err).NotTo(HaveOccurred())
+	})
+
+	// 011 Req 1.3
+	t.Run("a CPU limit is still rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := footprintNode(ns, "res-nc-cpulimit")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("16")}
+		})
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("no CPU limit"))
+	})
+
+	// 011 Req 1.3
+	t.Run("a memory limit unequal to the request is still rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := footprintNode(ns, "res-nc-memlimit")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.Resources.Requests[corev1.ResourceMemory] = resource.MustParse("64Gi")
+			cur.Spec.Resources.Limits = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Gi")}
+		})
+		g.Expect(err).To(HaveOccurred())
+	})
+}

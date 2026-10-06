@@ -227,6 +227,11 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	// Read-only; enforcement is the ensure-data-pvc task's provisioning hold.
 	r.reconcileVolumeAttributesClass(ctx, node)
 
+	// Same discipline for DataVolumeResizeInProgress: a read-only resolve here,
+	// so every path carries it. The write that grows the PVC sits below the
+	// Paused early return (growDataPVC).
+	r.reconcileDataVolumeResize(ctx, node)
+
 	// Same discipline again for EvmServing: a spec-derived False (NotApplicable,
 	// HttpDisabled) or a pod-derived answer, seeded on every path so an EVM-only
 	// node never carries an endpoint its condition does not vouch for. The
@@ -296,6 +301,11 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		}
 		return ctrl.Result{}, nil
 	}
+
+	// A steady-state owned-resource write, like reconcileStatefulSet, but below
+	// the Paused return: spec.paused promises no derived-resource mutation beyond
+	// the StatefulSet. A refused patch reports on the condition, never here.
+	r.growDataPVC(ctx, node)
 
 	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
