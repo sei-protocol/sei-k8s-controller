@@ -41,6 +41,7 @@ const (
 	TaskMarkNotReady               = wire.TaskMarkNotReady
 	TaskStopSeid                   = wire.TaskStopSeid
 	TaskAwaitSeidStart             = wire.TaskAwaitSeidStart
+	TaskResetDataKeepSignState     = wire.TaskResetDataKeepSignState
 	TaskResetData                  = wire.TaskResetData
 	TaskEVMDigest                  = wire.TaskEVMDigest
 )

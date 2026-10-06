@@ -3,6 +3,7 @@ package planner
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -23,14 +24,17 @@ const dataResetMaxRetries = 5
 // buildDataResetPlan builds the plan that performs one declarative data reset
 // (spec 009). One sequence serves every case, whether or not the pod rolled:
 //
-//	observe-image -> mark-not-ready -> stop-seid -> reset-data ->
-//	record-data-reset -> mark-ready
+//	observe-image -> mark-not-ready -> stop-seid ->
+//	reset-data-keep-sign-state -> record-data-reset -> mark-ready
 //
 // observe-image waits for the StatefulSet rollout, so the sidecar tasks reach
 // the pod that runs the current template. On a pod already parked at the start
 // gate, mark-not-ready and stop-seid are no-ops. record-data-reset stamps the
 // counter the plan was built for before mark-ready, so the start guard sees the
-// reset as done only for that value.
+// reset as done only for that value. The wipe is submitted as
+// reset-data-keep-sign-state, a type only a sidecar that keeps the sign state
+// accepts: against an older sidecar the submission fails and retries, with seid
+// held, rather than zeroing a validator's sign state.
 func buildDataResetPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	stopUpCheck := noderesource.UpCheckForNode(node)
 	steps := []struct {
@@ -40,7 +44,7 @@ func buildDataResetPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error
 		{task.TaskTypeObserveImage, task.ObserveImageParams{NodeName: node.Name, Namespace: node.Namespace}},
 		{taskTypeMarkNotReady, sidecar.MarkNotReadyTask{}},
 		{taskTypeStopSeid, sidecar.StopSeidTask{UpCheck: &stopUpCheck}},
-		{taskTypeResetData, sidecar.ResetDataTask{}},
+		{sidecar.TaskTypeResetDataKeepSignState, sidecar.ResetDataKeepSignStateTask{}},
 		{task.TaskTypeRecordDataReset, task.RecordDataResetParams{Generation: node.Spec.DataResetGeneration}},
 		{TaskMarkReady, sidecar.MarkReadyTask{}},
 	}
@@ -52,7 +56,7 @@ func buildDataResetPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error
 		if err != nil {
 			return nil, err
 		}
-		if s.taskType == taskTypeResetData {
+		if s.taskType == sidecar.TaskTypeResetDataKeepSignState {
 			t.MaxRetries = dataResetMaxRetries
 		}
 		tasks = append(tasks, t)
@@ -150,10 +154,34 @@ func observeTerminalDataResetPlan(node *seiv1alpha1.SeiNode, plan *seiv1alpha1.T
 		setDataResetCondition(node, metav1.ConditionFalse, seiv1alpha1.ReasonResetComplete,
 			fmt.Sprintf("data reset complete for dataResetGeneration=%d", node.Status.DataResetGeneration))
 	case seiv1alpha1.TaskPlanFailed:
+		if startDeferred(plan) {
+			// The wipe ran and the counter was recorded; only the final start
+			// was refused, because the counter rose again or a hold arrived.
+			// The next plan handles that; the reset itself succeeded.
+			setDataResetCondition(node, metav1.ConditionFalse, seiv1alpha1.ReasonResetComplete,
+				fmt.Sprintf("data reset complete for dataResetGeneration=%d; start deferred: %s",
+					node.Status.DataResetGeneration, plan.FailedTaskDetail.Error))
+			return
+		}
 		setDataResetCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonResetFailed,
 			fmt.Sprintf("data reset for dataResetGeneration=%d failed, seid stays held and the controller retries: %s",
 				node.Spec.DataResetGeneration, planFailureMessage(plan)))
 	}
+}
+
+// startDeferred reports whether plan failed only because the start guard
+// refused its final mark-ready, after every earlier task completed.
+func startDeferred(plan *seiv1alpha1.TaskPlan) bool {
+	d := plan.FailedTaskDetail
+	if d == nil || d.Type != TaskMarkReady || !strings.Contains(d.Error, task.StartGuardRefusal) {
+		return false
+	}
+	for _, t := range plan.Tasks {
+		if t.Type != TaskMarkReady && t.Status != seiv1alpha1.TaskComplete {
+			return false
+		}
+	}
+	return true
 }
 
 func setDataResetCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason, message string) {

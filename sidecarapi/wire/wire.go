@@ -49,6 +49,12 @@ const (
 	// gate again right after seid starts. Read-only.
 	TaskAwaitSeidStart TaskType = "await-seid-start"
 
+	// TaskResetDataKeepSignState is reset-data under a name that promises the
+	// sign state survives. The declarative reset (spec 009) uses it so that a
+	// sidecar built before that guarantee rejects the type as unknown, and the
+	// reset stops with seid held instead of zeroing a validator's sign state.
+	TaskResetDataKeepSignState TaskType = "reset-data-keep-sign-state"
+
 	// TaskEVMDigest runs `seidb evm-logical-digest` against the node's own
 	// store directories and returns the report JSON on the task result.
 	TaskEVMDigest TaskType = "evm-digest"

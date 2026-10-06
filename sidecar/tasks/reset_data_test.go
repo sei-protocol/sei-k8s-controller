@@ -211,6 +211,34 @@ func TestResetData_StateFilePath(t *testing.T) {
 	}
 }
 
+// 009 Req 4.4: sei-config's underscored spelling counts too, and a value the
+// reset cannot read is a refusal. (Review finding: the guard first read only
+// the hyphenated spelling.)
+func TestResetData_StateFileSpellingsAndShapes(t *testing.T) {
+	cases := []struct {
+		name   string
+		config string
+		refuse bool
+	}{
+		{"underscored, moved", "[priv_validator]\nstate_file = \"data/pvs.json\"\n", true},
+		{"underscored, default", "[priv_validator]\nstate_file = \"data/priv_validator_state.json\"\n", false},
+		{"mixed key, moved", "[priv-validator]\nstate_file = \"data/pvs.json\"\n", true},
+		{"value not a string", "[priv-validator]\nstate-file = 7\n", true},
+		{"section not a table", "priv_validator = \"x\"\n", true},
+		{"empty value", "[priv-validator]\nstate-file = \"\"\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := seedHome(t)
+			mustWrite(t, filepath.Join(home, "config", "config.toml"), tc.config)
+			_, err := newResetDataer(home, false).Handler()(context.Background(), nil)
+			if tc.refuse != (err != nil) {
+				t.Fatalf("refuse = %v, err = %v", tc.refuse, err)
+			}
+		})
+	}
+}
+
 // An unreadable config.toml means the reset cannot tell where the sign state
 // is, so it refuses rather than guess.
 func TestResetData_RefusesUnreadableConfig(t *testing.T) {

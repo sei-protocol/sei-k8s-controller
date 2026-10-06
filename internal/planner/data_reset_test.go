@@ -11,6 +11,7 @@ import (
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
+	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
 )
 
 // Spec 009 (declarative data reset): planner-side coverage. Each test names
@@ -40,7 +41,7 @@ func TestDataReset_PlanOrder(t *testing.T) {
 		task.TaskTypeObserveImage,
 		taskTypeMarkNotReady,
 		taskTypeStopSeid,
-		taskTypeResetData,
+		sidecar.TaskTypeResetDataKeepSignState,
 		task.TaskTypeRecordDataReset,
 		TaskMarkReady,
 	}))
@@ -95,7 +96,7 @@ func TestDataReset_NotRunningAbsorbsCounter(t *testing.T) {
 
 	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 	g.Expect(node.Status.Plan).NotTo(BeNil())
-	g.Expect(planTaskTypes(node.Status.Plan)).NotTo(ContainElement(taskTypeResetData))
+	g.Expect(planTaskTypes(node.Status.Plan)).NotTo(ContainElement(sidecar.TaskTypeResetDataKeepSignState))
 }
 
 // 009 Req 5 / SC-008: the condition moves Pending -> Running -> Complete and

@@ -180,27 +180,45 @@ func (d *ResetDataer) refuseDataUsers() error {
 	return nil
 }
 
-// refuseMovedSignState fails the reset when config.toml points
-// [priv-validator] state-file anywhere but data/priv_validator_state.json. The
-// wipe keeps the sign state by name; under another path inside data/ it would
-// delete it, and seid would start on a zero state.
+// refuseMovedSignState fails the reset when config.toml points the sign state
+// anywhere but data/priv_validator_state.json. The wipe keeps the sign state by
+// name; under another path inside data/ it would delete it, and seid would
+// start on a zero state. Both spellings count: CometBFT's
+// [priv-validator] state-file and sei-config's [priv_validator] state_file. A
+// value that is present but not a string is a refusal too.
 func (d *ResetDataer) refuseMovedSignState() error {
 	configPath := filepath.Join(d.homeDir, "config", "config.toml")
 	doc, err := tomlpatch.ReadTOML(configPath)
 	if err != nil {
 		return fmt.Errorf("reset-data: reading %s to locate the sign state: %w", configPath, err)
 	}
-	section, _ := doc["priv-validator"].(map[string]any)
-	configured, _ := section["state-file"].(string)
-	if configured == "" {
-		return nil
+	for _, sectionName := range []string{"priv-validator", "priv_validator"} {
+		raw, present := doc[sectionName]
+		if !present {
+			continue
+		}
+		section, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("reset-data: config.toml [%s] is not a table; refusing rather than guess where the sign state is", sectionName)
+		}
+		for _, key := range []string{"state-file", "state_file"} {
+			value, present := section[key]
+			if !present {
+				continue
+			}
+			configured, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("reset-data: config.toml [%s] %s is not a string; refusing rather than guess where the sign state is", sectionName, key)
+			}
+			if configured == "" || filepath.Clean(configured) == defaultPrivValidatorStatePath ||
+				filepath.Clean(configured) == filepath.Join(d.homeDir, defaultPrivValidatorStatePath) {
+				continue
+			}
+			return fmt.Errorf("reset-data: config.toml sets [%s] %s = %q; the reset keeps only %s, so it refuses rather than risk deleting the sign state",
+				sectionName, key, configured, defaultPrivValidatorStatePath)
+		}
 	}
-	if filepath.Clean(configured) == defaultPrivValidatorStatePath ||
-		filepath.Clean(configured) == filepath.Join(d.homeDir, defaultPrivValidatorStatePath) {
-		return nil
-	}
-	return fmt.Errorf("reset-data: config.toml sets [priv-validator] state-file = %q; the reset keeps only %s, so it refuses rather than risk deleting the sign state",
-		configured, defaultPrivValidatorStatePath)
+	return nil
 }
 
 // findDataUsers scans /proc for processes whose comm is in dataUserProcesses.
