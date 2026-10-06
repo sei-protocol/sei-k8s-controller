@@ -42,6 +42,7 @@ const (
 	TaskStopSeid                   = wire.TaskStopSeid
 	TaskResetData                  = wire.TaskResetData
 	TaskEVMDigest                  = wire.TaskEVMDigest
+	TaskUnjail                     = wire.TaskUnjail
 )
 
 // Task is a unit of work submitted by the controller. When ID is set, the

@@ -13,11 +13,11 @@ func TestPopulateGovUpdateInstantiateConfigOutputs(t *testing.T) {
 			Kind: seiv1alpha1.SeiNodeTaskKindGovUpdateInstantiateConfig,
 		},
 	}
-	if !isGovKind(cr.Spec.Kind) {
-		t.Fatal("GovUpdateInstantiateConfig must be classified as a gov kind")
+	if !isSignTxKind(cr.Spec.Kind) {
+		t.Fatal("GovUpdateInstantiateConfig must be classified as a sign-tx kind")
 	}
 
-	populateGovOutputs(cr, &wire.GovTxResult{
+	populateTxOutputs(cr, &wire.GovTxResult{
 		TxHash:     "ABC",
 		Height:     123,
 		ProposalID: 259,

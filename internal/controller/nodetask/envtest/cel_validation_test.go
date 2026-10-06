@@ -156,3 +156,37 @@ func TestCEL_KindImmutable_RestartSeidToMarkReady(t *testing.T) {
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("kind is immutable"))
 }
+
+// Unjail with its matching payload is accepted.
+func TestCEL_Unjail_Accepted(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "unjail-ok", seiv1alpha1.SeiNodeTaskKindUnjail)
+	snt.Spec.Unjail = &seiv1alpha1.UnjailPayload{ChainID: "sei-test", Fees: "4000usei", Gas: 200000}
+	g.Expect(testCli.Create(testCtx, snt)).To(Succeed())
+}
+
+// kind=Unjail with NO payload is rejected.
+func TestCEL_Unjail_NoPayload_Rejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "unjail-nopayload", seiv1alpha1.SeiNodeTaskKindUnjail)
+	err := testCli.Create(testCtx, snt)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(Or(
+		ContainSubstring("exactly one"),
+		ContainSubstring("unjail is required"),
+	))
+}
+
+// kind=Unjail with a second payload is rejected by the exactly-one union rule.
+func TestCEL_Unjail_MultiplePayloads_Rejected(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	snt := baseTask(ns, "unjail-two-payloads", seiv1alpha1.SeiNodeTaskKindUnjail)
+	snt.Spec.Unjail = &seiv1alpha1.UnjailPayload{ChainID: "sei-test", Fees: "4000usei", Gas: 200000}
+	snt.Spec.MarkReady = &seiv1alpha1.MarkReadyPayload{}
+	err := testCli.Create(testCtx, snt)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("exactly one"))
+}

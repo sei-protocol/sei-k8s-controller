@@ -47,6 +47,10 @@ const (
 	// TaskEVMDigest runs `seidb evm-logical-digest` against the node's own
 	// store directories and returns the report JSON on the task result.
 	TaskEVMDigest TaskType = "evm-digest"
+
+	// TaskUnjail signs MsgUnjail as the validator's operator account. Its
+	// result is a GovTxResult: the sign-tx completion contract is shared.
+	TaskUnjail TaskType = "unjail"
 )
 
 // VoteOption mirrors cosmos gov v1beta1 VoteOption values so callers can parse
