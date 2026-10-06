@@ -236,7 +236,7 @@ var registry = map[string]taskDeserializer{
 	TaskTypeObserveImage:            deserializeObserveImage,
 	TaskTypeRecordDataReset:         deserializeRecordDataReset,
 	TaskTypeRecordMaintenanceHold:   deserializeRecordMaintenanceHold,
-	TaskTypeStartSeidOnce:           deserializeStartSeidOnce, // start-guarded by resets only: start_guard.go
+	TaskTypeStartSeidOnce:           deserializeStartSeidOnce, // start-guarded by resets and a non-AfterExit request: start_guard.go
 	TaskTypeUpdateNodeImage:         deserializeUpdateNodeImage,
 	TaskTypeValidateSigningKey:      deserializeValidateSigningKey,
 	TaskTypeValidateNodeKey:         deserializeValidateNodeKey,

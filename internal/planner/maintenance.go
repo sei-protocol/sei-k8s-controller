@@ -39,16 +39,17 @@ type planStep struct {
 // parks at its next exit. observe-image waits for any rollout, so the sidecar
 // tasks reach the pod that runs the current template.
 //
-// A hold in effect is level-triggered against the observed gate: when the
-// sidecar reports ready (the gate is open) under a hold, the hold is rebuilt as
-// if from none. That closes a gate a failed start-once plan left open, which a
-// want == have short-circuit alone would never revisit.
+// A hold in effect is level-triggered against the observed gate: when a hold is
+// requested and the sidecar reports ready (the gate is open) under the hold in
+// effect, the hold in effect is applied again first, as if from none. That
+// closes a gate a failed start-once plan left open, whether or not the request
+// still differs; the next plan then moves the hold with the gate closed.
 func buildHoldPlan(node *seiv1alpha1.SeiNode, want, have seiv1alpha1.MaintenanceHold) (*seiv1alpha1.TaskPlan, error) {
-	if want == have {
-		if want == "" || !sidecarGateOpen(node) {
-			return nil, nil
-		}
-		have = ""
+	switch {
+	case want != "" && have != "" && sidecarGateOpen(node):
+		want, have = have, ""
+	case want == have:
+		return nil, nil
 	}
 	observe := planStep{task.TaskTypeObserveImage, task.ObserveImageParams{NodeName: node.Name, Namespace: node.Namespace}}
 	stopUpCheck := noderesource.UpCheckForNode(node)

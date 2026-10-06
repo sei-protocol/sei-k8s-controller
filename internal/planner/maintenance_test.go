@@ -283,21 +283,31 @@ func TestHold_StartOnceRefusedAfterFlipToImmediate(t *testing.T) {
 // closes again even though the requested and in-effect holds agree.
 func TestHold_OpenGateUnderHoldIsClosed(t *testing.T) {
 	cases := []struct {
-		hold  seiv1alpha1.MaintenanceHold
-		types []string
+		name       string
+		want, have seiv1alpha1.MaintenanceHold
+		types      []string
+		records    seiv1alpha1.MaintenanceHold
 	}{
-		{holdImmediate, []string{taskTypeMarkNotReady, taskTypeStopSeid, task.TaskTypeRecordMaintenanceHold}},
-		{holdAfterExit, []string{taskTypeMarkNotReady, task.TaskTypeRecordMaintenanceHold}},
+		{"Immediate in effect", holdImmediate, holdImmediate,
+			[]string{taskTypeMarkNotReady, taskTypeStopSeid, task.TaskTypeRecordMaintenanceHold}, holdImmediate},
+		{"AfterExit in effect", holdAfterExit, holdAfterExit,
+			[]string{taskTypeMarkNotReady, task.TaskTypeRecordMaintenanceHold}, holdAfterExit},
+		// seidroid #595 follow-up: a start-once plan failed after opening the
+		// gate. The Immediate hold in effect is applied again first; start-once
+		// is retried on the next plan, with the gate closed.
+		{"start-once failed, gate open", holdAfterExit, holdImmediate,
+			[]string{taskTypeMarkNotReady, taskTypeStopSeid, task.TaskTypeRecordMaintenanceHold}, holdImmediate},
 	}
 	for _, tc := range cases {
-		t.Run(string(tc.hold), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			g := NewWithT(t)
-			node := heldNode(tc.hold, tc.hold)
+			node := heldNode(tc.want, tc.have)
 			setSidecarReadyCondition(node, metav1.ConditionTrue, "Ready", "sidecar returned 200")
 
 			g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 			g.Expect(node.Status.Plan).NotTo(BeNil())
 			g.Expect(planTaskTypes(node.Status.Plan)).To(Equal(tc.types))
+			g.Expect(recordedHold(t, node.Status.Plan)).To(Equal(tc.records))
 		})
 	}
 }
