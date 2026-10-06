@@ -70,8 +70,12 @@ spec:
               spec.executionEngine when present and falls back to the deprecated
               spec.consensus.evmOnly otherwise — so migrating an existing node from the bool
               to the typed field is an accepted no-op while a real mode change is caught.
-              dataVolume.storage size presence is create-only: presence parity here (a
-              sub-type rule skips a first-time set). Size only — import still adds.
+              dataVolume.storage size presence: parity here, at spec level (a sub-type rule
+              skips a first-time set). Size only — import still adds. Without
+              spec.nodeConfig the presence is create-only. With it the size may be added
+              later, because the node reconciler grows the owned PVC to it (growDataPVC),
+              but never removed: a removed size would fall back to the per-mode default
+              while the volume keeps whatever it grew to.
               The size VALUE is pinned per Kind here, at spec level, because the shared
               sub-type rule cannot see spec.nodeConfig; the sub-type rule only refuses a
               shrink, on both Kinds. A node with spec.nodeConfig may grow its volume: the
@@ -277,8 +281,9 @@ spec:
                   When omitted, the controller creates a PVC using the node's mode-default
                   storage class and size; dataVolume.storage overrides the size (see
                   noderesource.StorageForNode). On a node with spec.nodeConfig the size may
-                  grow after creation, and the controller raises the owned PVC's request to
-                  match; it never shrinks. Elsewhere the size is create-only.
+                  be added or grown after creation, and the controller raises the owned PVC's
+                  request to match; it never shrinks a request, and the size cannot be
+                  removed. Elsewhere the size is create-only.
                 properties:
                   import:
                     description: |-
@@ -1380,15 +1385,25 @@ spec:
                 oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze)
                 ? oldSelf.archive.freeze.height : 0))'
             - message: 'the presence of spec.dataVolume.storage.resources.requests.storage
-                is create-only: it cannot be added to or removed from an existing
-                node — the data PVC is created once at the size set then, so the edit
-                would be inert; delete and recreate the node to change it'
-              rule: ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources)
-                && has(self.dataVolume.storage.resources.requests) && ('storage' in
-                self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume)
+                is create-only on a node without spec.nodeConfig: it cannot be added
+                to or removed from an existing node — the data PVC is created once
+                at the size set then, so the edit would be inert; delete and recreate
+                the node to change it'
+              rule: has(self.nodeConfig) || ((has(self.dataVolume) && has(self.dataVolume.storage)
+                && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests)
+                && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume)
                 && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources)
                 && has(oldSelf.dataVolume.storage.resources.requests) && ('storage'
                 in oldSelf.dataVolume.storage.resources.requests)))
+            - message: 'spec.dataVolume.storage.resources.requests.storage cannot
+                be removed from a node with spec.nodeConfig: the volume keeps the
+                size it grew to, so keep the size set (it may still grow)'
+              rule: '!has(self.nodeConfig) || !(has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage)
+                && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests)
+                && (''storage'' in oldSelf.dataVolume.storage.resources.requests))
+                || (has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources)
+                && has(self.dataVolume.storage.resources.requests) && (''storage''
+                in self.dataVolume.storage.resources.requests))'
             - message: 'spec.dataVolume.storage.resources.requests.storage is create-only
                 on a node without spec.nodeConfig: ensure-data-pvc creates the PVC
                 once and nothing grows it on that path; delete and recreate the node

@@ -83,7 +83,8 @@ func (r *SeiNodeReconciler) reconcileDataVolumeResize(ctx context.Context, node 
 }
 
 // growDataPVC raises the owned data PVC's storage request to the node's
-// growable size. It never lowers a request and never touches an imported or
+// growable size. It never lowers a request — a size added below the claim's
+// current request changes nothing — and never touches an imported or
 // unowned PVC. A refused patch — for example a StorageClass without
 // allowVolumeExpansion — sets ResizeFailed and does not fail the reconcile: the
 // plan work below must still run, and a Running node requeues on
@@ -132,7 +133,7 @@ func growableSize(node *seiv1alpha1.SeiNode) (*resource.Quantity, string) {
 	}
 	want := noderesource.GrowableStorageSize(node)
 	if want == nil {
-		return nil, "spec.dataVolume.storage.resources.requests.storage is unset, so the volume keeps its create-time size"
+		return nil, "spec.dataVolume.storage.resources.requests.storage is unset; set it to grow the volume"
 	}
 	return want, ""
 }

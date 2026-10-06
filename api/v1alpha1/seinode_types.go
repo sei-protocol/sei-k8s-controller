@@ -39,9 +39,14 @@ import (
 // +kubebuilder:validation:XValidation:rule="!(has(self.executionEngine) ? (has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') : (has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)) || !has(self.overrides) || !('network.rpc.listen_address' in self.overrides || 'api.rest.enable' in self.overrides || 'api.grpc.enable' in self.overrides || 'api.grpc_web.enable' in self.overrides || 'evm.http_enabled' in self.overrides)",message="an EVM-only node owns network.rpc.listen_address, api.{rest,grpc,grpc_web}.enable and evm.http_enabled: the EVM-only executor serves no CometBFT RPC, REST or gRPC, and its EVM listener is set via spec.executionEngine.evmOnly.httpEnabled"
 // +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
-// dataVolume.storage size presence is create-only: presence parity here (a
-// sub-type rule skips a first-time set). Size only — import still adds.
-// +kubebuilder:validation:XValidation:rule="((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="the presence of spec.dataVolume.storage.resources.requests.storage is create-only: it cannot be added to or removed from an existing node — the data PVC is created once at the size set then, so the edit would be inert; delete and recreate the node to change it"
+// dataVolume.storage size presence: parity here, at spec level (a sub-type rule
+// skips a first-time set). Size only — import still adds. Without
+// spec.nodeConfig the presence is create-only. With it the size may be added
+// later, because the node reconciler grows the owned PVC to it (growDataPVC),
+// but never removed: a removed size would fall back to the per-mode default
+// while the volume keeps whatever it grew to.
+// +kubebuilder:validation:XValidation:rule="has(self.nodeConfig) || ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="the presence of spec.dataVolume.storage.resources.requests.storage is create-only on a node without spec.nodeConfig: it cannot be added to or removed from an existing node — the data PVC is created once at the size set then, so the edit would be inert; delete and recreate the node to change it"
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !(has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)) || (has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests))",message="spec.dataVolume.storage.resources.requests.storage cannot be removed from a node with spec.nodeConfig: the volume keeps the size it grew to, so keep the size set (it may still grow)"
 // The size VALUE is pinned per Kind here, at spec level, because the shared
 // sub-type rule cannot see spec.nodeConfig; the sub-type rule only refuses a
 // shrink, on both Kinds. A node with spec.nodeConfig may grow its volume: the
@@ -200,8 +205,9 @@ type SeiNodeSpec struct {
 	// When omitted, the controller creates a PVC using the node's mode-default
 	// storage class and size; dataVolume.storage overrides the size (see
 	// noderesource.StorageForNode). On a node with spec.nodeConfig the size may
-	// grow after creation, and the controller raises the owned PVC's request to
-	// match; it never shrinks. Elsewhere the size is create-only.
+	// be added or grown after creation, and the controller raises the owned PVC's
+	// request to match; it never shrinks a request, and the size cannot be
+	// removed. Elsewhere the size is create-only.
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
 

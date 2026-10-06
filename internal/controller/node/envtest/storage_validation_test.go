@@ -500,9 +500,9 @@ func TestDataVolumeStorage_VACCreateOnlyGate(t *testing.T) {
 	})
 }
 
-// Spec 011 Requirement 2: on a node with spec.nodeConfig the size may grow and
-// never shrink; presence stays create-only. A node without it keeps the
-// create-only gate above (011 Req 2.3).
+// Spec 011 Requirement 2: on a node with spec.nodeConfig the size may be added
+// and may grow, but never shrinks and is never removed. A node without it keeps
+// the create-only gate above (011 Req 2.3, 2.6).
 func TestDataVolumeStorage_NodeConfigGrowth(t *testing.T) {
 	sizedNodeConfigNode := func(ns, name, size string) *seiv1alpha1.SeiNode {
 		node := nodeConfigNode(ns, name)
@@ -544,7 +544,7 @@ func TestDataVolumeStorage_NodeConfigGrowth(t *testing.T) {
 	})
 
 	// 011 Req 2.5
-	t.Run("adding a size after create is rejected", func(t *testing.T) {
+	t.Run("adding a size after create is accepted", func(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
 
@@ -558,8 +558,7 @@ func TestDataVolumeStorage_NodeConfigGrowth(t *testing.T) {
 				}},
 			}}
 		})
-		g.Expect(err).To(HaveOccurred(), "presence stays create-only on a nodeConfig node")
-		g.Expect(err.Error()).To(ContainSubstring("create-only"))
+		g.Expect(err).NotTo(HaveOccurred(), "a nodeConfig node may add a size; the controller grows the claim to it")
 	})
 
 	// 011 Req 2.5
@@ -573,8 +572,43 @@ func TestDataVolumeStorage_NodeConfigGrowth(t *testing.T) {
 		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
 			cur.Spec.DataVolume = nil
 		})
-		g.Expect(err).To(HaveOccurred(), "presence stays create-only on a nodeConfig node")
-		g.Expect(err.Error()).To(ContainSubstring("create-only"))
+		g.Expect(err).To(HaveOccurred(), "a nodeConfig node cannot drop its size")
+		g.Expect(err.Error()).To(ContainSubstring("cannot be removed from a node with spec.nodeConfig"))
+	})
+
+	// 011 Req 2.5: removing only the size, keeping the storage block, is the
+	// same removal.
+	t.Run("removing the size but keeping the storage block is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := sizedNodeConfigNode(ns, "dv-nc-remove-size", "2Ti")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.DataVolume.Storage = &seiv1alpha1.DataVolumeStorage{}
+		})
+		g.Expect(err).To(HaveOccurred(), "a nodeConfig node cannot drop its size")
+		g.Expect(err.Error()).To(ContainSubstring("cannot be removed from a node with spec.nodeConfig"))
+	})
+
+	// 011 Req 2.6: the relaxation is nodeConfig-only.
+	t.Run("adding a size without nodeConfig is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		node := nodeWithStorageSize(ns, "dv-plain-add", "")
+		g.Expect(testCli.Create(testCtx, node)).To(Succeed())
+
+		err := updateNodeWithRetry(t, client.ObjectKeyFromObject(node), func(cur *seiv1alpha1.SeiNode) {
+			cur.Spec.DataVolume = &seiv1alpha1.DataVolumeSpec{Storage: &seiv1alpha1.DataVolumeStorage{
+				Resources: &seiv1alpha1.VolumeClaimResources{Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("2Ti"),
+				}},
+			}}
+		})
+		g.Expect(err).To(HaveOccurred(), "presence stays create-only without nodeConfig")
+		g.Expect(err.Error()).To(ContainSubstring("create-only on a node without spec.nodeConfig"))
 	})
 
 	// The bare-int re-encode must not trip the grow-only rule either.

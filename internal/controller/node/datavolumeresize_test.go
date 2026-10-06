@@ -214,6 +214,27 @@ func TestGrowDataPVC_NeverLowers(t *testing.T) {
 	g.Expect(drainEvents(r)).To(BeEmpty())
 }
 
+// 011 Req 2.5 with Req 3.2: a size added after creation below the claim's
+// current request changes nothing, and the condition reads ResizeComplete
+// because the capacity already meets it.
+func TestGrowDataPVC_AddedSizeBelowRequestLeavesClaimAlone(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	// The claim was provisioned at the per-mode default before any size was set;
+	// the operator then adds a smaller explicit size.
+	node := resizeNode("dvr-added-below", true, "1Ti")
+	r, c := newNodeReconciler(t, node, dataPVC(node, "2Ti", "2Ti", true))
+
+	r.reconcileDataVolumeResize(ctx, node)
+	r.growDataPVC(ctx, node)
+
+	g.Expect(pvcRequest(t, c, node)).To(Equal("2Ti"), "an added size below the request must not lower it")
+	g.Expect(drainEvents(r)).To(BeEmpty(), "nothing was written, so nothing is reported")
+	cond := resizeCondition(node)
+	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonDataVolumeResizeComplete))
+}
+
 // 011 Req 3.3: an unowned claim is never written, and neither is a claim on a
 // node without nodeConfig.
 func TestGrowDataPVC_LeavesOtherClaimsAlone(t *testing.T) {
