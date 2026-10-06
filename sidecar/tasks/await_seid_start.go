@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/sei-protocol/seilog"
@@ -10,6 +11,13 @@ import (
 )
 
 var awaitSeidStartLog = seilog.NewLogger("seictl", "task", "await-seid-start")
+
+// awaitSeidStartTimeout bounds the wait. The start gate's wait loop sees
+// mark-ready within about 5s, so a seid that has not started after this long
+// never will on this pod: the pod rolled, or the gate closed again. The task
+// fails, the plan fails, and the planner builds the start-once plan again
+// against the current pod, rather than holding the node's only plan slot.
+const awaitSeidStartTimeout = 2 * time.Minute
 
 // awaitSeidStartPollInterval is how often the task looks for `seid start`.
 // The start gate's wait loop polls healthz every 5s, so seid starts within
@@ -23,6 +31,7 @@ const awaitSeidStartPollInterval = 250 * time.Millisecond
 type SeidStartAwaiter struct {
 	find         func() bool
 	pollInterval time.Duration
+	timeout      time.Duration
 }
 
 // NewSeidStartAwaiter builds a SeidStartAwaiter over the pod's /proc.
@@ -33,13 +42,17 @@ func NewSeidStartAwaiter() *SeidStartAwaiter {
 			return err == nil
 		},
 		pollInterval: awaitSeidStartPollInterval,
+		timeout:      awaitSeidStartTimeout,
 	}
 }
 
 // Handler returns an engine.TaskHandler for the await-seid-start task type.
-// Params are empty. It returns when seid runs, or with the context's error.
+// Params are empty. It returns when seid runs, and fails after the timeout or
+// when the context ends.
 func (a *SeidStartAwaiter) Handler() engine.TaskHandler {
 	return engine.TypedHandler(func(ctx context.Context, _ struct{}) error {
+		ctx, cancel := context.WithTimeout(ctx, a.timeout)
+		defer cancel()
 		ticker := time.NewTicker(a.pollInterval)
 		defer ticker.Stop()
 		for {
@@ -49,7 +62,7 @@ func (a *SeidStartAwaiter) Handler() engine.TaskHandler {
 			}
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf("await-seid-start: seid start not running after %s: %w", a.timeout, ctx.Err())
 			case <-ticker.C:
 			}
 		}

@@ -229,3 +229,27 @@ func TestResolveMaintenance(t *testing.T) {
 		})
 	}
 }
+
+// Review finding: a hold set after the init plan was built must not fail the
+// node. The init plan's mark-ready passes, the node reaches Running, and the
+// next plan is the hold plan.
+func TestHold_SetMidInitDoesNotFailNode(t *testing.T) {
+	g := NewWithT(t)
+	s := testScheme(t)
+	node := withNodeConfig(pendingNode(func(n *seiv1alpha1.SeiNode) { n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{} }))
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	plan := node.Status.Plan
+	g.Expect(plan.FailedPhase).To(Equal(seiv1alpha1.PhaseFailed), "an init plan failure is terminal, which is why this matters")
+	completeTasksBefore(plan, len(plan.Tasks)-1)
+
+	node.Spec.Maintenance = &seiv1alpha1.MaintenanceSpec{Hold: holdImmediate}
+
+	mock := &mockSidecarClient{}
+	_, err := nodeExecutor(fake.NewClientBuilder().WithScheme(s), s, mock).ExecutePlan(context.Background(), node, plan)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
+	g.Expect(node.Status.Phase).To(Equal(seiv1alpha1.PhaseRunning))
+
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	g.Expect(isMaintenancePlan(node.Status.Plan)).To(BeTrue())
+}

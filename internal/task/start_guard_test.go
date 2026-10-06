@@ -27,7 +27,7 @@ func (m *countingSidecar) SubmitTask(ctx context.Context, req sidecar.TaskReques
 }
 
 func nodeConfigNode(spec, handled int64) *seiv1alpha1.SeiNode {
-	return &seiv1alpha1.SeiNode{
+	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "rpc-0", Namespace: "default"},
 		Spec: seiv1alpha1.SeiNodeSpec{
 			NodeConfig: &seiv1alpha1.NodeConfig{
@@ -36,8 +36,9 @@ func nodeConfigNode(spec, handled int64) *seiv1alpha1.SeiNode {
 			},
 			DataResetGeneration: spec,
 		},
-		Status: seiv1alpha1.SeiNodeStatus{DataResetGeneration: handled},
+		Status: seiv1alpha1.SeiNodeStatus{DataResetGeneration: handled, Phase: seiv1alpha1.PhaseRunning},
 	}
+	return node
 }
 
 // 009 Req 3: the start guard blocks only while a reset is pending.
@@ -189,4 +190,17 @@ func TestRecordMaintenanceHold(t *testing.T) {
 		g.Expect(exec.Execute(context.Background())).To(Succeed())
 		g.Expect(node.Status.MaintenanceHold).To(Equal(hold))
 	}
+}
+
+// Review finding: a hold set while an init plan runs must not fail the node.
+// The hold half of the guard acts only on a Running node.
+func TestStartGuard_HoldInertBeforeRunning(t *testing.T) {
+	g := NewWithT(t)
+	node := nodeConfigNode(0, 0)
+	node.Spec.Maintenance = &seiv1alpha1.MaintenanceSpec{Hold: seiv1alpha1.MaintenanceHoldImmediate}
+	node.Status.Phase = seiv1alpha1.PhaseInitializing
+	g.Expect(task.StartBlocked(node)).To(BeEmpty())
+
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	g.Expect(task.StartBlocked(node)).To(ContainSubstring("maintenance hold"))
 }

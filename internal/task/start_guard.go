@@ -23,11 +23,17 @@ func DataResetPending(node *seiv1alpha1.SeiNode) bool {
 // every path that can start seid obeys, so a plan built before the spec changed,
 // or a MarkReady SeiNodeTask, cannot release seid onto data a reset has not
 // cleared yet, or out from under a maintenance hold.
+//
+// The hold half acts only on a Running node. An init plan fails the node
+// terminally (FailedPhase=Failed), so refusing its mark-ready because a hold
+// arrived mid-init would destroy the node; instead seid may start once, and the
+// hold plan stops it when the node reaches Running. A hold set before the init
+// plan is built parks the node without starting it (parkInsteadOfRelease).
 func StartBlocked(node *seiv1alpha1.SeiNode) string {
 	if reason := resetBlocks(node); reason != "" {
 		return reason
 	}
-	if hold := node.Spec.HoldRequested(); hold != "" {
+	if hold := node.Spec.HoldRequested(); hold != "" && node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return fmt.Sprintf("maintenance hold %s is set", hold)
 	}
 	return ""

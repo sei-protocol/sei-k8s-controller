@@ -12,6 +12,7 @@ func TestAwaitSeidStart_CompletesWhenSeidRuns(t *testing.T) {
 	a := &SeidStartAwaiter{
 		find:         func() bool { calls++; return calls >= 3 },
 		pollInterval: time.Millisecond,
+		timeout:      time.Minute,
 	}
 	if _, err := a.Handler()(context.Background(), nil); err != nil {
 		t.Fatalf("await-seid-start: %v", err)
@@ -22,10 +23,19 @@ func TestAwaitSeidStart_CompletesWhenSeidRuns(t *testing.T) {
 }
 
 func TestAwaitSeidStart_StopsOnContext(t *testing.T) {
-	a := &SeidStartAwaiter{find: func() bool { return false }, pollInterval: time.Millisecond}
+	a := &SeidStartAwaiter{find: func() bool { return false }, pollInterval: time.Millisecond, timeout: time.Minute}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if _, err := a.Handler()(ctx, nil); err == nil {
 		t.Fatal("expected the context error while seid never starts")
+	}
+}
+
+// Review finding: an unbounded wait held the plan slot forever when the pod
+// rolled before seid started. The wait now fails after its timeout.
+func TestAwaitSeidStart_FailsAfterTimeout(t *testing.T) {
+	a := &SeidStartAwaiter{find: func() bool { return false }, pollInterval: time.Millisecond, timeout: 10 * time.Millisecond}
+	if _, err := a.Handler()(context.Background(), nil); err == nil {
+		t.Fatal("expected a timeout failure while seid never starts")
 	}
 }
