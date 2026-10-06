@@ -91,6 +91,7 @@ and confirm the PVC's capacity and the file system grow while seid runs.
 - No NodePool can place the new footprint in the volume's availability zone: the new pod stays Pending, and the node is down. The runbook MUST tell the operator to provision capacity first for a validator.
 - Several validators change footprint in one commit: they all roll at once. The runbook MUST limit one commit to the voting power the chain can lose.
 - The storage provider refuses or delays the expansion, for example while a previous volume change completes: the condition stays `True/Resizing` and carries the PVC's message.
+- A node created without a disk size uses the mode default. The operator adds a size to grow it. A size below the PVC's request changes nothing, because the controller never lowers a request.
 - The operator raises the disk size again before the first growth completes: the controller raises the PVC request again, and the provider applies it when it can.
 - The PVC's StorageClass does not allow expansion: the API server refuses the PVC update, and the condition reads `True/ResizeFailed` with that error.
 - An imported PVC: the node has no disk-size field, so this spec does not apply. The runbook owns it.
@@ -121,7 +122,8 @@ and confirm the PVC's capacity and the file system grow while seid runs.
 2. WHERE a SeiNode has `spec.nodeConfig`, THE API server SHALL reject a disk size lower than the previous value.
 3. WHERE a SeiNode has no `spec.nodeConfig`, THE API server SHALL keep the disk size create-only.
 4. THE API server SHALL keep the disk size create-only on the SeiNetwork.
-5. THE API server SHALL keep rejecting an update that adds or removes the disk size.
+5. WHERE a SeiNode has `spec.nodeConfig`, THE API server SHALL accept an update that adds the disk size, and SHALL reject one that removes it.
+6. WHERE a SeiNode has no `spec.nodeConfig`, THE API server SHALL keep rejecting an update that adds or removes the disk size.
 
 ### Requirement 3: The controller grows the owned PVC
 
