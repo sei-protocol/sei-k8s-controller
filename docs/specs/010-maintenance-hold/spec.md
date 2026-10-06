@@ -204,9 +204,9 @@ reaches `Running` with seid parked.
 5. WHILE a hold is set, THE controller SHALL NOT build a plan that contains `mark-ready`, except the start-once step of a hold plan.
 6. WHILE a hold is set, THE controller SHALL keep applying the StatefulSet, so a template change rolls the pod and the new pod stays parked.
 7. WHEN the hold plan completes, THE controller SHALL set `status.maintenanceHold` to the hold value the plan was built for.
-8. WHILE `status.maintenanceHold` equals the hold, THE controller SHALL NOT build a hold plan.
+8. WHILE `status.maintenanceHold` equals the hold and the sidecar does not report the start gate open, THE controller SHALL NOT build a hold plan.
 9. WHERE a hold is set when the node initializes, THE controller SHALL build the init plan without its final `mark-ready`, and SHALL set `status.maintenanceHold` to `Immediate` when the plan completes.
-10. WHILE a hold is in effect and the sidecar reports the start gate open, THE controller SHALL build the hold plan again, so the gate closes.
+10. WHILE a hold is requested, a hold is in effect, and the sidecar reports the start gate open, THE controller SHALL first build the plan that applies the hold in effect again, so the gate closes. The next plan then moves the hold to the requested value with the gate closed.
 
 ### Requirement 3: The hold composes with the data reset
 
