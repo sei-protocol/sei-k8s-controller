@@ -181,12 +181,17 @@ reset plan runs next.
 
 ### User Story 5 - Watch and wait on a reset (Priority: P2)
 
-An operator or a runbook waits for reset N to finish with
-`kubectl wait seinode/<name> --for=jsonpath='{.status.dataResetGeneration}'=N`,
+An operator or a runbook waits until `status.dataResetGeneration` is at least N,
 and reads the `DataResetInProgress` condition to see why a reset is stuck. The
 wait compares counters, not the condition. Right after a merge the condition can
 still read `False` from the previous reset, because the controller has not yet
-seen the new counter. `kubectl wait` does not check `observedGeneration`.
+seen the new counter. The wait is a polling loop, because
+`kubectl wait --for=jsonpath=...=N` tests equality: a later bump can move the
+handled counter past N before the wait reads it, and the wait then never ends.
+
+```bash
+until [ "$(kubectl get seinode -n <ns> <name> -o jsonpath='{.status.dataResetGeneration}')" -ge N ]; do sleep 10; done
+```
 
 **Why this priority**: the merge is the only operator action, so status is the
 only feedback an operator gets.
@@ -281,6 +286,7 @@ path that releases the gate.
 2. IF a plan reaches `mark-ready` while a reset is pending, THEN THE controller SHALL fail that task. The planner then builds the next plan from the current spec.
 3. WHILE a reset is pending, THE controller SHALL fail a `MarkReady` SeiNodeTask that targets the node, and SHALL NOT submit it to the sidecar.
 4. WHILE a reset is pending, THE controller SHALL NOT build a plan that re-marks sidecar readiness.
+5. IF the start guard refuses only the final `mark-ready` of an update plan, THEN THE controller SHALL report the update as complete, with the start deferred, because the roll landed.
 
 ### Requirement 4: A reset keeps the sign state
 
@@ -313,7 +319,7 @@ path that releases the gate.
 6. The condition message SHALL name the reset counter value it refers to.
 7. THE completion contract for reset N SHALL be `status.dataResetGeneration >= N`. Runbooks and seictl SHALL wait on that field, not on the condition.
 8. WHEN the reset plan starts, succeeds, or fails, THE controller SHALL record an event on the SeiNode.
-9. IF the start guard refuses only the reset plan's final `mark-ready`, after the wipe and the handled counter succeeded, THEN THE condition SHALL be `False` with reason `ResetComplete`, and its message SHALL say the start was deferred.
+9. IF the start guard refuses only the reset plan's final `mark-ready`, after the wipe and the handled counter succeeded, THEN THE condition SHALL be `True` with reason `ResetPending` while a newer reset is pending, and `False` with reason `ResetComplete`, its message saying the start was deferred, otherwise. A counter that rose during a reset folds into one more reset; the condition and the events report the newer value.
 
 ### Key Entities
 

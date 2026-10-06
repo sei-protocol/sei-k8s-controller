@@ -123,9 +123,11 @@ Confirm seid stays parked.
 
 ### User Story 4 - Reset a held node (Priority: P2)
 
-An operator merges a reset commit while the node is held. The controller resets
-the data and leaves the node held. The operator can inspect the node before
-release.
+An operator merges a reset commit while the node is held with `Immediate`. The
+controller resets the data and leaves the node held. The operator can inspect the
+node before release. Under `AfterExit`, the reset also leaves seid parked, and the
+controller then starts it once, because `AfterExit` means seid runs until it
+exits.
 
 **Why this priority**: A3 in the runbook saves the hash log before the reset, so
 the operator holds the node, copies the files, then resets.
@@ -135,14 +137,16 @@ counter advances and seid stays parked.
 
 **Acceptance Scenarios**:
 
-1. **Given** a held node, **When** a reset becomes pending, **Then** the controller runs the reset and the node stays held.
+1. **Given** a node held with `Immediate`, **When** a reset becomes pending, **Then** the controller runs the reset and the node stays held.
 
 ---
 
 ### User Story 5 - Create a node parked (Priority: P2)
 
-An operator creates a SeiNode with a hold. The node initializes and stops at the
-start gate before seid first runs. The operator inspects the data, then releases.
+An operator creates a SeiNode with an `Immediate` hold. The node initializes and
+stops at the start gate before seid first runs. The operator inspects the data,
+then releases. A node created with `AfterExit` also initializes parked, and the
+controller then starts it once.
 
 **Why this priority**: the EC2 cutover checks a validator's imported data and sign
 state before the validator signs for the first time.
@@ -152,11 +156,14 @@ reaches `Running` with seid parked.
 
 **Acceptance Scenarios**:
 
-1. **Given** a new SeiNode with a hold, **When** its init plan completes, **Then** seid has not started and the condition reads `True/Held`.
+1. **Given** a new SeiNode with an `Immediate` hold, **When** its init plan completes, **Then** seid has not started and the condition reads `True/Held`.
 
 ### Edge Cases
 
 - A hold set after the node's init plan was built does not stop the init plan from starting seid: the hold acts on the start guard only once the node is `Running`, because an init plan failure is terminal. The hold plan then stops seid.
+- Under an `AfterExit` hold in effect, a pod roll parks seid as an exit does: a template change, a pod delete, an eviction, or the startup-probe restart after about five days. The condition stays `Armed`, and nothing starts seid again. To run a new template up to a halt height, hold with `Immediate` first, then change to `AfterExit` in the commit that changes the template; start-once then runs on the new pod.
+- The operator changes the hold back to `Immediate` while a start-once plan runs: the start-once step refuses, and seid does not start.
+- A start-once plan fails after it opened the gate: the sidecar then reports the gate open under the hold, and the controller closes it again.
 - The pod rolls after `start-seid-once` and before seid starts: the new pod's gate is closed, so seid does not start. `await-seid-start` fails after two minutes, and the controller builds the start-once plan again against the new pod.
 - The operator changes `AfterExit` to `Immediate`: the controller stops seid now.
 - The operator changes `Immediate` to `AfterExit` while seid is parked: seid starts once. The gate closes again a few seconds after `seid start` runs. On atlantic-2 and pacific-1, seid needs minutes to load its state before it can commit a block, so it parks at its next exit. A small harbor chain loads faster, so a rehearsal there can see seid commit before the gate closes.
@@ -193,12 +200,13 @@ reaches `Running` with seid parked.
 1. WHEN an `Immediate` hold is set on a `Running` node, THE controller SHALL run `mark-not-ready` and then `stop-seid`.
 2. WHEN an `AfterExit` hold is set on a `Running` node whose hold in effect is empty, THE controller SHALL run `mark-not-ready` and SHALL NOT stop seid.
 3. WHEN an `AfterExit` hold is set on a node whose hold in effect is `Immediate`, THE controller SHALL start seid once.
-4. WHILE a hold is set and the node is `Running`, THE start guard SHALL refuse `mark-ready` on every path that spec 009 Requirement 3 names, except the start-once step of a hold plan.
+4. WHILE a hold is set and the node is `Running`, THE start guard SHALL refuse `mark-ready` on every path that spec 009 Requirement 3 names, except the start-once step of a hold plan. THE start-once step SHALL refuse unless the requested hold is still `AfterExit`.
 5. WHILE a hold is set, THE controller SHALL NOT build a plan that contains `mark-ready`, except the start-once step of a hold plan.
 6. WHILE a hold is set, THE controller SHALL keep applying the StatefulSet, so a template change rolls the pod and the new pod stays parked.
 7. WHEN the hold plan completes, THE controller SHALL set `status.maintenanceHold` to the hold value the plan was built for.
 8. WHILE `status.maintenanceHold` equals the hold, THE controller SHALL NOT build a hold plan.
 9. WHERE a hold is set when the node initializes, THE controller SHALL build the init plan without its final `mark-ready`, and SHALL set `status.maintenanceHold` to `Immediate` when the plan completes.
+10. WHILE a hold is in effect and the sidecar reports the start gate open, THE controller SHALL build the hold plan again, so the gate closes.
 
 ### Requirement 3: The hold composes with the data reset
 
@@ -233,7 +241,7 @@ reaches `Running` with seid parked.
 
 1. The controller SHALL seed a `MaintenanceInProgress` condition on every SeiNode. `True` is the exception, `False` is the steady state.
 2. WHILE no hold is set, THE condition SHALL be `False` with reason `NotHeld`, or `NotApplicable` on a node without `spec.nodeConfig`.
-3. WHILE a hold is set and differs from `status.maintenanceHold`, THE condition SHALL be `True` with reason `HoldPending`.
+3. WHILE a hold is set and differs from `status.maintenanceHold`, WHILE a hold plan runs, or WHILE the sidecar reports the gate open under a hold, THE condition SHALL be `True` with reason `HoldPending`.
 4. WHILE an `Immediate` hold is in effect, THE condition SHALL be `True` with reason `Held`.
 5. WHILE an `AfterExit` hold is in effect, THE condition SHALL be `True` with reason `Armed`.
 6. WHEN the hold takes effect or the node is released, THE controller SHALL record an event on the SeiNode.
