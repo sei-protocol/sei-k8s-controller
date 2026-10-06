@@ -39,15 +39,30 @@ import (
 // +kubebuilder:validation:XValidation:rule="!(has(self.executionEngine) ? (has(self.executionEngine.mode) && self.executionEngine.mode == 'EvmOnly') : (has(self.consensus) && has(self.consensus.evmOnly) && self.consensus.evmOnly)) || !has(self.overrides) || !('network.rpc.listen_address' in self.overrides || 'api.rest.enable' in self.overrides || 'api.grpc.enable' in self.overrides || 'api.grpc_web.enable' in self.overrides || 'evm.http_enabled' in self.overrides)",message="an EVM-only node owns network.rpc.listen_address, api.{rest,grpc,grpc_web}.enable and evm.http_enabled: the EVM-only executor serves no CometBFT RPC, REST or gRPC, and its EVM listener is set via spec.executionEngine.evmOnly.httpEnabled"
 // +kubebuilder:validation:XValidation:rule="!((has(self.fullNode) && has(self.fullNode.freeze)) || (has(self.archive) && has(self.archive.freeze))) || !has(self.overrides) || (!('chain.halt_height' in self.overrides) && !('chain.halt_time' in self.overrides))",message="a frozen node cannot also set chain.halt_height or chain.halt_time: seid refuses to load the combination"
 // +kubebuilder:validation:XValidation:rule="(has(self.fullNode) && has(self.fullNode.freeze) ? self.fullNode.freeze.height : (has(self.archive) && has(self.archive.freeze) ? self.archive.freeze.height : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ? oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze) ? oldSelf.archive.freeze.height : 0))",message="the effective freeze height is create-only: it cannot be added, removed, or changed on an existing node, including by switching mode; replace the node instead"
-// dataVolume.storage size is create-only: presence parity here (a sub-type rule
-// skips a first-time set), value on the sub-type. Size only — import still adds.
-// +kubebuilder:validation:XValidation:rule="((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="spec.dataVolume.storage.resources.requests.storage is create-only: it cannot be added to or removed from an existing node — the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path), so the edit would be inert; delete and recreate the node to resize"
+// dataVolume.storage size presence: parity here, at spec level (a sub-type rule
+// skips a first-time set). Size only — import still adds. Without
+// spec.nodeConfig the presence is create-only. With it the size may be added
+// later, because the node reconciler grows the owned PVC to it (growDataPVC),
+// but never removed: a removed size would fall back to the per-mode default
+// while the volume keeps whatever it grew to.
+// +kubebuilder:validation:XValidation:rule="has(self.nodeConfig) || ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)))",message="the presence of spec.dataVolume.storage.resources.requests.storage is create-only on a node without spec.nodeConfig: it cannot be added to or removed from an existing node — the data PVC is created once at the size set then, so the edit would be inert; delete and recreate the node to change it"
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !(has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources) && has(oldSelf.dataVolume.storage.resources.requests) && ('storage' in oldSelf.dataVolume.storage.resources.requests)) || (has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources) && has(self.dataVolume.storage.resources.requests) && ('storage' in self.dataVolume.storage.resources.requests))",message="spec.dataVolume.storage.resources.requests.storage cannot be removed from a node with spec.nodeConfig: the volume keeps the size it grew to, so keep the size set (it may still grow)"
+// The size VALUE is pinned per Kind here, at spec level, because the shared
+// sub-type rule cannot see spec.nodeConfig; the sub-type rule only refuses a
+// shrink, on both Kinds. A node with spec.nodeConfig may grow its volume: the
+// node reconciler raises the owned PVC's request to the new size
+// (growDataPVC). Without spec.nodeConfig the size stays create-only, and
+// ensure-data-pvc — Get-then-Create with no update path — is the only writer.
+// +kubebuilder:validation:XValidation:rule="has(self.nodeConfig) || !has(self.dataVolume) || !has(self.dataVolume.storage) || !has(self.dataVolume.storage.resources) || !has(self.dataVolume.storage.resources.requests) || !('storage' in self.dataVolume.storage.resources.requests) || !has(oldSelf.dataVolume) || !has(oldSelf.dataVolume.storage) || !has(oldSelf.dataVolume.storage.resources) || !has(oldSelf.dataVolume.storage.resources.requests) || !('storage' in oldSelf.dataVolume.storage.resources.requests) || quantity(string(self.dataVolume.storage.resources.requests['storage'])).compareTo(quantity(string(oldSelf.dataVolume.storage.resources.requests['storage']))) == 0",message="spec.dataVolume.storage.resources.requests.storage is create-only on a node without spec.nodeConfig: ensure-data-pvc creates the PVC once and nothing grows it on that path; delete and recreate the node to resize, or use spec.nodeConfig, whose volume can grow"
 // The VAC selection's presence half — its own rule rather than a term on the
 // size rule above, so a rejection names the field the operator actually edited.
 // COMPLETENESS: a new DataVolume* field needs BOTH a value rule on its sub-type
 // and a presence term at spec level, on both Kinds.
 // +kubebuilder:validation:XValidation:rule="((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.volumeAttributesClassName)) == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.volumeAttributesClassName)))",message="spec.dataVolume.storage.volumeAttributesClassName is create-only: it cannot be added to or removed from an existing node — the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path) and the VAC name binds there, so the edit would be inert; delete and recreate the node to reselect"
-// resources is create-only, but compared PER-DIMENSION through quantity() — NOT
+// resources is create-only on a node without spec.nodeConfig, and mutable on a
+// node with it: that node's StatefulSet is RollingUpdate, so a footprint change
+// rolls the pod and the reapproval path re-marks the new sidecar ready. The
+// create-only half is compared PER-DIMENSION through quantity() — NOT
 // structural == on the object. The values are int-or-string Quantities, so a
 // node applied with a bare int (cpu: 4) stores an int, while the controller's
 // own typed Update (finalizer install) re-encodes it as the string "4"; a
@@ -57,7 +72,7 @@ import (
 // limits is not compared here: the equality rule already pins limits.memory to
 // requests.memory, and the controller derives the limit from the request, so the
 // footprint is frozen by freezing requests.
-// +kubebuilder:validation:XValidation:rule="(!has(self.resources) && !has(oldSelf.resources)) || (has(self.resources) && has(oldSelf.resources) && (has(self.resources.requests) == has(oldSelf.resources.requests)) && (!has(self.resources.requests) || ((('cpu' in self.resources.requests) == ('cpu' in oldSelf.resources.requests)) && (('memory' in self.resources.requests) == ('memory' in oldSelf.resources.requests)) && (!('cpu' in self.resources.requests) || !('cpu' in oldSelf.resources.requests) || quantity(string(self.resources.requests['cpu'])).compareTo(quantity(string(oldSelf.resources.requests['cpu']))) == 0) && (!('memory' in self.resources.requests) || !('memory' in oldSelf.resources.requests) || quantity(string(self.resources.requests['memory'])).compareTo(quantity(string(oldSelf.resources.requests['memory']))) == 0))))",message="spec.resources is create-only: the footprint is fixed at creation (a change is not rolled onto a running pod — the StatefulSet is OnDelete and drift detection is image-only), so replace the node to resize"
+// +kubebuilder:validation:XValidation:rule="has(self.nodeConfig) || ((!has(self.resources) && !has(oldSelf.resources)) || (has(self.resources) && has(oldSelf.resources) && (has(self.resources.requests) == has(oldSelf.resources.requests)) && (!has(self.resources.requests) || ((('cpu' in self.resources.requests) == ('cpu' in oldSelf.resources.requests)) && (('memory' in self.resources.requests) == ('memory' in oldSelf.resources.requests)) && (!('cpu' in self.resources.requests) || !('cpu' in oldSelf.resources.requests) || quantity(string(self.resources.requests['cpu'])).compareTo(quantity(string(oldSelf.resources.requests['cpu']))) == 0) && (!('memory' in self.resources.requests) || !('memory' in oldSelf.resources.requests) || quantity(string(self.resources.requests['memory'])).compareTo(quantity(string(oldSelf.resources.requests['memory']))) == 0)))))",message="spec.resources is create-only on a node without spec.nodeConfig: its StatefulSet is OnDelete and drift detection is image-only, so a change would never reach the running pod; replace the node to resize, or use spec.nodeConfig, which rolls a footprint change onto its pod"
 // A node with spec.nodeConfig runs no task that writes config.toml or
 // app.toml, so every field whose only route to seid was one of those tasks is
 // rejected beside it. Accepting one would report success on an edit that never
@@ -194,7 +209,10 @@ type SeiNodeSpec struct {
 	// DataVolume configures the data PersistentVolumeClaim for this node.
 	// When omitted, the controller creates a PVC using the node's mode-default
 	// storage class and size; dataVolume.storage overrides the size (see
-	// noderesource.StorageForNode).
+	// noderesource.StorageForNode). On a node with spec.nodeConfig the size may
+	// be added or grown after creation, and the controller raises the owned PVC's
+	// request to match; it never shrinks a request, and the size cannot be
+	// removed. Elsewhere the size is create-only.
 	// +optional
 	DataVolume *DataVolumeSpec `json:"dataVolume,omitempty"`
 
@@ -208,10 +226,13 @@ type SeiNodeSpec struct {
 	// benchmark operator from having to restate a mode's whole footprint to
 	// raise one axis.
 	//
-	// Immutable after creation (spec-level CEL). A change here would not reach a
-	// running pod anyway — the StatefulSets use UpdateStrategy: OnDelete and
-	// drift detection is image-only — so admission rejects the edit rather than
-	// accept an inert one. Replace the node to resize.
+	// Mutable on a node with spec.nodeConfig: its StatefulSet uses
+	// UpdateStrategy: RollingUpdate, so a change rolls the pod onto the new
+	// footprint, the same way an image change does. Immutable after creation on
+	// any other node (spec-level CEL): its StatefulSet is OnDelete and drift
+	// detection is image-only, so a change would never reach a running pod, and
+	// admission rejects the edit rather than accept an inert one. Replace that
+	// node to resize.
 	// +optional
 	Resources *Resources `json:"resources,omitempty"`
 
@@ -313,14 +334,16 @@ type DataVolumeSpec struct {
 }
 
 // DataVolumeStorage carries the size in the volume-claim shape and the storage
-// performance selection. Both are create-only: value rule here, presence half on
-// the spec. The size compares via quantity(), not ==, because a typed re-encode
-// of an int-or-string Quantity would reject the controller's write; the VAC name
-// is a plain string, so == is safe for it.
+// performance selection. The VAC name is create-only: value rule here, presence
+// half on the spec. The size can never shrink (rule here, both Kinds); whether it
+// may grow is per Kind and per node, so that equality rule sits at spec level
+// with the presence half. The size compares via quantity(), not ==, because a
+// typed re-encode of an int-or-string Quantity would reject the controller's
+// write; the VAC name is a plain string, so == is safe for it.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || (has(self.resources.requests) && 'storage' in self.resources.requests)",message="dataVolume.storage.resources must carry resources.requests.storage: an empty or null storage request would silently provision the per-mode default while reading as a size request"
 // +kubebuilder:validation:XValidation:rule="!has(self.volumeAttributesClassName) || !has(oldSelf.volumeAttributesClassName) || self.volumeAttributesClassName == oldSelf.volumeAttributesClassName",message="dataVolume.storage.volumeAttributesClassName is create-only: the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path) and the VAC name binds at provision, so a later edit could never reach the volume; delete and recreate the owning resource (the node, or the SeiNetwork for a pooled validator) to reselect"
-// +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || !has(oldSelf.resources) || !has(oldSelf.resources.requests) || !('storage' in oldSelf.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity(string(oldSelf.resources.requests['storage']))) == 0",message="dataVolume.storage.resources.requests.storage is create-only: the data PVC is created once (ensure-data-pvc is Get-then-Create with no update path), so a later size edit could never reach the volume; delete and recreate the owning resource (the node, or the SeiNetwork for a pooled validator) to resize"
+// +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || !has(oldSelf.resources) || !has(oldSelf.resources.requests) || !('storage' in oldSelf.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity(string(oldSelf.resources.requests['storage']))) >= 0",message="dataVolume.storage.resources.requests.storage cannot shrink: a volume claim only grows; delete and recreate the owning resource (the node, or the SeiNetwork for a pooled validator) to shrink it"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || self.resources.requests.all(k, k == 'storage')",message="dataVolume.storage.resources.requests accepts only storage"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests) || !('storage' in self.resources.requests) || quantity(string(self.resources.requests['storage'])).compareTo(quantity('0')) > 0",message="dataVolume.storage.resources.requests.storage must be positive"
 type DataVolumeStorage struct {
@@ -730,6 +753,15 @@ const (
 	// status.dataResetGeneration >= N, not this condition, because right after
 	// a merge it can still describe the previous reset.
 	ConditionDataResetInProgress = "DataResetInProgress"
+
+	// ConditionDataVolumeResizeInProgress reports whether the node's data volume
+	// is still growing toward spec.dataVolume.storage.resources.requests.storage.
+	// InProgress-style and always-present: True is the exception, False the
+	// steady state. Only a node with spec.nodeConfig and a controller-owned PVC
+	// can grow its volume; every other node reads False/NotApplicable. The
+	// message repeats the PVC's own resize conditions, because the storage
+	// provider — not the controller — paces the growth.
+	ConditionDataVolumeResizeInProgress = "DataVolumeResizeInProgress"
 )
 
 // Reasons for the DataResetInProgress condition. Stable enum (public API for
@@ -748,6 +780,27 @@ const (
 	// ReasonResetFailed: the last reset plan failed; the controller builds it
 	// again on a later reconcile, and seid stays held.
 	ReasonResetFailed = "ResetFailed"
+)
+
+// Reasons for the DataVolumeResizeInProgress condition. Stable enum (public API
+// for alerting/runbooks per CLAUDE.md "Conditions").
+const (
+	// ReasonDataVolumeResizing: the owned PVC's capacity is below the requested
+	// size. The message carries the PVC's resize conditions when present.
+	ReasonDataVolumeResizing = "Resizing"
+	// ReasonDataVolumeResizeFailed: the controller could not raise the owned
+	// PVC's storage request; the message carries the API error. A StorageClass
+	// without allowVolumeExpansion lands here.
+	ReasonDataVolumeResizeFailed = "ResizeFailed"
+	// ReasonDataVolumeResizeComplete: the owned PVC's capacity meets the
+	// requested size.
+	ReasonDataVolumeResizeComplete = "ResizeComplete"
+	// ReasonDataVolumeResizeNotApplicable: the node cannot grow its volume — no
+	// spec.nodeConfig, an imported PVC, no size set, or no bound owned PVC yet.
+	ReasonDataVolumeResizeNotApplicable = "NotApplicable"
+	// ReasonDataVolumePVCLookupError: reading the data PVC failed for a reason
+	// other than absence. Transient; the next reconcile re-resolves.
+	ReasonDataVolumePVCLookupError = "PVCLookupError"
 )
 
 // Reasons for the EvmServing condition. Stable enum (public API for

@@ -96,6 +96,8 @@ func SeiNodeTaskParamsFor(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNo
 		return restartSeidParams(cr, target)
 	case seiv1alpha1.SeiNodeTaskKindMarkReady:
 		return markReadyParams(cr)
+	case seiv1alpha1.SeiNodeTaskKindUnjail:
+		return unjailParams(cr, target)
 	default:
 		return SeiNodeTaskParams{}, &ErrUnsupportedKind{Kind: cr.Spec.Kind}
 	}
@@ -263,6 +265,27 @@ func markReadyParams(cr *seiv1alpha1.SeiNodeTask) (SeiNodeTaskParams, error) {
 		return SeiNodeTaskParams{}, paramsErr("spec.markReady is required for kind=MarkReady")
 	}
 	return SeiNodeTaskParams{sidecar.TaskTypeMarkReady, sidecar.MarkReadyTask{}}, nil
+}
+
+// unjailParams builds the sidecar unjail payload. A target that is not a
+// validator fails here, before anything reaches the sidecar. With nil target
+// (early-validation path) the validator check waits for driveTask.
+func unjailParams(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) (SeiNodeTaskParams, error) {
+	p := cr.Spec.Unjail
+	if p == nil {
+		return SeiNodeTaskParams{}, paramsErr("spec.unjail is required for kind=Unjail")
+	}
+	if target != nil && target.Spec.Validator == nil {
+		return SeiNodeTaskParams{}, paramsErr(fmt.Sprintf(
+			"kind=Unjail requires a validator target: SeiNode %s has no spec.validator", target.Name))
+	}
+	return SeiNodeTaskParams{sidecar.TaskTypeUnjail, sidecar.UnjailTask{
+		ChainID: p.ChainID,
+		KeyName: resolveSigningUID(p.KeyName, target),
+		Memo:    p.Memo,
+		Fees:    p.Fees,
+		Gas:     p.Gas,
+	}}, nil
 }
 
 // resolveSigningUID returns explicit when set; otherwise derives from target

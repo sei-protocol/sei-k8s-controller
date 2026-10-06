@@ -142,6 +142,7 @@ var serveCmd = cli.Command{
 			engine.TaskGovSoftwareUpgrade:         tasks.NewGovSoftwareUpgrader(execCfg).Handler(),
 			engine.TaskGovParamChange:             tasks.NewGovParamChanger(execCfg).Handler(),
 			engine.TaskGovUpdateInstantiateConfig: tasks.NewGovInstantiateConfigUpdater(execCfg).Handler(),
+			engine.TaskUnjail:                     tasks.NewUnjailer(execCfg).Handler(),
 		}
 
 		eng := engine.NewEngine(ctx, handlers, store)

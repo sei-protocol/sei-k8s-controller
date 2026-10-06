@@ -90,12 +90,17 @@ spec:
               bool to the typed field is an accepted no-op while a real mode change is caught.
               dataVolume is create-only (change, unset, first-time set all rejected).
               Presence parity only here; values are pinned on the shared DataVolume* types,
-              covering both Kinds. A structural == cannot stay once a Quantity lives here (a
+              covering both Kinds — except the size's equality, which follows this rule. A structural == cannot stay once a Quantity lives here (a
               typed re-encode would reject the controller's own write), and enumerating
               values — reaching import.pvcName — exceeds the CEL per-rule cost budget.
 
               COMPLETENESS: a new DataVolume* field is silently mutable until it gets BOTH a
               value rule on its sub-type AND a presence term here, on both Kinds.
+              The size VALUE is pinned here rather than on the shared DataVolumeStorage
+              type, which only refuses a shrink: a SeiNode with spec.nodeConfig may grow its
+              volume, and a sub-type rule cannot tell the Kinds apart. A pool's size is fixed
+              for the network's life — each child's PVC is created once, and a child carries
+              no spec.nodeConfig, so nothing would grow it.
               resources is create-only, compared PER-DIMENSION via quantity() rather than
               structural == — the values are int-or-string Quantities, and the network
               controller's finalizer Update re-encodes a bare-int footprint as a string, so
@@ -359,16 +364,15 @@ spec:
                         validator) to reselect'
                       rule: '!has(self.volumeAttributesClassName) || !has(oldSelf.volumeAttributesClassName)
                         || self.volumeAttributesClassName == oldSelf.volumeAttributesClassName'
-                    - message: 'dataVolume.storage.resources.requests.storage is create-only:
-                        the data PVC is created once (ensure-data-pvc is Get-then-Create
-                        with no update path), so a later size edit could never reach
-                        the volume; delete and recreate the owning resource (the node,
-                        or the SeiNetwork for a pooled validator) to resize'
+                    - message: 'dataVolume.storage.resources.requests.storage cannot
+                        shrink: a volume claim only grows; delete and recreate the
+                        owning resource (the node, or the SeiNetwork for a pooled
+                        validator) to shrink it'
                       rule: '!has(self.resources) || !has(self.resources.requests)
                         || !(''storage'' in self.resources.requests) || !has(oldSelf.resources)
                         || !has(oldSelf.resources.requests) || !(''storage'' in oldSelf.resources.requests)
                         || quantity(string(self.resources.requests[''storage''])).compareTo(quantity(string(oldSelf.resources.requests[''storage''])))
-                        == 0'
+                        >= 0'
                     - message: dataVolume.storage.resources.requests accepts only
                         storage
                       rule: '!has(self.resources) || !has(self.resources.requests)
@@ -805,6 +809,16 @@ spec:
                 && has(self.dataVolume.storage) && has(self.dataVolume.storage.volumeAttributesClassName))
                 == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) &&
                 has(oldSelf.dataVolume.storage.volumeAttributesClassName)))
+            - message: 'spec.dataVolume.storage.resources.requests.storage is create-only
+                on a SeiNetwork: each validator''s data PVC is created once and nothing
+                grows a pool''s volumes; recreate the owning resource to resize'
+              rule: '!has(self.dataVolume) || !has(self.dataVolume.storage) || !has(self.dataVolume.storage.resources)
+                || !has(self.dataVolume.storage.resources.requests) || !(''storage''
+                in self.dataVolume.storage.resources.requests) || !has(oldSelf.dataVolume)
+                || !has(oldSelf.dataVolume.storage) || !has(oldSelf.dataVolume.storage.resources)
+                || !has(oldSelf.dataVolume.storage.resources.requests) || !(''storage''
+                in oldSelf.dataVolume.storage.resources.requests) || quantity(string(self.dataVolume.storage.resources.requests[''storage''])).compareTo(quantity(string(oldSelf.dataVolume.storage.resources.requests[''storage''])))
+                == 0'
             - message: 'spec.resources is create-only: a validator pool is fixed-shape
                 at the genesis ceremony, and each child SeiNode''s own spec.resources
                 is itself create-only, so an edit here could never reach the pool;
