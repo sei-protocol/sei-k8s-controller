@@ -256,6 +256,67 @@ func TestGrowDataPVC_LeavesOtherClaimsAlone(t *testing.T) {
 	})
 }
 
+// An unbound owned claim (WaitForFirstConsumer during init) is not patched: the
+// API server would refuse it, and the condition keeps saying why.
+func TestGrowDataPVC_WaitsForBind(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	node := resizeNode("dvr-unbound-grow", true, "2Ti")
+	pvc := dataPVC(node, "1Ti", "1Ti", true)
+	pvc.Status.Phase = corev1.ClaimPending
+	pvc.Status.Capacity = nil
+	r, c := newNodeReconciler(t, node, pvc)
+
+	r.reconcileDataVolumeResize(ctx, node)
+	r.growDataPVC(ctx, node)
+
+	g.Expect(pvcRequest(t, c, node)).To(Equal("1Ti"), "an unbound claim must not be patched")
+	g.Expect(drainEvents(r)).To(BeEmpty())
+	cond := resizeCondition(node)
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonDataVolumeResizeNotApplicable))
+	g.Expect(cond.Message).To(ContainSubstring("not Bound"))
+}
+
+// The patch carries the read's resourceVersion: a claim that changed since the
+// read — lost its owner, or was recreated — is not grown. The conflict is not a
+// failure; the next reconcile reads the claim again.
+func TestGrowDataPVC_ConflictRetriesWithoutResizeFailed(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	node := resizeNode("dvr-conflict", true, "2Ti")
+	pvc := dataPVC(node, "1Ti", "1Ti", true)
+
+	s := newNodeTestScheme(t)
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(node, pvc).
+		WithStatusSubresource(&seiv1alpha1.SeiNode{}).Build()
+	// The claim changes between the read and the patch: the fake client then
+	// refuses the stale resourceVersion the optimistic lock sends.
+	c := interceptor.NewClient(base, interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if claim, ok := obj.(*corev1.PersistentVolumeClaim); ok {
+				fresh := &corev1.PersistentVolumeClaim{}
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(claim), fresh); err != nil {
+					return err
+				}
+				fresh.OwnerReferences = nil
+				if err := cl.Update(ctx, fresh); err != nil {
+					return err
+				}
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	r := &SeiNodeReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	r.reconcileDataVolumeResize(ctx, node)
+	r.growDataPVC(ctx, node)
+
+	g.Expect(pvcRequest(t, base, node)).To(Equal("1Ti"), "a claim that changed since the read must not be grown")
+	g.Expect(drainEvents(r)).To(BeEmpty(), "a conflict is a retry, not a failure")
+	cond := resizeCondition(node)
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonDataVolumeResizing), "the condition keeps the resolver's verdict")
+}
+
 // 011 Req 4.3: a refused PVC update reads ResizeFailed with the API error, and
 // records a Warning event, without failing anything else.
 func TestGrowDataPVC_RefusedPatchReportsResizeFailed(t *testing.T) {

@@ -85,7 +85,11 @@ func (r *SeiNodeReconciler) reconcileDataVolumeResize(ctx context.Context, node 
 // growDataPVC raises the owned data PVC's storage request to the node's
 // growable size. It never lowers a request — a size added below the claim's
 // current request changes nothing — and never touches an imported or
-// unowned PVC. A refused patch — for example a StorageClass without
+// unowned PVC. It waits for the claim to bind, as the condition does: the API
+// server refuses a request change on an unbound claim. The patch carries the
+// read's resourceVersion, so a claim that lost its owner or was recreated
+// since the read is never grown; that conflict retries on the next reconcile.
+// Any other refused patch — for example a StorageClass without
 // allowVolumeExpansion — sets ResizeFailed and does not fail the reconcile: the
 // plan work below must still run, and a Running node requeues on
 // statusPollInterval, which retries the patch.
@@ -95,7 +99,7 @@ func (r *SeiNodeReconciler) growDataPVC(ctx context.Context, node *seiv1alpha1.S
 		return
 	}
 	pvc, err := r.ownedDataPVC(ctx, node)
-	if err != nil || pvc == nil {
+	if err != nil || pvc == nil || pvc.Status.Phase != corev1.ClaimBound {
 		// reconcileDataVolumeResize already reported why; nothing to grow yet.
 		return
 	}
@@ -105,12 +109,16 @@ func (r *SeiNodeReconciler) growDataPVC(ctx context.Context, node *seiv1alpha1.S
 		return
 	}
 
-	patch := client.MergeFrom(pvc.DeepCopy())
+	patch := client.MergeFromWithOptions(pvc.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	if pvc.Spec.Resources.Requests == nil {
 		pvc.Spec.Resources.Requests = corev1.ResourceList{}
 	}
 	pvc.Spec.Resources.Requests[corev1.ResourceStorage] = *want
 	if err := r.Patch(ctx, pvc, patch); err != nil {
+		if apierrors.IsConflict(err) {
+			log.FromContext(ctx).V(1).Info("data PVC changed since it was read; retrying next reconcile", "pvc", pvc.Name)
+			return
+		}
 		log.FromContext(ctx).Error(err, "raising data PVC storage request", "pvc", pvc.Name)
 		setDataVolumeResize(node, metav1.ConditionTrue, seiv1alpha1.ReasonDataVolumeResizeFailed,
 			fmt.Sprintf("raising data PVC %q request from %s to %s: %v", pvc.Name, current.String(), want.String(), err))
