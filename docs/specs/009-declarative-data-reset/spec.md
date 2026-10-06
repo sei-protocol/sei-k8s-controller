@@ -265,7 +265,7 @@ path that releases the gate.
 2. THE reset plan SHALL wait for the StatefulSet rollout, then run `mark-not-ready`, `stop-seid`, `reset-data`, a step that sets the handled counter, and `mark-ready`, in that order.
 3. THE step that sets the handled counter SHALL set it to the reset counter value the plan was built for.
 4. WHILE the handled counter equals the reset counter, THE controller SHALL NOT run a data reset, across pod restarts and controller restarts.
-5. IF the data reset fails, THEN THE controller SHALL keep the start gate closed, leave the handled counter unchanged, and build the reset plan again on a later reconcile.
+5. IF the data reset fails, THEN THE controller SHALL keep the start gate closed and leave the handled counter unchanged. The reset plan SHALL retry `reset-data` with backoff, and the controller SHALL build the plan again when it fails.
 6. WHILE `spec.paused` is true, THE controller SHALL NOT start a data reset.
 7. WHILE a node is ConfigMap-configured, THE controller SHALL NOT write `config.toml` or `app.toml` as part of a data reset.
 
@@ -307,8 +307,8 @@ path that releases the gate.
 1. The controller SHALL seed a `DataResetInProgress` condition on every SeiNode, following the `<Subject>InProgress` convention: `True` is the exception, `False` is the steady state.
 2. WHILE no reset is pending, THE condition SHALL be `False`, with reason `ResetComplete` once a reset has run, `NoResetRequested` before one has, and `NotApplicable` on a node without `spec.nodeConfig`.
 3. WHILE a reset is pending and its plan has not started, THE condition SHALL be `True` with reason `ResetPending`.
-4. WHILE the reset plan runs, THE condition SHALL be `True` with reason `ResetRunning`.
-5. IF the reset plan fails, THEN THE condition SHALL be `True` with reason `ResetFailed`, and its message SHALL carry the task error.
+4. WHILE the first reset plan for a counter value runs, THE condition SHALL be `True` with reason `ResetRunning`.
+5. IF a reset plan fails, THEN THE condition SHALL be `True` with reason `ResetFailed`, and its message SHALL carry the task error. The reason SHALL stay `ResetFailed` through later attempts until a reset succeeds.
 6. The condition message SHALL name the reset counter value it refers to.
 7. THE completion contract for reset N SHALL be `status.dataResetGeneration >= N`. Runbooks and seictl SHALL wait on that field, not on the condition.
 8. WHEN the reset plan starts, succeeds, or fails, THE controller SHALL record an event on the SeiNode.

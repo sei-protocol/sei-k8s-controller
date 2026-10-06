@@ -45,7 +45,8 @@ against the data. The design needs no SSH and no new command API.
 - **Hold**: the new `spec.maintenance.hold` field. Its value is `Immediate` or `AfterExit`. An absent value means no hold.
 - **Immediate hold**: closes the start gate and stops seid now.
 - **AfterExit hold**: closes the start gate and leaves seid running. When seid exits on its own, for example at `halt-height`, the container restarts and parks at the gate.
-- **Hold in effect**: the new `status.maintenanceHold` field. It holds the hold value whose plan last completed. The controller compares it with the spec, the same way spec 009 compares its two counters.
+- **Hold in effect**: the new `status.maintenanceHold` field. `Immediate` means seid is parked by the hold. `AfterExit` means the gate is closed and seid may still run. Empty means no hold acts on the node. The controller compares it with the spec, the same way spec 009 compares its two counters.
+- **Start once**: the step that starts seid on a parked node and closes the gate again. The controller marks the sidecar ready, waits until the `seid start` process runs, and then runs `mark-not-ready`.
 - **Release**: removing the hold. The controller then marks the sidecar ready, and seid starts on whatever data the volume holds.
 - **Start gate**: the sidecar readiness flag that holds seid from starting until the sidecar receives `mark-ready`.
 - **Start guard**: the controller rule from spec 009 that decides whether `mark-ready` may reach the sidecar. This spec adds "no hold is set" to it.
@@ -98,6 +99,7 @@ again.
 
 1. **Given** a running node, **When** the operator sets an `AfterExit` hold, **Then** seid keeps running and the condition reads `True/Armed`.
 2. **Given** an `AfterExit` hold, **When** seid exits, **Then** the container parks at the start gate and seid does not start.
+3. **Given** a node parked by an `Immediate` hold, **When** the operator changes the hold to `AfterExit`, **Then** seid starts once and parks at its next exit.
 
 ---
 
@@ -135,11 +137,28 @@ counter advances and seid stays parked.
 
 1. **Given** a held node, **When** a reset becomes pending, **Then** the controller runs the reset and the node stays held.
 
+---
+
+### User Story 5 - Create a node parked (Priority: P2)
+
+An operator creates a SeiNode with a hold. The node initializes and stops at the
+start gate before seid first runs. The operator inspects the data, then releases.
+
+**Why this priority**: the EC2 cutover checks a validator's imported data and sign
+state before the validator signs for the first time.
+
+**Independent Test**: create a harbor node with an `Immediate` hold, and confirm it
+reaches `Running` with seid parked.
+
+**Acceptance Scenarios**:
+
+1. **Given** a new SeiNode with a hold, **When** its init plan completes, **Then** seid has not started and the condition reads `True/Held`.
+
 ### Edge Cases
 
 - The operator changes `AfterExit` to `Immediate`: the controller stops seid now.
-- The operator changes `Immediate` to `AfterExit`: seid is already parked, so nothing changes.
-- The hold is set on a node that is not `Running`: the hold takes effect when the node reaches `Running`.
+- The operator changes `Immediate` to `AfterExit` while seid is parked: seid starts once. The gate closes again a few seconds after `seid start` runs. On atlantic-2 and pacific-1, seid needs minutes to load its state before it can commit a block, so it parks at its next exit. A small harbor chain loads faster, so a rehearsal there can see seid commit before the gate closes.
+- A coordinated recovery changes the image, sets `halt-height` in a new ConfigMap, and changes the hold to `AfterExit`, in one commit per validator. The pod rolls onto the new template, starts once, and parks when seid exits at the halt height.
 - A plan built before the hold reaches `mark-ready`: the start guard fails the task, and the planner builds the next plan from the current spec.
 - The pod is not Ready while held, because pod readiness follows the sidecar's start gate. A Service that routes only to Ready pods drops the node.
 - The parked container restarts after about five days, when its startup probe gives up. The hold stays, and the new container parks again. An open exec session ends.
@@ -165,17 +184,19 @@ counter advances and seid stays parked.
 
 **Objective:** As an operator, I want seid parked with the pod alive, so that I can run tools against the data.
 
-**Traces to:** User Story 1, User Story 2, User Story 3
+**Traces to:** User Story 1, User Story 2, User Story 3, User Story 5
 
 #### Acceptance Criteria
 
 1. WHEN an `Immediate` hold is set on a `Running` node, THE controller SHALL run `mark-not-ready` and then `stop-seid`.
-2. WHEN an `AfterExit` hold is set on a `Running` node, THE controller SHALL run `mark-not-ready` and SHALL NOT stop seid.
-3. WHILE a hold is set, THE start guard SHALL refuse `mark-ready` on every path that spec 009 Requirement 3 names.
-4. WHILE a hold is set, THE controller SHALL NOT build a plan that contains `mark-ready`.
-5. WHILE a hold is set, THE controller SHALL keep applying the StatefulSet, so a template change rolls the pod and the new pod stays parked.
-6. WHEN the hold plan completes, THE controller SHALL set `status.maintenanceHold` to the hold value the plan was built for.
-7. WHILE `status.maintenanceHold` equals the hold, THE controller SHALL NOT build a hold plan.
+2. WHEN an `AfterExit` hold is set on a `Running` node whose hold in effect is empty, THE controller SHALL run `mark-not-ready` and SHALL NOT stop seid.
+3. WHEN an `AfterExit` hold is set on a node whose hold in effect is `Immediate`, THE controller SHALL start seid once.
+4. WHILE a hold is set, THE start guard SHALL refuse `mark-ready` on every path that spec 009 Requirement 3 names, except the start-once step of a hold plan.
+5. WHILE a hold is set, THE controller SHALL NOT build a plan that contains `mark-ready`, except the start-once step of a hold plan.
+6. WHILE a hold is set, THE controller SHALL keep applying the StatefulSet, so a template change rolls the pod and the new pod stays parked.
+7. WHEN the hold plan completes, THE controller SHALL set `status.maintenanceHold` to the hold value the plan was built for.
+8. WHILE `status.maintenanceHold` equals the hold, THE controller SHALL NOT build a hold plan.
+9. WHERE a hold is set when the node initializes, THE controller SHALL build the init plan without its final `mark-ready`, and SHALL set `status.maintenanceHold` to `Immediate` when the plan completes.
 
 ### Requirement 3: The hold composes with the data reset
 
@@ -186,7 +207,7 @@ counter advances and seid stays parked.
 #### Acceptance Criteria
 
 1. WHILE a hold is set and a reset is pending, THE controller SHALL build the reset plan without its final `mark-ready`.
-2. WHEN that reset plan completes, THE controller SHALL leave the node held.
+2. WHEN that reset plan completes, THE controller SHALL set `status.maintenanceHold` to `Immediate`, because the reset leaves seid parked.
 
 ### Requirement 4: The controller releases the node
 
@@ -226,11 +247,11 @@ counter advances and seid stays parked.
 
 - **SC-001**: The API server rejects a hold on a node without `spec.nodeConfig`, and a value other than `Immediate` or `AfterExit`.
   *Verifier:* judgement — a reviewer runs `make test` and confirms the CEL envtest cases pass.
-- **SC-002**: An `Immediate` hold builds a plan of `mark-not-ready` then `stop-seid`. An `AfterExit` hold builds a plan of `mark-not-ready` only.
+- **SC-002**: An `Immediate` hold builds a plan of `mark-not-ready` then `stop-seid`. An `AfterExit` hold on a running node builds a plan of `mark-not-ready` only. An `AfterExit` hold on a parked node builds the start-once plan. A hold on a new node removes the init plan's final `mark-ready`.
   *Verifier:* judgement — a reviewer runs `make test` and confirms the planner tests for both hold values pass.
 - **SC-003**: While held, the planner builds no plan that contains `mark-ready`, and the start guard fails a `mark-ready` from a stale plan and from a `MarkReady` SeiNodeTask.
   *Verifier:* judgement — a reviewer runs `make test` and confirms the planner, executor, and SeiNodeTask guard tests pass.
-- **SC-004**: A reset on a held node runs without its final `mark-ready`, and the node stays held. Release then builds a plan that marks the sidecar ready.
+- **SC-004**: A reset on a held node runs without its final `mark-ready`, and the hold in effect becomes `Immediate`. Release then builds a plan that marks the sidecar ready.
   *Verifier:* judgement — a reviewer runs `make test` and confirms the planner tests for reset-while-held and release pass.
 - **SC-005**: The `MaintenanceInProgress` condition reads `HoldPending`, then `Held` or `Armed`, then `NotHeld` after release.
   *Verifier:* judgement — a reviewer runs `make test` and confirms the condition tests pass.
@@ -243,9 +264,10 @@ counter advances and seid stays parked.
 
 - The start gate closes on a new pod, and only a completed `mark-ready` opens it. The sidecar keeps the flag in memory.
 - `stop-seid` stops only the `seid start` process. It does not stop an exec'd tool.
+- The sidecar can see the `seid start` process, because the pod shares one PID namespace. A new read-only sidecar task, `await-seid-start`, waits for it.
 - The seid container's startup probe targets the sidecar's healthz, not seid's RPC, so the kubelet does not kill a parked container for about five days.
 - The pod template carries `karpenter.sh/do-not-disrupt`, so Karpenter does not move a held pod on its own.
-- The operator's tools are in the seid image. `seidb` is not there today; that is a sei-chain image change.
+- The operator's tools are in the seid image. `seidb` joins it through sei-protocol/sei-chain#4488.
 
 ## Out of scope
 
