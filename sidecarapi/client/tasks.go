@@ -782,8 +782,9 @@ func (t GovVoteTask) ToTaskRequest() TaskRequest {
 
 // UnjailTask submits MsgUnjail for the validator whose operator account
 // KeyName names. The sidecar refuses before broadcast when the account has no
-// validator, or the validator is not jailed, still in its jail period, or
-// tombstoned.
+// validator, the validator's self-delegation is missing or below its min
+// self-delegation, or the validator is not jailed, still in its jail period,
+// or tombstoned.
 type UnjailTask struct {
 	ChainID string
 	KeyName string

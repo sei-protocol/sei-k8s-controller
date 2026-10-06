@@ -40,13 +40,24 @@ type UnjailRequest struct {
 
 // jailState is the chain state the pre-broadcast check reads. BlockTime is the
 // local node's latest block time: the chain compares JailedUntil against block
-// time, not wall-clock time.
+// time, not wall-clock time. A catching-up node's state holds only CatchingUp
+// and BlockTime; the rest is not read.
 type jailState struct {
-	Jailed      bool
+	CatchingUp bool
+	BlockTime  time.Time
+
+	// HasSelfDelegation, SelfBond, and MinSelfBond feed the keeper's
+	// self-delegation checks. SelfBond is the operator's self-delegated tokens,
+	// converted from shares and truncated as the keeper does.
+	HasSelfDelegation bool
+	SelfBond          sdk.Int
+	MinSelfBond       sdk.Int
+
+	Jailed bool
+	// Tombstoned and JailedUntil come from the validator's signing info. A
+	// jailed validator with no signing info leaves both at zero.
 	Tombstoned  bool
 	JailedUntil time.Time
-	BlockTime   time.Time
-	CatchingUp  bool
 }
 
 // errNoValidator reports that the operator account has no validator record.
@@ -118,7 +129,11 @@ func (u *Unjailer) Handler() engine.TaskHandler {
 
 // checkJailed refuses an unjail that the chain would reject after taking the
 // fee. CheckTx does not run the message handler, so these cases otherwise
-// surface only as a committed-but-failed tx.
+// surface only as a committed-but-failed tx. After the catching-up check, the
+// cases follow the order of the slashing keeper's Unjail
+// (sei-cosmos x/slashing/keeper/unjail.go): no validator, no self-delegation,
+// self-delegation below MinSelfDelegation, not jailed, tombstoned, jail period
+// not over.
 func (u *Unjailer) checkJailed(ctx context.Context, chainID string, valAddr sdk.ValAddress) error {
 	st, err := u.readJail(ctx, u.cfg, chainID, valAddr)
 	if errors.Is(err, errNoValidator) {
@@ -130,6 +145,11 @@ func (u *Unjailer) checkJailed(ctx context.Context, chainID string, valAddr sdk.
 	switch {
 	case st.CatchingUp:
 		return fmt.Errorf("local seid is catching up, so its jail state for %s may be stale; retry when it is caught up", valAddr)
+	case !st.HasSelfDelegation:
+		return Terminal(fmt.Errorf("validator %s has no self-delegation; the chain rejects its unjail (ErrMissingSelfDelegation)", valAddr))
+	case st.SelfBond.LT(st.MinSelfBond):
+		return Terminal(fmt.Errorf("validator %s self-delegation %s is below its min self-delegation %s; the chain rejects its unjail (ErrSelfDelegationTooLowToUnjail)",
+			valAddr, st.SelfBond, st.MinSelfBond))
 	case !st.Jailed:
 		return Terminal(fmt.Errorf("validator %s is not jailed; refusing to spend a fee on an unjail", valAddr))
 	case st.Tombstoned:
@@ -210,25 +230,52 @@ func readJailState(
 		return jailState{}, fmt.Errorf("query local seid /status: %w", err)
 	}
 	st := jailState{BlockTime: s.SyncInfo.LatestBlockTime, CatchingUp: s.SyncInfo.CatchingUp}
+	// A syncing node answers from an old height, where the validator may not
+	// exist yet. Read nothing more: checkJailed refuses on CatchingUp first.
+	if st.CatchingUp {
+		return st, nil
+	}
 
 	vres, err := staking.Validator(ctx, &stakingtypes.QueryValidatorRequest{ValidatorAddr: valAddr.String()})
 	if err != nil {
-		if isValidatorNotFound(err, valAddr) {
+		if isQueryNotFound(err, valAddr.String()+" not found") {
 			return jailState{}, errNoValidator
 		}
 		return jailState{}, fmt.Errorf("query validator: %w", err)
 	}
-	st.Jailed = vres.Validator.Jailed
+	v := vres.Validator
+	st.Jailed = v.Jailed
+	st.MinSelfBond = v.MinSelfDelegation
+
+	dres, err := staking.Delegation(ctx, &stakingtypes.QueryDelegationRequest{
+		DelegatorAddr: sdk.AccAddress(valAddr).String(),
+		ValidatorAddr: valAddr.String(),
+	})
+	switch {
+	case err == nil && dres.DelegationResponse != nil:
+		st.HasSelfDelegation = true
+		st.SelfBond = selfBondTokens(v, dres.DelegationResponse.Delegation.Shares)
+	case err == nil, isQueryNotFound(err, "not found for validator "+valAddr.String()):
+		// No self-delegation: HasSelfDelegation stays false.
+	default:
+		return jailState{}, fmt.Errorf("query self-delegation: %w", err)
+	}
 	if !st.Jailed {
 		return st, nil
 	}
 
-	consAddr, err := vres.Validator.GetConsAddr()
+	consAddr, err := v.GetConsAddr()
 	if err != nil {
 		return jailState{}, fmt.Errorf("validator consensus address: %w", err)
 	}
 	sres, err := slashing.SigningInfo(ctx, &slashingtypes.QuerySigningInfoRequest{ConsAddress: consAddr.String()})
 	if err != nil {
+		// The keeper lets a jailed validator with no signing info unjail at
+		// any time: it was never bonded, so it was jailed for falling below
+		// its min self-delegation. Tombstoned and JailedUntil stay zero.
+		if isQueryNotFound(err, "SigningInfo not found") {
+			return st, nil
+		}
 		return jailState{}, fmt.Errorf("query signing info: %w", err)
 	}
 	st.Tombstoned = sres.ValSigningInfo.Tombstoned
@@ -236,10 +283,18 @@ func readJailState(
 	return st, nil
 }
 
-// isValidatorNotFound matches the staking query's missing-validator answer. The
-// gRPC NotFound code survives the ABCI round trip; the message match covers a
-// node whose query path drops the code.
-func isValidatorNotFound(err error, valAddr sdk.ValAddress) bool {
-	return status.Code(err) == codes.NotFound ||
-		strings.Contains(err.Error(), valAddr.String()+" not found")
+// selfBondTokens converts delegation shares to tokens the way the keeper does:
+// TokensFromShares at the validator's exchange rate, truncated to an integer.
+func selfBondTokens(v stakingtypes.Validator, shares sdk.Dec) sdk.Int {
+	if v.DelegatorShares.IsZero() {
+		return sdk.ZeroInt()
+	}
+	return v.TokensFromShares(shares).TruncateInt()
+}
+
+// isQueryNotFound matches a query's missing-record answer. The gRPC NotFound
+// code survives the ABCI round trip; the message match covers a node whose
+// query path drops the code.
+func isQueryNotFound(err error, msgFragment string) bool {
+	return status.Code(err) == codes.NotFound || strings.Contains(err.Error(), msgFragment)
 }

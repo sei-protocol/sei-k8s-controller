@@ -78,8 +78,9 @@ const (
 	// SeiNodeTaskKindUnjail backs the sidecar `unjail` task. Submits MsgUnjail
 	// for the target validator, signed by its operator account through the
 	// sidecar keyring. The sidecar refuses before broadcast when the account has
-	// no validator, or the validator is not jailed, still in its jail period, or
-	// tombstoned. NOT chain-idempotent: a second unjail of a released validator
+	// no validator, the validator's self-delegation is missing or below its min
+	// self-delegation, or the validator is not jailed, still in its jail period,
+	// or tombstoned. NOT chain-idempotent: a second unjail of a released validator
 	// spends the fee and fails, so do not re-create a Complete task.
 	SeiNodeTaskKindUnjail SeiNodeTaskKind = "Unjail"
 )
