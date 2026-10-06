@@ -40,6 +40,7 @@ const (
 	TaskGovUpdateInstantiateConfig = wire.TaskGovUpdateInstantiateConfig
 	TaskMarkNotReady               = wire.TaskMarkNotReady
 	TaskStopSeid                   = wire.TaskStopSeid
+	TaskAwaitSeidStart             = wire.TaskAwaitSeidStart
 	TaskResetData                  = wire.TaskResetData
 	TaskEVMDigest                  = wire.TaskEVMDigest
 )

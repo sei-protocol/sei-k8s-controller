@@ -82,6 +82,7 @@ import (
 // and it needs nodeConfig, because only that node's plans run the reset.
 // +kubebuilder:validation:XValidation:rule="!has(self.dataResetGeneration) || has(self.nodeConfig)",message="spec.dataResetGeneration needs spec.nodeConfig: only a node that reads its config from ConfigMaps runs the declarative data reset"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.dataResetGeneration) || (has(self.dataResetGeneration) && self.dataResetGeneration >= oldSelf.dataResetGeneration)",message="spec.dataResetGeneration can only increase: lowering or removing it would rearm a data wipe; to undo a reset commit, revert the config and keep the counter"
+// +kubebuilder:validation:XValidation:rule="!has(self.maintenance) || !has(self.maintenance.hold) || has(self.nodeConfig)",message="spec.maintenance.hold needs spec.nodeConfig: only a node that reads its config from ConfigMaps runs the maintenance hold"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
@@ -265,6 +266,44 @@ type SeiNodeSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	DataResetGeneration int64 `json:"dataResetGeneration,omitempty"`
+
+	// Maintenance holds seid at the sidecar start gate with the pod alive and
+	// the data volume mounted, for work through kubectl exec. Requires
+	// spec.nodeConfig.
+	// +optional
+	Maintenance *MaintenanceSpec `json:"maintenance,omitempty"`
+}
+
+// MaintenanceHold is a maintenance hold mode.
+// +kubebuilder:validation:Enum=Immediate;AfterExit
+type MaintenanceHold string
+
+const (
+	// MaintenanceHoldImmediate closes the start gate and stops seid now.
+	MaintenanceHoldImmediate MaintenanceHold = "Immediate"
+	// MaintenanceHoldAfterExit closes the start gate and leaves seid running;
+	// when seid exits on its own, for example at halt-height, it parks. On a
+	// node parked by an Immediate hold it starts seid once first.
+	MaintenanceHoldAfterExit MaintenanceHold = "AfterExit"
+)
+
+// MaintenanceSpec is the maintenance request on a SeiNode.
+type MaintenanceSpec struct {
+	// Hold keeps seid from starting while it is set. Immediate stops seid now;
+	// AfterExit lets it run until it exits. Remove it to release seid. While
+	// held, the controller still applies the StatefulSet, so a template change
+	// rolls the pod and the new pod stays parked. A hold set on a new node parks
+	// it before seid first runs.
+	// +optional
+	Hold MaintenanceHold `json:"hold,omitempty"`
+}
+
+// HoldRequested returns the requested maintenance hold, or "" for none.
+func (s *SeiNodeSpec) HoldRequested() MaintenanceHold {
+	if s.Maintenance == nil {
+		return ""
+	}
+	return s.Maintenance.Hold
 }
 
 // Resources overrides the seid-container footprint in pod-resource shape.
@@ -730,6 +769,29 @@ const (
 	// status.dataResetGeneration >= N, not this condition, because right after
 	// a merge it can still describe the previous reset.
 	ConditionDataResetInProgress = "DataResetInProgress"
+
+	// ConditionMaintenanceInProgress reports the maintenance hold
+	// (spec.maintenance.hold). InProgress-style and always-present: False is
+	// the steady state. True/Held means seid is parked, so exec work on the data
+	// is safe.
+	ConditionMaintenanceInProgress = "MaintenanceInProgress"
+)
+
+// Reasons for the MaintenanceInProgress condition. Stable enum (public API for
+// alerting/runbooks per CLAUDE.md "Conditions").
+const (
+	// ReasonMaintenanceNotApplicable: the node has no spec.nodeConfig.
+	ReasonMaintenanceNotApplicable = "NotApplicable"
+	// ReasonNotHeld: no hold is requested or in effect.
+	ReasonNotHeld = "NotHeld"
+	// ReasonHoldPending: the requested hold differs from the hold in effect,
+	// and its plan has not finished.
+	ReasonHoldPending = "HoldPending"
+	// ReasonHeld: an Immediate hold is in effect; seid is parked.
+	ReasonHeld = "Held"
+	// ReasonArmed: an AfterExit hold is in effect; the gate is closed and seid
+	// parks at its next exit.
+	ReasonArmed = "Armed"
 )
 
 // Reasons for the DataResetInProgress condition. Stable enum (public API for
@@ -978,6 +1040,14 @@ type SeiNodeStatus struct {
 	// the spec value, so creating a node never wipes it.
 	// +optional
 	DataResetGeneration int64 `json:"dataResetGeneration,omitempty"`
+
+	// MaintenanceHold is the hold in effect: Immediate means seid is parked by
+	// the hold, AfterExit means the start gate is closed and seid may still run,
+	// empty means no hold acts on the node. The controller writes it when a hold,
+	// release, or held reset plan completes, and compares it with
+	// spec.maintenance.hold to decide the next plan.
+	// +optional
+	MaintenanceHold MaintenanceHold `json:"maintenanceHold,omitempty"`
 }
 
 // NodeEndpointStatus carries the in-cluster URLs this SeiNode serves, derived

@@ -22,8 +22,20 @@ func DataResetPending(node *seiv1alpha1.SeiNode) bool {
 // "" when mark-ready may reach the sidecar. It is the start guard: the one rule
 // every path that can start seid obeys, so a plan built before the spec changed,
 // or a MarkReady SeiNodeTask, cannot release seid onto data a reset has not
-// cleared yet.
+// cleared yet, or out from under a maintenance hold.
 func StartBlocked(node *seiv1alpha1.SeiNode) string {
+	if reason := resetBlocks(node); reason != "" {
+		return reason
+	}
+	if hold := node.Spec.HoldRequested(); hold != "" {
+		return fmt.Sprintf("maintenance hold %s is set", hold)
+	}
+	return ""
+}
+
+// resetBlocks is the reset half of the start guard. The hold's own start-once
+// step obeys only this half: it is how an AfterExit hold starts a parked seid.
+func resetBlocks(node *seiv1alpha1.SeiNode) string {
 	if DataResetPending(node) {
 		return fmt.Sprintf("data reset pending: spec.dataResetGeneration=%d, status.dataResetGeneration=%d",
 			node.Spec.DataResetGeneration, node.Status.DataResetGeneration)
@@ -31,12 +43,29 @@ func StartBlocked(node *seiv1alpha1.SeiNode) string {
 	return ""
 }
 
+// TaskTypeStartSeidOnce is the maintenance hold's start-once step. It submits
+// the sidecar's mark-ready, like the mark-ready plan task, but the hold does not
+// block it: an AfterExit hold on a parked node starts seid once, waits for
+// await-seid-start, and closes the gate again with mark-not-ready. A pending
+// reset still blocks it.
+const TaskTypeStartSeidOnce = "start-seid-once"
+
 // deserializeMarkReady wraps the mark-ready sidecar task in the start guard.
 // Both callers resolve the same SeiNode into cfg.Resource: the plan executor
 // (the reconciled node) and the SeiNodeTask controller (the target node). A
 // resource that is not a SeiNode (a SeiNetwork group plan) has no gate of its
 // own, so it passes through unguarded.
 func deserializeMarkReady(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
+	return deserializeGuardedMarkReady(id, params, cfg, StartBlocked)
+}
+
+func deserializeStartSeidOnce(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
+	return deserializeGuardedMarkReady(id, params, cfg, resetBlocks)
+}
+
+func deserializeGuardedMarkReady(
+	id string, params json.RawMessage, cfg ExecutionConfig, blocked func(*seiv1alpha1.SeiNode) string,
+) (TaskExecution, error) {
 	inner, err := deserializeSidecar[sidecar.MarkReadyTask](id, params, cfg.BuildSidecarClient, true)
 	if err != nil {
 		return nil, err
@@ -45,7 +74,7 @@ func deserializeMarkReady(id string, params json.RawMessage, cfg ExecutionConfig
 	if !ok {
 		return inner, nil
 	}
-	return &startGuardedExecution{TaskExecution: inner, node: node}, nil
+	return &startGuardedExecution{TaskExecution: inner, node: node, blocked: blocked}, nil
 }
 
 // startGuardedExecution checks the start guard at submission, the moment the
@@ -54,12 +83,13 @@ func deserializeMarkReady(id string, params json.RawMessage, cfg ExecutionConfig
 // instead would hold the node's only plan slot and block that reset.
 type startGuardedExecution struct {
 	TaskExecution
-	node *seiv1alpha1.SeiNode
-	err  error
+	node    *seiv1alpha1.SeiNode
+	blocked func(*seiv1alpha1.SeiNode) string
+	err     error
 }
 
 func (e *startGuardedExecution) Execute(ctx context.Context) error {
-	if reason := StartBlocked(e.node); reason != "" {
+	if reason := e.blocked(e.node); reason != "" {
 		e.err = fmt.Errorf("mark-ready refused by the start guard: %s", reason)
 		return Terminal(e.err)
 	}

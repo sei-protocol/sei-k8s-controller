@@ -44,6 +44,11 @@ const (
 	TaskStopSeid     TaskType = "stop-seid"
 	TaskResetData    TaskType = "reset-data"
 
+	// TaskAwaitSeidStart completes once a `seid start` process runs in the
+	// pod. The maintenance hold's start-once step uses it to close the start
+	// gate again right after seid starts. Read-only.
+	TaskAwaitSeidStart TaskType = "await-seid-start"
+
 	// TaskEVMDigest runs `seidb evm-logical-digest` against the node's own
 	// store directories and returns the report JSON on the task result.
 	TaskEVMDigest TaskType = "evm-digest"

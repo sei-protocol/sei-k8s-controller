@@ -94,36 +94,65 @@ func (p *staticConfigPlanner) Validate(node *seiv1alpha1.SeiNode) error {
 	return p.base.Validate(node)
 }
 
-// BuildPlan delegates every arm but Running to the mode planner.
+// BuildPlan delegates every arm but Running to the mode planner. A node created
+// with a maintenance hold initializes but does not start: the init plan ends
+// with the hold in effect instead of mark-ready (spec 010 Req 2.9).
 func (p *staticConfigPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	if node.Status.Phase == seiv1alpha1.PhaseRunning {
 		return p.buildRunningPlan(node)
 	}
-	return p.base.BuildPlan(node)
+	plan, err := p.base.BuildPlan(node)
+	if err != nil || plan == nil || node.Spec.HoldRequested() == "" {
+		return plan, err
+	}
+	if err := parkInsteadOfRelease(plan); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 // buildRunningPlan returns the next plan for a Running node, or nil if none is
-// needed. A pending data reset comes first: the reset plan also waits for any
-// rollout, so it serves a reset commit that changes the template too. There is
-// no configValues arm: the CRD rejects configValues alongside nodeConfig.
+// needed. The order is the safety order:
+//
+//  1. a pending data reset (spec 009), whose plan also waits for any rollout,
+//     so it serves a reset commit that changes the template too;
+//  2. a change to the maintenance hold (spec 010);
+//  3. pod-template drift;
+//  4. a readiness reapproval, never while a hold is requested.
+//
+// While a hold is requested no plan releases seid: the reset plan parks
+// instead, and the update plan carries no mark-ready. There is no configValues
+// arm: the CRD rejects configValues alongside nodeConfig.
 func (p *staticConfigPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	held := node.Spec.HoldRequested() != ""
 	if task.DataResetPending(node) {
 		plan, err := buildDataResetPlan(node)
 		if err != nil {
 			return nil, err
 		}
+		if held {
+			if err := parkInsteadOfRelease(plan); err != nil {
+				return nil, err
+			}
+		}
 		markDataResetStarted(node)
 		return plan, nil
+	}
+	if plan, err := buildHoldPlan(node, node.Spec.HoldRequested(), node.Status.MaintenanceHold); err != nil || plan != nil {
+		return plan, err
 	}
 	if podTemplateDrifted(node, p.platform) {
 		plan, err := p.buildUpdatePlan(node)
 		if err != nil {
 			return nil, err
 		}
+		if held {
+			withoutMarkReady(plan)
+		}
 		setNodeUpdateCondition(node, metav1.ConditionTrue, "UpdateStarted", podTemplateDriftMessage(node, p.platform))
 		return plan, nil
 	}
-	if sidecarNeedsReapproval(node) {
+	if sidecarNeedsReapproval(node) && !held {
 		return buildMarkReadyPlan(node)
 	}
 	return nil, nil

@@ -65,7 +65,9 @@ const (
 	TaskTypeMarkNotReady = string(wire.TaskMarkNotReady)
 	TaskTypeStopSeid     = string(wire.TaskStopSeid)
 	TaskTypeResetData    = string(wire.TaskResetData)
-	TaskTypeEVMDigest    = string(wire.TaskEVMDigest)
+
+	TaskTypeAwaitSeidStart = string(wire.TaskAwaitSeidStart)
+	TaskTypeEVMDigest      = string(wire.TaskEVMDigest)
 )
 
 // Snapshot-upload outcome contract, re-exported from wire so CLI consumers
@@ -332,6 +334,17 @@ func (t StopSeidTask) Validate() error {
 
 func (t StopSeidTask) ToTaskRequest() TaskRequest {
 	return upCheckTaskRequest(t.TaskType(), t.UpCheck)
+}
+
+// AwaitSeidStartTask completes once a `seid start` process runs in the pod. It
+// reads /proc and changes nothing. Consumers poll it to a terminal state.
+type AwaitSeidStartTask struct{}
+
+func (t AwaitSeidStartTask) TaskType() string { return TaskTypeAwaitSeidStart }
+func (t AwaitSeidStartTask) Validate() error  { return nil }
+
+func (t AwaitSeidStartTask) ToTaskRequest() TaskRequest {
+	return TaskRequest{Type: t.TaskType()}
 }
 
 // ResetDataTask clears the chain data directory (data/ only) and removes the

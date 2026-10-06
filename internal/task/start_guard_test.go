@@ -130,3 +130,63 @@ func TestRecordDataReset(t *testing.T) {
 		})
 	}
 }
+
+// 010 Req 2.4: a hold blocks mark-ready but not the hold's own start-once
+// step; a pending reset blocks both.
+func TestStartGuard_Hold(t *testing.T) {
+	cases := []struct {
+		name          string
+		hold          seiv1alpha1.MaintenanceHold
+		resetPending  bool
+		taskType      string
+		wantSubmitted bool
+	}{
+		{"mark-ready under hold", seiv1alpha1.MaintenanceHoldImmediate, false, sidecar.TaskTypeMarkReady, false},
+		{"start-once under hold", seiv1alpha1.MaintenanceHoldAfterExit, false, task.TaskTypeStartSeidOnce, true},
+		{"start-once under reset", seiv1alpha1.MaintenanceHoldAfterExit, true, task.TaskTypeStartSeidOnce, false},
+		{"mark-ready released", "", false, sidecar.TaskTypeMarkReady, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := nodeConfigNode(0, 0)
+			if tc.resetPending {
+				node.Spec.DataResetGeneration = 1
+			}
+			if tc.hold != "" {
+				node.Spec.Maintenance = &seiv1alpha1.MaintenanceSpec{Hold: tc.hold}
+			}
+			mock := &countingSidecar{}
+			cfg := task.ExecutionConfig{
+				BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
+				Resource:           node,
+			}
+			exec, err := task.Deserialize(tc.taskType, task.DeterministicTaskID("p", tc.taskType, 0), nil, cfg)
+			g.Expect(err).NotTo(HaveOccurred())
+			err = exec.Execute(context.Background())
+			if tc.wantSubmitted {
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(mock.submits).To(Equal(1))
+				return
+			}
+			var terminal *task.TerminalError
+			g.Expect(errors.As(err, &terminal)).To(BeTrue())
+			g.Expect(mock.submits).To(Equal(0))
+		})
+	}
+}
+
+// 010 Req 2.7: record-maintenance-hold writes the hold in effect, including
+// the empty value a release records.
+func TestRecordMaintenanceHold(t *testing.T) {
+	for _, hold := range []seiv1alpha1.MaintenanceHold{seiv1alpha1.MaintenanceHoldImmediate, ""} {
+		g := NewWithT(t)
+		node := nodeConfigNode(0, 0)
+		node.Status.MaintenanceHold = seiv1alpha1.MaintenanceHoldAfterExit
+		params := []byte(`{"hold":"` + string(hold) + `"}`)
+		exec, err := task.Deserialize(task.TaskTypeRecordMaintenanceHold, "id", params, task.ExecutionConfig{Resource: node})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(exec.Execute(context.Background())).To(Succeed())
+		g.Expect(node.Status.MaintenanceHold).To(Equal(hold))
+	}
+}

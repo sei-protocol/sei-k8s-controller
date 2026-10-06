@@ -308,6 +308,9 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 	if isDataResetPlan(plan) {
 		return "data-reset"
 	}
+	if isMaintenancePlan(plan) {
+		return "maintenance-hold"
+	}
 	for _, t := range plan.Tasks {
 		switch t.Type {
 		case task.TaskTypeObserveImage:

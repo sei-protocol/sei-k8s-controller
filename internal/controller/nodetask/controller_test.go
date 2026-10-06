@@ -713,6 +713,12 @@ func TestReconcile_MarkReady_EndToEnd(t *testing.T) {
 	g.Expect(fakeSC.getCalls).To(Equal(0))
 }
 
+// nodeConfigRefs is the ConfigMap pair the start-guard tests give a validator.
+var nodeConfigRefs = seiv1alpha1.NodeConfig{
+	ConfigRef: seiv1alpha1.ConfigFileRef{Name: "val-config"},
+	AppRef:    seiv1alpha1.ConfigFileRef{Name: "val-config"},
+}
+
 // 009 Req 3.3 / SC-005: while a data reset is pending, a MarkReady task fails
 // and submits nothing, so it cannot release seid onto data the reset has not
 // cleared.
@@ -722,10 +728,8 @@ func TestReconcile_MarkReady_RefusedWhileResetPending(t *testing.T) {
 	t0 := time.Now()
 	cr := newMarkReadyTask()
 	node := newRunningNode()
-	node.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
-		ConfigRef: seiv1alpha1.ConfigFileRef{Name: "val-config"},
-		AppRef:    seiv1alpha1.ConfigFileRef{Name: "val-config"},
-	}
+	refs := nodeConfigRefs
+	node.Spec.NodeConfig = &refs
 	node.Spec.DataResetGeneration = 1
 	fakeSC := newFakeSidecarClient()
 
@@ -740,6 +744,33 @@ func TestReconcile_MarkReady_RefusedWhileResetPending(t *testing.T) {
 	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
 	g.Expect(got.Status.Task.Err).To(ContainSubstring("data reset pending"))
 
+	fakeSC.mu.Lock()
+	defer fakeSC.mu.Unlock()
+	g.Expect(fakeSC.submitted).To(BeEmpty())
+}
+
+// 010 Req 2.4 / SC-003: while a maintenance hold is set, a MarkReady task fails
+// and submits nothing, so it cannot start seid out from under the hold.
+func TestReconcile_MarkReady_RefusedWhileHeld(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	t0 := time.Now()
+	cr := newMarkReadyTask()
+	node := newRunningNode()
+	refs := nodeConfigRefs
+	node.Spec.NodeConfig = &refs
+	node.Spec.Maintenance = &seiv1alpha1.MaintenanceSpec{Hold: seiv1alpha1.MaintenanceHoldImmediate}
+	fakeSC := newFakeSidecarClient()
+
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, cr, node)
+	for range 2 {
+		_, err := r.Reconcile(ctx, req())
+		g.Expect(err).NotTo(HaveOccurred())
+	}
+
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	g.Expect(got.Status.Task.Err).To(ContainSubstring("maintenance hold"))
 	fakeSC.mu.Lock()
 	defer fakeSC.mu.Unlock()
 	g.Expect(fakeSC.submitted).To(BeEmpty())
