@@ -149,13 +149,14 @@ and confirm the PVC's capacity and the file system grow while seid runs.
 2. WHILE the owned PVC's capacity is lower than the disk size, THE condition SHALL be `True` with reason `Resizing`. Its message SHALL carry the PVC's resize condition when one is present.
 3. IF the PVC update fails, THEN THE condition SHALL be `True` with reason `ResizeFailed`, and its message SHALL carry the error.
 4. WHILE the owned PVC's capacity is equal to or greater than the disk size, THE condition SHALL be `False` with reason `ResizeComplete`.
-5. WHERE a SeiNode has no `spec.nodeConfig`, or uses an imported PVC, THE condition SHALL be `False` with reason `NotApplicable`.
+5. WHERE a SeiNode has no `spec.nodeConfig`, no explicit disk size, an imported or unowned PVC, or a PVC that does not exist or is not bound yet, THE condition SHALL be `False` with reason `NotApplicable`.
+6. IF the controller cannot read the owned PVC for a reason other than "not found", THEN THE condition SHALL be `Unknown` with reason `PVCLookupError`.
 
 ### Key Entities
 
 - **Footprint** (`spec.resources`): mutable on a ConfigMap-configured node. A change rolls the pod.
 - **Disk size** (`spec.dataVolume.storage.resources.requests.storage`): grow-only on a ConfigMap-configured node.
-- **`DataVolumeResizeInProgress` condition**: the disk resize signal, with reasons `Resizing`, `ResizeFailed`, `ResizeComplete`, `NotApplicable`.
+- **`DataVolumeResizeInProgress` condition**: the disk resize signal, with reasons `Resizing`, `ResizeFailed`, `ResizeComplete`, `NotApplicable`, and `PVCLookupError`.
 
 ## Success Criteria *(mandatory)*
 
@@ -170,6 +171,7 @@ and confirm the PVC's capacity and the file system grow while seid runs.
 
 ## Assumptions
 
+- Only an explicit disk size grows a volume. The per-mode default comes from the controller's app-config, so a change to that default does not grow every volume in a cell.
 - A footprint change reaches the pod through the StatefulSet's `RollingUpdate`. The new pod starts with the start gate closed, and the controller re-marks the sidecar ready as it does after any roll. The start guard from specs 009 and 010 still applies.
 - The platform's `gp3` StorageClass sets `allowVolumeExpansion: true`, and the EBS CSI driver grows the volume and the file system online.
 - A Pending validator has hours before downtime jailing. On 2026-10-06 both chains used a window of 108,000 blocks, a 5% minimum, and a 600 s jail with no downtime slash.
