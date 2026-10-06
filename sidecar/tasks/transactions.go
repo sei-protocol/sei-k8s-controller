@@ -21,6 +21,7 @@ import (
 	banktypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/bank/types"
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
 	proposal "github.com/sei-protocol/sei-chain/sei-cosmos/x/params/types/proposal"
+	slashingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/slashing/types"
 	stakingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/staking/types"
 	upgradetypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/upgrade/types"
 	wasmtypes "github.com/sei-protocol/sei-chain/sei-wasmd/x/wasm/types"
@@ -37,13 +38,24 @@ const tmRPCTimeout = 30 * time.Second
 
 // newSDKTxClient wires the production txClient against the local seid RPC.
 func newSDKTxClient(cfg engine.ExecutionConfig, in SignAndBroadcastInput, fromAddr sdk.AccAddress) (txClient, error) {
+	clientCtx, err := newSignTxClientContext(cfg, in, fromAddr)
+	if err != nil {
+		return nil, err
+	}
+	return &sdkTxClient{clientCtx: clientCtx}, nil
+}
+
+// newSignTxClientContext builds the SDK client context against the local seid
+// RPC. The sign path and the read-only queries a sign-tx handler runs before
+// it signs share it, so both decode with the same registry.
+func newSignTxClientContext(cfg engine.ExecutionConfig, in SignAndBroadcastInput, fromAddr sdk.AccAddress) (client.Context, error) {
 	rpcURL := rpc.DefaultEndpoint
 	if cfg.RPC != nil && cfg.RPC.Endpoint() != "" {
 		rpcURL = cfg.RPC.Endpoint()
 	}
 	tmClient, err := rpchttp.NewWithTimeout(rpcURL, tmRPCTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("tendermint RPC client at %s: %w", rpcURL, err)
+		return client.Context{}, fmt.Errorf("tendermint RPC client at %s: %w", rpcURL, err)
 	}
 	registry, cdc, txCfg := makeSignTxCodec()
 	clientCtx := client.Context{}.
@@ -57,7 +69,7 @@ func newSDKTxClient(cfg engine.ExecutionConfig, in SignAndBroadcastInput, fromAd
 		WithFromName(in.KeyName).
 		WithAccountRetriever(authtypes.AccountRetriever{}).
 		WithBroadcastMode("sync")
-	return &sdkTxClient{clientCtx: clientCtx}, nil
+	return clientCtx, nil
 }
 
 type sdkTxClient struct {
@@ -192,6 +204,7 @@ func newSignTxInterfaceRegistry() codectypes.InterfaceRegistry {
 	authtypes.RegisterInterfaces(registry)
 	banktypes.RegisterInterfaces(registry)
 	stakingtypes.RegisterInterfaces(registry)
+	slashingtypes.RegisterInterfaces(registry)
 	govtypes.RegisterInterfaces(registry)
 	upgradetypes.RegisterInterfaces(registry)
 	// x/params ParameterChangeProposal as a gov Content impl (gov-param-change

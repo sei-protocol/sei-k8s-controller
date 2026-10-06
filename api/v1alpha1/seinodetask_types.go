@@ -7,7 +7,7 @@ import (
 
 // SeiNodeTaskKind discriminates the SeiNodeTask spec union. Exactly one of
 // the matching payload sub-structs in SeiNodeTaskSpec must be set.
-// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;GovParamChange;GovUpdateInstantiateConfig;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;RestartSeid;MarkReady
+// +kubebuilder:validation:Enum=GovSoftwareUpgrade;GovVote;GovParamChange;GovUpdateInstantiateConfig;AwaitCondition;UpdateNodeImage;AwaitNodesAtHeight;RestartSeid;MarkReady;Unjail
 type SeiNodeTaskKind string
 
 const (
@@ -74,6 +74,14 @@ const (
 	// accepts the request, a beat before /v0/healthz serves 200. Gate on the node
 	// actually serving with a following AwaitCondition/AwaitNodesAtHeight step.
 	SeiNodeTaskKindMarkReady SeiNodeTaskKind = "MarkReady"
+
+	// SeiNodeTaskKindUnjail backs the sidecar `unjail` task. Submits MsgUnjail
+	// for the target validator, signed by its operator account through the
+	// sidecar keyring. The sidecar refuses before broadcast when the account has
+	// no validator, or the validator is not jailed, still in its jail period, or
+	// tombstoned. NOT chain-idempotent: a second unjail of a released validator
+	// spends the fee and fails, so do not re-create a Complete task.
+	SeiNodeTaskKindUnjail SeiNodeTaskKind = "Unjail"
 )
 
 // SeiNodeTaskPhase is the high-level lifecycle state of a SeiNodeTask.
@@ -118,7 +126,7 @@ const (
 // Field names locked at v1alpha1 — see https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task-lld.md
 // (PR sei-protocol/sei-k8s-controller#277).
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.govUpdateInstantiateConfig) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, govParamChange, govUpdateInstantiateConfig, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, or markReady must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ? 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.govUpdateInstantiateConfig) ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage) ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid) ? 1 : 0) + (has(self.markReady) ? 1 : 0) + (has(self.unjail) ? 1 : 0) == 1",message="exactly one of govSoftwareUpgrade, govVote, govParamChange, govUpdateInstantiateConfig, awaitCondition, updateNodeImage, awaitNodesAtHeight, restartSeid, markReady, or unjail must be set"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)",message="spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovVote' || has(self.govVote)",message="spec.govVote is required when kind=GovVote"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovParamChange' || has(self.govParamChange)",message="spec.govParamChange is required when kind=GovParamChange"
@@ -128,6 +136,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.kind != 'AwaitNodesAtHeight' || has(self.awaitNodesAtHeight)",message="spec.awaitNodesAtHeight is required when kind=AwaitNodesAtHeight"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'RestartSeid' || has(self.restartSeid)",message="spec.restartSeid is required when kind=RestartSeid"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'MarkReady' || has(self.markReady)",message="spec.markReady is required when kind=MarkReady"
+// +kubebuilder:validation:XValidation:rule="self.kind != 'Unjail' || has(self.unjail)",message="spec.unjail is required when kind=Unjail"
 // +kubebuilder:validation:XValidation:rule="self.kind == oldSelf.kind",message="spec.kind is immutable"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovUpdateInstantiateConfig' || self.target == oldSelf.target",message="spec.target is immutable for kind=GovUpdateInstantiateConfig"
 // +kubebuilder:validation:XValidation:rule="self.kind != 'GovUpdateInstantiateConfig' || self.govUpdateInstantiateConfig == oldSelf.govUpdateInstantiateConfig",message="spec.govUpdateInstantiateConfig is immutable"
@@ -189,6 +198,10 @@ type SeiNodeTaskSpec struct {
 	// MarkReady is the payload for kind=MarkReady.
 	// +optional
 	MarkReady *MarkReadyPayload `json:"markReady,omitempty"`
+
+	// Unjail is the payload for kind=Unjail.
+	// +optional
+	Unjail *UnjailPayload `json:"unjail,omitempty"`
 }
 
 // SeiNodeTaskTarget identifies the single SeiNode this task operates on.
@@ -456,6 +469,36 @@ type GovVotePayload struct {
 	Gas uint64 `json:"gas"`
 }
 
+// UnjailPayload mirrors sidecar/tasks/unjail.go::UnjailRequest. The validator
+// is the one whose operator account signs; the payload names no address.
+type UnjailPayload struct {
+	// ChainID is the chain ID the unjail targets. Cross-checked against the
+	// local node's reported chain ID by the sidecar.
+	// +kubebuilder:validation:MinLength=1
+	ChainID string `json:"chainId"`
+
+	// KeyName names the keyring entry that signs the unjail. Omit to let the
+	// controller derive it from the target SeiNode, the same way as for
+	// GovVote: spec.validator.operatorKeyring.secret.keyName when .secret is
+	// set (defaulting to "node_admin"), otherwise "validator".
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9_-]+$`
+	KeyName string `json:"keyName,omitempty"`
+
+	// Memo is the optional tx memo. The sidecar appends a `taskID=<id>` tag;
+	// do not pre-tag.
+	// +optional
+	Memo string `json:"memo,omitempty"`
+
+	// Fees is the tx fee in coin notation (e.g. "4000usei"). usei-only.
+	// +kubebuilder:validation:MinLength=1
+	Fees string `json:"fees"`
+
+	// Gas is the tx gas limit.
+	// +kubebuilder:validation:Minimum=1
+	Gas uint64 `json:"gas"`
+}
+
 // AwaitConditionPayload is the await-condition payload. Today only the
 // height condition is supported by the sidecar; the nested condition
 // union shape exists so new condition kinds (proposalStatus, nodeRunning,
@@ -628,6 +671,10 @@ type SeiNodeTaskOutputs struct {
 	// AwaitNodesAtHeight outputs for kind=AwaitNodesAtHeight.
 	// +optional
 	AwaitNodesAtHeight *AwaitNodesAtHeightOutputs `json:"awaitNodesAtHeight,omitempty"`
+
+	// Unjail outputs for kind=Unjail.
+	// +optional
+	Unjail *UnjailOutputs `json:"unjail,omitempty"`
 }
 
 // GovSoftwareUpgradeOutputs are the typed results for a completed
@@ -684,6 +731,19 @@ type GovUpdateInstantiateConfigOutputs struct {
 
 // GovVoteOutputs are the typed results for a completed GovVote task.
 type GovVoteOutputs struct {
+	// TxHash is the upper-case hex-encoded transaction hash.
+	// +optional
+	TxHash string `json:"txHash,omitempty"`
+
+	// Height is the block height at which the tx was included.
+	// +optional
+	Height int64 `json:"height,omitempty"`
+}
+
+// UnjailOutputs are the typed results for an Unjail task. The controller
+// stamps them on a committed tx, and on a failed one when the sidecar reports
+// a tx hash.
+type UnjailOutputs struct {
 	// TxHash is the upper-case hex-encoded transaction hash.
 	// +optional
 	TxHash string `json:"txHash,omitempty"`

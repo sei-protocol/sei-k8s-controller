@@ -417,6 +417,7 @@ spec:
                 - AwaitNodesAtHeight
                 - RestartSeid
                 - MarkReady
+                - Unjail
                 type: string
               markReady:
                 description: MarkReady is the payload for kind=MarkReady.
@@ -475,6 +476,43 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              unjail:
+                description: Unjail is the payload for kind=Unjail.
+                properties:
+                  chainId:
+                    description: |-
+                      ChainID is the chain ID the unjail targets. Cross-checked against the
+                      local node's reported chain ID by the sidecar.
+                    minLength: 1
+                    type: string
+                  fees:
+                    description: Fees is the tx fee in coin notation (e.g. "4000usei").
+                      usei-only.
+                    minLength: 1
+                    type: string
+                  gas:
+                    description: Gas is the tx gas limit.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  keyName:
+                    description: |-
+                      KeyName names the keyring entry that signs the unjail. Omit to let the
+                      controller derive it from the target SeiNode, the same way as for
+                      GovVote: spec.validator.operatorKeyring.secret.keyName when .secret is
+                      set (defaulting to "node_admin"), otherwise "validator".
+                    pattern: ^[a-zA-Z0-9_-]+$
+                    type: string
+                  memo:
+                    description: |-
+                      Memo is the optional tx memo. The sidecar appends a `taskID=<id>` tag;
+                      do not pre-tag.
+                    type: string
+                required:
+                - chainId
+                - fees
+                - gas
+                type: object
               updateNodeImage:
                 description: UpdateNodeImage is the payload for kind=UpdateNodeImage.
                 properties:
@@ -495,12 +533,13 @@ spec:
             x-kubernetes-validations:
             - message: exactly one of govSoftwareUpgrade, govVote, govParamChange,
                 govUpdateInstantiateConfig, awaitCondition, updateNodeImage, awaitNodesAtHeight,
-                restartSeid, or markReady must be set
+                restartSeid, markReady, or unjail must be set
               rule: '(has(self.govSoftwareUpgrade) ? 1 : 0) + (has(self.govVote) ?
                 1 : 0) + (has(self.govParamChange) ? 1 : 0) + (has(self.govUpdateInstantiateConfig)
                 ? 1 : 0) + (has(self.awaitCondition) ? 1 : 0) + (has(self.updateNodeImage)
                 ? 1 : 0) + (has(self.awaitNodesAtHeight) ? 1 : 0) + (has(self.restartSeid)
-                ? 1 : 0) + (has(self.markReady) ? 1 : 0) == 1'
+                ? 1 : 0) + (has(self.markReady) ? 1 : 0) + (has(self.unjail) ? 1 :
+                0) == 1'
             - message: spec.govSoftwareUpgrade is required when kind=GovSoftwareUpgrade
               rule: self.kind != 'GovSoftwareUpgrade' || has(self.govSoftwareUpgrade)
             - message: spec.govVote is required when kind=GovVote
@@ -519,6 +558,8 @@ spec:
               rule: self.kind != 'RestartSeid' || has(self.restartSeid)
             - message: spec.markReady is required when kind=MarkReady
               rule: self.kind != 'MarkReady' || has(self.markReady)
+            - message: spec.unjail is required when kind=Unjail
+              rule: self.kind != 'Unjail' || has(self.unjail)
             - message: spec.kind is immutable
               rule: self.kind == oldSelf.kind
             - message: spec.target is immutable for kind=GovUpdateInstantiateConfig
@@ -684,6 +725,19 @@ spec:
                     type: object
                   govVote:
                     description: GovVote outputs for kind=GovVote.
+                    properties:
+                      height:
+                        description: Height is the block height at which the tx was
+                          included.
+                        format: int64
+                        type: integer
+                      txHash:
+                        description: TxHash is the upper-case hex-encoded transaction
+                          hash.
+                        type: string
+                    type: object
+                  unjail:
+                    description: Unjail outputs for kind=Unjail.
                     properties:
                       height:
                         description: Height is the block height at which the tx was

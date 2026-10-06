@@ -300,13 +300,13 @@ func (r *SeiNodeTaskReconciler) driveTask(ctx context.Context, cr *seiv1alpha1.S
 }
 
 // markComplete records a committed-ok terminal: stamp outputs and latch Ready.
-// Gov kinds latch reason Confirmed (on-chain confirmed); others keep TaskComplete.
+// Sign-tx kinds latch reason Confirmed (on-chain confirmed); others keep TaskComplete.
 func (r *SeiNodeTaskReconciler) markComplete(cr *seiv1alpha1.SeiNodeTask, exec task.TaskExecution, target *seiv1alpha1.SeiNode, now time.Time) {
 	cr.Status.Task.Status = seiv1alpha1.TaskComplete
 	populateOutputs(cr, target, decodeGovResult(exec))
 	r.setPhase(cr, seiv1alpha1.SeiNodeTaskPhaseComplete, now)
 	reason := "TaskComplete"
-	if isGovKind(cr.Spec.Kind) {
+	if isSignTxKind(cr.Spec.Kind) {
 		reason = "Confirmed"
 	}
 	setCondition(cr, metav1.Condition{
@@ -315,7 +315,7 @@ func (r *SeiNodeTaskReconciler) markComplete(cr *seiv1alpha1.SeiNodeTask, exec t
 	})
 }
 
-// handleFailure resolves an engine-Failed task. For gov kinds it decodes the
+// handleFailure resolves an engine-Failed task. For sign-tx kinds it decodes the
 // result to distinguish a committed-but-failed tx and an inclusion-undetermined
 // (pending) result — which is re-checked, not terminal — from a hard failure.
 func (r *SeiNodeTaskReconciler) handleFailure(cr *seiv1alpha1.SeiNodeTask, exec task.TaskExecution, now time.Time) {
@@ -329,7 +329,7 @@ func (r *SeiNodeTaskReconciler) handleFailure(cr *seiv1alpha1.SeiNodeTask, exec 
 		// explicitly classified below. An unverifiable inclusion or a
 		// committed tx whose proposal ID could not be decoded still carries the
 		// tx hash an operator needs to determine whether recreation is safe.
-		populateGovOutputs(cr, gr)
+		populateTxOutputs(cr, gr)
 		switch gr.InclusionStatus {
 		case wire.InclusionPending:
 			// Undetermined: re-submit (same task ID → engine re-run → marker
@@ -404,8 +404,8 @@ func taskParamsForKind(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode)
 }
 
 // populateOutputs stamps the typed per-kind outputs on the committed-ok path.
-// Gov kinds read the sidecar's structured result (gr); UpdateNodeImage reads
-// the target's observed image. gr is nil for non-gov kinds.
+// Sign-tx kinds read the sidecar's structured result (gr); UpdateNodeImage reads
+// the target's observed image. gr is nil for other kinds.
 func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode, gr *wire.GovTxResult) {
 	switch cr.Spec.Kind {
 	case seiv1alpha1.SeiNodeTaskKindUpdateNodeImage:
@@ -416,8 +416,8 @@ func populateOutputs(cr *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode, g
 			AppliedImage: target.Status.CurrentImage,
 		}
 	default:
-		if isGovKind(cr.Spec.Kind) {
-			populateGovOutputs(cr, gr)
+		if isSignTxKind(cr.Spec.Kind) {
+			populateTxOutputs(cr, gr)
 		}
 	}
 }
