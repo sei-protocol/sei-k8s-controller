@@ -156,8 +156,15 @@ func observeTerminalDataResetPlan(node *seiv1alpha1.SeiNode, plan *seiv1alpha1.T
 	case seiv1alpha1.TaskPlanFailed:
 		if startDeferred(plan) {
 			// The wipe ran and the counter was recorded; only the final start
-			// was refused, because the counter rose again or a hold arrived.
-			// The next plan handles that; the reset itself succeeded.
+			// was refused. A counter that rose again folds into one more reset,
+			// so the condition stays pending for the newer value. Otherwise a
+			// hold arrived, and the reset itself is complete.
+			if task.DataResetPending(node) {
+				setDataResetCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonResetPending,
+					fmt.Sprintf("data reset recorded for dataResetGeneration=%d; reset for %d pending",
+						node.Status.DataResetGeneration, node.Spec.DataResetGeneration))
+				return
+			}
 			setDataResetCondition(node, metav1.ConditionFalse, seiv1alpha1.ReasonResetComplete,
 				fmt.Sprintf("data reset complete for dataResetGeneration=%d; start deferred: %s",
 					node.Status.DataResetGeneration, plan.FailedTaskDetail.Error))

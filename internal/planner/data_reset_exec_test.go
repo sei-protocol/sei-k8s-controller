@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -57,9 +58,9 @@ func TestDataReset_StaleUpdatePlanCannotReleaseGate(t *testing.T) {
 		"the second reset starts fresh, not as a retry of a failure")
 }
 
-// 009 Req 5.5: only a real task failure reads ResetFailed. A reset plan whose
-// final mark-ready the guard refused reads ResetComplete for the value it
-// recorded.
+// 009 Req 5.3, 5.5 (seidroid #590): only a real task failure reads
+// ResetFailed. A reset plan whose final mark-ready the guard refused because
+// the counter rose again reads ResetPending for the newer value.
 func TestDataReset_DeferredStartIsNotAFailure(t *testing.T) {
 	g := NewWithT(t)
 	s := testScheme(t)
@@ -76,8 +77,33 @@ func TestDataReset_DeferredStartIsNotAFailure(t *testing.T) {
 
 	observeTerminalDataResetPlan(node, plan)
 	cond := dataResetCondition(node)
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonResetPending))
+	g.Expect(cond.Message).To(ContainSubstring("reset for 2 pending"))
+}
+
+// seidroid #594: an update plan whose start the guard deferred is a completed
+// update, not UpdateFailed, because the roll landed.
+func TestDataReset_StaleUpdatePlanReadsUpdateComplete(t *testing.T) {
+	g := NewWithT(t)
+	s := testScheme(t)
+	node := withNodeConfig(runningFullNode())
+	node.Spec.Image = testImageV2
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	plan := node.Status.Plan
+	completeTasksBefore(plan, len(plan.Tasks)-1)
+	node.Spec.DataResetGeneration = 1
+
+	mock := &mockSidecarClient{}
+	_, err := nodeExecutor(fake.NewClientBuilder().WithScheme(s), s, mock).ExecutePlan(context.Background(), node, plan)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
+
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+	g.Expect(cond).NotTo(BeNil())
 	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonResetComplete))
+	g.Expect(cond.Reason).To(Equal("UpdateComplete"))
 	g.Expect(cond.Message).To(ContainSubstring("start deferred"))
 }
 

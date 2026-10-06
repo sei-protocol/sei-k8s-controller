@@ -623,9 +623,10 @@ func (r *SeiNodeReconciler) emitStateSyncBlockedEvent(node *seiv1alpha1.SeiNode,
 }
 
 // emitDataResetEvent records the start, success, and each failure of a data
-// reset as Events on the SeiNode (spec 009 Requirement 5). A retry that fails
-// again keeps reason ResetFailed with a new message, so a changed message is a
-// new failure too.
+// reset as Events on the SeiNode (spec 009 Requirement 5). A changed message
+// under an unchanged reason is a new event too: a retry that fails again keeps
+// ResetFailed, and a counter that rose during a reset moves straight from one
+// ResetRunning to the next, folding the earlier value into it.
 func (r *SeiNodeReconciler) emitDataResetEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {
 	cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionDataResetInProgress)
 	if cur == nil || r.Recorder == nil {
