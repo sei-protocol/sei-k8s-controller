@@ -77,6 +77,11 @@ import (
 // podManagementPolicy follows it, and the API server refuses to change that
 // field on an existing StatefulSet.
 // +kubebuilder:validation:XValidation:rule="has(self.nodeConfig) == has(oldSelf.nodeConfig)",message="spec.nodeConfig can be neither added to nor removed from an existing SeiNode: it is fixed at creation, so replace the node (dataVolume.import can carry its data over)"
+// dataResetGeneration is a request counter: each increase asks for one data
+// reset. It can only increase, so a git revert cannot lower it and rearm a wipe,
+// and it needs nodeConfig, because only that node's plans run the reset.
+// +kubebuilder:validation:XValidation:rule="!has(self.dataResetGeneration) || has(self.nodeConfig)",message="spec.dataResetGeneration needs spec.nodeConfig: only a node that reads its config from ConfigMaps runs the declarative data reset"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.dataResetGeneration) || (has(self.dataResetGeneration) && self.dataResetGeneration >= oldSelf.dataResetGeneration)",message="spec.dataResetGeneration can only increase: lowering or removing it would rearm a data wipe; to undo a reset commit, revert the config and keep the counter"
 type SeiNodeSpec struct {
 	// ChainID of the chain this node belongs to.
 	// Constrained to DNS-1123 label characters because the controller composes
@@ -248,6 +253,18 @@ type SeiNodeSpec struct {
 	// recover from a failed node.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+
+	// DataResetGeneration requests a data reset. Each increase above
+	// status.dataResetGeneration asks the controller to wipe <home>/data/ once,
+	// while seid waits at the sidecar start gate, and then to start seid on the
+	// current spec. The sign state, the node identity, and config/ survive the
+	// reset. Put the counter increase and the config change it needs in one
+	// commit; two commits start seid once on the old data with the new config.
+	// Wait on status.dataResetGeneration >= N, not on a condition.
+	// Requires spec.nodeConfig. Can only increase.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	DataResetGeneration int64 `json:"dataResetGeneration,omitempty"`
 }
 
 // Resources overrides the seid-container footprint in pod-resource shape.
@@ -706,6 +723,31 @@ const (
 	// status.endpoint only while this is True, so a consumer never reads a URL
 	// nothing answers on.
 	ConditionEvmServing = "EvmServing"
+
+	// ConditionDataResetInProgress reports the declarative data reset
+	// (spec.dataResetGeneration). InProgress-style and always-present: False
+	// is the steady state. The completion contract is
+	// status.dataResetGeneration >= N, not this condition, because right after
+	// a merge it can still describe the previous reset.
+	ConditionDataResetInProgress = "DataResetInProgress"
+)
+
+// Reasons for the DataResetInProgress condition. Stable enum (public API for
+// alerting/runbooks per CLAUDE.md "Conditions").
+const (
+	// ReasonDataResetNotApplicable: the node has no spec.nodeConfig.
+	ReasonDataResetNotApplicable = "NotApplicable"
+	// ReasonNoResetRequested: no reset has run and none is pending.
+	ReasonNoResetRequested = "NoResetRequested"
+	// ReasonResetPending: a reset is pending and its plan has not started.
+	ReasonResetPending = "ResetPending"
+	// ReasonResetRunning: the reset plan runs.
+	ReasonResetRunning = "ResetRunning"
+	// ReasonResetComplete: the last reset finished and none is pending.
+	ReasonResetComplete = "ResetComplete"
+	// ReasonResetFailed: the last reset plan failed; the controller builds it
+	// again on a later reconcile, and seid stays held.
+	ReasonResetFailed = "ResetFailed"
 )
 
 // Reasons for the EvmServing condition. Stable enum (public API for
@@ -929,6 +971,13 @@ type SeiNodeStatus struct {
 	// omitempty leaves .status.endpoint absent for nodes that surface nothing.
 	// +optional
 	Endpoint *NodeEndpointStatus `json:"endpoint,omitempty"`
+
+	// DataResetGeneration is the last spec.dataResetGeneration the controller
+	// finished a data reset for. A reset is pending while the spec value is
+	// greater. While the node is not Running the controller keeps it equal to
+	// the spec value, so creating a node never wipes it.
+	// +optional
+	DataResetGeneration int64 `json:"dataResetGeneration,omitempty"`
 }
 
 // NodeEndpointStatus carries the in-cluster URLs this SeiNode serves, derived

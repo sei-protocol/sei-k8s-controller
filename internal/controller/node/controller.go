@@ -130,6 +130,13 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	observedPhase := node.Status.Phase
 	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 	prevStateSync := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionStateSyncReady)
+	// A copy, not the pointer FindStatusCondition returns: SetStatusCondition
+	// mutates the slice element in place, which would erase the transition.
+	var prevDataReset *metav1.Condition
+	if c := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionDataResetInProgress); c != nil {
+		cp := *c
+		prevDataReset = &cp
+	}
 
 	setNodePausedCondition(node)
 
@@ -237,6 +244,11 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		node.Status.Endpoint = composeNodeEndpoints(node)
 	}
 
+	// Same discipline for DataResetInProgress, and the handled counter beside
+	// it: spec-derived plus the persisted plan, so it rides the flush on every
+	// path, including Paused, where a pending reset waits.
+	planner.ResolveDataReset(node)
+
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
 		if err := flushStatus(); err != nil {
@@ -321,6 +333,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		}
 	}
 
+	r.emitDataResetEvent(node, prevDataReset)
 	r.observeCommittedHeight(ctx, node, suppressDrift)
 
 	if err := flushStatus(); err != nil {
@@ -607,4 +620,26 @@ func (r *SeiNodeReconciler) emitStateSyncBlockedEvent(node *seiv1alpha1.SeiNode,
 	r.Recorder.Eventf(node, corev1.EventTypeWarning, "StateSyncBlocked",
 		"state sync enabled but not ready for chain %q (%s); not building plan",
 		node.Spec.ChainID, cur.Reason)
+}
+
+// emitDataResetEvent records the start, success, and each failure of a data
+// reset as Events on the SeiNode (spec 009 Requirement 5). A retry that fails
+// again keeps reason ResetFailed with a new message, so a changed message is a
+// new failure too.
+func (r *SeiNodeReconciler) emitDataResetEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {
+	cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionDataResetInProgress)
+	if cur == nil || r.Recorder == nil {
+		return
+	}
+	if prev != nil && prev.Reason == cur.Reason && prev.Message == cur.Message {
+		return
+	}
+	switch cur.Reason {
+	case seiv1alpha1.ReasonResetRunning:
+		r.Recorder.Event(node, corev1.EventTypeNormal, "DataResetStarted", cur.Message)
+	case seiv1alpha1.ReasonResetComplete:
+		r.Recorder.Event(node, corev1.EventTypeNormal, "DataResetComplete", cur.Message)
+	case seiv1alpha1.ReasonResetFailed:
+		r.Recorder.Event(node, corev1.EventTypeWarning, "DataResetFailed", cur.Message)
+	}
 }

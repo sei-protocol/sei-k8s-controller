@@ -6,25 +6,39 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/sei-protocol/seilog"
 
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/engine"
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/rpc"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/tomlpatch"
 )
 
 var resetDataLog = seilog.NewLogger("seictl", "task", "reset-data")
 
 // privValidatorStateFile is CometBFT's last-sign-state file. It lives inside
 // data/ (unlike node_key.json / priv_validator_key.json, which live in config/
-// and are therefore outside the wipe), so the reset rewrites it fresh.
+// and are therefore outside the wipe), so the wipe skips it by name: it is the
+// validator's double-sign guard, and it must survive every reset.
 const privValidatorStateFile = "priv_validator_state.json"
 
-// emptyPrivValidatorState is the reset last-sign-state (unsafe-reset-all
-// semantics): height is a JSON string, round and step are numbers. RPC nodes
-// do not sign, and validators are excluded from the recipe, so writing a fresh
-// zero state is always safe here.
+// defaultPrivValidatorStatePath is the state-file path, relative to the home
+// root, that the wipe knows how to keep. A config.toml that moves the file
+// elsewhere makes the reset refuse rather than guess.
+const defaultPrivValidatorStatePath = "data/" + privValidatorStateFile
+
+// emptyPrivValidatorState is the zero last-sign-state seid needs to start when
+// no sign state exists yet: height is a JSON string, round and step are
+// numbers. It is written only when the file is absent, never over one.
 const emptyPrivValidatorState = `{"height":"0","round":0,"step":0}` + "\n"
+
+// dataUserProcesses are the process names (as /proc/<pid>/comm reports them)
+// that read or write the data directory. A wipe under any of them corrupts what
+// it is doing, or deletes what it is about to read.
+var dataUserProcesses = []string{"seid", "seidb"}
 
 // ResetDataResult is the reset-data task's structured result. WipedBytes is the
 // pre-wipe on-disk size of data/ (regular files only), surfaced so the
@@ -37,24 +51,33 @@ type ResetDataResult struct {
 	WipedBytes int64 `json:"wipedBytes"`
 }
 
-// ResetDataer clears the chain data directory for a state-sync re-bootstrap.
-// The wipe is scoped to <homeDir>/data/ and nothing else: the home root holds
-// config/ (node identity), the sidecar's task ledger (sidecar.db — the database
-// that resumes this very wipe after a crash), and the hold sentinel/markers.
-// Wiping the home root would destroy the machinery mid-flight; this is the
-// design's most important correctness rule.
+// ResetDataer clears the chain data directory for a re-bootstrap. The wipe is
+// scoped to <homeDir>/data/ and nothing else: the home root holds config/ (node
+// identity), the sidecar's task ledger (sidecar.db — the database that resumes
+// this very wipe after a crash), and the hold sentinel/markers. Wiping the home
+// root would destroy the machinery mid-flight; this is the design's most
+// important correctness rule.
+//
+// The sign state inside data/ survives: the wipe never deletes it, so a crash
+// part-way through cannot leave a re-run that finds no file and writes a zero
+// state over a validator's last signed height.
 //
 // The reset needs no atomicity of its own. A partially deleted data directory
 // is only dangerous if seid starts on it, and the node hold guarantees it does
 // not. As defense-in-depth the handler refuses to run while seid's local RPC is
-// serving (i.e. the node is not actually held). It is content-idempotent: an
-// already-wiped directory is success.
+// serving (the node is not actually held), while any seid or seidb process
+// runs in the pod (an operator's rollback or a digest scan), and when
+// config.toml moves the sign state to a path the wipe does not know. It is
+// content-idempotent: an already-wiped directory is success.
 type ResetDataer struct {
 	homeDir string
 	probeUp func(ctx context.Context) bool
 	// measure returns the pre-wipe size of data/. A test seam; defaults to
 	// dirSize when nil.
 	measure func(dir string) (int64, error)
+	// dataUsers returns the names of running processes that use the data
+	// directory. A test seam; defaults to findDataUsers when nil.
+	dataUsers func() ([]string, error)
 }
 
 // NewResetDataer builds a ResetDataer rooted at homeDir with the real local-RPC
@@ -62,9 +85,10 @@ type ResetDataer struct {
 func NewResetDataer(homeDir string) *ResetDataer {
 	statusClient := rpc.NewStatusClient("", nil)
 	return &ResetDataer{
-		homeDir: homeDir,
-		probeUp: func(ctx context.Context) bool { return seidRPCUp(ctx, statusClient) },
-		measure: dirSize,
+		homeDir:   homeDir,
+		probeUp:   func(ctx context.Context) bool { return seidRPCUp(ctx, statusClient) },
+		measure:   dirSize,
+		dataUsers: findDataUsers,
 	}
 }
 
@@ -83,6 +107,12 @@ func (d *ResetDataer) reset(ctx context.Context) (ResetDataResult, error) {
 	if d.probeUp(ctx) {
 		return ResetDataResult{}, fmt.Errorf("reset-data: seid RPC is serving; node is not held — refusing to wipe a live data directory")
 	}
+	if err := d.refuseDataUsers(); err != nil {
+		return ResetDataResult{}, err
+	}
+	if err := d.refuseMovedSignState(); err != nil {
+		return ResetDataResult{}, err
+	}
 
 	dataDir := filepath.Join(d.homeDir, "data")
 
@@ -98,18 +128,26 @@ func (d *ResetDataer) reset(ctx context.Context) (ResetDataResult, error) {
 		size = -1
 	}
 
-	if err := wipeDirContents(dataDir); err != nil {
+	if err := wipeDirContents(dataDir, privValidatorStateFile); err != nil {
 		return ResetDataResult{}, fmt.Errorf("reset-data: wiping %s: %w", dataDir, err)
 	}
 
 	// Recreate data/ (the wipe may have removed it if it was empty of anything
-	// but itself) and drop a fresh zero sign-state.
+	// but itself) and write the zero sign state only where none exists: a node
+	// that never signed needs it to start, and a validator keeps its own.
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return ResetDataResult{}, fmt.Errorf("reset-data: recreating %s: %w", dataDir, err)
 	}
 	statePath := filepath.Join(dataDir, privValidatorStateFile)
-	if err := os.WriteFile(statePath, []byte(emptyPrivValidatorState), 0o600); err != nil {
-		return ResetDataResult{}, fmt.Errorf("reset-data: writing %s: %w", statePath, err)
+	switch _, err := os.Stat(statePath); {
+	case err == nil:
+		resetDataLog.Info("kept existing sign state", "path", statePath)
+	case os.IsNotExist(err):
+		if err := writeFileSynced(statePath, []byte(emptyPrivValidatorState), 0o600); err != nil {
+			return ResetDataResult{}, fmt.Errorf("reset-data: writing %s: %w", statePath, err)
+		}
+	default:
+		return ResetDataResult{}, fmt.Errorf("reset-data: checking %s: %w", statePath, err)
 	}
 
 	// Clear the state-sync completion marker (home root, outside data/) so the
@@ -123,11 +161,101 @@ func (d *ResetDataer) reset(ctx context.Context) (ResetDataResult, error) {
 	return ResetDataResult{WipedBytes: size}, nil
 }
 
-// wipeDirContents removes every entry under dir, leaving dir itself. A missing
-// dir is success (content-idempotent: already-empty is the goal state), and a
-// concurrent peer removing an entry first (ENOENT) is tolerated so a rehydrated
-// re-run cannot fail on a half-wiped tree.
-func wipeDirContents(dir string) error {
+// refuseDataUsers fails the reset while a seid or seidb process runs anywhere
+// in the pod. The pod shares one PID namespace, so the sidecar sees an
+// operator's `seid rollback` in the seid container and its own digest scans.
+func (d *ResetDataer) refuseDataUsers() error {
+	find := d.dataUsers
+	if find == nil {
+		find = findDataUsers
+	}
+	users, err := find()
+	if err != nil {
+		return fmt.Errorf("reset-data: listing processes that use the data directory: %w", err)
+	}
+	if len(users) > 0 {
+		return fmt.Errorf("reset-data: %s running in the pod — refusing to wipe data it is using; finish or stop it first",
+			strings.Join(users, ", "))
+	}
+	return nil
+}
+
+// refuseMovedSignState fails the reset when config.toml points
+// [priv-validator] state-file anywhere but data/priv_validator_state.json. The
+// wipe keeps the sign state by name; under another path inside data/ it would
+// delete it, and seid would start on a zero state.
+func (d *ResetDataer) refuseMovedSignState() error {
+	configPath := filepath.Join(d.homeDir, "config", "config.toml")
+	doc, err := tomlpatch.ReadTOML(configPath)
+	if err != nil {
+		return fmt.Errorf("reset-data: reading %s to locate the sign state: %w", configPath, err)
+	}
+	section, _ := doc["priv-validator"].(map[string]any)
+	configured, _ := section["state-file"].(string)
+	if configured == "" {
+		return nil
+	}
+	if filepath.Clean(configured) == defaultPrivValidatorStatePath ||
+		filepath.Clean(configured) == filepath.Join(d.homeDir, defaultPrivValidatorStatePath) {
+		return nil
+	}
+	return fmt.Errorf("reset-data: config.toml sets [priv-validator] state-file = %q; the reset keeps only %s, so it refuses rather than risk deleting the sign state",
+		configured, defaultPrivValidatorStatePath)
+}
+
+// findDataUsers scans /proc for processes whose comm is in dataUserProcesses.
+// comm, not argv[0]: the seid container's start gate is a bash loop whose
+// script text names seid, and that must not count.
+func findDataUsers() ([]string, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, fmt.Errorf("reading /proc: %w", err)
+	}
+	var users []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+		if err != nil {
+			continue // exited between ReadDir and ReadFile
+		}
+		name := strings.TrimSpace(string(comm))
+		if slices.Contains(dataUserProcesses, name) {
+			users = append(users, fmt.Sprintf("%s (pid %d)", name, pid))
+		}
+	}
+	return users, nil
+}
+
+// writeFileSynced writes content and fsyncs it before returning, so the zero
+// sign state is on disk before the reset reports success.
+func writeFileSynced(path string, content []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// wipeDirContents removes every entry under dir except the top-level entries
+// named in keep, leaving dir itself. A missing dir is success
+// (content-idempotent: already-empty is the goal state), and a concurrent peer
+// removing an entry first (ENOENT) is tolerated so a rehydrated re-run cannot
+// fail on a half-wiped tree.
+func wipeDirContents(dir string, keep ...string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -136,6 +264,9 @@ func wipeDirContents(dir string) error {
 		return err
 	}
 	for _, e := range entries {
+		if slices.Contains(keep, e.Name()) {
+			continue
+		}
 		p := filepath.Join(dir, e.Name())
 		if err := os.RemoveAll(p); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("removing %s: %w", p, err)

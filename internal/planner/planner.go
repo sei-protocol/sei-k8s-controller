@@ -265,6 +265,7 @@ func handleTerminalPlan(ctx context.Context, node *seiv1alpha1.SeiNode) {
 
 	cn := "seinode"
 	planType := classifyPlan(plan)
+	observeTerminalDataResetPlan(node, plan)
 
 	switch plan.Phase {
 	case seiv1alpha1.TaskPlanComplete:
@@ -304,6 +305,9 @@ func setNodeUpdateCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionSt
 
 // classifyPlan returns the plan type for metrics.
 func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
+	if isDataResetPlan(plan) {
+		return "data-reset"
+	}
 	for _, t := range plan.Tasks {
 		switch t.Type {
 		case task.TaskTypeObserveImage:

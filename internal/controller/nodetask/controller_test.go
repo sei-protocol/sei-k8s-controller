@@ -303,11 +303,14 @@ func newReconcilerWithSidecar(t *testing.T, now time.Time, sc task.SidecarClient
 		Recorder: record.NewFakeRecorder(100),
 		Platform: platformtest.Config(),
 		Now:      func() time.Time { return now },
-		ConfigFor: func(_ context.Context, _ *seiv1alpha1.SeiNodeTask, _ *seiv1alpha1.SeiNode) task.ExecutionConfig {
+		// Resource is the target, as in cmd/main.go: the mark-ready start guard
+		// reads the target SeiNode from it.
+		ConfigFor: func(_ context.Context, _ *seiv1alpha1.SeiNodeTask, target *seiv1alpha1.SeiNode) task.ExecutionConfig {
 			return task.ExecutionConfig{
 				KubeClient:         c,
 				APIReader:          c,
 				Scheme:             s,
+				Resource:           target,
 				BuildSidecarClient: func() (task.SidecarClient, error) { return sc, nil },
 			}
 		},
@@ -708,6 +711,38 @@ func TestReconcile_MarkReady_EndToEnd(t *testing.T) {
 	// pins the fire-and-forget contract (a sidecarTask[...](false) regression,
 	// which polls GetTask to terminal, would trip this).
 	g.Expect(fakeSC.getCalls).To(Equal(0))
+}
+
+// 009 Req 3.3 / SC-005: while a data reset is pending, a MarkReady task fails
+// and submits nothing, so it cannot release seid onto data the reset has not
+// cleared.
+func TestReconcile_MarkReady_RefusedWhileResetPending(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	t0 := time.Now()
+	cr := newMarkReadyTask()
+	node := newRunningNode()
+	node.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
+		ConfigRef: seiv1alpha1.ConfigFileRef{Name: "val-config"},
+		AppRef:    seiv1alpha1.ConfigFileRef{Name: "val-config"},
+	}
+	node.Spec.DataResetGeneration = 1
+	fakeSC := newFakeSidecarClient()
+
+	r, c := newReconcilerWithSidecar(t, t0, fakeSC, cr, node)
+
+	_, err := r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+	_, err = r.Reconcile(ctx, req())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	got := getTask(t, ctx, c)
+	g.Expect(got.Status.Phase).To(Equal(seiv1alpha1.SeiNodeTaskPhaseFailed))
+	g.Expect(got.Status.Task.Err).To(ContainSubstring("data reset pending"))
+
+	fakeSC.mu.Lock()
+	defer fakeSC.mu.Unlock()
+	g.Expect(fakeSC.submitted).To(BeEmpty())
 }
 
 // ---------------------------------------------------------------------------
