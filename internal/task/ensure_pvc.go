@@ -122,10 +122,11 @@ func holdForVolumeAttributesClass(node *seiv1alpha1.SeiNode) error {
 // executeCreate is Get-then-Create, failing if an unexpected PVC already
 // exists that the SeiNode does not own.
 //
-// Once-only by design, not a missing update path: an owned PVC is accepted
-// as-is. dataVolume.storage is create-only so a size edit cannot diverge it, but
-// NodeMode is not, so a mode switch still can (pre-existing). Resizing means
-// deleting the node, which discards the volume via its ownerReference.
+// Once-only by design: an owned PVC is accepted as-is. Growth is not this
+// task's job — on a node with spec.nodeConfig the size may grow, and the node
+// reconciler raises the owned PVC's request (growDataPVC); elsewhere
+// dataVolume.storage is create-only, so a size edit cannot diverge it. NodeMode
+// is not create-only, so a mode switch still can (pre-existing).
 func (e *ensureDataPVCExecution) executeCreate(ctx context.Context, node *seiv1alpha1.SeiNode) error {
 	desired := noderesource.GenerateDataPVC(node, e.cfg.Platform)
 	if err := ctrl.SetControllerReference(node, desired, e.cfg.Scheme); err != nil {

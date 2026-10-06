@@ -84,6 +84,23 @@ func TestDataVolume_SizeCreateOnly(t *testing.T) {
 		g.Expect(err.Error()).To(ContainSubstring("recreate the owning resource"))
 	})
 
+	// 011 Req 2.4: the shared sub-type rule now only refuses a shrink, so the
+	// network's own spec-level rule must still refuse a grow (above) and a
+	// shrink (here).
+	t.Run("shrinking the size is rejected", func(t *testing.T) {
+		g := NewWithT(t)
+		ns := makeNamespace(t)
+
+		network := fixtures.NewNetwork(ns, "dv-size-shrink", fixtures.WithDataVolumeStorage("2Ti"))
+		g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+
+		err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+			cur.Spec.DataVolume.Storage.Resources.Requests[corev1.ResourceStorage] = resource.MustParse("500Gi")
+		})
+		g.Expect(err).To(HaveOccurred(), "shrinking a pool's volumes after create must be rejected")
+		g.Expect(err.Error()).To(ContainSubstring("create-only on a SeiNetwork"))
+	})
+
 	t.Run("adding a size to an existing network is rejected", func(t *testing.T) {
 		g := NewWithT(t)
 		ns := makeNamespace(t)
