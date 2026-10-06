@@ -293,8 +293,9 @@ path that releases the gate.
 1. WHEN the data reset runs on a node whose data directory holds a sign state, THE sidecar SHALL leave that file in place, unchanged.
 2. WHEN the data reset runs on a node with no sign state, THE sidecar SHALL write the zero sign state that seid requires to start.
 3. THE data reset SHALL NOT delete or rewrite `priv_validator_key.json` or `node_key.json`.
-4. IF `config.toml` sets `[priv-validator] state-file` to a path other than `data/priv_validator_state.json`, THEN THE sidecar SHALL refuse the data reset.
+4. IF `config.toml` sets `[priv-validator] state-file` or `[priv_validator] state_file` to a path other than `data/priv_validator_state.json`, or to a value the sidecar cannot read, THEN THE sidecar SHALL refuse the data reset.
 5. IF a `seid` or `seidb` process runs in the pod, THEN THE sidecar SHALL refuse the data reset.
+6. THE controller SHALL submit the reset as a task type that only a sidecar which keeps the sign state accepts, so an older sidecar refuses it and seid stays held.
 
 ### Requirement 5: The controller reports the reset on a condition and a counter
 
@@ -312,6 +313,7 @@ path that releases the gate.
 6. The condition message SHALL name the reset counter value it refers to.
 7. THE completion contract for reset N SHALL be `status.dataResetGeneration >= N`. Runbooks and seictl SHALL wait on that field, not on the condition.
 8. WHEN the reset plan starts, succeeds, or fails, THE controller SHALL record an event on the SeiNode.
+9. IF the start guard refuses only the reset plan's final `mark-ready`, after the wipe and the handled counter succeeded, THEN THE condition SHALL be `False` with reason `ResetComplete`, and its message SHALL say the start was deferred.
 
 ### Key Entities
 
@@ -352,6 +354,8 @@ Test names are the ones the implementation adds; each test names its requirement
 - The start gate closes on a new pod. The sidecar's readiness flag lives in memory and starts false, and only a completed `mark-ready` sets it. The seid container does not start seid while the gate is closed.
 - seid state syncs only when its block store is empty. A ConfigMap that keeps `[statesync] enable = true` after a successful state sync does not re-sync on a later restart.
 - A sign state kept across a state sync is safe. After the sync the node signs only above the snapshot height, and the kept sign state blocks any height, round, and step at or below the last one signed.
+- The start guard runs in the controller. A `mark-ready` the sidecar accepted before a reset became pending, and that a sidecar crash then left unfinished, runs again when the sidecar restarts. That window is one no-op handler long. The reset plan's `mark-not-ready` and `stop-seid` then stop seid before the wipe, and the kept sign state still guards against a double sign.
+- Deploy order: the sidecar image first, then the controller. To roll the controller back, first let every reset plan finish.
 - `stop-seid` succeeds as a no-op when seid is already parked at the start gate. The reset plan can therefore use one sequence whether or not the pod rolled.
 - `spec.nodeConfig` stays create-only. Moving an existing node onto it means replacing the node and carrying its data over with `spec.dataVolume.import`. The cutover runbook MUST copy the final sign state from the old host.
 

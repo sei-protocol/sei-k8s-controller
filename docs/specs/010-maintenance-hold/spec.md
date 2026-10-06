@@ -156,6 +156,8 @@ reaches `Running` with seid parked.
 
 ### Edge Cases
 
+- A hold set after the node's init plan was built does not stop the init plan from starting seid: the hold acts on the start guard only once the node is `Running`, because an init plan failure is terminal. The hold plan then stops seid.
+- The pod rolls after `start-seid-once` and before seid starts: the new pod's gate is closed, so seid does not start. `await-seid-start` fails after two minutes, and the controller builds the start-once plan again against the new pod.
 - The operator changes `AfterExit` to `Immediate`: the controller stops seid now.
 - The operator changes `Immediate` to `AfterExit` while seid is parked: seid starts once. The gate closes again a few seconds after `seid start` runs. On atlantic-2 and pacific-1, seid needs minutes to load its state before it can commit a block, so it parks at its next exit. A small harbor chain loads faster, so a rehearsal there can see seid commit before the gate closes.
 - A coordinated recovery changes the image, sets `halt-height` in a new ConfigMap, and changes the hold to `AfterExit`, in one commit per validator. The pod rolls onto the new template, starts once, and parks when seid exits at the halt height.
@@ -191,7 +193,7 @@ reaches `Running` with seid parked.
 1. WHEN an `Immediate` hold is set on a `Running` node, THE controller SHALL run `mark-not-ready` and then `stop-seid`.
 2. WHEN an `AfterExit` hold is set on a `Running` node whose hold in effect is empty, THE controller SHALL run `mark-not-ready` and SHALL NOT stop seid.
 3. WHEN an `AfterExit` hold is set on a node whose hold in effect is `Immediate`, THE controller SHALL start seid once.
-4. WHILE a hold is set, THE start guard SHALL refuse `mark-ready` on every path that spec 009 Requirement 3 names, except the start-once step of a hold plan.
+4. WHILE a hold is set and the node is `Running`, THE start guard SHALL refuse `mark-ready` on every path that spec 009 Requirement 3 names, except the start-once step of a hold plan.
 5. WHILE a hold is set, THE controller SHALL NOT build a plan that contains `mark-ready`, except the start-once step of a hold plan.
 6. WHILE a hold is set, THE controller SHALL keep applying the StatefulSet, so a template change rolls the pod and the new pod stays parked.
 7. WHEN the hold plan completes, THE controller SHALL set `status.maintenanceHold` to the hold value the plan was built for.
@@ -264,7 +266,8 @@ reaches `Running` with seid parked.
 
 - The start gate closes on a new pod, and only a completed `mark-ready` opens it. The sidecar keeps the flag in memory.
 - `stop-seid` stops only the `seid start` process. It does not stop an exec'd tool.
-- The sidecar can see the `seid start` process, because the pod shares one PID namespace. A new read-only sidecar task, `await-seid-start`, waits for it.
+- The sidecar can see the `seid start` process, because the pod shares one PID namespace. A new read-only sidecar task, `await-seid-start`, waits for it, for at most two minutes.
+- Deploy order: the sidecar image first, then the controller. An older sidecar does not know `await-seid-start`. To roll the controller back, first release every hold: an older controller has no hold and would start seid.
 - The seid container's startup probe targets the sidecar's healthz, not seid's RPC, so the kubelet does not kill a parked container for about five days.
 - The pod template carries `karpenter.sh/do-not-disrupt`, so Karpenter does not move a held pod on its own.
 - The operator's tools are in the seid image. `seidb` joins it through sei-protocol/sei-chain#4488.
