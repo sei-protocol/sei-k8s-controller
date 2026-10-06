@@ -421,6 +421,19 @@ func crdStorageSize(node *seiv1alpha1.SeiNode) *resource.Quantity {
 	return nil
 }
 
+// GrowableStorageSize returns the size the owned data PVC must grow to, or nil
+// when the node's volume cannot grow after creation. Only a node with
+// spec.nodeConfig may change its size (spec-level CEL), and only an explicit
+// CRD size counts: the per-mode default lives in app-config, and a default
+// change must not grow every volume in a cell. An importing node never reaches
+// the non-nil branch (storage and import are exclusive).
+func GrowableStorageSize(node *seiv1alpha1.SeiNode) *resource.Quantity {
+	if node.Spec.NodeConfig == nil {
+		return nil
+	}
+	return crdStorageSize(node)
+}
+
 // VolumeAttributesClassForNode returns the VolumeAttributesClass name the node
 // selects for the volume the controller provisions, or nil to leave the PVC's
 // volumeAttributesClassName unset — the mode-default StorageClass then supplies

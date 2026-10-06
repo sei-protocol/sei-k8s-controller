@@ -70,13 +70,22 @@ spec:
               spec.executionEngine when present and falls back to the deprecated
               spec.consensus.evmOnly otherwise — so migrating an existing node from the bool
               to the typed field is an accepted no-op while a real mode change is caught.
-              dataVolume.storage size is create-only: presence parity here (a sub-type rule
-              skips a first-time set), value on the sub-type. Size only — import still adds.
+              dataVolume.storage size presence is create-only: presence parity here (a
+              sub-type rule skips a first-time set). Size only — import still adds.
+              The size VALUE is pinned per Kind here, at spec level, because the shared
+              sub-type rule cannot see spec.nodeConfig; the sub-type rule only refuses a
+              shrink, on both Kinds. A node with spec.nodeConfig may grow its volume: the
+              node reconciler raises the owned PVC's request to the new size
+              (growDataPVC). Without spec.nodeConfig the size stays create-only, and
+              ensure-data-pvc — Get-then-Create with no update path — is the only writer.
               The VAC selection's presence half — its own rule rather than a term on the
               size rule above, so a rejection names the field the operator actually edited.
               COMPLETENESS: a new DataVolume* field needs BOTH a value rule on its sub-type
               and a presence term at spec level, on both Kinds.
-              resources is create-only, but compared PER-DIMENSION through quantity() — NOT
+              resources is create-only on a node without spec.nodeConfig, and mutable on a
+              node with it: that node's StatefulSet is RollingUpdate, so a footprint change
+              rolls the pod and the reapproval path re-marks the new sidecar ready. The
+              create-only half is compared PER-DIMENSION through quantity() — NOT
               structural == on the object. The values are int-or-string Quantities, so a
               node applied with a bare int (cpu: 4) stores an int, while the controller's
               own typed Update (finalizer install) re-encodes it as the string "4"; a
@@ -267,7 +276,9 @@ spec:
                   DataVolume configures the data PersistentVolumeClaim for this node.
                   When omitted, the controller creates a PVC using the node's mode-default
                   storage class and size; dataVolume.storage overrides the size (see
-                  noderesource.StorageForNode).
+                  noderesource.StorageForNode). On a node with spec.nodeConfig the size may
+                  grow after creation, and the controller raises the owned PVC's request to
+                  match; it never shrinks. Elsewhere the size is create-only.
                 properties:
                   import:
                     description: |-
@@ -358,16 +369,15 @@ spec:
                         validator) to reselect'
                       rule: '!has(self.volumeAttributesClassName) || !has(oldSelf.volumeAttributesClassName)
                         || self.volumeAttributesClassName == oldSelf.volumeAttributesClassName'
-                    - message: 'dataVolume.storage.resources.requests.storage is create-only:
-                        the data PVC is created once (ensure-data-pvc is Get-then-Create
-                        with no update path), so a later size edit could never reach
-                        the volume; delete and recreate the owning resource (the node,
-                        or the SeiNetwork for a pooled validator) to resize'
+                    - message: 'dataVolume.storage.resources.requests.storage cannot
+                        shrink: a volume claim only grows; delete and recreate the
+                        owning resource (the node, or the SeiNetwork for a pooled
+                        validator) to shrink it'
                       rule: '!has(self.resources) || !has(self.resources.requests)
                         || !(''storage'' in self.resources.requests) || !has(oldSelf.resources)
                         || !has(oldSelf.resources.requests) || !(''storage'' in oldSelf.resources.requests)
                         || quantity(string(self.resources.requests[''storage''])).compareTo(quantity(string(oldSelf.resources.requests[''storage''])))
-                        == 0'
+                        >= 0'
                     - message: dataVolume.storage.resources.requests accepts only
                         storage
                       rule: '!has(self.resources) || !has(self.resources.requests)
@@ -800,10 +810,13 @@ spec:
                   benchmark operator from having to restate a mode's whole footprint to
                   raise one axis.
 
-                  Immutable after creation (spec-level CEL). A change here would not reach a
-                  running pod anyway — the StatefulSets use UpdateStrategy: OnDelete and
-                  drift detection is image-only — so admission rejects the edit rather than
-                  accept an inert one. Replace the node to resize.
+                  Mutable on a node with spec.nodeConfig: its StatefulSet uses
+                  UpdateStrategy: RollingUpdate, so a change rolls the pod onto the new
+                  footprint, the same way an image change does. Immutable after creation on
+                  any other node (spec-level CEL): its StatefulSet is OnDelete and drift
+                  detection is image-only, so a change would never reach a running pod, and
+                  admission rejects the edit rather than accept an inert one. Replace that
+                  node to resize.
                 properties:
                   limits:
                     additionalProperties:
@@ -1366,17 +1379,27 @@ spec:
                 : 0)) == (has(oldSelf.fullNode) && has(oldSelf.fullNode.freeze) ?
                 oldSelf.fullNode.freeze.height : (has(oldSelf.archive) && has(oldSelf.archive.freeze)
                 ? oldSelf.archive.freeze.height : 0))'
-            - message: 'spec.dataVolume.storage.resources.requests.storage is create-only:
-                it cannot be added to or removed from an existing node — the data
-                PVC is created once (ensure-data-pvc is Get-then-Create with no update
-                path), so the edit would be inert; delete and recreate the node to
-                resize'
+            - message: 'the presence of spec.dataVolume.storage.resources.requests.storage
+                is create-only: it cannot be added to or removed from an existing
+                node — the data PVC is created once at the size set then, so the edit
+                would be inert; delete and recreate the node to change it'
               rule: ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.resources)
                 && has(self.dataVolume.storage.resources.requests) && ('storage' in
                 self.dataVolume.storage.resources.requests)) == (has(oldSelf.dataVolume)
                 && has(oldSelf.dataVolume.storage) && has(oldSelf.dataVolume.storage.resources)
                 && has(oldSelf.dataVolume.storage.resources.requests) && ('storage'
                 in oldSelf.dataVolume.storage.resources.requests)))
+            - message: 'spec.dataVolume.storage.resources.requests.storage is create-only
+                on a node without spec.nodeConfig: ensure-data-pvc creates the PVC
+                once and nothing grows it on that path; delete and recreate the node
+                to resize, or use spec.nodeConfig, whose volume can grow'
+              rule: has(self.nodeConfig) || !has(self.dataVolume) || !has(self.dataVolume.storage)
+                || !has(self.dataVolume.storage.resources) || !has(self.dataVolume.storage.resources.requests)
+                || !('storage' in self.dataVolume.storage.resources.requests) || !has(oldSelf.dataVolume)
+                || !has(oldSelf.dataVolume.storage) || !has(oldSelf.dataVolume.storage.resources)
+                || !has(oldSelf.dataVolume.storage.resources.requests) || !('storage'
+                in oldSelf.dataVolume.storage.resources.requests) || quantity(string(self.dataVolume.storage.resources.requests['storage'])).compareTo(quantity(string(oldSelf.dataVolume.storage.resources.requests['storage'])))
+                == 0
             - message: 'spec.dataVolume.storage.volumeAttributesClassName is create-only:
                 it cannot be added to or removed from an existing node — the data
                 PVC is created once (ensure-data-pvc is Get-then-Create with no update
@@ -1385,18 +1408,20 @@ spec:
               rule: ((has(self.dataVolume) && has(self.dataVolume.storage) && has(self.dataVolume.storage.volumeAttributesClassName))
                 == (has(oldSelf.dataVolume) && has(oldSelf.dataVolume.storage) &&
                 has(oldSelf.dataVolume.storage.volumeAttributesClassName)))
-            - message: 'spec.resources is create-only: the footprint is fixed at creation
-                (a change is not rolled onto a running pod — the StatefulSet is OnDelete
-                and drift detection is image-only), so replace the node to resize'
-              rule: (!has(self.resources) && !has(oldSelf.resources)) || (has(self.resources)
-                && has(oldSelf.resources) && (has(self.resources.requests) == has(oldSelf.resources.requests))
-                && (!has(self.resources.requests) || ((('cpu' in self.resources.requests)
-                == ('cpu' in oldSelf.resources.requests)) && (('memory' in self.resources.requests)
-                == ('memory' in oldSelf.resources.requests)) && (!('cpu' in self.resources.requests)
-                || !('cpu' in oldSelf.resources.requests) || quantity(string(self.resources.requests['cpu'])).compareTo(quantity(string(oldSelf.resources.requests['cpu'])))
+            - message: 'spec.resources is create-only on a node without spec.nodeConfig:
+                its StatefulSet is OnDelete and drift detection is image-only, so
+                a change would never reach the running pod; replace the node to resize,
+                or use spec.nodeConfig, which rolls a footprint change onto its pod'
+              rule: has(self.nodeConfig) || ((!has(self.resources) && !has(oldSelf.resources))
+                || (has(self.resources) && has(oldSelf.resources) && (has(self.resources.requests)
+                == has(oldSelf.resources.requests)) && (!has(self.resources.requests)
+                || ((('cpu' in self.resources.requests) == ('cpu' in oldSelf.resources.requests))
+                && (('memory' in self.resources.requests) == ('memory' in oldSelf.resources.requests))
+                && (!('cpu' in self.resources.requests) || !('cpu' in oldSelf.resources.requests)
+                || quantity(string(self.resources.requests['cpu'])).compareTo(quantity(string(oldSelf.resources.requests['cpu'])))
                 == 0) && (!('memory' in self.resources.requests) || !('memory' in
                 oldSelf.resources.requests) || quantity(string(self.resources.requests['memory'])).compareTo(quantity(string(oldSelf.resources.requests['memory'])))
-                == 0))))
+                == 0)))))
             - message: 'spec.nodeConfig and spec.configValues cannot both be set:
                 a node reading its config from ConfigMaps runs no config-patch task,
                 so the values would never reach seid; put them in the ConfigMap'
