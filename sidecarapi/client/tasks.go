@@ -65,7 +65,9 @@ const (
 	TaskTypeMarkNotReady = string(wire.TaskMarkNotReady)
 	TaskTypeStopSeid     = string(wire.TaskStopSeid)
 	TaskTypeResetData    = string(wire.TaskResetData)
-	TaskTypeEVMDigest    = string(wire.TaskEVMDigest)
+
+	TaskTypeResetDataKeepSignState = string(wire.TaskResetDataKeepSignState)
+	TaskTypeEVMDigest              = string(wire.TaskEVMDigest)
 )
 
 // Snapshot-upload outcome contract, re-exported from wire so CLI consumers
@@ -332,6 +334,19 @@ func (t StopSeidTask) Validate() error {
 
 func (t StopSeidTask) ToTaskRequest() TaskRequest {
 	return upCheckTaskRequest(t.TaskType(), t.UpCheck)
+}
+
+// ResetDataKeepSignStateTask is ResetDataTask under the type name that only a
+// sidecar which keeps the sign state accepts. Use it wherever a validator's
+// data may be reset: an older sidecar fails the submission instead of running
+// a reset that zeroes priv_validator_state.json.
+type ResetDataKeepSignStateTask struct{}
+
+func (t ResetDataKeepSignStateTask) TaskType() string { return TaskTypeResetDataKeepSignState }
+func (t ResetDataKeepSignStateTask) Validate() error  { return nil }
+
+func (t ResetDataKeepSignStateTask) ToTaskRequest() TaskRequest {
+	return TaskRequest{Type: t.TaskType()}
 }
 
 // ResetDataTask clears the chain data directory (data/ only) and removes the

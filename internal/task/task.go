@@ -211,6 +211,7 @@ var registry = map[string]taskDeserializer{
 	sidecar.TaskTypeMarkNotReady:               sidecarTask[sidecar.MarkNotReadyTask](false),
 	sidecar.TaskTypeStopSeid:                   sidecarTask[sidecar.StopSeidTask](false),
 	sidecar.TaskTypeResetData:                  sidecarTask[sidecar.ResetDataTask](false),
+	sidecar.TaskTypeResetDataKeepSignState:     sidecarTask[sidecar.ResetDataKeepSignStateTask](false),
 	sidecar.TaskTypeGenerateIdentity:           sidecarTask[sidecar.GenerateIdentityTask](false),
 	sidecar.TaskTypeGenerateGentx:              sidecarTask[sidecar.GenerateGentxTask](false),
 	sidecar.TaskTypeUploadGenesisArtifacts:     sidecarTask[sidecar.UploadGenesisArtifactsTask](false),

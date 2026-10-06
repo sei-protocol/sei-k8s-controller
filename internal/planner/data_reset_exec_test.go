@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
@@ -47,8 +48,37 @@ func TestDataReset_StaleUpdatePlanCannotReleaseGate(t *testing.T) {
 	g.Expect(plan.FailedTaskDetail.Error).To(ContainSubstring("start guard"))
 	g.Expect(mock.submitted).To(BeEmpty(), "the guard refuses before anything reaches the sidecar")
 
+	// The wipe ran and the counter was recorded: the deferred start is not a
+	// failed reset (review finding: a guard refusal is not a task failure).
+	ResolveDataReset(node)
 	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 	g.Expect(isDataResetPlan(node.Status.Plan)).To(BeTrue())
+	g.Expect(dataResetCondition(node).Reason).To(Equal(seiv1alpha1.ReasonResetRunning),
+		"the second reset starts fresh, not as a retry of a failure")
+}
+
+// 009 Req 5.5: only a real task failure reads ResetFailed. A reset plan whose
+// final mark-ready the guard refused reads ResetComplete for the value it
+// recorded.
+func TestDataReset_DeferredStartIsNotAFailure(t *testing.T) {
+	g := NewWithT(t)
+	s := testScheme(t)
+	node := resetPendingNode(1, 0)
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	plan := node.Status.Plan
+	completeTasksBefore(plan, 4)
+	node.Spec.DataResetGeneration = 2
+
+	mock := &mockSidecarClient{}
+	_, err := nodeExecutor(fake.NewClientBuilder().WithScheme(s), s, mock).ExecutePlan(context.Background(), node, plan)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
+
+	observeTerminalDataResetPlan(node, plan)
+	cond := dataResetCondition(node)
+	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonResetComplete))
+	g.Expect(cond.Message).To(ContainSubstring("start deferred"))
 }
 
 // 009 Req 2.2, 2.3: inside the reset plan, record-data-reset stamps the

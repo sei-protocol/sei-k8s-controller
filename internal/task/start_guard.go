@@ -48,6 +48,11 @@ func deserializeMarkReady(id string, params json.RawMessage, cfg ExecutionConfig
 	return &startGuardedExecution{TaskExecution: inner, node: node}, nil
 }
 
+// StartGuardRefusal prefixes the error of a mark-ready the start guard refused.
+// The planner reads it from a failed plan to tell a deferred start from a
+// failed task, so it is stable.
+const StartGuardRefusal = "mark-ready refused by the start guard"
+
 // startGuardedExecution checks the start guard at submission, the moment the
 // gate would open. A refusal is terminal: the plan fails and the planner builds
 // the next plan from the current spec, which puts the reset first. Waiting
@@ -60,7 +65,7 @@ type startGuardedExecution struct {
 
 func (e *startGuardedExecution) Execute(ctx context.Context) error {
 	if reason := StartBlocked(e.node); reason != "" {
-		e.err = fmt.Errorf("mark-ready refused by the start guard: %s", reason)
+		e.err = fmt.Errorf("%s: %s", StartGuardRefusal, reason)
 		return Terminal(e.err)
 	}
 	return e.TaskExecution.Execute(ctx)
