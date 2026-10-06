@@ -26,7 +26,7 @@ type planStep struct {
 }
 
 // buildHoldPlan returns the plan that moves the hold in effect from have to
-// want, or nil when they agree.
+// want, or nil when they agree and the start gate is where the hold says.
 //
 //	want=Immediate             mark-not-ready -> stop-seid -> record(Immediate)
 //	want=AfterExit, have=""    mark-not-ready -> record(AfterExit)
@@ -38,9 +38,17 @@ type planStep struct {
 // again a few seconds after seid starts, long before it loads its state, so it
 // parks at its next exit. observe-image waits for any rollout, so the sidecar
 // tasks reach the pod that runs the current template.
+//
+// A hold in effect is level-triggered against the observed gate: when the
+// sidecar reports ready (the gate is open) under a hold, the hold is rebuilt as
+// if from none. That closes a gate a failed start-once plan left open, which a
+// want == have short-circuit alone would never revisit.
 func buildHoldPlan(node *seiv1alpha1.SeiNode, want, have seiv1alpha1.MaintenanceHold) (*seiv1alpha1.TaskPlan, error) {
 	if want == have {
-		return nil, nil
+		if want == "" || !sidecarGateOpen(node) {
+			return nil, nil
+		}
+		have = ""
 	}
 	observe := planStep{task.TaskTypeObserveImage, task.ObserveImageParams{NodeName: node.Name, Namespace: node.Namespace}}
 	stopUpCheck := noderesource.UpCheckForNode(node)
@@ -118,6 +126,13 @@ func withoutMarkReady(plan *seiv1alpha1.TaskPlan) {
 	})
 }
 
+// sidecarGateOpen reports whether the last sidecar probe found the start gate
+// open (healthz 200). An unreachable sidecar is not evidence either way.
+func sidecarGateOpen(node *seiv1alpha1.SeiNode) bool {
+	c := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
+	return c != nil && c.Status == metav1.ConditionTrue
+}
+
 // isMaintenancePlan reports whether plan changes the hold in effect.
 func isMaintenancePlan(plan *seiv1alpha1.TaskPlan) bool {
 	return plan != nil && slices.ContainsFunc(plan.Tasks, func(t seiv1alpha1.PlannedTask) bool {
@@ -135,12 +150,20 @@ func ResolveMaintenance(node *seiv1alpha1.SeiNode) {
 		return
 	}
 	want, have := node.Spec.HoldRequested(), node.Status.MaintenanceHold
+	plan := node.Status.Plan
 	switch {
+	case isMaintenancePlan(plan) && plan.Phase == seiv1alpha1.TaskPlanActive:
+		// seid's state is changing; Held or Armed would invite exec work.
+		setMaintenanceCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending,
+			fmt.Sprintf("hold plan running; requested: %s, in effect: %s", holdOrNone(want), holdOrNone(have)))
 	case want == "" && have == "":
 		setMaintenanceCondition(node, metav1.ConditionFalse, seiv1alpha1.ReasonNotHeld, "no maintenance hold")
 	case want != "" && want != have:
 		setMaintenanceCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending,
 			fmt.Sprintf("hold %s requested; in effect: %s", want, holdOrNone(have)))
+	case want != "" && sidecarGateOpen(node):
+		setMaintenanceCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending,
+			fmt.Sprintf("hold %s in effect but the start gate is open; closing it", want))
 	default:
 		message := fmt.Sprintf("hold %s in effect", have)
 		if want == "" {

@@ -50,10 +50,10 @@ func resetBlocks(node *seiv1alpha1.SeiNode) string {
 }
 
 // TaskTypeStartSeidOnce is the maintenance hold's start-once step. It submits
-// the sidecar's mark-ready, like the mark-ready plan task, but the hold does not
-// block it: an AfterExit hold on a parked node starts seid once, waits for
-// await-seid-start, and closes the gate again with mark-not-ready. A pending
-// reset still blocks it.
+// the sidecar's mark-ready, like the mark-ready plan task, but an AfterExit hold
+// does not block it: an AfterExit hold on a parked node starts seid once, waits
+// for await-seid-start, and closes the gate again with mark-not-ready. A pending
+// reset, or any request other than AfterExit, blocks it.
 const TaskTypeStartSeidOnce = "start-seid-once"
 
 // deserializeMarkReady wraps the mark-ready sidecar task in the start guard.
@@ -66,7 +66,20 @@ func deserializeMarkReady(id string, params json.RawMessage, cfg ExecutionConfig
 }
 
 func deserializeStartSeidOnce(id string, params json.RawMessage, cfg ExecutionConfig) (TaskExecution, error) {
-	return deserializeGuardedMarkReady(id, params, cfg, resetBlocks)
+	return deserializeGuardedMarkReady(id, params, cfg, startOnceBlocked)
+}
+
+// startOnceBlocked is the start-once step's guard: a pending reset blocks it,
+// and so does a request that is no longer AfterExit. A plan already running
+// when the operator changed the hold back to Immediate must not start seid.
+func startOnceBlocked(node *seiv1alpha1.SeiNode) string {
+	if reason := resetBlocks(node); reason != "" {
+		return reason
+	}
+	if hold := node.Spec.HoldRequested(); hold != seiv1alpha1.MaintenanceHoldAfterExit {
+		return fmt.Sprintf("start once needs maintenance hold AfterExit, requested now: %q", hold)
+	}
+	return ""
 }
 
 func deserializeGuardedMarkReady(

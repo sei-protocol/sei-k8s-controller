@@ -308,7 +308,9 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 	if isDataResetPlan(plan) {
 		return "data-reset"
 	}
-	if isMaintenancePlan(plan) {
+	if isMaintenancePlan(plan) && !slices.ContainsFunc(plan.Tasks, func(t seiv1alpha1.PlannedTask) bool {
+		return t.Type == task.TaskTypeEnsureDataPVC // a held init plan is still an init plan
+	}) {
 		return "maintenance-hold"
 	}
 	for _, t := range plan.Tasks {

@@ -253,3 +253,80 @@ func TestHold_SetMidInitDoesNotFailNode(t *testing.T) {
 	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 	g.Expect(isMaintenancePlan(node.Status.Plan)).To(BeTrue())
 }
+
+// seidroid #595 blocker 1: the operator changes AfterExit back to Immediate
+// while the start-once plan runs. The start-once step refuses, nothing starts
+// seid, and with the gate still closed the planner has nothing left to do.
+func TestHold_StartOnceRefusedAfterFlipToImmediate(t *testing.T) {
+	g := NewWithT(t)
+	s := testScheme(t)
+	node := heldNode(holdAfterExit, holdImmediate)
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	plan := node.Status.Plan
+	completeTasksBefore(plan, 1) // observe-image done
+
+	node.Spec.Maintenance.Hold = holdImmediate
+
+	mock := &mockSidecarClient{}
+	_, err := nodeExecutor(fake.NewClientBuilder().WithScheme(s), s, mock).ExecutePlan(context.Background(), node, plan)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
+	g.Expect(plan.FailedTaskDetail.Type).To(Equal(task.TaskTypeStartSeidOnce))
+	g.Expect(mock.submitted).To(BeEmpty(), "start-seid-once must not reach the sidecar")
+
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	g.Expect(node.Status.Plan).To(BeNil(), "the gate never opened, so the Immediate hold still holds")
+}
+
+// seidroid #595 blocker 2: a hold in effect whose gate the sidecar reports
+// open (a start-once plan failed after mark-ready) is rebuilt, so the gate
+// closes again even though the requested and in-effect holds agree.
+func TestHold_OpenGateUnderHoldIsClosed(t *testing.T) {
+	cases := []struct {
+		hold  seiv1alpha1.MaintenanceHold
+		types []string
+	}{
+		{holdImmediate, []string{taskTypeMarkNotReady, taskTypeStopSeid, task.TaskTypeRecordMaintenanceHold}},
+		{holdAfterExit, []string{taskTypeMarkNotReady, task.TaskTypeRecordMaintenanceHold}},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.hold), func(t *testing.T) {
+			g := NewWithT(t)
+			node := heldNode(tc.hold, tc.hold)
+			setSidecarReadyCondition(node, metav1.ConditionTrue, "Ready", "sidecar returned 200")
+
+			g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+			g.Expect(node.Status.Plan).NotTo(BeNil())
+			g.Expect(planTaskTypes(node.Status.Plan)).To(Equal(tc.types))
+		})
+	}
+}
+
+// seidroid #595: the condition reads HoldPending, never Held or Armed, while a
+// hold plan runs or while the gate is open under a hold.
+func TestResolveMaintenance_NotHeldWhileChanging(t *testing.T) {
+	g := NewWithT(t)
+	node := heldNode(holdAfterExit, holdImmediate)
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	node.Spec.Maintenance.Hold = holdImmediate // want == have, but a plan runs
+
+	ResolveMaintenance(node)
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionMaintenanceInProgress)
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonHoldPending))
+
+	node.Status.Plan = nil
+	setSidecarReadyCondition(node, metav1.ConditionTrue, "Ready", "sidecar returned 200")
+	ResolveMaintenance(node)
+	cond = meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionMaintenanceInProgress)
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonHoldPending))
+	g.Expect(cond.Message).To(ContainSubstring("gate is open"))
+}
+
+// seidroid #595 nit: a held init plan keeps its "init" metric label.
+func TestClassifyPlan_HeldInitIsInit(t *testing.T) {
+	g := NewWithT(t)
+	node := withNodeConfig(pendingNode(func(n *seiv1alpha1.SeiNode) { n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{} }))
+	node.Spec.Maintenance = &seiv1alpha1.MaintenanceSpec{Hold: holdImmediate}
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	g.Expect(classifyPlan(node.Status.Plan)).To(Equal("init"))
+}
