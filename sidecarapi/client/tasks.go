@@ -334,9 +334,11 @@ func (t StopSeidTask) ToTaskRequest() TaskRequest {
 	return upCheckTaskRequest(t.TaskType(), t.UpCheck)
 }
 
-// ResetDataTask clears the chain data directory (data/ only), rewrites an empty
-// priv_validator_state, and removes the state-sync completion marker so the
-// node re-bootstraps through state sync. Refuses to run while seid's RPC serves.
+// ResetDataTask clears the chain data directory (data/ only) and removes the
+// state-sync completion marker so the node re-bootstraps. It keeps an existing
+// priv_validator_state.json and writes a zero one only when none exists. It
+// refuses while seid's RPC serves, while a seid or seidb process runs in the
+// pod, and when config.toml moves [priv-validator] state-file.
 type ResetDataTask struct{}
 
 func (t ResetDataTask) TaskType() string { return TaskTypeResetData }
