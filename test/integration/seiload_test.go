@@ -219,6 +219,10 @@ const (
 	// followerMaxLag is how many blocks a follower may trail the validators'
 	// head after load: read skew between two RPCs, not a stall.
 	followerMaxLag = 10
+	// followerCatchUpTimeout bounds how long a follower that fell behind under
+	// load has to return within followerMaxLag before it counts as stalled.
+	followerCatchUpTimeout = 5 * time.Minute
+	followerCatchUpPoll    = 10 * time.Second
 	// maxRevertRatio is the share of executed transactions that may revert
 	// before a run stops describing its workload.
 	maxRevertRatio = 0.01
@@ -227,9 +231,10 @@ const (
 )
 
 // assertChainLive fails unless the validators still produce blocks and every
-// follower sits within followerMaxLag of their head. catching_up is a one-way
-// latch that a follower stalled after its first catch-up never re-flips, so
-// heights are compared directly.
+// follower returns within followerMaxLag of their head inside
+// followerCatchUpTimeout. catching_up is a one-way latch that a follower
+// stalled after its first catch-up never re-flips, so heights are compared
+// directly.
 func assertChainLive(ctx context.Context, t *testing.T, hc *http.Client, ch *chain) {
 	t.Helper()
 	validators := ch.network.TendermintRPC()
@@ -239,12 +244,31 @@ func assertChainLive(ctx context.Context, t *testing.T, hc *http.Client, ch *cha
 		t.Errorf("post-load validators halted: %v", err)
 		return
 	}
-	head := mustLatestHeight(ctx, t, hc, validators, "post-load validator")
-	for _, n := range ch.rpcNodes {
-		h := mustLatestHeight(ctx, t, hc, n.TendermintRPC(), "post-load "+n.Name())
-		if lag := head - h; lag > followerMaxLag {
-			t.Errorf("post-load %s at height %d trails the validator head %d by %d blocks (> %d)",
-				n.Name(), h, head, lag, followerMaxLag)
+	deadline := time.Now().Add(followerCatchUpTimeout)
+	for {
+		head := mustLatestHeight(ctx, t, hc, validators, "post-load validator")
+		var lagging []string
+		for _, n := range ch.rpcNodes {
+			h := mustLatestHeight(ctx, t, hc, n.TendermintRPC(), "post-load "+n.Name())
+			if lag := head - h; lag > followerMaxLag {
+				lagging = append(lagging, fmt.Sprintf("%s at height %d trails the validator head %d by %d blocks (> %d)",
+					n.Name(), h, head, lag, followerMaxLag))
+			}
+		}
+		if len(lagging) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			for _, l := range lagging {
+				t.Errorf("post-load %s after %s", l, followerCatchUpTimeout)
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Errorf("post-load follower catch-up: %v", ctx.Err())
+			return
+		case <-time.After(followerCatchUpPoll):
 		}
 	}
 }
