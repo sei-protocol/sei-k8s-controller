@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	codectypes "github.com/sei-protocol/sei-chain/sei-cosmos/codec/types"
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	slashingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/slashing/types"
 	stakingtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/staking/types"
@@ -205,7 +206,7 @@ func chainJailState(ctx context.Context, cfg engine.ExecutionConfig, chainID str
 	}
 	ch := make(chan res, 1)
 	go func() {
-		st, err := readJailState(ctx, clientCtx.Client.Status, stakingtypes.NewQueryClient(clientCtx), slashingtypes.NewQueryClient(clientCtx), valAddr)
+		st, err := readJailState(ctx, clientCtx.Client.Status, stakingtypes.NewQueryClient(clientCtx), slashingtypes.NewQueryClient(clientCtx), clientCtx.InterfaceRegistry, valAddr)
 		ch <- res{st, err}
 	}()
 	select {
@@ -217,12 +218,15 @@ func chainJailState(ctx context.Context, cfg engine.ExecutionConfig, chainID str
 }
 
 // readJailState reads the jail state through narrow seams, so a test can fake
-// each read.
+// each read. unpacker decodes the validator's consensus key: sei-cosmos's
+// QueryValidatorResponse does not implement UnpackInterfaces, so the query
+// client returns the key still packed.
 func readJailState(
 	ctx context.Context,
 	statusOf func(context.Context) (*coretypes.ResultStatus, error),
 	staking stakingtypes.QueryClient,
 	slashing slashingtypes.QueryClient,
+	unpacker codectypes.AnyUnpacker,
 	valAddr sdk.ValAddress,
 ) (jailState, error) {
 	s, err := statusOf(ctx)
@@ -264,6 +268,9 @@ func readJailState(
 		return st, nil
 	}
 
+	if err := v.UnpackInterfaces(unpacker); err != nil {
+		return jailState{}, fmt.Errorf("unpack validator consensus key: %w", err)
+	}
 	consAddr, err := v.GetConsAddr()
 	if err != nil {
 		return jailState{}, fmt.Errorf("validator consensus address: %w", err)

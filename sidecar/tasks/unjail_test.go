@@ -202,7 +202,7 @@ func TestUnjailCatchingUpWinsOverValidatorNotFound(t *testing.T) {
 	h, _ := newUnjailHarness(t, jailState{}, nil, committed(0))
 	staking := &fakeStakingQuery{validatorErr: status.Error(codes.NotFound, "validator not found")}
 	h.u.readJail = func(ctx context.Context, _ engine.ExecutionConfig, _ string, valAddr sdk.ValAddress) (jailState, error) {
-		return readJailState(ctx, statusAt(testBlockTime, true), staking, &fakeSlashingQuery{}, valAddr)
+		return readJailState(ctx, statusAt(testBlockTime, true), staking, &fakeSlashingQuery{}, newSignTxInterfaceRegistry(), valAddr)
 	}
 	_, err := runUnjail(t, h.u, "node_admin")
 	if err == nil || IsTerminal(err) {
@@ -225,7 +225,7 @@ func TestUnjailJailedWithoutSigningInfoBroadcasts(t *testing.T) {
 	staking := &fakeStakingQuery{validator: v, delegation: selfDelegation(valAddr, sdk.NewDec(1_000_000))}
 	slashing := &fakeSlashingQuery{err: status.Error(codes.NotFound, "SigningInfo not found for validator")}
 	h.u.readJail = func(ctx context.Context, _ engine.ExecutionConfig, _ string, va sdk.ValAddress) (jailState, error) {
-		return readJailState(ctx, statusAt(testBlockTime, false), staking, slashing, va)
+		return readJailState(ctx, statusAt(testBlockTime, false), staking, slashing, newSignTxInterfaceRegistry(), va)
 	}
 	if _, err := runUnjail(t, h.u, "node_admin"); err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -320,8 +320,37 @@ func TestReadJailState(t *testing.T) {
 		return newTestValidator(t, valAddr, jailed, sdk.NewInt(1_000), sdk.NewDec(2_000), sdk.NewInt(700))
 	}
 	read := func(catchingUp bool, staking *fakeStakingQuery, slashing *fakeSlashingQuery) (jailState, error) {
-		return readJailState(context.Background(), statusAt(testBlockTime, catchingUp), staking, slashing, valAddr)
+		return readJailState(context.Background(), statusAt(testBlockTime, catchingUp), staking, slashing, newSignTxInterfaceRegistry(), valAddr)
 	}
+
+	// PLT-1392 harbor e2e: a validator from a real query reply carries its
+	// consensus key packed, because sei-cosmos's QueryValidatorResponse does
+	// not implement UnpackInterfaces. The read must unpack it itself.
+	t.Run("jailed validator decoded from the wire still resolves its consensus address", func(t *testing.T) {
+		bz, err := newV(true).Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fromWire stakingtypes.Validator
+		if err := fromWire.Unmarshal(bz); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fromWire.GetConsAddr(); err == nil {
+			t.Fatal("precondition: a validator decoded from the wire should carry its consensus key packed")
+		}
+		staking := &fakeStakingQuery{validator: &fromWire, delegation: selfDelegation(valAddr, sdk.NewDec(1_500))}
+		slash := &fakeSlashingQuery{info: slashingtypes.ValidatorSigningInfo{JailedUntil: until}}
+		st, err := read(false, staking, slash)
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		if !st.Jailed || !st.JailedUntil.Equal(until) {
+			t.Errorf("state = %+v", st)
+		}
+		if wantCons := sdk.ConsAddress(testConsKey.Address()).String(); slash.gotCons != wantCons {
+			t.Errorf("signing-info cons address = %q, want %q", slash.gotCons, wantCons)
+		}
+	})
 
 	t.Run("jailed reads self-bond at the exchange rate and signing info by consensus address", func(t *testing.T) {
 		staking := &fakeStakingQuery{validator: newV(true), delegation: selfDelegation(valAddr, sdk.NewDec(1_500))}
