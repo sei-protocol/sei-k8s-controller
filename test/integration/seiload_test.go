@@ -246,6 +246,10 @@ func assertChainLive(ctx context.Context, t *testing.T, hc *http.Client, ch *cha
 	}
 	deadline := time.Now().Add(followerCatchUpTimeout)
 	for {
+		if err := ctx.Err(); err != nil {
+			t.Errorf("post-load follower catch-up: %v", err)
+			return
+		}
 		head := mustLatestHeight(ctx, t, hc, validators, "post-load validator")
 		var lagging []string
 		for _, n := range ch.rpcNodes {
@@ -256,6 +260,11 @@ func assertChainLive(ctx context.Context, t *testing.T, hc *http.Client, ch *cha
 			}
 		}
 		if len(lagging) == 0 {
+			advanceCtx, cancel := context.WithTimeout(ctx, time.Minute)
+			defer cancel()
+			if err := sei.WaitHeightAdvances(advanceCtx, hc, validators, 2); err != nil {
+				t.Errorf("post-load validators halted during follower catch-up: %v", err)
+			}
 			return
 		}
 		if time.Now().After(deadline) {
