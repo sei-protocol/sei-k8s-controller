@@ -10,8 +10,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
+	"github.com/sei-protocol/sei-chain/sei-tendermint/rpc/coretypes"
 
 	"github.com/sei-protocol/seilog"
 
@@ -38,10 +41,27 @@ type GovVoteRequest struct {
 // documented read-only after startup, so the copy is safe.
 type GovVoter struct {
 	cfg engine.ExecutionConfig
+
+	// broadcast and readVote are test seams. They default to SignAndBroadcast
+	// and the chain's gov vote query.
+	broadcast func(ctx context.Context, cfg engine.ExecutionConfig, in SignAndBroadcastInput) (*SignAndBroadcastResult, error)
+	readVote  func(ctx context.Context, cfg engine.ExecutionConfig, chainID string, proposalID uint64, voter sdk.AccAddress) (*govtypes.Vote, error)
+
+	// confirmWait bounds how long a vote whose tx the node cannot look up
+	// waits for the vote to show in state, reads included; confirmEvery is
+	// the poll interval.
+	confirmWait  time.Duration
+	confirmEvery time.Duration
 }
 
 func NewGovVoter(cfg engine.ExecutionConfig) *GovVoter {
-	return &GovVoter{cfg: cfg}
+	return &GovVoter{
+		cfg:          cfg,
+		broadcast:    SignAndBroadcast,
+		readVote:     chainVote,
+		confirmWait:  30 * time.Second,
+		confirmEvery: time.Second,
+	}
 }
 
 // Handler delegates to SignAndBroadcast after MsgVote construction.
@@ -62,7 +82,7 @@ func (g *GovVoter) Handler() engine.TaskHandler {
 		if err != nil {
 			return nil, err
 		}
-		result, err := SignAndBroadcast(ctx, g.cfg, SignAndBroadcastInput{
+		result, err := g.broadcast(ctx, g.cfg, SignAndBroadcastInput{
 			ChainID: params.ChainID,
 			KeyName: params.KeyName,
 			Msg:     msg,
@@ -75,6 +95,10 @@ func (g *GovVoter) Handler() engine.TaskHandler {
 			return nil, err
 		}
 		out, cerr := classifyGovResult(engine.TaskGovVote, result)
+		votedByState := result.Unverifiable && g.votedAfter(ctx, params.ChainID, msg)
+		if votedByState {
+			cerr = nil
+		}
 		govVoteLog.Info("vote broadcast",
 			"taskId", engine.TaskIDFromContext(ctx),
 			"chainId", params.ChainID,
@@ -82,7 +106,8 @@ func (g *GovVoter) Handler() engine.TaskHandler {
 			"option", params.Option,
 			"txHash", out.TxHash,
 			"height", out.Height,
-			"inclusionStatus", out.InclusionStatus)
+			"inclusionStatus", out.InclusionStatus,
+			"votedByState", votedByState)
 		return out, cerr
 	})
 }
@@ -106,4 +131,96 @@ func buildVoteMsg(cfg engine.ExecutionConfig, params GovVoteRequest) (*govtypes.
 		return nil, Terminal(fmt.Errorf("keyring entry %q: %w", params.KeyName, err))
 	}
 	return govtypes.NewMsgVote(info.GetAddress(), params.ProposalID, govtypes.VoteOption(option)), nil
+}
+
+// votedAfter settles a vote whose tx the node cannot look up because its tx
+// index is off, as on most validators. The vote's effect shows in state: the
+// gov module records the voter's choice on the proposal. A vote that reads the
+// requested option landed; an earlier vote with the same option reads the
+// same, and the recorded choice is right either way. It polls until
+// confirmWait passes; the deadline also bounds each read.
+func (g *GovVoter) votedAfter(ctx context.Context, chainID string, msg *govtypes.MsgVote) bool {
+	voter, err := sdk.AccAddressFromBech32(msg.Voter)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, g.confirmWait)
+	defer cancel()
+	var lastErr error
+	for {
+		v, err := g.readVote(ctx, g.cfg, chainID, msg.ProposalId, voter)
+		if err == nil && voteHasOption(v, msg.Option) {
+			return true
+		}
+		if err != nil {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			govVoteLog.Warn("vote not confirmed from the gov vote query",
+				"proposalId", msg.ProposalId, "voter", msg.Voter, "wait", g.confirmWait, "lastReadErr", lastErr)
+			return false
+		case <-time.After(g.confirmEvery):
+		}
+	}
+}
+
+// voteHasOption reports whether v records option as its one full-weight
+// choice, which is how the gov keeper stores a MsgVote.
+func voteHasOption(v *govtypes.Vote, option govtypes.VoteOption) bool {
+	if v == nil || len(v.Options) != 1 {
+		return false
+	}
+	o := v.Options[0]
+	return o.Option == option && o.Weight.Equal(sdk.OneDec())
+}
+
+// chainVote reads the voter's recorded vote on proposalID from the local seid
+// over gRPC-over-ABCI. The SDK query path does not honor ctx, so the read runs
+// off-goroutine and ctx cancellation returns at once, as in chainJailState.
+func chainVote(ctx context.Context, cfg engine.ExecutionConfig, chainID string, proposalID uint64, voter sdk.AccAddress) (*govtypes.Vote, error) {
+	clientCtx, err := newSignTxClientContext(cfg, SignAndBroadcastInput{ChainID: chainID}, voter)
+	if err != nil {
+		return nil, err
+	}
+	type res struct {
+		v   *govtypes.Vote
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		v, err := readVoteState(ctx, clientCtx.Client.Status, govtypes.NewQueryClient(clientCtx), proposalID, voter)
+		ch <- res{v, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.v, r.err
+	}
+}
+
+// readVoteState reads the voter's recorded vote through narrow seams, so a test
+// can fake each read. A node that is catching up answers from an old height,
+// where an earlier vote may still show; it reports an error instead, and the
+// confirmation keeps polling.
+func readVoteState(
+	ctx context.Context,
+	statusOf func(context.Context) (*coretypes.ResultStatus, error),
+	gov govtypes.QueryClient,
+	proposalID uint64,
+	voter sdk.AccAddress,
+) (*govtypes.Vote, error) {
+	s, err := statusOf(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("query local seid /status: %w", err)
+	}
+	if s.SyncInfo.CatchingUp {
+		return nil, errors.New("local seid is catching up, so its vote record may be stale")
+	}
+	r, err := gov.Vote(ctx, &govtypes.QueryVoteRequest{ProposalId: proposalID, Voter: voter.String()})
+	if err != nil {
+		return nil, err
+	}
+	return &r.Vote, nil
 }

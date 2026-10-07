@@ -1,12 +1,20 @@
 package tasks
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
+	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
 
+	"google.golang.org/grpc"
+
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/engine"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
 
 func TestBuildVoteMsg(t *testing.T) {
@@ -97,4 +105,130 @@ func TestBuildVoteMsg(t *testing.T) {
 			t.Fatalf("expected wrapped keyring error: %v", err)
 		}
 	})
+}
+
+// govVoteHarness wires a GovVoter with a fake broadcast and a fake vote read
+// that returns votes in order, then repeats the last one.
+type govVoteHarness struct {
+	g     *GovVoter
+	reads int
+}
+
+func newGovVoteHarness(t *testing.T, result *SignAndBroadcastResult, votes ...*govtypes.Vote) *govVoteHarness {
+	t.Helper()
+	kr, _ := testKeyring(t)
+	h := &govVoteHarness{}
+	h.g = &GovVoter{
+		cfg: engine.ExecutionConfig{Keyring: kr},
+		broadcast: func(context.Context, engine.ExecutionConfig, SignAndBroadcastInput) (*SignAndBroadcastResult, error) {
+			return result, nil
+		},
+		readVote: func(context.Context, engine.ExecutionConfig, string, uint64, sdk.AccAddress) (*govtypes.Vote, error) {
+			h.reads++
+			if len(votes) == 0 {
+				return nil, errors.New("voter not found for proposal")
+			}
+			return votes[min(h.reads-1, len(votes)-1)], nil
+		},
+		confirmWait:  50 * time.Millisecond,
+		confirmEvery: time.Millisecond,
+	}
+	return h
+}
+
+func runGovVote(t *testing.T, g *GovVoter, option string) (*wire.GovTxResult, error) {
+	t.Helper()
+	ctx := engine.WithTaskID(context.Background(), "gov-vote-test")
+	raw, err := g.Handler()(ctx, map[string]any{
+		"chainId": "sei-test", "keyName": "node_admin", "proposalId": 7, "option": option, "fees": "4000usei", "gas": 200000,
+	})
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, err
+	}
+	var out wire.GovTxResult
+	if uerr := json.Unmarshal(raw, &out); uerr != nil {
+		t.Fatalf("decode result: %v", uerr)
+	}
+	return &out, err
+}
+
+func recordedVote(option govtypes.VoteOption) *govtypes.Vote {
+	return &govtypes.Vote{ProposalId: 7, Options: govtypes.NewNonSplitVoteOption(option)}
+}
+
+// PLT-1401: validators often run with the tx index off, so the node cannot
+// look up the vote tx. The task then confirms the vote from the gov module's
+// recorded choice: Complete once the vote reads the requested option.
+func TestGovVoteUnverifiableTxConfirmedByVoteQuery(t *testing.T) {
+	h := newGovVoteHarness(t, &SignAndBroadcastResult{TxHash: "ABCD", Unverifiable: true},
+		nil, recordedVote(govtypes.OptionYes))
+	out, err := runGovVote(t, h.g, "yes")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if out == nil || out.TxHash != "ABCD" || out.InclusionStatus != wire.InclusionUnverifiable {
+		t.Errorf("result = %+v; want the tx hash, still marked unverifiable", out)
+	}
+	if h.reads < 2 {
+		t.Errorf("read the vote %d times, want at least 2 (not yet recorded, then recorded)", h.reads)
+	}
+}
+
+// A recorded vote with a different option is not this vote: the task keeps
+// the unverifiable failure, and the operator checks the tx.
+func TestGovVoteUnverifiableTxDifferentOptionStaysUnverifiable(t *testing.T) {
+	h := newGovVoteHarness(t, &SignAndBroadcastResult{TxHash: "ABCD", Unverifiable: true}, recordedVote(govtypes.OptionNo))
+	out, err := runGovVote(t, h.g, "yes")
+	if !IsTerminal(err) || !strings.Contains(err.Error(), "inclusion unverifiable") {
+		t.Fatalf("want terminal inclusion-unverifiable error, got %v", err)
+	}
+	if out == nil || out.TxHash != "ABCD" {
+		t.Errorf("result = %+v", out)
+	}
+}
+
+// A vote the node can look up never reaches the vote query.
+func TestGovVoteCommittedTxSkipsVoteQuery(t *testing.T) {
+	now := time.Now()
+	h := newGovVoteHarness(t, &SignAndBroadcastResult{TxHash: "ABCD", Height: 9, IncludedAt: &now})
+	if _, err := runGovVote(t, h.g, "yes"); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if h.reads != 0 {
+		t.Errorf("read the vote %d times, want 0", h.reads)
+	}
+}
+
+type fakeGovQuery struct {
+	govtypes.QueryClient
+	vote  *govtypes.Vote
+	calls int
+}
+
+func (f *fakeGovQuery) Vote(context.Context, *govtypes.QueryVoteRequest, ...grpc.CallOption) (*govtypes.QueryVoteResponse, error) {
+	f.calls++
+	return &govtypes.QueryVoteResponse{Vote: *f.vote}, nil
+}
+
+// seidroid on #604: a node that is catching up can still show an older vote,
+// so the read refuses to trust it, as the Unjail jail-state read does.
+func TestReadVoteState(t *testing.T) {
+	_, voter := testKeyring(t)
+	gov := &fakeGovQuery{vote: recordedVote(govtypes.OptionYes)}
+
+	if _, err := readVoteState(context.Background(), statusAt(testBlockTime, true), gov, 7, voter); err == nil ||
+		!strings.Contains(err.Error(), "catching up") {
+		t.Fatalf("catching up: want an error, got %v", err)
+	}
+	if gov.calls != 0 {
+		t.Errorf("queried the vote %d times while catching up, want 0", gov.calls)
+	}
+
+	v, err := readVoteState(context.Background(), statusAt(testBlockTime, false), gov, 7, voter)
+	if err != nil {
+		t.Fatalf("caught up: unexpected err: %v", err)
+	}
+	if !voteHasOption(v, govtypes.OptionYes) {
+		t.Errorf("vote = %+v, want the recorded yes", v)
+	}
 }

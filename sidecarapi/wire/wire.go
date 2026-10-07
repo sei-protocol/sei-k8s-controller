@@ -103,10 +103,11 @@ const (
 	// its on-chain outcome cannot be observed from the target node (its tx
 	// index is disabled), so the sidecar can confirm neither success nor
 	// failure. Terminal — retrying the same node is futile — but distinct from
-	// committed_failed: the operator must verify via an indexed RPC. One
-	// exception: an unjail confirms its effect from the validator's jail state,
-	// so an Unjail task can complete with this status once the validator reads
-	// released. Key completion on the task phase, not on this value alone.
+	// committed_failed: the operator must verify via an indexed RPC. Two
+	// exceptions confirm their effect from state instead, so the task can
+	// complete with this status: an Unjail once the validator reads released,
+	// and a GovVote once the gov module records the requested option. Key
+	// completion on the task phase, not on this value alone.
 	InclusionUnverifiable = "unverifiable"
 )
 
