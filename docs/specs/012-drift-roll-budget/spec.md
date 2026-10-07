@@ -43,14 +43,16 @@ An operator bumps the cell sidecar image with the budget at 25%. In each namespa
 
 1. WHERE `rollout.driftUpdateBudgetPercent` is above 0, THE controller SHALL build a drift update only for a node that holds a roll slot.
 2. WHEN a drifted node holds no slot, THE controller SHALL build no plan for it and SHALL set `NodeUpdateInProgress=False` with reason `UpdateDeferred` and a message that names the slot holders.
-3. THE controller SHALL compute the same slot order on every node from the same cached view, so a stale read delays a roll and never fills more slots than the budget.
+3. THE controller SHALL list the namespace's SeiNodes with an uncached read. Because the node controller reconciles one node at a time, each slot decision then sees every earlier node's persisted status, and the slots never overfill.
 4. THE budget SHALL NOT gate a data reset, a hold change, a config update, an init plan, or a resize.
 
-### Requirement 2: A ConfigMap-configured node keeps its template while it waits
+### Requirement 2: A ConfigMap-configured node keeps its running images while it waits
 
 #### Acceptance Criteria
 
-1. WHILE a `nodeConfig` node is drifted, has no active plan, has no reset or hold change pending, and holds no slot, THE controller SHALL skip its StatefulSet apply, because that StatefulSet is `RollingUpdate` and the apply would roll the pod.
+1. WHILE a `nodeConfig` node is drifted and holds no slot, THE controller SHALL render its StatefulSet from a copy pinned to the running image, sidecar image, and isolation, because that StatefulSet is `RollingUpdate` and the drifted template would roll the pod.
+2. THE pinned render SHALL apply every other field, so `spec.paused`, a resize, and a config ref still take effect.
+3. THE controller SHALL pin only when no plan is active, no reset or hold change is pending, and the node is not paused. `observe-image` stamps the spec image when a rollout completes, so a plan that ran on a pinned template would record an image the pod does not run.
 
 ### Requirement 3: The budget is controller config
 
@@ -66,6 +68,7 @@ An operator bumps the cell sidecar image with the budget at 25%. In each namespa
 
 ## Known limits
 
+- While a `nodeConfig` node runs another plan, or has a reset or hold change pending, the controller applies its drifted template. The pod then rolls with that plan, outside the budget, and `observe-image` records the new images, so no second roll follows.
 - A drift update stuck in progress keeps its slot, so a namespace's further drift waits until an operator clears it. The `UpdateDeferred` message names the holder.
 - Cells still roll through separate pull requests; the budget is per namespace, not per chain across cells.
 

@@ -75,3 +75,47 @@ func TestReconcile_DriftWaitingForSlotKeepsTemplate(t *testing.T) {
 	g.Expect(cond.Reason).To(Equal("UpdateDeferred"))
 	g.Expect(cond.Message).To(ContainSubstring("held by drift-holder"))
 }
+
+// seidroid on #605: pausing a drifted nodeConfig node must still scale it to
+// zero while the drift budget is full, so spec.paused keeps its contract.
+func TestReconcile_PausedDriftedNodeScalesToZero(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	sidecar := platformtest.Config().SidecarImage
+
+	node := resizeNode("drift-paused", true, "")
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	node.Status.CurrentImage = testImage
+	node.Status.CurrentSidecarImage = sidecar
+
+	holder := resizeNode("drift-holder", false, "")
+	holder.UID = types.UID("drift-holder-uid")
+	holder.Status.Phase = seiv1alpha1.PhaseRunning
+	holder.Status.CurrentImage = testImage
+	holder.Status.CurrentSidecarImage = sidecar
+	meta.SetStatusCondition(&holder.Status.Conditions, metav1.Condition{
+		Type: seiv1alpha1.ConditionNodeUpdateInProgress, Status: metav1.ConditionTrue, Reason: "UpdateStarted",
+	})
+
+	r, c := newNodeReconciler(t, node, holder)
+	r.Planner.Nodes = c
+	r.Planner.Platform.DriftUpdateBudgetPercent = 25
+
+	_, err := r.Reconcile(ctx, nodeReqFor("drift-paused", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	n := getSeiNode(t, ctx, c, "drift-paused", testNamespace)
+	n.Status.Plan = nil
+	g.Expect(c.Status().Update(ctx, n)).To(Succeed())
+	n = getSeiNode(t, ctx, c, "drift-paused", testNamespace)
+	n.Spec.Image = "sei:v9.9.9"
+	n.Spec.Paused = true
+	g.Expect(c.Update(ctx, n)).To(Succeed())
+
+	_, err = r.Reconcile(ctx, nodeReqFor("drift-paused", testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+	sts := &appsv1.StatefulSet{}
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: "drift-paused", Namespace: testNamespace}, sts)).To(Succeed())
+	g.Expect(sts.Spec.Replicas).NotTo(BeNil())
+	g.Expect(*sts.Spec.Replicas).To(Equal(int32(0)), "a paused node scales to zero even while its drift waits")
+}

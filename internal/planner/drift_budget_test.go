@@ -2,7 +2,6 @@ package planner
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -137,19 +136,48 @@ func TestResolvePlan_ResetIgnoresTheDriftBudget(t *testing.T) {
 	g.Expect(isDataResetPlan(resetNode.Status.Plan)).To(BeTrue())
 }
 
-// The template gate: a nodeConfig node rolls by its StatefulSet, so a drift
-// without a slot must also hold back the StatefulSet apply.
-func TestDeferStatefulSetApply(t *testing.T) {
+// seidroid on #605: a node the list does not show as drifted may start only if
+// a slot is left after every node in the order, waiting ones included.
+func TestDriftSlot_FallbackCountsWaitingNodes(t *testing.T) {
+	g := NewWithT(t)
+	a := driftedNode("node-a")
+	updating(a)
+	b := driftedNode("node-b")
+	c := runningFullNode() // stored as not drifted yet
+	c.Name = "node-c"
+	r := budgetResolver(t, 67, a, b, c) // 3 * 67% = 2 slots, held by node-a and node-b
+
+	inMemory := driftedNode("node-c")
+	free, msg, err := r.DriftSlot(context.Background(), inMemory)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(free).To(BeFalse(), "both slots are taken once the waiting node-b counts")
+	g.Expect(msg).To(ContainSubstring("held by node-a, node-b"))
+}
+
+// The template gate: a nodeConfig node rolls by its StatefulSet, so while its
+// drift waits for a slot, the StatefulSet renders from a copy pinned to the
+// running images.
+func TestDriftRenderNode(t *testing.T) {
 	nodes := eightDrifted()
 	updating(nodes[0])
 	updating(nodes[1])
 	cases := []struct {
-		name string
-		node func() *seiv1alpha1.SeiNode
-		want bool
+		name   string
+		node   func() *seiv1alpha1.SeiNode
+		pinned bool
 	}{
 		{"nodeConfig drift without a slot", func() *seiv1alpha1.SeiNode { return withNodeConfig(driftedNode("node-y")) }, true},
 		{"controller-configured node", func() *seiv1alpha1.SeiNode { return driftedNode("node-y") }, false},
+		{"paused", func() *seiv1alpha1.SeiNode {
+			n := withNodeConfig(driftedNode("node-y"))
+			n.Spec.Paused = true
+			return n
+		}, false},
+		{"own drift update in progress", func() *seiv1alpha1.SeiNode {
+			n := withNodeConfig(driftedNode("node-y"))
+			updating(n)
+			return n
+		}, false},
 		{"reset pending", func() *seiv1alpha1.SeiNode {
 			n := withNodeConfig(driftedNode("node-y"))
 			n.Spec.DataResetGeneration = 1
@@ -172,9 +200,18 @@ func TestDeferStatefulSetApply(t *testing.T) {
 			g := NewWithT(t)
 			n := tc.node()
 			r := budgetResolver(t, 25, append(nodes, n)...)
-			got, err := r.DeferStatefulSetApply(context.Background(), n)
+			got, err := r.DriftRenderNode(context.Background(), n)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(got).To(Equal(tc.want), fmt.Sprintf("%+v", n.Status.Conditions))
+			if !tc.pinned {
+				g.Expect(got).To(BeIdenticalTo(n))
+				return
+			}
+			g.Expect(got).NotTo(BeIdenticalTo(n))
+			g.Expect(got.Spec.Image).To(Equal(n.Status.CurrentImage), "the pinned copy renders the running image")
+			g.Expect(n.Spec.Image).To(Equal(testImageV2), "the node itself keeps its spec")
+			cond := meta.FindStatusCondition(n.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
+			g.Expect(cond).NotTo(BeNil())
+			g.Expect(cond.Reason).To(Equal(reasonUpdateDeferred))
 		})
 	}
 }

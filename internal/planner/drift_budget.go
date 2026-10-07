@@ -19,9 +19,10 @@ import (
 // once. With platform DriftUpdateBudgetPercent set, a namespace gets
 // max(1, N*percent/100) roll slots, where N counts its Running, unpaused
 // SeiNodes. Nodes already updating hold the first slots; drifted nodes waiting
-// for one follow in name order. Every node computes the same order from the
-// same cache, so a stale read delays a roll rather than overfilling the slots.
-// A node without a slot keeps its current pod and reports UpdateDeferred.
+// for one follow in name order. The list is an uncached read and the node
+// controller reconciles one node at a time, so each decision sees every earlier
+// node's persisted status and the slots never overfill. A node without a slot
+// keeps its current pod and reports UpdateDeferred.
 
 const reasonUpdateDeferred = "UpdateDeferred"
 
@@ -59,9 +60,9 @@ func (p *NodeResolver) DriftSlot(ctx context.Context, node *seiv1alpha1.SeiNode)
 		if i < slots {
 			return true, "", nil
 		}
-	} else if len(updating) < slots {
-		// The cache does not list this node as drifted yet; fall back to the
-		// count of updates in progress.
+	} else if len(order) < slots {
+		// The list does not show this node as drifted yet; it may start only
+		// if a slot is left after every node already in the order.
 		return true, "", nil
 	}
 	holders := order[:min(slots, len(order))]
@@ -69,31 +70,60 @@ func (p *NodeResolver) DriftSlot(ctx context.Context, node *seiv1alpha1.SeiNode)
 		node.Namespace, slots, strings.Join(holders, ", ")), nil
 }
 
-// DeferStatefulSetApply reports whether the reconciler must skip this
-// reconcile's StatefulSet apply to keep a drift waiting. Only a nodeConfig
-// node needs it: its StatefulSet is RollingUpdate, so applying the drifted
-// template would roll the pod with no plan. It applies only when the next
-// plan would be the drift update: no plan is active, and no reset or hold
-// change is pending.
-func (p *NodeResolver) DeferStatefulSetApply(ctx context.Context, node *seiv1alpha1.SeiNode) (bool, error) {
-	if node.Spec.NodeConfig == nil || node.Status.Phase != seiv1alpha1.PhaseRunning {
-		return false, nil
+// DriftRenderNode returns the SeiNode the reconciler renders the StatefulSet
+// from. A nodeConfig node's StatefulSet is RollingUpdate, so applying a
+// drifted template rolls the pod at once. While such a node waits for a roll
+// slot, this returns a copy pinned to the running image, sidecar image, and
+// isolation; every other field still renders from the node, so pause, resize,
+// and config refs apply. Otherwise it returns node itself.
+//
+// It pins only when no plan can read the template this reconcile: no plan is
+// active, and no reset or hold change is pending. observe-image stamps the
+// spec image once a rollout completes, so a plan that ran on a pinned template
+// would record an image the pod does not run. A paused node is not pinned:
+// it runs no pod, and the next unpause renders the pinned template.
+func (p *NodeResolver) DriftRenderNode(ctx context.Context, node *seiv1alpha1.SeiNode) (*seiv1alpha1.SeiNode, error) {
+	if node.Spec.NodeConfig == nil || node.Spec.Paused || node.Status.Phase != seiv1alpha1.PhaseRunning {
+		return node, nil
 	}
 	if node.Status.Plan != nil && node.Status.Plan.Phase == seiv1alpha1.TaskPlanActive {
-		return false, nil
+		return node, nil
 	}
-	if !podTemplateDrifted(node, p.Platform) || task.DataResetPending(node) ||
+	if updateInProgress(node) || !podTemplateDrifted(node, p.Platform) || task.DataResetPending(node) ||
 		node.Spec.HoldRequested() != node.Status.MaintenanceHold {
-		return false, nil
+		return node, nil
 	}
 	free, msg, err := p.DriftSlot(ctx, node)
 	if err != nil {
-		return true, err
+		return node, err
 	}
-	if !free {
-		setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateDeferred, msg)
+	if free {
+		return node, nil
 	}
-	return !free, nil
+	setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateDeferred, msg)
+	return pinnedToRunning(node), nil
+}
+
+// pinnedToRunning returns a copy of node whose image, sidecar image, and
+// isolation are the ones its pod runs now.
+func pinnedToRunning(node *seiv1alpha1.SeiNode) *seiv1alpha1.SeiNode {
+	pinned := node.DeepCopy()
+	if img := node.Status.CurrentImage; img != "" {
+		pinned.Spec.Image = img
+	}
+	if img := node.Status.CurrentSidecarImage; img != "" {
+		if pinned.Spec.Sidecar == nil {
+			pinned.Spec.Sidecar = &seiv1alpha1.SidecarConfig{}
+		}
+		pinned.Spec.Sidecar.Image = img
+	}
+	if iso := node.Status.CurrentNodeIsolation; iso != "" {
+		if pinned.Spec.Scheduling == nil {
+			pinned.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{}
+		}
+		pinned.Spec.Scheduling.NodeIsolation = iso
+	}
+	return pinned
 }
 
 // isDriftUpdatePlan reports whether plan is the pod-template drift update the
