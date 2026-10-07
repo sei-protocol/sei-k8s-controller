@@ -591,6 +591,24 @@ spec:
                 maxLength: 512
                 minLength: 1
                 type: string
+              maintenance:
+                description: |-
+                  Maintenance holds seid at the sidecar start gate with the pod alive and
+                  the data volume mounted, for work through kubectl exec. Requires
+                  spec.nodeConfig.
+                properties:
+                  hold:
+                    description: |-
+                      Hold keeps seid from starting while it is set. Immediate stops seid now;
+                      AfterExit lets it run until it exits. Remove it to release seid. While
+                      held, the controller still applies the StatefulSet, so a template change
+                      rolls the pod and the new pod stays parked. A hold set on a new node parks
+                      it before seid first runs.
+                    enum:
+                    - Immediate
+                    - AfterExit
+                    type: string
+                type: object
               nodeConfig:
                 description: |-
                   NodeConfig supplies this node's seid config files from existing
@@ -1496,6 +1514,9 @@ spec:
                 and keep the counter'
               rule: '!has(oldSelf.dataResetGeneration) || (has(self.dataResetGeneration)
                 && self.dataResetGeneration >= oldSelf.dataResetGeneration)'
+            - message: 'spec.maintenance.hold needs spec.nodeConfig: only a node that
+                reads its config from ConfigMaps runs the maintenance hold'
+              rule: '!has(self.maintenance) || !has(self.maintenance.hold) || has(self.nodeConfig)'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:
@@ -1677,6 +1698,17 @@ spec:
                       leave the listener closed.
                     type: string
                 type: object
+              maintenanceHold:
+                description: |-
+                  MaintenanceHold is the hold in effect: Immediate means seid is parked by
+                  the hold, AfterExit means the start gate is closed and seid may still run,
+                  empty means no hold acts on the node. The controller writes it when a hold,
+                  release, or held reset plan completes, and compares it with
+                  spec.maintenance.hold to decide the next plan.
+                enum:
+                - Immediate
+                - AfterExit
+                type: string
               phase:
                 description: Phase is the high-level lifecycle state.
                 enum:

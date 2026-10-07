@@ -46,3 +46,38 @@ func TestEmitDataResetEvent(t *testing.T) {
 		})
 	}
 }
+
+// 010 Req 5.6 (harbor e2e finding): a release reaches NotHeld from HoldPending,
+// because the release plan runs first, and still records MaintenanceReleased.
+func TestEmitMaintenanceEvent(t *testing.T) {
+	cond := func(status metav1.ConditionStatus, reason string) *metav1.Condition {
+		return &metav1.Condition{Type: seiv1alpha1.ConditionMaintenanceInProgress, Status: status, Reason: reason, Message: reason}
+	}
+	cases := []struct {
+		name      string
+		prev, cur *metav1.Condition
+		want      string
+	}{
+		{"held", cond(metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending), cond(metav1.ConditionTrue, seiv1alpha1.ReasonHeld), "MaintenanceHeld"},
+		{"armed", cond(metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending), cond(metav1.ConditionTrue, seiv1alpha1.ReasonArmed), "MaintenanceArmed"},
+		{"released via HoldPending", cond(metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending), cond(metav1.ConditionFalse, seiv1alpha1.ReasonNotHeld), "MaintenanceReleased"},
+		{"released from Held", cond(metav1.ConditionTrue, seiv1alpha1.ReasonHeld), cond(metav1.ConditionFalse, seiv1alpha1.ReasonNotHeld), "MaintenanceReleased"},
+		{"seeded, never held", nil, cond(metav1.ConditionFalse, seiv1alpha1.ReasonNotHeld), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			rec := record.NewFakeRecorder(4)
+			r := &SeiNodeReconciler{Recorder: rec}
+			node := &seiv1alpha1.SeiNode{}
+			apimeta.SetStatusCondition(&node.Status.Conditions, *tc.cur)
+
+			r.emitMaintenanceEvent(node, tc.prev)
+			if tc.want == "" {
+				g.Expect(rec.Events).To(BeEmpty())
+				return
+			}
+			g.Expect(rec.Events).To(Receive(ContainSubstring(tc.want)))
+		})
+	}
+}

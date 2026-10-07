@@ -228,7 +228,7 @@ reaches `Running` with seid parked.
 #### Acceptance Criteria
 
 1. WHEN the hold is removed from a held node and no reset is pending, THE controller SHALL build a plan that marks the sidecar ready.
-2. WHEN the hold is removed and a reset is pending, THE controller SHALL build the reset plan with its final `mark-ready`.
+2. WHEN the hold is removed and a reset is pending, THE controller SHALL build the reset plan with its `mark-ready`, followed by a step that clears `status.maintenanceHold`.
 3. WHEN the plan that marks the sidecar ready completes, THE controller SHALL clear `status.maintenanceHold`.
 
 ### Requirement 5: The controller reports the hold
@@ -240,8 +240,8 @@ reaches `Running` with seid parked.
 #### Acceptance Criteria
 
 1. The controller SHALL seed a `MaintenanceInProgress` condition on every SeiNode. `True` is the exception, `False` is the steady state.
-2. WHILE no hold is set, THE condition SHALL be `False` with reason `NotHeld`, or `NotApplicable` on a node without `spec.nodeConfig`.
-3. WHILE a hold is set and differs from `status.maintenanceHold`, WHILE a hold plan runs, or WHILE the sidecar reports the gate open under a hold, THE condition SHALL be `True` with reason `HoldPending`.
+2. WHILE no hold is set and none is in effect, THE condition SHALL be `False` with reason `NotHeld`, or `NotApplicable` on a node without `spec.nodeConfig`.
+3. WHILE the hold set differs from `status.maintenanceHold` (a removed hold included), WHILE a plan that changes the hold in effect runs, or WHILE the sidecar reports the gate open under a hold, THE condition SHALL be `True` with reason `HoldPending`.
 4. WHILE an `Immediate` hold is in effect, THE condition SHALL be `True` with reason `Held`.
 5. WHILE an `AfterExit` hold is in effect, THE condition SHALL be `True` with reason `Armed`.
 6. WHEN the hold takes effect or the node is released, THE controller SHALL record an event on the SeiNode.

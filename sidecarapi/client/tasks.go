@@ -66,6 +66,7 @@ const (
 	TaskTypeStopSeid     = string(wire.TaskStopSeid)
 	TaskTypeResetData    = string(wire.TaskResetData)
 
+	TaskTypeAwaitSeidStart         = string(wire.TaskAwaitSeidStart)
 	TaskTypeResetDataKeepSignState = string(wire.TaskResetDataKeepSignState)
 	TaskTypeEVMDigest              = string(wire.TaskEVMDigest)
 	TaskTypeUnjail                 = string(wire.TaskUnjail)
@@ -335,6 +336,17 @@ func (t StopSeidTask) Validate() error {
 
 func (t StopSeidTask) ToTaskRequest() TaskRequest {
 	return upCheckTaskRequest(t.TaskType(), t.UpCheck)
+}
+
+// AwaitSeidStartTask completes once a `seid start` process runs in the pod. It
+// reads /proc and changes nothing. Consumers poll it to a terminal state.
+type AwaitSeidStartTask struct{}
+
+func (t AwaitSeidStartTask) TaskType() string { return TaskTypeAwaitSeidStart }
+func (t AwaitSeidStartTask) Validate() error  { return nil }
+
+func (t AwaitSeidStartTask) ToTaskRequest() TaskRequest {
+	return TaskRequest{Type: t.TaskType()}
 }
 
 // ResetDataKeepSignStateTask is ResetDataTask under the type name that only a

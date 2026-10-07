@@ -130,13 +130,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	observedPhase := node.Status.Phase
 	prevSidecar := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionSidecarReady)
 	prevStateSync := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionStateSyncReady)
-	// A copy, not the pointer FindStatusCondition returns: SetStatusCondition
-	// mutates the slice element in place, which would erase the transition.
-	var prevDataReset *metav1.Condition
-	if c := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionDataResetInProgress); c != nil {
-		cp := *c
-		prevDataReset = &cp
-	}
+	prevDataReset := conditionSnapshot(node, seiv1alpha1.ConditionDataResetInProgress)
+	prevMaintenance := conditionSnapshot(node, seiv1alpha1.ConditionMaintenanceInProgress)
 
 	setNodePausedCondition(node)
 
@@ -253,6 +248,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	// it: spec-derived plus the persisted plan, so it rides the flush on every
 	// path, including Paused, where a pending reset waits.
 	planner.ResolveDataReset(node)
+	planner.ResolveMaintenance(node)
 
 	// Failed is terminal — flush any condition updates and exit.
 	if node.Status.Phase == seiv1alpha1.PhaseFailed {
@@ -344,6 +340,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	}
 
 	r.emitDataResetEvent(node, prevDataReset)
+	r.emitMaintenanceEvent(node, prevMaintenance)
 	r.observeCommittedHeight(ctx, node, suppressDrift)
 
 	if err := flushStatus(); err != nil {
@@ -652,5 +649,38 @@ func (r *SeiNodeReconciler) emitDataResetEvent(node *seiv1alpha1.SeiNode, prev *
 		r.Recorder.Event(node, corev1.EventTypeNormal, "DataResetComplete", cur.Message)
 	case seiv1alpha1.ReasonResetFailed:
 		r.Recorder.Event(node, corev1.EventTypeWarning, "DataResetFailed", cur.Message)
+	}
+}
+
+// conditionSnapshot copies a condition, or returns nil when it is absent. A
+// copy, not the pointer FindStatusCondition returns: SetStatusCondition mutates
+// the slice element in place, which would erase the transition.
+func conditionSnapshot(node *seiv1alpha1.SeiNode, condType string) *metav1.Condition {
+	c := apimeta.FindStatusCondition(node.Status.Conditions, condType)
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	return &cp
+}
+
+// emitMaintenanceEvent records when a hold takes effect and when seid is
+// released (spec 010 Requirement 5).
+func (r *SeiNodeReconciler) emitMaintenanceEvent(node *seiv1alpha1.SeiNode, prev *metav1.Condition) {
+	cur := apimeta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionMaintenanceInProgress)
+	if cur == nil || r.Recorder == nil || (prev != nil && prev.Reason == cur.Reason) {
+		return
+	}
+	switch cur.Reason {
+	case seiv1alpha1.ReasonHeld:
+		r.Recorder.Event(node, corev1.EventTypeNormal, "MaintenanceHeld", cur.Message)
+	case seiv1alpha1.ReasonArmed:
+		r.Recorder.Event(node, corev1.EventTypeNormal, "MaintenanceArmed", cur.Message)
+	case seiv1alpha1.ReasonNotHeld:
+		// A release runs a plan, so the condition passes through HoldPending
+		// on its way to NotHeld; any True state before NotHeld is a release.
+		if prev != nil && prev.Status == metav1.ConditionTrue {
+			r.Recorder.Event(node, corev1.EventTypeNormal, "MaintenanceReleased", cur.Message)
+		}
 	}
 }

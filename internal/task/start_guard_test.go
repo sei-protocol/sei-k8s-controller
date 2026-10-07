@@ -27,7 +27,7 @@ func (m *countingSidecar) SubmitTask(ctx context.Context, req sidecar.TaskReques
 }
 
 func nodeConfigNode(spec, handled int64) *seiv1alpha1.SeiNode {
-	return &seiv1alpha1.SeiNode{
+	node := &seiv1alpha1.SeiNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "rpc-0", Namespace: "default"},
 		Spec: seiv1alpha1.SeiNodeSpec{
 			NodeConfig: &seiv1alpha1.NodeConfig{
@@ -36,8 +36,9 @@ func nodeConfigNode(spec, handled int64) *seiv1alpha1.SeiNode {
 			},
 			DataResetGeneration: spec,
 		},
-		Status: seiv1alpha1.SeiNodeStatus{DataResetGeneration: handled},
+		Status: seiv1alpha1.SeiNodeStatus{DataResetGeneration: handled, Phase: seiv1alpha1.PhaseRunning},
 	}
+	return node
 }
 
 // 009 Req 3: the start guard blocks only while a reset is pending.
@@ -129,4 +130,77 @@ func TestRecordDataReset(t *testing.T) {
 			g.Expect(node.Status.DataResetGeneration).To(Equal(tc.want))
 		})
 	}
+}
+
+// 010 Req 2.4: a hold blocks mark-ready but not the hold's own start-once
+// step; a pending reset blocks both.
+func TestStartGuard_Hold(t *testing.T) {
+	cases := []struct {
+		name          string
+		hold          seiv1alpha1.MaintenanceHold
+		resetPending  bool
+		taskType      string
+		wantSubmitted bool
+	}{
+		{"mark-ready under hold", seiv1alpha1.MaintenanceHoldImmediate, false, sidecar.TaskTypeMarkReady, false},
+		{"start-once under hold", seiv1alpha1.MaintenanceHoldAfterExit, false, task.TaskTypeStartSeidOnce, true},
+		{"start-once under reset", seiv1alpha1.MaintenanceHoldAfterExit, true, task.TaskTypeStartSeidOnce, false},
+		{"mark-ready released", "", false, sidecar.TaskTypeMarkReady, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			node := nodeConfigNode(0, 0)
+			if tc.resetPending {
+				node.Spec.DataResetGeneration = 1
+			}
+			if tc.hold != "" {
+				node.Spec.Maintenance = &seiv1alpha1.MaintenanceSpec{Hold: tc.hold}
+			}
+			mock := &countingSidecar{}
+			cfg := task.ExecutionConfig{
+				BuildSidecarClient: func() (task.SidecarClient, error) { return mock, nil },
+				Resource:           node,
+			}
+			exec, err := task.Deserialize(tc.taskType, task.DeterministicTaskID("p", tc.taskType, 0), nil, cfg)
+			g.Expect(err).NotTo(HaveOccurred())
+			err = exec.Execute(context.Background())
+			if tc.wantSubmitted {
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(mock.submits).To(Equal(1))
+				return
+			}
+			var terminal *task.TerminalError
+			g.Expect(errors.As(err, &terminal)).To(BeTrue())
+			g.Expect(mock.submits).To(Equal(0))
+		})
+	}
+}
+
+// 010 Req 2.7: record-maintenance-hold writes the hold in effect, including
+// the empty value a release records.
+func TestRecordMaintenanceHold(t *testing.T) {
+	for _, hold := range []seiv1alpha1.MaintenanceHold{seiv1alpha1.MaintenanceHoldImmediate, ""} {
+		g := NewWithT(t)
+		node := nodeConfigNode(0, 0)
+		node.Status.MaintenanceHold = seiv1alpha1.MaintenanceHoldAfterExit
+		params := []byte(`{"hold":"` + string(hold) + `"}`)
+		exec, err := task.Deserialize(task.TaskTypeRecordMaintenanceHold, "id", params, task.ExecutionConfig{Resource: node})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(exec.Execute(context.Background())).To(Succeed())
+		g.Expect(node.Status.MaintenanceHold).To(Equal(hold))
+	}
+}
+
+// Review finding: a hold set while an init plan runs must not fail the node.
+// The hold half of the guard acts only on a Running node.
+func TestStartGuard_HoldInertBeforeRunning(t *testing.T) {
+	g := NewWithT(t)
+	node := nodeConfigNode(0, 0)
+	node.Spec.Maintenance = &seiv1alpha1.MaintenanceSpec{Hold: seiv1alpha1.MaintenanceHoldImmediate}
+	node.Status.Phase = seiv1alpha1.PhaseInitializing
+	g.Expect(task.StartBlocked(node)).To(BeEmpty())
+
+	node.Status.Phase = seiv1alpha1.PhaseRunning
+	g.Expect(task.StartBlocked(node)).To(ContainSubstring("maintenance hold"))
 }

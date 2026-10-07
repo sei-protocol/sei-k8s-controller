@@ -177,18 +177,21 @@ func observeTerminalDataResetPlan(node *seiv1alpha1.SeiNode, plan *seiv1alpha1.T
 }
 
 // startDeferred reports whether plan failed only because the start guard
-// refused its final mark-ready, after every earlier task completed.
+// refused its mark-ready, after every task before it completed.
 func startDeferred(plan *seiv1alpha1.TaskPlan) bool {
 	d := plan.FailedTaskDetail
 	if d == nil || d.Type != TaskMarkReady || !strings.Contains(d.Error, task.StartGuardRefusal) {
 		return false
 	}
 	for _, t := range plan.Tasks {
-		if t.Type != TaskMarkReady && t.Status != seiv1alpha1.TaskComplete {
+		if t.Type == TaskMarkReady {
+			return true
+		}
+		if t.Status != seiv1alpha1.TaskComplete {
 			return false
 		}
 	}
-	return true
+	return false
 }
 
 func setDataResetCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatus, reason, message string) {

@@ -125,6 +125,7 @@ var serveCmd = cli.Command{
 			engine.TaskMarkNotReady:               tasks.NewMarkNotReadier(store).Handler(),
 			engine.TaskRestartSeid:                tasks.NewRestartSeider().Handler(),
 			engine.TaskStopSeid:                   tasks.NewStopSeider().Handler(),
+			engine.TaskAwaitSeidStart:             tasks.NewSeidStartAwaiter().Handler(),
 			engine.TaskResetData:                  tasks.NewResetDataer(homeDir).Handler(),
 			engine.TaskResetDataKeepSignState:     tasks.NewResetDataer(homeDir).Handler(),
 			engine.TaskConfigureGenesis:           tasks.NewGenesisFetcher(homeDir, chainID, genesisBucket, genesisRegion, nil).Handler(),
