@@ -178,6 +178,56 @@ func TestUnjailCommittedFailureIsTerminalAndKeepsTxHash(t *testing.T) {
 	}
 }
 
+// PLT-1392 harbor e2e: validators often run with the tx index off, so the
+// node cannot look up the unjail tx. The task then confirms the release from
+// the jail state: Complete once the validator reads released.
+func TestUnjailUnverifiableTxConfirmedByJailState(t *testing.T) {
+	kr, _ := testKeyring(t)
+	states := []jailState{releasable(), releasable(), with(func(s *jailState) { s.Jailed = false })}
+	reads := 0
+	u := &Unjailer{
+		cfg: engine.ExecutionConfig{Keyring: kr, Checkpointer: newFakeCheckpointer(nil)},
+		readJail: func(context.Context, engine.ExecutionConfig, string, sdk.ValAddress) (jailState, error) {
+			st := states[min(reads, len(states)-1)]
+			reads++
+			return st, nil
+		},
+		broadcast: func(context.Context, engine.ExecutionConfig, SignAndBroadcastInput) (*SignAndBroadcastResult, error) {
+			return &SignAndBroadcastResult{TxHash: "ABCD", Unverifiable: true}, nil
+		},
+		confirmWait:  time.Second,
+		confirmEvery: time.Millisecond,
+	}
+	out, err := runUnjail(t, u, "node_admin")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if out == nil || out.TxHash != "ABCD" || out.InclusionStatus != wire.InclusionUnverifiable {
+		t.Errorf("result = %+v; want the tx hash, still marked unverifiable", out)
+	}
+	if reads != 3 {
+		t.Errorf("read jail state %d times, want 3 (pre-check, then two polls)", reads)
+	}
+}
+
+// A validator that still reads jailed when the wait ends keeps the
+// unverifiable failure: the operator must check the tx through an indexed RPC.
+func TestUnjailUnverifiableTxStillJailedStaysUnverifiable(t *testing.T) {
+	h, _ := newUnjailHarness(t, releasable(), nil, &SignAndBroadcastResult{TxHash: "ABCD", Unverifiable: true})
+	h.u.confirmWait = 20 * time.Millisecond
+	h.u.confirmEvery = 5 * time.Millisecond
+	out, err := runUnjail(t, h.u, "node_admin")
+	if !IsTerminal(err) || !strings.Contains(err.Error(), "inclusion unverifiable") {
+		t.Fatalf("want terminal inclusion-unverifiable error, got %v", err)
+	}
+	if out == nil || out.TxHash != "ABCD" {
+		t.Errorf("result = %+v", out)
+	}
+	if h.reads < 2 {
+		t.Errorf("read jail state %d times, want the pre-check plus at least one poll", h.reads)
+	}
+}
+
 // A rehydrated run must adopt the first run's tx, not re-check the jail: the
 // first unjail may already have released the validator.
 func TestUnjailWithTxMarkerSkipsJailCheck(t *testing.T) {

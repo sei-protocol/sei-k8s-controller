@@ -80,8 +80,10 @@ const (
 	// sidecar keyring. The sidecar refuses before broadcast when the account has
 	// no validator, the validator's self-delegation is missing or below its min
 	// self-delegation, or the validator is not jailed, still in its jail period,
-	// or tombstoned. NOT chain-idempotent: a second unjail of a released validator
-	// spends the fee and fails, so do not re-create a Complete task.
+	// or tombstoned. On a node with the tx index off, as on most validators, the
+	// sidecar cannot look up the tx, so it confirms the release from the jail
+	// state instead. NOT chain-idempotent: a second unjail of a released
+	// validator spends the fee and fails, so do not re-create a Complete task.
 	SeiNodeTaskKindUnjail SeiNodeTaskKind = "Unjail"
 )
 
