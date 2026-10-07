@@ -19,7 +19,9 @@ const (
 
 	// SeiNodeTaskKindGovVote backs the sidecar `gov-vote` task. Submits
 	// MsgVote on an existing proposal. Chain-idempotent (last-write-wins on
-	// proposalId/voter).
+	// proposalId/voter). On a node with the tx index off, as on most
+	// validators, the sidecar confirms the vote from the gov module's recorded
+	// choice instead of the tx.
 	SeiNodeTaskKindGovVote SeiNodeTaskKind = "GovVote"
 
 	// SeiNodeTaskKindGovParamChange backs the sidecar `gov-param-change` task.
