@@ -184,8 +184,10 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 	job.Namespace = ns
 	runJob(ctx, t, cs, job)
 
-	assertChainLive(ctx, t, hc, ch)
+	// Read seiload's pod before the follower catch-up wait: Karpenter can
+	// reclaim the finished pod's node, taking its log with it.
 	assertSeiloadRun(ctx, t, cs, job, s)
+	assertChainLive(ctx, t, hc, ch)
 
 	// Chain included the load: at least one transaction landed in a block during
 	// the window.
