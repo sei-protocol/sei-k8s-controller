@@ -43,6 +43,7 @@ func TestRegistry_WorkflowHoldTasksArePolled(t *testing.T) {
 		{"mark-not-ready is polled", sidecar.TaskTypeMarkNotReady, true},
 		{"stop-seid is polled", sidecar.TaskTypeStopSeid, true},
 		{"reset-data is polled", sidecar.TaskTypeResetData, true},
+		{"reset-data-keep-sign-state is polled", sidecar.TaskTypeResetDataKeepSignState, true},
 		{"mark-ready is fire-and-forget (the trap)", sidecar.TaskTypeMarkReady, false},
 	}
 	for _, tc := range cases {

@@ -265,6 +265,7 @@ func handleTerminalPlan(ctx context.Context, node *seiv1alpha1.SeiNode) {
 
 	cn := "seinode"
 	planType := classifyPlan(plan)
+	observeTerminalDataResetPlan(node, plan)
 
 	switch plan.Phase {
 	case seiv1alpha1.TaskPlanComplete:
@@ -276,7 +277,15 @@ func handleTerminalPlan(ctx context.Context, node *seiv1alpha1.SeiNode) {
 		node.Status.Plan = nil
 
 	case seiv1alpha1.TaskPlanFailed:
-		if hasNodeUpdateCondition(node) {
+		switch {
+		case !hasNodeUpdateCondition(node):
+		case startDeferred(plan):
+			// The roll landed and observe-image stamped it; only the start was
+			// refused (a reset became pending or a hold arrived). The update is
+			// done, and an UpdateFailed reason would stay until the next update.
+			setNodeUpdateCondition(node, metav1.ConditionFalse, "UpdateComplete",
+				fmt.Sprintf("plan %s completed; start deferred: %s", plan.ID, plan.FailedTaskDetail.Error))
+		default:
 			setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateFailed,
 				fmt.Sprintf("plan %s failed: %s", plan.ID, planFailureMessage(plan)))
 		}
@@ -304,6 +313,9 @@ func setNodeUpdateCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionSt
 
 // classifyPlan returns the plan type for metrics.
 func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
+	if isDataResetPlan(plan) {
+		return "data-reset"
+	}
 	for _, t := range plan.Tasks {
 		switch t.Type {
 		case task.TaskTypeObserveImage:

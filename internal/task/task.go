@@ -200,7 +200,7 @@ var registry = map[string]taskDeserializer{
 	sidecar.TaskTypeConfigValidate:     sidecarTask[sidecar.ConfigValidateTask](true),
 	sidecar.TaskTypeConfigureGenesis:   sidecarTask[sidecar.ConfigureGenesisTask](false),
 	sidecar.TaskTypeRestartSeid:        sidecarTask[sidecar.RestartSeidTask](false),
-	sidecar.TaskTypeMarkReady:          sidecarTask[sidecar.MarkReadyTask](true),
+	sidecar.TaskTypeMarkReady:          deserializeMarkReady, // start-guarded: start_guard.go
 	// mark-not-ready is NOT fire-and-forget despite being mark-ready's sibling:
 	// its handler does real work (purging mark-ready records) and the engine
 	// flips readiness false only on handler success. Polling it means the
@@ -211,6 +211,7 @@ var registry = map[string]taskDeserializer{
 	sidecar.TaskTypeMarkNotReady:               sidecarTask[sidecar.MarkNotReadyTask](false),
 	sidecar.TaskTypeStopSeid:                   sidecarTask[sidecar.StopSeidTask](false),
 	sidecar.TaskTypeResetData:                  sidecarTask[sidecar.ResetDataTask](false),
+	sidecar.TaskTypeResetDataKeepSignState:     sidecarTask[sidecar.ResetDataKeepSignStateTask](false),
 	sidecar.TaskTypeGenerateIdentity:           sidecarTask[sidecar.GenerateIdentityTask](false),
 	sidecar.TaskTypeGenerateGentx:              sidecarTask[sidecar.GenerateGentxTask](false),
 	sidecar.TaskTypeUploadGenesisArtifacts:     sidecarTask[sidecar.UploadGenesisArtifactsTask](false),
@@ -233,6 +234,7 @@ var registry = map[string]taskDeserializer{
 	TaskTypeApplyRBACProxyConfig:    deserializeApplyRBACProxyConfig,
 	TaskTypeReplacePod:              deserializeReplacePod,
 	TaskTypeObserveImage:            deserializeObserveImage,
+	TaskTypeRecordDataReset:         deserializeRecordDataReset,
 	TaskTypeUpdateNodeImage:         deserializeUpdateNodeImage,
 	TaskTypeValidateSigningKey:      deserializeValidateSigningKey,
 	TaskTypeValidateNodeKey:         deserializeValidateNodeKey,

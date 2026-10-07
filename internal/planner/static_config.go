@@ -102,10 +102,19 @@ func (p *staticConfigPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1
 	return p.base.BuildPlan(node)
 }
 
-// buildRunningPlan returns the update plan for a Running node, or nil if no
-// drift. There is no configValues arm: the CRD rejects configValues alongside
-// nodeConfig.
+// buildRunningPlan returns the next plan for a Running node, or nil if none is
+// needed. A pending data reset comes first: the reset plan also waits for any
+// rollout, so it serves a reset commit that changes the template too. There is
+// no configValues arm: the CRD rejects configValues alongside nodeConfig.
 func (p *staticConfigPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
+	if task.DataResetPending(node) {
+		plan, err := buildDataResetPlan(node)
+		if err != nil {
+			return nil, err
+		}
+		markDataResetStarted(node)
+		return plan, nil
+	}
 	if podTemplateDrifted(node, p.platform) {
 		plan, err := p.buildUpdatePlan(node)
 		if err != nil {

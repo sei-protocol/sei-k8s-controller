@@ -110,6 +110,9 @@ spec:
               nodeConfig is fixed for the node's lifetime. The StatefulSet's
               podManagementPolicy follows it, and the API server refuses to change that
               field on an existing StatefulSet.
+              dataResetGeneration is a request counter: each increase asks for one data
+              reset. It can only increase, so a git revert cannot lower it and rearm a wipe,
+              and it needs nodeConfig, because only that node's plans run the reset.
             properties:
               archive:
                 description: Archive configures an archive node with full history
@@ -275,6 +278,19 @@ spec:
                     runs only under Autobahn consensus'
                   rule: '!(has(self.evmOnly) && self.evmOnly) || (has(self.engine)
                     && self.engine == ''Autobahn'')'
+              dataResetGeneration:
+                description: |-
+                  DataResetGeneration requests a data reset. Each increase above
+                  status.dataResetGeneration asks the controller to wipe <home>/data/ once,
+                  while seid waits at the sidecar start gate, and then to start seid on the
+                  current spec. The sign state, the node identity, and config/ survive the
+                  reset. Put the counter increase and the config change it needs in one
+                  commit; two commits start seid once on the old data with the new config.
+                  Wait on status.dataResetGeneration >= N, not on a condition.
+                  Requires spec.nodeConfig. Can only increase.
+                format: int64
+                minimum: 0
+                type: integer
               dataVolume:
                 description: |-
                   DataVolume configures the data PersistentVolumeClaim for this node.
@@ -1472,6 +1488,14 @@ spec:
                 existing SeiNode: it is fixed at creation, so replace the node (dataVolume.import
                 can carry its data over)'
               rule: has(self.nodeConfig) == has(oldSelf.nodeConfig)
+            - message: 'spec.dataResetGeneration needs spec.nodeConfig: only a node
+                that reads its config from ConfigMaps runs the declarative data reset'
+              rule: '!has(self.dataResetGeneration) || has(self.nodeConfig)'
+            - message: 'spec.dataResetGeneration can only increase: lowering or removing
+                it would rearm a data wipe; to undo a reset commit, revert the config
+                and keep the counter'
+              rule: '!has(oldSelf.dataResetGeneration) || (has(self.dataResetGeneration)
+                && self.dataResetGeneration >= oldSelf.dataResetGeneration)'
           status:
             description: SeiNodeStatus defines the observed state of a SeiNode.
             properties:
@@ -1609,6 +1633,14 @@ spec:
                   as no-drift so a controller upgrade doesn't fleet-roll every node
                   on first reconcile.
                 type: string
+              dataResetGeneration:
+                description: |-
+                  DataResetGeneration is the last spec.dataResetGeneration the controller
+                  finished a data reset for. A reset is pending while the spec value is
+                  greater. While the node is not Running the controller keeps it equal to
+                  the spec value, so creating a node never wipes it.
+                format: int64
+                type: integer
               endpoint:
                 description: |-
                   Endpoint is the in-cluster discoverable address(es) for this node, derived
