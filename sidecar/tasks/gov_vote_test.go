@@ -11,6 +11,8 @@ import (
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
 
+	"google.golang.org/grpc"
+
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/engine"
 	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
@@ -194,5 +196,39 @@ func TestGovVoteCommittedTxSkipsVoteQuery(t *testing.T) {
 	}
 	if h.reads != 0 {
 		t.Errorf("read the vote %d times, want 0", h.reads)
+	}
+}
+
+type fakeGovQuery struct {
+	govtypes.QueryClient
+	vote  *govtypes.Vote
+	calls int
+}
+
+func (f *fakeGovQuery) Vote(context.Context, *govtypes.QueryVoteRequest, ...grpc.CallOption) (*govtypes.QueryVoteResponse, error) {
+	f.calls++
+	return &govtypes.QueryVoteResponse{Vote: *f.vote}, nil
+}
+
+// seidroid on #604: a node that is catching up can still show an older vote,
+// so the read refuses to trust it, as the Unjail jail-state read does.
+func TestReadVoteState(t *testing.T) {
+	_, voter := testKeyring(t)
+	gov := &fakeGovQuery{vote: recordedVote(govtypes.OptionYes)}
+
+	if _, err := readVoteState(context.Background(), statusAt(testBlockTime, true), gov, 7, voter); err == nil ||
+		!strings.Contains(err.Error(), "catching up") {
+		t.Fatalf("catching up: want an error, got %v", err)
+	}
+	if gov.calls != 0 {
+		t.Errorf("queried the vote %d times while catching up, want 0", gov.calls)
+	}
+
+	v, err := readVoteState(context.Background(), statusAt(testBlockTime, false), gov, 7, voter)
+	if err != nil {
+		t.Fatalf("caught up: unexpected err: %v", err)
+	}
+	if !voteHasOption(v, govtypes.OptionYes) {
+		t.Errorf("vote = %+v, want the recorded yes", v)
 	}
 }

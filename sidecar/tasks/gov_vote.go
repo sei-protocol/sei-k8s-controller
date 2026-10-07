@@ -14,6 +14,7 @@ import (
 
 	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 	govtypes "github.com/sei-protocol/sei-chain/sei-cosmos/x/gov/types"
+	"github.com/sei-protocol/sei-chain/sei-tendermint/rpc/coretypes"
 
 	"github.com/sei-protocol/seilog"
 
@@ -188,12 +189,8 @@ func chainVote(ctx context.Context, cfg engine.ExecutionConfig, chainID string, 
 	}
 	ch := make(chan res, 1)
 	go func() {
-		r, err := govtypes.NewQueryClient(clientCtx).Vote(ctx, &govtypes.QueryVoteRequest{ProposalId: proposalID, Voter: voter.String()})
-		if err != nil {
-			ch <- res{nil, err}
-			return
-		}
-		ch <- res{&r.Vote, nil}
+		v, err := readVoteState(ctx, clientCtx.Client.Status, govtypes.NewQueryClient(clientCtx), proposalID, voter)
+		ch <- res{v, err}
 	}()
 	select {
 	case <-ctx.Done():
@@ -201,4 +198,29 @@ func chainVote(ctx context.Context, cfg engine.ExecutionConfig, chainID string, 
 	case r := <-ch:
 		return r.v, r.err
 	}
+}
+
+// readVoteState reads the voter's recorded vote through narrow seams, so a test
+// can fake each read. A node that is catching up answers from an old height,
+// where an earlier vote may still show; it reports an error instead, and the
+// confirmation keeps polling.
+func readVoteState(
+	ctx context.Context,
+	statusOf func(context.Context) (*coretypes.ResultStatus, error),
+	gov govtypes.QueryClient,
+	proposalID uint64,
+	voter sdk.AccAddress,
+) (*govtypes.Vote, error) {
+	s, err := statusOf(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("query local seid /status: %w", err)
+	}
+	if s.SyncInfo.CatchingUp {
+		return nil, errors.New("local seid is catching up, so its vote record may be stale")
+	}
+	r, err := gov.Vote(ctx, &govtypes.QueryVoteRequest{ProposalId: proposalID, Voter: voter.String()})
+	if err != nil {
+		return nil, err
+	}
+	return &r.Vote, nil
 }
