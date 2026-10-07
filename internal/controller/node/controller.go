@@ -677,7 +677,9 @@ func (r *SeiNodeReconciler) emitMaintenanceEvent(node *seiv1alpha1.SeiNode, prev
 	case seiv1alpha1.ReasonArmed:
 		r.Recorder.Event(node, corev1.EventTypeNormal, "MaintenanceArmed", cur.Message)
 	case seiv1alpha1.ReasonNotHeld:
-		if prev != nil && (prev.Reason == seiv1alpha1.ReasonHeld || prev.Reason == seiv1alpha1.ReasonArmed) {
+		// A release runs a plan, so the condition passes through HoldPending
+		// on its way to NotHeld; any True state before NotHeld is a release.
+		if prev != nil && prev.Status == metav1.ConditionTrue {
 			r.Recorder.Event(node, corev1.EventTypeNormal, "MaintenanceReleased", cur.Message)
 		}
 	}
