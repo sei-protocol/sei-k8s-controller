@@ -121,7 +121,8 @@ func (p *staticConfigPlanner) BuildPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1
 //  4. a readiness reapproval, never while a hold is requested.
 //
 // While a hold is requested no plan releases seid: the reset plan parks
-// instead, and the update plan carries no mark-ready. There is no configValues
+// instead, and the update plan carries no mark-ready. A reset plan that
+// releases a hold still in effect clears it after mark-ready. There is no configValues
 // arm: the CRD rejects configValues alongside nodeConfig.
 func (p *staticConfigPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv1alpha1.TaskPlan, error) {
 	held := node.Spec.HoldRequested() != ""
@@ -130,10 +131,14 @@ func (p *staticConfigPlanner) buildRunningPlan(node *seiv1alpha1.SeiNode) (*seiv
 		if err != nil {
 			return nil, err
 		}
-		if held {
-			if err := parkInsteadOfRelease(plan); err != nil {
-				return nil, err
-			}
+		switch {
+		case held:
+			err = parkInsteadOfRelease(plan)
+		case node.Status.MaintenanceHold != "":
+			err = clearHoldAfterRelease(plan)
+		}
+		if err != nil {
+			return nil, err
 		}
 		markDataResetStarted(node)
 		return plan, nil

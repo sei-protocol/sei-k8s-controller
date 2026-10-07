@@ -124,8 +124,8 @@ func TestHold_ResetParks(t *testing.T) {
 	g.Expect(recordedHold(t, plan)).To(Equal(holdImmediate))
 }
 
-// 010 Req 4.2: release with a reset pending runs the full reset plan, which
-// ends in mark-ready.
+// 010 Req 4.2: release with a reset pending runs the full reset plan through
+// its mark-ready, then clears the hold in effect.
 func TestRelease_WithResetPending(t *testing.T) {
 	g := NewWithT(t)
 	node := heldNode("", holdImmediate)
@@ -133,7 +133,8 @@ func TestRelease_WithResetPending(t *testing.T) {
 
 	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
 	types := planTaskTypes(node.Status.Plan)
-	g.Expect(types[len(types)-1]).To(Equal(TaskMarkReady))
+	g.Expect(types[len(types)-2:]).To(Equal([]string{TaskMarkReady, task.TaskTypeRecordMaintenanceHold}))
+	g.Expect(recordedHold(t, node.Status.Plan)).To(BeEmpty())
 }
 
 // 010 Req 2.9 / User Story 5: a node created with a hold initializes without
@@ -212,7 +213,7 @@ func TestResolveMaintenance(t *testing.T) {
 		{"held", true, holdImmediate, holdImmediate, metav1.ConditionTrue, seiv1alpha1.ReasonHeld},
 		{"armed", true, holdAfterExit, holdAfterExit, metav1.ConditionTrue, seiv1alpha1.ReasonArmed},
 		{"start once pending", true, holdAfterExit, holdImmediate, metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending},
-		{"release pending", true, "", holdImmediate, metav1.ConditionTrue, seiv1alpha1.ReasonHeld},
+		{"release pending", true, "", holdImmediate, metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -368,4 +369,67 @@ func TestHold_ArrivesMidReset(t *testing.T) {
 	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonResetComplete))
 	g.Expect(cond.Message).To(ContainSubstring("maintenance hold"))
 	g.Expect(isMaintenancePlan(node.Status.Plan)).To(BeTrue())
+}
+
+// seidroid #595 blocker 3, 010 Req 4.2, 4.3, 5.3: removing the hold in the same
+// commit that raises the counter builds the reset plan with its mark-ready, then
+// clears the hold in effect. The condition reads HoldPending while the wipe runs
+// and seid starts, never Held, and NotHeld once the plan completes.
+func TestHold_ReleasedWithReset(t *testing.T) {
+	g := NewWithT(t)
+	s := testScheme(t)
+	node := heldNode("", holdImmediate)
+	node.Spec.DataResetGeneration = 1
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	plan := node.Status.Plan
+	g.Expect(isDataResetPlan(plan)).To(BeTrue())
+	g.Expect(plan.Tasks[len(plan.Tasks)-2].Type).To(Equal(TaskMarkReady))
+	g.Expect(recordedHold(t, plan)).To(BeEmpty())
+
+	ResolveMaintenance(node)
+	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionMaintenanceInProgress)
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonHoldPending))
+
+	completeTasksBefore(plan, 4) // the wipe ran; record-data-reset is next
+	mock := &mockSidecarClient{}
+	exec := nodeExecutor(fake.NewClientBuilder().WithScheme(s), s, mock)
+	for i := 0; i < 3 && plan.Phase == seiv1alpha1.TaskPlanActive; i++ {
+		_, err := exec.ExecutePlan(context.Background(), node, plan)
+		g.Expect(err).NotTo(HaveOccurred())
+	}
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanComplete))
+	g.Expect(node.Status.DataResetGeneration).To(Equal(int64(1)))
+	g.Expect(node.Status.MaintenanceHold).To(BeEmpty())
+
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	g.Expect(node.Status.Plan).To(BeNil(), "the reset plan released the hold; no release plan follows")
+	ResolveMaintenance(node)
+	cond = meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionMaintenanceInProgress)
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonNotHeld))
+}
+
+// A reset plan that also clears a hold keeps the deferred-start reading: a
+// newer counter makes the guard refuse mark-ready, the trailing record step
+// never runs, the hold stays in effect, and the next reset releases it.
+func TestHold_ReleasedWithReset_StartDeferred(t *testing.T) {
+	g := NewWithT(t)
+	s := testScheme(t)
+	node := heldNode("", holdImmediate)
+	node.Spec.DataResetGeneration = 1
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	plan := node.Status.Plan
+	completeTasksBefore(plan, 4)
+
+	node.Spec.DataResetGeneration = 2 // a newer reset commit lands mid-plan
+
+	mock := &mockSidecarClient{}
+	_, err := nodeExecutor(fake.NewClientBuilder().WithScheme(s), s, mock).ExecutePlan(context.Background(), node, plan)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(plan.Phase).To(Equal(seiv1alpha1.TaskPlanFailed))
+	g.Expect(startDeferred(plan)).To(BeTrue(), "the pending record step must not turn a refused start into a failed reset")
+	g.Expect(node.Status.MaintenanceHold).To(Equal(holdImmediate), "seid never started, so the hold stays in effect")
+
+	g.Expect((&NodeResolver{}).ResolvePlan(context.Background(), node)).To(Succeed())
+	g.Expect(isDataResetPlan(node.Status.Plan)).To(BeTrue())
+	g.Expect(recordedHold(t, node.Status.Plan)).To(BeEmpty())
 }

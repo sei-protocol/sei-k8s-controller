@@ -119,6 +119,25 @@ func parkInsteadOfRelease(plan *seiv1alpha1.TaskPlan) error {
 	return nil
 }
 
+// clearHoldAfterRelease ends a plan that releases seid with
+// record-maintenance-hold(""), for a node whose hold was removed while still
+// in effect. The reset plan uses it when the release and a reset arrive
+// together, so the plan that marks the sidecar ready clears the hold, as the
+// release plan does.
+func clearHoldAfterRelease(plan *seiv1alpha1.TaskPlan) error {
+	last := len(plan.Tasks) - 1
+	if last < 0 || plan.Tasks[last].Type != TaskMarkReady {
+		return fmt.Errorf("plan %s does not end in %s; cannot release from it", plan.ID, TaskMarkReady)
+	}
+	step := recordHoldStep("")
+	t, err := buildPlannedTask(plan.ID, step.taskType, last+1, step.params)
+	if err != nil {
+		return err
+	}
+	plan.Tasks = append(plan.Tasks, t)
+	return nil
+}
+
 // withoutMarkReady drops mark-ready from a plan built for a held node, so an
 // image roll under a hold leaves the new pod parked.
 func withoutMarkReady(plan *seiv1alpha1.TaskPlan) {
@@ -159,22 +178,23 @@ func ResolveMaintenance(node *seiv1alpha1.SeiNode) {
 			fmt.Sprintf("hold plan running; requested: %s, in effect: %s", holdOrNone(want), holdOrNone(have)))
 	case want == "" && have == "":
 		setMaintenanceCondition(node, metav1.ConditionFalse, seiv1alpha1.ReasonNotHeld, "no maintenance hold")
-	case want != "" && want != have:
-		setMaintenanceCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending,
-			fmt.Sprintf("hold %s requested; in effect: %s", want, holdOrNone(have)))
-	case want != "" && sidecarGateOpen(node):
+	case want != have:
+		// A release counts: seid stays parked until the release plan runs, but
+		// exec work must stop now.
+		message := fmt.Sprintf("hold %s requested; in effect: %s", holdOrNone(want), holdOrNone(have))
+		if want == "" {
+			message = fmt.Sprintf("hold %s in effect; release pending", have)
+		}
+		setMaintenanceCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending, message)
+	case sidecarGateOpen(node):
 		setMaintenanceCondition(node, metav1.ConditionTrue, seiv1alpha1.ReasonHoldPending,
 			fmt.Sprintf("hold %s in effect but the start gate is open; closing it", want))
 	default:
-		message := fmt.Sprintf("hold %s in effect", have)
-		if want == "" {
-			message += "; release pending"
-		}
 		reason := seiv1alpha1.ReasonHeld
 		if have == seiv1alpha1.MaintenanceHoldAfterExit {
 			reason = seiv1alpha1.ReasonArmed
 		}
-		setMaintenanceCondition(node, metav1.ConditionTrue, reason, message)
+		setMaintenanceCondition(node, metav1.ConditionTrue, reason, fmt.Sprintf("hold %s in effect", have))
 	}
 }
 
