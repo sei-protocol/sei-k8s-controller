@@ -6,11 +6,15 @@ import (
 	"slices"
 	"strings"
 
+	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
+	"github.com/sei-protocol/sei-k8s-controller/internal/noderesource"
 	"github.com/sei-protocol/sei-k8s-controller/internal/task"
 )
 
@@ -101,21 +105,47 @@ func (p *NodeResolver) DriftRenderNode(ctx context.Context, node *seiv1alpha1.Se
 		return node, nil
 	}
 	setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateDeferred, msg)
-	return pinnedToRunning(node), nil
+	pinned, err := p.pinnedToRunning(ctx, node)
+	if err != nil || pinned == nil {
+		// With no running image to pin to, the template cannot hold the pod;
+		// the plan gate still defers the drift plan.
+		return node, err
+	}
+	return pinned, nil
 }
 
 // pinnedToRunning returns a copy of node whose image, sidecar image, and
-// isolation are the ones its pod runs now.
-func pinnedToRunning(node *seiv1alpha1.SeiNode) *seiv1alpha1.SeiNode {
-	pinned := node.DeepCopy()
-	if img := node.Status.CurrentImage; img != "" {
-		pinned.Spec.Image = img
+// isolation are the ones its pod runs now. Each comes from status, or, for an
+// image status has not observed yet, from the live StatefulSet's template.
+// It returns nil when no running seid image is known.
+func (p *NodeResolver) pinnedToRunning(ctx context.Context, node *seiv1alpha1.SeiNode) (*seiv1alpha1.SeiNode, error) {
+	seidImage, sidecarImage := node.Status.CurrentImage, node.Status.CurrentSidecarImage
+	if seidImage == "" || sidecarImage == "" {
+		sts := &appsv1.StatefulSet{}
+		err := p.Nodes.Get(ctx, types.NamespacedName{Name: node.Name, Namespace: node.Namespace}, sts)
+		switch {
+		case err == nil:
+			liveSeid, liveSidecar := noderesource.TemplateImages(sts)
+			if seidImage == "" {
+				seidImage = liveSeid
+			}
+			if sidecarImage == "" {
+				sidecarImage = liveSidecar
+			}
+		case !apierrors.IsNotFound(err):
+			return nil, fmt.Errorf("reading the live StatefulSet to pin a waiting drift: %w", err)
+		}
 	}
-	if img := node.Status.CurrentSidecarImage; img != "" {
+	if seidImage == "" {
+		return nil, nil
+	}
+	pinned := node.DeepCopy()
+	pinned.Spec.Image = seidImage
+	if sidecarImage != "" {
 		if pinned.Spec.Sidecar == nil {
 			pinned.Spec.Sidecar = &seiv1alpha1.SidecarConfig{}
 		}
-		pinned.Spec.Sidecar.Image = img
+		pinned.Spec.Sidecar.Image = sidecarImage
 	}
 	if iso := node.Status.CurrentNodeIsolation; iso != "" {
 		if pinned.Spec.Scheduling == nil {
@@ -123,7 +153,7 @@ func pinnedToRunning(node *seiv1alpha1.SeiNode) *seiv1alpha1.SeiNode {
 		}
 		pinned.Spec.Scheduling.NodeIsolation = iso
 	}
-	return pinned
+	return pinned, nil
 }
 
 // isDriftUpdatePlan reports whether plan is the pod-template drift update the

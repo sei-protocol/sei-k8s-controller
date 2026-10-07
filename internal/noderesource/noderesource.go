@@ -1889,3 +1889,20 @@ func SidecarURLForNode(node *seiv1alpha1.SeiNode) string {
 	return fmt.Sprintf("http://%s-0.%s.%s.svc.cluster.local:%d",
 		node.Name, node.Name, node.Namespace, RBACProxyPort)
 }
+
+// TemplateImages returns the seid and sidecar images in sts's pod template, or
+// "" for a container the template lacks.
+func TemplateImages(sts *appsv1.StatefulSet) (seid, sidecar string) {
+	spec := &sts.Spec.Template.Spec
+	for _, cs := range [][]corev1.Container{spec.Containers, spec.InitContainers} {
+		for i := range cs {
+			switch cs[i].Name {
+			case containerNameSeid:
+				seid = cs[i].Image
+			case containerNameSidecar:
+				sidecar = cs[i].Image
+			}
+		}
+	}
+	return seid, sidecar
+}

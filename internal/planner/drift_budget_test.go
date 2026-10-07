@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -214,4 +217,46 @@ func TestDriftRenderNode(t *testing.T) {
 			g.Expect(cond.Reason).To(Equal(reasonUpdateDeferred))
 		})
 	}
+}
+
+// Bugbot on #605: a node whose running image status has not observed counts
+// as drifted, so the pin reads the image from the live StatefulSet template.
+func TestDriftRenderNode_UnobservedImagePinsLiveTemplate(t *testing.T) {
+	nodes := eightDrifted()
+	updating(nodes[0])
+	updating(nodes[1])
+	unobserved := func() *seiv1alpha1.SeiNode {
+		n := withNodeConfig(driftedNode("node-y"))
+		n.Status.CurrentImage = ""
+		return n
+	}
+
+	t.Run("live template supplies the running image", func(t *testing.T) {
+		g := NewWithT(t)
+		n := unobserved()
+		sts := &appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: n.Name, Namespace: n.Namespace},
+			Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "seid", Image: "sei:v0.9.0"}},
+			}}},
+		}
+		c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+			WithObjects(nodes[0].DeepCopy(), nodes[1].DeepCopy(), n.DeepCopy(), sts).Build()
+		r := &NodeResolver{Nodes: c}
+		r.Platform.DriftUpdateBudgetPercent = 25
+
+		got, err := r.DriftRenderNode(context.Background(), n)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(got).NotTo(BeIdenticalTo(n))
+		g.Expect(got.Spec.Image).To(Equal("sei:v0.9.0"))
+	})
+
+	t.Run("no running image anywhere: not pinned", func(t *testing.T) {
+		g := NewWithT(t)
+		n := unobserved()
+		r := budgetResolver(t, 25, append(nodes, n)...)
+		got, err := r.DriftRenderNode(context.Background(), n)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(got).To(BeIdenticalTo(n))
+	})
 }
