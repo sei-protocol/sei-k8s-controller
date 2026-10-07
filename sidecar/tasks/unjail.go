@@ -75,8 +75,8 @@ type Unjailer struct {
 	broadcast func(ctx context.Context, cfg engine.ExecutionConfig, in SignAndBroadcastInput) (*SignAndBroadcastResult, error)
 
 	// confirmWait bounds how long an unjail whose tx the node cannot look up
-	// waits for the validator to read released; confirmEvery is the poll
-	// interval. Zero values check once.
+	// waits for the validator to read released, reads included; confirmEvery
+	// is the poll interval.
 	confirmWait  time.Duration
 	confirmEvery time.Duration
 }
@@ -149,19 +149,24 @@ func (u *Unjailer) Handler() engine.TaskHandler {
 // tx index is off, as on most validators. The unjail's effect shows in state
 // instead: a validator that reads not jailed was released. An unjail from
 // elsewhere that lands first reads the same, and the validator is released
-// either way. It polls until confirmWait passes, and checks at least once.
+// either way. It polls until confirmWait passes; the deadline also bounds each
+// read, so a slow read cannot stretch the wait.
 func (u *Unjailer) releasedAfter(ctx context.Context, chainID string, valAddr sdk.ValAddress) bool {
-	deadline := time.Now().Add(u.confirmWait)
+	ctx, cancel := context.WithTimeout(ctx, u.confirmWait)
+	defer cancel()
+	var lastErr error
 	for {
 		st, err := u.readJail(ctx, u.cfg, chainID, valAddr)
 		if err == nil && !st.CatchingUp && !st.Jailed {
 			return true
 		}
-		if !time.Now().Before(deadline) {
-			return false
+		if err != nil {
+			lastErr = err
 		}
 		select {
 		case <-ctx.Done():
+			unjailLog.Warn("unjail release not confirmed from the jail state",
+				"validator", valAddr.String(), "wait", u.confirmWait, "lastReadErr", lastErr)
 			return false
 		case <-time.After(u.confirmEvery):
 		}
