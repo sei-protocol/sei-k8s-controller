@@ -262,3 +262,39 @@ func TestReadFileConfig_EmptyPath(t *testing.T) {
 		t.Errorf("empty path should yield zero FileConfig, got %+v", cfg)
 	}
 }
+
+// PLT-1399: rollout.driftUpdateBudgetPercent loads into the config, defaults to
+// 0 (drift unpaced), and must lie in 0..100.
+func TestLoad_DriftUpdateBudgetPercent(t *testing.T) {
+	setGatewayEnv(t)
+	cases := []struct {
+		name    string
+		extra   string
+		want    int
+		wantErr bool
+	}{
+		{"unset leaves drift unpaced", "", 0, false},
+		{"set", "rollout:\n  driftUpdateBudgetPercent: 25\n", 25, false},
+		{"above 100", "rollout:\n  driftUpdateBudgetPercent: 101\n", 101, true},
+		{"negative", "rollout:\n  driftUpdateBudgetPercent: -1\n", -1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envControllerConfig, writeConfig(t, fullConfig+tc.extra))
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.DriftUpdateBudgetPercent != tc.want {
+				t.Errorf("DriftUpdateBudgetPercent = %d, want %d", cfg.DriftUpdateBudgetPercent, tc.want)
+			}
+			err = cfg.Validate()
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("Validate err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr && !strings.Contains(err.Error(), "rollout.driftUpdateBudgetPercent") {
+				t.Errorf("Validate error %q does not name the key", err)
+			}
+		})
+	}
+}

@@ -280,7 +280,14 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	// recovery aren't suspended indefinitely (the readiness gate keeps seid held,
 	// and a pod replacement of a parked node is in the safe interrupt class).
 	holdForWorkflow := node.Status.AdoptedWorkflow != nil && !adoptedWorkflowParkedFailed(node)
-	if !holdInitialSTS && !holdForWorkflow {
+	// No roll before a roll slot: a nodeConfig node's StatefulSet is
+	// RollingUpdate, so applying a drifted template rolls the pod at once. While
+	// the drift-roll budget has no slot for it, keep the current template.
+	holdForDriftSlot, err := r.Planner.DeferStatefulSetApply(ctx, node)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("checking the drift-roll budget: %w", err)
+	}
+	if !holdInitialSTS && !holdForWorkflow && !holdForDriftSlot {
 		if err := r.reconcileStatefulSet(ctx, node); err != nil {
 			// Whatever status was resolved this far is persisted by the flush on the
 			// way out, so this return no longer leaves a bare SeiNode behind. The

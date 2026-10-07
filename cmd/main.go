@@ -190,6 +190,7 @@ func main() {
 		Planner: &planner.NodeResolver{
 			BuildSidecarClient: buildSidecarClient,
 			Platform:           platformCfg,
+			Nodes:              mgr.GetClient(),
 		},
 		EC2Peers: peering.NewAWSEC2Resolver(),
 		PlanExecutor: &planner.Executor[*seiv1alpha1.SeiNode]{
