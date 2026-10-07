@@ -120,6 +120,11 @@ type Config struct {
 	// via StateSyncReady=False/NoSyncersConfigured rather than building a
 	// witness-less plan.
 	ControllerConfigFile string
+
+	// DriftUpdateBudgetPercent caps how many of a namespace's Running SeiNodes
+	// may run a pod-template drift update at once: max(1, N*percent/100).
+	// Zero disables the cap, so every drifted node updates at once.
+	DriftUpdateBudgetPercent int
 }
 
 // FileConfig is the controller's file-sourced application config (SEI_CONTROLLER_CONFIG).
@@ -139,6 +144,7 @@ type FileConfig struct {
 	Snapshot   BucketConfig     `json:"snapshot"`
 	Genesis    BucketConfig     `json:"genesis"`
 	Images     ImagesConfig     `json:"images"`
+	Rollout    RolloutConfig    `json:"rollout"`
 }
 
 // StateSyncConfig is the state-sync section of the application config.
@@ -219,6 +225,13 @@ type ImagesConfig struct {
 	Sidecar        string `json:"sidecar"`
 	KubeRBACProxy  string `json:"kubeRBACProxy"`
 	CosmosExporter string `json:"cosmosExporter"`
+}
+
+// RolloutConfig paces cell-wide changes. DriftUpdateBudgetPercent is the share
+// of a namespace's Running SeiNodes that may run a pod-template drift update
+// (image, sidecar image, isolation) at once; 0 leaves drift unpaced.
+type RolloutConfig struct {
+	DriftUpdateBudgetPercent int `json:"driftUpdateBudgetPercent"`
 }
 
 // NodepoolForMode returns the Karpenter NodePool name for the given
@@ -322,6 +335,9 @@ func (c Config) Validate() error {
 		if err := o.val.validate(o.key); err != nil {
 			return err
 		}
+	}
+	if c.DriftUpdateBudgetPercent < 0 || c.DriftUpdateBudgetPercent > 100 {
+		return fmt.Errorf("rollout.driftUpdateBudgetPercent must be between 0 and 100, got %d", c.DriftUpdateBudgetPercent)
 	}
 	return nil
 }

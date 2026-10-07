@@ -16,6 +16,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/internal/controller/observability"
@@ -30,7 +31,11 @@ const unknownValue = "unknown"
 // Update failure reasons are shared by writers and the diagnostic-preservation guard.
 // Add new failure reasons to isUpdateFailureReason as well.
 const (
-	reasonUpdateFailed          = "UpdateFailed"
+	reasonUpdateFailed = "UpdateFailed"
+
+	// planClassNodeUpdate is classifyPlan's label for a pod-template drift
+	// update plan.
+	planClassNodeUpdate         = "node-update"
 	reasonUpdatePlanBuildFailed = "UpdatePlanBuildFailed"
 )
 
@@ -158,6 +163,9 @@ type NodeResolver struct {
 	// Platform supplies the controller-wide sidecar image fallback used
 	// by sidecarImageDrifted when Spec.Sidecar.Image is unset.
 	Platform platform.Config
+	// Nodes lists a namespace's SeiNodes for the drift-roll budget. Nil
+	// leaves drift unpaced; used by tests.
+	Nodes client.Reader
 }
 
 func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNode) error {
@@ -203,6 +211,19 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		// reporting an update it does not have.
 		setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdatePlanBuildFailed, err.Error())
 		return err
+	}
+	if plan != nil && p.isDriftUpdatePlan(node, plan) {
+		free, msg, err := p.DriftSlot(ctx, node)
+		if err != nil {
+			setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateDeferred, err.Error())
+			return err
+		}
+		if !free {
+			// BuildPlan stamped UpdateStarted; the plan is not persisted, so
+			// the condition says why the node waits instead.
+			setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateDeferred, msg)
+			return nil
+		}
 	}
 	if plan == nil {
 		if shouldExplainUnobservedConfig(node) {
@@ -324,7 +345,7 @@ func classifyPlan(plan *seiv1alpha1.TaskPlan) string {
 	for _, t := range plan.Tasks {
 		switch t.Type {
 		case task.TaskTypeObserveImage:
-			return "node-update"
+			return planClassNodeUpdate
 		case task.TaskTypeEnsureDataPVC:
 			return "init"
 		case sidecar.TaskTypeRestartSeid:

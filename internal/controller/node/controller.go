@@ -280,8 +280,16 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	// recovery aren't suspended indefinitely (the readiness gate keeps seid held,
 	// and a pod replacement of a parked node is in the safe interrupt class).
 	holdForWorkflow := node.Status.AdoptedWorkflow != nil && !adoptedWorkflowParkedFailed(node)
+	// No roll before a roll slot: a nodeConfig node's StatefulSet is
+	// RollingUpdate, so a drifted template rolls the pod at once. While the
+	// drift-roll budget has no slot for it, render from a copy pinned to the
+	// running images; every other field still applies.
+	renderNode, err := r.Planner.DriftRenderNode(ctx, node)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("checking the drift-roll budget: %w", err)
+	}
 	if !holdInitialSTS && !holdForWorkflow {
-		if err := r.reconcileStatefulSet(ctx, node); err != nil {
+		if err := r.reconcileStatefulSet(ctx, renderNode); err != nil {
 			// Whatever status was resolved this far is persisted by the flush on the
 			// way out, so this return no longer leaves a bare SeiNode behind. The
 			// render failure itself is not a condition, so the Event stays the only
@@ -293,6 +301,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 				"Cannot render the StatefulSet: %v", err)
 			return ctrl.Result{}, fmt.Errorf("reconciling statefulset: %w", err)
 		}
+		node.Status.StatefulSet = renderNode.Status.StatefulSet
 	}
 
 	if node.Spec.Paused {

@@ -24,3 +24,4 @@ not re-litigated later. See `001-configurable-node-resources/decisions.md`.
 | [009](009-declarative-data-reset/spec.md) | Declarative data reset for ConfigMap-configured nodes | Draft |
 | [010](010-maintenance-hold/spec.md) | Maintenance hold for ConfigMap-configured nodes | Draft |
 | [011](011-live-resize/spec.md) | Resize CPU, memory, and disk on a live ConfigMap-configured node | Draft |
+| [012](012-drift-roll-budget/spec.md) | Drift-roll budget: pace pod-template drift per namespace | Draft |

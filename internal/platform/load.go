@@ -73,6 +73,8 @@ func Load() (Config, error) {
 		KubeRBACProxyImage:  file.Images.KubeRBACProxy,
 		CosmosExporterImage: file.Images.CosmosExporter,
 
+		DriftUpdateBudgetPercent: file.Rollout.DriftUpdateBudgetPercent,
+
 		// Networking/gateway: env-only, pending removal in the GitOps networking
 		// move (PLT-451).
 		GatewayName:         os.Getenv(envGatewayName),
