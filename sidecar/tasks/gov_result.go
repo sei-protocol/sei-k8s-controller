@@ -54,7 +54,8 @@ func classifyGovResult(taskType engine.TaskType, r *SignAndBroadcastResult) (*wi
 	case r.Unverifiable:
 		// Broadcast accepted but the node's tx index is off, so the outcome is
 		// unobservable. Terminal (retrying this node is futile) but NOT
-		// committed_failed — the operator must verify via an indexed RPC.
+		// committed_failed — the operator must verify via an indexed RPC. The
+		// Unjail handler overrides this when the jail state shows the release.
 		out.InclusionStatus = wire.InclusionUnverifiable
 		txBroadcastTotal.WithLabelValues(string(taskType), wire.InclusionUnverifiable).Inc()
 		return out, Terminal(fmt.Errorf("tx %s inclusion unverifiable: %w", r.TxHash, errTxIndexingDisabled))

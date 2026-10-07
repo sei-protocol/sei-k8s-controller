@@ -73,10 +73,22 @@ type Unjailer struct {
 	// and SignAndBroadcast.
 	readJail  func(ctx context.Context, cfg engine.ExecutionConfig, chainID string, valAddr sdk.ValAddress) (jailState, error)
 	broadcast func(ctx context.Context, cfg engine.ExecutionConfig, in SignAndBroadcastInput) (*SignAndBroadcastResult, error)
+
+	// confirmWait bounds how long an unjail whose tx the node cannot look up
+	// waits for the validator to read released, reads included; confirmEvery
+	// is the poll interval.
+	confirmWait  time.Duration
+	confirmEvery time.Duration
 }
 
 func NewUnjailer(cfg engine.ExecutionConfig) *Unjailer {
-	return &Unjailer{cfg: cfg, readJail: chainJailState, broadcast: SignAndBroadcast}
+	return &Unjailer{
+		cfg:          cfg,
+		readJail:     chainJailState,
+		broadcast:    SignAndBroadcast,
+		confirmWait:  30 * time.Second,
+		confirmEvery: time.Second,
+	}
 }
 
 // Handler checks the validator's jail state, then delegates to
@@ -117,15 +129,48 @@ func (u *Unjailer) Handler() engine.TaskHandler {
 			return nil, err
 		}
 		out, cerr := classifyGovResult(engine.TaskUnjail, result)
+		releasedByState := result.Unverifiable && u.releasedAfter(ctx, params.ChainID, valAddr)
+		if releasedByState {
+			cerr = nil
+		}
 		unjailLog.Info("unjail broadcast",
 			"taskId", taskID,
 			"chainId", params.ChainID,
 			"validator", valAddr.String(),
 			"txHash", out.TxHash,
 			"height", out.Height,
-			"inclusionStatus", out.InclusionStatus)
+			"inclusionStatus", out.InclusionStatus,
+			"releasedByState", releasedByState)
 		return out, cerr
 	})
+}
+
+// releasedAfter settles an unjail whose tx the node cannot look up because its
+// tx index is off, as on most validators. The unjail's effect shows in state
+// instead: a validator that reads not jailed was released. An unjail from
+// elsewhere that lands first reads the same, and the validator is released
+// either way. It polls until confirmWait passes; the deadline also bounds each
+// read, so a slow read cannot stretch the wait.
+func (u *Unjailer) releasedAfter(ctx context.Context, chainID string, valAddr sdk.ValAddress) bool {
+	ctx, cancel := context.WithTimeout(ctx, u.confirmWait)
+	defer cancel()
+	var lastErr error
+	for {
+		st, err := u.readJail(ctx, u.cfg, chainID, valAddr)
+		if err == nil && !st.CatchingUp && !st.Jailed {
+			return true
+		}
+		if err != nil {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			unjailLog.Warn("unjail release not confirmed from the jail state",
+				"validator", valAddr.String(), "wait", u.confirmWait, "lastReadErr", lastErr)
+			return false
+		case <-time.After(u.confirmEvery):
+		}
+	}
 }
 
 // checkJailed refuses an unjail that the chain would reject after taking the
