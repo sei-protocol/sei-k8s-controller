@@ -70,17 +70,6 @@ spec:
 
     - name: Controller Health
       rules:
-        - alert: SidecarUnreachableHigh
-          expr: rate(sei_controller_sidecar_unreachable_total[5m]) > 0.1
-          for: 10m
-          labels:
-            severity: warning
-            team: platform
-          annotations:
-            summary: "Sidecar for {{ $labels.namespace }}/{{ $labels.node }} is frequently unreachable"
-            description: "Sidecar connectivity failures sustained for 10 minutes."
-            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#sidecarunreachablehigh
-
         - alert: ControllerReconcileErrors
           expr: increase(sei_controller_reconcile_errors_total[15m]) > 5
           for: 5m
@@ -107,17 +96,6 @@ spec:
             summary: "Controller {{ $labels.controller }} reconcile is slow"
             description: "p99 reconcile latency above 10s for 10 minutes."
             runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#controllerhighreconcilelatency
-
-        - alert: TaskFailureRateHigh
-          expr: increase(sei_controller_task_failures_total[15m]) > 3
-          for: 5m
-          labels:
-            severity: warning
-            team: platform
-          annotations:
-            summary: "Task {{ $labels.task_type }} has elevated failure rate"
-            description: "More than 3 terminal task failures in 15 minutes. Early warning before nodes reach Failed phase."
-            runbook: https://github.com/sei-protocol/runbooks/blob/main/oncall-runbook.md#taskfailureratehigh
 
         - alert: ControllerMetricsDown
           expr: up{job=~".*sei-k8s-controller.*"} == 0
