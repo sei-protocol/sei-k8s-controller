@@ -116,7 +116,7 @@ func TestResolvePlan_DriftWaitsForASlot(t *testing.T) {
 	cond := meta.FindStatusCondition(waiting.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
 	g.Expect(cond).NotTo(BeNil())
 	g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(cond.Reason).To(Equal(reasonUpdateDeferred))
+	g.Expect(cond.Reason).To(Equal(ReasonUpdateDeferred))
 	g.Expect(cond.Message).To(ContainSubstring("held by node-a, node-b"))
 
 	first := nodes[0].DeepCopy() // node-a
@@ -214,7 +214,7 @@ func TestDriftRenderNode(t *testing.T) {
 			g.Expect(n.Spec.Image).To(Equal(testImageV2), "the node itself keeps its spec")
 			cond := meta.FindStatusCondition(n.Status.Conditions, seiv1alpha1.ConditionNodeUpdateInProgress)
 			g.Expect(cond).NotTo(BeNil())
-			g.Expect(cond.Reason).To(Equal(reasonUpdateDeferred))
+			g.Expect(cond.Reason).To(Equal(ReasonUpdateDeferred))
 		})
 	}
 }

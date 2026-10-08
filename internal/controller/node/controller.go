@@ -514,6 +514,7 @@ func (r *SeiNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Watches(&seiv1alpha1.SeiNodeTaskWorkflow{}, &workflowTargetHandler{}).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(podToSeiNode), builder.WithPredicates(podReadyChanged)).
+		Watches(&seiv1alpha1.SeiNode{}, handler.EnqueueRequestsFromMapFunc(r.deferredPeers), builder.WithPredicates(slotReleased)).
 		Named(seiNodeControllerName).
 		Complete(r)
 }

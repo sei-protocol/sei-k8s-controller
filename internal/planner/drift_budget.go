@@ -26,9 +26,12 @@ import (
 // for one follow in name order. The list is an uncached read and the node
 // controller reconciles one node at a time, so each decision sees every earlier
 // node's persisted status and the slots never overfill. A node without a slot
-// keeps its current pod and reports UpdateDeferred.
+// keeps its current pod and reports UpdateDeferred. When a slot frees, the
+// node controller wakes the waiting nodes at once (deferredPeers).
 
-const reasonUpdateDeferred = "UpdateDeferred"
+// ReasonUpdateDeferred is the NodeUpdateInProgress reason of a drifted node
+// that waits for a roll slot.
+const ReasonUpdateDeferred = "UpdateDeferred"
 
 // DriftSlot reports whether node may start a pod-template drift update now.
 // When it may not, the message names the slot holders.
@@ -104,7 +107,7 @@ func (p *NodeResolver) DriftRenderNode(ctx context.Context, node *seiv1alpha1.Se
 	if free {
 		return node, nil
 	}
-	setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateDeferred, msg)
+	setNodeUpdateCondition(node, metav1.ConditionFalse, ReasonUpdateDeferred, msg)
 	pinned, err := p.pinnedToRunning(ctx, node)
 	if err != nil || pinned == nil {
 		// With no running image to pin to, the template cannot hold the pod;
