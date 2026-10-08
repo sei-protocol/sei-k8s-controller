@@ -83,6 +83,27 @@ func TestReader_FollowsSealAndNextFile(t *testing.T) {
 	g.Expect(got).To(BeEmpty())
 }
 
+func TestReader_DropsTornTailOfSealedFile(t *testing.T) {
+	g := NewWithT(t)
+	src := &fakeSource{}
+	f := src.add(1, testHeader+rows(10, 11))
+	r := NewReader(src)
+
+	got, _, err := r.Poll(t.Context())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(heights(got)).To(Equal(span(10, 11)))
+
+	f.seal(10, 12, row(12, "")+row(13, "")[:5])
+	src.add(2, testHeader+rows(13, 14))
+	got, _, err = r.Poll(t.Context())
+	g.Expect(err).To(MatchError(errTornRow))
+	g.Expect(heights(got)).To(Equal([]int64{12}))
+
+	got, _, err = r.Poll(t.Context())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(heights(got)).To(Equal(span(13, 14)))
+}
+
 func TestReader_SkipsRemovedEmptyFile(t *testing.T) {
 	g := NewWithT(t)
 	src := &fakeSource{}

@@ -13,6 +13,7 @@ const (
 	ReasonNotFound    = "not_found"
 	ReasonUnavailable = "unavailable"
 	ReasonCoverageGap = "coverage_gap"
+	ReasonTornRow     = "torn_row"
 	ReasonInvalidRow  = "invalid_row"
 )
 
@@ -103,7 +104,7 @@ func (m *Metrics) initPair(chain, migrating, reserve string, now time.Time) {
 	m.ComparedHeights.WithLabelValues(chain, migrating, reserve)
 	for _, role := range []string{RoleMigrating, RoleReserve} {
 		m.HeightGaps.WithLabelValues(chain, migrating, reserve, role)
-		for _, reason := range []string{ReasonNotFound, ReasonUnavailable, ReasonCoverageGap, ReasonInvalidRow} {
+		for _, reason := range []string{ReasonNotFound, ReasonUnavailable, ReasonCoverageGap, ReasonTornRow, ReasonInvalidRow} {
 			m.SourceErrors.WithLabelValues(chain, migrating, reserve, role, reason)
 		}
 	}
