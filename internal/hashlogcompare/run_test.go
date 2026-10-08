@@ -107,6 +107,28 @@ func TestPairRunner_MissingReserveLogIsSourceError(t *testing.T) {
 	g.Expect(value(t, m.ComparedHeights.WithLabelValues(pr.labels...))).To(BeZero())
 }
 
+func TestPairRunner_TornReserveRowIsSourceError(t *testing.T) {
+	g := NewWithT(t)
+	migrating, reserve := &fakeSource{}, &fakeSource{}
+	migrating.add(1, testHeader+rows(1, 6))
+	rf := reserve.add(1, testHeader+rows(1, 3)+row(4, "")[:5])
+	pr, m := newTestRunner(migrating, reserve)
+	reserveTorn := m.SourceErrors.WithLabelValues(append(pr.labels, RoleReserve, ReasonTornRow)...)
+
+	pr.poll(t.Context())
+	g.Expect(value(t, reserveTorn)).To(BeZero())
+
+	rf.seal(1, 3, "")
+	reserve.add(2, testHeader+rows(4, 6))
+	pr.poll(t.Context())
+	g.Expect(value(t, reserveTorn)).To(Equal(1.0))
+
+	pr.poll(t.Context())
+	g.Expect(value(t, reserveTorn)).To(Equal(1.0))
+	g.Expect(value(t, m.LastComparedHeight.WithLabelValues(pr.labels...))).To(Equal(6.0))
+	g.Expect(value(t, m.SourceHeight.WithLabelValues(append(pr.labels, RoleReserve)...))).To(Equal(6.0))
+}
+
 func TestInitPair_ExportsZeroSeries(t *testing.T) {
 	g := NewWithT(t)
 	reg := prometheus.NewRegistry()
@@ -123,5 +145,5 @@ func TestInitPair_ExportsZeroSeries(t *testing.T) {
 	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_mismatches_total", 1))
 	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_last_compared_timestamp_seconds", 1))
 	g.Expect(value(t, m.LastComparedTimestamp.WithLabelValues("c", "a", "b"))).To(Equal(1_800_000_000.0))
-	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_source_errors_total", 2*4))
+	g.Expect(series).To(HaveKeyWithValue("sei_hashlog_compare_source_errors_total", 2*5))
 }

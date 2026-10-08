@@ -25,6 +25,10 @@ const (
 // while it was being read), so the reader restarts at the tip.
 var errCoverageGap = errors.New("hash log coverage gap")
 
+// errTornRow means a sealed file ends in an incomplete line: a row that a
+// crash tore mid-write. The reader drops it and moves to the next file.
+var errTornRow = errors.New("hash log torn row")
+
 // Source is the subset of the sidecar client the reader uses.
 type Source interface {
 	ListHashLog(ctx context.Context) ([]sidecar.HashLogFile, error)
@@ -40,7 +44,11 @@ type Row struct {
 
 // Reader tails one node's hash log in file-index order. It keeps a byte
 // cursor into the current file and only consumes complete lines, so a line
-// that is half written when read is picked up whole on the next poll.
+// that is half written when read is picked up whole on the next poll. A
+// sealed file gets no more bytes, so the reader drops an incomplete last
+// line there, as the HashLogger's own reader does. The HashLogger seals only
+// a file with a complete header and at least one complete row, so that last
+// line is the only incomplete line a sealed file can hold.
 type Reader struct {
 	src Source
 
@@ -60,7 +68,8 @@ func NewReader(src Source) *Reader {
 
 // Poll returns the complete rows written since the last call, plus the number
 // of lines that could not be parsed. Transport errors leave the cursor where
-// it was; errCoverageGap resets it to the tip.
+// it was; errCoverageGap resets it to the tip; errTornRow moves it past the
+// dropped line.
 func (r *Reader) Poll(ctx context.Context) (rows []Row, invalid int, err error) {
 	if !r.started {
 		ok, err := r.start(ctx)
@@ -111,8 +120,12 @@ func (r *Reader) Poll(ctx context.Context) (rows []Row, invalid int, err error) 
 		rows = append(rows, parsed...)
 		invalid += bad
 
-		if !r.sealed || len(complete) < len(data) {
+		if !r.sealed {
 			return rows, invalid, nil
+		}
+		if torn := len(data) - len(complete); torn > 0 {
+			r.offset += int64(torn)
+			return rows, invalid, fmt.Errorf("%w: dropped %d trailing bytes of sealed file %s", errTornRow, torn, r.name)
 		}
 		more, err := r.nextFile(ctx)
 		if err != nil || !more {

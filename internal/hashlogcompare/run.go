@@ -87,6 +87,8 @@ func (pr *pairRunner) read(ctx context.Context, role string, r *Reader, buf map[
 			reason = ReasonNotFound
 		case errors.Is(err, errCoverageGap):
 			reason = ReasonCoverageGap
+		case errors.Is(err, errTornRow):
+			reason = ReasonTornRow
 		}
 		m.SourceErrors.WithLabelValues(append(roleLabels, reason)...).Inc()
 		pr.c.Log.Warn("hash log read failed", pr.logAttrs(role, "reason", reason, "error", err)...)
