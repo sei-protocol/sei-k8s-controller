@@ -215,13 +215,13 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 	if plan != nil && p.isDriftUpdatePlan(node, plan) {
 		free, msg, err := p.DriftSlot(ctx, node)
 		if err != nil {
-			setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateDeferred, err.Error())
+			setNodeUpdateCondition(node, metav1.ConditionFalse, ReasonUpdateDeferred, err.Error())
 			return err
 		}
 		if !free {
 			// BuildPlan stamped UpdateStarted; the plan is not persisted, so
 			// the condition says why the node waits instead.
-			setNodeUpdateCondition(node, metav1.ConditionFalse, reasonUpdateDeferred, msg)
+			setNodeUpdateCondition(node, metav1.ConditionFalse, ReasonUpdateDeferred, msg)
 			return nil
 		}
 	}

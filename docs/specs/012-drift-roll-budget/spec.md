@@ -29,7 +29,7 @@ An operator bumps the cell sidecar image with the budget at 25%. In each namespa
 **Acceptance Scenarios**:
 
 1. **Given** a namespace with N Running nodes and budget B, **When** a drift lands on all of them, **Then** at most `max(1, N*B/100)` nodes update at once, and the rest report `NodeUpdateInProgress=False/UpdateDeferred` naming the slot holders.
-2. **Given** a waiting node, **When** a node holding a slot finishes, **Then** the waiting node starts within one status poll (30 seconds).
+2. **Given** a waiting node, **When** a node holding a slot finishes, **Then** the waiting node re-checks its slot at once, not on its next status poll (30 seconds).
 
 ### User Story 2 - The budget changes nothing until a cell sets it (Priority: P1)
 
@@ -45,6 +45,7 @@ An operator bumps the cell sidecar image with the budget at 25%. In each namespa
 2. WHEN a drifted node holds no slot, THE controller SHALL build no plan for it and SHALL set `NodeUpdateInProgress=False` with reason `UpdateDeferred` and a message that names the slot holders.
 3. THE controller SHALL list the namespace's SeiNodes with an uncached read. Because the node controller reconciles one node at a time, each slot decision then sees every earlier node's persisted status, and the slots never overfill.
 4. THE budget SHALL NOT gate a data reset, a hold change, a config update, an init plan, or a resize.
+5. WHEN a node leaves `NodeUpdateInProgress=True`, changes `spec.paused`, changes phase, or is deleted, THE controller SHALL enqueue every node in its namespace that reports `UpdateDeferred`, so the next node in slot order does not wait for its status poll.
 
 ### Requirement 2: A ConfigMap-configured node keeps its running images while it waits
 
@@ -65,11 +66,13 @@ An operator bumps the cell sidecar image with the budget at 25%. In each namespa
 
 - **SC-001**: Unit tests cover the slot count and order, the exclusions, the plan gate, and the template gate; a reconciler test shows a waiting nodeConfig node keeps its StatefulSet template. *Verifier:* `make test`.
 - **SC-002**: A harbor sidecar bump with the budget at 25% never exceeds the slot count in any namespace. *Verifier:* judgement — the roll log in PLT-1399.
+- **SC-003**: Unit tests cover the slot-release predicate and the peer mapping (Req 1.5). *Verifier:* `make test`.
 
 ## Known limits
 
 - While a `nodeConfig` node runs another plan, or has a reset or hold change pending, the controller applies its drifted template. The pod then rolls with that plan, outside the budget, and `observe-image` records the new images, so no second roll follows.
 - A drift update stuck in progress keeps its slot, so a namespace's further drift waits until an operator clears it. The `UpdateDeferred` message names the holder.
+- The node controller reconciles one node at a time, so a woken node still waits behind the nodes queued before it. In the 2026-10-08 rollout, before Req 1.5, the median wait from a freed slot to the next start was 1 to 28 seconds per namespace, and the longest was 52 seconds in the 51-node prod cell.
 - Cells still roll through separate pull requests; the budget is per namespace, not per chain across cells.
 
 ## Out of scope
