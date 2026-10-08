@@ -6,6 +6,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -102,10 +103,39 @@ func SyncStatefulSet(
 				node.Status.StatefulSet = nil
 				return nil, nil
 			}
+			// A node that gained spec.nodeConfig needs a different
+			// podManagementPolicy, which the API server refuses to change
+			// in place (spec 013). Delete the StatefulSet with orphan
+			// propagation: the running pod and the data PVC stay, the next
+			// reconcile applies the new StatefulSet, which adopts the pod
+			// and rolls it once onto the nodeConfig template.
+			if effectivePodManagementPolicy(existing.Spec.PodManagementPolicy) != effectivePodManagementPolicy(desired.Spec.PodManagementPolicy) {
+				if err := c.Delete(ctx, existing, client.PropagationPolicy(metav1.DeletePropagationOrphan)); err != nil && !apierrors.IsNotFound(err) {
+					return nil, fmt.Errorf("deleting statefulset to change its pod management policy: %w", err)
+				}
+				node.Status.StatefulSet = nil
+				return nil, nil
+			}
 		case apierrors.IsNotFound(err):
 			// Live object missing; the Apply below recreates it.
 		default:
 			return nil, fmt.Errorf("fetching tracked statefulset: %w", err)
+		}
+	} else {
+		// An orphan delete leaves the StatefulSet terminating until the
+		// garbage collector releases its pods. Wait for it to go: an Apply
+		// now would patch the terminating object, and the API server would
+		// reject the policy change. Its delete event triggers the next
+		// reconcile.
+		existing := &appsv1.StatefulSet{}
+		switch err := c.Get(ctx, key, existing); {
+		case err == nil:
+			if existing.DeletionTimestamp != nil {
+				return nil, nil
+			}
+		case apierrors.IsNotFound(err):
+		default:
+			return nil, fmt.Errorf("fetching statefulset: %w", err)
 		}
 	}
 
@@ -119,4 +149,13 @@ func SyncStatefulSet(
 		return nil, fmt.Errorf("applying statefulset: %w", err)
 	}
 	return desired, nil
+}
+
+// effectivePodManagementPolicy resolves an empty policy to the API default, so
+// a rendered "" compares equal to the live OrderedReady.
+func effectivePodManagementPolicy(p appsv1.PodManagementPolicyType) appsv1.PodManagementPolicyType {
+	if p == "" {
+		return appsv1.OrderedReadyPodManagement
+	}
+	return p
 }
