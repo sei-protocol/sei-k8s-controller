@@ -115,10 +115,9 @@ func TestNodeConfig_WithControllerManagedConfig_Rejected(t *testing.T) {
 	}
 }
 
-// nodeConfig is fixed at creation in both directions: the StatefulSet's
-// podManagementPolicy follows it, and that field cannot change on an existing
-// StatefulSet. Republishing under a new ConfigMap name stays allowed.
-func TestNodeConfig_CreateOnly(t *testing.T) {
+// Spec 013 Req 1.1: nodeConfig may be added to an existing node but never
+// removed. Republishing under a new ConfigMap name stays allowed.
+func TestNodeConfig_AddOnly(t *testing.T) {
 	g := NewWithT(t)
 	ns := makeNamespace(t)
 
@@ -134,20 +133,18 @@ func TestNodeConfig_CreateOnly(t *testing.T) {
 		cur.Spec.NodeConfig = nil
 	})
 	g.Expect(err).To(HaveOccurred(), "removing nodeConfig must be rejected")
-	g.Expect(err.Error()).To(ContainSubstring("fixed at creation"))
+	g.Expect(err.Error()).To(ContainSubstring("cannot be removed"))
 
-	without := nodeConfigNode(ns, "nc-never")
+	without := nodeConfigNode(ns, "nc-switch")
 	without.Spec.NodeConfig = nil
 	g.Expect(testCli.Create(testCtx, without)).To(Succeed())
 
-	err = updateNodeWithRetry(t, client.ObjectKeyFromObject(without), func(cur *seiv1alpha1.SeiNode) {
+	g.Expect(updateNodeWithRetry(t, client.ObjectKeyFromObject(without), func(cur *seiv1alpha1.SeiNode) {
 		cur.Spec.NodeConfig = &seiv1alpha1.NodeConfig{
 			ConfigRef: seiv1alpha1.ConfigFileRef{Name: "rpc-config-v1"},
 			AppRef:    seiv1alpha1.ConfigFileRef{Name: "rpc-app-v1"},
 		}
-	})
-	g.Expect(err).To(HaveOccurred(), "adding nodeConfig must be rejected")
-	g.Expect(err.Error()).To(ContainSubstring("fixed at creation"))
+	})).To(Succeed(), "adding nodeConfig must be accepted")
 }
 
 // These node shapes write config.toml at run time with values no ConfigMap

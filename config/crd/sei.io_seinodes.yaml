@@ -107,9 +107,11 @@ spec:
               The node shapes below reach config.toml through a task that writes
               configuration seid can only learn at run time, so they are rejected beside
               nodeConfig too.
-              nodeConfig is fixed for the node's lifetime. The StatefulSet's
+              nodeConfig may be added to an existing node but never removed (spec 013,
+              temporary for the arctic-1 migration, PLT-1410). The StatefulSet's
               podManagementPolicy follows it, and the API server refuses to change that
-              field on an existing StatefulSet.
+              field on an existing StatefulSet, so SyncStatefulSet recreates the
+              StatefulSet when the field must change.
               dataResetGeneration is a request counter: each increase asks for one data
               reset. It can only increase, so a git revert cannot lower it and rearm a wipe,
               and it needs nodeConfig, because only that node's plans run the reset.
@@ -1502,10 +1504,9 @@ spec:
                 the engine''s config.toml keys are controller-derived'
               rule: '!has(self.nodeConfig) || !has(self.consensus) || !has(self.consensus.engine)
                 || self.consensus.engine != ''Autobahn'''
-            - message: 'spec.nodeConfig can be neither added to nor removed from an
-                existing SeiNode: it is fixed at creation, so replace the node (dataVolume.import
-                can carry its data over)'
-              rule: has(self.nodeConfig) == has(oldSelf.nodeConfig)
+            - message: 'spec.nodeConfig cannot be removed from an existing SeiNode:
+                replace the node (dataVolume.import can carry its data over)'
+              rule: '!has(oldSelf.nodeConfig) || has(self.nodeConfig)'
             - message: 'spec.dataResetGeneration needs spec.nodeConfig: only a node
                 that reads its config from ConfigMaps runs the declarative data reset'
               rule: '!has(self.dataResetGeneration) || has(self.nodeConfig)'
