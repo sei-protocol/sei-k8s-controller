@@ -45,7 +45,7 @@ An operator bumps the cell sidecar image with the budget at 25%. In each namespa
 2. WHEN a drifted node holds no slot, THE controller SHALL build no plan for it and SHALL set `NodeUpdateInProgress=False` with reason `UpdateDeferred` and a message that names the slot holders.
 3. THE controller SHALL list the namespace's SeiNodes with an uncached read. Because the node controller reconciles one node at a time, each slot decision then sees every earlier node's persisted status, and the slots never overfill.
 4. THE budget SHALL NOT gate a data reset, a hold change, a config update, an init plan, or a resize.
-5. WHEN a node leaves `NodeUpdateInProgress=True`, or is deleted, THE controller SHALL enqueue every node in its namespace that reports `UpdateDeferred`, so the next node in slot order does not wait for its status poll.
+5. WHEN a node leaves `NodeUpdateInProgress=True`, changes `spec.paused`, changes phase, or is deleted, THE controller SHALL enqueue every node in its namespace that reports `UpdateDeferred`, so the next node in slot order does not wait for its status poll.
 
 ### Requirement 2: A ConfigMap-configured node keeps its running images while it waits
 

@@ -18,8 +18,9 @@ import (
 // watch below wakes it as soon as a slot frees instead, so the next node in
 // slot order starts without waiting out the poll interval.
 
-// slotReleased passes a SeiNode event that frees a drift-roll slot: the node
-// leaves NodeUpdateInProgress=True, or it is deleted.
+// slotReleased passes a SeiNode event that can free a drift-roll slot or add
+// one: the node leaves NodeUpdateInProgress=True, its pause flips, its phase
+// changes (the slot count counts Running, unpaused nodes), or it is deleted.
 var slotReleased = predicate.Funcs{
 	CreateFunc: func(event.CreateEvent) bool { return false },
 	UpdateFunc: func(e event.UpdateEvent) bool {
@@ -31,7 +32,9 @@ var slotReleased = predicate.Funcs{
 		if !ok {
 			return false
 		}
-		return nodeUpdating(oldNode) && !nodeUpdating(newNode)
+		return (nodeUpdating(oldNode) && !nodeUpdating(newNode)) ||
+			oldNode.Spec.Paused != newNode.Spec.Paused ||
+			oldNode.Status.Phase != newNode.Status.Phase
 	},
 	DeleteFunc:  func(event.DeleteEvent) bool { return true },
 	GenericFunc: func(event.GenericEvent) bool { return false },

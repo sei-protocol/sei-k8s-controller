@@ -22,20 +22,20 @@ func withUpdateCondition(node *seiv1alpha1.SeiNode, status metav1.ConditionStatu
 	return node
 }
 
-// Spec 012 Req 1.5: only an event that frees a slot wakes the waiting nodes.
+// Spec 012 Req 1.5: only an event that can free or add a slot wakes the
+// waiting nodes.
 func TestSlotReleased(t *testing.T) {
-	updating := func() *seiv1alpha1.SeiNode {
-		return withUpdateCondition(resizeNode("n", false, ""), metav1.ConditionTrue, "UpdateStarted")
+	running := func(status metav1.ConditionStatus, reason string) func() *seiv1alpha1.SeiNode {
+		return func() *seiv1alpha1.SeiNode {
+			n := withUpdateCondition(resizeNode("n", false, ""), status, reason)
+			n.Status.Phase = seiv1alpha1.PhaseRunning
+			return n
+		}
 	}
-	done := func() *seiv1alpha1.SeiNode {
-		return withUpdateCondition(resizeNode("n", false, ""), metav1.ConditionFalse, "UpdateComplete")
-	}
-	failed := func() *seiv1alpha1.SeiNode {
-		return withUpdateCondition(resizeNode("n", false, ""), metav1.ConditionFalse, "UpdateFailed")
-	}
-	deferred := func() *seiv1alpha1.SeiNode {
-		return withUpdateCondition(resizeNode("n", false, ""), metav1.ConditionFalse, planner.ReasonUpdateDeferred)
-	}
+	updating := running(metav1.ConditionTrue, "UpdateStarted")
+	done := running(metav1.ConditionFalse, "UpdateComplete")
+	failed := running(metav1.ConditionFalse, "UpdateFailed")
+	deferred := running(metav1.ConditionFalse, planner.ReasonUpdateDeferred)
 	cases := []struct {
 		name     string
 		old, new *seiv1alpha1.SeiNode
@@ -47,6 +47,8 @@ func TestSlotReleased(t *testing.T) {
 		{"still updating", updating(), updating(), false},
 		{"still waiting", deferred(), deferred(), false},
 		{"no condition", resizeNode("n", false, ""), resizeNode("n", false, ""), false},
+		{"holder paused", updating(), func() *seiv1alpha1.SeiNode { n := updating(); n.Spec.Paused = true; return n }(), true},
+		{"node leaves Running", updating(), func() *seiv1alpha1.SeiNode { n := updating(); n.Status.Phase = seiv1alpha1.PhaseFailed; return n }(), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
