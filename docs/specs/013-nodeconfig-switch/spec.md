@@ -4,7 +4,9 @@
 
 **Created**: 2026-10-08
 
-**Status**: Draft. Temporary: revert after the arctic-1 migration.
+**Status**: Reverted. The code shipped in `21ae61d` (#608) and moved 46 arctic-1 nodes in place on
+2026-10-08. The revert restores the create-only rule `has(self.nodeConfig) == has(oldSelf.nodeConfig)`
+and removes the StatefulSet recreation. A later in-place move needs this change again.
 
 **Tracking**: PLT-1410 (atlantic-2 migration)
 

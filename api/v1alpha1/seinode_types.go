@@ -88,12 +88,10 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.validator) || !has(self.validator.genesisCeremony)",message="spec.nodeConfig is not supported on a genesis-ceremony validator: the founding validator set is assembled during the ceremony and written into config.toml at run time"
 // +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || ((!has(self.fullNode) || !has(self.fullNode.snapshot) || !has(self.fullNode.snapshot.stateSync)) && (!has(self.validator) || !has(self.validator.snapshot) || !has(self.validator.snapshot.stateSync)) && (!has(self.replayer) || !has(self.replayer.snapshot.stateSync)))",message="spec.nodeConfig is not supported with a state-sync snapshot source: the trust height and hash are discovered from live witnesses and written into config.toml at run time"
 // +kubebuilder:validation:XValidation:rule="!has(self.nodeConfig) || !has(self.consensus) || !has(self.consensus.engine) || self.consensus.engine != 'Autobahn'",message="spec.nodeConfig is not supported under consensus engine Autobahn: the engine's config.toml keys are controller-derived"
-// nodeConfig may be added to an existing node but never removed (spec 013,
-// temporary for the arctic-1 migration, PLT-1410). The StatefulSet's
+// nodeConfig is fixed for the node's lifetime. The StatefulSet's
 // podManagementPolicy follows it, and the API server refuses to change that
-// field on an existing StatefulSet, so SyncStatefulSet recreates the
-// StatefulSet when the field must change.
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.nodeConfig) || has(self.nodeConfig)",message="spec.nodeConfig cannot be removed from an existing SeiNode: replace the node (dataVolume.import can carry its data over)"
+// field on an existing StatefulSet.
+// +kubebuilder:validation:XValidation:rule="has(self.nodeConfig) == has(oldSelf.nodeConfig)",message="spec.nodeConfig can be neither added to nor removed from an existing SeiNode: it is fixed at creation, so replace the node (dataVolume.import can carry its data over)"
 // dataResetGeneration is a request counter: each increase asks for one data
 // reset. It can only increase, so a git revert cannot lower it and rearm a wipe,
 // and it needs nodeConfig, because only that node's plans run the reset.

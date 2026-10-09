@@ -718,9 +718,8 @@ func updateStrategy(node *seiv1alpha1.SeiNode) appsv1.StatefulSetUpdateStrategy 
 // podManagementPolicy is Parallel for a RollingUpdate node. Under OrderedReady
 // the StatefulSet controller will not update a pod that is not Ready, so a seid
 // halted at an upgrade height would never take the new image. The API server
-// refuses to change this field on an existing StatefulSet, so SyncStatefulSet
-// recreates the StatefulSet when a node gains spec.nodeConfig (spec 013).
-// Empty leaves the API default.
+// refuses to change this field on an existing StatefulSet, which is why
+// spec.nodeConfig is fixed at creation. Empty leaves the API default.
 func podManagementPolicy(node *seiv1alpha1.SeiNode) appsv1.PodManagementPolicyType {
 	if node.Spec.NodeConfig != nil {
 		return appsv1.ParallelPodManagement
