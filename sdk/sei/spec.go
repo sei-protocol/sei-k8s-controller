@@ -105,7 +105,7 @@ type NodeSpec struct {
 type ConfigValue struct {
 	FileName string // config.toml or app.toml
 	Key      string // dotted TOML path, e.g. evm.rate_limiting_enabled
-	Value    any    // a JSON-encodable, non-nil value
+	Value    any    // JSON-encodable, and not null once encoded
 }
 
 // NodeStateSync configures a SeiNode to bootstrap via CometBFT state sync.

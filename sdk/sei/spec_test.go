@@ -1,6 +1,9 @@
 package sei
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // witnessA and witnessB are the two distinct bare host:port light-client
 // witnesses reused across the state-sync validation tests in this package.
@@ -68,6 +71,35 @@ func TestValidateNodeSpec(t *testing.T) {
 		{"config value nil", func(s *NodeSpec) { s.ConfigValues = []ConfigValue{{FileName: appToml, Key: rateLimitKey}} }, true},
 		{"config value with no JSON form", func(s *NodeSpec) {
 			s.ConfigValues = []ConfigValue{{FileName: appToml, Key: rateLimitKey, Value: make(chan int)}}
+		}, true},
+		{"config value typed nil pointer", func(s *NodeSpec) {
+			s.ConfigValues = []ConfigValue{{FileName: appToml, Key: rateLimitKey, Value: (*bool)(nil)}}
+		}, true},
+		{"config value nil map", func(s *NodeSpec) {
+			s.ConfigValues = []ConfigValue{{FileName: appToml, Key: rateLimitKey, Value: map[string]any(nil)}}
+		}, true},
+		{"config value file name without .toml", func(s *NodeSpec) {
+			s.ConfigValues = []ConfigValue{{FileName: "app", Key: rateLimitKey, Value: false}}
+		}, true},
+		{"config value key with an empty segment", func(s *NodeSpec) {
+			s.ConfigValues = []ConfigValue{{FileName: appToml, Key: "evm..rate_limiting_enabled", Value: false}}
+		}, true},
+		{"config value set twice", func(s *NodeSpec) {
+			s.ConfigValues = []ConfigValue{
+				{FileName: appToml, Key: rateLimitKey, Value: false},
+				{FileName: appToml, Key: rateLimitKey, Value: true},
+			}
+		}, true},
+		{"same key in two files", func(s *NodeSpec) {
+			s.ConfigValues = []ConfigValue{
+				{FileName: appToml, Key: rateLimitKey, Value: false},
+				{FileName: "config.toml", Key: rateLimitKey, Value: false},
+			}
+		}, false},
+		{"config values over the CRD limit", func(s *NodeSpec) {
+			for i := range 101 {
+				s.ConfigValues = append(s.ConfigValues, ConfigValue{FileName: appToml, Key: fmt.Sprintf("k%d", i), Value: i})
+			}
 		}, true},
 	}
 	for _, tc := range cases {

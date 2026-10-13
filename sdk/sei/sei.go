@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -237,19 +238,50 @@ func validateNodeSpec(s NodeSpec) error {
 	return validateConfigValues(s.ConfigValues)
 }
 
-// validateConfigValues refuses an entry the CRD would reject: no file name, no
-// key, or a value with no JSON form. The k8s provider renders each value
+// The limits below mirror the CRD's validation of seiv1alpha1.ConfigValue, so a
+// bad entry fails here as a usage error rather than at the API server.
+const (
+	maxConfigValues       = 100 // spec.configValues MaxItems
+	maxConfigFileNameLen  = 64
+	maxConfigKeyLen       = 256
+	configFileNamePattern = `^[A-Za-z0-9_-]+\.toml$`
+	configKeyPattern      = `^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$`
+)
+
+var (
+	configFileNameRE = regexp.MustCompile(configFileNamePattern)
+	configKeyRE      = regexp.MustCompile(configKeyPattern)
+)
+
+// validateConfigValues refuses what the CRD would reject: too many entries, a
+// malformed file name or key, a repeated (file, key) pair, and a value whose
+// JSON form is null or does not exist. The k8s provider renders each value
 // through json.Marshal, so a value that passes here always renders.
 func validateConfigValues(values []ConfigValue) error {
+	if len(values) > maxConfigValues {
+		return usageErr("NodeSpec.ConfigValues has %d entries, want at most %d", len(values), maxConfigValues)
+	}
+	seen := make(map[[2]string]bool, len(values))
 	for _, v := range values {
-		if strings.TrimSpace(v.FileName) == "" || strings.TrimSpace(v.Key) == "" {
-			return usageErr("NodeSpec.ConfigValues entry needs a FileName and a Key, got %q and %q", v.FileName, v.Key)
+		if len(v.FileName) > maxConfigFileNameLen || !configFileNameRE.MatchString(v.FileName) {
+			return usageErr("NodeSpec.ConfigValues file name %q must match %s, at most %d characters", v.FileName, configFileNamePattern, maxConfigFileNameLen)
 		}
-		if v.Value == nil {
-			return usageErr("NodeSpec.ConfigValues %s %s: Value is required (the CRD rejects null)", v.FileName, v.Key)
+		if len(v.Key) > maxConfigKeyLen || !configKeyRE.MatchString(v.Key) {
+			return usageErr("NodeSpec.ConfigValues key %q must match %s, at most %d characters", v.Key, configKeyPattern, maxConfigKeyLen)
 		}
-		if _, err := json.Marshal(v.Value); err != nil {
+		entry := [2]string{v.FileName, v.Key}
+		if seen[entry] {
+			return usageErr("NodeSpec.ConfigValues sets %s %s twice", v.FileName, v.Key)
+		}
+		seen[entry] = true
+		// A typed nil, such as a nil *bool, map or slice, encodes as null
+		// without an error, so the check reads the encoded form.
+		raw, err := json.Marshal(v.Value)
+		if err != nil {
 			return usageErr("NodeSpec.ConfigValues %s %s: Value has no JSON form: %v", v.FileName, v.Key, err)
+		}
+		if string(raw) == "null" {
+			return usageErr("NodeSpec.ConfigValues %s %s: Value is required (the CRD rejects null)", v.FileName, v.Key)
 		}
 	}
 	return nil
