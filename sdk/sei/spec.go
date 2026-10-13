@@ -86,11 +86,26 @@ type NodeSpec struct {
 	Config           map[string]string // -> spec.overrides (TOML-path keys)
 	Labels           map[string]string // extra labels on the SeiNode object, merged UNDER the canonical sei.io/role + sei.io/seinetwork (which win on key conflict)
 
+	// ConfigValues sets typed values in seid's config files with no check
+	// against the sei-config key list, so it reaches a seid key that Config
+	// rejects as unknown. It wins over Config on the same key. ->
+	// spec.configValues.
+	ConfigValues []ConfigValue
+
 	// StateSync bootstraps the node through CometBFT state sync instead of
 	// genesis block-sync; nil => genesis block-sync (unchanged). Set it to bring
 	// a follower up from a peer-served snapshot rather than replaying from height
 	// 1. -> spec.fullNode.snapshot{stateSync{}, rpcServers}.
 	StateSync *NodeStateSync
+}
+
+// ConfigValue is one typed value at a dotted TOML path in a seid config file.
+// Mirrors seiv1alpha1.ConfigValue. Value keeps its Go type through JSON into
+// the TOML file, so false lands as a TOML boolean and 16 as an integer.
+type ConfigValue struct {
+	FileName string // config.toml or app.toml
+	Key      string // dotted TOML path, e.g. evm.rate_limiting_enabled
+	Value    any    // a JSON-encodable, non-nil value
 }
 
 // NodeStateSync configures a SeiNode to bootstrap via CometBFT state sync.

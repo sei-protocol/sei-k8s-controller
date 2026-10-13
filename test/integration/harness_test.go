@@ -96,6 +96,10 @@ type spec struct {
 	rpcConfig     map[string]string    // extra per-RPC-node config overlaid on storageConfig (e.g. EVM tuning)
 	accounts      []sei.GenesisAccount // genesis-funded non-validator accounts (release funds an admin); nil funds none
 
+	// rpcConfigValues are per-RPC-node seid keys that sei-config does not know,
+	// so rpcConfig cannot carry them.
+	rpcConfigValues []sei.ConfigValue
+
 	// seiload inputs (load suite)
 	seiloadImage    string // sei-load benchmark image
 	seiloadProfile  string // profile name in the seiload-profiles ConfigMap
@@ -204,12 +208,13 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 	for i := range s.rpcNodes {
 		name := rpcNodeName(s.chainID, i)
 		node, err := createRPCNode(ctx, t, c, sei.NodeSpec{
-			Name:      name,
-			Network:   s.chainID,
-			Namespace: s.namespace,
-			Image:     s.seidImage,
-			Labels:    runLabels,
-			Config:    mergeConfig(s.storageConfig, s.rpcConfig),
+			Name:         name,
+			Network:      s.chainID,
+			Namespace:    s.namespace,
+			Image:        s.seidImage,
+			Labels:       runLabels,
+			Config:       mergeConfig(s.storageConfig, s.rpcConfig),
+			ConfigValues: s.rpcConfigValues,
 		})
 		if node != nil {
 			ch.rpcNodes = append(ch.rpcNodes, node)

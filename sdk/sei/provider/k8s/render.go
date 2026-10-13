@@ -130,6 +130,15 @@ func renderNode(spec sei.NodeSpec, namespace, networkNS string) *seiv1alpha1.Sei
 	if len(spec.Config) > 0 {
 		node.Spec.Overrides = maps.Clone(spec.Config)
 	}
+	for _, v := range spec.ConfigValues {
+		// validateNodeSpec has already refused a value with no JSON form.
+		raw, _ := json.Marshal(v.Value)
+		node.Spec.ConfigValues = append(node.Spec.ConfigValues, seiv1alpha1.ConfigValue{
+			FileName: v.FileName,
+			Key:      v.Key,
+			Value:    apiextensionsv1.JSON{Raw: raw},
+		})
+	}
 	if ss := spec.StateSync; ss != nil {
 		// Bootstrap via CometBFT state sync: the witnesses are the caller's bare
 		// host:port RpcServers; genesis block-sync leaves Snapshot nil (unchanged).

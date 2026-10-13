@@ -115,6 +115,13 @@ func TestNightlyBenchmark(t *testing.T) {
 					"evm.worker_queue_size": "4000",
 					"evm.max_tx_pool_txs":   "10000",
 				},
+				// seid limits EVM JSON-RPC to 200 requests a second per client IP
+				// by default. sei-load sends from one pod, so with the limit on,
+				// the run measures the limiter rather than the chain, and the
+				// funder's balance reads fail with 429.
+				rpcConfigValues: []sei.ConfigValue{
+					{FileName: "app.toml", Key: "evm.rate_limiting_enabled", Value: false},
+				},
 			}
 			if w.fund {
 				root, err := keygen.DeriveEVM()

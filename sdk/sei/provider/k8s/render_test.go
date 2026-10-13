@@ -1,9 +1,13 @@
 package k8s
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
+	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
@@ -216,5 +220,33 @@ func TestRenderNode_ConfigIntoOverrides(t *testing.T) {
 	node := renderNode(spec, testNS, testNS)
 	if got := node.Spec.Overrides["config.moniker"]; got != "rpc-0" {
 		t.Errorf("node overrides = %v, want config.moniker=rpc-0", node.Spec.Overrides)
+	}
+}
+
+// appToml is the config file the ConfigValues render cases write to.
+const appToml = "app.toml"
+
+func TestRenderNode_ConfigValuesKeepTheirJSONType(t *testing.T) {
+	spec := sei.NodeSpec{
+		Name: rpc0Name, Network: testNet, Image: testImage,
+		ConfigValues: []sei.ConfigValue{
+			{FileName: appToml, Key: "evm.rate_limiting_enabled", Value: false},
+			{FileName: appToml, Key: "giga.execution.parse_workers", Value: 16},
+		},
+	}
+	node := renderNode(spec, testNS, testNS)
+	want := []seiv1alpha1.ConfigValue{
+		{FileName: appToml, Key: "evm.rate_limiting_enabled", Value: apiextensionsv1.JSON{Raw: []byte("false")}},
+		{FileName: appToml, Key: "giga.execution.parse_workers", Value: apiextensionsv1.JSON{Raw: []byte("16")}},
+	}
+	if !reflect.DeepEqual(node.Spec.ConfigValues, want) {
+		t.Errorf("node configValues = %+v, want %+v", node.Spec.ConfigValues, want)
+	}
+}
+
+func TestRenderNode_NoConfigValuesLeavesTheFieldUnset(t *testing.T) {
+	node := renderNode(sei.NodeSpec{Name: rpc0Name, Network: testNet, Image: testImage}, testNS, testNS)
+	if node.Spec.ConfigValues != nil {
+		t.Errorf("node configValues = %+v, want nil", node.Spec.ConfigValues)
 	}
 }

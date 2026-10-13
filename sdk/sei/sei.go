@@ -20,6 +20,7 @@ package sei
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"slices"
 	"strings"
@@ -231,6 +232,24 @@ func validateNodeSpec(s NodeSpec) error {
 			// entries, so a two-element set of identical witnesses fails with
 			// distinct=1 — reporting len=2 would misdescribe the failure.
 			return usageErr("NodeSpec.StateSync.RpcServers must have >= 2 DISTINCT entries (the state-sync witness floor: served CRD MinItems=2 listType=set + the controller's canonical-syncer floor), got %d distinct", distinct)
+		}
+	}
+	return validateConfigValues(s.ConfigValues)
+}
+
+// validateConfigValues refuses an entry the CRD would reject: no file name, no
+// key, or a value with no JSON form. The k8s provider renders each value
+// through json.Marshal, so a value that passes here always renders.
+func validateConfigValues(values []ConfigValue) error {
+	for _, v := range values {
+		if strings.TrimSpace(v.FileName) == "" || strings.TrimSpace(v.Key) == "" {
+			return usageErr("NodeSpec.ConfigValues entry needs a FileName and a Key, got %q and %q", v.FileName, v.Key)
+		}
+		if v.Value == nil {
+			return usageErr("NodeSpec.ConfigValues %s %s: Value is required (the CRD rejects null)", v.FileName, v.Key)
+		}
+		if _, err := json.Marshal(v.Value); err != nil {
+			return usageErr("NodeSpec.ConfigValues %s %s: Value has no JSON form: %v", v.FileName, v.Key, err)
 		}
 	}
 	return nil

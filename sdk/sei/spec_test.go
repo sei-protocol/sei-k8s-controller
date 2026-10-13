@@ -12,6 +12,13 @@ const (
 	witnessB = "b:26657"
 )
 
+// appToml and rateLimitKey name the config value the ConfigValues validation
+// cases set.
+const (
+	appToml      = "app.toml"
+	rateLimitKey = "evm.rate_limiting_enabled"
+)
+
 func TestValidateNetworkSpec(t *testing.T) {
 	good := NetworkSpec{Name: "net", Image: "img", Validators: 1}
 	cases := []struct {
@@ -49,6 +56,19 @@ func TestValidateNodeSpec(t *testing.T) {
 		{"statesync one witness", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{witnessA}} }, true},
 		{"statesync two identical witnesses", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{witnessA, witnessA}} }, true},
 		{"statesync two distinct witnesses", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{witnessA, witnessB}} }, false},
+		{"config value", func(s *NodeSpec) {
+			s.ConfigValues = []ConfigValue{{FileName: appToml, Key: rateLimitKey, Value: false}}
+		}, false},
+		{"config value after valid statesync", func(s *NodeSpec) {
+			s.StateSync = &NodeStateSync{RpcServers: []string{witnessA, witnessB}}
+			s.ConfigValues = []ConfigValue{{FileName: appToml, Key: rateLimitKey}}
+		}, true},
+		{"config value missing file name", func(s *NodeSpec) { s.ConfigValues = []ConfigValue{{Key: rateLimitKey, Value: false}} }, true},
+		{"config value missing key", func(s *NodeSpec) { s.ConfigValues = []ConfigValue{{FileName: appToml, Value: false}} }, true},
+		{"config value nil", func(s *NodeSpec) { s.ConfigValues = []ConfigValue{{FileName: appToml, Key: rateLimitKey}} }, true},
+		{"config value with no JSON form", func(s *NodeSpec) {
+			s.ConfigValues = []ConfigValue{{FileName: appToml, Key: rateLimitKey, Value: make(chan int)}}
+		}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
