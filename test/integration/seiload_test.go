@@ -3,8 +3,10 @@
 package integration
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -182,11 +184,13 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 		RootKeySecret:   rootKeySecret,
 	})
 	job.Namespace = ns
-	runJob(ctx, t, cs, job)
+	createJob(ctx, t, cs, job)
+	summary := followSummary(ctx, cs, ns, job.Name)
+	waitJob(ctx, t, cs, ns, job.Name)
 
 	// Read seiload's pod before the follower catch-up wait: Karpenter can
 	// reclaim the finished pod's node, taking its log with it.
-	assertSeiloadRun(ctx, t, cs, job, s)
+	assertSeiloadRun(ctx, t, cs, job, s, summary.lines())
 	assertChainLive(ctx, t, hc, ch)
 
 	// Chain included the load: at least one transaction landed in a block during
@@ -230,6 +234,11 @@ const (
 	maxRevertRatio = 0.01
 	// seiloadSummaryLines is enough log tail to hold seiload's end-of-run summary.
 	seiloadSummaryLines = 200
+	// summaryStreamDrain bounds the wait for a followed seiload log stream to
+	// end once its Job has finished.
+	summaryStreamDrain = 30 * time.Second
+	// logStreamRetry is the interval between attempts to follow a seiload log.
+	logStreamRetry = 5 * time.Second
 )
 
 // assertChainLive fails unless the validators still produce blocks and every
@@ -291,6 +300,74 @@ var (
 	revertedLine   = regexp.MustCompile(`Of the (\d+) the chain executed, (\d+) reverted`)
 )
 
+// summaryFollower collects seiload's summary lines from its followed log.
+type summaryFollower struct {
+	cancel  context.CancelFunc
+	done    chan struct{}
+	matched []string
+}
+
+// followSummary follows the log of jobName's pod from its start and keeps the
+// lines matching statusReadLine or revertedLine. Kubelet serves a log read only
+// from the container's current log file, so a tail read after the run misses a
+// summary that a rotation moved into an older file; a followed stream reopens
+// the file when kubelet rotates it.
+func followSummary(ctx context.Context, cs *kubernetes.Clientset, ns, jobName string) *summaryFollower {
+	ctx, cancel := context.WithCancel(ctx)
+	f := &summaryFollower{cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(f.done)
+		stream, err := followPodLog(ctx, cs, ns, jobName)
+		if err != nil {
+			return
+		}
+		defer func() { _ = stream.Close() }()
+		r := bufio.NewReader(stream)
+		for {
+			line, err := r.ReadString('\n')
+			if statusReadLine.MatchString(line) || revertedLine.MatchString(line) {
+				f.matched = append(f.matched, strings.TrimRight(line, "\n"))
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return f
+}
+
+// lines returns the summary lines the stream carried, waiting at most
+// summaryStreamDrain for it to end. It is empty when the log could not be
+// followed or the stream dropped before the summary.
+func (f *summaryFollower) lines() string {
+	select {
+	case <-f.done:
+	case <-time.After(summaryStreamDrain):
+		f.cancel()
+		<-f.done
+	}
+	f.cancel()
+	return strings.Join(f.matched, "\n")
+}
+
+// followPodLog opens a following log stream for jobName's pod, retrying while
+// the pod does not exist yet or its container has not started.
+func followPodLog(ctx context.Context, cs *kubernetes.Clientset, ns, jobName string) (io.ReadCloser, error) {
+	for {
+		if pod, err := jobPod(ctx, cs, ns, jobName); err == nil {
+			req := cs.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{Follow: true})
+			if stream, err := req.Stream(ctx); err == nil {
+				return stream, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(logStreamRetry):
+		}
+	}
+}
+
 // summaryCounts returns the two counts line captures from seiload's log.
 func summaryCounts(line *regexp.Regexp, log string) (first, second int64, ok bool) {
 	m := line.FindStringSubmatch(log)
@@ -306,9 +383,12 @@ func summaryCounts(line *regexp.Regexp, log string) (first, second int64, ok boo
 // seiload exiting before its duration, more than maxRevertRatio of executed
 // transactions reverting, or, when s.minReceiptCoverage is set, too few
 // accepted transactions with a read execution status. The counts come from
-// seiload's end-of-run summary, so a SEILOAD_IMAGE that stops printing it
-// fails here rather than passing unverified.
-func assertSeiloadRun(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *batchv1.Job, s spec) {
+// seiload's end-of-run summary, read from the followed summary lines and the
+// log tail, so a SEILOAD_IMAGE that stops printing it fails here rather than
+// passing unverified.
+func assertSeiloadRun(
+	ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *batchv1.Job, s spec, summary string,
+) {
 	t.Helper()
 	pod, err := jobPod(ctx, cs, job.Namespace, job.Name)
 	if err != nil {
@@ -327,11 +407,12 @@ func assertSeiloadRun(ctx context.Context, t *testing.T, cs *kubernetes.Clientse
 		}
 	}
 
-	log, err := podLog(ctx, cs, pod, seiloadSummaryLines)
-	if err != nil {
+	tail, err := podLog(ctx, cs, pod, seiloadSummaryLines)
+	if err != nil && summary == "" {
 		t.Errorf("read seiload log: %v — cannot verify the run", err)
 		return
 	}
+	log := summary + "\n" + tail
 	executed, reverted, ok := summaryCounts(revertedLine, log)
 	switch {
 	case !ok:
@@ -424,6 +505,13 @@ func includedTxCount(ctx context.Context, t *testing.T, hc *http.Client, tmRPC s
 // to complete; a Failed Job fails the suite.
 func runJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *batchv1.Job) {
 	t.Helper()
+	createJob(ctx, t, cs, job)
+	waitJob(ctx, t, cs, job.Namespace, job.Name)
+}
+
+// createJob creates a one-shot harness Job, deleted on cleanup.
+func createJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *batchv1.Job) {
+	t.Helper()
 	if _, err := cs.BatchV1().Jobs(job.Namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create job %q: %v", job.Name, err)
 	}
@@ -434,7 +522,6 @@ func runJob(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *ba
 		_ = cs.BatchV1().Jobs(job.Namespace).Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
 	})
 	t.Logf("job %s launched (%s)", job.Name, job.Spec.Template.Spec.Containers[0].Image)
-	waitJob(ctx, t, cs, job.Namespace, job.Name)
 }
 
 // waitJob blocks until a harness Job reaches a terminal condition. A Failed
