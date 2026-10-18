@@ -420,6 +420,7 @@ func assertSeiloadRun(
 	ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *batchv1.Job, s spec, summary *summaryFollower,
 ) {
 	t.Helper()
+	defer summary.cancel()
 	pod, err := jobPod(ctx, cs, job.Namespace, job.Name)
 	if err != nil {
 		t.Errorf("%v — cannot verify the run", err)
