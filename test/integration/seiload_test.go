@@ -190,7 +190,7 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 
 	// Read seiload's pod before the follower catch-up wait: Karpenter can
 	// reclaim the finished pod's node, taking its log with it.
-	assertSeiloadRun(ctx, t, cs, job, s, summary.lines())
+	assertSeiloadRun(ctx, t, cs, job, s, summary)
 	assertChainLive(ctx, t, hc, ch)
 
 	// Chain included the load: at least one transaction landed in a block during
@@ -311,29 +311,59 @@ type summaryFollower struct {
 // lines matching statusReadLine or revertedLine. Kubelet serves a log read only
 // from the container's current log file, so a tail read after the run misses a
 // summary that a rotation moved into an older file; a followed stream reopens
-// the file when kubelet rotates it.
+// the file when kubelet rotates it. A stream that ends before seiload exits is
+// reopened; lines it repeats are harmless, as summaryCounts takes the first match.
 func followSummary(ctx context.Context, cs *kubernetes.Clientset, ns, jobName string) *summaryFollower {
 	ctx, cancel := context.WithCancel(ctx)
 	f := &summaryFollower{cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(f.done)
-		stream, err := followPodLog(ctx, cs, ns, jobName)
-		if err != nil {
-			return
-		}
-		defer func() { _ = stream.Close() }()
-		r := bufio.NewReader(stream)
 		for {
-			line, err := r.ReadString('\n')
-			if statusReadLine.MatchString(line) || revertedLine.MatchString(line) {
-				f.matched = append(f.matched, strings.TrimRight(line, "\n"))
-			}
+			stream, err := followPodLog(ctx, cs, ns, jobName)
 			if err != nil {
 				return
+			}
+			f.collect(stream)
+			_ = stream.Close()
+			if seiloadExited(ctx, cs, ns, jobName) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(logStreamRetry):
 			}
 		}
 	}()
 	return f
+}
+
+// collect keeps the summary lines of stream until it ends.
+func (f *summaryFollower) collect(stream io.Reader) {
+	r := bufio.NewReader(stream)
+	for {
+		line, err := r.ReadString('\n')
+		if statusReadLine.MatchString(line) || revertedLine.MatchString(line) {
+			f.matched = append(f.matched, strings.TrimRight(line, "\n"))
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// seiloadExited reports whether every container of jobName's pod has terminated.
+func seiloadExited(ctx context.Context, cs *kubernetes.Clientset, ns, jobName string) bool {
+	pod, err := jobPod(ctx, cs, ns, jobName)
+	if err != nil || len(pod.Status.ContainerStatuses) == 0 {
+		return false
+	}
+	for _, st := range pod.Status.ContainerStatuses {
+		if st.State.Terminated == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // lines returns the summary lines the stream carried, waiting at most
@@ -383,11 +413,11 @@ func summaryCounts(line *regexp.Regexp, log string) (first, second int64, ok boo
 // seiload exiting before its duration, more than maxRevertRatio of executed
 // transactions reverting, or, when s.minReceiptCoverage is set, too few
 // accepted transactions with a read execution status. The counts come from
-// seiload's end-of-run summary, read from the followed summary lines and the
-// log tail, so a SEILOAD_IMAGE that stops printing it fails here rather than
+// seiload's end-of-run summary, read from the followed summary and the log
+// tail, so a SEILOAD_IMAGE that stops printing it fails here rather than
 // passing unverified.
 func assertSeiloadRun(
-	ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *batchv1.Job, s spec, summary string,
+	ctx context.Context, t *testing.T, cs *kubernetes.Clientset, job *batchv1.Job, s spec, summary *summaryFollower,
 ) {
 	t.Helper()
 	pod, err := jobPod(ctx, cs, job.Namespace, job.Name)
@@ -407,12 +437,14 @@ func assertSeiloadRun(
 		}
 	}
 
+	// Drain the follower only after reading the pod, which Karpenter can reclaim.
 	tail, err := podLog(ctx, cs, pod, seiloadSummaryLines)
-	if err != nil && summary == "" {
+	followed := summary.lines()
+	if err != nil && followed == "" {
 		t.Errorf("read seiload log: %v — cannot verify the run", err)
 		return
 	}
-	log := summary + "\n" + tail
+	log := followed + "\n" + tail
 	executed, reverted, ok := summaryCounts(revertedLine, log)
 	switch {
 	case !ok:
