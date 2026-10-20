@@ -45,7 +45,7 @@ RUN cd sidecar && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 # `--inspect-plan`, `--json`, and `kvrepair-export`. A merged commit, not a PR
 # head: the FlatKV migration runbook requires seidb built from one. No release
 # tag descends from it yet. Pure Go — no wasmvm, no CGO.
-FROM --platform=$BUILDPLATFORM docker.io/golang:1.27.1 AS seidb
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.27.3 AS seidb
 ARG SEIDB_REF=53168c2d1ebc10ba3dd0b237b8be24f25b4657aa
 ARG TARGETOS
 ARG TARGETARCH
