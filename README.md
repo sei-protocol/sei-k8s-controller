@@ -83,12 +83,11 @@ spec:
 ### SeiNodeTask
 
 A one-shot operation against a single `SeiNode` (governance votes/proposals, image updates,
-height/condition waits). See **[https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task.md](https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/seinode-task/seinode-task.md)** for the kinds,
-lifecycle, signing topology, idempotency, and operational gotchas.
+height/condition waits).
 
 ## Platform Configuration
 
-Infrastructure-level settings (node pools, storage, resources, snapshot/genesis buckets, sidecar images) are read from the mounted app-config file (`SEI_CONTROLLER_CONFIG` → `platform.FileConfig`), which is authoritative — the controller fails fast at startup if a required field is unset. See the [controller-app-config schema](https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/controller-app-config/controller-app-config.md) (in bdchatham-designs — relocated per Design 05 / PLT-497).
+Infrastructure-level settings (node pools, storage, resources, snapshot/genesis buckets, sidecar images) are read from the mounted app-config file (`SEI_CONTROLLER_CONFIG` → `platform.FileConfig`), which is authoritative — the controller fails fast at startup if a required field is unset. See `internal/platform/platform.go` for the field list.
 
 Gateway config (`SEI_GATEWAY_NAME`, `SEI_GATEWAY_NAMESPACE`, `SEI_GATEWAY_DOMAIN`) and the config-file path (`SEI_CONTROLLER_CONFIG`) remain environment variables.
 
