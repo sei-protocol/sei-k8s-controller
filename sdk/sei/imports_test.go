@@ -9,7 +9,7 @@ import (
 
 // TestCoreContractStaysDependencyLight enforces the contract-seam invariant: the
 // core sei package (Provider/*Handle interfaces, *Spec structs, registry) is the
-// dependency-light surface a consumer's in-process harness conforms to by shape,
+// dependency-light surface a consumer-registered provider conforms to by shape,
 // so it must not pull controller-runtime / apimachinery / CRD code into its
 // transitive imports. Those belong to the k8s provider package alone; the
 // concrete object reaches callers only via Object() any. A drifted import here

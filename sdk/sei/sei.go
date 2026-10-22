@@ -5,11 +5,9 @@
 // The SDK ships WIRE providers — they speak RPC/CRDs to an already-running chain
 // (k8s over the controller's CRDs; docker over container-per-node RPC), so
 // pinning the SDK to a chain release is fine. It deliberately does NOT host an
-// in-process ("local") provider: that would link sei-chain's Go source, which the
-// controller cannot transitively build and which would co-version the harness
-// with the chain. An in-process harness lives in sei-chain instead; it satisfies
-// the Provider/*Handle interfaces by shape (structural typing) and is registered
-// or constructed consumer-side via RegisterProvider — the SDK does not ship it.
+// in-process provider: that would link sei-chain's Go source, which the
+// controller cannot transitively build. A consumer may register its own provider
+// via RegisterProvider; the SDK does not ship one.
 //
 // The SDK is a CRUD layer, NOT an orchestrator. The flow is: create a network ->
 // wait ready -> create RPC nodes as peers -> wait ready -> run tests against the
@@ -35,7 +33,7 @@ import (
 // SEI_DOCKER => "docker". More than one present (or none) is an error — never
 // guess. The k8s provider resolves its config from the ambient kubeconfig chain;
 // there is no caller-supplied connection string. A consumer that registers its
-// own provider (e.g. an in-process harness) passes its mode name explicitly;
+// own provider passes its mode name explicitly;
 // only the SDK's built-in wire modes participate in env resolution.
 func Open(ctx context.Context, mode string) (*Client, error) {
 	resolved, err := resolveMode(mode)
