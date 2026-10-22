@@ -189,7 +189,7 @@ a manual step.
 
 #### Acceptance Criteria
 
-1. When the engine is `Autobahn`, the `upload-genesis-artifacts` task SHALL widen the identity manifest with the validator public key, the node public key, the P2P address `<node>-0.<node>.<namespace>.svc.cluster.local:26656`, and the EVM-RPC URL `http://<node>-0.<node>.<namespace>.svc.cluster.local:8545`.
+1. When the engine is `Autobahn`, the `upload-genesis-artifacts` task SHALL widen the identity manifest with the validator public key, the node public key, the P2P address `<node>-0.<node>.<namespace>.svc.cluster.local:26656`, and the EVM-RPC URL `ws://<node>-0.<node>.<namespace>.svc.cluster.local:8546`, the EVM WebSocket listener that validators dial to proxy transactions to a shard's owner.
 2. When the engine is `Autobahn`, the assembler SHALL materialise one node directory per validator from the identity manifests, run `seid tendermint gen-autobahn-config <dirs> --output autobahn.json`, and upload the result to `{bucket}/{chainID}/autobahn.json` **before** it uploads `genesis.json`. `genesis.json` is the ceremony's commit point that every `configure-genesis` polls for, so the artifact is present whenever the commit point is.
 3. When any identity manifest lacks a field the generator reads, the assembler SHALL fail before writing either artifact, naming the validator and the field.
 4. When the engine is `Autobahn`, the `configure-genesis` task SHALL download `autobahn.json` to `config/autobahn.json` after `genesis.json`, on validators and followers alike. An absent artifact after a present `genesis.json` is a broken ceremony, not a race, and the task SHALL fail terminally naming the object key, so the plan fails on that attempt rather than at the end of the `configure-genesis` retry budget.

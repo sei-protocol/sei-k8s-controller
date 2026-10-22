@@ -65,7 +65,7 @@ func TestReadAutobahnIdentity_ProviderTextEncodings(t *testing.T) {
 	if id.AutobahnAddress != "val-1-0.val-1.bench.svc.cluster.local:26656" {
 		t.Errorf("autobahn_address = %q", id.AutobahnAddress)
 	}
-	if id.EVMRPCURL != "http://val-1-0.val-1.bench.svc.cluster.local:8545" {
+	if id.EVMRPCURL != "ws://val-1-0.val-1.bench.svc.cluster.local:8546" {
 		t.Errorf("evmrpc_url = %q", id.EVMRPCURL)
 	}
 	if err := validateAutobahnIdentity("val-1", id); err != nil {
@@ -90,7 +90,7 @@ func TestValidateAutobahnIdentity(t *testing.T) {
 		ValidatorPubKey: "validator:ed25519:public:" + strings.Repeat("ab", ed25519.PublicKeySize),
 		NodePubKey:      "node:ed25519:public:" + strings.Repeat("cd", ed25519.PublicKeySize),
 		AutobahnAddress: "val-0.val.ns.svc.cluster.local:26656",
-		EVMRPCURL:       "http://val-0.val.ns.svc.cluster.local:8545",
+		EVMRPCURL:       "ws://val-0.val.ns.svc.cluster.local:8546",
 	}
 	tests := []struct {
 		name   string
@@ -103,7 +103,9 @@ func TestValidateAutobahnIdentity(t *testing.T) {
 		{"validator hex length", func(id *autobahnIdentity) { id.ValidatorPubKey = "validator:ed25519:public:abcd" }, "validator_pubkey"},
 		{"node prefix", func(id *autobahnIdentity) { id.NodePubKey = "ed25519:public:" + strings.Repeat("cd", 32) }, "node_pubkey"},
 		{"address without port", func(id *autobahnIdentity) { id.AutobahnAddress = "val-0.val.ns.svc.cluster.local" }, "autobahn_address"},
-		{"evmrpc not a URL", func(id *autobahnIdentity) { id.EVMRPCURL = "val-0:8545" }, "evmrpc_url"},
+		{"evmrpc not a URL", func(id *autobahnIdentity) { id.EVMRPCURL = "val-0:8546" }, "evmrpc_url"},
+		{"evmrpc over http", func(id *autobahnIdentity) { id.EVMRPCURL = "http://val-0.val.ns.svc.cluster.local:8545" }, "want ws or wss"},
+		{"evmrpc over wss", func(id *autobahnIdentity) { id.EVMRPCURL = "wss://val-0.val.ns.svc.cluster.local:8546" }, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,8 +133,8 @@ func TestValidateAutobahnIdentity(t *testing.T) {
 // values gen-autobahn-config writes under its default flags.
 func TestBuildAutobahnConfig_MatchesGenAutobahnConfigDefaults(t *testing.T) {
 	validators := []autobahnValidator{
-		{ValidatorKey: "validator:ed25519:public:aa", NodeKey: "node:ed25519:public:bb", Address: "a:26656", EVMRPC: "http://a:8545"},
-		{ValidatorKey: "validator:ed25519:public:cc", NodeKey: "node:ed25519:public:dd", Address: "b:26656", EVMRPC: "http://b:8545"},
+		{ValidatorKey: "validator:ed25519:public:aa", NodeKey: "node:ed25519:public:bb", Address: "a:26656", EVMRPC: "ws://a:8546"},
+		{ValidatorKey: "validator:ed25519:public:cc", NodeKey: "node:ed25519:public:dd", Address: "b:26656", EVMRPC: "ws://b:8546"},
 	}
 	data, err := buildAutobahnConfig(validators, nil)
 	if err != nil {
@@ -194,7 +196,7 @@ func TestBuildAutobahnConfig_MatchesGenAutobahnConfigDefaults(t *testing.T) {
 
 func TestBuildAutobahnConfig_Overrides(t *testing.T) {
 	validators := []autobahnValidator{
-		{ValidatorKey: "validator:ed25519:public:aa", NodeKey: "node:ed25519:public:bb", Address: "a:26656", EVMRPC: "http://a:8545"},
+		{ValidatorKey: "validator:ed25519:public:aa", NodeKey: "node:ed25519:public:bb", Address: "a:26656", EVMRPC: "ws://a:8546"},
 	}
 	allow := true
 	maxTxs := int64(1500)

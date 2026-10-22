@@ -26,7 +26,7 @@ import (
 const (
 	autobahnArtifactName = "autobahn.json"
 	autobahnP2PPort      = 26656
-	autobahnEVMRPCPort   = 8545
+	autobahnEVMWSPort    = 8546
 
 	ed25519PubKeyTypeName  = "tendermint/PubKeyEd25519"
 	ed25519PrivKeyTypeName = "tendermint/PrivKeyEd25519"
@@ -80,9 +80,10 @@ func autobahnAddressFor(nodeName, namespace string) string {
 }
 
 // autobahnEVMRPCURLFor returns the EVM-RPC URL the ceremony advertises for a
-// validator's mempool shard.
+// validator's mempool shard: its EVM WebSocket listener, which validators dial
+// to proxy transactions to the shard's owner.
 func autobahnEVMRPCURLFor(nodeName, namespace string) string {
-	return fmt.Sprintf("http://%s-0.%s.%s.svc.cluster.local:%d", nodeName, nodeName, namespace, autobahnEVMRPCPort)
+	return fmt.Sprintf("ws://%s-0.%s.%s.svc.cluster.local:%d", nodeName, nodeName, namespace, autobahnEVMWSPort)
 }
 
 // readAutobahnIdentity derives the validator's Autobahn public inputs from the
@@ -178,7 +179,7 @@ func validateAutobahnIdentity(nodeName string, id *autobahnIdentity) error {
 	if err := checkHostPort(id.AutobahnAddress); err != nil {
 		return fmt.Errorf("validator %s: autobahn_address: %w", nodeName, err)
 	}
-	if err := checkHTTPURL(id.EVMRPCURL); err != nil {
+	if err := checkRPCURL(id.EVMRPCURL); err != nil {
 		return fmt.Errorf("validator %s: evmrpc_url: %w", nodeName, err)
 	}
 	return nil
@@ -220,7 +221,9 @@ func checkHostPort(s string) error {
 	return nil
 }
 
-func checkHTTPURL(s string) error {
+// checkRPCURL is the provider's utils.CheckRPCURL: a ws or wss URL with a host
+// and no userinfo.
+func checkRPCURL(s string) error {
 	if s == "" {
 		return fmt.Errorf("missing")
 	}
@@ -228,8 +231,8 @@ func checkHTTPURL(s string) error {
 	if err != nil {
 		return err
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("scheme %q, want http or https", u.Scheme)
+	if u.Scheme != "ws" && u.Scheme != "wss" {
+		return fmt.Errorf("scheme %q, want ws or wss", u.Scheme)
 	}
 	if u.Host == "" {
 		return fmt.Errorf("missing host")
