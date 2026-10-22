@@ -20,15 +20,19 @@ const (
 	keyAutobahnConfigFile = "autobahn-config-file"
 	keyEnable             = "enable"
 	keyHTTPEnabled        = "http_enabled"
+	keyWSEnabled          = "ws_enabled"
 )
 
 // consensusOverlay renders spec.consensus and spec.executionEngine as the seid
 // keys the engine needs, in the same merge-patch shape as configValues so it
 // rides the overlay splice after base regeneration. Tendermint with the
-// Default engine renders nothing. EVM-only also closes the CometBFT RPC, REST,
-// gRPC and gRPC-web listeners seid would otherwise open for an application it
-// does not run, and sets the EVM HTTP listener explicitly: the validator-mode
-// base config leaves it closed, and on this engine it is the only RPC surface.
+// Default engine renders nothing. Autobahn opens the EVM WebSocket listener,
+// the per-validator URL the ceremony advertises for proxying transactions to a
+// shard's owner, which the validator-mode base config leaves closed. EVM-only
+// also closes the CometBFT RPC, REST, gRPC and gRPC-web listeners seid would
+// otherwise open for an application it does not run, and sets the EVM HTTP
+// listener explicitly: the validator-mode base config leaves it closed, and on
+// this engine it is the only RPC surface.
 func consensusOverlay(node *seiv1alpha1.SeiNode) *task.ConfigPatchTask {
 	c := node.Spec.Consensus
 	if !c.IsAutobahn() {
@@ -37,8 +41,11 @@ func consensusOverlay(node *seiv1alpha1.SeiNode) *task.ConfigPatchTask {
 	configTOML := map[string]any{
 		keyAutobahnConfigFile: AutobahnConfigPath,
 	}
+	evm := map[string]any{keyWSEnabled: true}
+	appTOML := map[string]any{"evm": evm}
 	patch := &task.ConfigPatchTask{Files: map[string]map[string]any{
 		consensusConfigFile: configTOML,
+		consensusAppFile:    appTOML,
 	}}
 	engine := node.Spec.EffectiveExecutionEngine()
 	if !engine.IsEvmOnly() {
@@ -46,12 +53,10 @@ func consensusOverlay(node *seiv1alpha1.SeiNode) *task.ConfigPatchTask {
 	}
 	configTOML["evm-only"] = true
 	configTOML["rpc"] = map[string]any{"laddr": ""}
-	patch.Files[consensusAppFile] = map[string]any{
-		"api":      map[string]any{keyEnable: false},
-		"grpc":     map[string]any{keyEnable: false},
-		"grpc-web": map[string]any{keyEnable: false},
-		"evm":      map[string]any{keyHTTPEnabled: engine.EvmHTTPEnabled()},
-	}
+	appTOML["api"] = map[string]any{keyEnable: false}
+	appTOML["grpc"] = map[string]any{keyEnable: false}
+	appTOML["grpc-web"] = map[string]any{keyEnable: false}
+	evm[keyHTTPEnabled] = engine.EvmHTTPEnabled()
 	return patch
 }
 

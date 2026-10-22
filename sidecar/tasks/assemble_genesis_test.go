@@ -437,8 +437,8 @@ func TestAssembler_UploadAutobahnConfig_UsesIdentityManifests(t *testing.T) {
 	a := NewGenesisAssembler(t.TempDir(), "my-bucket", "us-west-2", "test-chain-1", nil, mockUploaderFactory(mock))
 	pub := func(prefix, b string) string { return prefix + ":ed25519:public:" + strings.Repeat(b, 32) }
 	identities := map[string]identityManifest{
-		"val-0": {Autobahn: &autobahnIdentity{ValidatorPubKey: pub("validator", "aa"), NodePubKey: pub("node", "bb"), AutobahnAddress: "val-0-0.val-0.ns.svc.cluster.local:26656", EVMRPCURL: "http://val-0-0.val-0.ns.svc.cluster.local:8545"}},
-		"val-1": {Autobahn: &autobahnIdentity{ValidatorPubKey: pub("validator", "cc"), NodePubKey: pub("node", "dd"), AutobahnAddress: "val-1-0.val-1.ns.svc.cluster.local:26656", EVMRPCURL: "http://val-1-0.val-1.ns.svc.cluster.local:8545"}},
+		"val-0": {Autobahn: &autobahnIdentity{ValidatorPubKey: pub("validator", "aa"), NodePubKey: pub("node", "bb"), AutobahnAddress: "val-0-0.val-0.ns.svc.cluster.local:26656", EVMRPCURL: "ws://val-0-0.val-0.ns.svc.cluster.local:8546"}},
+		"val-1": {Autobahn: &autobahnIdentity{ValidatorPubKey: pub("validator", "cc"), NodePubKey: pub("node", "dd"), AutobahnAddress: "val-1-0.val-1.ns.svc.cluster.local:26656", EVMRPCURL: "ws://val-1-0.val-1.ns.svc.cluster.local:8546"}},
 	}
 
 	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, nil); err != nil {
