@@ -7,9 +7,7 @@ blank-imports it, and `Open(ctx, mode)` selects the mode by name (or env).
 The SDK is a **wire-client product**: it ships providers that speak RPC/CRDs to an
 already-running chain (k8s, docker), so pinning it to a chain release is fine. It
 does **not** host an in-process provider — that would link sei-chain's Go source
-(uninstallable in the controller, and co-versioned with the chain). An in-process
-harness lives in sei-chain, conforms to these same handle interfaces by shape, and
-is registered/constructed consumer-side.
+(uninstallable in the controller, and co-versioned with the chain).
 
 The flow a harness drives: create network -> `WaitReady` -> create RPC nodes as
 peers -> `WaitReady` -> run tests against the returned Go handles -> `Delete`.
@@ -71,7 +69,7 @@ nil.
 
 **Contract seam.** The `Provider`/`*Handle` interfaces, the `*Spec` structs, and
 the registry are the SDK's stable, dependency-light contract — the surface a
-consumer's in-process harness conforms to by shape, and the seam a future leaf
+consumer-registered provider conforms to by shape, and the seam a future leaf
 module would extract. It MUST stay free of controller-runtime / apimachinery / CRD
 imports; those live in the k8s provider package alone (the concrete object reaches
 callers only via `Object() any`).
@@ -95,10 +93,8 @@ authors them once.
 - **docker** — registered wire STUB. `Open` resolves it, but every verb returns
   `ErrNotImplemented` so a mode picked by env fails clearly.
 
-The SDK ships no in-process ("local") provider. A consumer that needs one (e.g.
-sei-chain's in-repo harness) implements the same handle interfaces by shape and
-calls `provider.Register("local", …)` / `Open(ctx, "local")` itself — the SDK's
-generic registry permits this without hosting the adapter.
+The SDK ships no in-process provider. A consumer that needs one implements the
+same handle interfaces by shape and registers it with `provider.Register` itself.
 
 ## One-way doors (need sign-off to change; additive is safe)
 
