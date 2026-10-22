@@ -5,9 +5,7 @@ The keyring is the entry point for all transaction-signing tasks (governance
 votes, software-upgrade proposals, deposits — Component C of the in-pod
 governance signing design).
 
-This document covers the operator-facing contract. The full design — including
-the controller-side Secret projection that materializes the keyring directory
-in the pod — lives in the [in-pod-governance-signing design](https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/governance-signing/in-pod-governance-signing.md) (relocated to the bdchatham-designs repo per Design 05 / PLT-497).
+This document covers the operator-facing contract.
 
 ## Environment contract
 
@@ -59,7 +57,7 @@ sign-tx tasks, and surfaces missing-key errors at that point.
   occurrence of the passphrase before they leave the function.
 - The keyring directory is mounted read-only; the sidecar never writes to it.
 - Operators must rotate the passphrase by re-projecting the Secret and
-  restarting the sidecar pod (see the operator runbook in the design doc).
+  restarting the sidecar pod.
 
 ## Genesis isolation
 
@@ -67,10 +65,3 @@ sign-tx tasks, and surfaces missing-key errors at that point.
 unconditionally. The gentx validator key is throwaway by design and must not
 share state with the operator's production keyring. The two code paths share
 no keyring object and live in different packages.
-
-## Operator runbook
-
-See the "Operator runbook: creating the Secrets" section of the
-[in-pod-governance-signing design](https://github.com/sei-protocol/bdchatham-designs/blob/main/designs/governance-signing/in-pod-governance-signing.md) for the end-to-end flow:
-generating the keyring locally, building the projected Kubernetes Secret,
-and wiring it to the validator CRD.
