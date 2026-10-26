@@ -38,6 +38,12 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 
 	// Register the k8s provisioning provider for the SDK (database/sql-style
@@ -318,6 +324,13 @@ var suitesStarted atomic.Int64
 // bounds only the zero-match case; positive proof that every expected suite ran
 // is a completion-count SLI owned by the metrics layer, not this binary.
 func TestMain(m *testing.M) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	err := resolveSeidImages(ctx, newDynamicClient)
+	cancel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "integration guard: cannot resolve the sei-chain image: %v\n", err)
+		os.Exit(1)
+	}
 	if msg := staleSeidImages(time.Now().UTC()); msg != "" {
 		fmt.Fprintln(os.Stderr, msg)
 		os.Exit(1)
@@ -359,42 +372,134 @@ func openClient(ctx context.Context, t *testing.T) *sei.Client {
 	return c
 }
 
-// The Flux-advanced seid image inputs, one per nightly image flavor.
+// The nightly seid image inputs, one per nightly image flavor.
 const (
 	seidImageEnv      = "SEID_IMAGE"       // vanilla
 	seidImageMockEnv  = "SEID_IMAGE_MOCK"  // mock_balances
 	seidImageChaosEnv = "SEID_IMAGE_CHAOS" // mock_chain_validation + mock_balances
 )
 
-// seidImageEnvVars are the image inputs Flux's image automation advances. The
+// seidImageEnvVars are the image inputs that follow a Flux ImagePolicy. The
 // upgrade-suite images are deliberately absent: they pin specific commits, carry
 // no date, and must not be read as stale.
 var seidImageEnvVars = []string{seidImageEnv, seidImageMockEnv, seidImageChaosEnv}
 
-// nightlyTagDate extracts the date from a nightly tag. The alternation mirrors the
-// three filterTags patterns in the platform repo's
+// imagePolicySuffix names the companion of an image input that holds a Flux
+// ImagePolicy as <namespace>/<name>, e.g. SEID_IMAGE_POLICY.
+const imagePolicySuffix = "_POLICY"
+
+// fluxReadyCondition is the condition type every Flux object reports.
+const fluxReadyCondition = "Ready"
+
+var imagePolicyGVR = schema.GroupVersionResource{
+	Group: "image.toolkit.fluxcd.io", Version: "v1", Resource: "imagepolicies",
+}
+
+// resolveSeidImages fills each unset image input from the ImagePolicy its _POLICY
+// companion names, so the run uses the newest tag Flux has selected without that
+// tag ever being committed. A literal value wins, which is how a bisect or a
+// rollback pins one. It runs once before any suite, so every suite in the run
+// shares the same image, and the client is built only if a policy is named.
+func resolveSeidImages(ctx context.Context, newClient func() (dynamic.Interface, error)) error {
+	var dc dynamic.Interface
+	for _, key := range seidImageEnvVars {
+		ref := os.Getenv(key + imagePolicySuffix)
+		if ref == "" || os.Getenv(key) != "" {
+			continue
+		}
+		ns, name, ok := strings.Cut(ref, "/")
+		if !ok || ns == "" || name == "" {
+			return fmt.Errorf("%s%s=%q: want <namespace>/<name>", key, imagePolicySuffix, ref)
+		}
+		if dc == nil {
+			var err error
+			if dc, err = newClient(); err != nil {
+				return err
+			}
+		}
+		obj, err := dc.Resource(imagePolicyGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("%s: get ImagePolicy %s: %w", key, ref, err)
+		}
+		image, err := imageFromPolicy(obj)
+		if err != nil {
+			return fmt.Errorf("%s: ImagePolicy %s: %w", key, ref, err)
+		}
+		if err := os.Setenv(key, image); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "integration: %s=%s (from ImagePolicy %s)\n", key, image, ref)
+	}
+	return nil
+}
+
+// imageFromPolicy returns status.latestRef as name:tag, plus @digest when the
+// policy reflects one. It refuses a status written for an older spec or a policy
+// that is not Ready, since either can name an image the policy no longer selects.
+func imageFromPolicy(obj *unstructured.Unstructured) (string, error) {
+	observed, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
+	if observed != obj.GetGeneration() {
+		return "", fmt.Errorf("status is for generation %d, spec is at %d", observed, obj.GetGeneration())
+	}
+	conds, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	ready := false
+	for _, c := range conds {
+		if m, ok := c.(map[string]any); ok && m["type"] == fluxReadyCondition {
+			if m["status"] != string(metav1.ConditionTrue) {
+				return "", fmt.Errorf("not Ready: %v", m["message"])
+			}
+			ready = true
+		}
+	}
+	if !ready {
+		return "", errors.New("no Ready condition")
+	}
+	name, _, _ := unstructured.NestedString(obj.Object, "status", "latestRef", "name")
+	tag, _, _ := unstructured.NestedString(obj.Object, "status", "latestRef", "tag")
+	digest, _, _ := unstructured.NestedString(obj.Object, "status", "latestRef", "digest")
+	if name == "" || tag == "" {
+		return "", errors.New("status.latestRef is empty")
+	}
+	image := name + ":" + tag
+	if digest != "" {
+		image += "@" + digest
+	}
+	return image, nil
+}
+
+// newDynamicClient builds a dynamic client from the ambient config.
+func newDynamicClient() (dynamic.Interface, error) {
+	cfg, err := ctrl.GetConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load kubeconfig: %w", err)
+	}
+	return dynamic.NewForConfig(cfg)
+}
+
+// nightlyTagDate extracts the date from a nightly tag, with or without a digest.
+// The alternation mirrors the three filterTags patterns in the platform repo's
 // clusters/harbor/flux-system/image-automation.yaml; a tag shape added there needs
 // adding here, or its image silently stops being freshness-checked. A tag that does
 // not match — a pinned commit SHA, a local build — is skipped rather than failed,
 // which is what keeps this from firing on the upgrade images or on a developer
 // pointing the suite at their own build.
 var nightlyTagDate = regexp.MustCompile(
-	`:(?:mock-|mock_chain_validation-mock_balances-)?nightly-([0-9]{8})-[0-9a-f]{7}$`)
+	`:(?:mock-|mock_chain_validation-mock_balances-)?nightly-([0-9]{8})-[0-9a-f]{7}(?:@sha256:[0-9a-f]{64})?$`)
 
 // seidImageMaxAge is how far behind the image under test may fall before the run is
-// refused. The bump lands about 01:40 UTC and the suite runs at 08:00, so a healthy
-// image is hours old; 36h tolerates one skipped upstream build without tolerating a
-// stopped pipeline. Override with SEID_IMAGE_MAX_AGE_HOURS.
+// refused. The nightly tag is published about 01:00 UTC and the suite runs at
+// 08:00, so a healthy image is hours old; 36h tolerates one skipped upstream build
+// without tolerating a stopped pipeline. Override with SEID_IMAGE_MAX_AGE_HOURS.
 const seidImageMaxAge = 36 * time.Hour
 
 // staleSeidImages returns a diagnostic if any image input carries a nightly tag
 // older than the budget, and "" if every one is fresh, unset, or not nightly-tagged.
-// A stalled image bump otherwise reads as a green suite against an old build, since
+// A stalled image otherwise reads as a green suite against an old build, since
 // nothing downstream distinguishes that from a healthy run.
 //
 // The date comes from the tag, which the selecting ImagePolicy guarantees carries
-// one, so this needs no registry call, no cluster read and no added RBAC. Local runs
-// are exempt: without SEI_NODE_CLUSTER every suite skips anyway.
+// one, so this needs no registry call. Local runs are exempt: without
+// SEI_NODE_CLUSTER every suite skips anyway.
 func staleSeidImages(now time.Time) string {
 	if os.Getenv("SEI_NODE_CLUSTER") == "" {
 		return ""
@@ -420,11 +525,11 @@ func staleSeidImages(now time.Time) string {
 	if len(stale) == 0 {
 		return ""
 	}
-	return "integration guard: refusing to run against a stale sei-chain image — the image bump is stuck, " +
+	return "integration guard: refusing to run against a stale sei-chain image — the image is stuck, " +
 		"not the chain. Every suite would pass and report green on a build nobody has advanced.\n" +
 		strings.Join(stale, "\n") +
-		"\nCheck Flux's harbor image automation and whether its bump PR merged: " +
-		"`flux get image update -n flux-system` and any open flux-image-updates PR."
+		"\nCheck that sei-chain's nightly build still publishes, that Flux on harbor still scans it " +
+		"(`flux get image repository,policy -n flux-system`), and that no literal image overrides the policy."
 }
 
 // envOr returns the env var or a fallback (for local runs).
