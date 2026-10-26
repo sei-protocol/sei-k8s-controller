@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/yaml"
 
 	"github.com/sei-protocol/sei-k8s-controller/test/manifests/faults"
@@ -57,11 +56,7 @@ func (f fault) hasDuration() bool {
 // applies fault CRs unstructured through it.
 func dynClient(t *testing.T) dynamic.Interface {
 	t.Helper()
-	cfg, err := ctrl.GetConfig()
-	if err != nil {
-		t.Fatalf("load kubeconfig: %v", err)
-	}
-	dc, err := dynamic.NewForConfig(cfg)
+	dc, err := newDynamicClient()
 	if err != nil {
 		t.Fatalf("build dynamic client: %v", err)
 	}

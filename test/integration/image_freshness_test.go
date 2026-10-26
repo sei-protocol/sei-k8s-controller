@@ -3,9 +3,17 @@
 package integration
 
 import (
+	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 )
 
 // TestStaleSeidImages pins the gate's two edges: which tag shapes it reads, and
@@ -27,6 +35,9 @@ func TestStaleSeidImages(t *testing.T) {
 		{"same-day image passes", map[string]string{"SEID_IMAGE": fresh}, false},
 		{"five-day-old image is refused", map[string]string{"SEID_IMAGE": stale}, true},
 		{"pinned commit tag is not date-checked", map[string]string{"SEID_IMAGE": pinned}, false},
+		{"digest-pinned stale image is refused", map[string]string{
+			"SEID_IMAGE": stale + "@sha256:" + strings.Repeat("a", 64),
+		}, true},
 		{"unset image is not checked", map[string]string{}, false},
 		{"mock flavour is checked too", map[string]string{
 			"SEID_IMAGE":      fresh,
@@ -65,4 +76,106 @@ func TestStaleSeidImages(t *testing.T) {
 			t.Fatalf("expected no gate without a cluster, got: %s", msg)
 		}
 	})
+}
+
+// TestResolveSeidImages pins how an image input follows a Flux ImagePolicy: a
+// literal value wins, and a policy that cannot vouch for its status is refused.
+// Runs without a cluster.
+func TestResolveSeidImages(t *testing.T) {
+	const (
+		repo   = "189176372795.dkr.ecr.us-east-2.amazonaws.com/sei/sei-chain"
+		tag    = "nightly-20261026-1186580"
+		digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+		ref    = "flux-system/sei-chain-nightly"
+	)
+	ready := func(status, message string) []any {
+		return []any{map[string]any{"type": fluxReadyCondition, "status": status, "message": message}}
+	}
+	policy := func(mutate func(status map[string]any)) *unstructured.Unstructured {
+		status := map[string]any{
+			"observedGeneration": int64(2),
+			"conditions":         ready("True", ""),
+			"latestRef":          map[string]any{"name": repo, "tag": tag, "digest": digest},
+		}
+		if mutate != nil {
+			mutate(status)
+		}
+		u := &unstructured.Unstructured{Object: map[string]any{"status": status}}
+		u.SetAPIVersion("image.toolkit.fluxcd.io/v1")
+		u.SetKind("ImagePolicy")
+		u.SetNamespace("flux-system")
+		u.SetName("sei-chain-nightly")
+		u.SetGeneration(2)
+		return u
+	}
+
+	for _, tc := range []struct {
+		name    string
+		image   string
+		ref     string
+		policy  *unstructured.Unstructured
+		want    string
+		wantErr string
+	}{
+		{name: "resolves name:tag@digest", ref: ref,
+			policy: policy(nil), want: repo + ":" + tag + "@" + digest},
+		{name: "omits an unreflected digest", ref: ref,
+			policy: policy(func(s map[string]any) { s["latestRef"].(map[string]any)["digest"] = "" }),
+			want:   repo + ":" + tag},
+		{name: "literal image wins", image: repo + ":pinned", ref: ref,
+			want: repo + ":pinned"},
+		{name: "no policy leaves the input unset", want: ""},
+		{name: "malformed ref", ref: "sei-chain-nightly", wantErr: "want <namespace>/<name>"},
+		{name: "missing policy", ref: ref, wantErr: "not found"},
+		{name: "not Ready", ref: ref,
+			policy: policy(func(s map[string]any) {
+				s["conditions"] = ready("False", "no tags")
+			}),
+			wantErr: "not Ready: no tags"},
+		{name: "no Ready condition", ref: ref,
+			policy:  policy(func(s map[string]any) { delete(s, "conditions") }),
+			wantErr: "no Ready condition"},
+		{name: "status for an older spec", ref: ref,
+			policy:  policy(func(s map[string]any) { s["observedGeneration"] = int64(1) }),
+			wantErr: "generation 1, spec is at 2"},
+		{name: "empty latestRef", ref: ref,
+			policy:  policy(func(s map[string]any) { delete(s, "latestRef") }),
+			wantErr: "status.latestRef is empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range seidImageEnvVars {
+				t.Setenv(k, "")
+				t.Setenv(k+imagePolicySuffix, "")
+			}
+			t.Setenv("SEID_IMAGE", tc.image)
+			t.Setenv("SEID_IMAGE"+imagePolicySuffix, tc.ref)
+			var objs []runtime.Object
+			if tc.policy != nil {
+				objs = append(objs, tc.policy)
+			}
+			calls := 0
+			newClient := func() (dynamic.Interface, error) {
+				calls++
+				return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+					map[schema.GroupVersionResource]string{imagePolicyGVR: "ImagePolicyList"}, objs...), nil
+			}
+
+			err := resolveSeidImages(context.Background(), newClient)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := os.Getenv("SEID_IMAGE"); got != tc.want {
+				t.Fatalf("SEID_IMAGE = %q, want %q", got, tc.want)
+			}
+			if tc.policy == nil && calls != 0 {
+				t.Fatalf("built a client with nothing to resolve")
+			}
+		})
+	}
 }
