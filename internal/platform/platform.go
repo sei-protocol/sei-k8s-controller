@@ -104,8 +104,8 @@ type Config struct {
 	KubeRBACProxyImage string
 	SidecarImage       string
 
-	// CosmosExporterImage is the sei-cosmos-exporter sidecar image.
-	// The cosmos-exporter container is attached to every SeiNode pod.
+	// CosmosExporterImage is the sei-cosmos-exporter sidecar image, attached to
+	// every SeiNode pod whose seid serves gRPC. Empty attaches none.
 	CosmosExporterImage string
 
 	// ControllerConfigFile is the path to the read-only application-config file
@@ -310,7 +310,6 @@ func (c Config) Validate() error {
 		{"genesis.region", c.GenesisRegion},
 		{"images.sidecar", c.SidecarImage},
 		{"images.kubeRBACProxy", c.KubeRBACProxyImage},
-		{"images.cosmosExporter", c.CosmosExporterImage},
 		{envGatewayName, c.GatewayName},
 		{envGatewayNamespace, c.GatewayNamespace},
 		{envGatewayDomain, c.GatewayDomain},

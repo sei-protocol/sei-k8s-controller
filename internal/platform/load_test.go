@@ -112,10 +112,9 @@ func TestLoad_NoFile_FailsValidate(t *testing.T) {
 }
 
 // A required field absent from the file fails Validate, naming the file key.
-// Covers the CosmosExporterImage fold-in (now required at startup).
 func TestLoad_MissingField_FailsValidate(t *testing.T) {
 	setGatewayEnv(t)
-	body := strings.Replace(fullConfig, "  cosmosExporter: file-cosmos-exporter\n", "", 1)
+	body := strings.Replace(fullConfig, "  kubeRBACProxy: file-rbac-proxy\n", "", 1)
 	path := writeConfig(t, body)
 	t.Setenv(envControllerConfig, path)
 
@@ -123,8 +122,23 @@ func TestLoad_MissingField_FailsValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "images.cosmosExporter") {
-		t.Fatalf("want Validate error naming images.cosmosExporter, got %v", err)
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "images.kubeRBACProxy") {
+		t.Fatalf("want Validate error naming images.kubeRBACProxy, got %v", err)
+	}
+}
+
+// images.cosmosExporter is optional: a cell whose seid serves no gRPC omits it.
+func TestLoad_NoCosmosExporter_PassesValidate(t *testing.T) {
+	setGatewayEnv(t)
+	body := strings.Replace(fullConfig, "  cosmosExporter: file-cosmos-exporter\n", "", 1)
+	t.Setenv(envControllerConfig, writeConfig(t, body))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
 }
 

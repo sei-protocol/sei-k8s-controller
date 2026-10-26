@@ -2214,16 +2214,19 @@ func TestCosmosExporter_PortIsFixed(t *testing.T) {
 	g.Expect(ce.Ports[0].Name).To(Equal("cosmos-metrics"))
 }
 
-func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
+// A cell whose seid has no gRPC server leaves the image empty, so the exporter
+// is not attached to wait on a port that never binds.
+func TestCosmosExporter_AbsentWhenImageUnset(t *testing.T) {
 	g := NewWithT(t)
 	node := newSnapshotNode("ce-0", "default")
 	cfg := platformtest.Config()
 	cfg.CosmosExporterImage = ""
 
-	_, err := GenerateStatefulSet(node, cfg)
+	sts := mustGenerateStatefulSet(t, node, cfg)
 
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("images.cosmosExporter is required"))
+	containers := sts.Spec.Template.Spec.Containers
+	g.Expect(findContainer(containers, containerNameCosmosExporter)).To(BeNil())
+	g.Expect(containers).To(HaveLen(1))
 }
 
 func TestCosmosExporter_ReadinessProbe_TargetsExporterListener(t *testing.T) {

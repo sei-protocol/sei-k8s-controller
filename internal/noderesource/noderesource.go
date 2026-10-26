@@ -993,13 +993,10 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 
 	// cosmos-exporter scrapes staking and validator state over seid's gRPC. A
 	// seed serves neither, so attaching it there would leave it blocked in its
-	// wait loop until its own liveness probe killed it.
-	if servesSeidRPC(node) {
-		ceContainer, err := buildCosmosExporterContainer(p)
-		if err != nil {
-			return corev1.PodSpec{}, err
-		}
-		spec.Containers = append(spec.Containers, ceContainer)
+	// wait loop until its own liveness probe killed it. A cell whose seid has no
+	// gRPC server leaves images.cosmosExporter empty for the same reason.
+	if servesSeidRPC(node) && p.CosmosExporterImage != "" {
+		spec.Containers = append(spec.Containers, buildCosmosExporterContainer(p))
 	}
 
 	return spec, nil
@@ -1283,10 +1280,7 @@ func cosmosExporterWaitCommand() (command []string, args []string) {
 }
 
 // buildCosmosExporterContainer renders the cosmos-exporter sidecar.
-func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
-	if p.CosmosExporterImage == "" {
-		return corev1.Container{}, fmt.Errorf("images.cosmosExporter is required in the app-config file")
-	}
+func buildCosmosExporterContainer(p PlatformConfig) corev1.Container {
 	command, args := cosmosExporterWaitCommand()
 	return corev1.Container{
 		Name:    containerNameCosmosExporter,
@@ -1324,7 +1318,7 @@ func buildCosmosExporterContainer(p PlatformConfig) (corev1.Container, error) {
 			PeriodSeconds:       10,
 			FailureThreshold:    3,
 		},
-	}, nil
+	}
 }
 
 func sidecarWaitCommand(node *seiv1alpha1.SeiNode) (command []string, args []string) {
