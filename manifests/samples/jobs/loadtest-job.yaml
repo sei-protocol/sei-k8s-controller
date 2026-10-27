@@ -48,8 +48,7 @@ data:
         "tps": 10,
         "statsInterval": "5s",
         "trackBlocks": false,
-        "prewarm": false,
-        "rampUp": false
+        "prewarm": false
       }
     }
 ---
