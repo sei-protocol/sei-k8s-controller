@@ -47,7 +47,6 @@ data:
         "workers": 50,
         "tps": 10,
         "statsInterval": "5s",
-        "bufferSize": 100,
         "trackBlocks": false,
         "prewarm": false,
         "rampUp": false
