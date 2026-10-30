@@ -765,6 +765,12 @@ const (
 	// as it does today.
 	ConditionStateSyncReady = "StateSyncReady"
 
+	// ConditionPeersReady reports whether status.resolvedPeers holds any
+	// persistent peer. Set on every reconcile that resolves spec.peers. True
+	// means at least one peer resolved; False/AwaitingPeers means the init plan
+	// is held until a label peer resolves or the wait expires.
+	ConditionPeersReady = "PeersReady"
+
 	// ConditionWorkflowInProgress reports whether the node is currently driving
 	// an adopted SeiNodeTaskWorkflow. InProgress-style: True is the exception,
 	// False the steady state, always-present once the node is Running (seeded
@@ -913,6 +919,20 @@ const (
 	// closed and requeues; the rest of the reconcile (StatefulSet, Failed/Paused
 	// handling, status flush) still runs.
 	ReasonStateSyncSyncerSourceError = "SyncerSourceError"
+)
+
+// Reasons for the PeersReady condition.
+const (
+	// ReasonPeersResolved: status.resolvedPeers holds at least one peer.
+	ReasonPeersResolved = "Resolved"
+	// ReasonPeersAwaiting: a pre-Running node with a label peer source has no
+	// resolved peer yet, and its init plan is held.
+	ReasonPeersAwaiting = "AwaitingPeers"
+	// ReasonPeersUnresolved: no peer resolved and nothing is held, so seid runs
+	// without persistent peers until the next deployment.
+	ReasonPeersUnresolved = "Unresolved"
+	// ReasonPeersNotApplicable: spec.peers is empty.
+	ReasonPeersNotApplicable = "NotApplicable"
 )
 
 // Reasons for the ImportPVCReady condition.
