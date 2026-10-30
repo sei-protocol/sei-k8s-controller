@@ -54,9 +54,9 @@ func TestNightlyGigaMixedRelease(t *testing.T) {
 	runLabels := map[string]string{runLabelKey: chainID}
 
 	// Sequential critical path: provision + giga migration + one conformance run.
-	// TestNightlyRelease budgets 80m for provision + a single 60m release Job; this
+	// TestNightlyRelease budgets 140m for provision + a single 120m release Job; this
 	// suite adds a ~15m giga migration ahead of the same run, so size ~30m above it.
-	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 170*time.Minute)
 	defer cancel()
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

@@ -68,9 +68,9 @@ func TestNightlyRelease(t *testing.T) {
 	runLabels := map[string]string{runLabelKey: chainID}
 
 	// Generous envelope: the external chain-agnostic harness is a large suite
-	// (each test file re-creates + funds + associates users) and runs well past
-	// half an hour against a single RPC node; size the ctx above the Job deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Minute)
+	// (each test file re-creates + funds + associates users) and runs ~80m against
+	// a single RPC node; size the ctx above the Job deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 140*time.Minute)
 	defer cancel()
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -212,8 +212,8 @@ type releaseParams struct {
 // avoids imposing one the harness image may not tolerate (it writes a keyring).
 func releaseJob(p releaseParams) *batchv1.Job {
 	backoff := int32(0)
-	deadline := int64(60 * 60) // the chain-agnostic harness runs >35m against one RPC node; generous cap
-	ttl := int32(86400)        // GC the finished Job after a day (matches seiload)
+	deadline := int64(120 * 60) // the chain-agnostic harness runs ~80m against one RPC node; generous cap
+	ttl := int32(86400)         // GC the finished Job after a day (matches seiload)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      p.name,
