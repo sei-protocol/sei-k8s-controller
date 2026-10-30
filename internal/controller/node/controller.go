@@ -244,6 +244,10 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		node.Status.Endpoint = composeNodeEndpoints(node)
 	}
 
+	// Same for PeersReady, from the peers stored last reconcile. reconcilePeers
+	// refreshes it below once peers are re-resolved.
+	setPeersReady(node, time.Now())
+
 	// Same discipline for DataResetInProgress, and the handled counter beside
 	// it: spec-derived plus the persisted plan, so it rides the flush on every
 	// path, including Paused, where a pending reset waits.

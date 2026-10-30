@@ -766,9 +766,9 @@ const (
 	ConditionStateSyncReady = "StateSyncReady"
 
 	// ConditionPeersReady reports whether status.resolvedPeers holds any
-	// persistent peer. Set on every reconcile that resolves spec.peers. True
-	// means at least one peer resolved; False/AwaitingPeers means the init plan
-	// is held until a label peer resolves or the wait expires.
+	// persistent peer. Always-present once reconciled. True means at least one
+	// peer resolved; False/AwaitingPeers means the init plan is held until a
+	// label peer resolves or the wait expires.
 	ConditionPeersReady = "PeersReady"
 
 	// ConditionWorkflowInProgress reports whether the node is currently driving

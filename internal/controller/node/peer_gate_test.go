@@ -115,6 +115,26 @@ func TestReconcile_PeersUnresolved_WaitExpiredBuildsPlan(t *testing.T) {
 	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonPeersUnresolved))
 }
 
+// A paused node returns before peers are resolved, but still carries
+// PeersReady, and builds no plan.
+func TestReconcile_PausedNode_PeersReadyStillSeeded(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	node := labelPeeredNode(time.Minute)
+	node.Spec.Paused = true
+	r, c := newNodeReconciler(t, node, gatedPeer())
+
+	_, err := r.Reconcile(ctx, nodeReqFor(gatedNodeName, testNamespace))
+	g.Expect(err).NotTo(HaveOccurred())
+
+	fetched := getSeiNode(t, ctx, c, gatedNodeName, testNamespace)
+	cond := peersCondition(fetched)
+	g.Expect(cond).NotTo(BeNil(), "PeersReady must be present even on a paused node")
+	g.Expect(cond.Reason).To(Equal(seiv1alpha1.ReasonPeersAwaiting))
+	g.Expect(fetched.Status.Plan).To(BeNil(), "a paused node must build no plan")
+}
+
 func TestSetPeersReady_NoPeersNotApplicable(t *testing.T) {
 	g := NewWithT(t)
 	node := labelPeeredNode(time.Minute)
