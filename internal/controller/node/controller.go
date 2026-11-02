@@ -244,6 +244,10 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		node.Status.Endpoint = composeNodeEndpoints(node)
 	}
 
+	// Same for PeersReady, from the peers stored last reconcile. reconcilePeers
+	// refreshes it below once peers are re-resolved.
+	setPeersReady(node, time.Now())
+
 	// Same discipline for DataResetInProgress, and the handled counter beside
 	// it: spec-derived plus the persisted plan, so it rides the flush on every
 	// path, including Paused, where a pending reset waits.
@@ -260,17 +264,11 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		return ctrl.Result{}, nil
 	}
 
-	// Hold initial StatefulSet creation while the state-sync gate suppresses
-	// the init plan: the plan's EnsureDataPVC task is the only creator of the
-	// data PVC the pod mounts by claimName, so an STS created now would strand
-	// a Pending pod until the gate opens. Only initial creation is held
-	// (Status.StatefulSet == nil) — an existing STS is never touched, and
-	// StateSyncBlocksPlan is pre-Running-only, so a Running node's STS keeps
-	// syncing through transient syncer-source errors. One narrow stall is
-	// accepted: if the impostor branch just cleared Status.StatefulSet and the
-	// gate is blocked in the same window, STS re-creation waits for the gate's
-	// poll to re-resolve.
-	holdInitialSTS := planner.StateSyncBlocksPlan(node) && node.Status.StatefulSet == nil
+	// While a gate holds the init plan, don't create the StatefulSet: its data
+	// PVC comes from the init plan, so the pod would sit Pending. Only the first
+	// creation waits; an existing StatefulSet is always kept in sync.
+	holdInitialSTS := (planner.StateSyncBlocksPlan(node) || planner.PeersBlockPlan(node, time.Now())) &&
+		node.Status.StatefulSet == nil
 	// No roll mid-hold: a workflow ACTIVELY executing may have seid gated and its
 	// data directory mid-wipe. reconcileStatefulSet's unconditional SSA would
 	// push a spec.image template change immediately, defeating the drift
@@ -319,6 +317,8 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	if err := r.reconcilePeers(ctx, node); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling peers: %w", err)
 	}
+	// Nothing wakes a held node when a peer comes up, so it polls instead.
+	peersBlocked := planner.PeersBlockPlan(node, time.Now())
 
 	// Workflow adoption/execution occupies the node's single plan slot. When a
 	// workflow occupies the node (driving or parked-held), drift planning and
@@ -365,7 +365,7 @@ func (r *SeiNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 
 	r.emitPhaseTransition(ctx, node, observedPhase)
 
-	return steadyStateRequeue(node, result, suppressDrift, stateSyncBlocked), nil
+	return steadyStateRequeue(node, result, suppressDrift, stateSyncBlocked || peersBlocked), nil
 }
 
 // observeCommittedHeight stamps status.committedHeight/committedHeightTime

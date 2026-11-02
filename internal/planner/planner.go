@@ -73,8 +73,8 @@ const (
 	defaultLoggingLevel     = "error"
 
 	// keyP2PPersistentPeers is the sei-config enrichment key for
-	// network.p2p.persistent_peers (WithHotReload). sei-config v0.0.19
-	// exposes no exported constant for it, so it is named here.
+	// network.p2p.persistent_peers. sei-config exposes no exported constant
+	// for it, so it is named here. seid reads the value only at startup.
 	keyP2PPersistentPeers = "network.p2p.persistent_peers"
 
 	// keyFreezeHeight is the sei-config key for seid's app.toml freeze-height.
@@ -191,6 +191,13 @@ func (p *NodeResolver) ResolvePlan(ctx context.Context, node *seiv1alpha1.SeiNod
 		return nil
 	}
 
+	// The init plan freezes ResolvedPeers into config-apply, and seid reads
+	// persistent_peers only at startup, so a plan built before any label peer
+	// resolves starts seid with no peers until the next deployment.
+	if PeersBlockPlan(node, time.Now()) {
+		return nil
+	}
+
 	mode, err := p.plannerFor(node)
 	if err != nil {
 		return err
@@ -265,6 +272,27 @@ func StateSyncBlocksPlan(node *seiv1alpha1.SeiNode) bool {
 	}
 	cond := meta.FindStatusCondition(node.Status.Conditions, seiv1alpha1.ConditionStateSyncReady)
 	return cond != nil && cond.Status != metav1.ConditionTrue
+}
+
+// PeerResolutionWait is how long after creation a node with a label peer
+// source waits for a peer to resolve before its init plan is built anyway.
+const PeerResolutionWait = 10 * time.Minute
+
+// PeersBlockPlan reports whether the init plan must wait for a label peer to
+// resolve: the node is not yet Running, spec.peers carries a label source,
+// status.resolvedPeers is empty, and the node is younger than
+// PeerResolutionWait. Exported because the node controller holds initial
+// StatefulSet creation on the same predicate.
+func PeersBlockPlan(node *seiv1alpha1.SeiNode, now time.Time) bool {
+	if node.Status.Phase == seiv1alpha1.PhaseRunning || len(node.Status.ResolvedPeers) > 0 {
+		return false
+	}
+	if !slices.ContainsFunc(node.Spec.Peers, func(p seiv1alpha1.PeerSource) bool { return p.Label != nil }) {
+		return false
+	}
+	// Bounded so nodes whose label sources only select each other cannot hold
+	// one another forever: a held node has no pod, so no sidecar to resolve.
+	return now.Before(node.CreationTimestamp.Add(PeerResolutionWait))
 }
 
 // shouldExplainUnobservedConfig gates the baseline notice on no-op reconciles.
