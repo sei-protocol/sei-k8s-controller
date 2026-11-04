@@ -7,6 +7,7 @@ package noderesource
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	seiconfig "github.com/sei-protocol/sei-config"
@@ -994,8 +995,10 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 	// cosmos-exporter scrapes staking and validator state over seid's gRPC. A
 	// seed serves neither, so attaching it there would leave it blocked in its
 	// wait loop until its own liveness probe killed it. A cell whose seid has no
-	// gRPC server leaves images.cosmosExporter empty for the same reason.
-	if servesSeidRPC(node) && p.CosmosExporterImage != "" {
+	// gRPC server leaves images.cosmosExporter empty, and a chain whose seid has
+	// none is listed in images.cosmosExporterExcludedChains, for the same reason.
+	if servesSeidRPC(node) && p.CosmosExporterImage != "" &&
+		!slices.Contains(p.CosmosExporterExcludedChains, node.Spec.ChainID) {
 		spec.Containers = append(spec.Containers, buildCosmosExporterContainer(p))
 	}
 
