@@ -49,6 +49,7 @@ func Load() (Config, error) {
 		DedicatedNodepoolArchive:   file.Scheduling.Dedicated.NodepoolArchive,
 		DedicatedNodepoolValidator: file.Scheduling.Dedicated.NodepoolValidator,
 		DedicatedNodepoolSeed:      file.Scheduling.Dedicated.NodepoolSeed,
+		SelectableNodepools:        file.Scheduling.SelectableNodepools,
 
 		StorageClassPerf:    file.Storage.ClassPerf,
 		StorageClassDefault: file.Storage.ClassDefault,

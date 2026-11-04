@@ -644,6 +644,16 @@ spec:
                     - Shared
                     - Dedicated
                     type: string
+                  nodePool:
+                    description: |-
+                      NodePool places the pod on this Karpenter NodePool instead of the one the
+                      app-config names for the node's mode. It must be listed in the app-config's
+                      scheduling.selectableNodepools, unless the node's pod already runs on it.
+                      Changing it on a running node rolls the pod the way an image change does,
+                      paced by the drift update budget.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
                 type: object
               sidecar:
                 description: Sidecar configures the sei-sidecar container on each

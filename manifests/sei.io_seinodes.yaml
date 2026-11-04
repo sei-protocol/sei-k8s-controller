@@ -911,6 +911,16 @@ spec:
                     - Shared
                     - Dedicated
                     type: string
+                  nodePool:
+                    description: |-
+                      NodePool places the pod on this Karpenter NodePool instead of the one the
+                      app-config names for the node's mode. It must be listed in the app-config's
+                      scheduling.selectableNodepools, unless the node's pod already runs on it.
+                      Changing it on a running node rolls the pod the way an image change does,
+                      paced by the drift update budget.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
                 type: object
               seed:
                 description: Seed configures a peer-discovery seed node (P2P + PEX
@@ -1645,6 +1655,12 @@ spec:
                 enum:
                 - Shared
                 - Dedicated
+                type: string
+              currentNodePool:
+                description: |-
+                  CurrentNodePool is the spec.scheduling.nodePool the owned StatefulSet's
+                  pod was last rolled with, stamped jointly with CurrentImage on rollout
+                  completion. Empty means the pod runs on its mode's pool.
                 type: string
               currentSidecarImage:
                 description: |-

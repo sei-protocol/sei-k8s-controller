@@ -80,6 +80,10 @@ type Config struct {
 	DedicatedNodepoolValidator string
 	DedicatedNodepoolSeed      string
 
+	// SelectableNodepools are the NodePools a SeiNode may request through
+	// spec.scheduling.nodePool. Optional; empty means none may be requested.
+	SelectableNodepools []string
+
 	// Per-role seid-container resource overrides, keyed by sei.io/role. Each is
 	// optional: an unset field (or unset sub-field) falls back to the
 	// code-authoritative, prod-safe default for that role in internal/noderesource.
@@ -168,6 +172,9 @@ type SchedulingConfig struct {
 	// Dedicated names the optional single-tenant pool per mode; see
 	// Config.DedicatedNodepoolForMode.
 	Dedicated DedicatedSchedulingConfig `json:"dedicated"`
+
+	// SelectableNodepools lists the pools spec.scheduling.nodePool may name.
+	SelectableNodepools []string `json:"selectableNodepools"`
 }
 
 // DedicatedSchedulingConfig names the single-tenant Karpenter pools a

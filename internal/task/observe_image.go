@@ -79,6 +79,7 @@ func (e *observeImageExecution) Execute(ctx context.Context) error {
 	node.Status.CurrentImage = node.Spec.Image
 	node.Status.CurrentSidecarImage = EffectiveSidecarImage(node, e.cfg.Platform)
 	node.Status.CurrentNodeIsolation = noderesource.EffectiveNodeIsolation(node)
+	node.Status.CurrentNodePool = noderesource.RequestedNodePool(node)
 	e.complete()
 	return nil
 }
