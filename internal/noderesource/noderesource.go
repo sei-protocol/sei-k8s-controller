@@ -330,6 +330,19 @@ func NodepoolForMode(mode string, p PlatformConfig, dedicated bool) string {
 	return p.NodepoolForMode(mode)
 }
 
+// nodepoolFor returns the NodePool the node's pod schedules onto: the pool its
+// spec.scheduling.nodePool requests, which must be one the app-config lists as
+// selectable, or else its mode's pool.
+func nodepoolFor(node *seiv1alpha1.SeiNode, p PlatformConfig, dedicated bool) (string, error) {
+	if s := node.Spec.Scheduling; s != nil && s.NodePool != "" {
+		if !slices.Contains(p.SelectableNodepools, s.NodePool) {
+			return "", fmt.Errorf("spec.scheduling.nodePool %q is not listed in the app-config's scheduling.selectableNodepools", s.NodePool)
+		}
+		return s.NodePool, nil
+	}
+	return NodepoolForMode(NodeMode(node), p, dedicated), nil
+}
+
 // deriveRole returns the role label value for the node's mode. Stamped
 // onto the pod template as `sei.io/role` and lifted into the `sei_role`
 // metric label by the platform PodMonitor (see
@@ -928,7 +941,10 @@ func buildNodePodSpec(node *seiv1alpha1.SeiNode, p PlatformConfig) (corev1.PodSp
 	volumes = append(volumes, configVolumes...)
 
 	dedicated := IsDedicatedNode(node)
-	pool := NodepoolForMode(NodeMode(node), p, dedicated)
+	pool, err := nodepoolFor(node, p, dedicated)
+	if err != nil {
+		return corev1.PodSpec{}, err
+	}
 
 	spec := corev1.PodSpec{
 		// AutomountServiceAccountToken is explicit here because the

@@ -911,6 +911,15 @@ spec:
                     - Shared
                     - Dedicated
                     type: string
+                  nodePool:
+                    description: |-
+                      NodePool places the pod on this Karpenter NodePool instead of the one the
+                      app-config names for the node's mode. It must be listed in the app-config's
+                      scheduling.selectableNodepools. It applies when the pod is created; changing
+                      it does not replace a running pod.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
                 type: object
               seed:
                 description: Seed configures a peer-discovery seed node (P2P + PEX

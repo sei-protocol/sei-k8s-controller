@@ -261,6 +261,15 @@ type SchedulingConfig struct {
 	// The controller resolves an unset value to Shared after that fallback.
 	// +optional
 	NodeIsolation NodeIsolation `json:"nodeIsolation,omitempty"`
+
+	// NodePool places the pod on this Karpenter NodePool instead of the one the
+	// app-config names for the node's mode. It must be listed in the app-config's
+	// scheduling.selectableNodepools. It applies when the pod is created; changing
+	// it does not replace a running pod.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	NodePool string `json:"nodePool,omitempty"`
 }
 
 // ConsensusEngine selects the consensus engine seid runs.

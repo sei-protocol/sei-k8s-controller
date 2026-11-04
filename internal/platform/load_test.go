@@ -19,6 +19,8 @@ scheduling:
   serviceAccount: file-sa
   dedicated:
     nodepoolValidator: file-nodepool-validator-dedicated
+  selectableNodepools:
+    - file-nodepool-selectable
 storage:
   classPerf: file-perf
   classDefault: file-default
@@ -78,6 +80,9 @@ func TestLoad_InfraFromFile_GatewayFromEnv(t *testing.T) {
 	}
 	if got := cfg.DedicatedNodepoolForMode("validator"); got != "file-nodepool-validator-dedicated" {
 		t.Errorf("DedicatedNodepoolForMode(validator) = %q, want file-nodepool-validator-dedicated", got)
+	}
+	if got := cfg.SelectableNodepools; len(got) != 1 || got[0] != "file-nodepool-selectable" {
+		t.Errorf("SelectableNodepools = %q, want [file-nodepool-selectable]", got)
 	}
 	if got := cfg.DedicatedNodepoolForMode("archive"); got != "" {
 		t.Errorf("DedicatedNodepoolForMode(archive) = %q, want \"\" (none configured)", got)

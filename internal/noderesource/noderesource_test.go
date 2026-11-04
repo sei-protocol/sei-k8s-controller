@@ -1113,6 +1113,46 @@ func TestBuildNodePodSpec_Shared_IgnoresSingleTenantNodepool(t *testing.T) {
 	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf("sei-validator"))
 }
 
+// selectablePool is a pool the tests list in SelectableNodepools.
+const selectablePool = "sei-validator-graviton"
+
+// A selectable pool requested through spec.scheduling.nodePool replaces the
+// mode's pool, single-tenant one included, in both the affinity and the
+// toleration.
+func TestBuildNodePodSpec_RequestedNodepool_ReplacesModePool(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("validator-0", "pacific-1")
+	node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{
+		NodeIsolation: seiv1alpha1.NodeIsolationDedicated,
+		NodePool:      selectablePool,
+	}
+	cfg := platformtest.Config()
+	cfg.DedicatedNodepoolValidator = "sei-validator-dedicated"
+	cfg.SelectableNodepools = []string{selectablePool}
+
+	spec, err := buildNodePodSpec(node, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	terms := spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	g.Expect(terms[0].MatchExpressions[0].Values).To(ConsistOf(selectablePool))
+	g.Expect(spec.Tolerations).To(HaveLen(1))
+	g.Expect(spec.Tolerations[0].Value).To(Equal(selectablePool))
+	g.Expect(spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(2))
+}
+
+// A pool the app-config does not list as selectable fails the render rather
+// than scheduling the pod anywhere.
+func TestBuildNodePodSpec_RequestedNodepool_MustBeSelectable(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("validator-0", "pacific-1")
+	node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodePool: "sei-archive"}
+	cfg := platformtest.Config()
+	cfg.SelectableNodepools = []string{selectablePool}
+
+	_, err := buildNodePodSpec(node, cfg)
+	g.Expect(err).To(MatchError(ContainSubstring(`spec.scheduling.nodePool "sei-archive" is not listed`)))
+}
+
 func TestDefaultStorageForMode_Archive(t *testing.T) {
 	g := NewWithT(t)
 	cfg := platformtest.Config()
