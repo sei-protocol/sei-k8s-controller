@@ -3,6 +3,7 @@ package platform
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,7 @@ images:
   sidecar: file-sidecar
   kubeRBACProxy: file-rbac-proxy
   cosmosExporter: file-cosmos-exporter
+  cosmosExporterExcludedChains: [arctic-1]
 `
 
 func setGatewayEnv(t *testing.T) {
@@ -82,6 +84,9 @@ func TestLoad_InfraFromFile_GatewayFromEnv(t *testing.T) {
 	}
 	if cfg.CosmosExporterImage != "file-cosmos-exporter" {
 		t.Errorf("CosmosExporterImage = %q, want file-cosmos-exporter", cfg.CosmosExporterImage)
+	}
+	if !slices.Equal(cfg.CosmosExporterExcludedChains, []string{"arctic-1"}) {
+		t.Errorf("CosmosExporterExcludedChains = %v, want [arctic-1]", cfg.CosmosExporterExcludedChains)
 	}
 	if cfg.GatewayName != "env-gw-name" {
 		t.Errorf("GatewayName = %q, want env-gw-name", cfg.GatewayName)

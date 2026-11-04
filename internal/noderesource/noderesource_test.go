@@ -2226,6 +2226,26 @@ func TestCosmosExporter_ErrorWhenImageUnset(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("images.cosmosExporter is required"))
 }
 
+// A chain listed in CosmosExporterExcludedChains gets no exporter; other chains
+// in the same cell keep it.
+func TestCosmosExporter_ExcludedChains(t *testing.T) {
+	cfg := platformtest.Config()
+	cfg.CosmosExporterExcludedChains = []string{"arctic-1"}
+
+	for chainID, wantExporter := range map[string]bool{"arctic-1": false, "pacific-1": true} {
+		t.Run(chainID, func(t *testing.T) {
+			g := NewWithT(t)
+			node := newSnapshotNode("ce-0", "default")
+			node.Spec.ChainID = chainID
+
+			sts := mustGenerateStatefulSet(t, node, cfg)
+
+			ce := findContainer(sts.Spec.Template.Spec.Containers, containerNameCosmosExporter)
+			g.Expect(ce != nil).To(Equal(wantExporter))
+		})
+	}
+}
+
 func TestCosmosExporter_ReadinessProbe_TargetsExporterListener(t *testing.T) {
 	for _, name := range []string{"full", roleValidator} {
 		t.Run(name, func(t *testing.T) {

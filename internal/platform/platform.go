@@ -107,6 +107,9 @@ type Config struct {
 	// CosmosExporterImage is the sei-cosmos-exporter sidecar image.
 	// The cosmos-exporter container is attached to every SeiNode pod.
 	CosmosExporterImage string
+	// CosmosExporterExcludedChains lists chain IDs whose nodes get no
+	// cosmos-exporter, for chains whose seid no longer serves gRPC.
+	CosmosExporterExcludedChains []string
 
 	// ControllerConfigFile is the path to the read-only application-config file
 	// the controller reads (SEI_CONTROLLER_CONFIG). It is the trust root for
@@ -225,6 +228,8 @@ type ImagesConfig struct {
 	Sidecar        string `json:"sidecar"`
 	KubeRBACProxy  string `json:"kubeRBACProxy"`
 	CosmosExporter string `json:"cosmosExporter"`
+	// CosmosExporterExcludedChains is optional; see Config.CosmosExporterExcludedChains.
+	CosmosExporterExcludedChains []string `json:"cosmosExporterExcludedChains"`
 }
 
 // RolloutConfig paces cell-wide changes. DriftUpdateBudgetPercent is the share
