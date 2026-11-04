@@ -1153,6 +1153,19 @@ func TestBuildNodePodSpec_RequestedNodepool_MustBeSelectable(t *testing.T) {
 	g.Expect(err).To(MatchError(ContainSubstring(`spec.scheduling.nodePool "sei-archive" is not listed`)))
 }
 
+// A pool delisted from selectableNodepools still renders for a node whose pod
+// already runs on it, so its reconciles keep working until it moves off.
+func TestBuildNodePodSpec_RequestedNodepool_RunningPoolStaysRenderable(t *testing.T) {
+	g := NewWithT(t)
+	node := newGenesisNode("validator-0", "pacific-1")
+	node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodePool: selectablePool}
+	node.Status.CurrentNodePool = selectablePool
+
+	spec, err := buildNodePodSpec(node, platformtest.Config())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(spec.Tolerations[0].Value).To(Equal(selectablePool))
+}
+
 func TestDefaultStorageForMode_Archive(t *testing.T) {
 	g := NewWithT(t)
 	cfg := platformtest.Config()

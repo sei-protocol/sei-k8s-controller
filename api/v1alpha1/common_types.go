@@ -264,8 +264,9 @@ type SchedulingConfig struct {
 
 	// NodePool places the pod on this Karpenter NodePool instead of the one the
 	// app-config names for the node's mode. It must be listed in the app-config's
-	// scheduling.selectableNodepools. It applies when the pod is created; changing
-	// it does not replace a running pod.
+	// scheduling.selectableNodepools, unless the node's pod already runs on it.
+	// Changing it on a running node rolls the pod the way an image change does,
+	// paced by the drift update budget.
 	// +optional
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`

@@ -117,8 +117,8 @@ func (p *NodeResolver) DriftRenderNode(ctx context.Context, node *seiv1alpha1.Se
 	return pinned, nil
 }
 
-// pinnedToRunning returns a copy of node whose image, sidecar image, and
-// isolation are the ones its pod runs now. Each comes from status, or, for an
+// pinnedToRunning returns a copy of node whose image, sidecar image, isolation,
+// and requested nodepool are the ones its pod runs now. Each comes from status, or, for an
 // image status has not observed yet, from the live StatefulSet's template.
 // It returns nil when no running seid image is known.
 func (p *NodeResolver) pinnedToRunning(ctx context.Context, node *seiv1alpha1.SeiNode) (*seiv1alpha1.SeiNode, error) {
@@ -155,6 +155,13 @@ func (p *NodeResolver) pinnedToRunning(ctx context.Context, node *seiv1alpha1.Se
 			pinned.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{}
 		}
 		pinned.Spec.Scheduling.NodeIsolation = iso
+	}
+	// Only once a rollout has been observed: until then CurrentNodePool records nothing.
+	if node.Status.CurrentImage != "" && noderesource.RequestedNodePool(node) != node.Status.CurrentNodePool {
+		if pinned.Spec.Scheduling == nil {
+			pinned.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{}
+		}
+		pinned.Spec.Scheduling.NodePool = node.Status.CurrentNodePool
 	}
 	return pinned, nil
 }

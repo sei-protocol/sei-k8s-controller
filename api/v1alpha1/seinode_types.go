@@ -1030,6 +1030,12 @@ type SeiNodeStatus struct {
 	// +optional
 	CurrentNodeIsolation NodeIsolation `json:"currentNodeIsolation,omitempty"`
 
+	// CurrentNodePool is the spec.scheduling.nodePool the owned StatefulSet's
+	// pod was last rolled with, stamped jointly with CurrentImage on rollout
+	// completion. Empty means the pod runs on its mode's pool.
+	// +optional
+	CurrentNodePool string `json:"currentNodePool,omitempty"`
+
 	// +listType=map
 	// +listMapKey=type
 	// +optional

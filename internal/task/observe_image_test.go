@@ -208,3 +208,19 @@ func TestObserveImage_RolloutComplete_StampsNodeIsolation(t *testing.T) {
 	g.Expect(exec.Execute(context.Background())).To(Succeed())
 	g.Expect(dedicated.Status.CurrentNodeIsolation).To(Equal(seiv1alpha1.NodeIsolationDedicated))
 }
+
+// Rollout completion also records the nodePool the pod was rolled with, so the
+// planner can detect a later pool change.
+func TestObserveImage_RolloutComplete_StampsNodePool(t *testing.T) {
+	g := NewWithT(t)
+	node := observeImageNode()
+	node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodePool: "sei-validator-c8g"}
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: node.Namespace, Generation: 2},
+		Spec:       appsv1.StatefulSetSpec{Replicas: int32Ptr(1)},
+		Status:     appsv1.StatefulSetStatus{ObservedGeneration: 2, UpdatedReplicas: 1, Replicas: 1},
+	}
+	exec := newObserveImageExec(t, observeImageCfg(t, node, sts))
+	g.Expect(exec.Execute(context.Background())).To(Succeed())
+	g.Expect(node.Status.CurrentNodePool).To(Equal("sei-validator-c8g"))
+}

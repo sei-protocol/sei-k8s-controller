@@ -330,15 +330,25 @@ func NodepoolForMode(mode string, p PlatformConfig, dedicated bool) string {
 	return p.NodepoolForMode(mode)
 }
 
+// RequestedNodePool returns the pool the node's spec.scheduling.nodePool
+// requests, or "" when it requests none.
+func RequestedNodePool(node *seiv1alpha1.SeiNode) string {
+	if s := node.Spec.Scheduling; s != nil {
+		return s.NodePool
+	}
+	return ""
+}
+
 // nodepoolFor returns the NodePool the node's pod schedules onto: the pool its
-// spec.scheduling.nodePool requests, which must be one the app-config lists as
-// selectable, or else its mode's pool.
+// spec.scheduling.nodePool requests, or else its mode's pool. A requested pool
+// must be one the app-config lists as selectable, or the one the pod already
+// runs on, so delisting a pool does not wedge the nodes still on it.
 func nodepoolFor(node *seiv1alpha1.SeiNode, p PlatformConfig, dedicated bool) (string, error) {
-	if s := node.Spec.Scheduling; s != nil && s.NodePool != "" {
-		if !slices.Contains(p.SelectableNodepools, s.NodePool) {
-			return "", fmt.Errorf("spec.scheduling.nodePool %q is not listed in the app-config's scheduling.selectableNodepools", s.NodePool)
+	if pool := RequestedNodePool(node); pool != "" {
+		if !slices.Contains(p.SelectableNodepools, pool) && pool != node.Status.CurrentNodePool {
+			return "", fmt.Errorf("spec.scheduling.nodePool %q is not listed in the app-config's scheduling.selectableNodepools", pool)
 		}
-		return s.NodePool, nil
+		return pool, nil
 	}
 	return NodepoolForMode(NodeMode(node), p, dedicated), nil
 }

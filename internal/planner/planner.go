@@ -911,12 +911,23 @@ func nodeIsolationDrifted(node *seiv1alpha1.SeiNode) bool {
 	return noderesource.EffectiveNodeIsolation(node) != node.Status.CurrentNodeIsolation
 }
 
+// nodePoolDrifted reports whether spec.scheduling.nodePool differs from the one
+// the running pod was rolled with. A node with no observed rollout yet is not
+// drifted, so the field needs no backfill: before it existed every pod ran on
+// its mode's pool, which an empty CurrentNodePool records.
+func nodePoolDrifted(node *seiv1alpha1.SeiNode) bool {
+	if node.Status.CurrentImage == "" {
+		return false
+	}
+	return noderesource.RequestedNodePool(node) != node.Status.CurrentNodePool
+}
+
 // podTemplateDrifted reports whether an observed pod-template input has
-// drifted: seid image, sidecar image, or node isolation. The rendered nodepool
-// is not observed, so an app-config scheduling.dedicated.* change alone does
-// not roll.
+// drifted: seid image, sidecar image, node isolation, or requested nodepool.
+// The nodepool the app-config names is not observed, so an app-config
+// scheduling.* change alone does not roll.
 func podTemplateDrifted(node *seiv1alpha1.SeiNode, p platform.Config) bool {
-	return imageDrifted(node) || sidecarImageDrifted(node, p) || nodeIsolationDrifted(node)
+	return imageDrifted(node) || sidecarImageDrifted(node, p) || nodeIsolationDrifted(node) || nodePoolDrifted(node)
 }
 
 // podTemplateDriftMessage formats the NodeUpdateInProgress message every mode
@@ -926,7 +937,7 @@ func podTemplateDrifted(node *seiv1alpha1.SeiNode, p platform.Config) bool {
 func podTemplateDriftMessage(node *seiv1alpha1.SeiNode, p platform.Config) string {
 	seid := imageDrifted(node)
 	sc := sidecarImageDrifted(node, p)
-	iso := nodeIsolationDrifted(node)
+	iso := nodeIsolationDrifted(node) || nodePoolDrifted(node)
 	var parts []string
 	if seid {
 		parts = append(parts, fmt.Sprintf("seid spec=%s current=%s", node.Spec.Image, node.Status.CurrentImage))
@@ -935,16 +946,27 @@ func podTemplateDriftMessage(node *seiv1alpha1.SeiNode, p platform.Config) strin
 		parts = append(parts, fmt.Sprintf("sidecar spec=%s current=%s",
 			task.EffectiveSidecarImage(node, p), node.Status.CurrentSidecarImage))
 	}
-	if iso {
+	if nodeIsolationDrifted(node) {
 		parts = append(parts, fmt.Sprintf("nodeIsolation spec=%s current=%s",
 			noderesource.EffectiveNodeIsolation(node), node.Status.CurrentNodeIsolation))
 	}
+	if nodePoolDrifted(node) {
+		parts = append(parts, fmt.Sprintf("nodePool spec=%q current=%q",
+			noderesource.RequestedNodePool(node), node.Status.CurrentNodePool))
+	}
 	detail := strings.Join(parts, "; ")
+	placement := "node isolation"
+	switch {
+	case nodeIsolationDrifted(node) && nodePoolDrifted(node):
+		placement = "node isolation and node pool"
+	case nodePoolDrifted(node):
+		placement = "node pool"
+	}
 	switch {
 	case iso && !seid && !sc:
-		return "node isolation drift detected: " + detail
+		return placement + " drift detected: " + detail
 	case iso:
-		return "image and node isolation drift detected: " + detail
+		return "image and " + placement + " drift detected: " + detail
 	case sc && !seid:
 		return "sidecar image drift detected: " + detail
 	default:
