@@ -227,6 +227,27 @@ spec:
                           signs its votes. Omitted leaves governance off. Requires executionEngine
                           mode EvmOnly. Create-only, like the rest of this block.
                         properties:
+                          appliedUpgrades:
+                            description: |-
+                              AppliedUpgrades is autobahn.json evm_governance.applied_upgrades: the
+                              upgrade names the chain starts past, in order, the last being the one
+                              applied last. Set it to the release list of the seid image the network
+                              starts on (gen-autobahn-config writes the binary's upgradenames.Release()).
+                              Omitted, no upgrade counts as applied, so a proposal can schedule a name
+                              the running binary already handles, and every validator then halts with
+                              BINARY UPDATED BEFORE TRIGGER on the next block rather than at the plan's
+                              height. Listed names are rejected when proposed.
+                            items:
+                              maxLength: 128
+                              minLength: 1
+                              pattern: ^[A-Za-z0-9.+-]+$
+                              type: string
+                            maxItems: 64
+                            type: array
+                            x-kubernetes-list-type: atomic
+                            x-kubernetes-validations:
+                            - message: appliedUpgrades must not repeat a name
+                              rule: self.all(x, self.exists_one(y, y == x))
                           startingProposalId:
                             description: |-
                               StartingProposalID is the id of the first proposal, so ids can continue

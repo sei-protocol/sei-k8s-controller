@@ -95,6 +95,11 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: period}},
 		}
 	}
+	withUpgrades := func(names ...string) *seiv1alpha1.NetworkConsensusSpec {
+		c := withGovernance("5m")
+		c.Autobahn.EvmGovernance.AppliedUpgrades = names
+		return c
+	}
 	cases := []struct {
 		name      string
 		engine    *seiv1alpha1.ExecutionEngineSpec
@@ -116,6 +121,9 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 			errorText: "consensus.autobahn.evmGovernance requires executionEngine mode EvmOnly"},
 		{name: "governance-short-period", engine: evmOnly, consensus: withGovernance("1s"), errorText: "votingPeriod must be between 2s and 720h"},
 		{name: "governance-long-period", engine: evmOnly, consensus: withGovernance("721h"), errorText: "votingPeriod must be between 2s and 720h"},
+		{name: "governance-applied-upgrades", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.4.0+rc1")},
+		{name: "governance-repeated-upgrade", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.3.0"), errorText: "appliedUpgrades must not repeat a name"},
+		{name: "governance-bad-upgrade-name", engine: evmOnly, consensus: withUpgrades("v6 3"), errorText: "appliedUpgrades"},
 		{name: "governance-micro-unit", engine: evmOnly, consensus: withGovernance("5000000µs"), errorText: "votingPeriod"},
 	}
 	for _, tc := range cases {

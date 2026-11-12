@@ -452,6 +452,23 @@ type AutobahnEvmGovernanceSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	StartingProposalID *int64 `json:"startingProposalId,omitempty"`
+
+	// AppliedUpgrades is autobahn.json evm_governance.applied_upgrades: the
+	// upgrade names the chain starts past, in order, the last being the one
+	// applied last. Set it to the release list of the seid image the network
+	// starts on (gen-autobahn-config writes the binary's upgradenames.Release()).
+	// Omitted, no upgrade counts as applied, so a proposal can schedule a name
+	// the running binary already handles, and every validator then halts with
+	// BINARY UPDATED BEFORE TRIGGER on the next block rather than at the plan's
+	// height. Listed names are rejected when proposed.
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=128
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9.+-]+$`
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y == x))",message="appliedUpgrades must not repeat a name"
+	// +listType=atomic
+	// +optional
+	AppliedUpgrades []string `json:"appliedUpgrades,omitempty"`
 }
 
 // NetworkConsensusSpec is ConsensusSpec plus the ceremony inputs only a

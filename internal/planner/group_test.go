@@ -325,7 +325,9 @@ func TestBuildGroupAssemblyPlan_PropagatesEvmGovernance(t *testing.T) {
 			Consensus: &seiv1alpha1.NetworkConsensusSpec{
 				ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
 				Autobahn: &seiv1alpha1.AutobahnCeremonySpec{
-					EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: "5m", StartingProposalID: &startID},
+					EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{
+						VotingPeriod: "5m", StartingProposalID: &startID, AppliedUpgrades: []string{"v6.3.0", "v6.4.0"},
+					},
 				},
 			},
 			ExecutionEngine: &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly},
@@ -349,7 +351,7 @@ func TestBuildGroupAssemblyPlan_PropagatesEvmGovernance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(wire) != `{"evmGovernance":{"votingPeriod":"5m","startingProposalId":7}}` {
+	if string(wire) != `{"evmGovernance":{"votingPeriod":"5m","startingProposalId":7,"appliedUpgrades":["v6.3.0","v6.4.0"]}}` {
 		t.Errorf("wire autobahnConfig = %s", wire)
 	}
 

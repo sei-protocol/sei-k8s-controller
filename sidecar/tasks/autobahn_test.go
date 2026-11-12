@@ -257,7 +257,7 @@ func TestBuildAutobahnConfig_EvmGovernance(t *testing.T) {
 			{ValidatorKey: "validator:ed25519:public:cc", NodeKey: "node:ed25519:public:dd", Address: "b:26656", EVMRPC: "ws://b:8546", EVMVoter: b},
 		}
 	}
-	gov := &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", StartingProposalID: 7}}
+	gov := &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", StartingProposalID: 7, AppliedUpgrades: []string{"v6.3.0", "v6.4.0"}}}
 
 	data, err := buildAutobahnConfig(withVoters(voterA, voterB), gov)
 	if err != nil {
@@ -280,7 +280,7 @@ func TestBuildAutobahnConfig_EvmGovernance(t *testing.T) {
 	want := `{"params":{"voting_period":"5m0s","expedited_voting_period":"2m30s","min_deposit":10000000000000000000,` +
 		`"max_deposit_period":"5m0s","min_expedited_deposit":20000000000000000000,"quorum":334000000000000000,` +
 		`"threshold":500000000000000000,"veto_threshold":334000000000000000,"expedited_quorum":667000000000000000,` +
-		`"expedited_threshold":667000000000000000},"starting_proposal_id":7}`
+		`"expedited_threshold":667000000000000000},"starting_proposal_id":7,"applied_upgrades":["v6.3.0","v6.4.0"]}`
 	if compact.String() != want {
 		t.Errorf("evm_governance =\n%s\nwant\n%s", compact.String(), want)
 	}
@@ -300,6 +300,9 @@ func TestBuildAutobahnConfig_EvmGovernance(t *testing.T) {
 		"voter without gov":    {withVoters(voterA, voterB), nil, "without evm_governance"},
 		"period below floor":   {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "1s"}}, "must be in"},
 		"period above ceiling": {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "721h"}}, "must be in"},
+		"repeated upgrade":     {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", AppliedUpgrades: []string{"v1", "v1"}}}, "repeats"},
+		"empty upgrade":        {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", AppliedUpgrades: []string{""}}}, "is empty"},
+		"long upgrade":         {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", AppliedUpgrades: []string{strings.Repeat("v", 129)}}}, "longer than 128"},
 		"unparseable period":   {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "fast"}}, "voting period"},
 	} {
 		if _, err := buildAutobahnConfig(tc.validators, tc.overrides); err == nil || !strings.Contains(err.Error(), tc.wantErr) {

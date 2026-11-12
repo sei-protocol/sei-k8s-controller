@@ -66,7 +66,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 			EnableEvmProxy:   ab.EnableEvmProxy,
 		}
 		if g := ab.EvmGovernance; g != nil {
-			gov := &sidecar.AutobahnEvmGovernanceParams{VotingPeriod: g.VotingPeriod}
+			gov := &sidecar.AutobahnEvmGovernanceParams{VotingPeriod: g.VotingPeriod, AppliedUpgrades: g.AppliedUpgrades}
 			if g.StartingProposalID != nil {
 				gov.StartingProposalID = uint64(*g.StartingProposalID)
 			}

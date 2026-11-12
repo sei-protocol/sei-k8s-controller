@@ -643,9 +643,13 @@ type AutobahnConfigParams struct {
 // operator-key EVM address as its evm_voter. A sidecar that predates this
 // field ignores it and writes no evm_governance, so the sidecar image must be
 // rolled before a controller that sends it.
+//
+// AppliedUpgrades is evm_governance.applied_upgrades, the upgrade names the
+// chain starts past; gen-autobahn-config writes the binary's release list.
 type AutobahnEvmGovernanceParams struct {
-	VotingPeriod       string `json:"votingPeriod"`
-	StartingProposalID uint64 `json:"startingProposalId,omitempty"`
+	VotingPeriod       string   `json:"votingPeriod"`
+	StartingProposalID uint64   `json:"startingProposalId,omitempty"`
+	AppliedUpgrades    []string `json:"appliedUpgrades,omitempty"`
 }
 
 // Bounds on AutobahnEvmGovernanceParams.VotingPeriod: gen-autobahn-config's
@@ -653,6 +657,8 @@ type AutobahnEvmGovernanceParams struct {
 const (
 	AutobahnMinGovVotingPeriod = 2 * time.Second
 	AutobahnMaxGovVotingPeriod = 30 * 24 * time.Hour
+	// AutobahnMaxUpgradeNameLength is the upgrade precompile's MaxNameLength.
+	AutobahnMaxUpgradeNameLength = 128
 )
 
 func (a *AutobahnConfigParams) validate() error {
@@ -678,6 +684,16 @@ func (a *AutobahnConfigParams) validate() error {
 		}
 		if d < AutobahnMinGovVotingPeriod || d > AutobahnMaxGovVotingPeriod {
 			return fmt.Errorf("AutobahnConfig.EvmGovernance.VotingPeriod %q must be in [%s, %s]", g.VotingPeriod, AutobahnMinGovVotingPeriod, AutobahnMaxGovVotingPeriod)
+		}
+		seen := make(map[string]bool, len(g.AppliedUpgrades))
+		for i, name := range g.AppliedUpgrades {
+			switch {
+			case name == "" || len(name) > AutobahnMaxUpgradeNameLength:
+				return fmt.Errorf("AutobahnConfig.EvmGovernance.AppliedUpgrades[%d] %q must be 1 to %d bytes", i, name, AutobahnMaxUpgradeNameLength)
+			case seen[name]:
+				return fmt.Errorf("AutobahnConfig.EvmGovernance.AppliedUpgrades repeats %q", name)
+			}
+			seen[name] = true
 		}
 	}
 	return nil

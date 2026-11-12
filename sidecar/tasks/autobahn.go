@@ -89,6 +89,7 @@ type autobahnFileConfig struct {
 type autobahnEVMGovernance struct {
 	Params             autobahnEVMGovernanceParams `json:"params"`
 	StartingProposalID uint64                      `json:"starting_proposal_id,omitempty"`
+	AppliedUpgrades    []string                    `json:"applied_upgrades,omitempty"`
 }
 
 // autobahnEVMGovernanceParams matches config.EVMGovernanceParams's JSON:
@@ -326,11 +327,13 @@ type AutobahnConfigOverrides struct {
 // AutobahnEvmGovernanceOverrides enables evm_governance as
 // gen-autobahn-config's --evm-governance-voting-period and
 // --evm-governance-starting-proposal-id do. The command also writes the
-// running binary's release list as applied_upgrades; the sidecar cannot know
-// that list, so the artifact omits it and the chain starts past no upgrade.
+// running binary's release list as applied_upgrades; the sidecar cannot read
+// that list, so the operator supplies it as AppliedUpgrades, and empty starts
+// the chain past no upgrade.
 type AutobahnEvmGovernanceOverrides struct {
-	VotingPeriod       string `json:"votingPeriod"`
-	StartingProposalID uint64 `json:"startingProposalId,omitempty"`
+	VotingPeriod       string   `json:"votingPeriod"`
+	StartingProposalID uint64   `json:"startingProposalId,omitempty"`
+	AppliedUpgrades    []string `json:"appliedUpgrades,omitempty"`
 }
 
 // Bounds gen-autobahn-config and gov's params validation put on the voting
@@ -338,6 +341,8 @@ type AutobahnEvmGovernanceOverrides struct {
 const (
 	autobahnMinGovVotingPeriod = 2 * time.Second
 	autobahnMaxGovVotingPeriod = 30 * 24 * time.Hour
+	// autobahnMaxUpgradeName is the upgrade precompile's MaxNameLength.
+	autobahnMaxUpgradeName = 128
 )
 
 // weiPerUsei mirrors the gov precompile's deposit unit.
@@ -354,6 +359,19 @@ func buildAutobahnEVMGovernance(o *AutobahnEvmGovernanceOverrides) (*autobahnEVM
 	if d < autobahnMinGovVotingPeriod || d > autobahnMaxGovVotingPeriod {
 		return nil, fmt.Errorf("autobahn: evm_governance voting period %s must be in [%s, %s]", d, autobahnMinGovVotingPeriod, autobahnMaxGovVotingPeriod)
 	}
+	// upgrade.CheckGenesisNames: non-empty, at most MaxNameLength, no repeats.
+	seen := make(map[string]bool, len(o.AppliedUpgrades))
+	for i, name := range o.AppliedUpgrades {
+		switch {
+		case name == "":
+			return nil, fmt.Errorf("autobahn: evm_governance applied upgrade %d is empty", i)
+		case len(name) > autobahnMaxUpgradeName:
+			return nil, fmt.Errorf("autobahn: evm_governance applied upgrade %d is longer than %d bytes", i, autobahnMaxUpgradeName)
+		case seen[name]:
+			return nil, fmt.Errorf("autobahn: evm_governance applied upgrade %q repeats", name)
+		}
+		seen[name] = true
+	}
 	return &autobahnEVMGovernance{
 		Params: autobahnEVMGovernanceParams{
 			VotingPeriod:          d.String(),
@@ -368,6 +386,7 @@ func buildAutobahnEVMGovernance(o *AutobahnEvmGovernanceOverrides) (*autobahnEVM
 			ExpeditedThreshold:    667_000_000_000_000_000,
 		},
 		StartingProposalID: o.StartingProposalID,
+		AppliedUpgrades:    o.AppliedUpgrades,
 	}, nil
 }
 
