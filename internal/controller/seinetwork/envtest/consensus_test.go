@@ -89,6 +89,12 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 	ns := makeNamespace(t)
 	autobahn := &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}}
 	evmOnly := &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	withGovernance := func(period string) *seiv1alpha1.NetworkConsensusSpec {
+		return &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: period}},
+		}
+	}
 	cases := []struct {
 		name      string
 		engine    *seiv1alpha1.ExecutionEngineSpec
@@ -100,6 +106,17 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 		{name: "typed-default-legacy-true", engine: &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineDefault},
 			consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}},
 			errorText: "disagree"},
+		{name: "governance-evm-only", engine: evmOnly, consensus: withGovernance("5m")},
+		{name: "governance-legacy-evm-only", consensus: func() *seiv1alpha1.NetworkConsensusSpec {
+			c := withGovernance("5m")
+			c.EvmOnly = true
+			return c
+		}()},
+		{name: "governance-default-engine", consensus: withGovernance("5m"),
+			errorText: "consensus.autobahn.evmGovernance requires executionEngine mode EvmOnly"},
+		{name: "governance-short-period", engine: evmOnly, consensus: withGovernance("1s"), errorText: "votingPeriod must be between 2s and 720h"},
+		{name: "governance-long-period", engine: evmOnly, consensus: withGovernance("721h"), errorText: "votingPeriod must be between 2s and 720h"},
+		{name: "governance-micro-unit", engine: evmOnly, consensus: withGovernance("5000000µs"), errorText: "votingPeriod"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -226,7 +243,10 @@ func TestConsensus_AutobahnKnobsCreateOnly(t *testing.T) {
 		"change": func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn.BlockInterval = "2s" },
 		"add":    func(cur *seiv1alpha1.SeiNetwork) { v := true; cur.Spec.Consensus.Autobahn.AllowEmptyBlocks = &v },
 		"proxy":  func(cur *seiv1alpha1.SeiNetwork) { v := false; cur.Spec.Consensus.Autobahn.EnableEvmProxy = &v },
-		"drop":   func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn = nil },
+		"governance": func(cur *seiv1alpha1.SeiNetwork) {
+			cur.Spec.Consensus.Autobahn.EvmGovernance = &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: "5m"}
+		},
+		"drop": func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn = nil },
 	} {
 		err := updateNetworkWithRetry(t, key, mutate)
 		g.Expect(err).To(HaveOccurred(), name)

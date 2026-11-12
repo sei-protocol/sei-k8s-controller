@@ -247,3 +247,63 @@ func TestBuildAutobahnConfig_Overrides(t *testing.T) {
 		t.Errorf("explicit false must be accepted: %v", err)
 	}
 }
+
+func TestBuildAutobahnConfig_EvmGovernance(t *testing.T) {
+	voterA := "0x00000000000000000000000000000000000000aA"
+	voterB := "0x00000000000000000000000000000000000000bB"
+	withVoters := func(a, b string) []autobahnValidator {
+		return []autobahnValidator{
+			{ValidatorKey: "validator:ed25519:public:aa", NodeKey: "node:ed25519:public:bb", Address: "a:26656", EVMRPC: "ws://a:8546", EVMVoter: a},
+			{ValidatorKey: "validator:ed25519:public:cc", NodeKey: "node:ed25519:public:dd", Address: "b:26656", EVMRPC: "ws://b:8546", EVMVoter: b},
+		}
+	}
+	gov := &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", StartingProposalID: 7}}
+
+	data, err := buildAutobahnConfig(withVoters(voterA, voterB), gov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Validators    []autobahnValidator `json:"validators"`
+		EVMGovernance json.RawMessage     `json:"evm_governance"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, got.EVMGovernance); err != nil {
+		t.Fatal(err)
+	}
+	// gen-autobahn-config --evm-governance-voting-period 5m
+	// --evm-governance-starting-proposal-id 7: gov.DefaultParams with the
+	// voting and deposit periods replaced and the expedited period halved.
+	want := `{"params":{"voting_period":"5m0s","expedited_voting_period":"2m30s","min_deposit":10000000000000000000,` +
+		`"max_deposit_period":"5m0s","min_expedited_deposit":20000000000000000000,"quorum":334000000000000000,` +
+		`"threshold":500000000000000000,"veto_threshold":334000000000000000,"expedited_quorum":667000000000000000,` +
+		`"expedited_threshold":667000000000000000},"starting_proposal_id":7}`
+	if compact.String() != want {
+		t.Errorf("evm_governance =\n%s\nwant\n%s", compact.String(), want)
+	}
+	if got.Validators[0].EVMVoter != voterA || got.Validators[1].EVMVoter != voterB {
+		t.Errorf("evm_voter round-trip mismatch: %+v", got.Validators)
+	}
+
+	for name, tc := range map[string]struct {
+		validators []autobahnValidator
+		overrides  *AutobahnConfigOverrides
+		wantErr    string
+	}{
+		"missing voter":        {withVoters(voterA, ""), gov, "evm_voter: missing"},
+		"zero voter":           {withVoters(voterA, "0x0000000000000000000000000000000000000000"), gov, "zero address"},
+		"non-address voter":    {withVoters(voterA, "0x12"), gov, "not an address"},
+		"shared voter":         {withVoters(voterA, strings.ToLower(voterA)), gov, "shared with another validator"},
+		"voter without gov":    {withVoters(voterA, voterB), nil, "without evm_governance"},
+		"period below floor":   {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "1s"}}, "must be in"},
+		"period above ceiling": {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "721h"}}, "must be in"},
+		"unparseable period":   {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "fast"}}, "voting period"},
+	} {
+		if _, err := buildAutobahnConfig(tc.validators, tc.overrides); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("%s: error %v, want substring %q", name, err, tc.wantErr)
+		}
+	}
+}

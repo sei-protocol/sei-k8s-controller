@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net"
 	"net/url"
 	"os"
@@ -13,6 +14,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/sei-protocol/sei-chain/sei-cosmos/crypto/keyring"
+	sdk "github.com/sei-protocol/sei-chain/sei-cosmos/types"
 )
 
 // This file mirrors `seid tendermint gen-autobahn-config` (sei-chain
@@ -35,12 +42,15 @@ const (
 // autobahnIdentity is the Autobahn slice of a validator's identity.json: the
 // public inputs gen-autobahn-config reads from a node directory, in the text
 // encodings the provider writes to validator_pubkey.txt, node_pubkey.txt,
-// autobahn_address.txt and evmrpc_url.txt.
+// autobahn_address.txt, evmrpc_url.txt and evm_voter.txt. EVMVoter is the
+// EVM address of the validator's operator key; the assembler writes it only
+// when the ceremony enables EVM governance.
 type autobahnIdentity struct {
 	ValidatorPubKey string `json:"validator_pubkey"`
 	NodePubKey      string `json:"node_pubkey"`
 	AutobahnAddress string `json:"autobahn_address"`
 	EVMRPCURL       string `json:"evmrpc_url"`
+	EVMVoter        string `json:"evm_voter,omitempty"`
 }
 
 // autobahnValidator matches config.AutobahnValidator's JSON.
@@ -49,6 +59,7 @@ type autobahnValidator struct {
 	NodeKey      string `json:"node_key"`
 	Address      string `json:"address"`
 	EVMRPC       string `json:"evmrpc"`
+	EVMVoter     string `json:"evm_voter,omitempty"`
 }
 
 // autobahnBlockDBConfig matches config.AutobahnBlockDBConfig's JSON.
@@ -61,16 +72,38 @@ type autobahnBlockDBConfig struct {
 // gen-autobahn-config populates. Optional fields the command leaves absent and
 // that the provider marks omitzero are omitted here too.
 type autobahnFileConfig struct {
-	Validators         []autobahnValidator   `json:"validators"`
-	MaxTxsPerBlock     uint64                `json:"max_txs_per_block"`
-	MaxTxsPerSecond    *uint64               `json:"max_txs_per_second"`
-	AllowEmptyBlocks   bool                  `json:"allow_empty_blocks"`
-	EnableEvmProxy     *bool                 `json:"enable_evm_proxy,omitempty"`
-	BlockInterval      string                `json:"block_interval"`
-	ViewTimeout        string                `json:"view_timeout"`
-	PersistentStateDir string                `json:"persistent_state_dir"`
-	DialInterval       string                `json:"dial_interval"`
-	BlockDB            autobahnBlockDBConfig `json:"block_db"`
+	Validators         []autobahnValidator    `json:"validators"`
+	MaxTxsPerBlock     uint64                 `json:"max_txs_per_block"`
+	MaxTxsPerSecond    *uint64                `json:"max_txs_per_second"`
+	AllowEmptyBlocks   bool                   `json:"allow_empty_blocks"`
+	EnableEvmProxy     *bool                  `json:"enable_evm_proxy,omitempty"`
+	BlockInterval      string                 `json:"block_interval"`
+	ViewTimeout        string                 `json:"view_timeout"`
+	PersistentStateDir string                 `json:"persistent_state_dir"`
+	DialInterval       string                 `json:"dial_interval"`
+	BlockDB            autobahnBlockDBConfig  `json:"block_db"`
+	EVMGovernance      *autobahnEVMGovernance `json:"evm_governance,omitempty"`
+}
+
+// autobahnEVMGovernance matches config.EVMGovernance's JSON.
+type autobahnEVMGovernance struct {
+	Params             autobahnEVMGovernanceParams `json:"params"`
+	StartingProposalID uint64                      `json:"starting_proposal_id,omitempty"`
+}
+
+// autobahnEVMGovernanceParams matches config.EVMGovernanceParams's JSON:
+// periods are duration strings, deposits wei, ratios 1e18-scaled.
+type autobahnEVMGovernanceParams struct {
+	VotingPeriod          string   `json:"voting_period"`
+	ExpeditedVotingPeriod string   `json:"expedited_voting_period"`
+	MinDeposit            *big.Int `json:"min_deposit"`
+	MaxDepositPeriod      string   `json:"max_deposit_period"`
+	MinExpeditedDeposit   *big.Int `json:"min_expedited_deposit"`
+	Quorum                uint64   `json:"quorum"`
+	Threshold             uint64   `json:"threshold"`
+	VetoThreshold         uint64   `json:"veto_threshold"`
+	ExpeditedQuorum       uint64   `json:"expedited_quorum"`
+	ExpeditedThreshold    uint64   `json:"expedited_threshold"`
 }
 
 // autobahnAddressFor returns the P2P host:port the ceremony advertises for a
@@ -109,6 +142,39 @@ func readAutobahnIdentity(homeDir, nodeName, namespace string) (*autobahnIdentit
 // ed25519PubKeyString is crypto/ed25519.PublicKey.String in the provider.
 func ed25519PubKeyString(pub ed25519.PublicKey) string {
 	return "ed25519:public:" + hex.EncodeToString(pub)
+}
+
+// readEVMVoter returns the EVM address of the operator key generate-gentx
+// added to the test keyring: the address gentx associates with the
+// validator's account, and the one evm_governance names as its voter.
+func readEVMVoter(homeDir string) (string, error) {
+	kb, err := keyring.New(sdk.KeyringServiceName(), keyring.BackendTest, homeDir, nil)
+	if err != nil {
+		return "", fmt.Errorf("opening keyring: %w", err)
+	}
+	info, err := kb.Key(validatorKeyName)
+	if err != nil {
+		return "", fmt.Errorf("reading key %q: %w", validatorKeyName, err)
+	}
+	pub, err := ethcrypto.DecompressPubkey(info.GetPubKey().Bytes())
+	if err != nil {
+		return "", fmt.Errorf("key %q is not a secp256k1 key: %w", validatorKeyName, err)
+	}
+	return ethcrypto.PubkeyToAddress(*pub).Hex(), nil
+}
+
+// checkEVMVoter is the provider's evm_voter check: a hex address, not zero.
+func checkEVMVoter(s string) error {
+	if s == "" {
+		return fmt.Errorf("missing")
+	}
+	if !common.IsHexAddress(s) {
+		return fmt.Errorf("%q is not an address", s)
+	}
+	if common.HexToAddress(s) == (common.Address{}) {
+		return fmt.Errorf("is the zero address")
+	}
+	return nil
 }
 
 type typedKeyJSON struct {
@@ -250,10 +316,83 @@ const autobahnProtocolMaxTxsPerBlock = 2_000
 // AutobahnConfigOverrides replaces gen-autobahn-config defaults in the rendered
 // autobahn.json. Unset fields keep the default.
 type AutobahnConfigOverrides struct {
-	BlockInterval    string `json:"blockInterval,omitempty"`
-	AllowEmptyBlocks *bool  `json:"allowEmptyBlocks,omitempty"`
-	MaxTxsPerBlock   *int64 `json:"maxTxsPerBlock,omitempty"`
-	EnableEvmProxy   *bool  `json:"enableEvmProxy,omitempty"`
+	BlockInterval    string                          `json:"blockInterval,omitempty"`
+	AllowEmptyBlocks *bool                           `json:"allowEmptyBlocks,omitempty"`
+	MaxTxsPerBlock   *int64                          `json:"maxTxsPerBlock,omitempty"`
+	EnableEvmProxy   *bool                           `json:"enableEvmProxy,omitempty"`
+	EvmGovernance    *AutobahnEvmGovernanceOverrides `json:"evmGovernance,omitempty"`
+}
+
+// AutobahnEvmGovernanceOverrides enables evm_governance as
+// gen-autobahn-config's --evm-governance-voting-period and
+// --evm-governance-starting-proposal-id do. The command also writes the
+// running binary's release list as applied_upgrades; the sidecar cannot know
+// that list, so the artifact omits it and the chain starts past no upgrade.
+type AutobahnEvmGovernanceOverrides struct {
+	VotingPeriod       string `json:"votingPeriod"`
+	StartingProposalID uint64 `json:"startingProposalId,omitempty"`
+}
+
+// Bounds gen-autobahn-config and gov's params validation put on the voting
+// period: the command's 2s floor, and params.MaxVotingPeriod.
+const (
+	autobahnMinGovVotingPeriod = 2 * time.Second
+	autobahnMaxGovVotingPeriod = 30 * 24 * time.Hour
+)
+
+// weiPerUsei mirrors the gov precompile's deposit unit.
+var weiPerUsei = big.NewInt(1_000_000_000_000)
+
+// buildAutobahnEVMGovernance mirrors buildGenEVMGovernance: x/gov's default
+// params (gov.DefaultParams) with VotingPeriod as the voting and deposit
+// period and half of it as the expedited voting period.
+func buildAutobahnEVMGovernance(o *AutobahnEvmGovernanceOverrides) (*autobahnEVMGovernance, error) {
+	d, err := time.ParseDuration(o.VotingPeriod)
+	if err != nil {
+		return nil, fmt.Errorf("autobahn: evm_governance voting period %q: %w", o.VotingPeriod, err)
+	}
+	if d < autobahnMinGovVotingPeriod || d > autobahnMaxGovVotingPeriod {
+		return nil, fmt.Errorf("autobahn: evm_governance voting period %s must be in [%s, %s]", d, autobahnMinGovVotingPeriod, autobahnMaxGovVotingPeriod)
+	}
+	return &autobahnEVMGovernance{
+		Params: autobahnEVMGovernanceParams{
+			VotingPeriod:          d.String(),
+			ExpeditedVotingPeriod: (d / 2).String(),
+			MinDeposit:            new(big.Int).Mul(big.NewInt(10_000_000), weiPerUsei),
+			MaxDepositPeriod:      d.String(),
+			MinExpeditedDeposit:   new(big.Int).Mul(big.NewInt(20_000_000), weiPerUsei),
+			Quorum:                334_000_000_000_000_000,
+			Threshold:             500_000_000_000_000_000,
+			VetoThreshold:         334_000_000_000_000_000,
+			ExpeditedQuorum:       667_000_000_000_000_000,
+			ExpeditedThreshold:    667_000_000_000_000_000,
+		},
+		StartingProposalID: o.StartingProposalID,
+	}, nil
+}
+
+// checkAutobahnVoters is the provider's validateEVMGovernance voter rule: with
+// governance, every validator has a distinct valid evm_voter; without it, none
+// has one.
+func checkAutobahnVoters(validators []autobahnValidator, governance bool) error {
+	seen := make(map[common.Address]bool, len(validators))
+	for _, v := range validators {
+		if !governance {
+			if v.EVMVoter != "" {
+				return fmt.Errorf("autobahn: validator %s sets evm_voter without evm_governance", v.ValidatorKey)
+			}
+			continue
+		}
+		if err := checkEVMVoter(v.EVMVoter); err != nil {
+			return fmt.Errorf("autobahn: validator %s evm_voter: %w", v.ValidatorKey, err)
+		}
+		addr := common.HexToAddress(v.EVMVoter)
+		if seen[addr] {
+			return fmt.Errorf("autobahn: validator %s evm_voter %s is shared with another validator", v.ValidatorKey, addr.Hex())
+		}
+		seen[addr] = true
+	}
+	return nil
 }
 
 // buildAutobahnConfig renders autobahn.json for the given validators as
@@ -261,9 +400,11 @@ type AutobahnConfigOverrides struct {
 // its default flags: 2000 txs/block, empty blocks off, 400ms blocks, 1500ms
 // view timeout, 10s dial interval, state persisted under data/autobahn with a
 // 30s BlockDB retention, enable_evm_proxy absent so the provider's Or(true)
-// applies. Overrides replace the defaults they name, checked against the
-// provider's AutobahnFileConfig.Validate bounds. Validators keep the order
-// given, which is the ceremony's ordinal order.
+// applies, and no evm_governance. Overrides replace the defaults they name,
+// checked against the provider's AutobahnFileConfig.Validate bounds; an
+// EvmGovernance override requires an evm_voter on every validator, and its
+// absence forbids one. Validators keep the order given, which is the
+// ceremony's ordinal order.
 func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConfigOverrides) ([]byte, error) {
 	if len(validators) == 0 {
 		return nil, fmt.Errorf("autobahn: no validators")
@@ -302,6 +443,16 @@ func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConf
 		if overrides.EnableEvmProxy != nil {
 			cfg.EnableEvmProxy = overrides.EnableEvmProxy
 		}
+		if overrides.EvmGovernance != nil {
+			governance, err := buildAutobahnEVMGovernance(overrides.EvmGovernance)
+			if err != nil {
+				return nil, err
+			}
+			cfg.EVMGovernance = governance
+		}
+	}
+	if err := checkAutobahnVoters(validators, cfg.EVMGovernance != nil); err != nil {
+		return nil, err
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

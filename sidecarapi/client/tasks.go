@@ -633,7 +633,27 @@ type AutobahnConfigParams struct {
 	AllowEmptyBlocks *bool  `json:"allowEmptyBlocks,omitempty"`
 	MaxTxsPerBlock   *int64 `json:"maxTxsPerBlock,omitempty"`
 	EnableEvmProxy   *bool  `json:"enableEvmProxy,omitempty"`
+
+	EvmGovernance *AutobahnEvmGovernanceParams `json:"evmGovernance,omitempty"`
 }
+
+// AutobahnEvmGovernanceParams enables autobahn.json evm_governance with
+// x/gov's default params, VotingPeriod as the voting and deposit period and
+// half of it as the expedited one. The assembler names each validator's
+// operator-key EVM address as its evm_voter. A sidecar that predates this
+// field ignores it and writes no evm_governance, so the sidecar image must be
+// rolled before a controller that sends it.
+type AutobahnEvmGovernanceParams struct {
+	VotingPeriod       string `json:"votingPeriod"`
+	StartingProposalID uint64 `json:"startingProposalId,omitempty"`
+}
+
+// Bounds on AutobahnEvmGovernanceParams.VotingPeriod: gen-autobahn-config's
+// floor and the gov precompile's MaxVotingPeriod.
+const (
+	AutobahnMinGovVotingPeriod = 2 * time.Second
+	AutobahnMaxGovVotingPeriod = 30 * 24 * time.Hour
+)
 
 func (a *AutobahnConfigParams) validate() error {
 	if a == nil {
@@ -650,6 +670,15 @@ func (a *AutobahnConfigParams) validate() error {
 	}
 	if a.MaxTxsPerBlock != nil && (*a.MaxTxsPerBlock < 1 || *a.MaxTxsPerBlock > AutobahnMaxTxsPerBlockCeiling) {
 		return fmt.Errorf("AutobahnConfig.MaxTxsPerBlock %d must be in [1, %d]", *a.MaxTxsPerBlock, AutobahnMaxTxsPerBlockCeiling)
+	}
+	if g := a.EvmGovernance; g != nil {
+		d, err := time.ParseDuration(g.VotingPeriod)
+		if err != nil {
+			return fmt.Errorf("AutobahnConfig.EvmGovernance.VotingPeriod %q: %w", g.VotingPeriod, err)
+		}
+		if d < AutobahnMinGovVotingPeriod || d > AutobahnMaxGovVotingPeriod {
+			return fmt.Errorf("AutobahnConfig.EvmGovernance.VotingPeriod %q must be in [%s, %s]", g.VotingPeriod, AutobahnMinGovVotingPeriod, AutobahnMaxGovVotingPeriod)
+		}
 	}
 	return nil
 }
