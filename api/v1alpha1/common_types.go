@@ -453,25 +453,11 @@ type AutobahnEvmGovernanceSpec struct {
 	// +optional
 	StartingProposalID *int64 `json:"startingProposalId,omitempty"`
 
-	// AppliedUpgrades is autobahn.json evm_governance.applied_upgrades: the
-	// upgrade names the chain starts past, in order, the last being the one
-	// applied last. Set it to the full release list of the seid image the
-	// network starts on, the sei-chain app/upgradenames/tags file at that
-	// image's version, in its semver order; gen-autobahn-config writes the same
-	// list. Listed names are rejected when proposed.
-	//
-	// Omitted, no upgrade counts as applied, so a proposal can schedule a name
-	// the running binary already handles, and every validator then halts with
-	// BINARY UPDATED BEFORE TRIGGER on the next block rather than at the plan's
-	// height. A partial list leaves the unlisted names open to the same halt.
-	// The last name must be one the image has a handler for, or every validator
-	// halts on its first block with a wrong-binary error.
-	//
-	// Names follow the provider's CheckGenesisNames: non-empty, at most 128
-	// bytes, no repeats. They are not limited to plan-name characters, since
-	// the release list holds names such as "1.0.5beta upgrade". The list is
-	// atomic, not a set: CEL compares sets without regard to order, which
-	// would let a reorder past the create-only rule.
+	// AppliedUpgrades is autobahn.json evm_governance.applied_upgrades, the
+	// upgrades the chain starts past; proposals naming them are rejected. Set it
+	// to the starting seid image's full release list (sei-chain
+	// app/upgradenames/tags), in order. Omitted or partial, a proposal can name
+	// an upgrade the binary already handles, which halts every validator.
 	// +kubebuilder:validation:MaxItems=256
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=128
