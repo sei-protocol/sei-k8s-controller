@@ -130,7 +130,7 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 		{name: "governance-applied-upgrades", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.4.0+rc1")},
 		// sei-chain's release list is over 100 names and holds "1.0.5beta upgrade".
 		{name: "governance-full-release-list", engine: evmOnly, consensus: withUpgrades(releaseList...)},
-		{name: "governance-repeated-upgrade", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.3.0"), errorText: "Duplicate value"},
+		{name: "governance-repeated-upgrade", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.3.0"), errorText: "appliedUpgrades must not repeat a name"},
 		{name: "governance-long-upgrade-name", engine: evmOnly, consensus: withUpgrades(strings.Repeat("v", 129)), errorText: "appliedUpgrades"},
 		{name: "governance-micro-unit", engine: evmOnly, consensus: withGovernance("5000000µs"), errorText: "votingPeriod"},
 	}
@@ -274,6 +274,27 @@ func TestConsensus_AutobahnKnobsCreateOnly(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, plain)).To(Succeed())
 	err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(plain), func(cur *seiv1alpha1.SeiNetwork) {
 		cur.Spec.Consensus.Autobahn = &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "1s"}
+	})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("spec.consensus.autobahn is create-only"))
+}
+
+// appliedUpgrades is ordered (its last name is the chain's LastApplied), so a
+// reorder alone is a change the create-only rule must reject.
+func TestConsensus_AppliedUpgradesReorderIsCreateOnly(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	network := fixtures.NewNetwork(ns, "applied-upgrades-reorder")
+	network.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	network.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{
+		ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+		Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{
+			VotingPeriod: "5m", AppliedUpgrades: []string{"v1", "v2"},
+		}},
+	}
+	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+	err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+		cur.Spec.Consensus.Autobahn.EvmGovernance.AppliedUpgrades = []string{"v2", "v1"}
 	})
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("spec.consensus.autobahn is create-only"))

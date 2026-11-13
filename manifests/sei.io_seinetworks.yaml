@@ -245,14 +245,19 @@ spec:
 
                               Names follow the provider's CheckGenesisNames: non-empty, at most 128
                               bytes, no repeats. They are not limited to plan-name characters, since
-                              the release list holds names such as "1.0.5beta upgrade".
+                              the release list holds names such as "1.0.5beta upgrade". The list is
+                              atomic, not a set: CEL compares sets without regard to order, which
+                              would let a reorder past the create-only rule.
                             items:
                               maxLength: 128
                               minLength: 1
                               type: string
-                            maxItems: 1024
+                            maxItems: 256
                             type: array
-                            x-kubernetes-list-type: set
+                            x-kubernetes-list-type: atomic
+                            x-kubernetes-validations:
+                            - message: appliedUpgrades must not repeat a name
+                              rule: self.all(x, self.exists_one(y, y == x))
                           startingProposalId:
                             description: |-
                               StartingProposalID is the id of the first proposal, so ids can continue

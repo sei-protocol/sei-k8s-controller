@@ -469,11 +469,14 @@ type AutobahnEvmGovernanceSpec struct {
 	//
 	// Names follow the provider's CheckGenesisNames: non-empty, at most 128
 	// bytes, no repeats. They are not limited to plan-name characters, since
-	// the release list holds names such as "1.0.5beta upgrade".
-	// +kubebuilder:validation:MaxItems=1024
+	// the release list holds names such as "1.0.5beta upgrade". The list is
+	// atomic, not a set: CEL compares sets without regard to order, which
+	// would let a reorder past the create-only rule.
+	// +kubebuilder:validation:MaxItems=256
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=128
-	// +listType=set
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y == x))",message="appliedUpgrades must not repeat a name"
+	// +listType=atomic
 	// +optional
 	AppliedUpgrades []string `json:"appliedUpgrades,omitempty"`
 }
