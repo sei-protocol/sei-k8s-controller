@@ -27,7 +27,7 @@ func TestAssembleAndUploadGenesisTask_ValidateAutobahnConfig(t *testing.T) {
 		{name: "governance at floor", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "2s"}}},
 		{name: "governance below floor", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "1s"}}, wantErr: "must be in"},
 		{name: "governance above ceiling", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "721h"}}, wantErr: "must be in"},
-		{name: "governance upgrades", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "5m", AppliedUpgrades: []string{"v6.3.0", "v6.4.0"}}}},
+		{name: "governance upgrades", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "5m", AppliedUpgrades: []string{"1.0.5beta upgrade", "v6.3.0", "v6.4.0"}}}},
 		{name: "governance repeated upgrade", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "5m", AppliedUpgrades: []string{"v1", "v1"}}}, wantErr: `repeats "v1"`},
 		{name: "governance empty upgrade", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "5m", AppliedUpgrades: []string{""}}}, wantErr: "AppliedUpgrades[0]"},
 		{name: "governance unparseable", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "fast"}}, wantErr: `VotingPeriod "fast"`},

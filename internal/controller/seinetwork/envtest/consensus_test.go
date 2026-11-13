@@ -3,6 +3,8 @@
 package envtest_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -95,6 +97,10 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: period}},
 		}
 	}
+	releaseList := []string{"1.0.5beta upgrade"}
+	for i := range 107 {
+		releaseList = append(releaseList, fmt.Sprintf("v1.%d.0", i))
+	}
 	withUpgrades := func(names ...string) *seiv1alpha1.NetworkConsensusSpec {
 		c := withGovernance("5m")
 		c.Autobahn.EvmGovernance.AppliedUpgrades = names
@@ -122,8 +128,10 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 		{name: "governance-short-period", engine: evmOnly, consensus: withGovernance("1s"), errorText: "votingPeriod must be between 2s and 720h"},
 		{name: "governance-long-period", engine: evmOnly, consensus: withGovernance("721h"), errorText: "votingPeriod must be between 2s and 720h"},
 		{name: "governance-applied-upgrades", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.4.0+rc1")},
-		{name: "governance-repeated-upgrade", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.3.0"), errorText: "appliedUpgrades must not repeat a name"},
-		{name: "governance-bad-upgrade-name", engine: evmOnly, consensus: withUpgrades("v6 3"), errorText: "appliedUpgrades"},
+		// sei-chain's release list is over 100 names and holds "1.0.5beta upgrade".
+		{name: "governance-full-release-list", engine: evmOnly, consensus: withUpgrades(releaseList...)},
+		{name: "governance-repeated-upgrade", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.3.0"), errorText: "Duplicate value"},
+		{name: "governance-long-upgrade-name", engine: evmOnly, consensus: withUpgrades(strings.Repeat("v", 129)), errorText: "appliedUpgrades"},
 		{name: "governance-micro-unit", engine: evmOnly, consensus: withGovernance("5000000µs"), errorText: "votingPeriod"},
 	}
 	for _, tc := range cases {
