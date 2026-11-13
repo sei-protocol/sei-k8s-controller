@@ -218,6 +218,52 @@ spec:
                           benchmarked against the forwarding hop. Omitted leaves the key out of the
                           artifact so seid applies its own default.
                         type: boolean
+                      evmGovernance:
+                        description: |-
+                          EvmGovernance writes autobahn.json evm_governance, enabling the EVM-only
+                          gov and upgrade precompiles so the chain can upgrade by proposal. Each
+                          validator's evm_voter is the EVM address of its ceremony-generated
+                          operator key (the "validator" key in its test keyring), which is what
+                          signs its votes. Omitted leaves governance off. Requires executionEngine
+                          mode EvmOnly. Create-only, like the rest of this block.
+                        properties:
+                          appliedUpgrades:
+                            description: |-
+                              AppliedUpgrades is autobahn.json evm_governance.applied_upgrades, the
+                              upgrades the chain starts past; proposals naming them are rejected. Set it
+                              to the starting seid image's full release list (sei-chain
+                              app/upgradenames/tags), in order. Omitted or partial, a proposal can name
+                              an upgrade the binary already handles, which halts every validator.
+                            items:
+                              maxLength: 128
+                              minLength: 1
+                              type: string
+                            maxItems: 256
+                            type: array
+                            x-kubernetes-list-type: atomic
+                            x-kubernetes-validations:
+                            - message: appliedUpgrades must not repeat a name
+                              rule: self.all(x, self.exists_one(y, y == x))
+                          startingProposalId:
+                            description: |-
+                              StartingProposalID is the id of the first proposal, so ids can continue
+                              past another chain's. Omitted starts at 1.
+                            format: int64
+                            minimum: 1
+                            type: integer
+                          votingPeriod:
+                            description: |-
+                              VotingPeriod is the proposal voting and deposit period, a Go duration
+                              string such as 5m. Between 2s and 720h.
+                            pattern: ^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$
+                            type: string
+                        required:
+                        - votingPeriod
+                        type: object
+                        x-kubernetes-validations:
+                        - message: votingPeriod must be between 2s and 720h
+                          rule: duration(self.votingPeriod) >= duration('2s') && duration(self.votingPeriod)
+                            <= duration('720h')
                       maxTxsPerBlock:
                         description: |-
                           MaxTxsPerBlock is autobahn.json max_txs_per_block. Default 2000, which is
@@ -785,6 +831,12 @@ spec:
               rule: '!(has(self.executionEngine) && has(self.executionEngine.mode)
                 && self.executionEngine.mode == ''EvmOnly'') || (has(self.consensus)
                 && has(self.consensus.engine) && self.consensus.engine == ''Autobahn'')'
+            - message: 'consensus.autobahn.evmGovernance requires executionEngine
+                mode EvmOnly: only the EVM-only executor consumes evm_governance'
+              rule: '!(has(self.consensus) && has(self.consensus.autobahn) && has(self.consensus.autobahn.evmGovernance))
+                || (has(self.executionEngine) ? (has(self.executionEngine.mode) &&
+                self.executionEngine.mode == ''EvmOnly'') : (has(self.consensus) &&
+                has(self.consensus.evmOnly) && self.consensus.evmOnly))'
             - message: 'spec.consensus.autobahn is create-only: its values are written
                 into the ceremony''s autobahn.json, which every validator and follower
                 already holds; recreate the network to change them'

@@ -150,6 +150,9 @@ func (u *GenesisArtifactUploader) uploadIdentity(ctx context.Context, uploader s
 		if err != nil {
 			return fmt.Errorf("upload-genesis-artifacts: autobahn identity: %w", err)
 		}
+		if autobahn.EVMVoter, err = readEVMVoter(u.homeDir); err != nil {
+			return fmt.Errorf("upload-genesis-artifacts: autobahn evm voter: %w", err)
+		}
 		identity["autobahn"] = autobahn
 	}
 	data, err := json.Marshal(identity)

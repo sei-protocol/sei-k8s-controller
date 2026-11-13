@@ -3,6 +3,8 @@
 package envtest_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -89,6 +91,21 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 	ns := makeNamespace(t)
 	autobahn := &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}}
 	evmOnly := &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	withGovernance := func(period string) *seiv1alpha1.NetworkConsensusSpec {
+		return &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: period}},
+		}
+	}
+	releaseList := []string{"1.0.5beta upgrade"}
+	for i := range 107 {
+		releaseList = append(releaseList, fmt.Sprintf("v1.%d.0", i))
+	}
+	withUpgrades := func(names ...string) *seiv1alpha1.NetworkConsensusSpec {
+		c := withGovernance("5m")
+		c.Autobahn.EvmGovernance.AppliedUpgrades = names
+		return c
+	}
 	cases := []struct {
 		name      string
 		engine    *seiv1alpha1.ExecutionEngineSpec
@@ -100,6 +117,22 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 		{name: "typed-default-legacy-true", engine: &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineDefault},
 			consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}},
 			errorText: "disagree"},
+		{name: "governance-evm-only", engine: evmOnly, consensus: withGovernance("5m")},
+		{name: "governance-legacy-evm-only", consensus: func() *seiv1alpha1.NetworkConsensusSpec {
+			c := withGovernance("5m")
+			c.EvmOnly = true
+			return c
+		}()},
+		{name: "governance-default-engine", consensus: withGovernance("5m"),
+			errorText: "consensus.autobahn.evmGovernance requires executionEngine mode EvmOnly"},
+		{name: "governance-short-period", engine: evmOnly, consensus: withGovernance("1s"), errorText: "votingPeriod must be between 2s and 720h"},
+		{name: "governance-long-period", engine: evmOnly, consensus: withGovernance("721h"), errorText: "votingPeriod must be between 2s and 720h"},
+		{name: "governance-applied-upgrades", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.4.0+rc1")},
+		// sei-chain's release list is over 100 names and holds "1.0.5beta upgrade".
+		{name: "governance-full-release-list", engine: evmOnly, consensus: withUpgrades(releaseList...)},
+		{name: "governance-repeated-upgrade", engine: evmOnly, consensus: withUpgrades("v6.3.0", "v6.3.0"), errorText: "appliedUpgrades must not repeat a name"},
+		{name: "governance-long-upgrade-name", engine: evmOnly, consensus: withUpgrades(strings.Repeat("v", 129)), errorText: "appliedUpgrades"},
+		{name: "governance-micro-unit", engine: evmOnly, consensus: withGovernance("5000000µs"), errorText: "votingPeriod"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -226,7 +259,10 @@ func TestConsensus_AutobahnKnobsCreateOnly(t *testing.T) {
 		"change": func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn.BlockInterval = "2s" },
 		"add":    func(cur *seiv1alpha1.SeiNetwork) { v := true; cur.Spec.Consensus.Autobahn.AllowEmptyBlocks = &v },
 		"proxy":  func(cur *seiv1alpha1.SeiNetwork) { v := false; cur.Spec.Consensus.Autobahn.EnableEvmProxy = &v },
-		"drop":   func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn = nil },
+		"governance": func(cur *seiv1alpha1.SeiNetwork) {
+			cur.Spec.Consensus.Autobahn.EvmGovernance = &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: "5m"}
+		},
+		"drop": func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn = nil },
 	} {
 		err := updateNetworkWithRetry(t, key, mutate)
 		g.Expect(err).To(HaveOccurred(), name)
@@ -238,6 +274,27 @@ func TestConsensus_AutobahnKnobsCreateOnly(t *testing.T) {
 	g.Expect(testCli.Create(testCtx, plain)).To(Succeed())
 	err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(plain), func(cur *seiv1alpha1.SeiNetwork) {
 		cur.Spec.Consensus.Autobahn = &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "1s"}
+	})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("spec.consensus.autobahn is create-only"))
+}
+
+// appliedUpgrades is ordered (its last name is the chain's LastApplied), so a
+// reorder alone is a change the create-only rule must reject.
+func TestConsensus_AppliedUpgradesReorderIsCreateOnly(t *testing.T) {
+	g := NewWithT(t)
+	ns := makeNamespace(t)
+	network := fixtures.NewNetwork(ns, "applied-upgrades-reorder")
+	network.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
+	network.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{
+		ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+		Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{
+			VotingPeriod: "5m", AppliedUpgrades: []string{"v1", "v2"},
+		}},
+	}
+	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
+	err := updateNetworkWithRetry(t, client.ObjectKeyFromObject(network), func(cur *seiv1alpha1.SeiNetwork) {
+		cur.Spec.Consensus.Autobahn.EvmGovernance.AppliedUpgrades = []string{"v2", "v1"}
 	})
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("spec.consensus.autobahn is create-only"))

@@ -313,6 +313,54 @@ func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 	}
 }
 
+func TestBuildGroupAssemblyPlan_PropagatesEvmGovernance(t *testing.T) {
+	startID := int64(7)
+	group := &seiv1alpha1.SeiNetwork{
+		ObjectMeta: metav1.ObjectMeta{Name: "gov-group", Namespace: "default"},
+		Spec: seiv1alpha1.SeiNetworkSpec{
+			Replicas: 1,
+			Genesis: seiv1alpha1.GenesisCeremonyConfig{
+				ChainID: sourceChainID, AccountBalance: testAccountBalance,
+			},
+			Consensus: &seiv1alpha1.NetworkConsensusSpec{
+				ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+				Autobahn: &seiv1alpha1.AutobahnCeremonySpec{
+					EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{
+						VotingPeriod: "5m", StartingProposalID: &startID, AppliedUpgrades: []string{"v6.3.0", "v6.4.0"},
+					},
+				},
+			},
+			ExecutionEngine: &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly},
+		},
+		Status: seiv1alpha1.SeiNetworkStatus{IncumbentNodes: []string{testNodeName}},
+	}
+
+	p, err := ForGroup(group)
+	if err != nil {
+		t.Fatalf("ForGroup: %v", err)
+	}
+	plan, err := p.BuildPlan(group)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	var params sidecar.AssembleAndUploadGenesisTask
+	if err := json.Unmarshal(plan.Tasks[0].Params.Raw, &params); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	wire, err := json.Marshal((*params.ToTaskRequest().Params)["autobahnConfig"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(wire) != `{"evmGovernance":{"votingPeriod":"5m","startingProposalId":7,"appliedUpgrades":["v6.3.0","v6.4.0"]}}` {
+		t.Errorf("wire autobahnConfig = %s", wire)
+	}
+
+	group.Spec.Consensus.Autobahn.EvmGovernance.VotingPeriod = "1s"
+	if _, err := p.BuildPlan(group); err == nil {
+		t.Error("a voting period below 2s must fail plan construction")
+	}
+}
+
 func TestBuildGroupAssemblyPlan_UniqueIDsAcrossRebuilds(t *testing.T) {
 	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "det-group", Namespace: "default"},

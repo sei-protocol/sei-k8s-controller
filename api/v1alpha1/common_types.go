@@ -424,6 +424,47 @@ type AutobahnCeremonySpec struct {
 	// artifact so seid applies its own default.
 	// +optional
 	EnableEvmProxy *bool `json:"enableEvmProxy,omitempty"`
+
+	// EvmGovernance writes autobahn.json evm_governance, enabling the EVM-only
+	// gov and upgrade precompiles so the chain can upgrade by proposal. Each
+	// validator's evm_voter is the EVM address of its ceremony-generated
+	// operator key (the "validator" key in its test keyring), which is what
+	// signs its votes. Omitted leaves governance off. Requires executionEngine
+	// mode EvmOnly. Create-only, like the rest of this block.
+	// +optional
+	EvmGovernance *AutobahnEvmGovernanceSpec `json:"evmGovernance,omitempty"`
+}
+
+// AutobahnEvmGovernanceSpec is what gen-autobahn-config's
+// --evm-governance-voting-period and --evm-governance-starting-proposal-id
+// set: x/gov's default params, with votingPeriod as the voting and deposit
+// period and half of it as the expedited voting period.
+// +kubebuilder:validation:XValidation:rule="duration(self.votingPeriod) >= duration('2s') && duration(self.votingPeriod) <= duration('720h')",message="votingPeriod must be between 2s and 720h"
+type AutobahnEvmGovernanceSpec struct {
+	// VotingPeriod is the proposal voting and deposit period, a Go duration
+	// string such as 5m. Between 2s and 720h.
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$`
+	// +required
+	VotingPeriod string `json:"votingPeriod"`
+
+	// StartingProposalID is the id of the first proposal, so ids can continue
+	// past another chain's. Omitted starts at 1.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	StartingProposalID *int64 `json:"startingProposalId,omitempty"`
+
+	// AppliedUpgrades is autobahn.json evm_governance.applied_upgrades, the
+	// upgrades the chain starts past; proposals naming them are rejected. Set it
+	// to the starting seid image's full release list (sei-chain
+	// app/upgradenames/tags), in order. Omitted or partial, a proposal can name
+	// an upgrade the binary already handles, which halts every validator.
+	// +kubebuilder:validation:MaxItems=256
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y == x))",message="appliedUpgrades must not repeat a name"
+	// +listType=atomic
+	// +optional
+	AppliedUpgrades []string `json:"appliedUpgrades,omitempty"`
 }
 
 // NetworkConsensusSpec is ConsensusSpec plus the ceremony inputs only a

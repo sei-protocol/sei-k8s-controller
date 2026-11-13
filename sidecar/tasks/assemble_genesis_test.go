@@ -456,11 +456,42 @@ func TestAssembler_UploadAutobahnConfig_UsesIdentityManifests(t *testing.T) {
 		t.Errorf("validators = %+v", cfg.Validators)
 	}
 
+	// With EVM governance each validator's identity.json evm_voter becomes its
+	// autobahn.json evm_voter, and an identity without one fails the ceremony.
+	gov := &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m"}}
+	err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, gov)
+	if err == nil || !strings.Contains(err.Error(), "val-0") || !strings.Contains(err.Error(), "evm_voter") {
+		t.Fatalf("expected an error naming val-0's missing evm_voter, got %v", err)
+	}
+	identities["val-0"].Autobahn.EVMVoter = "0x00000000000000000000000000000000000000aA"
+	identities["val-1"].Autobahn.EVMVoter = "0x00000000000000000000000000000000000000bB"
+	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, gov); err != nil {
+		t.Fatalf("uploadAutobahnConfig with governance: %v", err)
+	}
+	cfg = autobahnFileConfig{}
+	if err := json.Unmarshal(mock.uploads["my-bucket/test-chain-1/autobahn.json"], &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EVMGovernance == nil || cfg.Validators[0].EVMVoter != identities["val-0"].Autobahn.EVMVoter || cfg.Validators[1].EVMVoter != identities["val-1"].Autobahn.EVMVoter {
+		t.Errorf("governance artifact = %+v", cfg)
+	}
+	// Without governance the voters identity.json carries are left out.
+	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, nil); err != nil {
+		t.Fatalf("uploadAutobahnConfig without governance: %v", err)
+	}
+	cfg = autobahnFileConfig{}
+	if err := json.Unmarshal(mock.uploads["my-bucket/test-chain-1/autobahn.json"], &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EVMGovernance != nil || cfg.Validators[0].EVMVoter != "" {
+		t.Errorf("artifact without governance carries governance: %+v", cfg)
+	}
+
 	// A validator whose identity.json predates Autobahn fails the ceremony
 	// before anything is uploaded.
 	mock2 := newMockS3Uploader()
 	a2 := NewGenesisAssembler(t.TempDir(), "my-bucket", "us-west-2", "test-chain-1", nil, mockUploaderFactory(mock2))
-	err := a2.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-2"}, identities, nil)
+	err = a2.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-2"}, identities, nil)
 	if err == nil || !strings.Contains(err.Error(), "val-2") {
 		t.Fatalf("expected an error naming val-2, got %v", err)
 	}

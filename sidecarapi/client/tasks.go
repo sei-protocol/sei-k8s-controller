@@ -633,7 +633,33 @@ type AutobahnConfigParams struct {
 	AllowEmptyBlocks *bool  `json:"allowEmptyBlocks,omitempty"`
 	MaxTxsPerBlock   *int64 `json:"maxTxsPerBlock,omitempty"`
 	EnableEvmProxy   *bool  `json:"enableEvmProxy,omitempty"`
+
+	EvmGovernance *AutobahnEvmGovernanceParams `json:"evmGovernance,omitempty"`
 }
+
+// AutobahnEvmGovernanceParams enables autobahn.json evm_governance with
+// x/gov's default params, VotingPeriod as the voting and deposit period and
+// half of it as the expedited one. The assembler names each validator's
+// operator-key EVM address as its evm_voter. A sidecar that predates this
+// field ignores it and writes no evm_governance, so the sidecar image must be
+// rolled before a controller that sends it.
+//
+// AppliedUpgrades is evm_governance.applied_upgrades, the upgrade names the
+// chain starts past; gen-autobahn-config writes the binary's release list.
+type AutobahnEvmGovernanceParams struct {
+	VotingPeriod       string   `json:"votingPeriod"`
+	StartingProposalID uint64   `json:"startingProposalId,omitempty"`
+	AppliedUpgrades    []string `json:"appliedUpgrades,omitempty"`
+}
+
+// Bounds on AutobahnEvmGovernanceParams.VotingPeriod: gen-autobahn-config's
+// floor and the gov precompile's MaxVotingPeriod.
+const (
+	AutobahnMinGovVotingPeriod = 2 * time.Second
+	AutobahnMaxGovVotingPeriod = 30 * 24 * time.Hour
+	// AutobahnMaxUpgradeNameLength is the upgrade precompile's MaxNameLength.
+	AutobahnMaxUpgradeNameLength = 128
+)
 
 func (a *AutobahnConfigParams) validate() error {
 	if a == nil {
@@ -650,6 +676,25 @@ func (a *AutobahnConfigParams) validate() error {
 	}
 	if a.MaxTxsPerBlock != nil && (*a.MaxTxsPerBlock < 1 || *a.MaxTxsPerBlock > AutobahnMaxTxsPerBlockCeiling) {
 		return fmt.Errorf("AutobahnConfig.MaxTxsPerBlock %d must be in [1, %d]", *a.MaxTxsPerBlock, AutobahnMaxTxsPerBlockCeiling)
+	}
+	if g := a.EvmGovernance; g != nil {
+		d, err := time.ParseDuration(g.VotingPeriod)
+		if err != nil {
+			return fmt.Errorf("AutobahnConfig.EvmGovernance.VotingPeriod %q: %w", g.VotingPeriod, err)
+		}
+		if d < AutobahnMinGovVotingPeriod || d > AutobahnMaxGovVotingPeriod {
+			return fmt.Errorf("AutobahnConfig.EvmGovernance.VotingPeriod %q must be in [%s, %s]", g.VotingPeriod, AutobahnMinGovVotingPeriod, AutobahnMaxGovVotingPeriod)
+		}
+		seen := make(map[string]bool, len(g.AppliedUpgrades))
+		for i, name := range g.AppliedUpgrades {
+			switch {
+			case name == "" || len(name) > AutobahnMaxUpgradeNameLength:
+				return fmt.Errorf("AutobahnConfig.EvmGovernance.AppliedUpgrades[%d] %q must be 1 to %d bytes", i, name, AutobahnMaxUpgradeNameLength)
+			case seen[name]:
+				return fmt.Errorf("AutobahnConfig.EvmGovernance.AppliedUpgrades repeats %q", name)
+			}
+			seen[name] = true
+		}
 	}
 	return nil
 }

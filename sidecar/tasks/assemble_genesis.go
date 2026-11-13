@@ -788,12 +788,19 @@ func (a *GenesisAssembler) uploadAutobahnConfig(ctx context.Context, nodes []str
 		if err := validateAutobahnIdentity(nodeName, id); err != nil {
 			return fmt.Errorf("assemble-genesis: autobahn: %w", err)
 		}
-		validators = append(validators, autobahnValidator{
+		validator := autobahnValidator{
 			ValidatorKey: id.ValidatorPubKey,
 			NodeKey:      id.NodePubKey,
 			Address:      id.AutobahnAddress,
 			EVMRPC:       id.EVMRPCURL,
-		})
+		}
+		if overrides != nil && overrides.EvmGovernance != nil {
+			if id.EVMVoter == "" {
+				return fmt.Errorf("assemble-genesis: autobahn: validator %s: identity.json has no evm_voter; its sidecar predates EVM governance", nodeName)
+			}
+			validator.EVMVoter = id.EVMVoter
+		}
+		validators = append(validators, validator)
 	}
 
 	data, err := buildAutobahnConfig(validators, overrides)
