@@ -396,14 +396,16 @@ func ResolveExecutionEngine(engine *ExecutionEngineSpec, consensus *ConsensusSpe
 // gen-autobahn-config writes with its default flags, and an omitted one keeps
 // that default. Every validator and follower reads the same artifact, so these
 // are network-wide and create-only.
+// +kubebuilder:validation:XValidation:rule="has(self.evmChainId)",message="autobahn.evmChainId is required: the ceremony's autobahn.json has no default EVM chain ID"
 // +kubebuilder:validation:XValidation:rule="!has(self.blockInterval) || duration(self.blockInterval) > duration('0s')",message="blockInterval must be a positive duration"
 type AutobahnCeremonySpec struct {
 	// EvmChainID is autobahn.json evm_chain_id, the EIP-155 chain ID the
-	// network's transactions and governance votes are signed for. It has no
-	// default: use one no other chain uses.
+	// network's transactions and governance votes are signed for. Required,
+	// with no default: use one no other chain uses.
 	// +kubebuilder:validation:Minimum=1
-	// +required
-	EvmChainID int64 `json:"evmChainId"`
+	// +kubebuilder:validation:Maximum=9007199254740991
+	// +optional
+	EvmChainID int64 `json:"evmChainId,omitempty"`
 
 	// BlockInterval is autobahn.json block_interval, a Go duration string such
 	// as 400ms (the gen-autobahn-config default). Must be positive.

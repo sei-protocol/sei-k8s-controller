@@ -182,6 +182,10 @@ func TestConsensus_NetworkShapes(t *testing.T) {
 		{name: "autobahn-zero-chain-id", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
 			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{BlockInterval: "1s"},
+		}, errorText: "autobahn.evmChainId is required"},
+		{name: "autobahn-chain-id-over-max", consensus: &seiv1alpha1.NetworkConsensusSpec{
+			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: 1 << 53},
 		}, errorText: "evmChainId"},
 		{name: "tendermint-evm-only", consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{EvmOnly: true}}, errorText: "evmOnly requires engine Autobahn"},
 		{name: "autobahn-knobs", consensus: &seiv1alpha1.NetworkConsensusSpec{

@@ -221,9 +221,10 @@ spec:
                       evmChainId:
                         description: |-
                           EvmChainID is autobahn.json evm_chain_id, the EIP-155 chain ID the
-                          network's transactions and governance votes are signed for. It has no
-                          default: use one no other chain uses.
+                          network's transactions and governance votes are signed for. Required,
+                          with no default: use one no other chain uses.
                         format: int64
+                        maximum: 9007199254740991
                         minimum: 1
                         type: integer
                       evmGovernance:
@@ -281,10 +282,11 @@ spec:
                         maximum: 2000
                         minimum: 1
                         type: integer
-                    required:
-                    - evmChainId
                     type: object
                     x-kubernetes-validations:
+                    - message: 'autobahn.evmChainId is required: the ceremony''s autobahn.json
+                        has no default EVM chain ID'
+                      rule: has(self.evmChainId)
                     - message: blockInterval must be a positive duration
                       rule: '!has(self.blockInterval) || duration(self.blockInterval)
                         > duration(''0s'')'
