@@ -427,8 +427,11 @@ type AutobahnCeremonySpec struct {
 	EnableEvmProxy *bool `json:"enableEvmProxy,omitempty"`
 
 	// EvmChainID is autobahn.json evm_chain_id, the EIP-155 chain ID the EVM-only
-	// executor signs and serves. Omitted writes 713715, the ID chains this
-	// controller created before the field existed run on.
+	// executor signs and serves. seid requires the key on every Autobahn chain
+	// but reads it only under EVM-only; with the Cosmos application, the EVM
+	// chain ID still derives from spec.genesis.chainId and this value has no
+	// effect. Omitted writes 713715, the ID chains this controller created
+	// before the field existed run on.
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	EvmChainID *int64 `json:"evmChainId,omitempty"`
