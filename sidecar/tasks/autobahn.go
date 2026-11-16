@@ -315,9 +315,9 @@ func checkRPCURL(s string) error {
 // the ceiling the producer clamps max_txs_per_block to.
 const autobahnProtocolMaxTxsPerBlock = 2_000
 
-// AutobahnConfigOverrides sets values in the rendered autobahn.json:
-// EvmChainID is its required evm_chain_id, and the other fields replace
-// gen-autobahn-config defaults, an unset one keeping the default.
+// AutobahnConfigOverrides sets values in the rendered autobahn.json.
+// EvmChainID is its evm_chain_id and is required; any other field left unset
+// keeps the gen-autobahn-config default.
 type AutobahnConfigOverrides struct {
 	EvmChainID       uint64                          `json:"evmChainId"`
 	BlockInterval    string                          `json:"blockInterval,omitempty"`
