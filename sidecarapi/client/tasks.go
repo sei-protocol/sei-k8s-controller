@@ -627,12 +627,14 @@ const AutobahnMaxTxsPerBlockCeiling = 2_000
 // otherwise write with gen-autobahn-config's defaults. A nil pointer or empty
 // string keeps the default. BlockInterval is a Go duration string. A nil
 // EnableEvmProxy leaves enable_evm_proxy out of the artifact entirely, so
-// seid's own default (true) applies.
+// seid's own default (true) applies. A nil EvmChainID writes the sidecar's
+// default evm_chain_id.
 type AutobahnConfigParams struct {
-	BlockInterval    string `json:"blockInterval,omitempty"`
-	AllowEmptyBlocks *bool  `json:"allowEmptyBlocks,omitempty"`
-	MaxTxsPerBlock   *int64 `json:"maxTxsPerBlock,omitempty"`
-	EnableEvmProxy   *bool  `json:"enableEvmProxy,omitempty"`
+	BlockInterval    string  `json:"blockInterval,omitempty"`
+	AllowEmptyBlocks *bool   `json:"allowEmptyBlocks,omitempty"`
+	MaxTxsPerBlock   *int64  `json:"maxTxsPerBlock,omitempty"`
+	EnableEvmProxy   *bool   `json:"enableEvmProxy,omitempty"`
+	EvmChainID       *uint64 `json:"evmChainId,omitempty"`
 
 	EvmGovernance *AutobahnEvmGovernanceParams `json:"evmGovernance,omitempty"`
 }
@@ -676,6 +678,9 @@ func (a *AutobahnConfigParams) validate() error {
 	}
 	if a.MaxTxsPerBlock != nil && (*a.MaxTxsPerBlock < 1 || *a.MaxTxsPerBlock > AutobahnMaxTxsPerBlockCeiling) {
 		return fmt.Errorf("AutobahnConfig.MaxTxsPerBlock %d must be in [1, %d]", *a.MaxTxsPerBlock, AutobahnMaxTxsPerBlockCeiling)
+	}
+	if a.EvmChainID != nil && *a.EvmChainID == 0 {
+		return fmt.Errorf("AutobahnConfig.EvmChainID must be positive")
 	}
 	if g := a.EvmGovernance; g != nil {
 		d, err := time.ParseDuration(g.VotingPeriod)

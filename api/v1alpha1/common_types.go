@@ -293,8 +293,9 @@ type ConsensusSpec struct {
 	// +optional
 	Engine ConsensusEngine `json:"engine,omitempty"`
 
-	// EvmOnly replaces the ABCI application with the EVM-only executor (chain ID
-	// 713715). It requires engine Autobahn and is rejected on a seed. The node
+	// EvmOnly replaces the ABCI application with the EVM-only executor, which
+	// signs for spec.consensus.autobahn.evmChainId (713715 when omitted). It
+	// requires engine Autobahn and is rejected on a seed. The node
 	// serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
 	// are off, no cosmos-exporter is attached, and Ready proves that listener
 	// answers, not sync distance.
@@ -424,6 +425,13 @@ type AutobahnCeremonySpec struct {
 	// artifact so seid applies its own default.
 	// +optional
 	EnableEvmProxy *bool `json:"enableEvmProxy,omitempty"`
+
+	// EvmChainID is autobahn.json evm_chain_id, the EIP-155 chain ID the EVM-only
+	// executor signs and serves. Omitted writes 713715, the ID chains this
+	// controller created before the field existed run on.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	EvmChainID *int64 `json:"evmChainId,omitempty"`
 
 	// EvmGovernance writes autobahn.json evm_governance, enabling the EVM-only
 	// gov and upgrade precompiles so the chain can upgrade by proposal. Each

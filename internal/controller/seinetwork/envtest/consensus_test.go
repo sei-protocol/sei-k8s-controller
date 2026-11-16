@@ -259,6 +259,7 @@ func TestConsensus_AutobahnKnobsCreateOnly(t *testing.T) {
 		"change": func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn.BlockInterval = "2s" },
 		"add":    func(cur *seiv1alpha1.SeiNetwork) { v := true; cur.Spec.Consensus.Autobahn.AllowEmptyBlocks = &v },
 		"proxy":  func(cur *seiv1alpha1.SeiNetwork) { v := false; cur.Spec.Consensus.Autobahn.EnableEvmProxy = &v },
+		"chain":  func(cur *seiv1alpha1.SeiNetwork) { v := int64(713700); cur.Spec.Consensus.Autobahn.EvmChainID = &v },
 		"governance": func(cur *seiv1alpha1.SeiNetwork) {
 			cur.Spec.Consensus.Autobahn.EvmGovernance = &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: "5m"}
 		},

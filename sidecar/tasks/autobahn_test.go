@@ -153,6 +153,7 @@ func TestBuildAutobahnConfig_MatchesGenAutobahnConfigDefaults(t *testing.T) {
 		"persistent_state_dir": `"data/autobahn"`,
 		"dial_interval":        `"10s"`,
 		"block_db":             `{"retention":"30s","gc_period":null}`,
+		"evm_chain_id":         "713715",
 	}
 	for key, value := range want {
 		raw, ok := got[key]
@@ -201,11 +202,13 @@ func TestBuildAutobahnConfig_Overrides(t *testing.T) {
 	allow := true
 	maxTxs := int64(1500)
 	noProxy := false
+	chainID := uint64(713700)
 	data, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{
 		BlockInterval:    "1s",
 		AllowEmptyBlocks: &allow,
 		MaxTxsPerBlock:   &maxTxs,
 		EnableEvmProxy:   &noProxy,
+		EvmChainID:       &chainID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -221,6 +224,7 @@ func TestBuildAutobahnConfig_Overrides(t *testing.T) {
 		"block_interval":     `"1s"`,
 		"view_timeout":       `"1.5s"`,
 		"dial_interval":      `"10s"`,
+		"evm_chain_id":       "713700",
 	}
 	for key, value := range want {
 		if string(got[key]) != value {
@@ -231,7 +235,9 @@ func TestBuildAutobahnConfig_Overrides(t *testing.T) {
 	disallow := false
 	zero := int64(0)
 	overCap := int64(2001)
+	zeroChainID := uint64(0)
 	for name, o := range map[string]*AutobahnConfigOverrides{
+		"zero evm chain id":    {EvmChainID: &zeroChainID},
 		"above protocol cap":   {MaxTxsPerBlock: &overCap},
 		"unparseable duration": {BlockInterval: "fast"},
 		"bare number":          {BlockInterval: "400"},
