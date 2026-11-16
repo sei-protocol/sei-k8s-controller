@@ -441,7 +441,7 @@ func TestAssembler_UploadAutobahnConfig_UsesIdentityManifests(t *testing.T) {
 		"val-1": {Autobahn: &autobahnIdentity{ValidatorPubKey: pub("validator", "cc"), NodePubKey: pub("node", "dd"), AutobahnAddress: "val-1-0.val-1.ns.svc.cluster.local:26656", EVMRPCURL: "ws://val-1-0.val-1.ns.svc.cluster.local:8546"}},
 	}
 
-	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, nil); err != nil {
+	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, &AutobahnConfigOverrides{EvmChainID: testEvmChainID}); err != nil {
 		t.Fatalf("uploadAutobahnConfig: %v", err)
 	}
 	uploaded, ok := mock.uploads["my-bucket/test-chain-1/autobahn.json"]
@@ -458,7 +458,7 @@ func TestAssembler_UploadAutobahnConfig_UsesIdentityManifests(t *testing.T) {
 
 	// With EVM governance each validator's identity.json evm_voter becomes its
 	// autobahn.json evm_voter, and an identity without one fails the ceremony.
-	gov := &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m"}}
+	gov := &AutobahnConfigOverrides{EvmChainID: testEvmChainID, EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m"}}
 	err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, gov)
 	if err == nil || !strings.Contains(err.Error(), "val-0") || !strings.Contains(err.Error(), "evm_voter") {
 		t.Fatalf("expected an error naming val-0's missing evm_voter, got %v", err)
@@ -476,7 +476,7 @@ func TestAssembler_UploadAutobahnConfig_UsesIdentityManifests(t *testing.T) {
 		t.Errorf("governance artifact = %+v", cfg)
 	}
 	// Without governance the voters identity.json carries are left out.
-	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, nil); err != nil {
+	if err := a.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-1"}, identities, &AutobahnConfigOverrides{EvmChainID: testEvmChainID}); err != nil {
 		t.Fatalf("uploadAutobahnConfig without governance: %v", err)
 	}
 	cfg = autobahnFileConfig{}
@@ -491,7 +491,7 @@ func TestAssembler_UploadAutobahnConfig_UsesIdentityManifests(t *testing.T) {
 	// before anything is uploaded.
 	mock2 := newMockS3Uploader()
 	a2 := NewGenesisAssembler(t.TempDir(), "my-bucket", "us-west-2", "test-chain-1", nil, mockUploaderFactory(mock2))
-	err = a2.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-2"}, identities, nil)
+	err = a2.uploadAutobahnConfig(context.Background(), []string{"val-0", "val-2"}, identities, &AutobahnConfigOverrides{EvmChainID: testEvmChainID})
 	if err == nil || !strings.Contains(err.Error(), "val-2") {
 		t.Fatalf("expected an error naming val-2, got %v", err)
 	}

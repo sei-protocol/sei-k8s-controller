@@ -606,8 +606,8 @@ func validateGenesisAccounts(prefix string, accounts []GenesisAccountEntry) erro
 // ConsensusParams is one JSON object shaped like genesis.consensus_params,
 // deep-merged over the assembled genesis. Autobahn makes the assembler
 // generate autobahn.json from every validator's identity.json and upload it
-// before genesis.json; AutobahnConfig replaces the listed gen-autobahn-config
-// defaults in that file and is ignored unless Autobahn is set.
+// before genesis.json; AutobahnConfig sets that file's values, and Autobahn
+// requires it.
 type AssembleAndUploadGenesisTask struct {
 	AccountBalance  string
 	Namespace       string
@@ -623,12 +623,15 @@ type AssembleAndUploadGenesisTask struct {
 // the value the producer clamps max_txs_per_block to and gen-autobahn-config's default.
 const AutobahnMaxTxsPerBlockCeiling = 2_000
 
-// AutobahnConfigParams overrides autobahn.json values the ceremony would
-// otherwise write with gen-autobahn-config's defaults. A nil pointer or empty
-// string keeps the default. BlockInterval is a Go duration string. A nil
-// EnableEvmProxy leaves enable_evm_proxy out of the artifact entirely, so
-// seid's own default (true) applies.
+// AutobahnConfigParams sets autobahn.json values for the ceremony. EvmChainID
+// is evm_chain_id and is required. The other fields override
+// gen-autobahn-config's defaults, and a nil pointer or empty string keeps the
+// default. BlockInterval is a Go duration string. A nil EnableEvmProxy leaves
+// enable_evm_proxy out of the artifact entirely, so seid's own default (true)
+// applies.
 type AutobahnConfigParams struct {
+	EvmChainID uint64 `json:"evmChainId"`
+
 	BlockInterval    string `json:"blockInterval,omitempty"`
 	AllowEmptyBlocks *bool  `json:"allowEmptyBlocks,omitempty"`
 	MaxTxsPerBlock   *int64 `json:"maxTxsPerBlock,omitempty"`
@@ -719,6 +722,9 @@ func (t AssembleAndUploadGenesisTask) Validate() error {
 	}
 	if t.AutobahnConfig != nil && !t.Autobahn {
 		return fmt.Errorf("assemble-and-upload-genesis: AutobahnConfig requires Autobahn")
+	}
+	if t.Autobahn && (t.AutobahnConfig == nil || t.AutobahnConfig.EvmChainID == 0) {
+		return fmt.Errorf("assemble-and-upload-genesis: Autobahn requires AutobahnConfig.EvmChainID")
 	}
 	if err := t.AutobahnConfig.validate(); err != nil {
 		return fmt.Errorf("assemble-and-upload-genesis: %w", err)

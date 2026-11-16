@@ -195,8 +195,8 @@ spec:
                 properties:
                   autobahn:
                     description: |-
-                      Autobahn tunes the autobahn.json the genesis ceremony writes. Omitted
-                      fields keep gen-autobahn-config's defaults. Create-only.
+                      Autobahn sets the autobahn.json the genesis ceremony writes. Required
+                      with engine Autobahn, for its evmChainId. Create-only.
                     properties:
                       allowEmptyBlocks:
                         description: |-
@@ -218,6 +218,14 @@ spec:
                           benchmarked against the forwarding hop. Omitted leaves the key out of the
                           artifact so seid applies its own default.
                         type: boolean
+                      evmChainId:
+                        description: |-
+                          EvmChainID is autobahn.json evm_chain_id, the EIP-155 chain ID the
+                          network's transactions and governance votes are signed for. It has no
+                          default: use one no other chain uses.
+                        format: int64
+                        minimum: 1
+                        type: integer
                       evmGovernance:
                         description: |-
                           EvmGovernance writes autobahn.json evm_governance, enabling the EVM-only
@@ -273,6 +281,8 @@ spec:
                         maximum: 2000
                         minimum: 1
                         type: integer
+                    required:
+                    - evmChainId
                     type: object
                     x-kubernetes-validations:
                     - message: blockInterval must be a positive duration
@@ -307,6 +317,10 @@ spec:
                     produces'
                   rule: '!has(self.autobahn) || (has(self.engine) && self.engine ==
                     ''Autobahn'')'
+                - message: 'engine Autobahn requires autobahn.evmChainId: the ceremony''s
+                    autobahn.json has no default EVM chain ID'
+                  rule: has(self.autobahn) || !(has(self.engine) && self.engine ==
+                    'Autobahn')
                 - message: 'evmOnly requires engine Autobahn: the EVM-only executor
                     runs only under Autobahn consensus'
                   rule: '!(has(self.evmOnly) && self.evmOnly) || (has(self.engine)

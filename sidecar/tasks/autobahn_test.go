@@ -129,6 +129,8 @@ func TestValidateAutobahnIdentity(t *testing.T) {
 	}
 }
 
+const testEvmChainID = 713700
+
 // The artifact must decode as the provider's AutobahnFileConfig with the
 // values gen-autobahn-config writes under its default flags.
 func TestBuildAutobahnConfig_MatchesGenAutobahnConfigDefaults(t *testing.T) {
@@ -136,7 +138,7 @@ func TestBuildAutobahnConfig_MatchesGenAutobahnConfigDefaults(t *testing.T) {
 		{ValidatorKey: "validator:ed25519:public:aa", NodeKey: "node:ed25519:public:bb", Address: "a:26656", EVMRPC: "ws://a:8546"},
 		{ValidatorKey: "validator:ed25519:public:cc", NodeKey: "node:ed25519:public:dd", Address: "b:26656", EVMRPC: "ws://b:8546"},
 	}
-	data, err := buildAutobahnConfig(validators, nil)
+	data, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{EvmChainID: testEvmChainID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +147,7 @@ func TestBuildAutobahnConfig_MatchesGenAutobahnConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
+		"evm_chain_id":         "713700",
 		"max_txs_per_block":    "2000",
 		"max_txs_per_second":   "null",
 		"allow_empty_blocks":   "false",
@@ -181,16 +184,14 @@ func TestBuildAutobahnConfig_MatchesGenAutobahnConfigDefaults(t *testing.T) {
 		t.Errorf("validators round-trip mismatch: %+v", vals)
 	}
 
-	if _, err := buildAutobahnConfig(nil, nil); err == nil {
+	if _, err := buildAutobahnConfig(nil, &AutobahnConfigOverrides{EvmChainID: testEvmChainID}); err == nil {
 		t.Error("an empty validator set must be rejected")
 	}
 
-	empty, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(empty, data) {
-		t.Error("an empty overrides struct must render the same artifact as nil")
+	for _, o := range []*AutobahnConfigOverrides{nil, {}} {
+		if _, err := buildAutobahnConfig(validators, o); err == nil || !strings.Contains(err.Error(), "evm_chain_id must be set") {
+			t.Errorf("overrides %+v without a chain ID: error %v", o, err)
+		}
 	}
 }
 
@@ -202,6 +203,7 @@ func TestBuildAutobahnConfig_Overrides(t *testing.T) {
 	maxTxs := int64(1500)
 	noProxy := false
 	data, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{
+		EvmChainID:       testEvmChainID,
 		BlockInterval:    "1s",
 		AllowEmptyBlocks: &allow,
 		MaxTxsPerBlock:   &maxTxs,
@@ -232,18 +234,18 @@ func TestBuildAutobahnConfig_Overrides(t *testing.T) {
 	zero := int64(0)
 	overCap := int64(2001)
 	for name, o := range map[string]*AutobahnConfigOverrides{
-		"above protocol cap":   {MaxTxsPerBlock: &overCap},
-		"unparseable duration": {BlockInterval: "fast"},
-		"bare number":          {BlockInterval: "400"},
-		"zero duration":        {BlockInterval: "0s"},
-		"negative duration":    {BlockInterval: "-1s"},
-		"zero max txs":         {MaxTxsPerBlock: &zero},
+		"above protocol cap":   {EvmChainID: testEvmChainID, MaxTxsPerBlock: &overCap},
+		"unparseable duration": {EvmChainID: testEvmChainID, BlockInterval: "fast"},
+		"bare number":          {EvmChainID: testEvmChainID, BlockInterval: "400"},
+		"zero duration":        {EvmChainID: testEvmChainID, BlockInterval: "0s"},
+		"negative duration":    {EvmChainID: testEvmChainID, BlockInterval: "-1s"},
+		"zero max txs":         {EvmChainID: testEvmChainID, MaxTxsPerBlock: &zero},
 	} {
 		if _, err := buildAutobahnConfig(validators, o); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
-	if _, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{AllowEmptyBlocks: &disallow}); err != nil {
+	if _, err := buildAutobahnConfig(validators, &AutobahnConfigOverrides{EvmChainID: testEvmChainID, AllowEmptyBlocks: &disallow}); err != nil {
 		t.Errorf("explicit false must be accepted: %v", err)
 	}
 }
@@ -257,7 +259,7 @@ func TestBuildAutobahnConfig_EvmGovernance(t *testing.T) {
 			{ValidatorKey: "validator:ed25519:public:cc", NodeKey: "node:ed25519:public:dd", Address: "b:26656", EVMRPC: "ws://b:8546", EVMVoter: b},
 		}
 	}
-	gov := &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", StartingProposalID: 7, AppliedUpgrades: []string{"v6.3.0", "v6.4.0"}}}
+	gov := &AutobahnConfigOverrides{EvmChainID: testEvmChainID, EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", StartingProposalID: 7, AppliedUpgrades: []string{"v6.3.0", "v6.4.0"}}}
 
 	data, err := buildAutobahnConfig(withVoters(voterA, voterB), gov)
 	if err != nil {
@@ -297,13 +299,13 @@ func TestBuildAutobahnConfig_EvmGovernance(t *testing.T) {
 		"zero voter":           {withVoters(voterA, "0x0000000000000000000000000000000000000000"), gov, "zero address"},
 		"non-address voter":    {withVoters(voterA, "0x12"), gov, "not an address"},
 		"shared voter":         {withVoters(voterA, strings.ToLower(voterA)), gov, "shared with another validator"},
-		"voter without gov":    {withVoters(voterA, voterB), nil, "without evm_governance"},
-		"period below floor":   {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "1s"}}, "must be in"},
-		"period above ceiling": {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "721h"}}, "must be in"},
-		"repeated upgrade":     {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", AppliedUpgrades: []string{"v1", "v1"}}}, "repeats"},
-		"empty upgrade":        {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", AppliedUpgrades: []string{""}}}, "is empty"},
-		"long upgrade":         {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", AppliedUpgrades: []string{strings.Repeat("v", 129)}}}, "longer than 128"},
-		"unparseable period":   {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "fast"}}, "voting period"},
+		"voter without gov":    {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmChainID: testEvmChainID}, "without evm_governance"},
+		"period below floor":   {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmChainID: testEvmChainID, EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "1s"}}, "must be in"},
+		"period above ceiling": {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmChainID: testEvmChainID, EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "721h"}}, "must be in"},
+		"repeated upgrade":     {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmChainID: testEvmChainID, EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", AppliedUpgrades: []string{"v1", "v1"}}}, "repeats"},
+		"empty upgrade":        {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmChainID: testEvmChainID, EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", AppliedUpgrades: []string{""}}}, "is empty"},
+		"long upgrade":         {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmChainID: testEvmChainID, EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "5m", AppliedUpgrades: []string{strings.Repeat("v", 129)}}}, "longer than 128"},
+		"unparseable period":   {withVoters(voterA, voterB), &AutobahnConfigOverrides{EvmChainID: testEvmChainID, EvmGovernance: &AutobahnEvmGovernanceOverrides{VotingPeriod: "fast"}}, "voting period"},
 	} {
 		if _, err := buildAutobahnConfig(tc.validators, tc.overrides); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 			t.Errorf("%s: error %v, want substring %q", name, err, tc.wantErr)

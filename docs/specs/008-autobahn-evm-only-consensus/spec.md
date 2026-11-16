@@ -190,7 +190,7 @@ a manual step.
 #### Acceptance Criteria
 
 1. When the engine is `Autobahn`, the `upload-genesis-artifacts` task SHALL widen the identity manifest with the validator public key, the node public key, the P2P address `<node>-0.<node>.<namespace>.svc.cluster.local:26656`, and the EVM-RPC URL `ws://<node>-0.<node>.<namespace>.svc.cluster.local:8546`, the EVM WebSocket listener that validators dial to proxy transactions to a shard's owner.
-2. When the engine is `Autobahn`, the assembler SHALL materialise one node directory per validator from the identity manifests, run `seid tendermint gen-autobahn-config <dirs> --output autobahn.json`, and upload the result to `{bucket}/{chainID}/autobahn.json` **before** it uploads `genesis.json`. `genesis.json` is the ceremony's commit point that every `configure-genesis` polls for, so the artifact is present whenever the commit point is.
+2. When the engine is `Autobahn`, the assembler SHALL materialise one node directory per validator from the identity manifests, run `seid tendermint gen-autobahn-config <dirs> --evm-chain-id <id> --output autobahn.json` with `SeiNetwork.spec.consensus.autobahn.evmChainId`, and upload the result to `{bucket}/{chainID}/autobahn.json` **before** it uploads `genesis.json`. `genesis.json` is the ceremony's commit point that every `configure-genesis` polls for, so the artifact is present whenever the commit point is.
 3. When any identity manifest lacks a field the generator reads, the assembler SHALL fail before writing either artifact, naming the validator and the field.
 4. When the engine is `Autobahn`, the `configure-genesis` task SHALL download `autobahn.json` to `config/autobahn.json` after `genesis.json`, on validators and followers alike. An absent artifact after a present `genesis.json` is a broken ceremony, not a race, and the task SHALL fail terminally naming the object key, so the plan fails on that attempt rather than at the end of the `configure-genesis` retry budget.
 5. The assembler SHALL render the artifact with the generator's defaults — `max_txs_per_block` 2000, `allow_empty_blocks` false, `block_interval` 400ms, `view_timeout` 1.5s, `dial_interval` 10s, `persistent_state_dir` `data/autobahn`, BlockDB retention 30s, `enable_evm_proxy` absent so seid's default of true applies — except where `SeiNetwork.spec.consensus.autobahn` names a value:
@@ -200,13 +200,14 @@ a manual step.
      consensus:
        engine: Autobahn
        autobahn:
+         evmChainId: 713700       # required, no default; one no other chain uses
          blockInterval: 400ms     # Go duration, > 0
          allowEmptyBlocks: false
          maxTxsPerBlock: 2000     # 1..2000; 2000 is the protocol ceiling the producer clamps to
          enableEvmProxy: true     # omitted leaves the key absent; seid defaults it to true
    ```
 
-   The block is network-only (a `SeiNode` consumes `autobahn.json`, it never generates one), requires `engine: Autobahn`, and is create-only as a whole: its values are already in every validator's and follower's copy of the artifact. The planner carries it to the assembler as typed fields on the `assemble-and-upload-genesis` task, never as file content. `view_timeout`, `dial_interval` and BlockDB settings stay at their defaults.
+   The block is network-only (a `SeiNode` consumes `autobahn.json`, it never generates one), requires `engine: Autobahn` and is required by it, for `evmChainId`, and is create-only as a whole: its values are already in every validator's and follower's copy of the artifact. The planner carries it to the assembler as typed fields on the `assemble-and-upload-genesis` task, never as file content. `view_timeout`, `dial_interval` and BlockDB settings stay at their defaults.
 
 ### Requirement 3: The controller writes the engine keys
 

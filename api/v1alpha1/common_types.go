@@ -392,11 +392,19 @@ func ResolveExecutionEngine(engine *ExecutionEngineSpec, consensus *ConsensusSpe
 }
 
 // AutobahnCeremonySpec is the operator-settable slice of the ceremony's
-// autobahn.json. Each field replaces one value gen-autobahn-config writes with
-// its default flags; an omitted field keeps that default. Every validator and
-// follower reads the same artifact, so these are network-wide and create-only.
+// autobahn.json. EvmChainID is required; every other field replaces one value
+// gen-autobahn-config writes with its default flags, and an omitted one keeps
+// that default. Every validator and follower reads the same artifact, so these
+// are network-wide and create-only.
 // +kubebuilder:validation:XValidation:rule="!has(self.blockInterval) || duration(self.blockInterval) > duration('0s')",message="blockInterval must be a positive duration"
 type AutobahnCeremonySpec struct {
+	// EvmChainID is autobahn.json evm_chain_id, the EIP-155 chain ID the
+	// network's transactions and governance votes are signed for. It has no
+	// default: use one no other chain uses.
+	// +kubebuilder:validation:Minimum=1
+	// +required
+	EvmChainID int64 `json:"evmChainId"`
+
 	// BlockInterval is autobahn.json block_interval, a Go duration string such
 	// as 400ms (the gen-autobahn-config default). Must be positive.
 	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
@@ -471,11 +479,12 @@ type AutobahnEvmGovernanceSpec struct {
 // SeiNetwork can carry: a SeiNode consumes the ceremony's autobahn.json, it
 // never generates one.
 // +kubebuilder:validation:XValidation:rule="!has(self.autobahn) || (has(self.engine) && self.engine == 'Autobahn')",message="autobahn settings require engine Autobahn: they are written into the ceremony's autobahn.json, which only an Autobahn ceremony produces"
+// +kubebuilder:validation:XValidation:rule="has(self.autobahn) || !(has(self.engine) && self.engine == 'Autobahn')",message="engine Autobahn requires autobahn.evmChainId: the ceremony's autobahn.json has no default EVM chain ID"
 type NetworkConsensusSpec struct {
 	ConsensusSpec `json:",inline"`
 
-	// Autobahn tunes the autobahn.json the genesis ceremony writes. Omitted
-	// fields keep gen-autobahn-config's defaults. Create-only.
+	// Autobahn sets the autobahn.json the genesis ceremony writes. Required
+	// with engine Autobahn, for its evmChainId. Create-only.
 	// +optional
 	Autobahn *AutobahnCeremonySpec `json:"autobahn,omitempty"`
 }

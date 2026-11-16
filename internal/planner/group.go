@@ -60,6 +60,7 @@ func (p *genesisGroupPlanner) BuildPlan(
 	}
 	if ab := network.Spec.Consensus.AutobahnSettings(); ab != nil {
 		assembleParams.AutobahnConfig = &sidecar.AutobahnConfigParams{
+			EvmChainID:       uint64(ab.EvmChainID),
 			BlockInterval:    ab.BlockInterval,
 			AllowEmptyBlocks: ab.AllowEmptyBlocks,
 			MaxTxsPerBlock:   ab.MaxTxsPerBlock,
