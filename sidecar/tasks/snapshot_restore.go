@@ -79,11 +79,14 @@ func (r *SnapshotRestorer) Handler() engine.TaskHandler {
 	})
 }
 
-// Restore downloads and extracts the snapshot, skipping if the marker file exists.
-// It lists objects under the chain's state-sync prefix and picks the highest
-// snapshot height; when targetHeight > 0, the search is capped at that height.
+// Restore installs a snapshot into an absent or empty snapshot directory.
+// A completion marker skips restoration; targetHeight caps the selected height.
 func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) error {
-	if markerExists(r.homeDir, restoreMarkerFile) {
+	completed, err := snapshotRestoreCompleted(r.homeDir)
+	if err != nil {
+		return err
+	}
+	if completed {
 		restoreLog.Debug("already completed, skipping")
 		return nil
 	}
@@ -91,6 +94,12 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 	if targetHeight < 0 {
 		return fmt.Errorf("snapshot-restore: targetHeight must be >= 0, got %d", targetHeight)
 	}
+
+	installation, err := prepareSnapshotInstallation(filepath.Join(r.homeDir, "data", "snapshots"))
+	if err != nil {
+		return err
+	}
+	defer installation.cleanup()
 
 	prefix := r.chainID + "/state-sync/"
 
@@ -136,24 +145,18 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 		return seis3.ClassifyS3Error("snapshot-restore", r.bucket, snapshotKey, r.region, err)
 	}
 
-	if h := parseHeightFromKey(snapshotKey); h > 0 {
-		if err := os.WriteFile(
-			filepath.Join(r.homeDir, SnapshotHeightFile),
-			[]byte(strconv.FormatInt(h, 10)),
-			0o644,
-		); err != nil {
-			restoreLog.Warn("failed to write snapshot height file", "err", err)
-		}
+	if err := installation.install(ctx, tmpPath); err != nil {
+		return err
 	}
 
-	destDir := filepath.Join(r.homeDir, "data", "snapshots")
-	restoreLog.Info("extracting archive", "dest", destDir)
-	if err := extractArchive(ctx, tmpPath, destDir); err != nil {
-		return fmt.Errorf("extracting snapshot: %w", err)
+	if err := writeRestoreFile(r.homeDir, SnapshotHeightFile, []byte(strconv.FormatInt(parseHeightFromKey(snapshotKey), 10))); err != nil {
+		return fmt.Errorf("snapshot installed but height recording failed; preserve %s before retrying: %w", installation.destination, err)
 	}
-
+	if err := writeRestoreFile(r.homeDir, restoreMarkerFile, nil); err != nil {
+		return fmt.Errorf("snapshot installed but completion recording failed; preserve %s before retrying: %w", installation.destination, err)
+	}
 	restoreLog.Info("restore complete")
-	return writeMarker(r.homeDir, restoreMarkerFile)
+	return nil
 }
 
 // resolveKeyForHeight lists snapshot objects under prefix and returns the key
