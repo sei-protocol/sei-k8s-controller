@@ -79,7 +79,7 @@ func (r *SnapshotRestorer) Handler() engine.TaskHandler {
 	})
 }
 
-// Restore installs a snapshot into an absent or empty snapshot directory.
+// Restore installs a snapshot or finishes the same engine task after interruption.
 // A completion marker skips restoration; targetHeight caps the selected height.
 func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) error {
 	completed, err := snapshotRestoreCompleted(r.homeDir)
@@ -95,7 +95,26 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 		return fmt.Errorf("snapshot-restore: targetHeight must be >= 0, got %d", targetHeight)
 	}
 
-	installation, err := prepareSnapshotInstallation(filepath.Join(r.homeDir, "data", "snapshots"))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	identity := restoreInstallationIdentity{
+		TaskID:       engine.TaskIDFromContext(ctx),
+		Bucket:       r.bucket,
+		Region:       r.region,
+		ChainID:      r.chainID,
+		TargetHeight: targetHeight,
+	}
+	destination := filepath.Join(r.homeDir, "data", "snapshots")
+	installedHeight, err := matchingSnapshotInstallation(destination, identity)
+	if err != nil {
+		return err
+	}
+	if installedHeight > 0 {
+		return r.recordInstalledSnapshot(installedHeight)
+	}
+
+	installation, err := prepareSnapshotInstallation(destination)
 	if err != nil {
 		return err
 	}
@@ -145,15 +164,20 @@ func (r *SnapshotRestorer) Restore(ctx context.Context, targetHeight int64) erro
 		return seis3.ClassifyS3Error("snapshot-restore", r.bucket, snapshotKey, r.region, err)
 	}
 
-	if err := installation.install(ctx, tmpPath); err != nil {
+	receipt := restoreInstallationReceipt{Identity: identity, Height: parseHeightFromKey(snapshotKey)}
+	if err := installation.install(ctx, tmpPath, receipt); err != nil {
 		return err
 	}
+	return r.recordInstalledSnapshot(receipt.Height)
+}
 
-	if err := writeRestoreFile(r.homeDir, SnapshotHeightFile, []byte(strconv.FormatInt(parseHeightFromKey(snapshotKey), 10))); err != nil {
-		return fmt.Errorf("snapshot installed but height recording failed; preserve %s before retrying: %w", installation.destination, err)
+func (r *SnapshotRestorer) recordInstalledSnapshot(height int64) error {
+	destination := filepath.Join(r.homeDir, "data", "snapshots")
+	if err := writeRestoreFile(r.homeDir, SnapshotHeightFile, []byte(strconv.FormatInt(height, 10))); err != nil {
+		return fmt.Errorf("snapshot installed but height recording failed; preserve %s before retrying: %w", destination, err)
 	}
 	if err := writeRestoreFile(r.homeDir, restoreMarkerFile, nil); err != nil {
-		return fmt.Errorf("snapshot installed but completion recording failed; preserve %s before retrying: %w", installation.destination, err)
+		return fmt.Errorf("snapshot installed but completion recording failed; preserve %s before retrying: %w", destination, err)
 	}
 	restoreLog.Info("restore complete")
 	return nil

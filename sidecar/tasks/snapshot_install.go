@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -9,7 +10,65 @@ import (
 	"syscall"
 )
 
-const snapshotStagingPrefix = ".sei-snapshot-restore-"
+const (
+	snapshotStagingPrefix           = ".sei-snapshot-restore-"
+	snapshotInstallationReceiptFile = ".sei-sidecar-restore-installation.json"
+)
+
+type restoreInstallationIdentity struct {
+	TaskID       string `json:"taskID"`
+	Bucket       string `json:"bucket"`
+	Region       string `json:"region"`
+	ChainID      string `json:"chainID"`
+	TargetHeight int64  `json:"targetHeight"`
+}
+
+type restoreInstallationReceipt struct {
+	Identity restoreInstallationIdentity `json:"identity"`
+	Height   int64                       `json:"height"`
+}
+
+func matchingSnapshotInstallation(destination string, identity restoreInstallationIdentity) (int64, error) {
+	if identity.TaskID == "" {
+		return 0, nil
+	}
+	info, err := os.Lstat(destination)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("inspecting installed snapshot: %w", err)
+	}
+	if !info.IsDir() {
+		return 0, nil
+	}
+	path := filepath.Join(destination, snapshotInstallationReceiptFile)
+	info, err = os.Lstat(path)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("inspecting snapshot installation receipt: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return 0, fmt.Errorf("snapshot installation receipt must be a regular file; existing data was preserved")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("reading snapshot installation receipt: %w", err)
+	}
+	var receipt restoreInstallationReceipt
+	if err := json.Unmarshal(body, &receipt); err != nil {
+		return 0, fmt.Errorf("decoding snapshot installation receipt: %w", err)
+	}
+	if receipt.Identity != identity {
+		return 0, fmt.Errorf("snapshot installation belongs to a different restore task or request; existing data was preserved")
+	}
+	if receipt.Height <= 0 || (identity.TargetHeight > 0 && receipt.Height > identity.TargetHeight) {
+		return 0, fmt.Errorf("snapshot installation receipt has an invalid height; existing data was preserved")
+	}
+	return receipt.Height, nil
+}
 
 // snapshotInstallation owns private extraction and installation into an empty destination.
 type snapshotInstallation struct {
@@ -58,13 +117,22 @@ func requireEmptySnapshotDestination(destination string) error {
 	return fmt.Errorf("snapshot destination %s is not empty; existing data was preserved, use an empty destination to retry", destination)
 }
 
-func (i *snapshotInstallation) install(ctx context.Context, archivePath string) error {
+func (i *snapshotInstallation) install(ctx context.Context, archivePath string, receipt restoreInstallationReceipt) error {
 	restoreLog.Info("extracting archive into staging", "dest", i.staging)
 	if err := extractArchive(ctx, archivePath, i.staging); err != nil {
 		return fmt.Errorf("extracting snapshot: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// Write ownership locally after extraction so it becomes visible with the
+	// installed store, before completion can be recorded.
+	body, err := json.Marshal(receipt)
+	if err != nil {
+		return fmt.Errorf("encoding snapshot installation receipt: %w", err)
+	}
+	if err := writeRestoreFile(i.staging, snapshotInstallationReceiptFile, body); err != nil {
+		return fmt.Errorf("writing snapshot installation receipt: %w", err)
 	}
 	// Another attempt may have installed while this archive was downloading.
 	if err := requireEmptySnapshotDestination(i.destination); err != nil {
