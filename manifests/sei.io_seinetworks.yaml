@@ -220,9 +220,11 @@ spec:
                         type: boolean
                       evmChainId:
                         description: |-
-                          EvmChainID is autobahn.json evm_chain_id, the EIP-155 chain ID the
-                          network's transactions and governance votes are signed for. Required,
-                          with no default: use one no other chain uses.
+                          EvmChainID is autobahn.json evm_chain_id, the EIP-155 chain ID the EVM-only
+                          executor signs and serves. seid requires the key on every Autobahn chain
+                          but reads it only under EVM-only; with the Cosmos application, the EVM
+                          chain ID still derives from spec.genesis.chainId and this value has no
+                          effect. Required, with no default: use one no other chain uses.
                         format: int64
                         maximum: 9007199254740991
                         minimum: 1
@@ -301,11 +303,11 @@ spec:
                     type: string
                   evmOnly:
                     description: |-
-                      EvmOnly replaces the ABCI application with the EVM-only executor (chain ID
-                      713715). It requires engine Autobahn and is rejected on a seed. The node
-                      serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
-                      are off, no cosmos-exporter is attached, and Ready proves that listener
-                      answers, not sync distance.
+                      EvmOnly replaces the ABCI application with the EVM-only executor, which
+                      signs for spec.consensus.autobahn.evmChainId. It requires engine Autobahn
+                      and is rejected on a seed. The node serves only the EVM JSON-RPC listener
+                      on 8545: CometBFT RPC, REST and gRPC are off, no cosmos-exporter is
+                      attached, and Ready proves that listener answers, not sync distance.
 
                       Deprecated: EVM-only is an execution engine, not a consensus setting. Set
                       spec.executionEngine.mode to EvmOnly instead; this field is still honored

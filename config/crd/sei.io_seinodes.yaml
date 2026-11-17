@@ -261,11 +261,11 @@ spec:
                     type: string
                   evmOnly:
                     description: |-
-                      EvmOnly replaces the ABCI application with the EVM-only executor (chain ID
-                      713715). It requires engine Autobahn and is rejected on a seed. The node
-                      serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
-                      are off, no cosmos-exporter is attached, and Ready proves that listener
-                      answers, not sync distance.
+                      EvmOnly replaces the ABCI application with the EVM-only executor, which
+                      signs for spec.consensus.autobahn.evmChainId. It requires engine Autobahn
+                      and is rejected on a seed. The node serves only the EVM JSON-RPC listener
+                      on 8545: CometBFT RPC, REST and gRPC are off, no cosmos-exporter is
+                      attached, and Ready proves that listener answers, not sync distance.
 
                       Deprecated: EVM-only is an execution engine, not a consensus setting. Set
                       spec.executionEngine.mode to EvmOnly instead; this field is still honored

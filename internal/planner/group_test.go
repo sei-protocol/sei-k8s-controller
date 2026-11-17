@@ -250,10 +250,10 @@ func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
 	}
 }
 
-// spec.consensus.autobahn rides the assemble task as autobahnConfig and reaches
-// the sidecar wire request; the sidecar decodes it into the same field names.
 const testEvmChainID = 713700
 
+// spec.consensus.autobahn rides the assemble task as autobahnConfig and reaches
+// the sidecar wire request; the sidecar decodes it into the same field names.
 func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 	allow := true
 	maxTxs := int64(1500)
@@ -268,7 +268,7 @@ func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 			Consensus: &seiv1alpha1.NetworkConsensusSpec{
 				ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
 				Autobahn: &seiv1alpha1.AutobahnCeremonySpec{
-					EvmChainID:       testEvmChainID,
+					EvmChainID:       new(int64(testEvmChainID)),
 					BlockInterval:    "1s",
 					AllowEmptyBlocks: &allow,
 					MaxTxsPerBlock:   &maxTxs,
@@ -328,7 +328,7 @@ func TestBuildGroupAssemblyPlan_PropagatesEvmGovernance(t *testing.T) {
 			Consensus: &seiv1alpha1.NetworkConsensusSpec{
 				ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
 				Autobahn: &seiv1alpha1.AutobahnCeremonySpec{
-					EvmChainID: testEvmChainID,
+					EvmChainID: new(int64(testEvmChainID)),
 					EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{
 						VotingPeriod: "5m", StartingProposalID: &startID, AppliedUpgrades: []string{"v6.3.0", "v6.4.0"},
 					},

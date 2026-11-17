@@ -30,7 +30,7 @@ func TestConsensus_PropagatesToValidators(t *testing.T) {
 	allow := true
 	network.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{
 		ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true},
-		Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, BlockInterval: "1s", AllowEmptyBlocks: &allow},
+		Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), BlockInterval: "1s", AllowEmptyBlocks: &allow},
 	}
 	network.Spec.Genesis.ConsensusParams = &apiextensionsv1.JSON{Raw: []byte(`{"block":{"max_gas":"35000000"}}`)}
 	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
@@ -66,7 +66,7 @@ func TestExecutionEngine_PropagatesToValidators(t *testing.T) {
 	network := fixtures.NewNetwork(ns, "engine-evm-only", fixtures.WithReplicas(2))
 	network.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{
 		ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-		Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID},
+		Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID))},
 	}
 	network.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{
 		Mode:    seiv1alpha1.ExecutionEngineEvmOnly,
@@ -93,12 +93,12 @@ func TestExecutionEngine_PropagatesToValidators(t *testing.T) {
 
 func TestExecutionEngine_NetworkShapes(t *testing.T) {
 	ns := makeNamespace(t)
-	autobahn := &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}, Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID}}
+	autobahn := &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}, Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID))}}
 	evmOnly := &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
 	withGovernance := func(period string) *seiv1alpha1.NetworkConsensusSpec {
 		return &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: period}},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: period}},
 		}
 	}
 	releaseList := []string{"1.0.5beta upgrade"}
@@ -119,7 +119,7 @@ func TestExecutionEngine_NetworkShapes(t *testing.T) {
 		{name: "evm-only-autobahn", engine: evmOnly, consensus: autobahn},
 		{name: "evm-only-tendermint", engine: evmOnly, errorText: "executionEngine mode EvmOnly requires consensus engine Autobahn"},
 		{name: "typed-default-legacy-true", engine: &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineDefault},
-			consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}, Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID}},
+			consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn, EvmOnly: true}, Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID))}},
 			errorText: "disagree"},
 		{name: "governance-evm-only", engine: evmOnly, consensus: withGovernance("5m")},
 		{name: "governance-legacy-evm-only", consensus: func() *seiv1alpha1.NetworkConsensusSpec {
@@ -176,7 +176,7 @@ func TestConsensus_NetworkShapes(t *testing.T) {
 		errorText string
 	}{
 		{name: "omitted"},
-		{name: "autobahn", consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}, Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID}}},
+		{name: "autobahn", consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}, Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID))}}},
 		{name: "autobahn-without-settings", consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}},
 			errorText: "engine Autobahn requires autobahn.evmChainId"},
 		{name: "autobahn-zero-chain-id", consensus: &seiv1alpha1.NetworkConsensusSpec{
@@ -185,39 +185,39 @@ func TestConsensus_NetworkShapes(t *testing.T) {
 		}, errorText: "autobahn.evmChainId is required"},
 		{name: "autobahn-chain-id-over-max", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: 1 << 53},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(1 << 53))},
 		}, errorText: "evmChainId"},
 		{name: "tendermint-evm-only", consensus: &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{EvmOnly: true}}, errorText: "evmOnly requires engine Autobahn"},
 		{name: "autobahn-knobs", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, BlockInterval: "250ms", MaxTxsPerBlock: &one},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), BlockInterval: "250ms", MaxTxsPerBlock: &one},
 		}},
 		{name: "tendermint-knobs", consensus: &seiv1alpha1.NetworkConsensusSpec{
-			Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, BlockInterval: "250ms"},
+			Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), BlockInterval: "250ms"},
 		}, errorText: "autobahn settings require engine Autobahn"},
 		{name: "bad-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, BlockInterval: "400"},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), BlockInterval: "400"},
 		}, errorText: "blockInterval"},
 		{name: "zero-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, BlockInterval: "0s"},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), BlockInterval: "0s"},
 		}, errorText: "blockInterval must be a positive duration"},
 		{name: "zero-composite-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, BlockInterval: "0h0m0s"},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), BlockInterval: "0h0m0s"},
 		}, errorText: "blockInterval must be a positive duration"},
 		{name: "fractional-interval", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, BlockInterval: "1.5s"},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), BlockInterval: "1.5s"},
 		}},
 		{name: "zero-max-txs", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, MaxTxsPerBlock: &zero},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), MaxTxsPerBlock: &zero},
 		}, errorText: "maxTxsPerBlock"},
 		{name: "over-cap-max-txs", consensus: &seiv1alpha1.NetworkConsensusSpec{
 			ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, MaxTxsPerBlock: &overCap},
+			Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), MaxTxsPerBlock: &overCap},
 		}, errorText: "maxTxsPerBlock"},
 	}
 	for _, tc := range cases {
@@ -249,7 +249,7 @@ func TestConsensus_NetworkEffectiveValueCreateOnly(t *testing.T) {
 	})).To(Succeed(), "making the default explicit is not a change")
 
 	err := updateNetworkWithRetry(t, key, func(cur *seiv1alpha1.SeiNetwork) {
-		cur.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}, Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID}}
+		cur.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn}, Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID))}}
 	})
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("spec.consensus.engine is create-only"))
@@ -264,16 +264,18 @@ func TestConsensus_AutobahnKnobsCreateOnly(t *testing.T) {
 	network := fixtures.NewNetwork(ns, "autobahn-knobs-immutable")
 	network.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{
 		ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-		Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, BlockInterval: "1s"},
+		Autobahn:      &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), BlockInterval: "1s"},
 	}
 	g.Expect(testCli.Create(testCtx, network)).To(Succeed())
 	key := client.ObjectKeyFromObject(network)
 
 	for name, mutate := range map[string]func(*seiv1alpha1.SeiNetwork){
-		"change":   func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn.BlockInterval = "2s" },
-		"chain-id": func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn.EvmChainID = testEvmChainID + 1 },
-		"add":      func(cur *seiv1alpha1.SeiNetwork) { v := true; cur.Spec.Consensus.Autobahn.AllowEmptyBlocks = &v },
-		"proxy":    func(cur *seiv1alpha1.SeiNetwork) { v := false; cur.Spec.Consensus.Autobahn.EnableEvmProxy = &v },
+		"change": func(cur *seiv1alpha1.SeiNetwork) { cur.Spec.Consensus.Autobahn.BlockInterval = "2s" },
+		"chain-id": func(cur *seiv1alpha1.SeiNetwork) {
+			cur.Spec.Consensus.Autobahn.EvmChainID = new(int64(testEvmChainID + 1))
+		},
+		"add":   func(cur *seiv1alpha1.SeiNetwork) { v := true; cur.Spec.Consensus.Autobahn.AllowEmptyBlocks = &v },
+		"proxy": func(cur *seiv1alpha1.SeiNetwork) { v := false; cur.Spec.Consensus.Autobahn.EnableEvmProxy = &v },
 		"governance": func(cur *seiv1alpha1.SeiNetwork) {
 			cur.Spec.Consensus.Autobahn.EvmGovernance = &seiv1alpha1.AutobahnEvmGovernanceSpec{VotingPeriod: "5m"}
 		},
@@ -295,7 +297,7 @@ func TestConsensus_AppliedUpgradesReorderIsCreateOnly(t *testing.T) {
 	network.Spec.ExecutionEngine = &seiv1alpha1.ExecutionEngineSpec{Mode: seiv1alpha1.ExecutionEngineEvmOnly}
 	network.Spec.Consensus = &seiv1alpha1.NetworkConsensusSpec{
 		ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
-		Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: testEvmChainID, EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{
+		Autobahn: &seiv1alpha1.AutobahnCeremonySpec{EvmChainID: new(int64(testEvmChainID)), EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{
 			VotingPeriod: "5m", AppliedUpgrades: []string{"v1", "v2"},
 		}},
 	}
