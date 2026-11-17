@@ -15,12 +15,12 @@ var (
 		[]string{"chain"},
 	)
 
-	// snapshotUploadLastUploaded records the last run that actually pushed an
-	// archive to S3 (set only on a real upload, never on a noop).
+	// snapshotUploadLastUploaded records local archive publication finalization.
+	// It does not report when the archive was transferred or latest.txt advanced.
 	snapshotUploadLastUploaded = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "seictl_snapshot_upload_last_uploaded_timestamp_seconds",
-			Help: "Unix timestamp of the last snapshot-upload run that uploaded an archive to S3.",
+			Help: "Unix timestamp of the last archive publication finalized by this sidecar.",
 		},
 		[]string{"chain"},
 	)
@@ -28,7 +28,7 @@ var (
 	snapshotUploadLastUploadedHeight = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "seictl_snapshot_upload_last_uploaded_height",
-			Help: "Snapshot height of the last archive uploaded to S3.",
+			Help: "Snapshot height of the last archive publication finalized by this sidecar.",
 		},
 		[]string{"chain"},
 	)

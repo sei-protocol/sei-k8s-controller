@@ -110,7 +110,7 @@ var serveCmd = cli.Command{
 			return fmt.Errorf("creating snapshot restorer: %w", err)
 		}
 
-		snapshotUploader, err := tasks.NewSnapshotUploader(homeDir, snapshotBucket, snapshotRegion, chainID, snapshotUploadInterval, nil)
+		snapshotUploader, err := tasks.NewSnapshotUploader(homeDir, snapshotBucket, snapshotRegion, chainID, snapshotUploadInterval, nil, nil)
 		if err != nil {
 			return fmt.Errorf("creating snapshot uploader: %w", err)
 		}

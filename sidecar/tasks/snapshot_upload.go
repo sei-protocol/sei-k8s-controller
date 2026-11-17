@@ -2,7 +2,6 @@ package tasks
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -57,16 +56,14 @@ const (
 	NoopAlreadyUploaded       = wire.NoopAlreadyUploaded
 )
 
-// SnapshotUploadResult is the structured result both handlers return through the
-// engine so a one-shot poller can distinguish uploaded / noop / error: an error
-// return carries Outcome=OutcomeError alongside the error string. On the loop
-// path it is discarded; the engine persists it on TaskResult.Result for the
-// one-shot path.
+// SnapshotUploadResult reports local archive publication and the shared marker
+// outcome. An uploaded archive may leave an equal or newer marker unchanged.
 type SnapshotUploadResult struct {
-	Outcome    UploadOutcome `json:"outcome"`
-	NoopReason NoopReason    `json:"noopReason,omitempty"`
-	Height     int64         `json:"height,omitempty"`
-	Key        string        `json:"key,omitempty"`
+	Outcome       UploadOutcome       `json:"outcome"`
+	NoopReason    NoopReason          `json:"noopReason,omitempty"`
+	Height        int64               `json:"height,omitempty"`
+	Key           string              `json:"key,omitempty"`
+	MarkerOutcome seis3.MarkerOutcome `json:"markerOutcome,omitempty"`
 }
 
 // uploadState tracks the last successfully uploaded snapshot height and when it
@@ -82,35 +79,38 @@ type uploadState struct {
 // and uploads new ones to S3. When submitted as a task, it runs in a loop
 // at the configured interval until the context is cancelled.
 type SnapshotUploader struct {
-	homeDir           string
-	bucket            string
-	region            string
-	chainID           string
-	uploadInterval    time.Duration
-	s3UploaderFactory seis3.UploaderFactory
+	homeDir             string
+	bucket              string
+	region              string
+	chainID             string
+	uploadInterval      time.Duration
+	s3UploaderFactory   seis3.UploaderFactory
+	latestMarkerFactory seis3.LatestMarkerFactory
 }
 
-// NewSnapshotUploader creates an uploader targeting the given home directory.
-// Bucket, region, and chainID are read from environment at construction time
-// and rejected here if empty so the caller fails fast rather than entering
-// runLoop and uploading nothing forever.
-func NewSnapshotUploader(homeDir, bucket, region, chainID string, uploadInterval time.Duration, factory seis3.UploaderFactory) (*SnapshotUploader, error) {
+// NewSnapshotUploader creates an uploader for a home and a nonempty S3 destination.
+// Nil factories use the default AWS configuration for archive and marker clients.
+func NewSnapshotUploader(homeDir, bucket, region, chainID string, uploadInterval time.Duration, factory seis3.UploaderFactory, markerFactory seis3.LatestMarkerFactory) (*SnapshotUploader, error) {
 	if bucket == "" || region == "" || chainID == "" {
 		return nil, fmt.Errorf("snapshot-upload: bucket, region, and chainID are required")
 	}
 	if factory == nil {
 		factory = seis3.DefaultUploaderFactory
 	}
+	if markerFactory == nil {
+		markerFactory = seis3.DefaultLatestMarkerFactory
+	}
 	if uploadInterval <= 0 {
 		uploadInterval = defaultUploadInterval
 	}
 	return &SnapshotUploader{
-		homeDir:           homeDir,
-		bucket:            bucket,
-		region:            region,
-		chainID:           chainID,
-		uploadInterval:    uploadInterval,
-		s3UploaderFactory: factory,
+		homeDir:             homeDir,
+		bucket:              bucket,
+		region:              region,
+		chainID:             chainID,
+		uploadInterval:      uploadInterval,
+		s3UploaderFactory:   factory,
+		latestMarkerFactory: markerFactory,
 	}, nil
 }
 
@@ -199,28 +199,25 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 	}
 
 	latestKey := prefix + "latest.txt"
-	latestBody := []byte(strconv.FormatInt(height, 10))
-	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket: aws.String(u.bucket),
-		Key:    aws.String(latestKey),
-		Body:   bytes.NewReader(latestBody),
-	})
+	marker, err := u.latestMarkerFactory(ctx, u.region)
 	if err != nil {
-		return u.recordError(ctx), fmt.Errorf("uploading %s: %w", latestKey, err)
+		return u.recordError(ctx), fmt.Errorf("building snapshot marker publisher: %w", err)
 	}
-	uploadLog.Info("updated latest.txt", "key", latestKey, "height", height)
+	markerOutcome, err := marker.Advance(ctx, u.bucket, latestKey, height)
+	if err != nil {
+		return u.recordError(ctx), fmt.Errorf("publishing %s: %w", latestKey, err)
+	}
+	uploadLog.Info("resolved latest.txt publication", "key", latestKey, "height", height, "marker-outcome", markerOutcome)
 
 	if err := u.writeUploadState(uploadState{LastUploadedHeight: height, LastUploadedAt: time.Now().Unix()}); err != nil {
 		return u.recordError(ctx), err
 	}
 
-	return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeUploaded, Height: height, Key: archiveKey}), nil
+	return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeUploaded, Height: height, Key: archiveKey, MarkerOutcome: markerOutcome}), nil
 }
 
-// recordTerminal emits the metrics for a clean terminal and returns the result
-// unchanged so callers can `return u.recordTerminal(...), nil` in one line. Any
-// clean terminal (uploaded or noop) refreshes the last-run-success gauge and the
-// outcome counter; only a real upload advances the uploaded gauges.
+// recordTerminal records a clean outcome and local archive finalization metrics.
+// The uploaded gauges describe the local archive, not the shared marker.
 func (u *SnapshotUploader) recordTerminal(result SnapshotUploadResult) SnapshotUploadResult {
 	now := time.Now()
 	snapshotUploadLastRunSuccess.WithLabelValues(u.chainID).Set(float64(now.Unix()))
