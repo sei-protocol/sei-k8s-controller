@@ -70,6 +70,11 @@ func (in *AutobahnCeremonySpec) DeepCopyInto(out *AutobahnCeremonySpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.EvmChainID != nil {
+		in, out := &in.EvmChainID, &out.EvmChainID
+		*out = new(int64)
+		**out = **in
+	}
 	if in.EvmGovernance != nil {
 		in, out := &in.EvmGovernance, &out.EvmGovernance
 		*out = new(AutobahnEvmGovernanceSpec)

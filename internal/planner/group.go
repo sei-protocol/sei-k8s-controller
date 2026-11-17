@@ -65,6 +65,10 @@ func (p *genesisGroupPlanner) BuildPlan(
 			MaxTxsPerBlock:   ab.MaxTxsPerBlock,
 			EnableEvmProxy:   ab.EnableEvmProxy,
 		}
+		if ab.EvmChainID != nil {
+			id := uint64(*ab.EvmChainID)
+			assembleParams.AutobahnConfig.EvmChainID = &id
+		}
 		if g := ab.EvmGovernance; g != nil {
 			gov := &sidecar.AutobahnEvmGovernanceParams{VotingPeriod: g.VotingPeriod, AppliedUpgrades: g.AppliedUpgrades}
 			if g.StartingProposalID != nil {

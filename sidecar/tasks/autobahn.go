@@ -83,6 +83,7 @@ type autobahnFileConfig struct {
 	DialInterval       string                 `json:"dial_interval"`
 	BlockDB            autobahnBlockDBConfig  `json:"block_db"`
 	EVMGovernance      *autobahnEVMGovernance `json:"evm_governance,omitempty"`
+	EVMChainID         uint64                 `json:"evm_chain_id"`
 }
 
 // autobahnEVMGovernance matches config.EVMGovernance's JSON.
@@ -314,6 +315,10 @@ func checkRPCURL(s string) error {
 // the ceiling the producer clamps max_txs_per_block to.
 const autobahnProtocolMaxTxsPerBlock = 2_000
 
+// autobahnDefaultEVMChainID is the evm_chain_id written when the ceremony names
+// none: the ID every EVM-only chain ran on before seid required the field.
+const autobahnDefaultEVMChainID = 713_715
+
 // AutobahnConfigOverrides replaces gen-autobahn-config defaults in the rendered
 // autobahn.json. Unset fields keep the default.
 type AutobahnConfigOverrides struct {
@@ -321,6 +326,7 @@ type AutobahnConfigOverrides struct {
 	AllowEmptyBlocks *bool                           `json:"allowEmptyBlocks,omitempty"`
 	MaxTxsPerBlock   *int64                          `json:"maxTxsPerBlock,omitempty"`
 	EnableEvmProxy   *bool                           `json:"enableEvmProxy,omitempty"`
+	EvmChainID       *uint64                         `json:"evmChainId,omitempty"`
 	EvmGovernance    *AutobahnEvmGovernanceOverrides `json:"evmGovernance,omitempty"`
 }
 
@@ -419,11 +425,11 @@ func checkAutobahnVoters(validators []autobahnValidator, governance bool) error 
 // its default flags: 2000 txs/block, empty blocks off, 400ms blocks, 1500ms
 // view timeout, 10s dial interval, state persisted under data/autobahn with a
 // 30s BlockDB retention, enable_evm_proxy absent so the provider's Or(true)
-// applies, and no evm_governance. Overrides replace the defaults they name,
-// checked against the provider's AutobahnFileConfig.Validate bounds; an
-// EvmGovernance override requires an evm_voter on every validator, and its
-// absence forbids one. Validators keep the order given, which is the
-// ceremony's ordinal order.
+// applies, and no evm_governance, plus evm_chain_id 713715, which the command
+// requires as a flag. Overrides replace the defaults they name, checked
+// against the provider's AutobahnFileConfig.Validate bounds; an EvmGovernance
+// override requires an evm_voter on every validator, and its absence forbids
+// one. Validators keep the order given, which is the ceremony's ordinal order.
 func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConfigOverrides) ([]byte, error) {
 	if len(validators) == 0 {
 		return nil, fmt.Errorf("autobahn: no validators")
@@ -438,6 +444,7 @@ func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConf
 		PersistentStateDir: "data/autobahn",
 		DialInterval:       (10 * time.Second).String(),
 		BlockDB:            autobahnBlockDBConfig{Retention: &retention},
+		EVMChainID:         autobahnDefaultEVMChainID,
 	}
 	if overrides != nil {
 		if overrides.BlockInterval != "" {
@@ -461,6 +468,12 @@ func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConf
 		}
 		if overrides.EnableEvmProxy != nil {
 			cfg.EnableEvmProxy = overrides.EnableEvmProxy
+		}
+		if overrides.EvmChainID != nil {
+			if *overrides.EvmChainID == 0 {
+				return nil, fmt.Errorf("autobahn: evm_chain_id must be positive")
+			}
+			cfg.EVMChainID = *overrides.EvmChainID
 		}
 		if overrides.EvmGovernance != nil {
 			governance, err := buildAutobahnEVMGovernance(overrides.EvmGovernance)

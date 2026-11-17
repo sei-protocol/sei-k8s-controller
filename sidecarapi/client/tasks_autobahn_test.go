@@ -7,6 +7,7 @@ import (
 
 func TestAssembleAndUploadGenesisTask_ValidateAutobahnConfig(t *testing.T) {
 	one, zero, overCap := int64(1), int64(0), int64(AutobahnMaxTxsPerBlockCeiling+1)
+	chainID, zeroChainID := uint64(713700), uint64(0)
 	cases := []struct {
 		name     string
 		autobahn bool
@@ -23,6 +24,8 @@ func TestAssembleAndUploadGenesisTask_ValidateAutobahnConfig(t *testing.T) {
 		{name: "negative interval", autobahn: true, cfg: &AutobahnConfigParams{BlockInterval: "-1s"}, wantErr: "must be positive"},
 		{name: "zero max txs", autobahn: true, cfg: &AutobahnConfigParams{MaxTxsPerBlock: &zero}, wantErr: "MaxTxsPerBlock 0"},
 		{name: "over-cap max txs", autobahn: true, cfg: &AutobahnConfigParams{MaxTxsPerBlock: &overCap}, wantErr: "MaxTxsPerBlock 2001"},
+		{name: "evm chain id", autobahn: true, cfg: &AutobahnConfigParams{EvmChainID: &chainID}},
+		{name: "zero evm chain id", autobahn: true, cfg: &AutobahnConfigParams{EvmChainID: &zeroChainID}, wantErr: "EvmChainID must be positive"},
 		{name: "governance", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "5m", StartingProposalID: 7}}},
 		{name: "governance at floor", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "2s"}}},
 		{name: "governance below floor", autobahn: true, cfg: &AutobahnConfigParams{EvmGovernance: &AutobahnEvmGovernanceParams{VotingPeriod: "1s"}}, wantErr: "must be in"},

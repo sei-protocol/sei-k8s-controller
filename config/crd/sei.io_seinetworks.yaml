@@ -218,6 +218,17 @@ spec:
                           benchmarked against the forwarding hop. Omitted leaves the key out of the
                           artifact so seid applies its own default.
                         type: boolean
+                      evmChainId:
+                        description: |-
+                          EvmChainID is autobahn.json evm_chain_id, the EIP-155 chain ID the EVM-only
+                          executor signs and serves. seid requires the key on every Autobahn chain
+                          but reads it only under EVM-only; with the Cosmos application, the EVM
+                          chain ID still derives from spec.genesis.chainId and this value has no
+                          effect. Omitted writes 713715, the ID chains this controller created
+                          before the field existed run on.
+                        format: int64
+                        minimum: 1
+                        type: integer
                       evmGovernance:
                         description: |-
                           EvmGovernance writes autobahn.json evm_governance, enabling the EVM-only
@@ -289,8 +300,9 @@ spec:
                     type: string
                   evmOnly:
                     description: |-
-                      EvmOnly replaces the ABCI application with the EVM-only executor (chain ID
-                      713715). It requires engine Autobahn and is rejected on a seed. The node
+                      EvmOnly replaces the ABCI application with the EVM-only executor, which
+                      signs for spec.consensus.autobahn.evmChainId (713715 when omitted). It
+                      requires engine Autobahn and is rejected on a seed. The node
                       serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
                       are off, no cosmos-exporter is attached, and Ready proves that listener
                       answers, not sync distance.
