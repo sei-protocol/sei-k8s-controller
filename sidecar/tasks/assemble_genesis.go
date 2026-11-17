@@ -94,8 +94,8 @@ type AssembleGenesisResult struct {
 // ConsensusParams is one JSON object shaped like genesis.consensus_params,
 // deep-merged over what collect-gentxs produced. Autobahn makes the ceremony
 // also generate autobahn.json from every node's identity.json and upload it
-// under the chain prefix before genesis.json; AutobahnConfig replaces the
-// gen-autobahn-config defaults it names in that file.
+// under the chain prefix before genesis.json; AutobahnConfig sets that file's
+// evm_chain_id and any gen-autobahn-config default it names.
 type AssembleGenesisRequest struct {
 	AccountBalance  string                     `json:"accountBalance"`
 	Namespace       string                     `json:"namespace"`

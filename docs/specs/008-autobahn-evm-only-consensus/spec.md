@@ -190,7 +190,7 @@ a manual step.
 #### Acceptance Criteria
 
 1. When the engine is `Autobahn`, the `upload-genesis-artifacts` task SHALL widen the identity manifest with the validator public key, the node public key, the P2P address `<node>-0.<node>.<namespace>.svc.cluster.local:26656`, and the EVM-RPC URL `ws://<node>-0.<node>.<namespace>.svc.cluster.local:8546`, the EVM WebSocket listener that validators dial to proxy transactions to a shard's owner.
-2. When the engine is `Autobahn`, the assembler SHALL materialise one node directory per validator from the identity manifests, run `seid tendermint gen-autobahn-config <dirs> --output autobahn.json`, and upload the result to `{bucket}/{chainID}/autobahn.json` **before** it uploads `genesis.json`. `genesis.json` is the ceremony's commit point that every `configure-genesis` polls for, so the artifact is present whenever the commit point is.
+2. When the engine is `Autobahn`, the assembler SHALL materialise one node directory per validator from the identity manifests, run `seid tendermint gen-autobahn-config <dirs> --evm-chain-id <id> --output autobahn.json` with `SeiNetwork.spec.consensus.autobahn.evmChainId`, and upload the result to `{bucket}/{chainID}/autobahn.json` **before** it uploads `genesis.json`. `genesis.json` is the ceremony's commit point that every `configure-genesis` polls for, so the artifact is present whenever the commit point is.
 3. When any identity manifest lacks a field the generator reads, the assembler SHALL fail before writing either artifact, naming the validator and the field.
 4. When the engine is `Autobahn`, the `configure-genesis` task SHALL download `autobahn.json` to `config/autobahn.json` after `genesis.json`, on validators and followers alike. An absent artifact after a present `genesis.json` is a broken ceremony, not a race, and the task SHALL fail terminally naming the object key, so the plan fails on that attempt rather than at the end of the `configure-genesis` retry budget.
 5. The assembler SHALL render the artifact with the generator's defaults — `max_txs_per_block` 2000, `allow_empty_blocks` false, `block_interval` 400ms, `view_timeout` 1.5s, `dial_interval` 10s, `persistent_state_dir` `data/autobahn`, BlockDB retention 30s, `enable_evm_proxy` absent so seid's default of true applies — except where `SeiNetwork.spec.consensus.autobahn` names a value:
@@ -200,13 +200,14 @@ a manual step.
      consensus:
        engine: Autobahn
        autobahn:
+         evmChainId: 713700       # required, no default; one no other chain uses
          blockInterval: 400ms     # Go duration, > 0
          allowEmptyBlocks: false
          maxTxsPerBlock: 2000     # 1..2000; 2000 is the protocol ceiling the producer clamps to
          enableEvmProxy: true     # omitted leaves the key absent; seid defaults it to true
    ```
 
-   The block is network-only (a `SeiNode` consumes `autobahn.json`, it never generates one), requires `engine: Autobahn`, and is create-only as a whole: its values are already in every validator's and follower's copy of the artifact. The planner carries it to the assembler as typed fields on the `assemble-and-upload-genesis` task, never as file content. `view_timeout`, `dial_interval` and BlockDB settings stay at their defaults.
+   The block is network-only (a `SeiNode` consumes `autobahn.json`, it never generates one), requires `engine: Autobahn` and is required by it, for `evmChainId`, and is create-only as a whole: its values are already in every validator's and follower's copy of the artifact. The planner carries it to the assembler as typed fields on the `assemble-and-upload-genesis` task, never as file content. `view_timeout`, `dial_interval` and BlockDB settings stay at their defaults.
 
 ### Requirement 3: The controller writes the engine keys
 
@@ -296,7 +297,7 @@ so that the README's block gas limit is a declared value and not a patch.
 - The controller's own overrides travel as `sei-config` enrichment keys (`network.p2p.persistent_peers`, `chain.freeze_height`). `sei-config` exposes no key for `autobahn-config-file` or `evm-only` today; Requirement 3 item 1 adds them there rather than using the raw-TOML `config-patch` path, because only a `sei-config` key can be denied on the override maps (item 4).
 - EVM-only leaves `[rpc] laddr` empty and disables `api`, `grpc`, and `grpc-web`, following the `docker/localnode` `step4_config_override.sh` sequence in `sei-chain`. Non-EVM-only Autobahn keeps the CometBFT RPC, as that script does, so its health source is unchanged.
 - The EVM-only listener returns `200` to a bare GET on `/` with no body: the `go-ethereum` `rpc.Server.ServeHTTP` health-check path, in the fork `sei-chain` pins. An `httpGet` probe therefore needs no `exec`, no POST, and no `sei-chain` change. The listener serves only `eth_sendRawTransaction` and `eth_getTransactionReceipt`, so no `eth_blockNumber` probe is available; that bounds what Ready can mean here.
-- `seid` reads the EVM chain ID from `autobahn.json` `evm_chain_id`, which it requires since sei-chain #4878. The ceremony writes `spec.consensus.autobahn.evmChainId`, or `713715` when that is omitted. `spec.genesis.chainId` still names the Cosmos chain and still keys the S3 prefix; the two do not conflict.
+- `seid` reads the EVM chain ID from `autobahn.json` `evm_chain_id`, which it requires since sei-chain #4878. The ceremony writes `spec.consensus.autobahn.evmChainId`, which has no default. `spec.genesis.chainId` still names the Cosmos chain and still keys the S3 prefix; the two do not conflict.
 - The `restart-seid` process match on `seid start` is unchanged; EVM-only launches through the same subcommand with the engine keys in `config.toml`, not extra flags.
 - The README starts `seid` with `--inv-check-period 0 --freeze-height 0`. Both are `seid start`'s own defaults (`sei-cosmos/server/start.go` registers each flag with `0`), so the controller's bare `seid start` is equivalent. `--freeze-height` also reads from `app.toml` `freeze-height`, which `spec.freeze` already renders for the non-consensus modes; `--inv-check-period` is accepted by `seid start` and discarded by `app.New` (the parameter is `_ uint`), so no value of it changes a node. Neither flag needs a controller field (PLT-1250).
 - Autobahn disables empty blocks by default, so an idle network stays at height 0. Spec 007's `Producing` needs a height source the EVM-only node does not serve on `26657`; PLT-1251 decides the rule, and this spec keeps Ready as a listener-up signal for EVM-only until it does.

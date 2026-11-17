@@ -250,13 +250,14 @@ func TestBuildGroupAssemblyPlan_OmitsOverridesWhenUnset(t *testing.T) {
 	}
 }
 
+const testEvmChainID = 713700
+
 // spec.consensus.autobahn rides the assemble task as autobahnConfig and reaches
 // the sidecar wire request; the sidecar decodes it into the same field names.
 func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 	allow := true
 	maxTxs := int64(1500)
 	noProxy := false
-	evmChainID := int64(713700)
 	group := &seiv1alpha1.SeiNetwork{
 		ObjectMeta: metav1.ObjectMeta{Name: "ab-group", Namespace: "default"},
 		Spec: seiv1alpha1.SeiNetworkSpec{
@@ -267,11 +268,11 @@ func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 			Consensus: &seiv1alpha1.NetworkConsensusSpec{
 				ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
 				Autobahn: &seiv1alpha1.AutobahnCeremonySpec{
+					EvmChainID:       new(int64(testEvmChainID)),
 					BlockInterval:    "1s",
 					AllowEmptyBlocks: &allow,
 					MaxTxsPerBlock:   &maxTxs,
 					EnableEvmProxy:   &noProxy,
-					EvmChainID:       &evmChainID,
 				},
 			},
 		},
@@ -294,10 +295,9 @@ func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 	if !params.Autobahn || params.AutobahnConfig == nil {
 		t.Fatalf("Autobahn=%v AutobahnConfig=%v", params.Autobahn, params.AutobahnConfig)
 	}
-	if params.AutobahnConfig.BlockInterval != "1s" || params.AutobahnConfig.AllowEmptyBlocks == nil || !*params.AutobahnConfig.AllowEmptyBlocks ||
+	if params.AutobahnConfig.EvmChainID != testEvmChainID || params.AutobahnConfig.BlockInterval != "1s" || params.AutobahnConfig.AllowEmptyBlocks == nil || !*params.AutobahnConfig.AllowEmptyBlocks ||
 		params.AutobahnConfig.MaxTxsPerBlock == nil || *params.AutobahnConfig.MaxTxsPerBlock != 1500 ||
-		params.AutobahnConfig.EnableEvmProxy == nil || *params.AutobahnConfig.EnableEvmProxy ||
-		params.AutobahnConfig.EvmChainID == nil || *params.AutobahnConfig.EvmChainID != 713700 {
+		params.AutobahnConfig.EnableEvmProxy == nil || *params.AutobahnConfig.EnableEvmProxy {
 		t.Errorf("AutobahnConfig = %+v", *params.AutobahnConfig)
 	}
 
@@ -306,7 +306,7 @@ func TestBuildGroupAssemblyPlan_PropagatesAutobahnConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(wire) != `{"blockInterval":"1s","allowEmptyBlocks":true,"maxTxsPerBlock":1500,"enableEvmProxy":false,"evmChainId":713700}` {
+	if string(wire) != `{"evmChainId":713700,"blockInterval":"1s","allowEmptyBlocks":true,"maxTxsPerBlock":1500,"enableEvmProxy":false}` {
 		t.Errorf("wire autobahnConfig = %s", wire)
 	}
 
@@ -328,6 +328,7 @@ func TestBuildGroupAssemblyPlan_PropagatesEvmGovernance(t *testing.T) {
 			Consensus: &seiv1alpha1.NetworkConsensusSpec{
 				ConsensusSpec: seiv1alpha1.ConsensusSpec{Engine: seiv1alpha1.ConsensusEngineAutobahn},
 				Autobahn: &seiv1alpha1.AutobahnCeremonySpec{
+					EvmChainID: new(int64(testEvmChainID)),
 					EvmGovernance: &seiv1alpha1.AutobahnEvmGovernanceSpec{
 						VotingPeriod: "5m", StartingProposalID: &startID, AppliedUpgrades: []string{"v6.3.0", "v6.4.0"},
 					},
@@ -354,7 +355,7 @@ func TestBuildGroupAssemblyPlan_PropagatesEvmGovernance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(wire) != `{"evmGovernance":{"votingPeriod":"5m","startingProposalId":7,"appliedUpgrades":["v6.3.0","v6.4.0"]}}` {
+	if string(wire) != `{"evmChainId":713700,"evmGovernance":{"votingPeriod":"5m","startingProposalId":7,"appliedUpgrades":["v6.3.0","v6.4.0"]}}` {
 		t.Errorf("wire autobahnConfig = %s", wire)
 	}
 

@@ -72,6 +72,7 @@ type autobahnBlockDBConfig struct {
 // gen-autobahn-config populates. Optional fields the command leaves absent and
 // that the provider marks omitzero are omitted here too.
 type autobahnFileConfig struct {
+	EVMChainID         uint64                 `json:"evm_chain_id"`
 	Validators         []autobahnValidator    `json:"validators"`
 	MaxTxsPerBlock     uint64                 `json:"max_txs_per_block"`
 	MaxTxsPerSecond    *uint64                `json:"max_txs_per_second"`
@@ -83,7 +84,6 @@ type autobahnFileConfig struct {
 	DialInterval       string                 `json:"dial_interval"`
 	BlockDB            autobahnBlockDBConfig  `json:"block_db"`
 	EVMGovernance      *autobahnEVMGovernance `json:"evm_governance,omitempty"`
-	EVMChainID         uint64                 `json:"evm_chain_id"`
 }
 
 // autobahnEVMGovernance matches config.EVMGovernance's JSON.
@@ -315,18 +315,15 @@ func checkRPCURL(s string) error {
 // the ceiling the producer clamps max_txs_per_block to.
 const autobahnProtocolMaxTxsPerBlock = 2_000
 
-// autobahnDefaultEVMChainID is the evm_chain_id written when the ceremony names
-// none: the ID every EVM-only chain ran on before seid required the field.
-const autobahnDefaultEVMChainID = 713_715
-
-// AutobahnConfigOverrides replaces gen-autobahn-config defaults in the rendered
-// autobahn.json. Unset fields keep the default.
+// AutobahnConfigOverrides sets values in the rendered autobahn.json.
+// EvmChainID is its evm_chain_id and is required; any other field left unset
+// keeps the gen-autobahn-config default.
 type AutobahnConfigOverrides struct {
+	EvmChainID       uint64                          `json:"evmChainId"`
 	BlockInterval    string                          `json:"blockInterval,omitempty"`
 	AllowEmptyBlocks *bool                           `json:"allowEmptyBlocks,omitempty"`
 	MaxTxsPerBlock   *int64                          `json:"maxTxsPerBlock,omitempty"`
 	EnableEvmProxy   *bool                           `json:"enableEvmProxy,omitempty"`
-	EvmChainID       *uint64                         `json:"evmChainId,omitempty"`
 	EvmGovernance    *AutobahnEvmGovernanceOverrides `json:"evmGovernance,omitempty"`
 }
 
@@ -421,21 +418,26 @@ func checkAutobahnVoters(validators []autobahnValidator, governance bool) error 
 }
 
 // buildAutobahnConfig renders autobahn.json for the given validators as
-// `seid tendermint gen-autobahn-config <dirs> --output autobahn.json` does with
-// its default flags: 2000 txs/block, empty blocks off, 400ms blocks, 1500ms
-// view timeout, 10s dial interval, state persisted under data/autobahn with a
-// 30s BlockDB retention, enable_evm_proxy absent so the provider's Or(true)
-// applies, and no evm_governance, plus evm_chain_id 713715, which the command
-// requires as a flag. Overrides replace the defaults they name, checked
-// against the provider's AutobahnFileConfig.Validate bounds; an EvmGovernance
-// override requires an evm_voter on every validator, and its absence forbids
-// one. Validators keep the order given, which is the ceremony's ordinal order.
+// `seid tendermint gen-autobahn-config <dirs> --evm-chain-id <id> --output
+// autobahn.json` does with its other flags at their defaults: 2000 txs/block,
+// empty blocks off, 400ms blocks, 1500ms view timeout, 10s dial interval,
+// state persisted under data/autobahn with a 30s BlockDB retention,
+// enable_evm_proxy absent so the provider's Or(true) applies, and no
+// evm_governance. Overrides must carry the chain ID; the defaults they name
+// are replaced, checked against the provider's AutobahnFileConfig.Validate
+// bounds. An EvmGovernance override requires an evm_voter on every validator,
+// and its absence forbids one. Validators keep the order given, which is the
+// ceremony's ordinal order.
 func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConfigOverrides) ([]byte, error) {
 	if len(validators) == 0 {
 		return nil, fmt.Errorf("autobahn: no validators")
 	}
+	if overrides == nil || overrides.EvmChainID == 0 {
+		return nil, fmt.Errorf("autobahn: evm_chain_id must be set")
+	}
 	retention := (30 * time.Second).String()
 	cfg := autobahnFileConfig{
+		EVMChainID:         overrides.EvmChainID,
 		Validators:         validators,
 		MaxTxsPerBlock:     autobahnProtocolMaxTxsPerBlock,
 		AllowEmptyBlocks:   false,
@@ -444,44 +446,35 @@ func buildAutobahnConfig(validators []autobahnValidator, overrides *AutobahnConf
 		PersistentStateDir: "data/autobahn",
 		DialInterval:       (10 * time.Second).String(),
 		BlockDB:            autobahnBlockDBConfig{Retention: &retention},
-		EVMChainID:         autobahnDefaultEVMChainID,
 	}
-	if overrides != nil {
-		if overrides.BlockInterval != "" {
-			d, err := time.ParseDuration(overrides.BlockInterval)
-			if err != nil {
-				return nil, fmt.Errorf("autobahn: block_interval %q: %w", overrides.BlockInterval, err)
-			}
-			if d <= 0 {
-				return nil, fmt.Errorf("autobahn: block_interval must be > 0, got %q", overrides.BlockInterval)
-			}
-			cfg.BlockInterval = d.String()
+	if overrides.BlockInterval != "" {
+		d, err := time.ParseDuration(overrides.BlockInterval)
+		if err != nil {
+			return nil, fmt.Errorf("autobahn: block_interval %q: %w", overrides.BlockInterval, err)
 		}
-		if overrides.AllowEmptyBlocks != nil {
-			cfg.AllowEmptyBlocks = *overrides.AllowEmptyBlocks
+		if d <= 0 {
+			return nil, fmt.Errorf("autobahn: block_interval must be > 0, got %q", overrides.BlockInterval)
 		}
-		if overrides.MaxTxsPerBlock != nil {
-			if *overrides.MaxTxsPerBlock < 1 || *overrides.MaxTxsPerBlock > autobahnProtocolMaxTxsPerBlock {
-				return nil, fmt.Errorf("autobahn: max_txs_per_block must be in [1, %d], got %d", autobahnProtocolMaxTxsPerBlock, *overrides.MaxTxsPerBlock)
-			}
-			cfg.MaxTxsPerBlock = uint64(*overrides.MaxTxsPerBlock)
+		cfg.BlockInterval = d.String()
+	}
+	if overrides.AllowEmptyBlocks != nil {
+		cfg.AllowEmptyBlocks = *overrides.AllowEmptyBlocks
+	}
+	if overrides.MaxTxsPerBlock != nil {
+		if *overrides.MaxTxsPerBlock < 1 || *overrides.MaxTxsPerBlock > autobahnProtocolMaxTxsPerBlock {
+			return nil, fmt.Errorf("autobahn: max_txs_per_block must be in [1, %d], got %d", autobahnProtocolMaxTxsPerBlock, *overrides.MaxTxsPerBlock)
 		}
-		if overrides.EnableEvmProxy != nil {
-			cfg.EnableEvmProxy = overrides.EnableEvmProxy
+		cfg.MaxTxsPerBlock = uint64(*overrides.MaxTxsPerBlock)
+	}
+	if overrides.EnableEvmProxy != nil {
+		cfg.EnableEvmProxy = overrides.EnableEvmProxy
+	}
+	if overrides.EvmGovernance != nil {
+		governance, err := buildAutobahnEVMGovernance(overrides.EvmGovernance)
+		if err != nil {
+			return nil, err
 		}
-		if overrides.EvmChainID != nil {
-			if *overrides.EvmChainID == 0 {
-				return nil, fmt.Errorf("autobahn: evm_chain_id must be positive")
-			}
-			cfg.EVMChainID = *overrides.EvmChainID
-		}
-		if overrides.EvmGovernance != nil {
-			governance, err := buildAutobahnEVMGovernance(overrides.EvmGovernance)
-			if err != nil {
-				return nil, err
-			}
-			cfg.EVMGovernance = governance
-		}
+		cfg.EVMGovernance = governance
 	}
 	if err := checkAutobahnVoters(validators, cfg.EVMGovernance != nil); err != nil {
 		return nil, err

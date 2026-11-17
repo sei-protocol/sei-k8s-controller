@@ -195,8 +195,8 @@ spec:
                 properties:
                   autobahn:
                     description: |-
-                      Autobahn tunes the autobahn.json the genesis ceremony writes. Omitted
-                      fields keep gen-autobahn-config's defaults. Create-only.
+                      Autobahn sets the autobahn.json the genesis ceremony writes. Required
+                      with engine Autobahn, for its evmChainId. Create-only.
                     properties:
                       allowEmptyBlocks:
                         description: |-
@@ -224,9 +224,9 @@ spec:
                           executor signs and serves. seid requires the key on every Autobahn chain
                           but reads it only under EVM-only; with the Cosmos application, the EVM
                           chain ID still derives from spec.genesis.chainId and this value has no
-                          effect. Omitted writes 713715, the ID chains this controller created
-                          before the field existed run on.
+                          effect. Required, with no default: use one no other chain uses.
                         format: int64
+                        maximum: 9007199254740991
                         minimum: 1
                         type: integer
                       evmGovernance:
@@ -286,6 +286,9 @@ spec:
                         type: integer
                     type: object
                     x-kubernetes-validations:
+                    - message: 'autobahn.evmChainId is required: the ceremony''s autobahn.json
+                        has no default EVM chain ID'
+                      rule: has(self.evmChainId)
                     - message: blockInterval must be a positive duration
                       rule: '!has(self.blockInterval) || duration(self.blockInterval)
                         > duration(''0s'')'
@@ -301,11 +304,10 @@ spec:
                   evmOnly:
                     description: |-
                       EvmOnly replaces the ABCI application with the EVM-only executor, which
-                      signs for spec.consensus.autobahn.evmChainId (713715 when omitted). It
-                      requires engine Autobahn and is rejected on a seed. The node
-                      serves only the EVM JSON-RPC listener on 8545: CometBFT RPC, REST and gRPC
-                      are off, no cosmos-exporter is attached, and Ready proves that listener
-                      answers, not sync distance.
+                      signs for spec.consensus.autobahn.evmChainId. It requires engine Autobahn
+                      and is rejected on a seed. The node serves only the EVM JSON-RPC listener
+                      on 8545: CometBFT RPC, REST and gRPC are off, no cosmos-exporter is
+                      attached, and Ready proves that listener answers, not sync distance.
 
                       Deprecated: EVM-only is an execution engine, not a consensus setting. Set
                       spec.executionEngine.mode to EvmOnly instead; this field is still honored
@@ -319,6 +321,10 @@ spec:
                     produces'
                   rule: '!has(self.autobahn) || (has(self.engine) && self.engine ==
                     ''Autobahn'')'
+                - message: 'engine Autobahn requires autobahn.evmChainId: the ceremony''s
+                    autobahn.json has no default EVM chain ID'
+                  rule: has(self.autobahn) || !(has(self.engine) && self.engine ==
+                    'Autobahn')
                 - message: 'evmOnly requires engine Autobahn: the EVM-only executor
                     runs only under Autobahn consensus'
                   rule: '!(has(self.evmOnly) && self.evmOnly) || (has(self.engine)
