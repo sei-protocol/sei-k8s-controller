@@ -263,12 +263,13 @@ func (b *publicationReproBucket) markerPutCount() int {
 func newPublicationReproNode(t *testing.T, bucket *publicationReproBucket, height int64) *SnapshotUploader {
 	t.Helper()
 	home := t.TempDir()
-	// The uploader selects the previous height when there are two generations.
-	setupSnapshotDirs(t, home, []int64{height, height + 1})
-	node, err := NewSnapshotUploader(home, "bucket", "eu-central-1", "chain", 0, bucket.uploaderFactory, bucket.markerFactory)
+	// This stack supplies the producer's completed record, rather than directory order.
+	createPublicationSnapshots(t, home, uint64(height))
+	node, err := newFixtureSnapshotUploader(t, home, "bucket", "eu-central-1", "chain", 0, bucket.uploaderFactory)
 	if err != nil {
 		t.Fatal(err)
 	}
+	node.latestMarkerFactory = bucket.markerFactory
 	return node
 }
 

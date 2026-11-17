@@ -1,14 +1,18 @@
 package planner
 
 import (
+	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	seiconfig "github.com/sei-protocol/sei-config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	seiv1alpha1 "github.com/sei-protocol/sei-k8s-controller/api/v1alpha1"
 	sidecar "github.com/sei-protocol/sei-k8s-controller/sidecarapi/client"
+	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/tomlpatch"
 )
 
 func TestFullNodePlanner_Validate_SnapshotGeneration(t *testing.T) {
@@ -42,14 +46,30 @@ func TestFullNodePlanner_Validate_SnapshotGeneration(t *testing.T) {
 			wantErr: "fullNode: snapshotGeneration is set but has no sub-struct",
 		},
 		{
-			name: "publish with keepRecent=1 is rejected",
+			name: "publish accepts keepRecent=1",
 			sg: &seiv1alpha1.SnapshotGenerationConfig{
 				Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{
 					KeepRecent: 1,
 					Publish:    &seiv1alpha1.TendermintSnapshotPublishConfig{},
 				},
 			},
-			wantErr: "fullNode: snapshotGeneration.tendermint.keepRecent must be >= 2 when publish is set",
+		},
+		{
+			name: "publish rejects keepRecent=0",
+			sg: &seiv1alpha1.SnapshotGenerationConfig{
+				Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{
+					KeepRecent: 0,
+					Publish:    &seiv1alpha1.TendermintSnapshotPublishConfig{},
+				},
+			},
+			wantErr: "fullNode: snapshotGeneration.tendermint.keepRecent must be >= 1",
+		},
+		{
+			name: "without publish rejects keepRecent=-1",
+			sg: &seiv1alpha1.SnapshotGenerationConfig{
+				Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{KeepRecent: -1},
+			},
+			wantErr: "fullNode: snapshotGeneration.tendermint.keepRecent must be >= 1",
 		},
 	}
 
@@ -79,6 +99,47 @@ func TestFullNodePlanner_Validate_SnapshotGeneration(t *testing.T) {
 				t.Fatalf("Validate: error = %q, want containing %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestFullNodePlanner_PublishKeepRecentOneReachesAppConfig(t *testing.T) {
+	node := pendingNode(func(n *seiv1alpha1.SeiNode) {
+		n.Spec.FullNode = &seiv1alpha1.FullNodeSpec{
+			SnapshotGeneration: &seiv1alpha1.SnapshotGenerationConfig{
+				Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{
+					KeepRecent: 1,
+					Publish:    &seiv1alpha1.TendermintSnapshotPublishConfig{},
+				},
+			},
+		}
+	})
+	if err := (&NodeResolver{}).ResolvePlan(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+	if node.Status.Plan == nil {
+		t.Fatal("valid retention produced no plan")
+	}
+	intent := configApplyIntent(t, node.Status.Plan)
+	if got := intent.Overrides[seiconfig.KeySnapshotKeepRecent]; got != "1" {
+		t.Fatalf("snapshot retention override = %q, want 1", got)
+	}
+	result, err := seiconfig.ResolveIntent(*intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Valid {
+		t.Fatalf("invalid configuration: %v", result.Diagnostics)
+	}
+	home := t.TempDir()
+	if err := seiconfig.WriteConfigToDir(result.Config, home); err != nil {
+		t.Fatal(err)
+	}
+	app, err := tomlpatch.ReadTOML(filepath.Join(home, "config", "app.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := app["state-sync"].(map[string]any)["snapshot-keep-recent"]; got != int64(1) {
+		t.Fatalf("app.toml snapshot-keep-recent = %v, want 1", got)
 	}
 }
 

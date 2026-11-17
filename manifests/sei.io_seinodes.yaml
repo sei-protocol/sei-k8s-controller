@@ -150,9 +150,7 @@ spec:
                           keepRecent:
                             description: |-
                               KeepRecent is the number of recent snapshots to retain on disk.
-                              When Publish is set, must be at least 2 so the upload algorithm can
-                              select the second-to-latest completed snapshot. Otherwise must be at
-                              least 1.
+                              Must be at least 1, including when Publish is set.
                             format: int32
                             minimum: 1
                             type: integer
@@ -554,9 +552,7 @@ spec:
                           keepRecent:
                             description: |-
                               KeepRecent is the number of recent snapshots to retain on disk.
-                              When Publish is set, must be at least 2 so the upload algorithm can
-                              select the second-to-latest completed snapshot. Otherwise must be at
-                              least 1.
+                              Must be at least 1, including when Publish is set.
                             format: int32
                             minimum: 1
                             type: integer

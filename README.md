@@ -98,6 +98,8 @@ enforce S3 conditional writes. Access denial and failed
 conditional writes are returned as publication errors; there is no unconditional
 fallback.
 
+For destinations used by older publishers, follow the [snapshot publication recovery procedure](docs/operations/snapshot-publication-recovery.md) to inspect existing archives before resuming restores.
+
 Gateway config (`SEI_GATEWAY_NAME`, `SEI_GATEWAY_NAMESPACE`, `SEI_GATEWAY_DOMAIN`) and the config-file path (`SEI_CONTROLLER_CONFIG`) remain environment variables.
 
 ## Development
