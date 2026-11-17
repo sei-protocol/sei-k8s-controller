@@ -85,6 +85,7 @@ const (
 	OutcomeError    = wire.OutcomeError
 
 	NoopFewerThanTwoSnapshots = wire.NoopFewerThanTwoSnapshots
+	NoopNoCompletedSnapshots  = wire.NoopNoCompletedSnapshots
 	NoopAlreadyUploaded       = wire.NoopAlreadyUploaded
 )
 

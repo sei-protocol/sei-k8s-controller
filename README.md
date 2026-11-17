@@ -89,6 +89,17 @@ height/condition waits).
 
 Infrastructure-level settings (node pools, storage, resources, snapshot/genesis buckets, sidecar images) are read from the mounted app-config file (`SEI_CONTROLLER_CONFIG` → `platform.FileConfig`), which is authoritative — the controller fails fast at startup if a required field is unset. See `internal/platform/platform.go` for the field list.
 
+Snapshot publishers use S3 conditional writes to keep `{chainID}/state-sync/latest.txt`
+at the highest published height. Every publisher targeting that marker must use
+this protocol; an older publisher that writes unconditionally can still replace it.
+The publishing role needs `s3:GetObject` and `s3:PutObject` for the marker and
+`s3:ListBucket` on the bucket to recognize an absent marker. The destination must
+enforce S3 conditional writes. Access denial and failed
+conditional writes are returned as publication errors; there is no unconditional
+fallback.
+
+For destinations used by older publishers, follow the [snapshot publication recovery procedure](docs/operations/snapshot-publication-recovery.md) to inspect existing archives before resuming restores.
+
 Gateway config (`SEI_GATEWAY_NAME`, `SEI_GATEWAY_NAMESPACE`, `SEI_GATEWAY_DOMAIN`) and the config-file path (`SEI_CONTROLLER_CONFIG`) remain environment variables.
 
 ## Development

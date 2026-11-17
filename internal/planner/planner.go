@@ -565,8 +565,8 @@ func validateSnapshotGeneration(sg *seiv1alpha1.SnapshotGenerationConfig) error 
 	if sg.Tendermint == nil {
 		return fmt.Errorf("snapshotGeneration is set but has no sub-struct (e.g., tendermint); omit it to disable snapshot generation")
 	}
-	if sg.Tendermint.Publish != nil && sg.Tendermint.KeepRecent < 2 {
-		return fmt.Errorf("snapshotGeneration.tendermint.keepRecent must be >= 2 when publish is set (upload algorithm requires the second-to-latest snapshot)")
+	if sg.Tendermint.KeepRecent < 1 {
+		return fmt.Errorf("snapshotGeneration.tendermint.keepRecent must be >= 1")
 	}
 	return nil
 }

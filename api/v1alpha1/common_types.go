@@ -155,9 +155,7 @@ type SnapshotGenerationConfig struct {
 // node's data volume.
 type TendermintSnapshotGenerationConfig struct {
 	// KeepRecent is the number of recent snapshots to retain on disk.
-	// When Publish is set, must be at least 2 so the upload algorithm can
-	// select the second-to-latest completed snapshot. Otherwise must be at
-	// least 1.
+	// Must be at least 1, including when Publish is set.
 	// +kubebuilder:validation:Minimum=1
 	KeepRecent int32 `json:"keepRecent"`
 

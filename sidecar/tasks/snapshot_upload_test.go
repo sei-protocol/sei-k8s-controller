@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,7 +20,11 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	snapshottypes "github.com/sei-protocol/sei-chain/sei-cosmos/snapshots/types"
 
 	seis3 "github.com/sei-protocol/sei-k8s-controller/sidecar/s3"
 )
@@ -34,7 +40,9 @@ func newMockS3Uploader() *mockS3Uploader {
 func (m *mockS3Uploader) UploadObject(_ context.Context, input *transfermanager.UploadObjectInput, _ ...func(*transfermanager.Options)) (*transfermanager.UploadObjectOutput, error) {
 	var buf bytes.Buffer
 	if input.Body != nil {
-		_, _ = io.Copy(&buf, input.Body)
+		if _, err := io.Copy(&buf, input.Body); err != nil {
+			return nil, err
+		}
 	}
 	key := *input.Bucket + "/" + *input.Key
 	m.uploads[key] = buf.Bytes()
@@ -47,57 +55,77 @@ func mockUploaderFactory(client *mockS3Uploader) seis3.UploaderFactory {
 	}
 }
 
-func setupSnapshotDirs(t *testing.T, homeDir string, heights []int64) {
+func newFixtureSnapshotUploader(t *testing.T, home, bucket, region, chain string, interval time.Duration, factory seis3.UploaderFactory) (*SnapshotUploader, error) {
 	t.Helper()
-	snapshotsDir := filepath.Join(homeDir, "data", "snapshots")
-	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
-		t.Fatalf("creating snapshots dir: %v", err)
+	store, metadata := openPublicationStore(t, home)
+	completed, err := store.List()
+	_ = metadata.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
+	return newPublicationUploader(t, completed, home, bucket, region, chain, interval, factory)
+}
 
-	for _, h := range heights {
-		dir := filepath.Join(snapshotsDir, strconv.FormatInt(h, 10))
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("creating height dir %d: %v", h, err)
-		}
-		chunkDir := filepath.Join(dir, "1")
-		if err := os.MkdirAll(chunkDir, 0o755); err != nil {
-			t.Fatalf("creating chunk dir: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(chunkDir, "0"), []byte("chunk-data"), 0o644); err != nil {
-			t.Fatalf("writing chunk file: %v", err)
-		}
-	}
+func candidateSnapshotWithFormat(height uint64, format uint32) snapshottypes.Snapshot {
+	snapshot := candidateSnapshot(height)
+	snapshot.Format = format
+	return snapshot
+}
 
-	// Create metadata.db
-	metadataPath := filepath.Join(snapshotsDir, "metadata.db")
-	if err := os.WriteFile(metadataPath, []byte("metadata-content"), 0o644); err != nil {
-		t.Fatalf("writing metadata.db: %v", err)
-	}
+func candidateSnapshot(height uint64) snapshottypes.Snapshot {
+	hash := sha256.Sum256([]byte("complete chunk"))
+	return snapshottypes.Snapshot{Height: height, Format: 1, Chunks: 1, Hash: hash[:], Metadata: snapshottypes.Metadata{ChunkHashes: [][]byte{hash[:]}}}
 }
 
 func TestPickUploadCandidate(t *testing.T) {
-	cases := []struct {
-		name    string
-		heights []int64
-		want    int64
+	for _, tc := range []struct {
+		name      string
+		completed []snapshottypes.Snapshot
+		want      uint64
 	}{
-		{"two snapshots returns second to latest", []int64{1000, 2000}, 1000},
-		{"three snapshots returns second to latest", []int64{1000, 3000, 2000}, 2000},
-		{"single snapshot returns zero", []int64{1000}, 0},
-		{"no snapshots returns zero", nil, 0},
-	}
-	for _, tc := range cases {
+		{"newest completed snapshot", []snapshottypes.Snapshot{candidateSnapshot(1000), candidateSnapshot(3000), candidateSnapshot(2000)}, 3000},
+		{"one completed snapshot is sufficient", []snapshottypes.Snapshot{candidateSnapshot(1000)}, 1000},
+		{"no completed snapshots", nil, 0},
+		{"format preserved without interpreting chunk payload", []snapshottypes.Snapshot{candidateSnapshot(1000), candidateSnapshotWithFormat(9000, 2)}, 9000},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			homeDir := t.TempDir()
-			if tc.heights != nil {
-				setupSnapshotDirs(t, homeDir, tc.heights)
-			}
-			h, err := pickUploadCandidate(filepath.Join(homeDir, "data", "snapshots"))
+			candidate, err := pickUploadCandidate(tc.completed)
 			if err != nil {
-				t.Fatalf("pickUploadCandidate() error = %v", err)
+				t.Fatal(err)
 			}
-			if h != tc.want {
-				t.Errorf("height = %d, want %d", h, tc.want)
+			if tc.want == 0 {
+				if candidate != nil {
+					t.Fatalf("candidate=%+v, want none", candidate)
+				}
+			} else if candidate == nil || candidate.Height != tc.want {
+				t.Fatalf("candidate=%+v, want height %d", candidate, tc.want)
+			}
+		})
+	}
+}
+
+func TestPickUploadCandidate_RejectsInvalidCompletionMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		damage func(*snapshottypes.Snapshot)
+	}{
+		{"zero height", func(s *snapshottypes.Snapshot) { s.Height = 0 }},
+		{"height exceeds result range", func(s *snapshottypes.Snapshot) { s.Height = math.MaxUint64 }},
+		{"zero format", func(s *snapshottypes.Snapshot) { s.Format = 0 }},
+		{"zero chunks", func(s *snapshottypes.Snapshot) { s.Chunks = 0 }},
+		{"invalid aggregate hash", func(s *snapshottypes.Snapshot) { s.Hash = []byte{1} }},
+		{"missing chunk hash", func(s *snapshottypes.Snapshot) { s.Metadata.ChunkHashes = nil }},
+		{"extra chunk hash", func(s *snapshottypes.Snapshot) {
+			s.Metadata.ChunkHashes = append(s.Metadata.ChunkHashes, make([]byte, sha256.Size))
+		}},
+		{"invalid chunk hash", func(s *snapshottypes.Snapshot) { s.Metadata.ChunkHashes[0] = []byte{1} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := candidateSnapshot(1000)
+			tc.damage(&snapshot)
+			candidate, err := pickUploadCandidate([]snapshottypes.Snapshot{snapshot})
+			if err == nil || candidate != nil {
+				t.Fatalf("candidate=%+v error=%v, want invalid metadata rejection", candidate, err)
 			}
 		})
 	}
@@ -105,10 +133,10 @@ func TestPickUploadCandidate(t *testing.T) {
 
 func TestUpload_UploadsArchiveAndLatestTxt(t *testing.T) {
 	homeDir := t.TempDir()
-	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
+	createPublicationSnapshots(t, homeDir, 1000)
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
+	uploader, err := newFixtureSnapshotUploader(t, homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 	if err != nil {
 		t.Fatalf("NewSnapshotUploader: %v", err)
 	}
@@ -145,14 +173,14 @@ func TestUpload_UploadsArchiveAndLatestTxt(t *testing.T) {
 
 func TestUpload_SkipsWhenAlreadyUploaded(t *testing.T) {
 	homeDir := t.TempDir()
-	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
+	createPublicationSnapshots(t, homeDir, 1000)
 
-	state := uploadState{LastUploadedHeight: 1000}
+	state := uploadState{LastUploadedHeight: 1000, ArchiveVerificationVersion: verifiedArchiveVersion, Bucket: "my-bucket", ChainID: "testchain"}
 	data, _ := json.Marshal(state)
 	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
+	uploader, err := newFixtureSnapshotUploader(t, homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 	if err != nil {
 		t.Fatalf("NewSnapshotUploader: %v", err)
 	}
@@ -172,14 +200,14 @@ func TestUpload_SkipsWhenAlreadyUploaded(t *testing.T) {
 
 func TestUpload_UploadsNewerSnapshot(t *testing.T) {
 	homeDir := t.TempDir()
-	setupSnapshotDirs(t, homeDir, []int64{1000, 2000, 3000})
+	createPublicationSnapshots(t, homeDir, 1000, 2000)
 
-	state := uploadState{LastUploadedHeight: 1000}
+	state := uploadState{LastUploadedHeight: 1000, ArchiveVerificationVersion: verifiedArchiveVersion, Bucket: "my-bucket", ChainID: "testchain"}
 	data, _ := json.Marshal(state)
 	_ = os.WriteFile(filepath.Join(homeDir, uploadStateFile), data, 0o644)
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
+	uploader, err := newFixtureSnapshotUploader(t, homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 	if err != nil {
 		t.Fatalf("NewSnapshotUploader: %v", err)
 	}
@@ -194,12 +222,12 @@ func TestUpload_UploadsNewerSnapshot(t *testing.T) {
 	}
 }
 
-func TestUpload_NoOpsWhenTooFewSnapshots(t *testing.T) {
+func TestUpload_NoOpsWhenNoCompletedSnapshots(t *testing.T) {
 	homeDir := t.TempDir()
-	setupSnapshotDirs(t, homeDir, []int64{1000})
+	createPublicationSnapshots(t, homeDir)
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
+	uploader, err := newFixtureSnapshotUploader(t, homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 	if err != nil {
 		t.Fatalf("NewSnapshotUploader: %v", err)
 	}
@@ -208,8 +236,8 @@ func TestUpload_NoOpsWhenTooFewSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Upload() error = %v", err)
 	}
-	if result.Outcome != OutcomeNoop || result.NoopReason != NoopFewerThanTwoSnapshots {
-		t.Errorf("result = %+v, want noop/fewer-than-2-snapshots", result)
+	if result.Outcome != OutcomeNoop || result.NoopReason != NoopNoCompletedSnapshots {
+		t.Errorf("result = %+v, want noop/no-completed-snapshots", result)
 	}
 
 	if len(mock.uploads) != 0 {
@@ -219,10 +247,10 @@ func TestUpload_NoOpsWhenTooFewSnapshots(t *testing.T) {
 
 func TestUpload_WritesUploadState(t *testing.T) {
 	homeDir := t.TempDir()
-	setupSnapshotDirs(t, homeDir, []int64{1000, 2000})
+	createPublicationSnapshots(t, homeDir, 1000)
 
 	mock := newMockS3Uploader()
-	uploader, err := NewSnapshotUploader(homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
+	uploader, err := newFixtureSnapshotUploader(t, homeDir, "my-bucket", "eu-central-1", "testchain", 0, mockUploaderFactory(mock))
 	if err != nil {
 		t.Fatalf("NewSnapshotUploader: %v", err)
 	}
@@ -265,85 +293,43 @@ func readTarGzNames(t *testing.T, body []byte) map[string]byte {
 	return out
 }
 
-// runWriteArchive captures writeArchive output via an io.Pipe.
-func runWriteArchive(t *testing.T, snapshotsDir string, height int64) []byte {
-	t.Helper()
+func TestWriteArchive_OnlySelectedChunksAndIsolatedMetadata(t *testing.T) {
+	home := t.TempDir()
+	completed := createPublicationSnapshots(t, home, 1000, 2000)
+	snapshotsDir := filepath.Join(home, "data", "snapshots")
+	if err := os.WriteFile(filepath.Join(snapshotsDir, "metadata.db", "producer-only"), []byte("must not be copied"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadataDir := t.TempDir()
+	if err := writeSnapshotMetadata(metadataDir, *completed[0]); err != nil {
+		t.Fatal(err)
+	}
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
-	go func() {
-		done <- writeArchive(context.Background(), pw, snapshotsDir, height)
-	}()
+	go func() { done <- writeArchive(t.Context(), pw, snapshotsDir, metadataDir, *completed[0]) }()
 	body, err := io.ReadAll(pr)
+	_ = pr.Close()
 	if err != nil {
-		t.Fatalf("read pipe: %v", err)
+		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
-		t.Fatalf("writeArchive error: %v", err)
-	}
-	return body
-}
-
-func TestWriteArchive_MetadataAsDirectory(t *testing.T) {
-	homeDir := t.TempDir()
-	snapshotsDir := filepath.Join(homeDir, "data", "snapshots")
-	if err := os.MkdirAll(filepath.Join(snapshotsDir, "1000", "1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(snapshotsDir, "1000", "1", "0"), []byte("chunk"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// metadata.db as a directory containing typical LevelDB files
-	mdDir := filepath.Join(snapshotsDir, "metadata.db")
-	if err := os.MkdirAll(mdDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(mdDir, "CURRENT"), []byte("MANIFEST-000001\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(mdDir, "MANIFEST-000001"), []byte("manifest-bytes"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	body := runWriteArchive(t, snapshotsDir, 1000)
 	names := readTarGzNames(t, body)
-
-	// Height directory entries present and recursive
 	if _, ok := names["1000/1/0"]; !ok {
-		t.Errorf("missing height-dir file 1000/1/0 in archive; entries: %v", names)
+		t.Fatalf("selected chunk absent: %v", names)
 	}
-	// metadata.db directory header + recursive contents
-	if tf, ok := names["metadata.db"]; !ok || tf != tar.TypeDir {
-		t.Errorf("metadata.db missing or not a directory entry (typeflag=%d)", tf)
+	for name := range names {
+		if strings.HasPrefix(name, "2000/") || name == "metadata.db/producer-only" {
+			t.Fatalf("unselected producer data was archived: %s", name)
+		}
 	}
-	if _, ok := names["metadata.db/CURRENT"]; !ok {
-		t.Errorf("missing metadata.db/CURRENT in archive; entries: %v", names)
-	}
-	if _, ok := names["metadata.db/MANIFEST-000001"]; !ok {
-		t.Errorf("missing metadata.db/MANIFEST-000001 in archive; entries: %v", names)
-	}
-}
-
-func TestWriteArchive_MetadataAsFile(t *testing.T) {
-	homeDir := t.TempDir()
-	snapshotsDir := filepath.Join(homeDir, "data", "snapshots")
-	if err := os.MkdirAll(filepath.Join(snapshotsDir, "1000", "1"), 0o755); err != nil {
+	restored := t.TempDir()
+	if err := extractTarStream(t.Context(), bytes.NewReader(body), filepath.Join(restored, "data", "snapshots")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(snapshotsDir, "1000", "1", "0"), []byte("chunk"), 0o644); err != nil {
+	if err := checkPublicationRestoresApplication(restored, 1000); err != nil {
 		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(snapshotsDir, "metadata.db"), []byte("metadata-content"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	body := runWriteArchive(t, snapshotsDir, 1000)
-	names := readTarGzNames(t, body)
-
-	if tf, ok := names["metadata.db"]; !ok || tf != tar.TypeReg {
-		t.Errorf("metadata.db missing or not a regular file (typeflag=%d)", tf)
-	}
-	if _, ok := names["1000/1/0"]; !ok {
-		t.Errorf("missing height-dir file 1000/1/0 in archive; entries: %v", names)
 	}
 }
 
@@ -368,8 +354,8 @@ func decodeUploadResult(t *testing.T, raw json.RawMessage) SnapshotUploadResult 
 func TestOnceHandler_ReturnsDistinguishableOutcomes(t *testing.T) {
 	t.Run("uploaded", func(t *testing.T) {
 		home := t.TempDir()
-		setupSnapshotDirs(t, home, []int64{1000, 2000})
-		uploader, err := NewSnapshotUploader(home, "b", "r", "once-uploaded", 0, mockUploaderFactory(newMockS3Uploader()))
+		createPublicationSnapshots(t, home, 1000)
+		uploader, err := newFixtureSnapshotUploader(t, home, "b", "r", "once-uploaded", 0, mockUploaderFactory(newMockS3Uploader()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -383,10 +369,10 @@ func TestOnceHandler_ReturnsDistinguishableOutcomes(t *testing.T) {
 		}
 	})
 
-	t.Run("noop fewer than 2 snapshots", func(t *testing.T) {
+	t.Run("noop no completed snapshots", func(t *testing.T) {
 		home := t.TempDir()
-		setupSnapshotDirs(t, home, []int64{1000})
-		uploader, err := NewSnapshotUploader(home, "b", "r", "once-few", 0, mockUploaderFactory(newMockS3Uploader()))
+		createPublicationSnapshots(t, home)
+		uploader, err := newFixtureSnapshotUploader(t, home, "b", "r", "once-few", 0, mockUploaderFactory(newMockS3Uploader()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -395,19 +381,19 @@ func TestOnceHandler_ReturnsDistinguishableOutcomes(t *testing.T) {
 			t.Fatalf("handler error = %v", err)
 		}
 		got := decodeUploadResult(t, raw)
-		if got.Outcome != OutcomeNoop || got.NoopReason != NoopFewerThanTwoSnapshots {
-			t.Fatalf("result = %+v, want noop/fewer-than-2-snapshots", got)
+		if got.Outcome != OutcomeNoop || got.NoopReason != NoopNoCompletedSnapshots {
+			t.Fatalf("result = %+v, want noop/no-completed-snapshots", got)
 		}
 	})
 
 	t.Run("noop already uploaded", func(t *testing.T) {
 		home := t.TempDir()
-		setupSnapshotDirs(t, home, []int64{1000, 2000})
-		data, _ := json.Marshal(uploadState{LastUploadedHeight: 1000})
+		createPublicationSnapshots(t, home, 1000)
+		data, _ := json.Marshal(uploadState{LastUploadedHeight: 1000, ArchiveVerificationVersion: verifiedArchiveVersion, Bucket: "b", ChainID: "once-already"})
 		if err := os.WriteFile(filepath.Join(home, uploadStateFile), data, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		uploader, err := NewSnapshotUploader(home, "b", "r", "once-already", 0, mockUploaderFactory(newMockS3Uploader()))
+		uploader, err := newFixtureSnapshotUploader(t, home, "b", "r", "once-already", 0, mockUploaderFactory(newMockS3Uploader()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -428,10 +414,10 @@ func TestOnceHandler_ReturnsDistinguishableOutcomes(t *testing.T) {
 // the error outcome counter — the recordError suppression keys only on Canceled.
 func TestOnceHandler_DeadlineFailsCleanly(t *testing.T) {
 	home := t.TempDir()
-	setupSnapshotDirs(t, home, []int64{1000, 2000})
+	createPublicationSnapshots(t, home, 1000)
 	chain := "once-deadline"
 	factory := func(context.Context, string) (seis3.Uploader, error) { return blockingUploader{}, nil }
-	uploader, err := NewSnapshotUploader(home, "b", "r", chain, 0, factory)
+	uploader, err := newFixtureSnapshotUploader(t, home, "b", "r", chain, 0, factory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,10 +438,10 @@ func TestOnceHandler_DeadlineFailsCleanly(t *testing.T) {
 // suppresses it on the canceled path so its value there is inert.
 func TestUpload_CanceledDoesNotTickErrorCounter(t *testing.T) {
 	home := t.TempDir()
-	setupSnapshotDirs(t, home, []int64{1000, 2000})
+	createPublicationSnapshots(t, home, 1000)
 	chain := "cancel-no-tick"
 	factory := func(context.Context, string) (seis3.Uploader, error) { return blockingUploader{}, nil }
-	uploader, err := NewSnapshotUploader(home, "b", "r", chain, 0, factory)
+	uploader, err := newFixtureSnapshotUploader(t, home, "b", "r", chain, 0, factory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,13 +471,13 @@ func TestUpload_CanceledDoesNotTickErrorCounter(t *testing.T) {
 // context cancellation.
 func TestRunLoop_SwallowsErrorsAndStopsOnCancel(t *testing.T) {
 	home := t.TempDir()
-	setupSnapshotDirs(t, home, []int64{1000, 2000})
+	createPublicationSnapshots(t, home, 1000)
 	var calls atomic.Int64
 	factory := func(context.Context, string) (seis3.Uploader, error) {
 		calls.Add(1)
 		return nil, errors.New("s3 down")
 	}
-	uploader, err := NewSnapshotUploader(home, "b", "r", "loop-chain", 5*time.Millisecond, factory)
+	uploader, err := newFixtureSnapshotUploader(t, home, "b", "r", "loop-chain", 5*time.Millisecond, factory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +507,7 @@ func TestRunLoop_SwallowsErrorsAndStopsOnCancel(t *testing.T) {
 // files may be left behind.
 func TestWriteUploadState_AtomicUnderConcurrentWriters(t *testing.T) {
 	home := t.TempDir()
-	uploader, err := NewSnapshotUploader(home, "b", "r", "atomic-chain", 0, mockUploaderFactory(newMockS3Uploader()))
+	uploader, err := newTestSnapshotUploader(home, "b", "r", "atomic-chain", 0, mockUploaderFactory(newMockS3Uploader()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,7 +547,7 @@ func TestWriteUploadState_AtomicUnderConcurrentWriters(t *testing.T) {
 // rename is all-or-nothing, so a torn temp never clobbers the live file.
 func TestWriteUploadState_PreservesPriorStateOnRoundTrip(t *testing.T) {
 	home := t.TempDir()
-	uploader, err := NewSnapshotUploader(home, "b", "r", "roundtrip-chain", 0, mockUploaderFactory(newMockS3Uploader()))
+	uploader, err := newTestSnapshotUploader(home, "b", "r", "roundtrip-chain", 0, mockUploaderFactory(newMockS3Uploader()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,9 +570,9 @@ func TestWriteUploadState_PreservesPriorStateOnRoundTrip(t *testing.T) {
 func TestUpload_EmitsMetrics(t *testing.T) {
 	t.Run("upload sets all gauges", func(t *testing.T) {
 		home := t.TempDir()
-		setupSnapshotDirs(t, home, []int64{1000, 2000})
+		createPublicationSnapshots(t, home, 1000)
 		chain := "metrics-uploaded"
-		uploader, err := NewSnapshotUploader(home, "b", "r", chain, 0, mockUploaderFactory(newMockS3Uploader()))
+		uploader, err := newFixtureSnapshotUploader(t, home, "b", "r", chain, 0, mockUploaderFactory(newMockS3Uploader()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -609,9 +595,9 @@ func TestUpload_EmitsMetrics(t *testing.T) {
 
 	t.Run("noop refreshes success but not uploaded gauges", func(t *testing.T) {
 		home := t.TempDir()
-		setupSnapshotDirs(t, home, []int64{1000}) // fewer than 2 -> noop
+		createPublicationSnapshots(t, home) // no completed snapshots
 		chain := "metrics-noop"
-		uploader, err := NewSnapshotUploader(home, "b", "r", chain, 0, mockUploaderFactory(newMockS3Uploader()))
+		uploader, err := newFixtureSnapshotUploader(t, home, "b", "r", chain, 0, mockUploaderFactory(newMockS3Uploader()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -636,12 +622,12 @@ func TestUpload_EmitsMetrics(t *testing.T) {
 // untouched so a real S3 outage cannot read as green.
 func TestUpload_ErrorOutcomeOnFailure(t *testing.T) {
 	home := t.TempDir()
-	setupSnapshotDirs(t, home, []int64{1000, 2000})
+	createPublicationSnapshots(t, home, 1000)
 	chain := "metrics-error"
 	factory := func(context.Context, string) (seis3.Uploader, error) {
 		return nil, errors.New("s3 down")
 	}
-	uploader, err := NewSnapshotUploader(home, "b", "r", chain, 0, factory)
+	uploader, err := newFixtureSnapshotUploader(t, home, "b", "r", chain, 0, factory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -667,11 +653,11 @@ func TestUpload_ErrorOutcomeOnFailure(t *testing.T) {
 func TestEmitStartupMetrics_RehydratesUploadedGauges(t *testing.T) {
 	home := t.TempDir()
 	chain := "startup-chain"
-	uploader, err := NewSnapshotUploader(home, "b", "r", chain, 0, mockUploaderFactory(newMockS3Uploader()))
+	uploader, err := newTestSnapshotUploader(home, "b", "r", chain, 0, mockUploaderFactory(newMockS3Uploader()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := uploader.writeUploadState(uploadState{LastUploadedHeight: 7777, LastUploadedAt: 1234567890}); err != nil {
+	if err := uploader.writeUploadState(uploadState{LastUploadedHeight: 7777, LastUploadedAt: 1234567890, ArchiveVerificationVersion: verifiedArchiveVersion, Bucket: "b", ChainID: chain}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -688,4 +674,31 @@ func TestEmitStartupMetrics_RehydratesUploadedGauges(t *testing.T) {
 	if got := testutil.ToFloat64(snapshotUploadLastRunSuccess.WithLabelValues(chain)); got != 0 {
 		t.Errorf("startup must not set last run success, got %v", got)
 	}
+}
+
+func newTestSnapshotUploader(home, bucket, region, chain string, interval time.Duration, factory seis3.UploaderFactory) (*SnapshotUploader, error) {
+	markerFactory := func(ctx context.Context, region string) (seis3.LatestMarker, error) {
+		client, err := factory(ctx, region)
+		if err != nil {
+			return nil, err
+		}
+		return seis3.NewLatestMarker(uploadTestMarkerClient{client}), nil
+	}
+	return NewSnapshotUploader(home, bucket, region, chain, interval, factory, markerFactory)
+}
+
+// These existing tests have one publisher. Preserve their UploadObject fault
+// boundary; the independent publisher tests use atomic S3 conditions over HTTP.
+type uploadTestMarkerClient struct{ uploader seis3.Uploader }
+
+func (uploadTestMarkerClient) GetObject(context.Context, *awss3.GetObjectInput, ...func(*awss3.Options)) (*awss3.GetObjectOutput, error) {
+	return nil, &smithy.GenericAPIError{Code: "NoSuchKey"}
+}
+
+func (c uploadTestMarkerClient) PutObject(ctx context.Context, input *awss3.PutObjectInput, _ ...func(*awss3.Options)) (*awss3.PutObjectOutput, error) {
+	if input.IfNoneMatch == nil || *input.IfNoneMatch != "*" {
+		return nil, fmt.Errorf("missing create condition")
+	}
+	_, err := c.uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{Bucket: input.Bucket, Key: input.Key, Body: input.Body})
+	return &awss3.PutObjectOutput{}, err
 }

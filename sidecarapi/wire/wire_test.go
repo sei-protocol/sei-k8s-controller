@@ -14,6 +14,7 @@ func TestSnapshotUploadWireValues(t *testing.T) {
 		{string(OutcomeNoop), "noop"},
 		{string(OutcomeError), "error"},
 		{string(NoopFewerThanTwoSnapshots), "fewer-than-2-snapshots"},
+		{string(NoopNoCompletedSnapshots), "no-completed-snapshots"},
 		{string(NoopAlreadyUploaded), "already-uploaded"},
 	}
 	for _, c := range cases {

@@ -189,14 +189,30 @@ func TestArchivePlanner_Validate(t *testing.T) {
 			wantErr: "archive: snapshotGeneration is set but has no sub-struct",
 		},
 		{
-			name: "publish with keepRecent=1 is rejected",
+			name: "publish accepts keepRecent=1",
 			sg: &seiv1alpha1.SnapshotGenerationConfig{
 				Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{
 					KeepRecent: 1,
 					Publish:    &seiv1alpha1.TendermintSnapshotPublishConfig{},
 				},
 			},
-			wantErr: "archive: snapshotGeneration.tendermint.keepRecent must be >= 2 when publish is set",
+		},
+		{
+			name: "publish rejects keepRecent=0",
+			sg: &seiv1alpha1.SnapshotGenerationConfig{
+				Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{
+					KeepRecent: 0,
+					Publish:    &seiv1alpha1.TendermintSnapshotPublishConfig{},
+				},
+			},
+			wantErr: "archive: snapshotGeneration.tendermint.keepRecent must be >= 1",
+		},
+		{
+			name: "without publish rejects keepRecent=-1",
+			sg: &seiv1alpha1.SnapshotGenerationConfig{
+				Tendermint: &seiv1alpha1.TendermintSnapshotGenerationConfig{KeepRecent: -1},
+			},
+			wantErr: "archive: snapshotGeneration.tendermint.keepRecent must be >= 1",
 		},
 	}
 

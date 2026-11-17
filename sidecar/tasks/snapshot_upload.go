@@ -1,25 +1,24 @@
 package tasks
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
-	"slices"
-	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	snapshottypes "github.com/sei-protocol/sei-chain/sei-cosmos/snapshots/types"
 	"github.com/sei-protocol/seilog"
 
 	"github.com/sei-protocol/sei-k8s-controller/sidecar/engine"
+	"github.com/sei-protocol/sei-k8s-controller/sidecar/rpc"
 	seis3 "github.com/sei-protocol/sei-k8s-controller/sidecar/s3"
 	"github.com/sei-protocol/sei-k8s-controller/sidecarapi/wire"
 )
@@ -27,8 +26,9 @@ import (
 var uploadLog = seilog.NewLogger("seictl", "task", "snapshot-upload")
 
 const (
-	uploadStateFile       = ".sei-sidecar-last-upload.json"
-	defaultUploadInterval = 7 * 24 * time.Hour // weekly
+	uploadStateFile        = ".sei-sidecar-last-upload.json"
+	defaultUploadInterval  = 7 * 24 * time.Hour // weekly
+	verifiedArchiveVersion = 1
 
 	// defaultUploadTimeout bounds a single one-shot upload. Uploads on large
 	// chains legitimately run 60-90 min, so the default is generous; a wedged
@@ -53,20 +53,18 @@ const (
 	OutcomeNoop     = wire.OutcomeNoop
 	OutcomeError    = wire.OutcomeError
 
-	NoopFewerThanTwoSnapshots = wire.NoopFewerThanTwoSnapshots
-	NoopAlreadyUploaded       = wire.NoopAlreadyUploaded
+	NoopNoCompletedSnapshots = wire.NoopNoCompletedSnapshots
+	NoopAlreadyUploaded      = wire.NoopAlreadyUploaded
 )
 
-// SnapshotUploadResult is the structured result both handlers return through the
-// engine so a one-shot poller can distinguish uploaded / noop / error: an error
-// return carries Outcome=OutcomeError alongside the error string. On the loop
-// path it is discarded; the engine persists it on TaskResult.Result for the
-// one-shot path.
+// SnapshotUploadResult reports local archive publication and the shared marker
+// outcome. An uploaded archive may leave an equal or newer marker unchanged.
 type SnapshotUploadResult struct {
-	Outcome    UploadOutcome `json:"outcome"`
-	NoopReason NoopReason    `json:"noopReason,omitempty"`
-	Height     int64         `json:"height,omitempty"`
-	Key        string        `json:"key,omitempty"`
+	Outcome       UploadOutcome       `json:"outcome"`
+	NoopReason    NoopReason          `json:"noopReason,omitempty"`
+	Height        int64               `json:"height,omitempty"`
+	Key           string              `json:"key,omitempty"`
+	MarkerOutcome seis3.MarkerOutcome `json:"markerOutcome,omitempty"`
 }
 
 // uploadState tracks the last successfully uploaded snapshot height and when it
@@ -74,43 +72,59 @@ type SnapshotUploadResult struct {
 // gauges can be re-emitted on sidecar startup, avoiding a false-stale reading
 // after the uploading pod restarts.
 type uploadState struct {
-	LastUploadedHeight int64 `json:"lastUploadedHeight"`
-	LastUploadedAt     int64 `json:"lastUploadedAt,omitempty"`
+	LastUploadedHeight         int64  `json:"lastUploadedHeight"`
+	LastUploadedAt             int64  `json:"lastUploadedAt,omitempty"`
+	ArchiveVerificationVersion uint32 `json:"archiveVerificationVersion,omitempty"`
+	Bucket                     string `json:"bucket,omitempty"`
+	ChainID                    string `json:"chainId,omitempty"`
 }
 
-// SnapshotUploader scans for locally produced Tendermint state-sync snapshots
-// and uploads new ones to S3. When submitted as a task, it runs in a loop
-// at the configured interval until the context is cancelled.
+// verifiesArchive reports whether this cache records a verified archive for the destination.
+// Older checkpoints cannot establish the archive completion or hash contract.
+func (s uploadState) verifiesArchive(bucket, chainID string) bool {
+	return s.ArchiveVerificationVersion == verifiedArchiveVersion && s.Bucket == bucket && s.ChainID == chainID
+}
+
+type snapshotLister interface {
+	ListSnapshots(context.Context) ([]snapshottypes.Snapshot, error)
+}
+
+// SnapshotUploader publishes snapshots completed by the local producer to S3.
 type SnapshotUploader struct {
-	homeDir           string
-	bucket            string
-	region            string
-	chainID           string
-	uploadInterval    time.Duration
-	s3UploaderFactory seis3.UploaderFactory
+	homeDir             string
+	bucket              string
+	region              string
+	chainID             string
+	uploadInterval      time.Duration
+	s3UploaderFactory   seis3.UploaderFactory
+	latestMarkerFactory seis3.LatestMarkerFactory
+	snapshotClient      snapshotLister
 }
 
-// NewSnapshotUploader creates an uploader targeting the given home directory.
-// Bucket, region, and chainID are read from environment at construction time
-// and rejected here if empty so the caller fails fast rather than entering
-// runLoop and uploading nothing forever.
-func NewSnapshotUploader(homeDir, bucket, region, chainID string, uploadInterval time.Duration, factory seis3.UploaderFactory) (*SnapshotUploader, error) {
+// NewSnapshotUploader creates an uploader for a home and a nonempty S3 destination.
+// Nil factories use the default AWS configuration for archive and marker clients.
+func NewSnapshotUploader(homeDir, bucket, region, chainID string, uploadInterval time.Duration, factory seis3.UploaderFactory, markerFactory seis3.LatestMarkerFactory) (*SnapshotUploader, error) {
 	if bucket == "" || region == "" || chainID == "" {
 		return nil, fmt.Errorf("snapshot-upload: bucket, region, and chainID are required")
 	}
 	if factory == nil {
 		factory = seis3.DefaultUploaderFactory
 	}
+	if markerFactory == nil {
+		markerFactory = seis3.DefaultLatestMarkerFactory
+	}
 	if uploadInterval <= 0 {
 		uploadInterval = defaultUploadInterval
 	}
 	return &SnapshotUploader{
-		homeDir:           homeDir,
-		bucket:            bucket,
-		region:            region,
-		chainID:           chainID,
-		uploadInterval:    uploadInterval,
-		s3UploaderFactory: factory,
+		homeDir:             homeDir,
+		bucket:              bucket,
+		region:              region,
+		chainID:             chainID,
+		uploadInterval:      uploadInterval,
+		s3UploaderFactory:   factory,
+		latestMarkerFactory: markerFactory,
+		snapshotClient:      rpc.NewSnapshotClient(nil),
 	}, nil
 }
 
@@ -158,27 +172,30 @@ func (u *SnapshotUploader) runLoop(ctx context.Context) error {
 	}
 }
 
-// Upload finds the latest complete snapshot, archives it, and streams it to S3.
-// It picks the second-to-latest snapshot height to avoid uploading an
-// in-progress snapshot. If the snapshot has already been uploaded (tracked
-// via a local state file), it no-ops.
-//
-// The archive is streamed through an io.Pipe so it never needs to be buffered
-// entirely in memory; the transfermanager handles multipart upload automatically.
+// Upload verifies and publishes the newest snapshot completed by the local node.
+// The shared marker preserves any newer publication; local state caches success.
 func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, error) {
-	snapshotsDir := filepath.Join(u.homeDir, "data", "snapshots")
-
-	height, err := pickUploadCandidate(snapshotsDir)
+	last := u.readUploadState()
+	verifiedLast := last.verifiesArchive(u.bucket, u.chainID)
+	completed, err := u.snapshotClient.ListSnapshots(ctx)
+	if err != nil {
+		return u.recordError(ctx), fmt.Errorf("listing completed snapshots: %w", err)
+	}
+	snapshot, err := pickUploadCandidate(completed)
 	if err != nil {
 		return u.recordError(ctx), err
 	}
-	if height == 0 {
-		uploadLog.Debug("fewer than 2 snapshots on disk, nothing to upload")
-		return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeNoop, NoopReason: NoopFewerThanTwoSnapshots}), nil
+	if snapshot == nil {
+		if last.LastUploadedHeight > 0 && !verifiedLast {
+			uploadLog.Warn("historical snapshot publication remains unverified; no completed replacement is available",
+				"legacy-height", last.LastUploadedHeight, "recovery-guide", "docs/operations/snapshot-publication-recovery.md")
+		}
+		uploadLog.Info("no completed snapshots reported by the local node, nothing to upload")
+		return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeNoop, NoopReason: NoopNoCompletedSnapshots}), nil
 	}
+	height := int64(snapshot.Height)
 
-	last := u.readUploadState()
-	if last.LastUploadedHeight >= height {
+	if verifiedLast && last.LastUploadedHeight >= height {
 		uploadLog.Debug("height already uploaded", "height", height, "last-uploaded", last.LastUploadedHeight)
 		return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeNoop, NoopReason: NoopAlreadyUploaded, Height: height}), nil
 	}
@@ -194,33 +211,38 @@ func (u *SnapshotUploader) Upload(ctx context.Context) (SnapshotUploadResult, er
 
 	archiveKey := fmt.Sprintf("%s%d.tar.gz", prefix, height)
 	uploadLog.Info("streaming archive to S3", "key", archiveKey)
-	if err := u.streamUpload(ctx, uploader, u.bucket, archiveKey, snapshotsDir, height); err != nil {
+	if err := u.streamUpload(ctx, uploader, archiveKey, *snapshot); err != nil {
 		return u.recordError(ctx), fmt.Errorf("uploading %s: %w", archiveKey, err)
 	}
 
 	latestKey := prefix + "latest.txt"
-	latestBody := []byte(strconv.FormatInt(height, 10))
-	_, err = uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket: aws.String(u.bucket),
-		Key:    aws.String(latestKey),
-		Body:   bytes.NewReader(latestBody),
-	})
+	marker, err := u.latestMarkerFactory(ctx, u.region)
 	if err != nil {
-		return u.recordError(ctx), fmt.Errorf("uploading %s: %w", latestKey, err)
+		return u.recordError(ctx), fmt.Errorf("building snapshot marker publisher: %w", err)
 	}
-	uploadLog.Info("updated latest.txt", "key", latestKey, "height", height)
+	markerOutcome, err := marker.Advance(ctx, u.bucket, latestKey, height)
+	if err != nil {
+		return u.recordError(ctx), fmt.Errorf("publishing %s: %w", latestKey, err)
+	}
+	uploadLog.Info("resolved latest.txt publication", "key", latestKey, "height", height, "marker-outcome", markerOutcome)
 
-	if err := u.writeUploadState(uploadState{LastUploadedHeight: height, LastUploadedAt: time.Now().Unix()}); err != nil {
+	if err := u.writeUploadState(uploadState{
+		LastUploadedHeight: height, LastUploadedAt: time.Now().Unix(),
+		ArchiveVerificationVersion: verifiedArchiveVersion, Bucket: u.bucket, ChainID: u.chainID,
+	}); err != nil {
 		return u.recordError(ctx), err
 	}
+	if last.LastUploadedHeight > 0 && !verifiedLast {
+		uploadLog.Warn("replaced unverified local upload history; historical remote archives still need inspection",
+			"legacy-height", last.LastUploadedHeight, "verified-height", height, "marker-outcome", markerOutcome,
+			"recovery-guide", "docs/operations/snapshot-publication-recovery.md")
+	}
 
-	return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeUploaded, Height: height, Key: archiveKey}), nil
+	return u.recordTerminal(SnapshotUploadResult{Outcome: OutcomeUploaded, Height: height, Key: archiveKey, MarkerOutcome: markerOutcome}), nil
 }
 
-// recordTerminal emits the metrics for a clean terminal and returns the result
-// unchanged so callers can `return u.recordTerminal(...), nil` in one line. Any
-// clean terminal (uploaded or noop) refreshes the last-run-success gauge and the
-// outcome counter; only a real upload advances the uploaded gauges.
+// recordTerminal records a clean outcome and local archive finalization metrics.
+// The uploaded gauges describe the local archive, not the shared marker.
 func (u *SnapshotUploader) recordTerminal(result SnapshotUploadResult) SnapshotUploadResult {
 	now := time.Now()
 	snapshotUploadLastRunSuccess.WithLabelValues(u.chainID).Set(float64(now.Unix()))
@@ -258,7 +280,7 @@ func (u *SnapshotUploader) recordError(ctx context.Context) SnapshotUploadResult
 // mask a genuinely stalled uploader after a restart.
 func (u *SnapshotUploader) EmitStartupMetrics() {
 	st := u.readUploadState()
-	if st.LastUploadedHeight <= 0 {
+	if st.LastUploadedHeight <= 0 || !st.verifiesArchive(u.bucket, u.chainID) {
 		return
 	}
 	snapshotUploadLastUploadedHeight.WithLabelValues(u.chainID).Set(float64(st.LastUploadedHeight))
@@ -267,168 +289,79 @@ func (u *SnapshotUploader) EmitStartupMetrics() {
 	}
 }
 
-// streamUpload pipes a tar.gz archive directly into the transfermanager,
-// avoiding in-memory buffering of the full archive.
-func (u *SnapshotUploader) streamUpload(ctx context.Context, uploader seis3.Uploader, bucket, key, snapshotsDir string, height int64) error {
-	pr, pw := io.Pipe()
+// streamUpload sends chunks and isolated metadata to S3, aborting the object
+// if the archive fails validation.
+func (u *SnapshotUploader) streamUpload(ctx context.Context, uploader seis3.Uploader, key string, snapshot snapshottypes.Snapshot) error {
+	metadataDir, err := os.MkdirTemp("", "sei-snapshot-metadata-*")
+	if err != nil {
+		return fmt.Errorf("creating archive metadata directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(metadataDir) }()
+	if err := writeSnapshotMetadata(metadataDir, snapshot); err != nil {
+		return err
+	}
 
+	pr, pw := io.Pipe()
+	defer func() { _ = pr.Close() }()
 	archiveErr := make(chan error, 1)
 	go func() {
-		archiveErr <- writeArchive(ctx, pw, snapshotsDir, height)
+		archiveErr <- writeArchive(ctx, pw, filepath.Join(u.homeDir, "data", "snapshots"), metadataDir, snapshot)
 	}()
 
 	_, uploadErr := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(bucket),
+		Bucket:      aws.String(u.bucket),
 		Key:         aws.String(key),
 		Body:        pr,
 		ContentType: aws.String("application/gzip"),
 	})
-
-	if uploadErr != nil {
-		// Unblock the archiver goroutine if it's still writing.
-		pr.CloseWithError(uploadErr)
-	}
-
-	aErr := <-archiveErr
+	// Also close after success: an uploader that returns without consuming the
+	// body must not leave the archiver blocked on its next write.
+	_ = pr.CloseWithError(io.ErrClosedPipe)
+	archiveError := <-archiveErr
 	if uploadErr != nil {
 		return uploadErr
 	}
-	return aErr
+	return archiveError
 }
 
-// pickUploadCandidate scans the snapshots directory and returns the
-// second-to-latest height. This avoids uploading an in-progress snapshot.
-// Returns 0 if fewer than 2 snapshots exist.
-func pickUploadCandidate(snapshotsDir string) (int64, error) {
-	entries, err := os.ReadDir(snapshotsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
+// pickUploadCandidate returns the newest completed snapshot, if any.
+func pickUploadCandidate(completed []snapshottypes.Snapshot) (*snapshottypes.Snapshot, error) {
+	var newest *snapshottypes.Snapshot
+	for _, snapshot := range completed {
+		if newest == nil || snapshot.Height > newest.Height || (snapshot.Height == newest.Height && snapshot.Format > newest.Format) {
+			newest = &snapshot
 		}
-		return 0, fmt.Errorf("reading snapshots directory: %w", err)
 	}
-
-	var heights []int64
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		h, err := strconv.ParseInt(e.Name(), 10, 64)
-		if err != nil {
-			continue // skip non-numeric directories
-		}
-		heights = append(heights, h)
+	if newest == nil {
+		return nil, nil
 	}
-
-	if len(heights) < 2 {
-		return 0, nil
+	if err := validateSnapshotMetadata(*newest); err != nil {
+		return nil, err
 	}
-
-	slices.Sort(heights)
-	return heights[len(heights)-2], nil
+	return newest, nil
 }
 
-// writeArchive streams a tar.gz archive of the snapshot at the given height
-// into wc (typically the write half of an io.Pipe). It always closes wc when
-// done, propagating any archiving error so the reader side sees it.
-func writeArchive(ctx context.Context, wc io.WriteCloser, snapshotsDir string, height int64) (retErr error) {
-	defer func() {
-		if retErr != nil {
-			wc.(*io.PipeWriter).CloseWithError(retErr)
-		} else {
-			_ = wc.Close()
-		}
-	}()
-
-	gw := gzip.NewWriter(wc)
-	tw := tar.NewWriter(gw)
-
-	heightDir := filepath.Join(snapshotsDir, strconv.FormatInt(height, 10))
-	if err := addDirToTar(ctx, tw, heightDir, strconv.FormatInt(height, 10)); err != nil {
-		return err
+// validateSnapshotMetadata checks the height, format and expected SHA256 hashes
+// required to verify an archive before publication.
+func validateSnapshotMetadata(snapshot snapshottypes.Snapshot) error {
+	if snapshot.Height == 0 || snapshot.Height > math.MaxInt64 {
+		return fmt.Errorf("invalid completed snapshot height %d", snapshot.Height)
 	}
-
-	// metadata.db has been a LevelDB directory in cosmos-sdk for several
-	// versions, but the API allows it to be a single file too. Dispatch
-	// on whichever we observe so a future revert doesn't break us either way.
-	metadataPath := filepath.Join(snapshotsDir, "metadata.db")
-	if info, err := os.Stat(metadataPath); err == nil {
-		var addErr error
-		if info.IsDir() {
-			addErr = addDirToTar(ctx, tw, metadataPath, "metadata.db")
-		} else {
-			addErr = addFileToTar(ctx, tw, metadataPath, "metadata.db", info)
-		}
-		if addErr != nil {
-			return fmt.Errorf("archiving metadata.db: %w", addErr)
-		}
+	if snapshot.Format == 0 || snapshot.Chunks == 0 {
+		return fmt.Errorf("snapshot %d has no format or chunks", snapshot.Height)
 	}
-
-	if err := tw.Close(); err != nil {
-		return fmt.Errorf("closing tar writer: %w", err)
+	if len(snapshot.Hash) != sha256.Size {
+		return fmt.Errorf("snapshot %d has an invalid SHA256 hash", snapshot.Height)
 	}
-	if err := gw.Close(); err != nil {
-		return fmt.Errorf("closing gzip writer: %w", err)
+	if uint64(len(snapshot.Metadata.ChunkHashes)) != uint64(snapshot.Chunks) {
+		return fmt.Errorf("snapshot %d chunk count does not match its metadata", snapshot.Height)
+	}
+	for index, hash := range snapshot.Metadata.ChunkHashes {
+		if len(hash) != sha256.Size {
+			return fmt.Errorf("invalid chunk hash at height %d index %d", snapshot.Height, index)
+		}
 	}
 	return nil
-}
-
-func addDirToTar(ctx context.Context, tw *tar.Writer, dir, base string) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		rel, err := filepath.Rel(filepath.Dir(dir), path)
-		if err != nil {
-			return err
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		header.Name = rel
-
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }()
-		_, err = io.Copy(tw, f)
-		return err
-	})
-}
-
-func addFileToTar(ctx context.Context, tw *tar.Writer, path, name string, info os.FileInfo) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	header, err := tar.FileInfoHeader(info, "")
-	if err != nil {
-		return err
-	}
-	header.Name = name
-	if err := tw.WriteHeader(header); err != nil {
-		return err
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	_, err = io.Copy(tw, f)
-	return err
 }
 
 func (u *SnapshotUploader) readUploadState() uploadState {

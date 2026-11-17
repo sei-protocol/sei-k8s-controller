@@ -161,7 +161,7 @@ func TestNewSnapshotUploader_RejectsEmptyConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewSnapshotUploader(t.TempDir(), tt.bucket, tt.region, tt.chainID, 0, nil)
+			_, err := NewSnapshotUploader(t.TempDir(), tt.bucket, tt.region, tt.chainID, 0, nil, nil)
 			if err == nil {
 				t.Fatal("expected constructor error, got nil")
 			}

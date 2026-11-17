@@ -142,6 +142,7 @@ type NoopReason string
 
 const (
 	NoopFewerThanTwoSnapshots NoopReason = "fewer-than-2-snapshots"
+	NoopNoCompletedSnapshots  NoopReason = "no-completed-snapshots"
 	NoopAlreadyUploaded       NoopReason = "already-uploaded"
 )
 
