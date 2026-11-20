@@ -113,6 +113,7 @@ func TestNightlyChainUpgrade(t *testing.T) {
 
 	const validators = 4
 	s := spec{
+		sizing:     sei.NodeSizing{DataVolumeGiB: nightlyDataVolumeGiB},
 		chainID:    chainID,
 		runID:      chainID,
 		namespace:  ns,
@@ -263,6 +264,7 @@ func networkSpec(s spec, image string, labels map[string]string) sei.NetworkSpec
 		Namespace:      s.namespace,
 		Image:          image,
 		Validators:     s.validators,
+		Sizing:         s.sizing,
 		Labels:         labels,
 		Config:         upgradeConfig,
 		Genesis:        votingPeriodGenesis,

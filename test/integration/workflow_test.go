@@ -217,6 +217,7 @@ func bringUpStateSyncFollower(ctx context.Context, t *testing.T, c *sei.Client, 
 	// p2p. Blocksync's caught-up check needs >1 peer (sei-tendermint
 	// pool.IsCaughtUp); the validator set provides them.
 	ch, err := provision(ctx, t, c, spec{
+		sizing:        sei.NodeSizing{DataVolumeGiB: nightlyDataVolumeGiB},
 		chainID:       chainID,
 		runID:         chainID,
 		namespace:     ns,
@@ -270,6 +271,7 @@ func bringUpStateSyncFollower(ctx context.Context, t *testing.T, c *sei.Client, 
 	// memiavlStorageConfig).
 	ssNode, err := c.CreateNode(ctx, sei.NodeSpec{
 		Name:      "statesync-" + chainID,
+		Sizing:    sei.NodeSizing{DataVolumeGiB: nightlyDataVolumeGiB},
 		Network:   chainID,
 		Namespace: ns,
 		Image:     seid,

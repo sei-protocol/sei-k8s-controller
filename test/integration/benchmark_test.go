@@ -93,6 +93,7 @@ func TestNightlyBenchmark(t *testing.T) {
 				t.Fatalf("chain id %q yields label value %q > 63 chars", id, v)
 			}
 			s := spec{
+				sizing:     sei.NodeSizing{DataVolumeGiB: nightlyDataVolumeGiB},
 				chainID:    id,
 				runID:      id,
 				namespace:  ns,

@@ -11,6 +11,29 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
+func TestSizingOnGenesisValidatorsAndRPCFollowers(t *testing.T) {
+	const pool = "small"
+	sizing := sei.NodeSizing{DataVolumeGiB: 100, MemoryGiB: 32, MilliCPU: 4500}
+	net := renderNetwork(sei.NetworkSpec{Sizing: sizing, NodePool: pool}, testNS)
+	rpc := renderNode(sei.NodeSpec{Sizing: sizing, NodePool: pool}, testNS, testNS)
+	if !reflect.DeepEqual(net.Spec.DataVolume, rpc.Spec.DataVolume) ||
+		!reflect.DeepEqual(net.Spec.Resources, rpc.Spec.Resources) ||
+		!reflect.DeepEqual(net.Spec.Scheduling, rpc.Spec.Scheduling) {
+		t.Fatal("validator and RPC settings differ")
+	}
+	if net.Spec.Scheduling.NodePool != pool || net.Spec.DataVolume.Storage.Resources.Requests.Storage().String() != "100Gi" ||
+		net.Spec.Resources.Requests.Memory().String() != "32Gi" || net.Spec.Resources.Requests.Cpu().MilliValue() != 4500 {
+		t.Fatalf("unexpected scheduling, volume or resources: %v %v %v", net.Spec.Scheduling, net.Spec.DataVolume, net.Spec.Resources)
+	}
+	diskOnly := renderNetwork(sei.NetworkSpec{Sizing: sei.NodeSizing{DataVolumeGiB: 100}}, testNS)
+	if diskOnly.Spec.Resources != nil || diskOnly.Spec.Scheduling != nil || diskOnly.Spec.DataVolume.Storage.VolumeAttributesClassName != nil {
+		t.Fatal("a disk-only override changed a compute or performance default")
+	}
+	if volume, resources := renderSizing(sei.NodeSizing{}); volume != nil || resources != nil {
+		t.Fatal("zero sizing must omit both fields")
+	}
+}
+
 func TestRenderNetwork_PropagatesVesting(t *testing.T) {
 	spec := sei.NetworkSpec{
 		Name: testNet, Image: testImage, Validators: 1,

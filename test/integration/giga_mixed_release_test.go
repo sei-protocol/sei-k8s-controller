@@ -77,6 +77,7 @@ func TestNightlyGigaMixedRelease(t *testing.T) {
 	//    Validators are snapshot-producing so the migration can state-sync from a
 	//    snapshot; the followers are non-producing witnesses (interval 0).
 	ch, err := provision(ctx, t, c, spec{
+		sizing:        sei.NodeSizing{DataVolumeGiB: nightlyDataVolumeGiB},
 		chainID:       chainID,
 		runID:         chainID,
 		namespace:     ns,
