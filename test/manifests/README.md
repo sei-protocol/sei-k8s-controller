@@ -43,15 +43,15 @@ budgets 40 minutes, and the default 10-minute test timeout would panic mid-fault
 
 Required environment: `SEI_CHAIN_ID` (the base chain id) and `SEID_IMAGE_CHAOS`
 (the seid image, as for the nightly chaos suite). Optional: `SEI_NAMESPACE`,
-`CHAOS_DURATION`, `CHAOS_EXTENDED_SCENARIOS`, `CHAOS_STORAGE_PROFILE` and
-`CHAOS_REQUIRE_CLEAN_SHUTDOWN`, described below.
+`CHAOS_DURATION`, `CHAOS_EXTENDED_SCENARIOS`, `CHAOS_STORAGE_PROFILE`,
+`CHAOS_REQUIRE_CLEAN_SHUTDOWN`, `CHAOS_SYNC_DEPTH`, and `CHAOS_LOAD_MINUTES` (which
+then requires `SEILOAD_IMAGE`), described below.
 
 | Scenario | Fault(s) | What it checks |
 |---|---|---|
 | `kill-during-recovery` | `container-kill-validator-0` x3 | validator-0 SIGKILLed again as soon as its container runs, so recovery starts from a store a crash left half-done. **Best effort:** a fast recovery can finish before the next kill lands; the log records whether the pod was already Ready at each kill, so a green run is not proof that mid-recovery kills were covered. |
-| `kill-during-replay` | `container-kill-validator-0` x5 | the same repeated SIGKILL, watching for the window in which the container is running but the RPC listener is not (a node handshakes and replays before it starts its RPC server). **Best effort:** the next kill is injected a moment after the observation, and a small chain replays in under a second. It fails if no attempt ever saw that window, so a chain with no replay phase cannot pass as if it had one; run it with `CHAOS_LOAD_MINUTES` or the `flatkv` profile. |
-| `restart-during-blocksync` | `container-kill-node` | a follower added to a chain already `CHAOS_SYNC_DEPTH` blocks deep is SIGKILLed while it reports `catching_up`; it must resume, catch up without losing the blocks it had synced, and agree with every other node. Fails if the follower had already caught up when first observed (raise the depth). |
-| `restart-during-statesync` | `container-kill-node` | a follower bootstrapping from a snapshot is SIGKILLed while it reports `catching_up` at height 0; it must start over (a snapshot restore is not resumable), still end up from a snapshot (earliest height above 1, not a genesis replay), and agree with every other node. Fails if the restore had already finished when first observed. |
+| `restart-during-blocksync` | `container-kill-node` | a follower added to a chain already `CHAOS_SYNC_DEPTH` blocks deep is SIGKILLed while it reports `catching_up`. The kill is injected a couple of seconds after the follower is observed syncing, so afterwards the scenario compares the follower's first height after the restart with the chain tip at the kill: at or above the tip means it had already finished and the scenario fails (raise the depth). It must also not resume below the height it had when observed (less a block or two), catch up, and agree with every other node. |
+| `restart-during-statesync` | `container-kill-node` | a follower bootstrapping from a snapshot is SIGKILLed while it state syncs. The phase is detected from seid's **log** (`starting state sync` without `Finished state sync`), because the RPC listener binds after state sync and `/status` is refused for the whole phase; this needs seid logging at info level. Afterwards the killed container's own previous log must show it started state sync and never finished, which is the proof the kill landed in the phase. It must then start over (a snapshot restore is not resumable), still end up from a snapshot (earliest height above 1), and agree with every other node. |
 | `cold-start` | `container-kill-all` | every validator SIGKILLed at once; each recovers alone and the chain must reconcile |
 | `quorum-loss-partition` | `network-partition-split` | a 2\|2 split of the validators, RPC follower on one side: the chain must stop committing (observed on validator-0), then resume without forking |
 | `network-flap` | `network-partition` (from the nightly `Catalog`, not `ExtendedCatalog`) x5, 20s on/off | repeated drop and reconnect of one validator |
@@ -85,8 +85,14 @@ Optional inputs:
   ratio) are not applied, since a fault makes sends fail by design. The chain gets
   two followers, one taking the sends and the other, the observer, serving receipts.
   The chaos image is the `mock_balances` build, so no funded key is needed.
+  **Set it above the scenario's own length, 30 minutes or more:** the Job runs this
+  long and nothing extends it. A Job that has ended makes the post-recovery check
+  fail, with a message that says the load ended, not that the chain stopped taking
+  traffic. Scenario budgets are 40 minutes, 60 for state sync and 75 for block sync.
 - `CHAOS_SYNC_DEPTH`: how many blocks the chain has before `restart-during-blocksync`
-  adds its follower (default 600). The deeper, the wider the block-sync window.
+  adds its follower (default 600). The deeper, the wider the block-sync window. The
+  scenario fails, and says to raise this, if the follower finished syncing before
+  the kill landed.
 - `CHAOS_EXTENDED_SCENARIOS`: comma-separated scenario names.
 - `CHAOS_STORAGE_PROFILE`: `memiavl` (the default), or `flatkv`, which runs the
   chain on `write_mode: flatkv_only`. **Unconfirmed:** the chaos image is built
@@ -105,13 +111,28 @@ Optional inputs:
 - That Chaos Mesh keeps the per-target `injectedCount` on a fault CR after it
   recovers (`network-flap` relies on it).
 - That the chaos image boots with `flatkv_only`.
-- That `/status` reports `catching_up` with height 0 while a node state syncs, and
-  `catching_up` with a rising height while it block syncs (the two sync scenarios
-  gate on that, and the state-sync one on the height 0).
+- That `/status` reports `catching_up` true with a rising height while a node block
+  syncs (`restart-during-blocksync` gates on it).
+- That the chaos chain's seid logs `starting state sync` at the level it runs at
+  (`restart-during-statesync` gates on the log; if the line never appears the
+  scenario fails and says so), and that kubelet keeps the killed container's log so
+  the scenario can read it.
+- That a follower pod carries `sei.io/node=<its name>`, so `container-kill-node`
+  reaches it, and that a snapshot-restored follower reports an earliest height
+  above 1.
 - That the seiload Job's profile (`SEILOAD_PROFILE`, default `nightly_evm_transfer`)
   lands transactions on the `mock_balances` chaos image without a funded key.
-- That a kill can actually be landed in each sync phase and in replay on a chain
-  of this size; the scenarios fail loudly when they cannot, rather than pass.
+- That a kill can actually be landed in each sync phase on a chain of this size; the
+  two sync scenarios check afterwards that it did and fail when it did not, rather
+  than pass.
+
+### Not covered
+
+There is no WAL-replay scenario. A node replays at most one block on start, in
+milliseconds, and the RPC listener binds after every other service, so "container
+running, RPC refused" spans the whole of startup and cannot isolate replay. Replay
+is exercised only indirectly, by `kill-during-recovery` under `CHAOS_LOAD_MINUTES`,
+which kills a node mid-block and again as it restarts.
 
 ### Promotion
 

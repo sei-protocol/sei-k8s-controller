@@ -5,28 +5,53 @@ package integration
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 	"github.com/sei-protocol/sei-k8s-controller/test/chaoscheck"
 	"github.com/sei-protocol/sei-k8s-controller/test/manifests/faults"
 )
 
-// Scenarios in this file restart a node while it is in a specific phase of its
-// life (replaying on start, block syncing, state syncing), and the load wrapper
-// that runs any scenario under traffic. Landing a restart in a phase is
-// best-effort, because each phase can be shorter than the time it takes to
-// notice it and inject a fault. Every scenario here fails loudly when it could not
-// create the phase, and logs what it observed at the moment of the kill, so a
-// green run is not a silent claim that the phase was covered.
+// Scenarios in this file restart a node while it is block syncing or state
+// syncing, and the load wrapper that runs any scenario under traffic. Landing a
+// restart in a phase is best-effort, because each phase can be shorter than the
+// time it takes to notice it and inject a fault. Each scenario therefore checks
+// AFTER the kill that it landed in the phase, from evidence the restarted node or
+// the killed container left behind, and fails loudly when it did not, instead of
+// logging a claim nobody checked.
+//
+// There is deliberately no WAL-replay scenario. A node replays at most one block
+// on start, in milliseconds, and the RPC listener binds last, after every other
+// service has started, so "container running, RPC refused" spans the whole of
+// startup and says nothing about replay. Replay is exercised only indirectly:
+// kill-during-recovery under load kills a node mid-block and again as it restarts.
 
 // snapshotIntervalKey is the sei-config key that sets how often a node emits a
 // state-sync snapshot (snapshotProductionConfig sets it on the validators).
 const snapshotIntervalKey = "storage.snapshot_interval"
+
+// The two seid log lines that bracket state sync (sei-tendermint
+// internal/statesync/reactor.go). They are the only signal that a node is state
+// syncing: the state-sync reactor blocks node start, and the RPC listener binds
+// after it, so /status is refused for the whole phase.
+const (
+	stateSyncStartLog = "starting state sync"
+	stateSyncDoneLog  = "Finished state sync"
+)
+
+// blockSyncTipSlack is how many blocks below the chain tip a restarted follower's
+// first height may sit and still count as having been mid-sync when it was killed.
+// A follower already at (or past) the tip finished syncing before the kill landed.
+const blockSyncTipSlack = 20
 
 // loadConfig is the seiload run that goes on while a scenario's fault is injected.
 type loadConfig struct {
@@ -57,7 +82,8 @@ func loadFromEnv(t *testing.T) (loadConfig, bool) {
 // loadRPCConfig and loadRPCConfigValues are the follower settings the benchmark
 // suite applies so its RPC nodes absorb the load: a bigger EVM worker pool and tx
 // pool, and seid's per-client rate limit off (sei-load sends from one pod, so with
-// the limit on the run would measure the limiter).
+// the limit on the run would measure the limiter). They are copies of
+// benchmark_test.go's rpcConfig and rpcConfigValues; keep the two in step.
 var (
 	loadRPCConfig = map[string]string{
 		"evm.worker_pool_size":  "32",
@@ -79,6 +105,11 @@ var (
 //     not real and the scenario would not be a test of anything under load;
 //   - after the scenario's own recovery gate, transactions must land again, so a
 //     chain that recovered but stopped taking traffic fails.
+//
+// The load Job runs CHAOS_LOAD_MINUTES and nothing extends it, so it must outlast
+// the scenario. waitIncluded fails with its own message when the Job has ended, so
+// a Job that expired mid-scenario is not mistaken for a chain that stopped taking
+// traffic.
 //
 // seiload's own thresholds (its run length and revert ratio) are not applied: a
 // fault makes sends fail by design. The Job is stopped once the checks are done,
@@ -102,24 +133,88 @@ func (r *chaosRun) runWithLoad(ctx context.Context, t *testing.T, s spec, sc ext
 
 // waitIncluded waits, within loadInclusionWindow, until at least one transaction
 // has been included in a block after height from, read from the node that takes
-// no sends. phase names the point in the scenario for the failure message.
+// no sends. phase names the point in the scenario for the failure message. A read
+// that fails (the observer briefly unreachable right after a fault) is retried, not
+// fatal; only the window expiring, or the load Job having ended, fails.
 func (r *chaosRun) waitIncluded(ctx context.Context, t *testing.T, run *seiloadRun, from int64, phase string) {
 	t.Helper()
 	waitCtx, cancel := context.WithTimeout(ctx, loadInclusionWindow)
 	defer cancel()
 	var total int64
 	pollUntil(waitCtx, t, "seiload transactions included in blocks "+phase, func(ctx context.Context) bool {
+		if ended, why := seiloadEnded(ctx, r.cs, run); ended {
+			t.Fatalf("the seiload Job ended before the scenario did (%s), so no load is running %s: "+
+				"raise %s above the scenario's own length (allow 30+ minutes)", why, phase, chaosLoadMinutesEnv)
+		}
 		to, ok := sei.LatestHeight(ctx, run.hc, run.tmRPC)
 		if !ok {
 			return false
 		}
 		if to > from {
-			total += includedTxCount(ctx, t, run.hc, run.tmRPC, from, to)
+			n, ok := includedSoft(ctx, run.hc, run.tmRPC, from, to)
+			if !ok {
+				return false // retry the same range
+			}
+			total += n
 			from = to
 		}
 		return total > 0
 	})
 	t.Logf("load is landing %s: >=%d transactions included", phase, total)
+}
+
+// seiloadEnded reports whether run's Job has completed or failed, and why. A Job
+// that cannot be read is treated as still running; the poll will retry.
+func seiloadEnded(ctx context.Context, cs *kubernetes.Clientset, run *seiloadRun) (bool, string) {
+	job, err := cs.BatchV1().Jobs(run.ns).Get(ctx, run.job.Name, metav1.GetOptions{})
+	if err != nil {
+		return false, ""
+	}
+	for _, c := range job.Status.Conditions {
+		if c.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch c.Type {
+		case batchv1.JobComplete:
+			return true, "it completed its run"
+		case batchv1.JobFailed:
+			return true, "it failed: " + c.Message
+		}
+	}
+	return false, ""
+}
+
+// includedSoft is includedTxCount without the t.Fatalf: it counts the transactions
+// in blocks from+1 through to on the node at tmRPC, and returns ok=false on a page
+// that cannot be read, decoded or is short, so a poll can retry. includedTxCount
+// fails closed because the nightly calls it on a healthy chain after load; here it
+// would run right after a fault, when a few seconds of an unreachable RPC is
+// expected, and must not turn a healthy recovery into a harness failure.
+func includedSoft(ctx context.Context, hc *http.Client, tmRPC string, from, to int64) (int64, bool) {
+	var total int64
+	for lo := from + 1; lo <= to; lo += blockchainPageSize {
+		hi := min(lo+blockchainPageSize-1, to)
+		var page blockchainInfo
+		url := fmt.Sprintf("%s/blockchain?minHeight=%d&maxHeight=%d", tmRPC, lo, hi)
+		if !getJSONInto(ctx, hc, url, &page) {
+			return total, false
+		}
+		metas := page.metas()
+		if int64(len(metas)) != hi-lo+1 {
+			return total, false // a short page is a pruned range or an error envelope, not zero
+		}
+		for _, m := range metas {
+			n, err := strconv.ParseInt(m.NumTxs, 10, 64)
+			if err != nil {
+				return total, false
+			}
+			total += n
+		}
+		if total > 0 {
+			return total, true
+		}
+	}
+	return total, true
 }
 
 // nodePod names the pod of the SeiNode called node.
@@ -132,9 +227,10 @@ func (r *chaosRun) nodePod(ctx context.Context, t *testing.T, node string) strin
 	return l.Items[0].Name
 }
 
-// seidRestarts returns seid's restart count in pod, and whether it is Ready.
-func (r *chaosRun) seidRestarts(ctx context.Context, t *testing.T, pod string) (restarts int32, running, ready bool) {
-	t.Helper()
+// seidRestarts returns seid's restart count in pod, and whether it is running and
+// whether the pod is Ready. A pod that cannot be read reads as zero restarts and
+// not running.
+func (r *chaosRun) seidRestarts(ctx context.Context, pod string) (restarts int32, running, ready bool) {
 	p, err := r.cs.CoreV1().Pods(r.ns).Get(ctx, pod, metav1.GetOptions{})
 	if err != nil {
 		return 0, false, false
@@ -146,6 +242,21 @@ func (r *chaosRun) seidRestarts(ctx context.Context, t *testing.T, pod string) (
 	return st.RestartCount, st.State.Running != nil, podReady(p)
 }
 
+// waitSeidRestarted waits, within recoveryWindow, until pod's seid container has
+// restarted more than before times, polling every 200ms. It does not wait for the
+// pod to be Ready: a follower's readiness probe is lag-based, so Ready arrives
+// only once it is near the tip, and a caller that must read the node right after
+// it restarts cannot wait for that.
+func (r *chaosRun) waitSeidRestarted(ctx context.Context, t *testing.T, pod string, before int32) {
+	t.Helper()
+	recCtx, cancel := context.WithTimeout(ctx, recoveryWindow)
+	defer cancel()
+	pollEvery(recCtx, t, fmt.Sprintf("%s seid restarted", pod), 200*time.Millisecond, func(ctx context.Context) bool {
+		n, _, _ := r.seidRestarts(ctx, pod)
+		return n > before
+	})
+}
+
 // waitNodeRestarted waits, within recoveryWindow, until pod's seid container has
 // restarted more than before times and the pod is Ready. A restart count that has
 // to rise is what separates "recovered" from "Ready only because the kill had not
@@ -155,70 +266,43 @@ func (r *chaosRun) waitNodeRestarted(ctx context.Context, t *testing.T, pod stri
 	recCtx, cancel := context.WithTimeout(ctx, recoveryWindow)
 	defer cancel()
 	pollUntil(recCtx, t, fmt.Sprintf("%s seid restarted and Ready", pod), func(ctx context.Context) bool {
-		n, _, ready := r.seidRestarts(ctx, t, pod)
+		n, _, ready := r.seidRestarts(ctx, pod)
 		return n > before && ready
 	})
 }
 
-// scenarioKillDuringReplay SIGKILLs validator-0 repeatedly, each time right after
-// its container is running again, watching for the window in which the node is up
-// but its RPC listener is not. The node handshakes and replays before it starts
-// the RPC server, so a refused RPC connection with a running container is the one
-// observable sign of startup, handshake and replay. Whether a kill lands in it is
-// best effort: the next kill is injected a moment after the observation, and a
-// small chain replays in well under a second.
-//
-// It fails if no attempt ever saw the node in that window, so a chain too small
-// to have a replay phase cannot pass as if it had. The remedies are to run with
-// CHAOS_LOAD_MINUTES (kills then land mid-block, and replay has real work) or on
-// the flatkv profile (whose four stores can come back at different heights).
-func scenarioKillDuringReplay(ctx context.Context, t *testing.T, r *chaosRun) {
-	const attempts = 5
-	start := time.Now()
-	floor := r.floor(ctx, t)
-	pod := r.nodePod(ctx, t, r.id+"-0")
-	rpc := r.endpoints(ctx, t)[0] // validator-0
-	restarts, _, _ := r.seidRestarts(ctx, t, pod)
+// seidLog returns the tail of seid's log in pod. previous selects the container
+// instance that was running before the last restart: kubelet keeps that one's log,
+// which is how a scenario checks, after the kill, what the killed instance was
+// doing when it died.
+func (r *chaosRun) seidLog(ctx context.Context, pod string, previous bool) (string, error) {
+	tail := int64(2000)
+	raw, err := r.cs.CoreV1().Pods(r.ns).GetLogs(pod, &corev1.PodLogOptions{
+		Container: seidContainer,
+		Previous:  previous,
+		TailLines: &tail,
+	}).DoRaw(ctx)
+	return string(raw), err
+}
 
-	// A short per-request timeout: during replay the RPC connection is refused, and
-	// a 10s client timeout would hide the window it is meant to see.
-	probe := *r.hc
-	probe.Timeout = 500 * time.Millisecond
-
-	hits := 0
-	for i := 1; i <= attempts; i++ {
-		f := r.apply(ctx, t, "container-kill-validator-0", fmt.Sprintf("-p%d", i), "")
-		r.gateInjectedExactly(ctx, t, f, 1)
-
-		var rpcDown bool
-		var seen int32
-		killCtx, cancelKill := context.WithTimeout(ctx, recoveryWindow)
-		pollEvery(killCtx, t, fmt.Sprintf("kill %d: %s restarted and running", i, pod), 200*time.Millisecond,
-			func(ctx context.Context) bool {
-				n, running, _ := r.seidRestarts(ctx, t, pod)
-				if n <= restarts || !running {
-					return false
-				}
-				_, err := chaoscheck.Sync(ctx, &probe, rpc)
-				rpcDown = err != nil
-				seen = n
-				return true
-			})
-		cancelKill()
-		restarts = seen
-		if rpcDown {
-			hits++
-		}
-		t.Logf("kill %d/%d: container running again, RPC listener up: %v", i, attempts, !rpcDown)
-	}
-	t.Logf("%d of %d restarts were observed before the RPC listener came up", hits, attempts)
-	if hits == 0 {
-		t.Errorf("no restart was ever observed before the RPC listener came up, so no kill had a replay "+
-			"phase to land in; the chain replays too fast (try %s or the flatkv profile)", chaosLoadMinutesEnv)
-	}
-
-	r.waitAllReady(ctx, t)
-	r.assertRecovered(ctx, t, start, floor)
+// firstSync reads /status of node as soon as its RPC answers, polling every 200ms
+// within 2 minutes. It is the first look at the node after a restart, before it has
+// had time to sync further.
+func firstSync(ctx context.Context, t *testing.T, hc *http.Client, node *sei.Node) chaoscheck.SyncInfo {
+	t.Helper()
+	pollCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	var got chaoscheck.SyncInfo
+	pollEvery(pollCtx, t, node.Name()+" answering /status after the restart", 200*time.Millisecond,
+		func(ctx context.Context) bool {
+			s, err := chaoscheck.Sync(ctx, hc, node.TendermintRPC())
+			if err != nil {
+				return false
+			}
+			got = s
+			return true
+		})
+	return got
 }
 
 // scenarioRestartDuringBlockSync adds a follower to a chain that already has
@@ -228,8 +312,15 @@ func scenarioKillDuringReplay(ctx context.Context, t *testing.T, r *chaosRun) {
 //
 // The follower is not a validator, so the kill goes through container-kill-node,
 // which pins sei.io/node to its name (followers carry no sei.io/nodedeployment).
-// If the follower had already caught up by the time it could be observed, the
-// phase was missed; the scenario fails and says to raise the depth.
+//
+// The kill is injected a couple of seconds after the follower is observed syncing,
+// and on a shallow chain it can finish syncing in that gap. So the scenario checks
+// afterwards: the follower's first height after the restart, read as soon as its
+// RPC answers, is compared with the chain tip at the kill. At or above the tip it
+// had already finished, the kill missed the phase, and the scenario fails and says
+// to raise the depth. Below the tip, the restarted follower is shown to have been
+// behind when it died. The same first read bounds data loss: it must not be below
+// the height the follower had when it was observed, less the block in flight.
 func scenarioRestartDuringBlockSync(ctx context.Context, t *testing.T, r *chaosRun) {
 	depth := int64(envInt(t, chaosSyncDepthEnv, defaultSyncDepth))
 	waitCtx, cancelWait := context.WithTimeout(ctx, 20*time.Minute)
@@ -259,7 +350,7 @@ func scenarioRestartDuringBlockSync(ctx context.Context, t *testing.T, r *chaosR
 	pod := r.nodePod(ctx, t, name)
 
 	// Catch it syncing: the RPC answers, catching_up is true, and it has height.
-	var atKill chaoscheck.SyncInfo
+	var observed chaoscheck.SyncInfo
 	syncCtx, cancelSync := context.WithTimeout(ctx, 2*time.Minute)
 	pollEvery(syncCtx, t, name+" block syncing", 500*time.Millisecond, func(ctx context.Context) bool {
 		s, err := chaoscheck.Sync(ctx, r.hc, node.TendermintRPC())
@@ -270,18 +361,44 @@ func scenarioRestartDuringBlockSync(ctx context.Context, t *testing.T, r *chaosR
 			t.Fatalf("%s had already caught up (height %d) when first observed, before a kill could land in "+
 				"block sync; raise %s (now %d)", name, s.Height, chaosSyncDepthEnv, depth)
 		}
-		atKill = s
+		observed = s
 		return true
 	})
 	cancelSync()
-	before, _, _ := r.seidRestarts(ctx, t, pod)
+	before, _, _ := r.seidRestarts(ctx, pod)
 
 	f := r.applyWith(ctx, t, "container-kill-node", "", "", func(p *faults.Params) { p.Node = name })
 	r.gateInjectedExactly(ctx, t, f, 1)
-	t.Logf("%s killed while block syncing at height %d of ~%d", name, atKill.Height, depth)
+	tipAtKill, ok := sei.LatestHeight(ctx, r.hc, r.follower().TendermintRPC())
+	if !ok {
+		t.Fatalf("read the chain tip after the kill from %s", r.follower().TendermintRPC())
+	}
 
+	r.waitSeidRestarted(ctx, t, pod, before)
+	first := firstSync(ctx, t, r.hc, node)
+	switch {
+	case first.Height >= tipAtKill:
+		t.Errorf("%s was already at the chain tip (height %d, tip %d at the kill) when first read after the "+
+			"restart: it finished block sync before the kill landed, so block sync was not what was restarted; "+
+			"raise %s (now %d)", name, first.Height, tipAtKill, chaosSyncDepthEnv, depth)
+	case first.Height+blockSyncTipSlack >= tipAtKill:
+		t.Logf("%s resumed at height %d, within %d of the tip %d at the kill: it was near the end of block sync "+
+			"when killed", name, first.Height, blockSyncTipSlack, tipAtKill)
+	default:
+		t.Logf("%s was mid block sync when killed: observed at height %d, resumed at height %d, tip %d at the kill",
+			name, observed.Height, first.Height, tipAtKill)
+	}
+	if first.Height < observed.Height-2 {
+		t.Errorf("%s resumed at height %d, below the %d it had synced when observed: it lost blocks",
+			name, first.Height, observed.Height)
+	}
+
+	catchCtx, cancelCatch := context.WithTimeout(ctx, 5*time.Minute)
+	if err := sei.WaitCaughtUp(catchCtx, r.hc, node.TendermintRPC()); err != nil {
+		t.Errorf("%s did not catch up after the restart: %v", name, err)
+	}
+	cancelCatch()
 	r.waitNodeRestarted(ctx, t, pod, before)
-	r.assertFollowerResumed(ctx, t, node, atKill.Height)
 	r.assertRecovered(ctx, t, start, floor)
 }
 
@@ -295,28 +412,38 @@ func scenarioRestartDuringBlockSync(ctx context.Context, t *testing.T, r *chaosR
 // restore is not resumable, so the node has to discover a snapshot and restore it
 // again, and the committed-state check at the end is what shows it did so cleanly.
 //
-// The phase is read from /status: while state syncing, the node reports
-// catching_up with height 0, then jumps to the snapshot height. A height above 0
-// on the first read means the restore had already finished.
+// The phase can only be seen in seid's log. The state-sync reactor blocks node
+// start and the RPC listener binds after it, so /status is refused for the whole
+// phase. The kill waits for "starting state sync" without "Finished state sync" in
+// the follower's log, which needs seid logging at info level; if the line never
+// appears the scenario fails and says so. After the restart, the killed
+// container's own log (kubelet keeps the previous instance's) must show it
+// started state sync and never finished: that is the proof the kill landed in the
+// phase, not a belief that it did.
 func scenarioRestartDuringStateSync(ctx context.Context, t *testing.T, r *chaosRun) {
 	interval, err := strconv.Atoi(snapshotProductionConfig[snapshotIntervalKey])
 	if err != nil {
 		t.Fatalf("snapshot_interval not an int: %v", err)
 	}
 	// A snapshot has to exist before a follower can state-sync from one.
-	if err := sei.WaitHeightAdvances(ctx, r.hc, r.ch.network.TendermintRPC(), int64(interval)+10); err != nil {
+	advCtx, cancelAdv := context.WithTimeout(ctx, 10*time.Minute)
+	if err := sei.WaitHeightAdvances(advCtx, r.hc, r.ch.network.TendermintRPC(), int64(interval)+10); err != nil {
 		t.Fatalf("network did not advance past the snapshot interval: %v", err)
 	}
+	cancelAdv()
+	// The witnesses are two distinct full nodes that serve light-client trust
+	// points: validator-0 and the observer. Not the first follower, which with load
+	// on is the node taking every send and could lag the head.
 	witnessNS := witnessNamespace(t, r.ch.network)
 	witnesses := []string{
-		nodeRPC(fmt.Sprintf("%s-0", r.id), witnessNS), // validator-0
-		nodeRPC(rpcNodeName(r.id, 0), witnessNS),      // follower 0
+		nodeRPC(fmt.Sprintf("%s-0", r.id), witnessNS),
+		nodeRPC(r.follower().Name(), witnessNS),
 	}
 	assertWitnessFresh(ctx, t, r.hc, witnesses[0], witnesses[1], interval)
 
 	start := time.Now()
 	floor := r.floor(ctx, t)
-	name := "statesync-" + r.id
+	name := r.id + "-statesync"
 	node, err := r.c.CreateNode(ctx, sei.NodeSpec{
 		Name:      name,
 		Network:   r.id,
@@ -339,66 +466,60 @@ func scenarioRestartDuringStateSync(ctx context.Context, t *testing.T, r *chaosR
 	if err != nil {
 		t.Fatalf("create state-sync node %s: %v", name, err)
 	}
-	if err := node.WaitReady(ctx); err != nil {
-		t.Fatalf("state-sync node %s running: %v", name, err)
-	}
 	pod := r.nodePod(ctx, t, name)
 
-	// Catch it state syncing: the RPC answers with catching_up and no height yet.
-	syncCtx, cancelSync := context.WithTimeout(ctx, 3*time.Minute)
-	pollEvery(syncCtx, t, name+" state syncing", 500*time.Millisecond, func(ctx context.Context) bool {
-		s, err := chaoscheck.Sync(ctx, r.hc, node.TendermintRPC())
-		if err != nil {
-			return false // the RPC is not up yet
-		}
-		if s.Height > 0 {
-			t.Fatalf("%s had already restored a snapshot (height %d) when first observed, before a kill could "+
-				"land in state sync", name, s.Height)
-		}
-		return s.CatchingUp
-	})
+	// Catch it state syncing, from its log. node.WaitReady is not used: it needs the
+	// RPC to answer, which only happens after state sync has finished.
+	syncCtx, cancelSync := context.WithTimeout(ctx, 5*time.Minute)
+	pollEvery(syncCtx, t, fmt.Sprintf("%s logging %q (seid must log at info level or lower; the RPC is not up "+
+		"during state sync, so the log is the only signal)", name, stateSyncStartLog),
+		500*time.Millisecond, func(ctx context.Context) bool {
+			log, err := r.seidLog(ctx, pod, false)
+			if err != nil {
+				return false // the container has not started yet
+			}
+			if strings.Contains(log, stateSyncDoneLog) {
+				t.Fatalf("%s had already finished state sync when first observed, before a kill could land in it", name)
+			}
+			return strings.Contains(log, stateSyncStartLog)
+		})
 	cancelSync()
-	before, _, _ := r.seidRestarts(ctx, t, pod)
+	before, _, _ := r.seidRestarts(ctx, pod)
 
 	f := r.applyWith(ctx, t, "container-kill-node", "", "", func(p *faults.Params) { p.Node = name })
 	r.gateInjectedExactly(ctx, t, f, 1)
-	t.Logf("%s killed while state syncing (catching up, no snapshot restored yet)", name)
+	r.waitSeidRestarted(ctx, t, pod, before)
 
+	// The killed instance's own log is the evidence the kill landed in state sync.
+	prev, err := r.seidLog(ctx, pod, true)
+	switch {
+	case err != nil:
+		t.Errorf("read the killed %s container's log: %v", name, err)
+	case !strings.Contains(prev, stateSyncStartLog):
+		t.Errorf("the killed %s instance's log has no %q: it was not state syncing when it died", name, stateSyncStartLog)
+	case strings.Contains(prev, stateSyncDoneLog):
+		t.Errorf("the killed %s instance had already finished state sync (%q is in its log): the kill landed "+
+			"after the phase", name, stateSyncDoneLog)
+	default:
+		t.Logf("%s was killed mid state sync: the killed instance logged %q and never %q", name, stateSyncStartLog,
+			stateSyncDoneLog)
+	}
+
+	// It must start over, and still come from a snapshot, not replay from genesis.
 	r.waitNodeRestarted(ctx, t, pod, before)
-	// It must start over and still come from a snapshot, not replay from genesis.
-	r.assertFollowerResumed(ctx, t, node, 0)
-	hc := r.hc
-	earliest, ok := sei.EarliestHeight(ctx, hc, node.TendermintRPC())
+	catchCtx, cancelCatch := context.WithTimeout(ctx, 5*time.Minute)
+	if err := sei.WaitCaughtUp(catchCtx, r.hc, node.TendermintRPC()); err != nil {
+		t.Errorf("%s did not catch up after the restart: %v", name, err)
+	}
+	cancelCatch()
+	earliest, ok := sei.EarliestHeight(ctx, r.hc, node.TendermintRPC())
 	switch {
 	case !ok:
 		t.Errorf("read the earliest height of %s after the restart", name)
 	case earliest <= 1:
-		t.Errorf("%s earliest height is %d after the restart, want > 1: it replayed from genesis instead of "+
-			"restoring a snapshot", name, earliest)
+		t.Errorf("%s earliest height is %d after the restart, want > 1: a node that restored a snapshot starts "+
+			"above 1, so it block-synced from genesis instead (which also happens if the snapshot was pruned away "+
+			"while it was down)", name, earliest)
 	}
 	r.assertRecovered(ctx, t, start, floor)
-}
-
-// assertFollowerResumed checks that a follower killed mid-sync catches up, within
-// 5 minutes, and that it did not lose the blocks it had already synced: its height
-// after the restart is not below atKill by more than a block or two (the one in
-// flight when it died). Failures are recorded with t.Errorf so the rest of the
-// recovery gate still runs.
-func (r *chaosRun) assertFollowerResumed(ctx context.Context, t *testing.T, node *sei.Node, atKill int64) {
-	t.Helper()
-	catchCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	if err := sei.WaitCaughtUp(catchCtx, r.hc, node.TendermintRPC()); err != nil {
-		t.Errorf("%s did not catch up after the restart: %v", node.Name(), err)
-		return
-	}
-	h, ok := sei.LatestHeight(ctx, r.hc, node.TendermintRPC())
-	if !ok {
-		t.Errorf("read the height of %s after the restart", node.Name())
-		return
-	}
-	if h < atKill-2 {
-		t.Errorf("%s is at height %d after the restart, below the %d it had synced when killed: "+
-			"it lost blocks", node.Name(), h, atKill)
-	}
 }

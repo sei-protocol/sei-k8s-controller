@@ -77,6 +77,9 @@ const (
 	// before the fault (it must be real) and after recovery (the chain must take it
 	// again).
 	loadInclusionWindow = 3 * time.Minute
+	// defaultScenarioTimeout is a scenario's whole budget unless its registry entry
+	// says otherwise.
+	defaultScenarioTimeout = 40 * time.Minute
 	// defaultSyncDepth is the chain height restart-during-blocksync waits for
 	// before adding its follower, unless CHAOS_SYNC_DEPTH says otherwise.
 	defaultSyncDepth = 600
@@ -90,14 +93,17 @@ type extendedScenario struct {
 	// snapshots makes the chain's validators emit state-sync snapshots, which a
 	// scenario that state-syncs a follower needs.
 	snapshots bool
-	run       func(ctx context.Context, t *testing.T, r *chaosRun)
+	// timeout is the scenario's whole budget, from before the chain is provisioned.
+	// Zero means defaultScenarioTimeout. The two sync scenarios wait for chain depth
+	// or a snapshot boundary first, so they need more.
+	timeout time.Duration
+	run     func(ctx context.Context, t *testing.T, r *chaosRun)
 }
 
 var extendedScenarios = []extendedScenario{
 	{name: "kill-during-recovery", run: scenarioKillDuringRecovery},
-	{name: "kill-during-replay", run: scenarioKillDuringReplay},
-	{name: "restart-during-blocksync", run: scenarioRestartDuringBlockSync},
-	{name: "restart-during-statesync", snapshots: true, run: scenarioRestartDuringStateSync},
+	{name: "restart-during-blocksync", timeout: 75 * time.Minute, run: scenarioRestartDuringBlockSync},
+	{name: "restart-during-statesync", snapshots: true, timeout: 60 * time.Minute, run: scenarioRestartDuringStateSync},
 	{name: "cold-start", run: scenarioColdStart},
 	{name: "quorum-loss-partition", run: scenarioQuorumLossPartition},
 	{name: "network-flap", run: scenarioNetworkFlap},
@@ -121,14 +127,13 @@ var extendedScenarios = []extendedScenario{
 //   - kill-during-recovery: SIGKILL validator-0 three times in a row, each time
 //     as soon as its container is running again. Replay and recovery code runs
 //     against a store that a crash already left half-done.
-//   - kill-during-replay: the same repeated SIGKILL, watching for the window in
-//     which the container is running but the RPC listener is not (the node
-//     handshakes and replays before it starts the RPC server). Best effort.
 //   - restart-during-blocksync: add a follower to a chain that is already deep,
-//     SIGKILL it while it block syncs, and check it resumes and agrees.
+//     SIGKILL it while it block syncs, check afterwards that the kill did land
+//     mid-sync, and that it resumes and agrees.
 //   - restart-during-statesync: the same for a follower bootstrapping from a
 //     snapshot, which has to start over because a snapshot restore is not
-//     resumable.
+//     resumable. Detected from seid's log (the RPC is not up during state sync)
+//     and verified from the killed container's own log.
 //   - cold-start: SIGKILL every validator at once. Each recovers on its own and
 //     they can come back at different heights; the chain has to reconcile.
 //   - quorum-loss-partition: split the validators 2|2, with the RPC follower on
@@ -164,7 +169,8 @@ var extendedScenarios = []extendedScenario{
 // SEI_NAMESPACE, CHAOS_DURATION, CHAOS_EXTENDED_SCENARIOS, CHAOS_STORAGE_PROFILE,
 // CHAOS_REQUIRE_CLEAN_SHUTDOWN, CHAOS_SYNC_DEPTH, and CHAOS_LOAD_MINUTES with
 // SEILOAD_IMAGE (required when load is on), SEILOAD_PROFILE, SEILOAD_COMMIT_ID
-// [optional]. Run with -test.timeout 0: each scenario budgets 40 minutes.
+// [optional]. Run with -test.timeout 0: each scenario budgets 40 minutes, the
+// block-sync one 75 and the state-sync one 60.
 func TestChaosExtended(t *testing.T) {
 	requireCluster(t)
 	base := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
@@ -191,12 +197,22 @@ func TestChaosExtended(t *testing.T) {
 			// Selector values are k8s labels, capped at 63 characters. The longest
 			// ones derived from the id are the per-fault run id (id + "-flap5"), the
 			// follower a block-sync run adds, and the state-sync follower's name.
-			for _, derived := range []string{id + "-flap5", rpcNodeName(id, 2), "statesync-" + id} {
-				if len(derived) > 63 {
-					t.Fatalf("chain id %q yields label value %q > 63 chars", id, derived)
+			if derived := id + "-flap5"; len(derived) > 63 {
+				t.Fatalf("chain id %q yields label value %q > 63 chars", id, derived)
+			}
+			// A SeiNode's name becomes its StatefulSet's name, and the pod is <name>-0:
+			// its hostname and its statefulset.kubernetes.io/pod-name label are 63
+			// characters at most, so the node name is held to 61.
+			for _, node := range []string{rpcNodeName(id, 2), id + "-statesync"} {
+				if len(node) > 61 {
+					t.Fatalf("chain id %q yields node name %q > 61 chars (its pod name would exceed 63)", id, node)
 				}
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+			timeout := sc.timeout
+			if timeout == 0 {
+				timeout = defaultScenarioTimeout
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			// A Job eviction or a manual delete sends SIGTERM. Without a signal-aware
 			// context the test would not unwind, cleanupChain would never run, and the
@@ -214,13 +230,13 @@ func TestChaosExtended(t *testing.T) {
 				seidImage:     seid,
 				validators:    extendedValidators,
 				rpcNodes:      1, // an unfaulted observer of liveness + recovery
-				timeout:       40 * time.Minute,
+				timeout:       timeout,
 				storageConfig: storage,
 			}
 			if sc.snapshots {
 				// The validators emit snapshots; the followers do not (a light-client
 				// witness serves RPC trust points, chunks travel over p2p from the
-				// validators), as bringUpStateSyncFollower provisions it.
+				// validators), the way workflow_test.go's state-sync suite provisions it.
 				s.storageConfig = mergeConfig(storage, snapshotProductionConfig)
 				s.rpcConfig = map[string]string{snapshotIntervalKey: "0"}
 			}
@@ -336,22 +352,28 @@ func (r *chaosRun) followerNames() []string {
 	return names
 }
 
+// validatorRPC returns the Tendermint RPC of validator i.
+func (r *chaosRun) validatorRPC(ctx context.Context, t *testing.T, i int) string {
+	t.Helper()
+	name := fmt.Sprintf("%s-%d", r.id, i)
+	n, err := r.c.GetNode(ctx, name, r.ns)
+	if err != nil {
+		t.Fatalf("get validator %s: %v", name, err)
+	}
+	u := n.TendermintRPC()
+	if u == "" {
+		t.Fatalf("validator %s has no Tendermint RPC endpoint in its status", name)
+	}
+	return u
+}
+
 // endpoints returns the Tendermint RPC of every validator and every follower, so
 // the committed-state check compares all of them.
 func (r *chaosRun) endpoints(ctx context.Context, t *testing.T) []string {
 	t.Helper()
 	urls := make([]string, 0, extendedValidators+len(r.ch.rpcNodes))
 	for i := range extendedValidators {
-		name := fmt.Sprintf("%s-%d", r.id, i)
-		n, err := r.c.GetNode(ctx, name, r.ns)
-		if err != nil {
-			t.Fatalf("get validator %s: %v", name, err)
-		}
-		u := n.TendermintRPC()
-		if u == "" {
-			t.Fatalf("validator %s has no Tendermint RPC endpoint in its status", name)
-		}
-		urls = append(urls, u)
+		urls = append(urls, r.validatorRPC(ctx, t, i))
 	}
 	for _, n := range r.ch.rpcNodes {
 		u := n.TendermintRPC()
@@ -636,7 +658,7 @@ func scenarioKillDuringRecovery(ctx context.Context, t *testing.T, r *chaosRun) 
 	start := time.Now()
 	floor := r.floor(ctx, t)
 	restarts := r.restartCounts(ctx, t)
-	pod := r.validator0Pod(ctx, t)
+	pod := r.nodePod(ctx, t, r.id+"-0") // validator-0
 
 	for i := 1; i <= kills; i++ {
 		before := restarts[pod]
@@ -652,14 +674,10 @@ func scenarioKillDuringRecovery(ctx context.Context, t *testing.T, r *chaosRun) 
 		// recoveryWindow, not after the rest of the 40-minute scenario budget.
 		killCtx, cancelKill := context.WithTimeout(ctx, recoveryWindow)
 		pollUntil(killCtx, t, fmt.Sprintf("kill %d: %s seid restarted and running", i, pod), func(ctx context.Context) bool {
-			p, err := r.cs.CoreV1().Pods(r.ns).Get(ctx, pod, metav1.GetOptions{})
-			if err != nil {
-				return false
-			}
-			st, ok := seidStatus(p)
-			if ok && st.RestartCount > before && st.State.Running != nil {
-				readyAtRunning = podReady(p)
-				seen = st.RestartCount
+			n, running, ready := r.seidRestarts(ctx, pod)
+			if n > before && running {
+				readyAtRunning = ready
+				seen = n
 				return true
 			}
 			return false
@@ -676,16 +694,6 @@ func scenarioKillDuringRecovery(ctx context.Context, t *testing.T, r *chaosRun) 
 	// recovery from the last kill, not a leftover from before it.
 	r.waitAllReady(ctx, t)
 	r.assertRecovered(ctx, t, start, floor)
-}
-
-// validator0Pod names validator-0's pod.
-func (r *chaosRun) validator0Pod(ctx context.Context, t *testing.T) string {
-	t.Helper()
-	l, err := r.cs.CoreV1().Pods(r.ns).List(ctx, metav1.ListOptions{LabelSelector: "sei.io/node=" + r.id + "-0"})
-	if err != nil || len(l.Items) != 1 {
-		t.Fatalf("want exactly one pod for validator-0, got %d (err: %v)", len(l.Items), err)
-	}
-	return l.Items[0].Name
 }
 
 // scenarioColdStart SIGKILLs every validator at once. No quorum survives, so
@@ -743,7 +751,7 @@ func scenarioQuorumLossPartition(ctx context.Context, t *testing.T, r *chaosRun)
 	// the split landed it could legitimately catch up more than a block from
 	// validators -0 and -1 and fail a chain that did halt.
 	if err := chaoscheck.HoldsHeight(
-		ctx, r.hc, r.endpoints(ctx, t)[0], quorumSettle, quorumStallWindow, 1,
+		ctx, r.hc, r.validatorRPC(ctx, t, 0), quorumSettle, quorumStallWindow, 1,
 	); err != nil {
 		t.Errorf("chain kept committing under a 2|2 split: %v", err)
 	}

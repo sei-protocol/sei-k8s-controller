@@ -100,6 +100,36 @@ func TestRender_NodeTargetedFaultNeedsANodeInTheChain(t *testing.T) {
 	out, err := f.Render(ok)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(string(out)).To(ContainSubstring(`values: ["c-rpc-1"]`))
+
+	// The state-sync follower is named <chain>-statesync. Naming it statesync-<chain>
+	// instead was rejected here, which made the scenario unrunnable until a review
+	// caught it; this pins both sides of that rule.
+	ss := base
+	ss.Node = "c-statesync"
+	_, err = f.Render(ss)
+	g.Expect(err).NotTo(HaveOccurred())
+	ss.Node = "statesync-c"
+	_, err = f.Render(ss)
+	g.Expect(err).To(MatchError(ContainSubstring("does not belong to chain")))
+}
+
+// TestRender_NodeIsReadOnlyByNodeTargetedFaults guards the converse of NeedsNode:
+// a template that interpolates {{.Node}} must be flagged NeedsNode, or Render never
+// checks the field and a caller who leaves it empty gets an empty selector.
+func TestRender_NodeIsReadOnlyByNodeTargetedFaults(t *testing.T) {
+	const sentinel = "sentinel-node-name"
+	for _, f := range append(slices.Clone(Catalog), ExtendedCatalog...) {
+		if f.NeedsNode {
+			continue
+		}
+		t.Run(f.Name, func(t *testing.T) {
+			g := NewWithT(t)
+			out, err := f.Render(Params{ChainID: "c", RunID: "r", Namespace: "n", Duration: "1m", Node: sentinel})
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(string(out)).NotTo(ContainSubstring(sentinel),
+				"%s reads Params.Node but is not flagged NeedsNode, so Render would not validate it", f.Name)
+		})
+	}
 }
 
 func TestRender_FollowersMustBelongToTheChain(t *testing.T) {
