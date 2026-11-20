@@ -431,6 +431,7 @@ func scenarioRestartDuringBlockSync(ctx context.Context, t *testing.T, r *chaosR
 
 	// Catch it syncing: the RPC answers, catching_up is true, and it has height.
 	var observed chaoscheck.SyncInfo
+	var earliestBefore int64
 	syncCtx, cancelSync := context.WithTimeout(ctx, 2*time.Minute)
 	pollEvery(syncCtx, t, name+" block syncing", 500*time.Millisecond, func(ctx context.Context) bool {
 		s, err := chaoscheck.Sync(ctx, r.hc, node.TendermintRPC())
@@ -442,6 +443,7 @@ func scenarioRestartDuringBlockSync(ctx context.Context, t *testing.T, r *chaosR
 				"block sync; raise %s (now %d)", name, s.Height, chaosSyncDepthEnv, depth)
 		}
 		observed = s
+		earliestBefore, _ = sei.EarliestHeight(ctx, r.hc, node.TendermintRPC())
 		return true
 	})
 	cancelSync()
@@ -451,7 +453,9 @@ func scenarioRestartDuringBlockSync(ctx context.Context, t *testing.T, r *chaosR
 	r.gateInjectedExactly(ctx, t, f, 1)
 	r.waitSeidRestarted(ctx, t, pod, before)
 
-	// The killed instance's own log shows whether block sync had already ended.
+	// The killed instance's own log shows whether block sync had already ended. The
+	// gate is absence-only (the line must not be there), so its positive evidence is
+	// the pre-kill observation above that the node reported catching_up.
 	if r.restartedOnce(ctx, t, pod, before) {
 		prev, err := r.seidLog(ctx, pod, true)
 		switch {
@@ -477,6 +481,15 @@ func scenarioRestartDuringBlockSync(ctx context.Context, t *testing.T, r *chaosR
 		t.Errorf("%s did not catch up after the restart: %v", name, err)
 	}
 	cancelCatch()
+	// The block-store base does not move on a restart, so it bounds data loss where
+	// the first height cannot: the RPC binds after the reactors start, so a node that
+	// had lost its store would have re-synced past the observed height before the
+	// first read. A moved base means the store was wiped.
+	if earliestAfter, ok := sei.EarliestHeight(ctx, r.hc, node.TendermintRPC()); ok && earliestBefore > 0 &&
+		earliestAfter != earliestBefore {
+		t.Errorf("%s earliest height moved from %d to %d across the restart: its block store was wiped",
+			name, earliestBefore, earliestAfter)
+	}
 	r.waitNodeRestarted(ctx, t, pod, before)
 	r.assertRecovered(ctx, t, start, floor)
 }
@@ -558,7 +571,8 @@ func scenarioRestartDuringStateSync(ctx context.Context, t *testing.T, r *chaosR
 			return false // the container has not started yet
 		}
 		if strings.Contains(log, stateSyncDoneLog) {
-			t.Fatalf("%s had already finished state sync when first observed, before a kill could land in it", name)
+			t.Fatalf("%s had already finished (or failed) state sync when first observed, before a kill could "+
+				"land in it: %q is logged on the failure path too", name, stateSyncDoneLog)
 		}
 		return strings.Contains(log, stateSyncStartLog)
 	})
@@ -579,8 +593,8 @@ func scenarioRestartDuringStateSync(ctx context.Context, t *testing.T, r *chaosR
 			t.Errorf("the killed %s instance's log has no %q: it was not state syncing when it died",
 				name, stateSyncStartLog)
 		case strings.Contains(prev, stateSyncDoneLog):
-			t.Errorf("the killed %s instance had already finished state sync (%q is in its log): the kill landed "+
-				"after the phase", name, stateSyncDoneLog)
+			t.Errorf("the killed %s instance had already finished or failed state sync (%q is in its log, and "+
+				"seid logs it on the failure path too): the kill landed after the phase", name, stateSyncDoneLog)
 		default:
 			t.Logf("%s was killed mid state sync: the killed instance logged %q and never %q", name,
 				stateSyncStartLog, stateSyncDoneLog)
@@ -588,14 +602,18 @@ func scenarioRestartDuringStateSync(ctx context.Context, t *testing.T, r *chaosR
 	}
 
 	// It must start over, and still come from a snapshot, not replay from genesis.
-	// CreateNode returned a handle with no status, so re-read the node for its RPC.
-	r.waitNodeRestarted(ctx, t, pod, before)
+	// CreateNode returned a handle with no status, so re-read the node for its RPC
+	// (published once the node is Running, which is during state sync, not after).
+	// Catch-up is awaited before Ready: the readiness probe is lag-based, so Ready
+	// already means re-restored and caught up, and a slow but healthy second restore
+	// should fail as "did not catch up", not as an unrelated Ready timeout.
 	node = r.refreshFollower(ctx, t, name)
-	catchCtx, cancelCatch := context.WithTimeout(ctx, 5*time.Minute)
+	catchCtx, cancelCatch := context.WithTimeout(ctx, 10*time.Minute)
 	if err := sei.WaitCaughtUp(catchCtx, r.hc, node.TendermintRPC()); err != nil {
 		t.Errorf("%s did not catch up after the restart: %v", name, err)
 	}
 	cancelCatch()
+	r.waitNodeRestarted(ctx, t, pod, before)
 	earliest, ok := sei.EarliestHeight(ctx, r.hc, node.TendermintRPC())
 	switch {
 	case !ok:

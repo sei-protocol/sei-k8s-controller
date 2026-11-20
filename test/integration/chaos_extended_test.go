@@ -46,8 +46,8 @@ const (
 	// SEILOAD_IMAGE, and optionally SEILOAD_PROFILE and SEILOAD_COMMIT_ID, as the
 	// benchmark suite does.
 	chaosLoadMinutesEnv = "CHAOS_LOAD_MINUTES"
-	// chaosSyncDepthEnv is how many blocks the chain has before restart-during-
-	// blocksync adds its follower. A follower of a shallow chain finishes block sync
+	// chaosSyncDepthEnv is how many blocks the chain has before blocksync-restart
+	// adds its follower. A follower of a shallow chain finishes block sync
 	// in seconds, before a kill can land; the deeper the chain, the wider the window.
 	chaosSyncDepthEnv = "CHAOS_SYNC_DEPTH"
 )
@@ -179,7 +179,8 @@ var extendedScenarios = []extendedScenario{
 // SEILOAD_IMAGE (required when load is on), SEILOAD_PROFILE, SEILOAD_COMMIT_ID
 // [optional]. Run with -test.timeout 0: a scenario budgets 40 minutes after its
 // chain is up, the state-sync one 60 and the block-sync one 75, plus 20 minutes
-// to provision. With load on, CHAOS_LOAD_MINUTES must be at least that budget.
+// to provision. With load on, CHAOS_LOAD_MINUTES must be at least that budget
+// plus 6 minutes.
 func TestChaosExtended(t *testing.T) {
 	requireCluster(t)
 	base := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
@@ -224,11 +225,13 @@ func TestChaosExtended(t *testing.T) {
 				timeout = defaultScenarioTimeout
 			}
 			// The load Job runs CHAOS_LOAD_MINUTES and nothing extends it, so it has to
-			// cover the scenario's whole budget. Failing here beats failing 20 minutes in,
-			// at a post-recovery check that finds the load gone.
-			if loadOn && time.Duration(load.minutes)*time.Minute < timeout {
-				t.Fatalf("%s=%d is shorter than this scenario's %s budget: raise it to at least %d",
-					chaosLoadMinutesEnv, load.minutes, timeout, int(timeout/time.Minute))
+			// cover the scenario's whole budget plus the two inclusion checks that bracket
+			// it (before the fault and after recovery). Failing here beats failing 20
+			// minutes in, at a post-recovery check that finds the load gone.
+			if need := timeout + 2*loadInclusionWindow; loadOn && time.Duration(load.minutes)*time.Minute < need {
+				t.Fatalf("%s=%d is shorter than this scenario needs (its %s budget plus two %s inclusion "+
+					"checks): raise it to at least %d", chaosLoadMinutesEnv, load.minutes, timeout,
+					loadInclusionWindow, int(need/time.Minute))
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout+provisionBudget)
 			defer cancel()

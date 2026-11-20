@@ -87,8 +87,9 @@ Optional inputs:
   ratio) are not applied, since a fault makes sends fail by design. The chain gets
   two followers, one taking the sends and the other, the observer, serving receipts.
   The chaos image is the `mock_balances` build, so no funded key is needed.
-  **Set it to at least the budget of the scenarios you run: 40 or more for most, 60
-  for `statesync-restart`, 75 for `blocksync-restart`.** The Job runs this long and
+  **Set it to at least the budget of the scenarios you run plus 6 minutes (the two
+  inclusion checks that bracket the scenario): 46 or more for most, 66 for
+  `statesync-restart`, 81 for `blocksync-restart`.** The Job runs this long and
   nothing extends it, so a shorter value is refused when the scenario starts. (The
   load is stopped as soon as the scenario's checks are done, so the Job does not run
   its full length.) A Job that has ended mid-scenario would make the post-recovery
@@ -123,6 +124,12 @@ Optional inputs:
   controller overrides it; `statesync-restart` gates on the first and checks the
   killed container's previous log for both scenarios), and that kubelet keeps the
   killed container's log so the scenario can read it.
+- That the logs read back are complete enough: the scenarios read the killed
+  container's previous log, which kubelet retains only up to its container-log cap. A
+  rotated-away head would make `starting state sync` look absent (a false red), and
+  would hide `switching to consensus reactor` (a false green on `blocksync-restart`,
+  whose log check is absence-only; its positive evidence is the earlier observation
+  that the follower reported `catching_up`).
 - That the suite's service account can read `pods/log` in the chain's namespace. The
   harbor nightly harness role grants `pods/log: get`
   (`clusters/harbor/nightly/harness/rbac.yaml` in the platform repo); a run under
