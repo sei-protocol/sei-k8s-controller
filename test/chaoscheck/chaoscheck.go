@@ -4,9 +4,16 @@
 //
 // The nightly suite's recovery gate asks whether the chain is live and every
 // validator pod is Ready. That does not notice validators that came back
-// healthy but disagree on state: a recovery bug that corrupts one node's
-// store shows up as a different app hash long before it halts anything.
-// WaitAgree is that check.
+// healthy but committed different state. WaitAgreeAbove is that check.
+//
+// It compares each node's own committed store hash, read from /abci_info
+// (ResponseInfo.last_block_app_hash, which the app fills from its multistore's
+// LastCommitID). That is the locally computed value, so a node whose store
+// came back wrong reports a different hash. The block header's app_hash,
+// served by /commit, is copied from the network and cannot differ on a node
+// that is accepting blocks: a node with a bad store rejects the next block and
+// stalls instead. /abci_info is also served under Autobahn, where the CometBFT
+// block store behind /commit is empty.
 package chaoscheck
 
 import (
@@ -23,20 +30,24 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
-// pollInterval is how often WaitAgree and HoldsHeight sample; a var so tests
-// can shrink it.
+// pollInterval is how often HoldsHeight samples; a var so tests can shrink it.
 var pollInterval = 2 * time.Second
+
+// sampleInterval is how often WaitAgreeAbove reads every node. It is well under
+// a block time so that nodes' samples overlap on common heights; a var so tests
+// can shrink it.
+var sampleInterval = 250 * time.Millisecond
 
 // maxReadFailures is how many consecutive failed height reads HoldsHeight
 // tolerates before it gives up, so one dropped request does not fail a
 // scenario but a node that has gone silent does.
 const maxReadFailures = 3
 
-// DivergenceError reports nodes that returned different app hashes for the same
+// DivergenceError reports nodes that committed different state at the same
 // height. It is never retried: a hash that differs now will not converge.
 type DivergenceError struct {
 	Height int64
-	// Hashes maps each RPC endpoint to the app hash it reported.
+	// Hashes maps each RPC endpoint to the committed hash it reported.
 	Hashes map[string]string
 }
 
@@ -50,155 +61,219 @@ func (e *DivergenceError) Error() string {
 	for _, u := range urls {
 		parts = append(parts, fmt.Sprintf("%s=%s", u, e.Hashes[u]))
 	}
-	return fmt.Sprintf("app hash diverged at height %d: %s", e.Height, strings.Join(parts, " "))
+	return fmt.Sprintf("committed state diverged at height %d: %s", e.Height, strings.Join(parts, " "))
 }
 
-// commitResponse models the part of CometBFT /commit this package reads. The
-// Sei fork sometimes returns the body without the JSON-RPC envelope (the same
-// quirk sdk/sei accepts for /status), so both shapes are decoded.
-type commitResponse struct {
-	Result       *commitBody `json:"result,omitempty"`
-	SignedHeader signedHdr   `json:"signed_header"`
+// Sample is one node's last committed block: its height and the hash of the
+// state that block left in the node's own store.
+type Sample struct {
+	Height int64
+	Hash   string
 }
 
-type commitBody struct {
-	SignedHeader signedHdr `json:"signed_header"`
+// infoResponse models the part of /abci_info this package reads. The Sei fork
+// sometimes returns the body without the JSON-RPC envelope (the same quirk
+// sdk/sei accepts for /status), so both shapes are decoded. The height is a
+// json.Number because it arrives as a quoted string or a bare number; the hash
+// is base64, compared as the string it arrives as.
+type infoResponse struct {
+	Result *infoBody `json:"result,omitempty"`
+	infoBody
 }
 
-type signedHdr struct {
-	Header struct {
-		AppHash string `json:"app_hash"`
-	} `json:"header"`
+type infoBody struct {
+	Response struct {
+		LastBlockHeight  json.Number `json:"last_block_height"`
+		LastBlockAppHash string      `json:"last_block_app_hash"`
+	} `json:"response"`
 }
 
-func (c *commitResponse) appHash() string {
-	if c.Result != nil && c.Result.SignedHeader.Header.AppHash != "" {
-		return c.Result.SignedHeader.Header.AppHash
+func (r *infoResponse) body() infoBody {
+	if r.Result != nil && r.Result.Response.LastBlockAppHash != "" {
+		return *r.Result
 	}
-	return c.SignedHeader.Header.AppHash
+	return r.infoBody
 }
 
-// AppHash returns the app hash in the header of the block at height, as
-// reported by the node at tmRPC. An unreachable node, a height it does not
-// have, or an empty hash is an error: an empty hash would otherwise compare
-// equal across nodes and hide a failure.
-func AppHash(ctx context.Context, hc *http.Client, tmRPC string, height int64) (string, error) {
+// Info reads the node's last committed height and state hash from /abci_info. A
+// node that has committed nothing (height 0 or no hash) is an error: an empty
+// hash would otherwise compare equal across nodes and hide a failure.
+func Info(ctx context.Context, hc *http.Client, tmRPC string) (Sample, error) {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	url := fmt.Sprintf("%s/commit?height=%d", strings.TrimRight(tmRPC, "/"), height)
+	url := strings.TrimRight(tmRPC, "/") + "/abci_info"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", fmt.Errorf("build request %s: %w", url, err)
+		return Sample{}, fmt.Errorf("build request %s: %w", url, err)
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("get %s: %w", url, err)
+		return Sample{}, fmt.Errorf("get %s: %w", url, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("get %s: status %d", url, resp.StatusCode)
+		return Sample{}, fmt.Errorf("get %s: status %d", url, resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", url, err)
+		return Sample{}, fmt.Errorf("read %s: %w", url, err)
 	}
-	var c commitResponse
-	if err := json.Unmarshal(body, &c); err != nil {
-		return "", fmt.Errorf("decode %s: %w", url, err)
+	var r infoResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return Sample{}, fmt.Errorf("decode %s: %w", url, err)
 	}
-	h := c.appHash()
-	if h == "" {
-		return "", fmt.Errorf("%s returned no app_hash at height %d", url, height)
+	b := r.body()
+	h, err := b.Response.LastBlockHeight.Int64()
+	if err != nil {
+		return Sample{}, fmt.Errorf("%s: last_block_height %q: %w", url, b.Response.LastBlockHeight, err)
 	}
-	return strings.ToUpper(h), nil
+	if h <= 0 || b.Response.LastBlockAppHash == "" {
+		return Sample{}, fmt.Errorf("%s has committed nothing yet (height %d, hash %q)",
+			url, h, b.Response.LastBlockAppHash)
+	}
+	return Sample{Height: h, Hash: b.Response.LastBlockAppHash}, nil
 }
 
-// CommonHeight returns the highest height every node has committed, less
-// margin: the latest height of the slowest node, pulled back so a node that is
-// a block or two behind has the height too. It returns an error if any node
-// cannot report a height, or if the result would be below 1.
-func CommonHeight(ctx context.Context, hc *http.Client, tmRPCs []string, margin int64) (int64, error) {
-	if len(tmRPCs) == 0 {
-		return 0, errors.New("no RPC endpoints")
-	}
-	lowest := int64(-1)
+// Floor returns the highest committed height any of the nodes reports right
+// now. Capture it just before injecting a fault, then pass it to
+// WaitAgreeAbove so the comparison happens on state committed after the fault.
+// It is a watermark, so unreachable nodes are skipped; it fails only if none
+// answers.
+func Floor(ctx context.Context, hc *http.Client, tmRPCs []string) (int64, error) {
+	var floor int64
+	var errs []error
 	for _, u := range tmRPCs {
-		h, ok := sei.LatestHeight(ctx, hc, u)
-		if !ok {
-			return 0, fmt.Errorf("%s: no height", u)
-		}
-		if lowest < 0 || h < lowest {
-			lowest = h
-		}
-	}
-	if lowest-margin < 1 {
-		return 0, fmt.Errorf("slowest node is at height %d, too low for margin %d", lowest, margin)
-	}
-	return lowest - margin, nil
-}
-
-// AgreeOn fetches the app hash at height from every node and fails with a
-// *DivergenceError if they are not all equal. Any fetch error is returned
-// as-is, so callers can tell "could not read" from "disagrees".
-func AgreeOn(ctx context.Context, hc *http.Client, tmRPCs []string, height int64) error {
-	hashes := make(map[string]string, len(tmRPCs))
-	var first string
-	diverged := false
-	for _, u := range tmRPCs {
-		h, err := AppHash(ctx, hc, u, height)
+		s, err := Info(ctx, hc, u)
 		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		floor = max(floor, s.Height)
+	}
+	if floor == 0 {
+		return 0, fmt.Errorf("no node reported a committed height: %w", errors.Join(errs...))
+	}
+	return floor, nil
+}
+
+// WaitAgreeAbove waits until every node has committed past floor and the nodes
+// have agreed on the state hash of at least wantCommon distinct heights that all
+// of them reported. It samples every node continuously, because the chain keeps
+// moving: two nodes' tips differ by a block or so, so agreement is read off the
+// heights their samples share, not off one instant.
+//
+// Requiring every node to report a height above floor is what makes this a
+// recovery check. A validator that restarted and is still replaying behind the
+// fault never reports such a height, so the call fails instead of comparing
+// everyone at a height from before the fault, where they trivially agree.
+//
+// Reads that fail are retried until ctx ends. A node that reports two different
+// hashes for one height, or two nodes that differ at a shared height, return a
+// *DivergenceError at once.
+func WaitAgreeAbove(ctx context.Context, hc *http.Client, tmRPCs []string, floor int64, wantCommon int) error {
+	if len(tmRPCs) == 0 {
+		return errors.New("no RPC endpoints")
+	}
+	seen := make(map[string]map[int64]string, len(tmRPCs)) // endpoint -> height -> hash
+	for _, u := range tmRPCs {
+		seen[u] = map[int64]string{}
+	}
+	agreed := map[int64]struct{}{}
+	var lastErr error
+
+	tick := time.NewTicker(sampleInterval)
+	defer tick.Stop()
+	for {
+		for _, u := range tmRPCs {
+			s, err := Info(ctx, hc, u)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if s.Height <= floor {
+				continue
+			}
+			if prev, ok := seen[u][s.Height]; ok && prev != s.Hash {
+				return &DivergenceError{Height: s.Height, Hashes: map[string]string{
+					u + " (first read)":  prev,
+					u + " (second read)": s.Hash,
+				}}
+			}
+			seen[u][s.Height] = s.Hash
+		}
+		if err := compareShared(tmRPCs, seen, agreed); err != nil {
 			return err
 		}
-		hashes[u] = h
-		if first == "" {
-			first = h
-		} else if h != first {
-			diverged = true
+		if len(agreed) >= wantCommon {
+			return nil
 		}
-	}
-	if diverged {
-		return &DivergenceError{Height: height, Hashes: hashes}
-	}
-	return nil
-}
-
-// WaitAgree waits until every node can report a common height, then checks that
-// they agree on its app hash. Reads that fail (a node still catching up, a
-// blip) are retried until ctx ends; a divergence is returned at once.
-func WaitAgree(ctx context.Context, hc *http.Client, tmRPCs []string, margin int64) error {
-	tick := time.NewTicker(pollInterval)
-	defer tick.Stop()
-	var lastErr error
-	for {
-		h, err := CommonHeight(ctx, hc, tmRPCs, margin)
-		if err == nil {
-			err = AgreeOn(ctx, hc, tmRPCs, h)
-			var div *DivergenceError
-			if err == nil || errors.As(err, &div) {
-				return err
-			}
-		}
-		lastErr = err
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("nodes did not reach a comparable height before deadline: %w (last: %v)", ctx.Err(), lastErr)
+			return fmt.Errorf("no %d common heights above %d agreed before deadline: %w; %s (last read error: %v)",
+				wantCommon, floor, ctx.Err(), progress(tmRPCs, seen), lastErr)
 		case <-tick.C:
 		}
 	}
 }
 
+// compareShared compares the hashes of every height all nodes have reported,
+// recording agreed heights in agreed and returning a *DivergenceError on the
+// first mismatch.
+func compareShared(tmRPCs []string, seen map[string]map[int64]string, agreed map[int64]struct{}) error {
+	for h, first := range seen[tmRPCs[0]] {
+		if _, done := agreed[h]; done {
+			continue
+		}
+		hashes := map[string]string{tmRPCs[0]: first}
+		shared := true
+		for _, u := range tmRPCs[1:] {
+			hash, ok := seen[u][h]
+			if !ok {
+				shared = false
+				break
+			}
+			hashes[u] = hash
+		}
+		if !shared {
+			continue
+		}
+		for _, hash := range hashes {
+			if hash != first {
+				return &DivergenceError{Height: h, Hashes: hashes}
+			}
+		}
+		agreed[h] = struct{}{}
+	}
+	return nil
+}
+
+// progress names the nodes that have not reported a height above the floor, so
+// a timeout says which node was behind.
+func progress(tmRPCs []string, seen map[string]map[int64]string) string {
+	var behind []string
+	for _, u := range tmRPCs {
+		if len(seen[u]) == 0 {
+			behind = append(behind, u)
+		}
+	}
+	if len(behind) == 0 {
+		return "every node reported heights above the floor but none were shared"
+	}
+	return fmt.Sprintf("no height above the floor from: %s", strings.Join(behind, ", "))
+}
+
 // HoldsHeight asserts that the node at tmRPC does not commit blocks: after
 // settle (in-flight blocks finish), its height advances by at most maxAdvance
 // over window. It is the stall check for a fault that removes quorum. A node
-// that cannot report a height at all is an error, since an unreachable node
-// proves nothing about the chain.
+// that cannot report a height is an error, since an unreachable node proves
+// nothing about the chain.
 func HoldsHeight(
 	ctx context.Context, hc *http.Client, tmRPC string, settle, window time.Duration, maxAdvance int64,
 ) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("%s: %w", tmRPC, ctx.Err())
 	case <-time.After(settle):
 	}
 	start, ok := sei.LatestHeight(ctx, hc, tmRPC)
@@ -213,7 +288,7 @@ func HoldsHeight(
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("%s: %w", tmRPC, ctx.Err())
 		case <-deadline.C:
 			// A node that answered nothing at the end of the window proves nothing:
 			// "the chain held" must rest on a read, not on silence.

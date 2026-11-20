@@ -12,12 +12,14 @@ spec:
   # without this fault the SIGTERM shutdown path is never exercised. The same
   # path a rolling restart or an upgrade takes.
   #
-  # gracePeriod is a placeholder: set it to the termination grace period the
-  # controller renders for SeiNode pods, so a clean stop has the time a real
-  # rollout gives it.
+  # gracePeriod is 30: the controller sets no terminationGracePeriodSeconds on
+  # SeiNode pods (nothing under internal/ does), so Kubernetes' 30s default is
+  # what a real rollout gives seid. A longer value here would give seid more
+  # time than production does, and a clean exit would prove nothing about a
+  # real roll. Revisit if the controller ever sets its own.
   action: pod-kill
   mode: one
-  gracePeriod: 60
+  gracePeriod: 30
   selector:
     namespaces: ["{{.Namespace}}"]
     expressionSelectors:

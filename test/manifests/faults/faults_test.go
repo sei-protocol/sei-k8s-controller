@@ -1,6 +1,7 @@
 package faults
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -134,7 +135,9 @@ func TestExtendedCatalog_EveryFaultRendersToItsKind(t *testing.T) {
 			spec := m["spec"].(map[string]any)
 			_, hasDuration := spec["duration"]
 			g.Expect(hasDuration).To(Equal(!f.OneShot), "spec.duration presence must match OneShot")
-			g.Expect(string(out)).To(ContainSubstring(`values: ["bench-a"]`), "selector must pin the pool")
+			// How a selector pins the chain is checked precisely, on both sides, by
+			// TestExtendedCatalog_BlastRadius; here only that the run's chain id is templated in.
+			g.Expect(string(out)).To(ContainSubstring(`"bench-a`), "selector must carry the run's chain id")
 			g.Expect(string(out)).NotTo(ContainSubstring("{{"), "unrendered template action")
 		})
 	}
@@ -160,40 +163,90 @@ func TestLookupExtended(t *testing.T) {
 	g.Expect(err).To(MatchError(ContainSubstring(`unknown extended fault "pod-failure"`)))
 }
 
+// crSelector is the selector shape shared by spec.selector and spec.target.selector.
+type crSelector struct {
+	Namespaces          []string `json:"namespaces"`
+	ExpressionSelectors []struct {
+		Key      string   `json:"key"`
+		Operator string   `json:"operator"`
+		Values   []string `json:"values"`
+	} `json:"expressionSelectors"`
+}
+
+// crSpec is the part of a rendered fault the blast-radius tests read.
+type crSpec struct {
+	Spec struct {
+		Mode     string     `json:"mode"`
+		Selector crSelector `json:"selector"`
+		Target   *struct {
+			Selector crSelector `json:"selector"`
+		} `json:"target"`
+	} `json:"spec"`
+}
+
+// nodePins returns the values of the selector's sei.io/node In-pin, or nil.
+func (s crSelector) nodePins() []string {
+	for _, es := range s.ExpressionSelectors {
+		if es.Key == "sei.io/node" && es.Operator == "In" {
+			return es.Values
+		}
+	}
+	return nil
+}
+
+// pinsChain reports whether the selector is confined to the run's own chain: a
+// sei.io/nodedeployment In-pin on the chain id, or a sei.io/node In-pin whose
+// every value belongs to the chain (names start with "<chain>-").
+func (s crSelector) pinsChain(chain string) bool {
+	for _, es := range s.ExpressionSelectors {
+		if es.Key == "sei.io/nodedeployment" && es.Operator == "In" && len(es.Values) == 1 && es.Values[0] == chain {
+			return true
+		}
+	}
+	pins := s.nodePins()
+	if len(pins) == 0 {
+		return false
+	}
+	for _, v := range pins {
+		if !strings.HasPrefix(v, chain+"-") {
+			return false
+		}
+	}
+	return true
+}
+
 // TestExtendedCatalog_BlastRadius pins what each extended fault may hit, the
-// counterpart of TestCatalog_BlastRadius. A fault is either f=1 (one pod, or a
-// pin to validator-0) or flagged QuorumLoss, and a QuorumLoss fault must really
-// take quorum away: a kill of every validator, or a split with no side holding
-// 2/3 of four validators. A fault flagged QuorumLoss that did not would run
-// without the under-fault liveness check for no reason, and the reverse would
-// fail that check on a chain that is supposed to be live.
+// counterpart of TestCatalog_BlastRadius, and it reads BOTH selectors: a
+// NetworkChaos target.selector that lost its chain pin would widen the blast
+// radius to every pod in the namespace while a test that parsed only
+// spec.selector stayed green.
+//
+// Every selector, on both sides, must be confined to the run's namespace and
+// its own chain. Beyond that a fault is either f=1 (one pod, or a pin to
+// validator-0) or flagged QuorumLoss, and a QuorumLoss fault must really take
+// quorum away: a kill of every validator, or a split with no side holding 2/3
+// of four validators. A fault flagged QuorumLoss that did not would run without
+// the under-fault liveness check for no reason, and the reverse would fail that
+// check on a chain that is supposed to be live.
 func TestExtendedCatalog_BlastRadius(t *testing.T) {
 	for _, f := range ExtendedCatalog {
 		t.Run(f.Name, func(t *testing.T) {
 			g := NewWithT(t)
 			out, err := f.Render(Params{ChainID: "c", RunID: "r", Namespace: "ns", Duration: "1m"})
 			g.Expect(err).NotTo(HaveOccurred())
-			var cr struct {
-				Spec struct {
-					Mode     string `json:"mode"`
-					Selector struct {
-						ExpressionSelectors []struct {
-							Key      string   `json:"key"`
-							Operator string   `json:"operator"`
-							Values   []string `json:"values"`
-						} `json:"expressionSelectors"`
-					} `json:"selector"`
-				} `json:"spec"`
-			}
+			var cr crSpec
 			g.Expect(yaml.Unmarshal(out, &cr)).To(Succeed())
 
-			pinned := 0 // validators the sei.io/node In-pin names
-			for _, es := range cr.Spec.Selector.ExpressionSelectors {
-				if es.Key == "sei.io/node" && es.Operator == "In" {
-					pinned = len(es.Values)
-				}
+			selectors := []crSelector{cr.Spec.Selector}
+			if cr.Spec.Target != nil {
+				selectors = append(selectors, cr.Spec.Target.Selector)
+			}
+			for i, sel := range selectors {
+				g.Expect(sel.Namespaces).To(Equal([]string{"ns"}), "selector %d must be pinned to the run's namespace", i)
+				g.Expect(sel.pinsChain("c")).To(BeTrue(), "selector %d must be confined to the run's chain", i)
 			}
 
+			pinned := len(cr.Spec.Selector.nodePins())
 			switch {
 			case !f.QuorumLoss:
 				g.Expect(cr.Spec.Mode == "one" || pinned == 1).To(BeTrue(),
@@ -202,9 +255,45 @@ func TestExtendedCatalog_BlastRadius(t *testing.T) {
 				g.Expect(cr.Spec.Mode).To(Equal("all"), "a QuorumLoss kill must take every validator")
 				g.Expect(pinned).To(BeZero(), "a QuorumLoss kill must not pin a subset")
 			default:
-				// A partition: neither side may hold 2/3 of four validators.
-				g.Expect(pinned).To(Equal(2), "a split must put exactly half the validators on one side")
+				g.Expect(cr.Spec.Target).NotTo(BeNil(), "a partition has a target side")
+				assertSplitHasNoQuorum(g, cr.Spec.Selector.nodePins(), cr.Spec.Target.Selector.nodePins())
 			}
+		})
+	}
+}
+
+// assertSplitHasNoQuorum checks a 2|2 split of four validators (c-0 .. c-3), and
+// that the RPC follower (c-rpc-0) sits on exactly one side. A follower on
+// neither side bridges the split, because it peers with every validator and
+// relays votes.
+func assertSplitHasNoQuorum(g *WithT, side, other []string) {
+	validators := func(names []string) (n int) {
+		for _, v := range names {
+			if !strings.Contains(v, "-rpc-") {
+				n++
+			}
+		}
+		return n
+	}
+	g.Expect(validators(side)).To(Equal(2), "each side must hold exactly two of the four validators")
+	g.Expect(validators(other)).To(Equal(2), "each side must hold exactly two of the four validators")
+
+	followers := 0
+	for _, v := range append(slices.Clone(side), other...) {
+		if v == "c-rpc-0" {
+			followers++
+		}
+	}
+	g.Expect(followers).To(Equal(1), "the follower must be on exactly one side, or it bridges the partition")
+}
+
+// TestCatalog_HoldsNoQuorumLossFault guards what QuorumLoss's doc comment
+// promises: the nightly Catalog is the f=1 set. A quorum-loss fault there would
+// turn the nightly red by design.
+func TestCatalog_HoldsNoQuorumLossFault(t *testing.T) {
+	for _, f := range Catalog {
+		t.Run(f.Name, func(t *testing.T) {
+			NewWithT(t).Expect(f.QuorumLoss).To(BeFalse(), "Catalog is the f=1 set the nightly suite runs")
 		})
 	}
 }

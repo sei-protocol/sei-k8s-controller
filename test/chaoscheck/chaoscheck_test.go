@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,36 +13,45 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func init() { pollInterval = 10 * time.Millisecond }
+func init() {
+	pollInterval = 10 * time.Millisecond
+	sampleInterval = 5 * time.Millisecond
+}
 
-// node is a fake Tendermint RPC: /status reports a height, /commit reports an
-// app hash per height. enveloped selects the JSON-RPC wrapper the Sei fork
-// sometimes drops.
+// node is a fake Tendermint RPC. /status reports its height; /abci_info reports
+// the height and a hash of the node's own committed state, as the real endpoint
+// does. hashAt decides the hash per height, so a test can make one node differ.
+// enveloped selects the JSON-RPC wrapper the Sei fork sometimes drops, and
+// quotedHeight selects the string or the bare-number height encoding.
 type node struct {
-	height    atomic.Int64
-	hashes    map[int64]string
-	enveloped bool
-	noCommit  bool
+	height       atomic.Int64
+	hashAt       func(h int64) string
+	enveloped    bool
+	quotedHeight bool
+	down         atomic.Bool
 }
 
 func (n *node) serve(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
-		body := fmt.Sprintf(`{"sync_info":{"latest_block_height":"%d","catching_up":false}}`, n.height.Load())
-		if n.enveloped {
-			body = fmt.Sprintf(`{"result":%s}`, body)
-		}
-		_, _ = w.Write([]byte(body))
-	})
-	mux.HandleFunc("/commit", func(w http.ResponseWriter, r *http.Request) {
-		if n.noCommit {
-			http.Error(w, "no", http.StatusInternalServerError)
+		if n.down.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
 			return
 		}
-		h, _ := strconv.ParseInt(r.URL.Query().Get("height"), 10, 64)
-		hdr := fmt.Sprintf(`{"header":{"app_hash":%q}}`, n.hashes[h])
-		body := fmt.Sprintf(`{"signed_header":%s}`, hdr)
+		_, _ = fmt.Fprintf(w, `{"sync_info":{"latest_block_height":"%d","catching_up":false}}`, n.height.Load())
+	})
+	mux.HandleFunc("/abci_info", func(w http.ResponseWriter, _ *http.Request) {
+		if n.down.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		h := n.height.Load()
+		height := fmt.Sprintf("%d", h)
+		if n.quotedHeight {
+			height = fmt.Sprintf("%q", height)
+		}
+		body := fmt.Sprintf(`{"response":{"last_block_height":%s,"last_block_app_hash":%q}}`, height, n.hashAt(h))
 		if n.enveloped {
 			body = fmt.Sprintf(`{"result":%s}`, body)
 		}
@@ -54,132 +62,177 @@ func (n *node) serve(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func newNode(t *testing.T, height int64, hash string, enveloped bool) (*node, string) {
+// sameHash is the hash every honest node reports at a height.
+func sameHash(h int64) string { return fmt.Sprintf("hash-%d", h) }
+
+func newNode(t *testing.T, height int64, hashAt func(int64) string) (*node, string) {
 	t.Helper()
-	n := &node{hashes: map[int64]string{}, enveloped: enveloped}
+	n := &node{hashAt: hashAt}
 	n.height.Store(height)
-	for h := int64(1); h <= height; h++ {
-		n.hashes[h] = hash
-	}
 	return n, n.serve(t).URL
 }
 
-func TestAppHash_BothResponseShapes(t *testing.T) {
+// advance moves the node's height forward every few milliseconds until the test
+// ends, so the chain keeps moving under WaitAgreeAbove.
+func advance(t *testing.T, ns ...*node) {
+	t.Helper()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	t.Cleanup(func() { close(stop); <-done })
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(3 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				for _, n := range ns {
+					n.height.Add(1)
+				}
+			}
+		}
+	}()
+}
+
+func within(t *testing.T, d time.Duration) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func TestInfo_AllResponseShapes(t *testing.T) {
 	for _, enveloped := range []bool{true, false} {
-		t.Run(fmt.Sprintf("enveloped=%v", enveloped), func(t *testing.T) {
-			g := NewWithT(t)
-			_, url := newNode(t, 10, "abcd", enveloped)
-			h, err := AppHash(context.Background(), nil, url, 5)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(h).To(Equal("ABCD"), "hashes are compared upper-cased")
-		})
+		for _, quoted := range []bool{true, false} {
+			t.Run(fmt.Sprintf("enveloped=%v quoted=%v", enveloped, quoted), func(t *testing.T) {
+				g := NewWithT(t)
+				n := &node{hashAt: sameHash, enveloped: enveloped, quotedHeight: quoted}
+				n.height.Store(42)
+				s, err := Info(context.Background(), nil, n.serve(t).URL)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(s).To(Equal(Sample{Height: 42, Hash: "hash-42"}))
+			})
+		}
 	}
 }
 
-func TestAppHash_EmptyHashIsAnError(t *testing.T) {
-	g := NewWithT(t)
-	n, url := newNode(t, 10, "abcd", false)
-	n.hashes[5] = ""
-	_, err := AppHash(context.Background(), nil, url, 5)
-	g.Expect(err).To(MatchError(ContainSubstring("no app_hash")))
-}
-
-func TestAgreeOn(t *testing.T) {
-	t.Run("equal hashes agree, whatever the case", func(t *testing.T) {
+func TestInfo_NothingCommittedIsAnError(t *testing.T) {
+	t.Run("height zero", func(t *testing.T) {
 		g := NewWithT(t)
-		_, a := newNode(t, 10, "abcd", false)
-		_, b := newNode(t, 10, "ABCD", true)
-		g.Expect(AgreeOn(context.Background(), nil, []string{a, b}, 5)).To(Succeed())
+		_, url := newNode(t, 0, sameHash)
+		_, err := Info(context.Background(), nil, url)
+		g.Expect(err).To(MatchError(ContainSubstring("committed nothing")))
 	})
-	t.Run("different hashes diverge and name every node", func(t *testing.T) {
+	t.Run("empty hash would otherwise compare equal everywhere", func(t *testing.T) {
 		g := NewWithT(t)
-		_, a := newNode(t, 10, "aaaa", false)
-		_, b := newNode(t, 10, "bbbb", false)
-		err := AgreeOn(context.Background(), nil, []string{a, b}, 5)
-		var div *DivergenceError
-		g.Expect(errors.As(err, &div)).To(BeTrue())
-		g.Expect(div.Height).To(Equal(int64(5)))
-		g.Expect(div.Hashes).To(HaveLen(2))
-	})
-	t.Run("a read failure is not reported as divergence", func(t *testing.T) {
-		g := NewWithT(t)
-		_, a := newNode(t, 10, "aaaa", false)
-		n, b := newNode(t, 10, "aaaa", false)
-		n.noCommit = true
-		err := AgreeOn(context.Background(), nil, []string{a, b}, 5)
-		var div *DivergenceError
-		g.Expect(err).To(HaveOccurred())
-		g.Expect(errors.As(err, &div)).To(BeFalse())
+		_, url := newNode(t, 10, func(int64) string { return "" })
+		_, err := Info(context.Background(), nil, url)
+		g.Expect(err).To(MatchError(ContainSubstring("committed nothing")))
 	})
 }
 
-func TestCommonHeight(t *testing.T) {
+func TestFloor(t *testing.T) {
 	g := NewWithT(t)
-	_, a := newNode(t, 100, "x", false)
-	_, b := newNode(t, 90, "x", true)
-	h, err := CommonHeight(context.Background(), nil, []string{a, b}, 5)
+	_, a := newNode(t, 100, sameHash)
+	_, b := newNode(t, 90, sameHash)
+	down, c := newNode(t, 500, sameHash)
+	down.down.Store(true)
+
+	f, err := Floor(context.Background(), nil, []string{a, b, c})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(h).To(Equal(int64(85)), "slowest node's height minus the margin")
+	g.Expect(f).To(Equal(int64(100)), "highest height among the reachable nodes; the unreachable one is skipped")
 
-	_, err = CommonHeight(context.Background(), nil, []string{a, b}, 95)
-	g.Expect(err).To(MatchError(ContainSubstring("too low")))
+	_, err = Floor(context.Background(), nil, []string{c})
+	g.Expect(err).To(HaveOccurred(), "fails only when no node answers")
+}
 
-	_, err = CommonHeight(context.Background(), nil, nil, 1)
+func TestWaitAgreeAbove_AgreesOnceEveryNodeIsPastTheFloor(t *testing.T) {
+	g := NewWithT(t)
+	a, urlA := newNode(t, 100, sameHash)
+	b, urlB := newNode(t, 100, sameHash)
+	c, urlC := newNode(t, 100, sameHash)
+	advance(t, a, b, c)
+	g.Expect(WaitAgreeAbove(within(t, 5*time.Second), nil, []string{urlA, urlB, urlC}, 100, 3)).To(Succeed())
+}
+
+// A validator that restarted and is still replaying behind the fault must not
+// let the check pass at a height from before the fault.
+func TestWaitAgreeAbove_LaggingNodeBelowTheFloorFails(t *testing.T) {
+	g := NewWithT(t)
+	fast, urlFast := newNode(t, 1000, sameHash)
+	_, urlLagging := newNode(t, 50, sameHash) // stays at 50: below the floor
+	advance(t, fast)
+
+	err := WaitAgreeAbove(within(t, 300*time.Millisecond), nil, []string{urlFast, urlLagging}, 900, 3)
 	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(urlLagging), "the error must name the node that never got past the floor")
+	var div *DivergenceError
+	g.Expect(errors.As(err, &div)).To(BeFalse(), "being behind is not a divergence")
 }
 
-func TestWaitAgree_RetriesUntilTheSlowNodeCatchesUp(t *testing.T) {
+func TestWaitAgreeAbove_DivergenceReturnsAtOnce(t *testing.T) {
 	g := NewWithT(t)
-	_, fast := newNode(t, 100, "same", false)
-	// The slow node has every hash from the start but reports a low height;
-	// margin 5 makes that too low to compare until it advances. Only the height
-	// changes after the server starts, so the hash map is never written while
-	// the handler reads it.
-	slow, slowURL := newNode(t, 60, "same", false)
-	slow.height.Store(3)
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		slow.height.Store(60)
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	g.Expect(WaitAgree(ctx, nil, []string{fast, slowURL}, 5)).To(Succeed())
-}
+	a, urlA := newNode(t, 100, sameHash)
+	b, urlB := newNode(t, 100, func(h int64) string { return fmt.Sprintf("other-%d", h) })
+	advance(t, a, b)
 
-func TestWaitAgree_DivergenceReturnsAtOnce(t *testing.T) {
-	g := NewWithT(t)
-	_, a := newNode(t, 100, "aaaa", false)
-	_, b := newNode(t, 100, "bbbb", false)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	start := time.Now()
-	err := WaitAgree(ctx, nil, []string{a, b}, 5)
+	err := WaitAgreeAbove(within(t, 5*time.Second), nil, []string{urlA, urlB}, 100, 3)
 	var div *DivergenceError
 	g.Expect(errors.As(err, &div)).To(BeTrue())
+	g.Expect(div.Hashes).To(HaveLen(2))
 	g.Expect(time.Since(start)).To(BeNumerically("<", time.Second), "a divergence must not be retried to the deadline")
+}
+
+func TestWaitAgreeAbove_NodeReportingTwoHashesForOneHeightDiverges(t *testing.T) {
+	g := NewWithT(t)
+	var flips atomic.Int64
+	// Same height every read, a different hash on each read.
+	n := &node{hashAt: func(int64) string { return fmt.Sprintf("hash-%d", flips.Add(1)) }}
+	n.height.Store(500)
+	url := n.serve(t).URL
+	_, other := newNode(t, 500, sameHash)
+
+	err := WaitAgreeAbove(within(t, 2*time.Second), nil, []string{url, other}, 100, 3)
+	var div *DivergenceError
+	g.Expect(errors.As(err, &div)).To(BeTrue())
+}
+
+func TestWaitAgreeAbove_UnreachableNodeNeverAgrees(t *testing.T) {
+	g := NewWithT(t)
+	a, urlA := newNode(t, 100, sameHash)
+	b, urlB := newNode(t, 100, sameHash)
+	b.down.Store(true)
+	advance(t, a)
+
+	err := WaitAgreeAbove(within(t, 300*time.Millisecond), nil, []string{urlA, urlB}, 50, 3)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(urlB))
+}
+
+func TestWaitAgreeAbove_NoEndpoints(t *testing.T) {
+	g := NewWithT(t)
+	g.Expect(WaitAgreeAbove(context.Background(), nil, nil, 0, 1)).To(MatchError(ContainSubstring("no RPC endpoints")))
 }
 
 func TestHoldsHeight(t *testing.T) {
 	t.Run("a stalled chain holds", func(t *testing.T) {
 		g := NewWithT(t)
-		_, url := newNode(t, 50, "x", false)
+		_, url := newNode(t, 50, sameHash)
 		g.Expect(HoldsHeight(context.Background(), nil, url, 0, 100*time.Millisecond, 1)).To(Succeed())
 	})
 	t.Run("a chain still committing fails", func(t *testing.T) {
 		g := NewWithT(t)
-		n, url := newNode(t, 50, "x", false)
-		go func() {
-			for range 100 {
-				n.height.Add(1)
-				time.Sleep(5 * time.Millisecond)
-			}
-		}()
+		n, url := newNode(t, 50, sameHash)
+		advance(t, n)
 		err := HoldsHeight(context.Background(), nil, url, 0, 500*time.Millisecond, 1)
 		g.Expect(err).To(MatchError(ContainSubstring("quorum should be lost")))
 	})
 	t.Run("one in-flight block is within tolerance", func(t *testing.T) {
 		g := NewWithT(t)
-		n, url := newNode(t, 50, "x", false)
+		n, url := newNode(t, 50, sameHash)
 		go func() { time.Sleep(20 * time.Millisecond); n.height.Add(1) }()
 		g.Expect(HoldsHeight(context.Background(), nil, url, 0, 200*time.Millisecond, 1)).To(Succeed())
 	})

@@ -14,7 +14,6 @@ spec:
   action: container-kill
   mode: one
   containerNames: ["seid"]
-  gracePeriod: 0
   selector:
     namespaces: ["{{.Namespace}}"]
     expressionSelectors:
