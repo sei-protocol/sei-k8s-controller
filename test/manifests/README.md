@@ -38,8 +38,10 @@ They run through `TestChaosExtended` (`test/integration/chaos_extended_test.go`)
 which is not named `TestNightly*`, so the nightly's `^TestNightly` pattern never
 selects it. Run it by name, as a manual Job (see `clusters/harbor/nightly/README.md`
 in the platform repo, "Running a suite manually"), overriding `-test.run` to
-`^TestChaosExtended$` and running with **`-test.timeout 0`**: each scenario
-budgets 40 minutes, and the default 10-minute test timeout would panic mid-fault.
+`^TestChaosExtended$` and running with **`-test.timeout 0`**: a scenario budgets 40
+minutes after its chain is up (60 for `statesync-restart`, 75 for `blocksync-restart`,
+which first wait for a snapshot boundary or chain depth), plus 20 to provision, and
+the default 10-minute test timeout would panic mid-fault.
 
 Required environment: `SEI_CHAIN_ID` (the base chain id) and `SEID_IMAGE_CHAOS`
 (the seid image, as for the nightly chaos suite). Optional: `SEI_NAMESPACE`,
@@ -50,8 +52,8 @@ then requires `SEILOAD_IMAGE`), described below.
 | Scenario | Fault(s) | What it checks |
 |---|---|---|
 | `kill-during-recovery` | `container-kill-validator-0` x3 | validator-0 SIGKILLed again as soon as its container runs, so recovery starts from a store a crash left half-done. **Best effort:** a fast recovery can finish before the next kill lands; the log records whether the pod was already Ready at each kill, so a green run is not proof that mid-recovery kills were covered. |
-| `restart-during-blocksync` | `container-kill-node` | a follower added to a chain already `CHAOS_SYNC_DEPTH` blocks deep is SIGKILLed while it reports `catching_up`. The kill is injected a couple of seconds after the follower is observed syncing, so afterwards the scenario compares the follower's first height after the restart with the chain tip at the kill: at or above the tip means it had already finished and the scenario fails (raise the depth). It must also not resume below the height it had when observed (less a block or two), catch up, and agree with every other node. |
-| `restart-during-statesync` | `container-kill-node` | a follower bootstrapping from a snapshot is SIGKILLed while it state syncs. The phase is detected from seid's **log** (`starting state sync` without `Finished state sync`), because the RPC listener binds after state sync and `/status` is refused for the whole phase; this needs seid logging at info level. Afterwards the killed container's own previous log must show it started state sync and never finished, which is the proof the kill landed in the phase. It must then start over (a snapshot restore is not resumable), still end up from a snapshot (earliest height above 1), and agree with every other node. |
+| `blocksync-restart` | `container-kill-node` | a follower added to a chain already `CHAOS_SYNC_DEPTH` blocks deep is SIGKILLed while it reports `catching_up`. The kill is injected a couple of seconds after the follower is observed syncing, so afterwards the scenario reads the killed container's own previous log: a follower that had already finished block sync logged `switching to consensus reactor`, and then the scenario fails (raise the depth). A height comparison could not tell, because the RPC binds only after the reactors start. It must also not resume below the height it had when observed (less a block or two), catch up, and agree with every other node. |
+| `statesync-restart` | `container-kill-node` | a follower bootstrapping from a snapshot is SIGKILLed while it state syncs. The phase is detected from seid's **log** (`starting state sync` without `Finished state sync`), because the RPC listener binds after state sync and `/status` is refused for the whole phase; this needs seid logging at info level. Afterwards the killed container's own previous log must show it started state sync and never finished, which is the proof the kill landed in the phase. It must then start over (a snapshot restore is not resumable), still end up from a snapshot (earliest height above 1), and agree with every other node. If it fails because the phase was missed, there is no tuning knob: rerun. |
 | `cold-start` | `container-kill-all` | every validator SIGKILLed at once; each recovers alone and the chain must reconcile |
 | `quorum-loss-partition` | `network-partition-split` | a 2\|2 split of the validators, RPC follower on one side: the chain must stop committing (observed on validator-0), then resume without forking |
 | `network-flap` | `network-partition` (from the nightly `Catalog`, not `ExtendedCatalog`) x5, 20s on/off | repeated drop and reconnect of one validator |
@@ -85,11 +87,14 @@ Optional inputs:
   ratio) are not applied, since a fault makes sends fail by design. The chain gets
   two followers, one taking the sends and the other, the observer, serving receipts.
   The chaos image is the `mock_balances` build, so no funded key is needed.
-  **Set it above the scenario's own length, 30 minutes or more:** the Job runs this
-  long and nothing extends it. A Job that has ended makes the post-recovery check
-  fail, with a message that says the load ended, not that the chain stopped taking
-  traffic. Scenario budgets are 40 minutes, 60 for state sync and 75 for block sync.
-- `CHAOS_SYNC_DEPTH`: how many blocks the chain has before `restart-during-blocksync`
+  **Set it to at least the budget of the scenarios you run: 40 or more for most, 60
+  for `statesync-restart`, 75 for `blocksync-restart`.** The Job runs this long and
+  nothing extends it, so a shorter value is refused when the scenario starts. (The
+  load is stopped as soon as the scenario's checks are done, so the Job does not run
+  its full length.) A Job that has ended mid-scenario would make the post-recovery
+  check fail, with a message that says the load ended, not that the chain stopped
+  taking traffic.
+- `CHAOS_SYNC_DEPTH`: how many blocks the chain has before `blocksync-restart`
   adds its follower (default 600). The deeper, the wider the block-sync window. The
   scenario fails, and says to raise this, if the follower finished syncing before
   the kill landed.
@@ -112,11 +117,17 @@ Optional inputs:
   recovers (`network-flap` relies on it).
 - That the chaos image boots with `flatkv_only`.
 - That `/status` reports `catching_up` true with a rising height while a node block
-  syncs (`restart-during-blocksync` gates on it).
-- That the chaos chain's seid logs `starting state sync` at the level it runs at
-  (`restart-during-statesync` gates on the log; if the line never appears the
-  scenario fails and says so), and that kubelet keeps the killed container's log so
-  the scenario can read it.
+  syncs (`blocksync-restart` gates on it).
+- That the chaos chain's seid logs `starting state sync` and `switching to consensus
+  reactor` at the level it runs at (seid's default is info, and nothing in the
+  controller overrides it; `statesync-restart` gates on the first and checks the
+  killed container's previous log for both scenarios), and that kubelet keeps the
+  killed container's log so the scenario can read it.
+- That the suite's service account can read `pods/log` in the chain's namespace. The
+  harbor nightly harness role grants `pods/log: get`
+  (`clusters/harbor/nightly/harness/rbac.yaml` in the platform repo); a run under
+  another service account needs it, and without it `statesync-restart` fails as
+  though seid were not logging at info level.
 - That a follower pod carries `sei.io/node=<its name>`, so `container-kill-node`
   reaches it, and that a snapshot-restored follower reports an earliest height
   above 1.

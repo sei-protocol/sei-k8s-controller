@@ -77,10 +77,17 @@ const (
 	// before the fault (it must be real) and after recovery (the chain must take it
 	// again).
 	loadInclusionWindow = 3 * time.Minute
-	// defaultScenarioTimeout is a scenario's whole budget unless its registry entry
-	// says otherwise.
+	// defaultScenarioTimeout is a scenario's own budget, after its chain is
+	// provisioned, unless its registry entry says otherwise.
 	defaultScenarioTimeout = 40 * time.Minute
-	// defaultSyncDepth is the chain height restart-during-blocksync waits for
+	// provisionBudget is added to a scenario's budget for provisioning the chain. A
+	// slow provision would otherwise eat the scenario's budget and kill it at a
+	// random later wait.
+	provisionBudget = 20 * time.Minute
+	// maxNodeNameLen is the longest SeiNode name a pod can carry: the StatefulSet's
+	// controller-revision-hash label is <name>-<10 character hash>, at most 63.
+	maxNodeNameLen = 52
+	// defaultSyncDepth is the chain height blocksync-restart waits for
 	// before adding its follower, unless CHAOS_SYNC_DEPTH says otherwise.
 	defaultSyncDepth = 600
 )
@@ -93,17 +100,18 @@ type extendedScenario struct {
 	// snapshots makes the chain's validators emit state-sync snapshots, which a
 	// scenario that state-syncs a follower needs.
 	snapshots bool
-	// timeout is the scenario's whole budget, from before the chain is provisioned.
-	// Zero means defaultScenarioTimeout. The two sync scenarios wait for chain depth
-	// or a snapshot boundary first, so they need more.
+	// timeout is the scenario's own budget, after its chain is provisioned (the
+	// run also gets provisionBudget on top). Zero means defaultScenarioTimeout. The
+	// two sync scenarios wait for chain depth or a snapshot boundary first, so they
+	// need more.
 	timeout time.Duration
 	run     func(ctx context.Context, t *testing.T, r *chaosRun)
 }
 
 var extendedScenarios = []extendedScenario{
 	{name: "kill-during-recovery", run: scenarioKillDuringRecovery},
-	{name: "restart-during-blocksync", timeout: 75 * time.Minute, run: scenarioRestartDuringBlockSync},
-	{name: "restart-during-statesync", snapshots: true, timeout: 60 * time.Minute, run: scenarioRestartDuringStateSync},
+	{name: "blocksync-restart", timeout: 75 * time.Minute, run: scenarioRestartDuringBlockSync},
+	{name: "statesync-restart", snapshots: true, timeout: 60 * time.Minute, run: scenarioRestartDuringStateSync},
 	{name: "cold-start", run: scenarioColdStart},
 	{name: "quorum-loss-partition", run: scenarioQuorumLossPartition},
 	{name: "network-flap", run: scenarioNetworkFlap},
@@ -127,10 +135,10 @@ var extendedScenarios = []extendedScenario{
 //   - kill-during-recovery: SIGKILL validator-0 three times in a row, each time
 //     as soon as its container is running again. Replay and recovery code runs
 //     against a store that a crash already left half-done.
-//   - restart-during-blocksync: add a follower to a chain that is already deep,
+//   - blocksync-restart: add a follower to a chain that is already deep,
 //     SIGKILL it while it block syncs, check afterwards that the kill did land
 //     mid-sync, and that it resumes and agrees.
-//   - restart-during-statesync: the same for a follower bootstrapping from a
+//   - statesync-restart: the same for a follower bootstrapping from a
 //     snapshot, which has to start over because a snapshot restore is not
 //     resumable. Detected from seid's log (the RPC is not up during state sync)
 //     and verified from the killed container's own log.
@@ -169,8 +177,9 @@ var extendedScenarios = []extendedScenario{
 // SEI_NAMESPACE, CHAOS_DURATION, CHAOS_EXTENDED_SCENARIOS, CHAOS_STORAGE_PROFILE,
 // CHAOS_REQUIRE_CLEAN_SHUTDOWN, CHAOS_SYNC_DEPTH, and CHAOS_LOAD_MINUTES with
 // SEILOAD_IMAGE (required when load is on), SEILOAD_PROFILE, SEILOAD_COMMIT_ID
-// [optional]. Run with -test.timeout 0: each scenario budgets 40 minutes, the
-// block-sync one 75 and the state-sync one 60.
+// [optional]. Run with -test.timeout 0: a scenario budgets 40 minutes after its
+// chain is up, the state-sync one 60 and the block-sync one 75, plus 20 minutes
+// to provision. With load on, CHAOS_LOAD_MINUTES must be at least that budget.
 func TestChaosExtended(t *testing.T) {
 	requireCluster(t)
 	base := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
@@ -200,19 +209,28 @@ func TestChaosExtended(t *testing.T) {
 			if derived := id + "-flap5"; len(derived) > 63 {
 				t.Fatalf("chain id %q yields label value %q > 63 chars", id, derived)
 			}
-			// A SeiNode's name becomes its StatefulSet's name, and the pod is <name>-0:
-			// its hostname and its statefulset.kubernetes.io/pod-name label are 63
-			// characters at most, so the node name is held to 61.
+			// A SeiNode's name becomes its StatefulSet's name. The StatefulSet stamps each
+			// pod with controller-revision-hash=<name>-<10 character hash>, a label value
+			// capped at 63 characters, so a node name is held to 52 (the pod name, <name>-0,
+			// and its hostname are shorter and fit inside that).
 			for _, node := range []string{rpcNodeName(id, 2), id + "-statesync"} {
-				if len(node) > 61 {
-					t.Fatalf("chain id %q yields node name %q > 61 chars (its pod name would exceed 63)", id, node)
+				if len(node) > maxNodeNameLen {
+					t.Fatalf("chain id %q yields node name %q (%d chars) > %d: shorten SEI_CHAIN_ID",
+						id, node, len(node), maxNodeNameLen)
 				}
 			}
 			timeout := sc.timeout
 			if timeout == 0 {
 				timeout = defaultScenarioTimeout
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			// The load Job runs CHAOS_LOAD_MINUTES and nothing extends it, so it has to
+			// cover the scenario's whole budget. Failing here beats failing 20 minutes in,
+			// at a post-recovery check that finds the load gone.
+			if loadOn && time.Duration(load.minutes)*time.Minute < timeout {
+				t.Fatalf("%s=%d is shorter than this scenario's %s budget: raise it to at least %d",
+					chaosLoadMinutesEnv, load.minutes, timeout, int(timeout/time.Minute))
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout+provisionBudget)
 			defer cancel()
 			// A Job eviction or a manual delete sends SIGTERM. Without a signal-aware
 			// context the test would not unwind, cleanupChain would never run, and the
@@ -230,7 +248,7 @@ func TestChaosExtended(t *testing.T) {
 				seidImage:     seid,
 				validators:    extendedValidators,
 				rpcNodes:      1, // an unfaulted observer of liveness + recovery
-				timeout:       timeout,
+				timeout:       timeout + provisionBudget,
 				storageConfig: storage,
 			}
 			if sc.snapshots {
@@ -674,8 +692,8 @@ func scenarioKillDuringRecovery(ctx context.Context, t *testing.T, r *chaosRun) 
 		// recoveryWindow, not after the rest of the 40-minute scenario budget.
 		killCtx, cancelKill := context.WithTimeout(ctx, recoveryWindow)
 		pollUntil(killCtx, t, fmt.Sprintf("kill %d: %s seid restarted and running", i, pod), func(ctx context.Context) bool {
-			n, running, ready := r.seidRestarts(ctx, pod)
-			if n > before && running {
+			n, running, ready, ok := r.seidRestarts(ctx, pod)
+			if ok && n > before && running {
 				readyAtRunning = ready
 				seen = n
 				return true
