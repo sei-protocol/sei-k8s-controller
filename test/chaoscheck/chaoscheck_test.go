@@ -271,3 +271,38 @@ func TestInfo_OmittedHeightReadsAsNothingCommitted(t *testing.T) {
 	_, err := Info(context.Background(), nil, srv.URL)
 	g.Expect(err).To(MatchError(ContainSubstring("committed nothing")))
 }
+
+func TestSync_BothResponseShapes(t *testing.T) {
+	for _, enveloped := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enveloped=%v", enveloped), func(t *testing.T) {
+			g := NewWithT(t)
+			body := `{"sync_info":{"latest_block_height":"77","catching_up":true}}`
+			if enveloped {
+				body = `{"result":` + body + `}`
+			}
+			mux := http.NewServeMux()
+			mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) })
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+
+			got, err := Sync(context.Background(), nil, srv.URL)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(got).To(Equal(SyncInfo{Height: 77, CatchingUp: true}))
+		})
+	}
+}
+
+func TestSync_UnreachableAndEmptyAreErrors(t *testing.T) {
+	g := NewWithT(t)
+	down, url := newNode(t, 10, sameHash)
+	down.down.Store(true)
+	_, err := Sync(context.Background(), nil, url)
+	g.Expect(err).To(HaveOccurred(), "an RPC that is not up reads as an error, so callers poll through replay")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"sync_info":{}}`)) })
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	_, err = Sync(context.Background(), nil, srv.URL)
+	g.Expect(err).To(MatchError(ContainSubstring("no latest_block_height")))
+}

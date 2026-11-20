@@ -41,6 +41,15 @@ const (
 	// would fail by design, and a run that only logs the exit code is still
 	// worth having.
 	chaosRequireCleanShutdownEnv = "CHAOS_REQUIRE_CLEAN_SHUTDOWN"
+	// chaosLoadMinutesEnv, when above 0, runs seiload against the chain while each
+	// scenario's fault is injected, for up to that many minutes. It needs
+	// SEILOAD_IMAGE, and optionally SEILOAD_PROFILE and SEILOAD_COMMIT_ID, as the
+	// benchmark suite does.
+	chaosLoadMinutesEnv = "CHAOS_LOAD_MINUTES"
+	// chaosSyncDepthEnv is how many blocks the chain has before restart-during-
+	// blocksync adds its follower. A follower of a shallow chain finishes block sync
+	// in seconds, before a kill can land; the deeper the chain, the wider the window.
+	chaosSyncDepthEnv = "CHAOS_SYNC_DEPTH"
 )
 
 const (
@@ -64,6 +73,13 @@ const (
 	quorumStallWindow  = 60 * time.Second
 	// seidContainer is the consensus container the kill faults target.
 	seidContainer = "seid"
+	// loadInclusionWindow bounds how long the load has to show up in blocks, both
+	// before the fault (it must be real) and after recovery (the chain must take it
+	// again).
+	loadInclusionWindow = 3 * time.Minute
+	// defaultSyncDepth is the chain height restart-during-blocksync waits for
+	// before adding its follower, unless CHAOS_SYNC_DEPTH says otherwise.
+	defaultSyncDepth = 600
 )
 
 // extendedScenario is one TestChaosExtended subtest. Each runs on its own fresh
@@ -71,19 +87,25 @@ const (
 // leak into the next.
 type extendedScenario struct {
 	name string
-	run  func(ctx context.Context, t *testing.T, r *chaosRun)
+	// snapshots makes the chain's validators emit state-sync snapshots, which a
+	// scenario that state-syncs a follower needs.
+	snapshots bool
+	run       func(ctx context.Context, t *testing.T, r *chaosRun)
 }
 
 var extendedScenarios = []extendedScenario{
-	{"kill-during-recovery", scenarioKillDuringRecovery},
-	{"cold-start", scenarioColdStart},
-	{"quorum-loss-partition", scenarioQuorumLossPartition},
-	{"network-flap", scenarioNetworkFlap},
-	{"clean-stop", scenarioCleanStop},
-	{"time-skew-forward", func(ctx context.Context, t *testing.T, r *chaosRun) {
+	{name: "kill-during-recovery", run: scenarioKillDuringRecovery},
+	{name: "kill-during-replay", run: scenarioKillDuringReplay},
+	{name: "restart-during-blocksync", run: scenarioRestartDuringBlockSync},
+	{name: "restart-during-statesync", snapshots: true, run: scenarioRestartDuringStateSync},
+	{name: "cold-start", run: scenarioColdStart},
+	{name: "quorum-loss-partition", run: scenarioQuorumLossPartition},
+	{name: "network-flap", run: scenarioNetworkFlap},
+	{name: "clean-stop", run: scenarioCleanStop},
+	{name: "time-skew-forward", run: func(ctx context.Context, t *testing.T, r *chaosRun) {
 		scenarioTimedFault(ctx, t, r, "time-skew-forward")
 	}},
-	{"time-skew-large", func(ctx context.Context, t *testing.T, r *chaosRun) {
+	{name: "time-skew-large", run: func(ctx context.Context, t *testing.T, r *chaosRun) {
 		scenarioTimedFault(ctx, t, r, "time-skew-large")
 	}},
 }
@@ -99,6 +121,14 @@ var extendedScenarios = []extendedScenario{
 //   - kill-during-recovery: SIGKILL validator-0 three times in a row, each time
 //     as soon as its container is running again. Replay and recovery code runs
 //     against a store that a crash already left half-done.
+//   - kill-during-replay: the same repeated SIGKILL, watching for the window in
+//     which the container is running but the RPC listener is not (the node
+//     handshakes and replays before it starts the RPC server). Best effort.
+//   - restart-during-blocksync: add a follower to a chain that is already deep,
+//     SIGKILL it while it block syncs, and check it resumes and agrees.
+//   - restart-during-statesync: the same for a follower bootstrapping from a
+//     snapshot, which has to start over because a snapshot restore is not
+//     resumable.
 //   - cold-start: SIGKILL every validator at once. Each recovers on its own and
 //     they can come back at different heights; the chain has to reconcile.
 //   - quorum-loss-partition: split the validators 2|2, with the RPC follower on
@@ -125,10 +155,16 @@ var extendedScenarios = []extendedScenario{
 // follower's caught-up check reads /status catching_up, which is not meaningful
 // under Autobahn.
 //
+// With CHAOS_LOAD_MINUTES set, every scenario runs under seiload: the load starts
+// first, must be landing in blocks before the fault, runs through the fault and
+// the recovery gate, and must land again afterwards. Without it the chain is idle,
+// and a kill almost always falls between meaningful writes.
+//
 // Inputs (env): SEI_CHAIN_ID (base) and SEID_IMAGE_CHAOS [both required];
 // SEI_NAMESPACE, CHAOS_DURATION, CHAOS_EXTENDED_SCENARIOS, CHAOS_STORAGE_PROFILE,
-// CHAOS_REQUIRE_CLEAN_SHUTDOWN [optional]. Run with -test.timeout 0: each
-// scenario budgets 40 minutes.
+// CHAOS_REQUIRE_CLEAN_SHUTDOWN, CHAOS_SYNC_DEPTH, and CHAOS_LOAD_MINUTES with
+// SEILOAD_IMAGE (required when load is on), SEILOAD_PROFILE, SEILOAD_COMMIT_ID
+// [optional]. Run with -test.timeout 0: each scenario budgets 40 minutes.
 func TestChaosExtended(t *testing.T) {
 	requireCluster(t)
 	base := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
@@ -144,6 +180,7 @@ func TestChaosExtended(t *testing.T) {
 	}
 	storage := extendedStorageConfig(t)
 	selected := selectedScenarios(t)
+	load, loadOn := loadFromEnv(t)
 
 	for _, sc := range extendedScenarios {
 		if !selected(sc.name) {
@@ -151,10 +188,13 @@ func TestChaosExtended(t *testing.T) {
 		}
 		t.Run(sc.name, func(t *testing.T) {
 			id := base + "-" + sc.name
-			// Selector values are k8s labels, capped at 63 characters; the longest
-			// one derived from the id is the per-fault run id (id + "-flap5").
-			if longest := id + "-flap5"; len(longest) > 63 {
-				t.Fatalf("chain id %q yields label value %q > 63 chars", id, longest)
+			// Selector values are k8s labels, capped at 63 characters. The longest
+			// ones derived from the id are the per-fault run id (id + "-flap5"), the
+			// follower a block-sync run adds, and the state-sync follower's name.
+			for _, derived := range []string{id + "-flap5", rpcNodeName(id, 2), "statesync-" + id} {
+				if len(derived) > 63 {
+					t.Fatalf("chain id %q yields label value %q > 63 chars", id, derived)
+				}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 			defer cancel()
@@ -167,7 +207,7 @@ func TestChaosExtended(t *testing.T) {
 
 			c := openClient(ctx, t)
 			cs := clientset(t)
-			ch, err := provision(ctx, t, c, spec{
+			s := spec{
 				chainID:       id,
 				runID:         id,
 				namespace:     ns,
@@ -176,7 +216,27 @@ func TestChaosExtended(t *testing.T) {
 				rpcNodes:      1, // an unfaulted observer of liveness + recovery
 				timeout:       40 * time.Minute,
 				storageConfig: storage,
-			})
+			}
+			if sc.snapshots {
+				// The validators emit snapshots; the followers do not (a light-client
+				// witness serves RPC trust points, chunks travel over p2p from the
+				// validators), as bringUpStateSyncFollower provisions it.
+				s.storageConfig = mergeConfig(storage, snapshotProductionConfig)
+				s.rpcConfig = map[string]string{snapshotIntervalKey: "0"}
+			}
+			if loadOn {
+				// One follower takes the sends and the other serves receipts and is the
+				// observer, so the observer's liveness reads do not compete with the load.
+				s.rpcNodes = 2
+				s.rpcConfig = mergeConfig(s.rpcConfig, loadRPCConfig)
+				s.rpcConfigValues = loadRPCConfigValues
+				s.seiloadImage = load.image
+				s.seiloadProfile = load.profile
+				s.seiloadCommit = load.commit
+				s.seiloadWorkload = "chaos-" + sc.name
+				s.durationMin = load.minutes
+			}
+			ch, err := provision(ctx, t, c, s)
 			cleanupChain(t, ch)
 			if err != nil {
 				t.Fatalf("provision: %v", err)
@@ -191,6 +251,13 @@ func TestChaosExtended(t *testing.T) {
 				hc:       &http.Client{Timeout: 10 * time.Second},
 				duration: duration,
 				faultDur: faultDur,
+				image:    seid,
+				storage:  storage,
+				observer: ch.rpcNodes[len(ch.rpcNodes)-1],
+			}
+			if loadOn {
+				r.runWithLoad(ctx, t, s, sc)
+				return
 			}
 			sc.run(ctx, t, r)
 		})
@@ -248,15 +315,32 @@ type chaosRun struct {
 	hc       *http.Client
 	duration string        // CHAOS_DURATION, for duration-bearing faults
 	faultDur time.Duration // the same, parsed
+	image    string        // the seid image, for followers a scenario adds
+	storage  map[string]string
+	// observer is the follower the scenarios read liveness from. It is fixed when
+	// the chain is provisioned: a scenario that adds a follower appends it to
+	// ch.rpcNodes (so teardown reaps it), which must not change the observer. With
+	// load it is the second follower, the one that takes no sends.
+	observer *sei.Node
 }
 
-func (r *chaosRun) follower() *sei.Node { return r.ch.rpcNodes[0] }
+func (r *chaosRun) follower() *sei.Node { return r.observer }
 
-// endpoints returns the Tendermint RPC of every validator and the follower, so
-// the app-hash check compares all of them.
+// followerNames returns the sei.io/node value of every RPC follower the chain was
+// provisioned with, which network-partition-split puts on one side of the split.
+func (r *chaosRun) followerNames() []string {
+	names := make([]string, 0, len(r.ch.rpcNodes))
+	for _, n := range r.ch.rpcNodes {
+		names = append(names, n.Name())
+	}
+	return names
+}
+
+// endpoints returns the Tendermint RPC of every validator and every follower, so
+// the committed-state check compares all of them.
 func (r *chaosRun) endpoints(ctx context.Context, t *testing.T) []string {
 	t.Helper()
-	var urls []string
+	urls := make([]string, 0, extendedValidators+len(r.ch.rpcNodes))
 	for i := range extendedValidators {
 		name := fmt.Sprintf("%s-%d", r.id, i)
 		n, err := r.c.GetNode(ctx, name, r.ns)
@@ -269,13 +353,30 @@ func (r *chaosRun) endpoints(ctx context.Context, t *testing.T) []string {
 		}
 		urls = append(urls, u)
 	}
-	return append(urls, r.follower().TendermintRPC())
+	for _, n := range r.ch.rpcNodes {
+		u := n.TendermintRPC()
+		if u == "" {
+			t.Fatalf("follower %s has no Tendermint RPC endpoint in its status", n.Name())
+		}
+		urls = append(urls, u)
+	}
+	return urls
 }
 
 // apply renders and applies one fault. suffix keeps the CR name and run label
 // unique when a scenario applies the same fault more than once. The fault comes
 // from ExtendedCatalog, or the nightly Catalog for network-flap.
 func (r *chaosRun) apply(ctx context.Context, t *testing.T, name, suffix, duration string) fault {
+	t.Helper()
+	return r.applyWith(ctx, t, name, suffix, duration, nil)
+}
+
+// applyWith is apply with a hook to set Params fields beyond the chain, run and
+// namespace: the node a node-targeted fault hits, or the followers a split puts on
+// one side.
+func (r *chaosRun) applyWith(
+	ctx context.Context, t *testing.T, name, suffix, duration string, mod func(*faults.Params),
+) fault {
 	t.Helper()
 	cf, extErr := faults.LookupExtended(name)
 	if extErr != nil {
@@ -284,12 +385,16 @@ func (r *chaosRun) apply(ctx context.Context, t *testing.T, name, suffix, durati
 			t.Fatalf("lookup fault %q: %v", name, errors.Join(extErr, nightlyErr))
 		}
 	}
-	f := renderFault(t, cf, faults.Params{
+	p := faults.Params{
 		ChainID:   r.id,
 		RunID:     r.id + suffix,
 		Namespace: r.ns,
 		Duration:  duration,
-	})
+	}
+	if mod != nil {
+		mod(&p)
+	}
+	f := renderFault(t, cf, p)
 	applyFault(ctx, t, r.dc, r.ns, f)
 	return f
 }
@@ -361,7 +466,14 @@ func (r *chaosRun) podUIDs(ctx context.Context, t *testing.T) map[string]types.U
 // on timeout with what names the wait.
 func pollUntil(ctx context.Context, t *testing.T, what string, done func(context.Context) bool) {
 	t.Helper()
-	tick := time.NewTicker(2 * time.Second)
+	pollEvery(ctx, t, what, 2*time.Second, done)
+}
+
+// pollEvery is pollUntil with the poll interval chosen by the caller: a scenario
+// that has to catch a phase lasting a second or two polls faster than 2s.
+func pollEvery(ctx context.Context, t *testing.T, what string, every time.Duration, done func(context.Context) bool) {
+	t.Helper()
+	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
 		if done(ctx) {
@@ -620,7 +732,8 @@ func scenarioQuorumLossPartition(ctx context.Context, t *testing.T, r *chaosRun)
 	}
 	start := time.Now()
 	floor := r.floor(ctx, t)
-	f := r.apply(ctx, t, "network-partition-split", "", quorumLossDuration.String())
+	f := r.applyWith(ctx, t, "network-partition-split", "", quorumLossDuration.String(),
+		func(p *faults.Params) { p.Followers = r.followerNames() })
 	gateInjected(ctx, t, r.dc, r.ns, f, false)
 	t.Logf("network-partition-split injected: validators split 2|2, follower on one side, no side has quorum")
 

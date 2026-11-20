@@ -140,6 +140,75 @@ func Info(ctx context.Context, hc *http.Client, tmRPC string) (Sample, error) {
 	return Sample{Height: h, Hash: b.Response.LastBlockAppHash}, nil
 }
 
+// SyncInfo is a node's sync state from /status.
+type SyncInfo struct {
+	Height     int64
+	CatchingUp bool
+}
+
+// statusResponse models the part of /status Sync reads, in the enveloped and
+// unwrapped shapes the Sei fork emits.
+type statusResponse struct {
+	Result *statusBody `json:"result,omitempty"`
+	statusBody
+}
+
+type statusBody struct {
+	SyncInfo struct {
+		LatestBlockHeight json.Number `json:"latest_block_height"`
+		CatchingUp        bool        `json:"catching_up"`
+	} `json:"sync_info"`
+}
+
+func (r *statusResponse) body() statusBody {
+	if r.Result != nil && r.Result.SyncInfo.LatestBlockHeight != "" {
+		return *r.Result
+	}
+	return r.statusBody
+}
+
+// Sync reads the node's height and whether it reports itself as catching up, from
+// /status. Under CometBFT consensus catching_up is true while the node is block
+// syncing or state syncing, which is what a scenario that must land a restart in
+// one of those phases watches for. Under Autobahn catching_up is not meaningful.
+// An unreachable node, or a body with no height, is an error: the RPC listener
+// is not up yet while a node replays on startup, so callers poll through errors.
+func Sync(ctx context.Context, hc *http.Client, tmRPC string) (SyncInfo, error) {
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	url := strings.TrimRight(tmRPC, "/") + "/status"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return SyncInfo{}, fmt.Errorf("build request %s: %w", url, err)
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return SyncInfo{}, fmt.Errorf("get %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return SyncInfo{}, fmt.Errorf("get %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return SyncInfo{}, fmt.Errorf("read %s: %w", url, err)
+	}
+	var r statusResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return SyncInfo{}, fmt.Errorf("decode %s: %w", url, err)
+	}
+	b := r.body()
+	if b.SyncInfo.LatestBlockHeight == "" {
+		return SyncInfo{}, fmt.Errorf("%s returned no latest_block_height", url)
+	}
+	h, err := b.SyncInfo.LatestBlockHeight.Int64()
+	if err != nil {
+		return SyncInfo{}, fmt.Errorf("%s: latest_block_height %q: %w", url, b.SyncInfo.LatestBlockHeight, err)
+	}
+	return SyncInfo{Height: h, CatchingUp: b.SyncInfo.CatchingUp}, nil
+}
+
 // Floor returns the highest committed height any of the nodes reports right
 // now. Capture it just before injecting a fault, then pass it to
 // WaitAgreeAbove so the comparison happens on state committed after the fault.

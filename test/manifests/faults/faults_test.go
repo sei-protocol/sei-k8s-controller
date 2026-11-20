@@ -9,7 +9,10 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-var params = Params{ChainID: "bench-a", RunID: "r1", Namespace: "eng-x", Duration: "3m"}
+var params = Params{
+	ChainID: "bench-a", RunID: "r1", Namespace: "eng-x", Duration: "3m",
+	Node: "bench-a-rpc-1", Followers: []string{"bench-a-rpc-0"},
+}
 
 func TestCatalog_EveryFaultRendersToItsKind(t *testing.T) {
 	for _, f := range Catalog {
@@ -74,6 +77,41 @@ func TestRender_RejectsIncompleteParams(t *testing.T) {
 	g := NewWithT(t)
 	_, err := kill.Render(Params{ChainID: "c", RunID: "r", Namespace: "n"})
 	g.Expect(err).NotTo(HaveOccurred(), "one-shot faults take no duration")
+}
+
+func TestRender_NodeTargetedFaultNeedsANodeInTheChain(t *testing.T) {
+	g := NewWithT(t)
+	f, err := LookupExtended("container-kill-node")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(f.NeedsNode).To(BeTrue())
+	base := Params{ChainID: "c", RunID: "r", Namespace: "n"}
+
+	_, err = f.Render(base)
+	g.Expect(err).To(MatchError(ContainSubstring("node is required")))
+
+	// A name outside the chain would let the selector reach another chain's pod.
+	bad := base
+	bad.Node = "other-rpc-0"
+	_, err = f.Render(bad)
+	g.Expect(err).To(MatchError(ContainSubstring("does not belong to chain")))
+
+	ok := base
+	ok.Node = "c-rpc-1"
+	out, err := f.Render(ok)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(string(out)).To(ContainSubstring(`values: ["c-rpc-1"]`))
+}
+
+func TestRender_FollowersMustBelongToTheChain(t *testing.T) {
+	g := NewWithT(t)
+	f, err := LookupExtended("network-partition-split")
+	g.Expect(err).NotTo(HaveOccurred())
+	_, err = f.Render(Params{ChainID: "c", RunID: "r", Namespace: "n", Duration: "1m", Followers: []string{"other-rpc-0"}})
+	g.Expect(err).To(MatchError(ContainSubstring("does not belong to chain")))
+
+	out, err := f.Render(Params{ChainID: "c", RunID: "r", Namespace: "n", Duration: "1m"})
+	g.Expect(err).NotTo(HaveOccurred(), "a chain with no followers renders a split of the validators alone")
+	g.Expect(string(out)).NotTo(ContainSubstring(`"c-rpc`), "no follower names are templated in")
 }
 
 // TestCatalog_BlastRadius pins the f=1 contract the package doc states: every
@@ -233,7 +271,10 @@ func TestExtendedCatalog_BlastRadius(t *testing.T) {
 	for _, f := range ExtendedCatalog {
 		t.Run(f.Name, func(t *testing.T) {
 			g := NewWithT(t)
-			out, err := f.Render(Params{ChainID: "c", RunID: "r", Namespace: "ns", Duration: "1m"})
+			out, err := f.Render(Params{
+				ChainID: "c", RunID: "r", Namespace: "ns", Duration: "1m",
+				Node: "c-rpc-2", Followers: splitFollowers,
+			})
 			g.Expect(err).NotTo(HaveOccurred())
 			var cr crSpec
 			g.Expect(yaml.Unmarshal(out, &cr)).To(Succeed())
@@ -261,20 +302,25 @@ func TestExtendedCatalog_BlastRadius(t *testing.T) {
 				// leaves quorum intact and makes the split a no-op.
 				g.Expect(cr.Spec.Mode).To(Equal("all"), "a split must apply to every pod on the source side")
 				g.Expect(cr.Spec.Target.Mode).To(Equal("all"), "a split must apply to every pod on the target side")
-				assertSplitHasNoQuorum(g, cr.Spec.Selector.nodePins(), cr.Spec.Target.Selector.nodePins())
+				assertSplitHasNoQuorum(g, cr.Spec.Selector.nodePins(), cr.Spec.Target.Selector.nodePins(), splitFollowers)
 			}
 		})
 	}
 }
 
-// assertSplitHasNoQuorum checks a 2|2 split of four validators (c-0 .. c-3), and
-// that the RPC follower (c-rpc-0) sits on exactly one side. A follower on
-// neither side bridges the split, because it peers with every validator and
-// relays votes.
-func assertSplitHasNoQuorum(g *WithT, side, other []string) {
+// splitFollowers are the followers the blast-radius test renders the split with.
+// Two, so that a template which handled only the first would fail.
+var splitFollowers = []string{"c-rpc-0", "c-rpc-1"}
+
+// assertSplitHasNoQuorum checks a 2|2 split of four validators (c-0 .. c-3) and
+// that every RPC follower sits on the source side. A follower on neither side
+// bridges the split, because it peers with every validator and relays votes,
+// and one on each side would too.
+func assertSplitHasNoQuorum(g *WithT, side, other, followers []string) {
+	isFollower := func(v string) bool { return strings.Contains(v, "-rpc-") }
 	validators := func(names []string) (n int) {
 		for _, v := range names {
-			if !strings.Contains(v, "-rpc-") {
+			if !isFollower(v) {
 				n++
 			}
 		}
@@ -283,26 +329,28 @@ func assertSplitHasNoQuorum(g *WithT, side, other []string) {
 	g.Expect(validators(side)).To(Equal(2), "each side must hold exactly two of the four validators")
 	g.Expect(validators(other)).To(Equal(2), "each side must hold exactly two of the four validators")
 
-	// The sides must be disjoint and together name all four validators: a name on
-	// both sides, or a validator on neither, is not a 2|2 split of the four.
-	all := append(slices.Clone(side), other...)
-	for _, want := range []string{"c-0", "c-1", "c-2", "c-3"} {
-		n := 0
-		for _, v := range all {
+	count := func(names []string, want string) (n int) {
+		for _, v := range names {
 			if v == want {
 				n++
 			}
 		}
-		g.Expect(n).To(Equal(1), "validator %s must be on exactly one side", want)
+		return n
+	}
+	// The sides must be disjoint and together name all four validators: a name on
+	// both sides, or a validator on neither, is not a 2|2 split of the four.
+	all := append(slices.Clone(side), other...)
+	for _, want := range []string{"c-0", "c-1", "c-2", "c-3"} {
+		g.Expect(count(all, want)).To(Equal(1), "validator %s must be on exactly one side", want)
 	}
 
-	followers := 0
-	for _, v := range append(slices.Clone(side), other...) {
-		if v == "c-rpc-0" {
-			followers++
-		}
+	// Every follower the run has must be on the source side, once: left out, or on
+	// the target side, it bridges the partition. Nothing else may be listed.
+	for _, f := range followers {
+		g.Expect(count(side, f)).To(Equal(1), "follower %s must be on the source side", f)
+		g.Expect(count(other, f)).To(BeZero(), "follower %s must not be on the target side", f)
 	}
-	g.Expect(followers).To(Equal(1), "the follower must be on exactly one side, or it bridges the partition")
+	g.Expect(len(side)-validators(side)).To(Equal(len(followers)), "the source side lists exactly the run's followers")
 }
 
 // TestCatalog_HoldsNoQuorumLossFault guards what QuorumLoss's doc comment

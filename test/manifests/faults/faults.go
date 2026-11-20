@@ -44,6 +44,17 @@ type Params struct {
 	// Duration is spec.duration for duration-bearing faults, in Go duration
 	// syntax. Ignored by one-shot faults.
 	Duration string
+	// Node is the sei.io/node value (the SeiNode name) of the single node a
+	// node-targeted fault hits. Required by faults flagged NeedsNode and ignored
+	// by the rest. It must belong to ChainID: the node-targeted templates pin the
+	// selector to this name, so Render rejects a name outside the chain.
+	Node string
+	// Followers are the sei.io/node values of the run's RPC followers. A fault
+	// that splits the network (network-partition-split) puts every follower on
+	// one side, because a follower peers with all validators and relays
+	// consensus votes, so one left outside both sides bridges the split. Ignored
+	// by the rest; empty for a chain with no followers.
+	Followers []string
 }
 
 // Fault describes one catalog entry.
@@ -58,6 +69,9 @@ type Fault struct {
 	// MeshWide marks a fault whose selector covers the whole validator pool
 	// (mode: all, no sei.io/node pin) instead of a single validator.
 	MeshWide bool
+	// NeedsNode marks a fault that hits one named node (Params.Node), not a pool
+	// or a validator position.
+	NeedsNode bool
 	// QuorumLoss marks a fault that takes down more than f=1 of the validators
 	// (or splits them so no side holds 2/3). The chain is expected to STOP
 	// committing blocks under it and resume afterwards, so callers must not run
@@ -118,6 +132,9 @@ var ExtendedCatalog = []Fault{
 	{Name: "container-kill-all", Kind: kindPodChaos, OneShot: true, QuorumLoss: true,
 		Summary: "kill the seid container of every validator at once (cold start of the whole chain)",
 		file:    "container_kill_all.yaml.tmpl"},
+	{Name: "container-kill-node", Kind: kindPodChaos, OneShot: true, NeedsNode: true,
+		Summary: "kill the seid container of one named node (Params.Node), for a node that is not a validator",
+		file:    "container_kill_node.yaml.tmpl"},
 	{Name: "pod-clean-stop", Kind: kindPodChaos, OneShot: true,
 		Summary: "delete one validator pod with a grace period, so seid gets SIGTERM before any SIGKILL",
 		file:    "pod_clean_stop.yaml.tmpl"},
@@ -199,6 +216,15 @@ func (f Fault) validate(p Params) error {
 		return fmt.Errorf("runID is required")
 	case p.Namespace == "":
 		return fmt.Errorf("namespace is required")
+	case f.NeedsNode && p.Node == "":
+		return fmt.Errorf("node is required")
+	case f.NeedsNode && !strings.HasPrefix(p.Node, p.ChainID+"-"):
+		return fmt.Errorf("node %q does not belong to chain %q (want a name starting %q)", p.Node, p.ChainID, p.ChainID+"-")
+	}
+	for _, name := range p.Followers {
+		if !strings.HasPrefix(name, p.ChainID+"-") {
+			return fmt.Errorf("follower %q does not belong to chain %q", name, p.ChainID)
+		}
 	}
 	if f.OneShot {
 		return nil

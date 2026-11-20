@@ -49,6 +49,9 @@ Required environment: `SEI_CHAIN_ID` (the base chain id) and `SEID_IMAGE_CHAOS`
 | Scenario | Fault(s) | What it checks |
 |---|---|---|
 | `kill-during-recovery` | `container-kill-validator-0` x3 | validator-0 SIGKILLed again as soon as its container runs, so recovery starts from a store a crash left half-done. **Best effort:** a fast recovery can finish before the next kill lands; the log records whether the pod was already Ready at each kill, so a green run is not proof that mid-recovery kills were covered. |
+| `kill-during-replay` | `container-kill-validator-0` x5 | the same repeated SIGKILL, watching for the window in which the container is running but the RPC listener is not (a node handshakes and replays before it starts its RPC server). **Best effort:** the next kill is injected a moment after the observation, and a small chain replays in under a second. It fails if no attempt ever saw that window, so a chain with no replay phase cannot pass as if it had one; run it with `CHAOS_LOAD_MINUTES` or the `flatkv` profile. |
+| `restart-during-blocksync` | `container-kill-node` | a follower added to a chain already `CHAOS_SYNC_DEPTH` blocks deep is SIGKILLed while it reports `catching_up`; it must resume, catch up without losing the blocks it had synced, and agree with every other node. Fails if the follower had already caught up when first observed (raise the depth). |
+| `restart-during-statesync` | `container-kill-node` | a follower bootstrapping from a snapshot is SIGKILLed while it reports `catching_up` at height 0; it must start over (a snapshot restore is not resumable), still end up from a snapshot (earliest height above 1, not a genesis replay), and agree with every other node. Fails if the restore had already finished when first observed. |
 | `cold-start` | `container-kill-all` | every validator SIGKILLed at once; each recovers alone and the chain must reconcile |
 | `quorum-loss-partition` | `network-partition-split` | a 2\|2 split of the validators, RPC follower on one side: the chain must stop committing (observed on validator-0), then resume without forking |
 | `network-flap` | `network-partition` (from the nightly `Catalog`, not `ExtendedCatalog`) x5, 20s on/off | repeated drop and reconnect of one validator |
@@ -72,6 +75,18 @@ follower's caught-up check reads `/status` `catching_up`, which is not
 meaningful under Autobahn (it stays `true` with no consensus reactor).
 
 Optional inputs:
+- `CHAOS_LOAD_MINUTES`: when above 0, every scenario runs under seiload for up to
+  that long. It needs `SEILOAD_IMAGE`, and takes `SEILOAD_PROFILE` (default
+  `nightly_evm_transfer`) and `SEILOAD_COMMIT_ID` as the benchmark suite does. The
+  load starts before the scenario captures its pre-fault height; transactions must
+  be landing in blocks **before** the fault (else the load is not real and the run
+  fails), the load runs through the fault and the recovery gate, and transactions
+  must land **again** after recovery. seiload's own thresholds (run length, revert
+  ratio) are not applied, since a fault makes sends fail by design. The chain gets
+  two followers, one taking the sends and the other, the observer, serving receipts.
+  The chaos image is the `mock_balances` build, so no funded key is needed.
+- `CHAOS_SYNC_DEPTH`: how many blocks the chain has before `restart-during-blocksync`
+  adds its follower (default 600). The deeper, the wider the block-sync window.
 - `CHAOS_EXTENDED_SCENARIOS`: comma-separated scenario names.
 - `CHAOS_STORAGE_PROFILE`: `memiavl` (the default), or `flatkv`, which runs the
   chain on `write_mode: flatkv_only`. **Unconfirmed:** the chaos image is built
@@ -90,6 +105,13 @@ Optional inputs:
 - That Chaos Mesh keeps the per-target `injectedCount` on a fault CR after it
   recovers (`network-flap` relies on it).
 - That the chaos image boots with `flatkv_only`.
+- That `/status` reports `catching_up` with height 0 while a node state syncs, and
+  `catching_up` with a rising height while it block syncs (the two sync scenarios
+  gate on that, and the state-sync one on the height 0).
+- That the seiload Job's profile (`SEILOAD_PROFILE`, default `nightly_evm_transfer`)
+  lands transactions on the `mock_balances` chaos image without a funded key.
+- That a kill can actually be landed in each sync phase and in replay on a chain
+  of this size; the scenarios fail loudly when they cannot, rather than pass.
 
 ### Promotion
 

@@ -16,6 +16,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -149,6 +150,26 @@ func renderJob(t *testing.T, p bench.Params) *batchv1.Job {
 // sei-load's funding root key.
 func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch *chain, s spec) {
 	t.Helper()
+	startSeiload(ctx, t, cs, ch, s).finish(ctx, t, cs, ch, s)
+}
+
+// seiloadRun is a seiload Job that has been started and not yet finished.
+// runSeiload is startSeiload followed by finish; a suite that has to inject
+// faults while the load runs calls the two apart.
+type seiloadRun struct {
+	ns          string
+	job         *batchv1.Job
+	summary     *summaryFollower
+	hc          *http.Client
+	tmRPC       string // the RPC node that takes no sends; inclusion is read here
+	startHeight int64  // the committed height just before the load started
+}
+
+// startSeiload renders the platform profile and creates seiload's Job, then
+// returns without waiting for it. It is everything runSeiload does before it
+// blocks on the Job.
+func startSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch *chain, s spec) *seiloadRun {
+	t.Helper()
 	// The seiload Job co-locates with the chain; the network's resolved
 	// namespace is authoritative (never re-resolve from env here).
 	ns := ch.network.Namespace()
@@ -186,17 +207,26 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 	job.Namespace = ns
 	createJob(ctx, t, cs, job)
 	summary := followSummary(ctx, cs, ns, job.Name)
-	waitJob(ctx, t, cs, ns, job.Name)
+	return &seiloadRun{ns: ns, job: job, summary: summary, hc: hc, tmRPC: tmRPC, startHeight: startHeight}
+}
+
+// finish waits for the Job and applies runSeiload's assertions: seiload's run
+// was long enough and did not revert too much, the chain is live, and it included
+// the load.
+func (r *seiloadRun) finish(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch *chain, s spec) {
+	t.Helper()
+	waitJob(ctx, t, cs, r.ns, r.job.Name)
 
 	// Read seiload's pod before the follower catch-up wait: Karpenter can
 	// reclaim the finished pod's node, taking its log with it.
-	assertSeiloadRun(ctx, t, cs, job, s, summary)
-	assertChainLive(ctx, t, hc, ch)
+	assertSeiloadRun(ctx, t, cs, r.job, s, r.summary)
+	assertChainLive(ctx, t, r.hc, ch)
 
 	// Chain included the load: at least one transaction landed in a block during
 	// the window.
-	endHeight := mustLatestHeight(ctx, t, hc, tmRPC, "post-load")
-	included := includedTxCount(ctx, t, hc, tmRPC, startHeight, endHeight)
+	startHeight := r.startHeight
+	endHeight := mustLatestHeight(ctx, t, r.hc, r.tmRPC, "post-load")
+	included := includedTxCount(ctx, t, r.hc, r.tmRPC, startHeight, endHeight)
 	if included == 0 {
 		t.Errorf("seiload ran %dm against %s but 0 transactions were included in blocks %d..%d — "+
 			"the chain accepted load without including any of it",
@@ -204,6 +234,22 @@ func runSeiload(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch 
 		return
 	}
 	t.Logf("inclusion gate: >=%d transactions included in blocks %d..%d", included, startHeight, endHeight)
+}
+
+// stop ends the load early, for a run that injects faults: finish's thresholds
+// (seiload's run length, its revert ratio) would fail by design while a fault is
+// active, so such a run stops the Job once it has what it needs and judges
+// inclusion itself (see chaosRun.waitIncluded). It stops following the log and
+// deletes the Job; the cleanup createJob registered would delete it at test end
+// anyway.
+func (r *seiloadRun) stop(ctx context.Context, t *testing.T, cs *kubernetes.Clientset) {
+	t.Helper()
+	r.summary.cancel()
+	bg := metav1.DeletePropagationBackground
+	err := cs.BatchV1().Jobs(r.ns).Delete(ctx, r.job.Name, metav1.DeleteOptions{PropagationPolicy: &bg})
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Logf("stop seiload job %s: %v", r.job.Name, err)
+	}
 }
 
 // mustLatestHeight reads the committed height with a bounded retry: a transient
