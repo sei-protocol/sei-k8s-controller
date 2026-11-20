@@ -1,0 +1,22 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: container-kill-validator-0-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # One-shot SIGKILL of validator-0's seid container, pinned to that validator.
+  # container-kill (mode: one) picks any validator; this variant always hits the
+  # same one, so a scenario can kill it again while it is still recovering from
+  # the previous kill without the second kill landing on a different validator
+  # (two down is beyond f=1 and halts the chain).
+  action: container-kill
+  mode: one
+  containerNames: ["seid"]
+  gracePeriod: 0
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+      - {key: sei.io/node, operator: In, values: ["{{.ChainID}}-0"]}

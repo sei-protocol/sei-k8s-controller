@@ -106,11 +106,7 @@ func gateInjected(ctx context.Context, t *testing.T, dc dynamic.Interface, ns st
 	// injectWindow boundary can leave injectCtx with almost no time left, and
 	// this single fast read shouldn't spuriously fail on that race — only the
 	// poll loop above is time-boxed.
-	u, err := dc.Resource(chaosGVR(f.resource)).Namespace(ns).Get(ctx, f.obj.GetName(), metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("read injected targets for %s/%s: %v", f.resource, f.obj.GetName(), err)
-	}
-	n := faultInjectedTargets(u)
+	n := injectedTargets(ctx, t, dc, ns, f)
 	if n < 1 {
 		t.Fatalf("fault %s/%s injected 0 targets — selector matched nothing (false-green guard)", f.resource, f.obj.GetName())
 	}
@@ -118,6 +114,17 @@ func gateInjected(ctx context.Context, t *testing.T, dc dynamic.Interface, ns st
 		t.Fatalf("one-shot fault %s/%s injected %d targets, want exactly 1 — quorum risk", f.resource, f.obj.GetName(), n)
 	}
 	t.Logf("%s/%s injected %d target(s)", f.resource, f.obj.GetName(), n)
+}
+
+// injectedTargets reads the fault CR and returns how many targets chaos-mesh
+// injected.
+func injectedTargets(ctx context.Context, t *testing.T, dc dynamic.Interface, ns string, f fault) int {
+	t.Helper()
+	u, err := dc.Resource(chaosGVR(f.resource)).Namespace(ns).Get(ctx, f.obj.GetName(), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read injected targets for %s/%s: %v", f.resource, f.obj.GetName(), err)
+	}
+	return faultInjectedTargets(u)
 }
 
 // faultInjectedTargets counts the targets chaos-mesh actually injected. The

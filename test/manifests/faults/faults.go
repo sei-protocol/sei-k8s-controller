@@ -13,6 +13,10 @@
 // not because quorum is preserved. Duration-bearing faults self-expire
 // through spec.duration; one-shot kills (pod-failure, container-kill) carry
 // no duration and end when the kill lands.
+//
+// ExtendedCatalog holds the faults that break that contract on purpose (a
+// QuorumLoss fault stops the chain) or probe recovery harder than one kill. The
+// nightly suite and seictl never see them; see ExtendedCatalog.
 package faults
 
 import (
@@ -54,6 +58,11 @@ type Fault struct {
 	// MeshWide marks a fault whose selector covers the whole validator pool
 	// (mode: all, no sei.io/node pin) instead of a single validator.
 	MeshWide bool
+	// QuorumLoss marks a fault that takes down more than f=1 of the validators
+	// (or splits them so no side holds 2/3). The chain is expected to STOP
+	// committing blocks under it and resume afterwards, so callers must not run
+	// the under-fault liveness check. Only ExtendedCatalog carries these.
+	QuorumLoss bool
 	// Summary is one line on what the fault does and to whom.
 	Summary string
 
@@ -92,6 +101,50 @@ var Catalog = []Fault{
 		Summary: "kill exactly one validator pod once", file: "pod_failure.yaml.tmpl"},
 	{Name: "container-kill", Kind: kindPodChaos, OneShot: true,
 		Summary: "kill the seid container of exactly one validator once", file: "container_kill.yaml.tmpl"},
+}
+
+// ExtendedCatalog holds faults that are not part of the nightly suite: ones
+// that need an assertion Catalog's f=1 contract cannot give (a chain that stops
+// and resumes), or that probe recovery harder than a single kill does. They
+// are kept apart from Catalog on purpose. The nightly suite and seictl iterate
+// Catalog and assume every entry is survivable with the chain live; adding a
+// QuorumLoss fault there would turn the nightly red by design. Run these
+// through test/integration's TestChaosExtended until each has proved stable
+// in-cluster, then promote it.
+var ExtendedCatalog = []Fault{
+	{Name: "container-kill-validator-0", Kind: kindPodChaos, OneShot: true,
+		Summary: "kill validator-0's seid container, always the same one, so it can be killed again mid-recovery",
+		file:    "container_kill_validator0.yaml.tmpl"},
+	{Name: "container-kill-all", Kind: kindPodChaos, OneShot: true, QuorumLoss: true,
+		Summary: "kill the seid container of every validator at once (cold start of the whole chain)",
+		file:    "container_kill_all.yaml.tmpl"},
+	{Name: "pod-clean-stop", Kind: kindPodChaos, OneShot: true,
+		Summary: "delete one validator pod with a grace period, so seid gets SIGTERM before any SIGKILL",
+		file:    "pod_clean_stop.yaml.tmpl"},
+	{Name: "network-partition-split", Kind: kindNetworkChaos, QuorumLoss: true,
+		Summary: "split the validators 2|2 so neither side holds quorum", file: "network_partition_split.yaml.tmpl"},
+	{Name: "time-skew-forward", Kind: kindTimeChaos,
+		Summary: "skew one validator's clock +1m", file: "time_skew_forward.yaml.tmpl"},
+	{Name: "time-skew-large", Kind: kindTimeChaos,
+		Summary: "skew one validator's clock -5m", file: "time_skew_large.yaml.tmpl"},
+}
+
+// ExtendedNames lists the ExtendedCatalog keys in catalog order.
+func ExtendedNames() []string {
+	names := make([]string, 0, len(ExtendedCatalog))
+	for _, f := range ExtendedCatalog {
+		names = append(names, f.Name)
+	}
+	return names
+}
+
+// LookupExtended returns the ExtendedCatalog entry for name.
+func LookupExtended(name string) (Fault, error) {
+	i := slices.IndexFunc(ExtendedCatalog, func(f Fault) bool { return f.Name == name })
+	if i < 0 {
+		return Fault{}, fmt.Errorf("unknown extended fault %q; known: %v", name, ExtendedNames())
+	}
+	return ExtendedCatalog[i], nil
 }
 
 // Resource is the CR's plural resource name for dynamic-client GVR lookups.

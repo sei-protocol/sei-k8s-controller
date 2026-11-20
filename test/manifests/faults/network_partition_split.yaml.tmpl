@@ -1,0 +1,28 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-partition-split-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # Split the four validators 2 | 2, both directions. Neither side holds the
+  # 2/3 quorum, so the chain must STOP committing blocks, and must resume on one
+  # fork-free history once the partition lifts. Beyond f=1 by design: this checks
+  # the safety side of BFT (halt, never fork), which no f=1 fault can.
+  action: partition
+  mode: all
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+      - {key: sei.io/node, operator: In, values: ["{{.ChainID}}-0", "{{.ChainID}}-1"]}
+  direction: both
+  target:
+    mode: all
+    selector:
+      namespaces: ["{{.Namespace}}"]
+      expressionSelectors:
+        - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+        - {key: sei.io/node, operator: NotIn, values: ["{{.ChainID}}-0", "{{.ChainID}}-1"]}
+  duration: "{{.Duration}}"

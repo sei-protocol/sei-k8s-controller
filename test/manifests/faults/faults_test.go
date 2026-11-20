@@ -114,3 +114,97 @@ func TestCatalog_BlastRadius(t *testing.T) {
 		})
 	}
 }
+
+func TestExtendedCatalog_EveryFaultRendersToItsKind(t *testing.T) {
+	for _, f := range ExtendedCatalog {
+		t.Run(f.Name, func(t *testing.T) {
+			g := NewWithT(t)
+			out, err := f.Render(params)
+			g.Expect(err).NotTo(HaveOccurred())
+
+			var m map[string]any
+			g.Expect(yaml.Unmarshal(out, &m)).To(Succeed())
+			g.Expect(m["kind"]).To(Equal(f.Kind))
+
+			meta := m["metadata"].(map[string]any)
+			g.Expect(meta["name"]).To(HaveSuffix("-r1"), "CR name must carry the run id")
+			g.Expect(meta["namespace"]).To(Equal("eng-x"))
+			g.Expect(meta["labels"]).To(HaveKeyWithValue("sei.io/harness-run", "r1"))
+
+			spec := m["spec"].(map[string]any)
+			_, hasDuration := spec["duration"]
+			g.Expect(hasDuration).To(Equal(!f.OneShot), "spec.duration presence must match OneShot")
+			g.Expect(string(out)).To(ContainSubstring(`values: ["bench-a"]`), "selector must pin the pool")
+			g.Expect(string(out)).NotTo(ContainSubstring("{{"), "unrendered template action")
+		})
+	}
+}
+
+func TestExtendedCatalog_NamesAreDisjointFromCatalog(t *testing.T) {
+	g := NewWithT(t)
+	for _, name := range ExtendedNames() {
+		_, err := Lookup(name)
+		g.Expect(err).To(HaveOccurred(),
+			"%s must not be reachable through Lookup: the nightly suite and seictl iterate Catalog", name)
+	}
+	g.Expect(ExtendedNames()).To(HaveLen(len(ExtendedCatalog)))
+}
+
+func TestLookupExtended(t *testing.T) {
+	g := NewWithT(t)
+	f, err := LookupExtended("container-kill-all")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(f.QuorumLoss).To(BeTrue())
+
+	_, err = LookupExtended("pod-failure")
+	g.Expect(err).To(MatchError(ContainSubstring(`unknown extended fault "pod-failure"`)))
+}
+
+// TestExtendedCatalog_BlastRadius pins what each extended fault may hit, the
+// counterpart of TestCatalog_BlastRadius. A fault is either f=1 (one pod, or a
+// pin to validator-0) or flagged QuorumLoss, and a QuorumLoss fault must really
+// take quorum away: a kill of every validator, or a split with no side holding
+// 2/3 of four validators. A fault flagged QuorumLoss that did not would run
+// without the under-fault liveness check for no reason, and the reverse would
+// fail that check on a chain that is supposed to be live.
+func TestExtendedCatalog_BlastRadius(t *testing.T) {
+	for _, f := range ExtendedCatalog {
+		t.Run(f.Name, func(t *testing.T) {
+			g := NewWithT(t)
+			out, err := f.Render(Params{ChainID: "c", RunID: "r", Namespace: "ns", Duration: "1m"})
+			g.Expect(err).NotTo(HaveOccurred())
+			var cr struct {
+				Spec struct {
+					Mode     string `json:"mode"`
+					Selector struct {
+						ExpressionSelectors []struct {
+							Key      string   `json:"key"`
+							Operator string   `json:"operator"`
+							Values   []string `json:"values"`
+						} `json:"expressionSelectors"`
+					} `json:"selector"`
+				} `json:"spec"`
+			}
+			g.Expect(yaml.Unmarshal(out, &cr)).To(Succeed())
+
+			pinned := 0 // validators the sei.io/node In-pin names
+			for _, es := range cr.Spec.Selector.ExpressionSelectors {
+				if es.Key == "sei.io/node" && es.Operator == "In" {
+					pinned = len(es.Values)
+				}
+			}
+
+			switch {
+			case !f.QuorumLoss:
+				g.Expect(cr.Spec.Mode == "one" || pinned == 1).To(BeTrue(),
+					"an f=1 fault must target one pod: mode=%q pinned=%d", cr.Spec.Mode, pinned)
+			case f.OneShot:
+				g.Expect(cr.Spec.Mode).To(Equal("all"), "a QuorumLoss kill must take every validator")
+				g.Expect(pinned).To(BeZero(), "a QuorumLoss kill must not pin a subset")
+			default:
+				// A partition: neither side may hold 2/3 of four validators.
+				g.Expect(pinned).To(Equal(2), "a split must put exactly half the validators on one side")
+			}
+		})
+	}
+}
