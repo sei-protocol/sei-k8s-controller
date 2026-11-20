@@ -68,6 +68,14 @@ var memiavlStorageConfig = map[string]string{
 	"storage.state_commit.write_mode": "memiavl_only",
 }
 
+// flatkvStorageConfig runs state commitment on FlatKV from genesis. Only the
+// extended chaos suite selects it (CHAOS_STORAGE_PROFILE=flatkv); the nightly
+// chaos image is built for memiavl, so whether it boots with flatkv_only has to
+// be confirmed by the first run.
+var flatkvStorageConfig = map[string]string{
+	"storage.state_commit.write_mode": "flatkv_only",
+}
+
 // runChainID appends a per-run token to the base chain id so every run gets a
 // fresh genesis and node keys. A static id reused across runs (e.g. "bench")
 // collides with the prior run's persisted genesis: the nodes boot with new keys

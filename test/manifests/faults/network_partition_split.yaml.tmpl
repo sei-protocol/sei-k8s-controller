@@ -1,0 +1,40 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-partition-split-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # Split the four validators 2 | 2, both directions, and put every RPC follower
+  # on the first side. Neither side holds the 2/3 quorum, so the chain must STOP
+  # committing, and must resume on one fork-free history once the partition
+  # lifts. Beyond f=1 by design: this checks the safety side of BFT (halt, never
+  # fork), which no f=1 fault can.
+  #
+  # The follower has to be in the partition. It peers with all four validators
+  # and relays consensus votes and block parts over every peer, so a follower
+  # left outside both groups bridges the split and the chain keeps committing.
+  # It does not carry sei.io/nodedeployment (only SeiNetwork-created validators
+  # do), so both groups are pinned by sei.io/node name instead. Names carry the
+  # run's unique chain id, and namespaces pins the run's namespace, so the
+  # selectors cannot reach another chain.
+  #
+  # Params.Followers lists every RPC follower; all go on the first side. Their
+  # names are the harness's selector contract: test/integration
+  # rpcNodeName(chainID, i) = <chainID>-rpc-<i>. The four validators are
+  # <chainID>-0 .. -3 (the harness provisions exactly four).
+  action: partition
+  mode: all
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/node, operator: In, values: ["{{.ChainID}}-0", "{{.ChainID}}-1"{{range .Followers}}, "{{.}}"{{end}}]}
+  direction: both
+  target:
+    mode: all
+    selector:
+      namespaces: ["{{.Namespace}}"]
+      expressionSelectors:
+        - {key: sei.io/node, operator: In, values: ["{{.ChainID}}-2", "{{.ChainID}}-3"]}
+  duration: "{{.Duration}}"

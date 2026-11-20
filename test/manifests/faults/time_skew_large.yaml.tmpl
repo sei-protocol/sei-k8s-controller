@@ -1,0 +1,22 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: TimeChaos
+metadata:
+  name: time-skew-large-{{.RunID}}
+  namespace: {{.Namespace}}
+  labels:
+    sei.io/harness-run: "{{.RunID}}"
+spec:
+  # Skew one validator's clock -5m: ten times the -30s time-skew fault. A drift
+  # this large is what a failed NTP sync or a VM resume produces, and it is far
+  # outside any per-message timestamp tolerance. The validator is outvoted
+  # (1/4 power), so the chain must stay live and the skewed one must rejoin
+  # cleanly once the clock is restored.
+  mode: one
+  selector:
+    namespaces: ["{{.Namespace}}"]
+    expressionSelectors:
+      - {key: sei.io/nodedeployment, operator: In, values: ["{{.ChainID}}"]}
+  timeOffset: "-5m"
+  clockIds: ["CLOCK_REALTIME"]
+  containerNames: ["seid"]
+  duration: "{{.Duration}}"
