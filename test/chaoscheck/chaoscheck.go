@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
@@ -124,9 +125,13 @@ func Info(ctx context.Context, hc *http.Client, tmRPC string) (Sample, error) {
 		return Sample{}, fmt.Errorf("decode %s: %w", url, err)
 	}
 	b := r.body()
-	h, err := b.Response.LastBlockHeight.Int64()
-	if err != nil {
-		return Sample{}, fmt.Errorf("%s: last_block_height %q: %w", url, b.Response.LastBlockHeight, err)
+	// last_block_height is omitted at height 0, which arrives as an empty number.
+	var h int64
+	if b.Response.LastBlockHeight != "" {
+		var err error
+		if h, err = b.Response.LastBlockHeight.Int64(); err != nil {
+			return Sample{}, fmt.Errorf("%s: last_block_height %q: %w", url, b.Response.LastBlockHeight, err)
+		}
 	}
 	if h <= 0 || b.Response.LastBlockAppHash == "" {
 		return Sample{}, fmt.Errorf("%s has committed nothing yet (height %d, hash %q)",
@@ -171,6 +176,16 @@ func Floor(ctx context.Context, hc *http.Client, tmRPCs []string) (int64, error)
 // Reads that fail are retried until ctx ends. A node that reports two different
 // hashes for one height, or two nodes that differ at a shared height, return a
 // *DivergenceError at once.
+//
+// Every endpoint must be ONE node: a node reporting two hashes for one height is
+// read as divergence and never retried, so an endpoint fronted by a Service over
+// several pods would false-diverge. The harness reads each validator's and the
+// follower's own endpoint.
+//
+// The nodes are read concurrently each tick. Read one after another, a slow node
+// (a replaying one is exactly that) would stretch the gap between the first and
+// last read past a sub-second block time, and the samples would never share a
+// height.
 func WaitAgreeAbove(ctx context.Context, hc *http.Client, tmRPCs []string, floor int64, wantCommon int) error {
 	if len(tmRPCs) == 0 {
 		return errors.New("no RPC endpoints")
@@ -185,8 +200,9 @@ func WaitAgreeAbove(ctx context.Context, hc *http.Client, tmRPCs []string, floor
 	tick := time.NewTicker(sampleInterval)
 	defer tick.Stop()
 	for {
-		for _, u := range tmRPCs {
-			s, err := Info(ctx, hc, u)
+		samples, errs := readAll(ctx, hc, tmRPCs)
+		for i, u := range tmRPCs {
+			s, err := samples[i], errs[i]
 			if err != nil {
 				lastErr = err
 				continue
@@ -210,11 +226,28 @@ func WaitAgreeAbove(ctx context.Context, hc *http.Client, tmRPCs []string, floor
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("no %d common heights above %d agreed before deadline: %w; %s (last read error: %v)",
+			// ctx.Err() says whether this was the deadline or a cancellation (a SIGTERM
+			// unwinding the run), so it is wrapped rather than described.
+			return fmt.Errorf("fewer than %d common heights above %d agreed: %w; %s (last read error: %v)",
 				wantCommon, floor, ctx.Err(), progress(tmRPCs, seen), lastErr)
 		case <-tick.C:
 		}
 	}
+}
+
+// readAll reads every endpoint's /abci_info concurrently and returns the results
+// in endpoint order. The goroutines write only to their own slots.
+func readAll(ctx context.Context, hc *http.Client, tmRPCs []string) ([]Sample, []error) {
+	samples := make([]Sample, len(tmRPCs))
+	errs := make([]error, len(tmRPCs))
+	var wg sync.WaitGroup
+	for i, u := range tmRPCs {
+		wg.Go(func() {
+			samples[i], errs[i] = Info(ctx, hc, u)
+		})
+	}
+	wg.Wait()
+	return samples, errs
 }
 
 // compareShared compares the hashes of every height all nodes have reported,

@@ -179,6 +179,7 @@ type crSpec struct {
 		Mode     string     `json:"mode"`
 		Selector crSelector `json:"selector"`
 		Target   *struct {
+			Mode     string     `json:"mode"`
 			Selector crSelector `json:"selector"`
 		} `json:"target"`
 	} `json:"spec"`
@@ -256,6 +257,10 @@ func TestExtendedCatalog_BlastRadius(t *testing.T) {
 				g.Expect(pinned).To(BeZero(), "a QuorumLoss kill must not pin a subset")
 			default:
 				g.Expect(cr.Spec.Target).NotTo(BeNil(), "a partition has a target side")
+				// mode: one would have chaos-mesh pick a single pod from a side, which
+				// leaves quorum intact and makes the split a no-op.
+				g.Expect(cr.Spec.Mode).To(Equal("all"), "a split must apply to every pod on the source side")
+				g.Expect(cr.Spec.Target.Mode).To(Equal("all"), "a split must apply to every pod on the target side")
 				assertSplitHasNoQuorum(g, cr.Spec.Selector.nodePins(), cr.Spec.Target.Selector.nodePins())
 			}
 		})
@@ -277,6 +282,19 @@ func assertSplitHasNoQuorum(g *WithT, side, other []string) {
 	}
 	g.Expect(validators(side)).To(Equal(2), "each side must hold exactly two of the four validators")
 	g.Expect(validators(other)).To(Equal(2), "each side must hold exactly two of the four validators")
+
+	// The sides must be disjoint and together name all four validators: a name on
+	// both sides, or a validator on neither, is not a 2|2 split of the four.
+	all := append(slices.Clone(side), other...)
+	for _, want := range []string{"c-0", "c-1", "c-2", "c-3"} {
+		n := 0
+		for _, v := range all {
+			if v == want {
+				n++
+			}
+		}
+		g.Expect(n).To(Equal(1), "validator %s must be on exactly one side", want)
+	}
 
 	followers := 0
 	for _, v := range append(slices.Clone(side), other...) {

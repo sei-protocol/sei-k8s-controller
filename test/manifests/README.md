@@ -50,7 +50,7 @@ Required environment: `SEI_CHAIN_ID` (the base chain id) and `SEID_IMAGE_CHAOS`
 |---|---|---|
 | `kill-during-recovery` | `container-kill-validator-0` x3 | validator-0 SIGKILLed again as soon as its container runs, so recovery starts from a store a crash left half-done. **Best effort:** a fast recovery can finish before the next kill lands; the log records whether the pod was already Ready at each kill, so a green run is not proof that mid-recovery kills were covered. |
 | `cold-start` | `container-kill-all` | every validator SIGKILLed at once; each recovers alone and the chain must reconcile |
-| `quorum-loss-partition` | `network-partition-split` | a 2\|2 split of the validators, RPC follower on one side: the chain must stop committing, then resume without forking |
+| `quorum-loss-partition` | `network-partition-split` | a 2\|2 split of the validators, RPC follower on one side: the chain must stop committing (observed on validator-0), then resume without forking |
 | `network-flap` | `network-partition` (from the nightly `Catalog`, not `ExtendedCatalog`) x5, 20s on/off | repeated drop and reconnect of one validator |
 | `clean-stop` | `pod-clean-stop` | graceful stop (SIGTERM, 30s grace period: the controller sets none, so Kubernetes' default applies); records seid's exit code |
 | `time-skew-forward` | `time-skew-forward` | one validator's clock +1m |
@@ -67,8 +67,9 @@ Every scenario ends with one recovery gate, stronger than the nightly's:
   not catch a node that recovered into corrupt state and then stalled: that
   node rejects the next block, and the Ready and caught-up checks catch it.
 
-The suite assumes CometBFT consensus, which is what it provisions: the follower
-checks read `/status`, which Autobahn does not populate.
+The suite assumes CometBFT consensus, which is what it provisions: the
+follower's caught-up check reads `/status` `catching_up`, which is not
+meaningful under Autobahn (it stays `true` with no consensus reactor).
 
 Optional inputs:
 - `CHAOS_EXTENDED_SCENARIOS`: comma-separated scenario names.

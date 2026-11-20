@@ -121,8 +121,9 @@ var extendedScenarios = []extendedScenario{
 // is caught, and so is a fork. A node that recovered into corrupt state and then
 // stalled is caught by the Ready and caught-up checks instead.
 //
-// The suite assumes CometBFT consensus, which is what it provisions; the
-// follower checks read /status, which Autobahn does not populate.
+// The suite assumes CometBFT consensus, which is what it provisions: the
+// follower's caught-up check reads /status catching_up, which is not meaningful
+// under Autobahn.
 //
 // Inputs (env): SEI_CHAIN_ID (base) and SEID_IMAGE_CHAOS [both required];
 // SEI_NAMESPACE, CHAOS_DURATION, CHAOS_EXTENDED_SCENARIOS, CHAOS_STORAGE_PROFILE,
@@ -195,6 +196,9 @@ func TestChaosExtended(t *testing.T) {
 		})
 	}
 }
+
+// requireCleanShutdown reports whether CHAOS_REQUIRE_CLEAN_SHUTDOWN=true.
+func requireCleanShutdown() bool { return envOr(chaosRequireCleanShutdownEnv, "") == "true" }
 
 // extendedStorageConfig maps CHAOS_STORAGE_PROFILE to seid's state-commit
 // config. "memiavl" matches TestNightlyChaosSuite. "flatkv" runs the chain on
@@ -478,9 +482,9 @@ func (r *chaosRun) gateInjectedEver(ctx context.Context, t *testing.T, f fault) 
 // The hash is each node's own (see package chaoscheck), so it catches a node
 // that recovered into different state, and a fork. It cannot catch a node that
 // recovered into corrupt state and then stalled; the Ready and caught-up checks
-// catch that one. The follower checks read /status, which is only populated
-// under CometBFT consensus; the chain this suite provisions never enables
-// Autobahn.
+// catch that one. The follower's caught-up check reads /status catching_up,
+// which is not meaningful under Autobahn (it stays true with no consensus
+// reactor); the chain this suite provisions never enables Autobahn.
 func (r *chaosRun) assertRecovered(ctx context.Context, t *testing.T, since time.Time, floor int64) {
 	t.Helper()
 	followerRPC := r.follower().TendermintRPC()
@@ -609,6 +613,11 @@ func scenarioQuorumLossPartition(ctx context.Context, t *testing.T, r *chaosRun)
 		t.Fatalf("injectWindow (%s) + settle (%s) + stall window (%s) must be below the partition duration (%s)",
 			injectWindow, quorumSettle, quorumStallWindow, quorumLossDuration)
 	}
+	// network_partition_split.yaml.tmpl names validators -0 .. -3 literally; a
+	// different count would leave a validator outside both sides, relaying votes.
+	if extendedValidators != 4 {
+		t.Fatalf("network-partition-split names four validators; extendedValidators is %d", extendedValidators)
+	}
 	start := time.Now()
 	floor := r.floor(ctx, t)
 	f := r.apply(ctx, t, "network-partition-split", "", quorumLossDuration.String())
@@ -616,9 +625,12 @@ func scenarioQuorumLossPartition(ctx context.Context, t *testing.T, r *chaosRun)
 	t.Logf("network-partition-split injected: validators split 2|2, follower on one side, no side has quorum")
 
 	// A block already in flight when the split lands may still commit, hence the
-	// settle time and the one-block tolerance.
+	// settle time and the one-block tolerance. Observed on validator-0, which is on
+	// the first side: the follower is on that side too, but if it was lagging when
+	// the split landed it could legitimately catch up more than a block from
+	// validators -0 and -1 and fail a chain that did halt.
 	if err := chaoscheck.HoldsHeight(
-		ctx, r.hc, r.follower().TendermintRPC(), quorumSettle, quorumStallWindow, 1,
+		ctx, r.hc, r.endpoints(ctx, t)[0], quorumSettle, quorumStallWindow, 1,
 	); err != nil {
 		t.Errorf("chain kept committing under a 2|2 split: %v", err)
 	}
@@ -690,10 +702,17 @@ func scenarioCleanStop(ctx context.Context, t *testing.T, r *chaosRun) {
 		code, ok := exits.get(uid)
 		switch {
 		case !ok:
-			t.Logf("%s: seid exit code not observed (the pod left before a watch event carried it)", name)
+			msg := fmt.Sprintf("%s: seid exit code not observed (the pod left before a watch event carried it, "+
+				"or the watch ended)", name)
+			if requireCleanShutdown() {
+				// An unobserved code must not read as a clean one.
+				t.Errorf("%s", msg)
+			} else {
+				t.Logf("%s", msg)
+			}
 		case code == 137:
 			msg := fmt.Sprintf("%s: seid exited 137 (SIGKILL): the grace period ran out before it shut down", name)
-			if envOr(chaosRequireCleanShutdownEnv, "") == "true" {
+			if requireCleanShutdown() {
 				t.Errorf("%s", msg)
 			} else {
 				t.Logf("%s (not a failure unless %s=true)", msg, chaosRequireCleanShutdownEnv)

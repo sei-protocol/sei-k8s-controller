@@ -257,3 +257,17 @@ func TestHoldsHeight_UnreachableNodeIsNotAHeldChain(t *testing.T) {
 	g.Expect(err).To(MatchError(ContainSubstring("no height")),
 		"a node that went silent must not be reported as a chain that held")
 }
+
+// last_block_height is omitted at height 0, which arrives as no field at all.
+func TestInfo_OmittedHeightReadsAsNothingCommitted(t *testing.T) {
+	g := NewWithT(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/abci_info", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"response":{"data":"sei"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	_, err := Info(context.Background(), nil, srv.URL)
+	g.Expect(err).To(MatchError(ContainSubstring("committed nothing")))
+}
