@@ -85,7 +85,17 @@ func TestNightlyRelease(t *testing.T) {
 	}
 
 	// Provision: 4 validators with the admin funded in genesis, + 1 RPC follower.
+	sizing := sei.NodeSizing{DataVolumeGiB: nightlyDataVolumeGiB}
+	// Only the normal release scenario uses the pilot pool. An unset pool
+	// gives the control run the platform CPU and memory defaults.
+	pool := envOr("NIGHTLY_RELEASE_NODE_POOL", "")
+	if pool != "" {
+		sizing.MilliCPU = 4000
+		sizing.MemoryGiB = 32
+	}
 	ch, err := provision(ctx, t, c, spec{
+		sizing:        sizing,
+		nodePool:      pool,
 		chainID:       chainID,
 		runID:         chainID,
 		namespace:     ns,
