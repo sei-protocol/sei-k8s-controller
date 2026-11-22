@@ -45,6 +45,9 @@ import (
 //
 // Inputs (env): SEI_CHAIN_ID, SEID_IMAGE, RELEASE_TEST_IMAGE [required];
 // SEI_NAMESPACE [optional]. Run with -test.timeout 0.
+//
+// Optional NIGHTLY_GIGA_MIXED_RELEASE_NODE_POOL selects trial workers independently.
+// Allow capacity for four validators and two concurrent followers.
 func TestNightlyGigaMixedRelease(t *testing.T) {
 	requireCluster(t)
 	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
@@ -76,7 +79,10 @@ func TestNightlyGigaMixedRelease(t *testing.T) {
 	//    shipped default (the v2 control); rpcNodes[1] is migrated to giga below.
 	//    Validators are snapshot-producing so the migration can state-sync from a
 	//    snapshot; the followers are non-producing witnesses (interval 0).
+	pool := envOr("NIGHTLY_GIGA_MIXED_RELEASE_NODE_POOL", "")
 	ch, err := provision(ctx, t, c, spec{
+		sizing:        functionalNodeSizing(pool),
+		nodePool:      pool,
 		chainID:       chainID,
 		runID:         chainID,
 		namespace:     ns,

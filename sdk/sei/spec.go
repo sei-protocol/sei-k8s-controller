@@ -24,6 +24,14 @@ const (
 	IsolationDedicated = "Dedicated"
 )
 
+// NodeSizing overrides per-mode defaults at creation. Zero leaves each dimension
+// to the platform. Memory is the seid request and limit; CPU is request-only.
+type NodeSizing struct {
+	DataVolumeGiB int32
+	MemoryGiB     int32
+	MilliCPU      int32
+}
+
 // NetworkSpec is the typed input to CreateNetwork. ChainID is not a field: it
 // defaults to Name (the genesis chain ID == the network name). Genesis and
 // Config are the two override escape hatches so the typed surface need not chase
@@ -54,6 +62,8 @@ type NetworkSpec struct {
 	// placement for every validator; "" leaves spec.scheduling unset, which the
 	// controller treats as Shared. -> spec.scheduling.nodeIsolation.
 	NodeIsolation string
+	NodePool      string     // optional platform-selectable pool
+	Sizing        NodeSizing // applied to every genesis validator
 }
 
 // GenesisAccount is a non-validator genesis account to fund.
@@ -97,6 +107,9 @@ type NodeSpec struct {
 	// a follower up from a peer-served snapshot rather than replaying from height
 	// 1. -> spec.fullNode.snapshot{stateSync{}, rpcServers}.
 	StateSync *NodeStateSync
+
+	NodePool string // optional platform-selectable pool
+	Sizing   NodeSizing
 }
 
 // ConfigValue is one typed value at a dotted TOML path in a seid config file.

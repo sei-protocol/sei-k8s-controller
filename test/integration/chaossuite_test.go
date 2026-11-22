@@ -31,6 +31,15 @@ const oneShotObserveWindow = 90 * time.Second
 // condition.
 var chaosScenarios = faults.Catalog
 
+// The memory-stress fault exercises the normal memory envelope even when the
+// other scenarios are being compared on smaller workers.
+func chaosNodePool(faultName, trialPool string) string {
+	if faultName == "memory-stress" {
+		return ""
+	}
+	return trialPool
+}
+
 // TestNightlyChaosSuite runs each fault against its own fresh chain: provision → inject
 // the Chaos-Mesh fault → gate it injected → assert the chain stays live under it
 // (faults are bounded to f=1, so 2/3 quorum holds) → gate recovery → assert the
@@ -39,6 +48,7 @@ var chaosScenarios = faults.Catalog
 //
 // Inputs (env): SEI_CHAIN_ID (base), SEID_IMAGE_CHAOS [required]; SEI_NAMESPACE,
 // CHAOS_DURATION [optional]. Run with -test.timeout 0 (see TestNightlyBenchmark).
+// NIGHTLY_CHAOS_NODE_POOL selects trial workers for the non-memory-stress cases.
 func TestNightlyChaosSuite(t *testing.T) {
 	requireCluster(t)
 	base := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
@@ -58,6 +68,7 @@ func TestNightlyChaosSuite(t *testing.T) {
 		t.Fatalf("injectWindow (%s) must be below CHAOS_DURATION (%s)", injectWindow, faultDur)
 	}
 
+	trialPool := envOr("NIGHTLY_CHAOS_NODE_POOL", "")
 	for _, sc := range chaosScenarios {
 		t.Run(sc.Name, func(t *testing.T) {
 			id := base + "-" + sc.Name
@@ -67,7 +78,10 @@ func TestNightlyChaosSuite(t *testing.T) {
 			if v := id + "-0"; len(v) > 63 {
 				t.Fatalf("chain id %q yields label value %q > 63 chars", id, v)
 			}
+			pool := chaosNodePool(sc.Name, trialPool)
 			s := spec{
+				sizing:        functionalNodeSizing(pool),
+				nodePool:      pool,
 				chainID:       id,
 				runID:         id,
 				namespace:     ns,
@@ -186,4 +200,24 @@ func podReady(p *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+func TestChaosWorkerSizing(t *testing.T) {
+	const trialPool = "trial"
+	diskOnly := sei.NodeSizing{DataVolumeGiB: 100}
+	small := sei.NodeSizing{DataVolumeGiB: 100, MilliCPU: 4000, MemoryGiB: 32}
+	for _, tc := range []struct {
+		fault, trial, wantPool string
+		wantSizing             sei.NodeSizing
+	}{
+		{"cpu-stress", "", "", diskOnly},
+		{"cpu-stress", trialPool, trialPool, small},
+		{"memory-stress", trialPool, "", diskOnly},
+	} {
+		pool := chaosNodePool(tc.fault, tc.trial)
+		if got := functionalNodeSizing(pool); pool != tc.wantPool || got != tc.wantSizing {
+			t.Errorf("%s (trial %q): got pool %q and sizing %+v, want %q and %+v",
+				tc.fault, tc.trial, pool, got, tc.wantPool, tc.wantSizing)
+		}
+	}
 }

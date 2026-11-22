@@ -32,6 +32,7 @@ func TestValidateNetworkSpec(t *testing.T) {
 		{"valid", func(*NetworkSpec) {}, false},
 		{"missing name", func(s *NetworkSpec) { s.Name = "" }, true},
 		{"missing image", func(s *NetworkSpec) { s.Image = "" }, true},
+		{"negative disk", func(s *NetworkSpec) { s.Sizing.DataVolumeGiB = -1 }, true},
 		{"validators zero", func(s *NetworkSpec) { s.Validators = 0 }, true},
 	}
 	for _, tc := range cases {
@@ -56,6 +57,8 @@ func TestValidateNodeSpec(t *testing.T) {
 		{"missing name", func(s *NodeSpec) { s.Name = "" }, true},
 		{"missing network", func(s *NodeSpec) { s.Network = "" }, true},
 		{"missing image", func(s *NodeSpec) { s.Image = "" }, true},
+		{"negative memory", func(s *NodeSpec) { s.Sizing.MemoryGiB = -1 }, true},
+		{"negative CPU", func(s *NodeSpec) { s.Sizing.MilliCPU = -1 }, true},
 		{"statesync one witness", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{witnessA}} }, true},
 		{"statesync two identical witnesses", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{witnessA, witnessA}} }, true},
 		{"statesync two distinct witnesses", func(s *NodeSpec) { s.StateSync = &NodeStateSync{RpcServers: []string{witnessA, witnessB}} }, false},
