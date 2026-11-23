@@ -46,6 +46,7 @@ import (
 // Inputs (env): SEI_CHAIN_ID, SEID_IMAGE, RELEASE_TEST_IMAGE [required];
 // SEI_NAMESPACE [optional]. Run with -test.timeout 0.
 //
+// NIGHTLY_GIGA_MIXED_RELEASE_DATA_VOLUME_GIB optionally sets the data disk size for validators and followers.
 // Optional NIGHTLY_GIGA_MIXED_RELEASE_NODE_POOL selects trial workers independently.
 // Allow capacity for four validators and two concurrent followers.
 func TestNightlyGigaMixedRelease(t *testing.T) {
@@ -81,7 +82,7 @@ func TestNightlyGigaMixedRelease(t *testing.T) {
 	//    snapshot; the followers are non-producing witnesses (interval 0).
 	pool := envOr("NIGHTLY_GIGA_MIXED_RELEASE_NODE_POOL", "")
 	ch, err := provision(ctx, t, c, spec{
-		sizing:        functionalNodeSizing(pool),
+		sizing:        functionalNodeSizing(t, pool, "NIGHTLY_GIGA_MIXED_RELEASE_DATA_VOLUME_GIB"),
 		nodePool:      pool,
 		chainID:       chainID,
 		runID:         chainID,

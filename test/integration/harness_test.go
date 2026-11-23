@@ -51,10 +51,18 @@ import (
 	_ "github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider/k8s"
 )
 
-// functionalNodeSizing is selected by the release and chaos suites. A control
-// run changes only PVC capacity, retaining its normal storage performance.
-func functionalNodeSizing(pool string) sei.NodeSizing {
-	sizing := sei.NodeSizing{DataVolumeGiB: 100}
+// functionalNodeSizing lets a suite opt in to disk capacity and worker sizing independently.
+// Zero fields leave the corresponding deployment settings to the platform.
+func functionalNodeSizing(t *testing.T, pool, volumeEnv string) sei.NodeSizing {
+	t.Helper()
+	var sizing sei.NodeSizing
+	if raw := os.Getenv(volumeEnv); raw != "" {
+		gib, err := strconv.ParseInt(raw, 10, 32)
+		if err != nil || gib <= 0 {
+			t.Fatalf("%s=%q: expected a positive whole number of GiB", volumeEnv, raw)
+		}
+		sizing.DataVolumeGiB = int32(gib)
+	}
 	if pool != "" {
 		sizing.MilliCPU = 4000
 		sizing.MemoryGiB = 32

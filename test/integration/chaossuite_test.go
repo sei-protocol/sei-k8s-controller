@@ -48,6 +48,7 @@ func chaosNodePool(faultName, trialPool string) string {
 //
 // Inputs (env): SEI_CHAIN_ID (base), SEID_IMAGE_CHAOS [required]; SEI_NAMESPACE,
 // CHAOS_DURATION [optional]. Run with -test.timeout 0 (see TestNightlyBenchmark).
+// NIGHTLY_CHAOS_DATA_VOLUME_GIB optionally sets the data disk size for validators and followers.
 // NIGHTLY_CHAOS_NODE_POOL selects trial workers for the non-memory-stress cases.
 func TestNightlyChaosSuite(t *testing.T) {
 	requireCluster(t)
@@ -80,7 +81,7 @@ func TestNightlyChaosSuite(t *testing.T) {
 			}
 			pool := chaosNodePool(sc.Name, trialPool)
 			s := spec{
-				sizing:        functionalNodeSizing(pool),
+				sizing:        functionalNodeSizing(t, pool, "NIGHTLY_CHAOS_DATA_VOLUME_GIB"),
 				nodePool:      pool,
 				chainID:       id,
 				runID:         id,
@@ -203,21 +204,27 @@ func podReady(p *corev1.Pod) bool {
 }
 
 func TestChaosWorkerSizing(t *testing.T) {
+	const volumeEnv = "NIGHTLY_CHAOS_DATA_VOLUME_GIB"
 	const trialPool = "trial"
-	diskOnly := sei.NodeSizing{DataVolumeGiB: 100}
-	small := sei.NodeSizing{DataVolumeGiB: 100, MilliCPU: 4000, MemoryGiB: 32}
+	diskOnly := sei.NodeSizing{DataVolumeGiB: 50}
+	workerOnly := sei.NodeSizing{MilliCPU: 4000, MemoryGiB: 32}
+	both := sei.NodeSizing{DataVolumeGiB: 50, MilliCPU: 4000, MemoryGiB: 32}
 	for _, tc := range []struct {
-		fault, trial, wantPool string
-		wantSizing             sei.NodeSizing
+		name, fault, trial, volume, wantPool string
+		wantSizing                           sei.NodeSizing
 	}{
-		{"cpu-stress", "", "", diskOnly},
-		{"cpu-stress", trialPool, trialPool, small},
-		{"memory-stress", trialPool, "", diskOnly},
+		{"defaults", "cpu-stress", "", "", "", sei.NodeSizing{}},
+		{"disk only", "cpu-stress", "", "50", "", diskOnly},
+		{"worker only", "cpu-stress", trialPool, "", trialPool, workerOnly},
+		{"both", "cpu-stress", trialPool, "50", trialPool, both},
+		{"memory stress", "memory-stress", trialPool, "50", "", diskOnly},
 	} {
-		pool := chaosNodePool(tc.fault, tc.trial)
-		if got := functionalNodeSizing(pool); pool != tc.wantPool || got != tc.wantSizing {
-			t.Errorf("%s (trial %q): got pool %q and sizing %+v, want %q and %+v",
-				tc.fault, tc.trial, pool, got, tc.wantPool, tc.wantSizing)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(volumeEnv, tc.volume)
+			pool := chaosNodePool(tc.fault, tc.trial)
+			if got := functionalNodeSizing(t, pool, volumeEnv); pool != tc.wantPool || got != tc.wantSizing {
+				t.Errorf("got pool %q and sizing %+v, want %q and %+v", pool, got, tc.wantPool, tc.wantSizing)
+			}
+		})
 	}
 }
