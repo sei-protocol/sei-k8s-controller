@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"maps"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -14,6 +16,30 @@ import (
 
 // fieldOwner is the SDK's SSA field manager. A distinct writer from seictl.
 const fieldOwner client.FieldOwner = sei.FieldOwner
+
+// renderSizing omits unset dimensions so per-role CPU, memory and PVC defaults
+// continue to apply independently. The mode's storage class sets performance.
+func renderSizing(s sei.NodeSizing) (*seiv1alpha1.DataVolumeSpec, *seiv1alpha1.Resources) {
+	var volume *seiv1alpha1.DataVolumeSpec
+	if s.DataVolumeGiB > 0 {
+		volume = &seiv1alpha1.DataVolumeSpec{Storage: &seiv1alpha1.DataVolumeStorage{
+			Resources: &seiv1alpha1.VolumeClaimResources{Requests: corev1.ResourceList{
+				corev1.ResourceStorage: *resource.NewQuantity(int64(s.DataVolumeGiB)<<30, resource.BinarySI),
+			}},
+		}}
+	}
+	requests := corev1.ResourceList{}
+	if s.MilliCPU > 0 {
+		requests[corev1.ResourceCPU] = *resource.NewMilliQuantity(int64(s.MilliCPU), resource.DecimalSI)
+	}
+	if s.MemoryGiB > 0 {
+		requests[corev1.ResourceMemory] = *resource.NewQuantity(int64(s.MemoryGiB)<<30, resource.BinarySI)
+	}
+	if len(requests) == 0 {
+		return volume, nil
+	}
+	return volume, &seiv1alpha1.Resources{Requests: requests}
+}
 
 // renderNetwork builds the SeiNetwork from a NetworkSpec. ChainID is not a spec
 // field: it defaults to Name (chain ID == network name) and maps to
@@ -79,11 +105,13 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 		// EffectiveSidecarImage falls back to the platform default.
 		net.Spec.Sidecar = &seiv1alpha1.SidecarConfig{Image: spec.SidecarImage}
 	}
-	if spec.NodeIsolation != "" {
+	net.Spec.DataVolume, net.Spec.Resources = renderSizing(spec.Sizing)
+	if spec.NodeIsolation != "" || spec.NodePool != "" {
 		// The controller propagates spec.scheduling to every validator child. ""
 		// leaves it unset (no schema default), which the controller reads as Shared.
 		net.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{
 			NodeIsolation: seiv1alpha1.NodeIsolation(spec.NodeIsolation),
+			NodePool:      spec.NodePool,
 		}
 	}
 	return net
@@ -138,6 +166,10 @@ func renderNode(spec sei.NodeSpec, namespace, networkNS string) *seiv1alpha1.Sei
 			Key:      v.Key,
 			Value:    apiextensionsv1.JSON{Raw: raw},
 		})
+	}
+	node.Spec.DataVolume, node.Spec.Resources = renderSizing(spec.Sizing)
+	if spec.NodePool != "" {
+		node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodePool: spec.NodePool}
 	}
 	if ss := spec.StateSync; ss != nil {
 		// Bootstrap via CometBFT state sync: the witnesses are the caller's bare

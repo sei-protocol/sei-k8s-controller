@@ -51,6 +51,25 @@ import (
 	_ "github.com/sei-protocol/sei-k8s-controller/sdk/sei/provider/k8s"
 )
 
+// functionalNodeSizing lets a suite opt in to disk capacity and worker sizing independently.
+// Zero fields leave the corresponding deployment settings to the platform.
+func functionalNodeSizing(t *testing.T, pool, volumeEnv string) sei.NodeSizing {
+	t.Helper()
+	var sizing sei.NodeSizing
+	if raw := os.Getenv(volumeEnv); raw != "" {
+		gib, err := strconv.ParseInt(raw, 10, 32)
+		if err != nil || gib <= 0 {
+			t.Fatalf("%s=%q: expected a positive whole number of GiB", volumeEnv, raw)
+		}
+		sizing.DataVolumeGiB = int32(gib)
+	}
+	if pool != "" {
+		sizing.MilliCPU = 4000
+		sizing.MemoryGiB = 32
+	}
+	return sizing
+}
+
 // runLabelKey marks a run's resources for the abnormal-exit reaper (t.Cleanup is
 // skipped on SIGKILL / a -test.timeout breach). provision stamps it on the
 // network + every node; a suite's directly-applied seiload Job + fault CRs stamp
@@ -90,6 +109,8 @@ func mergeConfig(base, extra map[string]string) map[string]string {
 // spec is the typed input shared by the suites — the local-Go-state replacement
 // for the per-run workflow-vars contract.
 type spec struct {
+	sizing        sei.NodeSizing
+	nodePool      string
 	chainID       string               // SeiNetwork name == genesis chain id; also peer-selector value + run discriminator
 	runID         string               // unique per run; the sei.io/harness-run label value
 	namespace     string               // shared nightly namespace; "" => the SDK client's resolved default
@@ -187,6 +208,8 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 		Image:        s.seidImage,
 		SidecarImage: s.sidecarImage,
 		Validators:   s.validators,
+		Sizing:       s.sizing,
+		NodePool:     s.nodePool,
 		Labels:       runLabels,
 		Config:       maps.Clone(s.storageConfig),
 		Accounts:     s.accounts,
@@ -215,6 +238,8 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 		name := rpcNodeName(s.chainID, i)
 		node, err := createRPCNode(ctx, t, c, sei.NodeSpec{
 			Name:         name,
+			Sizing:       s.sizing,
+			NodePool:     s.nodePool,
 			Network:      s.chainID,
 			Namespace:    s.namespace,
 			Image:        s.seidImage,

@@ -59,6 +59,9 @@ var releaseRPCConfig = map[string]string{
 // Inputs (env): SEI_CHAIN_ID, SEID_IMAGE [required], RELEASE_TEST_IMAGE
 // (the external harness) [required]; SEI_NAMESPACE [optional]. Run with
 // -test.timeout 0 (see TestNightlyBenchmark).
+//
+// NIGHTLY_RELEASE_DATA_VOLUME_GIB optionally sets the data disk size for validators and followers.
+// Optional NIGHTLY_RELEASE_NODE_POOL selects trial workers for the four validators and one RPC follower.
 func TestNightlyRelease(t *testing.T) {
 	requireCluster(t)
 	chainID := runChainID(mustEnv(t, "SEI_CHAIN_ID"))
@@ -85,7 +88,10 @@ func TestNightlyRelease(t *testing.T) {
 	}
 
 	// Provision: 4 validators with the admin funded in genesis, + 1 RPC follower.
+	pool := envOr("NIGHTLY_RELEASE_NODE_POOL", "")
 	ch, err := provision(ctx, t, c, spec{
+		sizing:        functionalNodeSizing(t, pool, "NIGHTLY_RELEASE_DATA_VOLUME_GIB"),
+		nodePool:      pool,
 		chainID:       chainID,
 		runID:         chainID,
 		namespace:     ns,

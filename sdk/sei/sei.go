@@ -199,6 +199,13 @@ func (n *Node) Delete(ctx context.Context) error { return n.handle.Delete(ctx) }
 // Object returns the mode-specific raw resource (k8s: *v1alpha1.SeiNode).
 func (n *Node) Object() any { return n.handle.Object() }
 
+func validateSizing(s NodeSizing) error {
+	if s.DataVolumeGiB < 0 || s.MemoryGiB < 0 || s.MilliCPU < 0 {
+		return usageErr("node sizing values must be non-negative")
+	}
+	return nil
+}
+
 func validateNetworkSpec(s NetworkSpec) error {
 	switch {
 	case strings.TrimSpace(s.Name) == "":
@@ -208,7 +215,7 @@ func validateNetworkSpec(s NetworkSpec) error {
 	case s.Validators < 1:
 		return usageErr("NetworkSpec.Validators must be >= 1, got %d", s.Validators)
 	}
-	return nil
+	return validateSizing(s.Sizing)
 }
 
 func validateNodeSpec(s NodeSpec) error {
@@ -232,6 +239,9 @@ func validateNodeSpec(s NodeSpec) error {
 			// distinct=1 — reporting len=2 would misdescribe the failure.
 			return usageErr("NodeSpec.StateSync.RpcServers must have >= 2 DISTINCT entries (the state-sync witness floor: served CRD MinItems=2 listType=set + the controller's canonical-syncer floor), got %d distinct", distinct)
 		}
+	}
+	if err := validateSizing(s.Sizing); err != nil {
+		return err
 	}
 	return validateConfigValues(s.ConfigValues)
 }
