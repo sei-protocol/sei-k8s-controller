@@ -2582,7 +2582,7 @@ func TestSeed_RoleAndModeAreNotFullNodeDefaults(t *testing.T) {
 
 // Memory request==limit makes an allocation burst an OOMKill, and the Go GC
 // cannot see the cgroup limit. A soft limit below the cap trades CPU to stay
-// resident. Seed-only: the r-class modes carry tens of GiB of absolute headroom.
+// resident.
 func TestSeed_GoMemLimitBelowMemoryLimit(t *testing.T) {
 	g := NewWithT(t)
 	cfg := platformtest.Config()
@@ -2601,15 +2601,31 @@ func TestSeed_GoMemLimitBelowMemoryLimit(t *testing.T) {
 	g.Expect(soft.Value()).To(BeNumerically(">", limit.Value()/2), "soft limit should not waste the footprint")
 }
 
-// Chain-following modes keep the runtime's own heap sizing; their headroom is
-// large enough that GC slack cannot cross the cap.
-func TestNonSeed_HasNoGoMemLimit(t *testing.T) {
-	g := NewWithT(t)
+func TestRPC_GoMemLimitUsesResolvedMemoryLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		override string
+		memory   string
+	}{
+		{name: "default", memory: "256Gi"},
+		{name: "override", override: "200Gi", memory: "200Gi"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			cfg := platformtest.Config()
+			cfg.NodeResourcesNode = platform.ResourceOverride{Memory: tc.override}
 
-	sts := mustGenerateStatefulSet(t, newSnapshotNode("rpc-0", testNamespace), platformtest.Config())
-	seid := findContainer(sts.Spec.Template.Spec.Containers, containerNameSeid)
+			sts := mustGenerateStatefulSet(t, newSnapshotNode("rpc-0", testNamespace), cfg)
+			seid := findContainer(sts.Spec.Template.Spec.Containers, containerNameSeid)
+			g.Expect(seid).NotTo(BeNil())
+			env := findEnvVar(seid.Env, "GOMEMLIMIT")
+			g.Expect(env).NotTo(BeNil())
 
-	g.Expect(findEnvVar(seid.Env, "GOMEMLIMIT")).To(BeNil())
+			limit := resource.MustParse(tc.memory)
+			g.Expect(seid.Resources.Limits[corev1.ResourceMemory]).To(Equal(limit))
+			g.Expect(env.Value).To(Equal(fmt.Sprintf("%dB", limit.Value()*87/100)))
+		})
+	}
 }
 
 func findEnvVar(env []corev1.EnvVar, name string) *corev1.EnvVar {
