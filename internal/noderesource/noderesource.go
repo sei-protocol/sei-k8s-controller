@@ -89,8 +89,7 @@ const (
 	cpuArchive   = "64"    // r7i.16xlarge vCPU; request-only, no CPU limit
 	cpuSeed      = "1"     // PEX gossip is light and spiky; request-only, no CPU limit
 
-	// goMemLimitPercentOfLimit is the seed's GOMEMLIMIT as a percentage of its
-	// memory limit; the remainder is the non-heap margin. See goMemLimitEnv.
+	// goMemLimitPercentOfLimit leaves headroom for memory outside Go's accounting.
 	goMemLimitPercentOfLimit = 87
 
 	dataDir = platform.DataDir
@@ -1108,7 +1107,7 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 	container := buildNodeMainContainer(node)
 	container.Command, container.Args = sidecarWaitCommand(node)
 	container.Resources = ResourcesForNode(node, p)
-	if env, ok := goMemLimitEnv(node, container.Resources); ok {
+	if env, ok := goMemLimitEnv(container.Resources); ok {
 		container.Env = append(container.Env, env)
 	}
 	// Sidecar binds loopback; gate startup on the proxy's /v0/healthz
@@ -1126,34 +1125,10 @@ func buildSidecarMainContainer(node *seiv1alpha1.SeiNode, p PlatformConfig) core
 	return container
 }
 
-// goMemLimitEnv returns the GOMEMLIMIT env var for a seed's seid container.
-//
-// The Go runtime targets a heap roughly twice the live set and cannot see the
-// cgroup limit, so with memory request==limit reclaimable growth becomes an
-// OOMKill rather than a throttle. A soft limit below the hard cap makes the GC
-// spend CPU to stay resident instead.
-//
-// What it does and does not cover: it governs churn — buffers allocated and
-// freed at rate, which GOGC alone would let balloon toward twice the live set.
-// It cannot shrink memory that is genuinely live, and it does not account for
-// non-heap RSS at all: thread stacks, cgo allocations, mmap'd memIAVL pages, or
-// the kernel socket buffers a thousand connections charge to the cgroup. The
-// concurrent pre-auth handshake burst that sizes this mode is live memory, so
-// absolute headroom is what defends it — not this limit. The margin below the
-// cap exists for the non-heap share.
-//
-// Scoped to seed as a matter of caution rather than principle: GC slack is
-// proportional to the live set, so any mode with request==limit would benefit.
-// The other modes are tuned and prod-proven, and changing their runtime
-// behaviour is not this change's business.
-//
-// Derived from the resolved limit, so an app-config resources.seed override
-// keeps it consistent. Reports false when no memory limit is set, or when the
-// limit is small enough that the computed soft cap would be useless.
-func goMemLimitEnv(node *seiv1alpha1.SeiNode, res corev1.ResourceRequirements) (corev1.EnvVar, bool) {
-	if servesSeidRPC(node) {
-		return corev1.EnvVar{}, false
-	}
+// goMemLimitEnv derives seid's soft Go memory limit from its resolved container
+// limit. The margin leaves room for memory outside Go's accounting, such as
+// mmap'd state and socket buffers. The soft limit cannot reclaim live memory.
+func goMemLimitEnv(res corev1.ResourceRequirements) (corev1.EnvVar, bool) {
 	lim, ok := res.Limits[corev1.ResourceMemory]
 	if !ok {
 		return corev1.EnvVar{}, false
