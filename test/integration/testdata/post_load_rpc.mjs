@@ -28,6 +28,22 @@ function logIdentity(log) {
   return logFields.map(key => log[key]);
 }
 
+const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+const callTracer = { tracer: 'callTracer', timeout: '25s' };
+
+function traceScenario(name, method, params, metadata, verify) {
+  return { name, method, params: [...params, callTracer], metadata, verify };
+}
+
+function verifyFrame(frame, tx) {
+  assert.equal(frame?.type, 'CALL');
+  assert.ok(!frame.error, 'load transaction trace failed');
+  assert.equal(frame.from.toLowerCase(), tx.from.toLowerCase());
+  assert.equal(frame.to.toLowerCase(), tx.to.toLowerCase());
+  assert.equal(frame.input.toLowerCase(), tx.input.toLowerCase());
+  assert.ok(BigInt(frame.gasUsed) > 0n);
+}
+
 export async function prepareScenarios(read, first, last) {
   assert.ok(Number.isSafeInteger(first) && first > 0 && Number.isSafeInteger(last) && last >= first, 'invalid load window');
   const blocks = [];
@@ -64,7 +80,7 @@ export async function prepareScenarios(read, first, last) {
   assert.ok(txCount, 'load window contains no transactions');
   blocks.reverse();
   const scenarios = [];
-  const seal = (name, method, params, expected) => {
+  const seal = (name, method, params, expected, metadata) => {
     assert.notEqual(expected, null, 'missing reference for ' + name);
     const fingerprint = value => {
       if (method !== 'eth_getLogs') return digest(value);
@@ -72,7 +88,7 @@ export async function prepareScenarios(read, first, last) {
       return digest(value.map(logIdentity)); // preserve order and duplicates
     };
     const expectedHash = fingerprint(expected);
-    scenarios.push({ name, method, params, expectedHash, verify(value) {
+    scenarios.push({ name, method, params, expectedHash, metadata, verify(value) {
       assert.equal(fingerprint(value), expectedHash, name + ' differs from its sealed reference');
     } });
   };
@@ -120,7 +136,59 @@ export async function prepareScenarios(read, first, last) {
       seal(method + '-' + address, method, params, value);
     }
   }
-  return { scenarios, corpus: { first: range.fromBlock, last: end, blocks: blocks.length, transactions: txCount, logs: logCount } };
+  // Use a token and holder that actually participated in this workload.
+  const transfer = logs.find(l => l.topics.length === 3 && l.topics[0].toLowerCase() === transferTopic);
+  assert.ok(transfer, 'steady-state corpus has no ERC-20 Transfer');
+  const call = { to: transfer.address, data: '0x70a08231' + transfer.topics[2].slice(2) };
+  for (const height of new Set([range.fromBlock, end])) {
+    const value = await read('eth_call', [call, height]);
+    assert.match(value, /^0x[0-9a-f]{64}$/i, 'balanceOf must return one ABI word');
+    const position = height === end ? 'last' : 'first';
+    seal('call-balanceOf-' + position, 'eth_call', [call, height], value, { height, contract: call.to });
+    if (height === end) {
+      scenarios.push(traceScenario('trace-call-balanceOf', 'debug_traceCall', [call, height], { height }, frame => {
+        assert.equal(frame?.type, 'CALL');
+        assert.ok(!frame.error, 'balanceOf trace failed');
+        assert.equal(frame.to.toLowerCase(), call.to.toLowerCase());
+        assert.equal(frame.output.toLowerCase(), value.toLowerCase());
+      }));
+    }
+  }
+
+  const tx = await read('eth_getTransactionByHash', [transfer.transactionHash]);
+  assert.equal(tx?.hash, transfer.transactionHash);
+  assert.equal(tx.blockHash, transfer.blockHash);
+  scenarios.push(traceScenario('trace-token-transaction', 'debug_traceTransaction', [tx.hash],
+    { height: transfer.blockNumber, txHash: tx.hash }, frame => verifyFrame(frame, tx)));
+
+  const ranked = [...populated].sort((a, b) => Number(BigInt(a.header.gasUsed) - BigInt(b.header.gasUsed)));
+  const seen = new Set();
+  for (const percentile of [50, 90]) {
+    const header = ranked[Math.ceil(percentile / 100 * ranked.length) - 1].header;
+    if (seen.has(header.hash)) continue;
+    seen.add(header.hash);
+    const metadata = { height: header.number, blockHash: header.hash, gasUsed: header.gasUsed, transactions: header.transactions.length };
+    let reference;
+    function verifyBlock(entries) {
+      assert.ok(Array.isArray(entries));
+      assert.deepEqual(entries.map(entry => entry.txHash.toLowerCase()), header.transactions.map(hash => hash.toLowerCase()));
+      for (const entry of entries) {
+        assert.ok(!entry.error && entry.result?.type, 'missing block trace frame');
+      }
+      // Both lookup methods must agree on every frame, including internal calls.
+      const actual = digest(entries);
+      reference ??= actual;
+      assert.equal(actual, reference, 'block traces differ');
+    }
+    for (const [method, key] of [['debug_traceBlockByNumber', header.number], ['debug_traceBlockByHash', header.hash]]) {
+      scenarios.push(traceScenario(method + '-gas-p' + percentile, method, [key], metadata, verifyBlock));
+    }
+  }
+
+  const filterBlock = blocks.find(block => block.logs.length);
+  const filter = { criteria: { fromBlock: filterBlock.header.number, toBlock: filterBlock.header.number },
+    expected: filterBlock.logs.map(logIdentity) };
+  return { scenarios, filter, corpus: { first: range.fromBlock, last: end, blocks: blocks.length, transactions: txCount, logs: logCount } };
 }
 
 async function checkedTransaction(read, tx, header) {
@@ -128,6 +196,41 @@ async function checkedTransaction(read, tx, header) {
   assert.equal(result?.hash, tx.hash);
   assert.equal(result.blockHash, header.hash);
   return result;
+}
+
+function report(scenario, method, samples, fields) {
+  const times = samples.map(sample => sample.ms).sort((a, b) => a - b);
+  const percentile = q => times[Math.ceil(times.length * q) - 1];
+  console.log(JSON.stringify({ scenario, method, ...fields, requests: times.length,
+    responseBytes: samples.reduce((total, sample) => total + sample.bytes, 0),
+    p50Ms: percentile(.5), p95Ms: times.length >= 20 ? percentile(.95) : null,
+    p99Ms: times.length >= 100 ? percentile(.99) : null }));
+}
+
+async function measureFilter(request, filter, budgetMs) {
+  const populated = [], drained = [];
+  async function cycle(measure) {
+    const { value: id } = await request('eth_newFilter', [filter.criteria]);
+    assert.match(id, /^0x[0-9a-f]+$/i);
+    try {
+      const first = await request('eth_getFilterChanges', [id]);
+      assert.deepEqual(first.value.map(logIdentity), filter.expected, 'first poll differs from receipts');
+      const next = await request('eth_getFilterChanges', [id]);
+      assert.deepEqual(next.value, [], 'drained filter replayed logs');
+      if (measure) {
+        populated.push({ ms: first.ms, bytes: first.bytes });
+        drained.push({ ms: next.ms, bytes: next.bytes });
+      }
+    } finally {
+      assert.equal((await request('eth_uninstallFilter', [id])).value, true);
+    }
+  }
+  await cycle(false);
+  const start = performance.now();
+  do { await cycle(true); } while (performance.now() - start < budgetMs);
+  for (const [scenario, samples, logs] of [['populated', populated, filter.expected.length], ['drained', drained, 0]]) {
+    report('filter-' + scenario, 'eth_getFilterChanges', samples, { ...filter.criteria, logs });
+  }
 }
 
 export async function runPostLoad(endpoint, first, last, budgetMs = 600_000) {
@@ -153,27 +256,24 @@ export async function runPostLoad(endpoint, first, last, budgetMs = 600_000) {
     assert.ok(performance.now() < readyBy, 'receipt follower did not reach load height ' + last);
     await sleep(1000);
   }
-  const { scenarios, corpus } = await prepareScenarios(async (method, params) => (await request(method, params)).value, first, last);
-  console.log(JSON.stringify({ phase: 'post-load-rpc', endpoint, corpus, fingerprint: digest(scenarios.map(s => [s.name, s.params, s.expectedHash])), scenarios: scenarios.length }));
+  const { scenarios, filter, corpus } = await prepareScenarios(async (method, params) => (await request(method, params)).value, first, last);
+  console.log(JSON.stringify({ phase: 'post-load-rpc', endpoint, corpus, fingerprint: digest(scenarios.map(s => [s.name, s.params, s.expectedHash])), scenarios: scenarios.length + 2 }));
+  const timePerScenario = budgetMs / (scenarios.length + 2);
+  await measureFilter(request, filter, 2 * timePerScenario);
   for (const scenario of scenarios) {
     async function sample() {
-      const r = await request(scenario.method, scenario.params);
-      scenario.verify(r.value);
-      return r;
+      const { value, ms, bytes } = await request(scenario.method, scenario.params);
+      scenario.verify(value);
+      return { ms, bytes };
     }
-    await sample(); // exclude warmup from latency and throughput
-    const times = [];
-    let bytes = 0;
+    const first = await sample();
+    const samples = [];
     const start = performance.now();
-    do {
-      const result = await sample();
-      times.push(result.ms);
-      bytes += result.bytes;
-    } while (performance.now() - start < budgetMs / scenarios.length);
+    do { samples.push(await sample()); } while (performance.now() - start < timePerScenario);
     const elapsed = performance.now() - start;
-    times.sort((a, b) => a - b);
-    const percentile = q => times[Math.ceil(times.length * q) - 1];
-    console.log(JSON.stringify({ scenario: scenario.name, method: scenario.method, requests: times.length,
-      rps: times.length * 1000 / elapsed, responseBytes: bytes, p50Ms: percentile(.5), p95Ms: percentile(.95), p99Ms: percentile(.99) }));
+    const trace = scenario.method.startsWith('debug_trace');
+    report(scenario.name, scenario.method, samples, { ...scenario.metadata,
+      ...(trace ? { tracer: callTracer.tracer, firstObservedMs: first.ms } : {}),
+      rps: samples.length * 1000 / elapsed });
   }
 }
