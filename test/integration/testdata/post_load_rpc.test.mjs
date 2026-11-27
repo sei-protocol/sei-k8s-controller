@@ -106,7 +106,7 @@ test('runs every scenario over HTTP and fails on a successful RPC with incorrect
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const url = 'http://127.0.0.1:' + server.address().port;
-  const run = () => runPostLoad(url, 10, 15, 0, 4, url + '/metrics');
+  const run = (budgetMs = 0) => runPostLoad(url, 10, 15, budgetMs, 4, url + '/metrics');
   await run();
   const rejected = reports.get('logs-range-plus-one');
   assert.equal(rejected.expectedRejections, 1);
@@ -130,6 +130,11 @@ test('runs every scenario over HTTP and fails on a successful RPC with incorrect
   assert.ok(measured.includes('debug_traceBlockByHash'));
   assert.equal(measured.filter(m => m === 'eth_getFilterChanges').length, 4);
   assert.equal(filters.size, 0);
+  await run(1500);
+  const completed = reports.get(undefined);
+  assert.equal(completed.event, 'completed');
+  assert.equal(completed.budgetMs, 1500);
+  assert.ok(completed.elapsedMs >= completed.budgetMs - 1);
   corrupt = 'eth_getFilterChanges';
   await assert.rejects(run(), /first poll differs/);
   assert.equal(filters.size, 0);

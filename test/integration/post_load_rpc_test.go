@@ -30,7 +30,7 @@ func runPostLoadRPC(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 			Labels: map[string]string{runLabelKey: id},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: ptr.To[int32](0), ActiveDeadlineSeconds: ptr.To[int64](35 * 60),
+			BackoffLimit: ptr.To[int32](0), ActiveDeadlineSeconds: ptr.To[int64](20 * 60),
 			TTLSecondsAfterFinished: ptr.To[int32](86400),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{runLabelKey: id}},

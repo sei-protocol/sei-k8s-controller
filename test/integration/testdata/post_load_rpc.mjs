@@ -470,6 +470,8 @@ export async function measureDistinctBlocks(request, reference, first, last, bud
 }
 
 export async function runPostLoad(endpoint, first, last, budgetMs = 600_000, maxBlocks = 2000, metricsURL = followerMetricsURL(endpoint), referenceEndpoint = endpoint) {
+  const suiteStart = performance.now();
+  const deadline = suiteStart + budgetMs;
   const request = rpcClient(endpoint);
   // Tendermint can report the end height before the EVM receipt watermark
   // catches up. Poll for this exact height before sealing the corpus.
@@ -478,19 +480,22 @@ export async function runPostLoad(endpoint, first, last, budgetMs = 600_000, max
     assert.ok(performance.now() < readyBy, 'receipt follower did not reach load height ' + last);
     await sleep(1000);
   }
-  const pairStart = performance.now();
   await measureDistinctBlocks(request, rpcClient(referenceEndpoint), first, last, budgetMs / 5);
-  const pairElapsed = performance.now() - pairStart;
   const { scenarios, filter, corpus } = await prepareScenarios(async (method, params) => (await request(method, params)).value, first, last);
   console.log(JSON.stringify({ phase: 'post-load-rpc', endpoint, corpus, fingerprint: digest(scenarios.map(s => [s.name, s.params, s.expectedHash])), readScenarios: scenarios.length + 2, limitStages: ['baseline', 'exercise', 'recovery'] }));
   const control = scenarios.find(s => s.name === 'logs-1-blocks');
-  await runLimitChecks(endpoint, Number(corpus.last), maxBlocks, control, budgetMs, metricsURL);
-  const timePerScenario = Math.max(0, budgetMs - pairElapsed) / (scenarios.length + 2);
-  await measureFilter(request, filter, 2 * timePerScenario);
+  await runLimitChecks(endpoint, Number(corpus.last), maxBlocks, control, budgetMs / 10, metricsURL);
+  function remainingBudget() {
+    const remaining = deadline - performance.now();
+    if (budgetMs > 0) assert.ok(remaining > 0, 'shared RPC budget expired before all scenarios completed');
+    return Math.max(0, remaining);
+  }
+  await measureFilter(request, filter, 2 * remainingBudget() / (scenarios.length + 2));
   const groups = ['logs', 'blocks-transactions-receipts', 'state', 'traces'];
   const ordered = groups.flatMap(group => scenarios.filter(s => suiteGroup(s.method) === group));
   assert.equal(ordered.length, scenarios.length);
-  for (const scenario of ordered) {
+  for (const [index, scenario] of ordered.entries()) {
+    const scenarioEnd = performance.now() + remainingBudget() / (ordered.length - index);
     let observedLogs;
     async function sample(measured) {
       const { value, ms, bytes } = await request(scenario.method, scenario.params);
@@ -504,11 +509,12 @@ export async function runPostLoad(endpoint, first, last, budgetMs = 600_000, max
     const startedAt = new Date().toISOString();
     const samples = [];
     const start = performance.now();
-    do { samples.push(await sample(true)); } while (performance.now() - start < timePerScenario);
+    do { samples.push(await sample(true)); } while (performance.now() < scenarioEnd);
     const elapsed = performance.now() - start;
     const trace = scenario.method.startsWith('debug_trace');
     report(scenario.name, scenario.method, samples, { startedAt, endedAt: new Date().toISOString(), ...scenario.metadata, ...observedLogs,
       ...(trace ? { tracer: callTracer.tracer, firstObservedMs: first.ms } : {}),
       rps: samples.length * 1000 / elapsed });
   }
+  console.log(JSON.stringify({ suite: 'post-load-rpc', event: 'completed', budgetMs, elapsedMs: performance.now() - suiteStart }));
 }
