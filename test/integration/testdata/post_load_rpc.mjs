@@ -383,7 +383,93 @@ export async function runLimitChecks(endpoint, end, maxBlocks, control, duration
   }
 }
 
-export async function runPostLoad(endpoint, first, last, budgetMs = 600_000, maxBlocks = 2000, metricsURL = followerMetricsURL(endpoint)) {
+// Shuffle relative heights reproducibly so neither the target nor reference is
+// traversed sequentially. Reserve the pinned suite's 500-height setup window.
+export async function measureDistinctBlocks(request, reference, first, last, budgetMs) {
+  const end = last - first >= 500 ? last - 500 : last;
+  const cases = [
+    { name: 'logs-1-block', method: 'eth_getLogs', width: 1 },
+    { name: 'full-block', method: 'eth_getBlockByNumber', width: 1 },
+    { name: 'block-trace', method: 'debug_traceBlockByNumber', width: 1 },
+    { name: 'logs-10-blocks', method: 'eth_getLogs', width: 10 },
+  ];
+  // Assign disjoint spans first, then shuffle each case independently so a
+  // ten-block log lookup cannot prime a later block or trace lookup.
+  for (const c of cases) {
+    c.targets = [];
+    c.samples = { firstRead: [], immediateRepeat: [] };
+  }
+  let cursor = first;
+  while (cursor <= end) {
+    for (const c of cases) {
+      if (cursor + c.width - 1 > end) continue;
+      c.targets.push({ height: cursor, order: digest(['rpc-height-order-v1', c.name, cursor - first]) });
+      cursor += c.width;
+    }
+  }
+  for (const c of cases) c.targets.sort((a, b) => a.order.localeCompare(b.order));
+  const targets = [];
+  for (let i = 0; i < Math.max(...cases.map(c => c.targets.length)); i++) {
+    for (const c of cases) if (c.targets[i]) targets.push({ c, height: c.targets[i].height });
+  }
+  const startedAt = new Date().toISOString();
+  const start = performance.now();
+  let count = 0;
+  for (const { c, height } of targets) {
+    const { method } = c;
+    const h = quantity(height);
+    const range = { fromBlock: h, toBlock: quantity(height + c.width - 1) };
+    let params = [range];
+    if (method === 'eth_getBlockByNumber') params = [h, true];
+    if (method === 'debug_traceBlockByNumber') params = [h, callTracer];
+
+    const initial = await request(method, params);
+    const repeat = await request(method, params);
+    assert.deepEqual(repeat.value, initial.value, method + ' repeat differs at ' + height);
+    let details;
+    if (method === 'eth_getLogs') {
+      let referenceLogs;
+      if (c.width === 1) {
+        const { value: receipts } = await reference('eth_getBlockReceipts', [h]);
+        referenceLogs = receipts.flatMap(receipt => receipt.logs);
+      } else {
+        referenceLogs = (await reference(method, params)).value;
+      }
+      const expected = referenceLogs.map(logIdentity);
+      assert.deepEqual(initial.value.map(logIdentity), expected, 'rotated logs differ from receipts at ' + height);
+      details = logSummary(range, expected.length, initial.value);
+    } else if (method === 'eth_getBlockByNumber') {
+      const { value: block } = await reference(method, params);
+      assert.equal(block?.number, h);
+      assert.deepEqual(initial.value, block, 'rotated block differs across followers at ' + height);
+      details = { transactions: block.transactions.length, gasUsed: block.gasUsed };
+    } else {
+      const { value: block } = await reference('eth_getBlockByNumber', [h, false]);
+      assert.equal(block?.number, h);
+      assert.deepEqual(initial.value.map(entry => entry.txHash), block.transactions);
+      for (const entry of initial.value) assert.ok(!entry.error && entry.result?.type, 'missing rotated block trace frame');
+      details = { transactions: block.transactions.length, gasUsed: block.gasUsed };
+    }
+    const pair = c.samples;
+    pair.firstRead.push({ ms: initial.ms, bytes: initial.bytes });
+    pair.immediateRepeat.push({ ms: repeat.ms, bytes: repeat.bytes });
+    console.log(JSON.stringify({ suite: 'post-load-rpc', event: 'height-pair', method, workload: c.name, height, depthFromLoadEnd: last - height,
+      firstReadMs: initial.ms, immediateRepeatMs: repeat.ms, firstResponseBytes: initial.bytes, repeatResponseBytes: repeat.bytes, ...details }));
+    count++;
+    if (count >= cases.length && performance.now() - start >= budgetMs) break;
+  }
+  const endedAt = new Date().toISOString();
+  for (const c of cases) {
+    const pair = c.samples;
+    if (!pair.firstRead.length) continue;
+    for (const [access, rows] of Object.entries(pair)) {
+      report('historical-' + c.name + '-' + access, c.method, rows, { startedAt, endedAt, access,
+        blockSpan: c.width, distinctTargets: rows.length, distinctHeights: rows.length * c.width, eligibleTargets: c.targets.length, poolExhausted: rows.length === c.targets.length });
+    }
+  }
+}
+
+export async function runPostLoad(endpoint, first, last, budgetMs = 600_000, maxBlocks = 2000, metricsURL = followerMetricsURL(endpoint), referenceEndpoint = endpoint) {
   const request = rpcClient(endpoint);
   // Tendermint can report the end height before the EVM receipt watermark
   // catches up. Poll for this exact height before sealing the corpus.
@@ -392,13 +478,14 @@ export async function runPostLoad(endpoint, first, last, budgetMs = 600_000, max
     assert.ok(performance.now() < readyBy, 'receipt follower did not reach load height ' + last);
     await sleep(1000);
   }
+  const pairStart = performance.now();
+  await measureDistinctBlocks(request, rpcClient(referenceEndpoint), first, last, budgetMs / 5);
+  const pairElapsed = performance.now() - pairStart;
   const { scenarios, filter, corpus } = await prepareScenarios(async (method, params) => (await request(method, params)).value, first, last);
   console.log(JSON.stringify({ phase: 'post-load-rpc', endpoint, corpus, fingerprint: digest(scenarios.map(s => [s.name, s.params, s.expectedHash])), readScenarios: scenarios.length + 2, limitStages: ['baseline', 'exercise', 'recovery'] }));
-  // Reserve one minute of the ten-minute measurement window for boundary behavior.
-  const limitMs = budgetMs / 10;
   const control = scenarios.find(s => s.name === 'logs-1-blocks');
-  await runLimitChecks(endpoint, Number(corpus.last), maxBlocks, control, limitMs, metricsURL);
-  const timePerScenario = (budgetMs - limitMs) / (scenarios.length + 2);
+  await runLimitChecks(endpoint, Number(corpus.last), maxBlocks, control, budgetMs, metricsURL);
+  const timePerScenario = Math.max(0, budgetMs - pairElapsed) / (scenarios.length + 2);
   await measureFilter(request, filter, 2 * timePerScenario);
   const groups = ['logs', 'blocks-transactions-receipts', 'state', 'traces'];
   const ordered = groups.flatMap(group => scenarios.filter(s => suiteGroup(s.method) === group));

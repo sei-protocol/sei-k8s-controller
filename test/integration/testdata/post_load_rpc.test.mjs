@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { prepareScenarios, runPostLoad } from './post_load_rpc.mjs';
+import { measureDistinctBlocks, prepareScenarios, runPostLoad } from './post_load_rpc.mjs';
 
 const address = '0x' + '11'.repeat(20);
 const topic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -46,7 +46,7 @@ function rpc(method, [arg, full]) {
     case 'debug_traceCall':
     case 'debug_traceTransaction': return frame;
     case 'debug_traceBlockByNumber':
-    case 'debug_traceBlockByHash': return [{ txHash: transaction(n).hash, result: frame }];
+    case 'debug_traceBlockByHash': return heights.includes(n) ? [{ txHash: transaction(n).hash, result: frame }] : [];
     case 'eth_getBalance': return '0x1';
     case 'eth_getCode': return '0x';
     case 'eth_getLogs': return heights.filter(h => h >= Number(arg.fromBlock) && h <= Number(arg.toBlock)
@@ -135,7 +135,7 @@ test('runs every scenario over HTTP and fails on a successful RPC with incorrect
   assert.equal(filters.size, 0);
   for (corrupt of ['accepted', 'wrong-error']) await assert.rejects(run(), /expected limit error|block range too large/);
   corrupt = 'eth_getLogs';
-  await assert.rejects(run(), /unexpected log count/);
+  await assert.rejects(run(), /rotated logs differ|unexpected log count/);
 });
 
 test('narrows the contiguous suffix before a wide query would exceed the follower log limit', async () => {
@@ -148,4 +148,40 @@ test('narrows the contiguous suffix before a wide query would exceed the followe
   };
   const { corpus } = await prepareScenarios(read, 10, 12);
   assert.deepEqual(corpus, { first: '0xc', last: '0xc', headersRead: 2, blocks: 1, transactions: 1, logs: 5001 });
+});
+
+test('pairs first and repeated reads before reference queries and exhausts distinct heights without recycling', async t => {
+  const events = [], reports = [];
+  t.mock.method(console, 'log', line => reports.push(JSON.parse(line)));
+  const client = source => async (method, params) => {
+    const height = Number(params[0]?.fromBlock ?? params[0]);
+    events.push([source, method, height]);
+    return { value: rpc(method, params), ms: 2, bytes: 100 };
+  };
+  await measureDistinctBlocks(client('target'), client('reference'), 10, 515, 30_000);
+  const pairs = reports.filter(r => r.event === 'height-pair');
+  assert.equal(pairs.length, 6);
+  assert.deepEqual(pairs.map(p => p.height).sort((a,b) => a-b), [10,11,12,13,14,15]);
+  for (const [index, pair] of pairs.entries()) {
+    const [first, repeat, ref] = events.slice(index * 3, index * 3 + 3);
+    assert.deepEqual(first, ['target', pair.method, pair.height]);
+    assert.deepEqual(first, repeat);
+    assert.equal(ref[0], 'reference');
+    assert.equal(ref[2], pair.height);
+  }
+  const rows = reports.filter(r => r.scenario);
+  assert.equal(rows.length, 6);
+  for (const row of rows) {
+    assert.equal(row.requests, 2);
+    assert.equal(row.distinctHeights, 2);
+    assert.equal(row.poolExhausted, true);
+  }
+  reports.length = 0;
+  await measureDistinctBlocks(client('target'), client('reference'), 10, 535, 30_000);
+  const covered = reports.filter(r => r.event === 'height-pair').flatMap(row =>
+    Array.from({length: row.blockSpan ?? 1}, (_, offset) => row.height + offset));
+  assert.equal(covered.length, 26);
+  assert.equal(new Set(covered).size, 26);
+  assert.equal(reports.find(r => r.scenario === 'historical-logs-10-blocks-firstRead').distinctHeights, 20);
+  await assert.rejects(measureDistinctBlocks(client('target'), async () => ({value: []}), 10, 10, 0), /rotated logs differ/);
 });

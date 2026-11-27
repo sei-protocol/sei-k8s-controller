@@ -30,7 +30,7 @@ func runPostLoadRPC(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 			Labels: map[string]string{runLabelKey: id},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: ptr.To[int32](0), ActiveDeadlineSeconds: ptr.To[int64](20 * 60),
+			BackoffLimit: ptr.To[int32](0), ActiveDeadlineSeconds: ptr.To[int64](35 * 60),
 			TTLSecondsAfterFinished: ptr.To[int32](86400),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{runLabelKey: id}},
@@ -45,8 +45,8 @@ func runPostLoadRPC(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 						Name: "rpc-benchmark", Image: image,
 						Command: []string{"node", "--input-type=module", "--eval"},
 						Args: []string{
-							postLoadRPCScript + "\nawait runPostLoad(process.argv[1], Number(process.argv[2]), Number(process.argv[3]), undefined, Number(process.argv[4]));",
-							"--", ch.rpcNodes[1].EVMRPC(), strconv.FormatInt(first, 10), strconv.FormatInt(last, 10), strconv.Itoa(historyRPCMaxLogBlocks),
+							postLoadRPCScript + "\nawait runPostLoad(process.argv[1], Number(process.argv[2]), Number(process.argv[3]), undefined, Number(process.argv[4]), undefined, process.argv[5]);",
+							"--", ch.rpcNodes[1].EVMRPC(), strconv.FormatInt(first, 10), strconv.FormatInt(last, 10), strconv.Itoa(historyRPCMaxLogBlocks), ch.rpcNodes[0].EVMRPC(),
 						},
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
