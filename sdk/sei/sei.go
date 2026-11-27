@@ -215,7 +215,10 @@ func validateNetworkSpec(s NetworkSpec) error {
 	case s.Validators < 1:
 		return usageErr("NetworkSpec.Validators must be >= 1, got %d", s.Validators)
 	}
-	return validateSizing(s.Sizing)
+	if err := validateSizing(s.Sizing); err != nil {
+		return err
+	}
+	return validateConfigValues("NetworkSpec", s.ConfigValues)
 }
 
 func validateNodeSpec(s NodeSpec) error {
@@ -243,7 +246,7 @@ func validateNodeSpec(s NodeSpec) error {
 	if err := validateSizing(s.Sizing); err != nil {
 		return err
 	}
-	return validateConfigValues(s.ConfigValues)
+	return validateConfigValues("NodeSpec", s.ConfigValues)
 }
 
 // The limits below mirror the CRD's validation of seiv1alpha1.ConfigValue, so a
@@ -265,31 +268,31 @@ var (
 // malformed file name or key, a repeated (file, key) pair, and a value whose
 // JSON form is null or does not exist. The k8s provider renders each value
 // through json.Marshal, so a value that passes here always renders.
-func validateConfigValues(values []ConfigValue) error {
+func validateConfigValues(kind string, values []ConfigValue) error {
 	if len(values) > maxConfigValues {
-		return usageErr("NodeSpec.ConfigValues has %d entries, want at most %d", len(values), maxConfigValues)
+		return usageErr("%s.ConfigValues has %d entries, want at most %d", kind, len(values), maxConfigValues)
 	}
 	seen := make(map[[2]string]bool, len(values))
 	for _, v := range values {
 		if len(v.FileName) > maxConfigFileNameLen || !configFileNameRE.MatchString(v.FileName) {
-			return usageErr("NodeSpec.ConfigValues file name %q must match %s, at most %d characters", v.FileName, configFileNamePattern, maxConfigFileNameLen)
+			return usageErr("%s.ConfigValues file name %q must match %s, at most %d characters", kind, v.FileName, configFileNamePattern, maxConfigFileNameLen)
 		}
 		if len(v.Key) > maxConfigKeyLen || !configKeyRE.MatchString(v.Key) {
-			return usageErr("NodeSpec.ConfigValues key %q must match %s, at most %d characters", v.Key, configKeyPattern, maxConfigKeyLen)
+			return usageErr("%s.ConfigValues key %q must match %s, at most %d characters", kind, v.Key, configKeyPattern, maxConfigKeyLen)
 		}
 		entry := [2]string{v.FileName, v.Key}
 		if seen[entry] {
-			return usageErr("NodeSpec.ConfigValues sets %s %s twice", v.FileName, v.Key)
+			return usageErr("%s.ConfigValues sets %s %s twice", kind, v.FileName, v.Key)
 		}
 		seen[entry] = true
 		// A typed nil, such as a nil *bool, map or slice, encodes as null
 		// without an error, so the check reads the encoded form.
 		raw, err := json.Marshal(v.Value)
 		if err != nil {
-			return usageErr("NodeSpec.ConfigValues %s %s: Value has no JSON form: %v", v.FileName, v.Key, err)
+			return usageErr("%s.ConfigValues %s %s: Value has no JSON form: %v", kind, v.FileName, v.Key, err)
 		}
 		if string(raw) == "null" {
-			return usageErr("NodeSpec.ConfigValues %s %s: Value is required (the CRD rejects null)", v.FileName, v.Key)
+			return usageErr("%s.ConfigValues %s %s: Value is required (the CRD rejects null)", kind, v.FileName, v.Key)
 		}
 	}
 	return nil

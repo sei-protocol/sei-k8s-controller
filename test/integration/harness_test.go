@@ -32,6 +32,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -123,6 +124,7 @@ type spec struct {
 	rpcConfig     map[string]string    // extra per-RPC-node config overlaid on storageConfig (e.g. EVM tuning)
 	accounts      []sei.GenesisAccount // genesis-funded non-validator accounts (release funds an admin); nil funds none
 
+	commonConfigValues []sei.ConfigValue // applies to validators and both RPC followers
 	// rpcConfigValues are per-RPC-node seid keys that sei-config does not know,
 	// so rpcConfig cannot carry them.
 	rpcConfigValues []sei.ConfigValue
@@ -212,6 +214,7 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 		NodePool:     s.nodePool,
 		Labels:       runLabels,
 		Config:       maps.Clone(s.storageConfig),
+		ConfigValues: s.commonConfigValues,
 		Accounts:     s.accounts,
 		// Ephemeral chain: cascade-delete the controller-created validators (+
 		// their PVCs) on teardown. The CRD default Retain would orphan them —
@@ -245,7 +248,7 @@ func provision(ctx context.Context, t *testing.T, c *sei.Client, s spec) (*chain
 			Image:        s.seidImage,
 			Labels:       runLabels,
 			Config:       mergeConfig(s.storageConfig, s.rpcConfig),
-			ConfigValues: s.rpcConfigValues,
+			ConfigValues: slices.Concat(s.commonConfigValues, s.rpcConfigValues),
 		})
 		if node != nil {
 			ch.rpcNodes = append(ch.rpcNodes, node)

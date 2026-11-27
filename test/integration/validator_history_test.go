@@ -54,15 +54,17 @@ func TestNightlyValidatorHistory(t *testing.T) {
 			"evm.http_enabled":                "true",
 			"evm.ws_enabled":                  "true",
 		}),
-		// Match the steady-state follower settings so the validator config
-		// is the variable in the comparison.
+		// Match steady-state follower worker and queue sizing.
 		rpcConfig: map[string]string{
 			"evm.worker_pool_size":  "32",
 			"evm.worker_queue_size": "4000",
 			"evm.max_tx_pool_txs":   "10000",
 		},
-		rpcConfigValues: []sei.ConfigValue{
+		commonConfigValues: []sei.ConfigValue{
 			{FileName: "app.toml", Key: "evm.rate_limiting_enabled", Value: false},
+			{FileName: "app.toml", Key: "evm.large_log_query_rps", Value: 0},
+		},
+		rpcConfigValues: []sei.ConfigValue{
 			{FileName: "app.toml", Key: "evm.max_blocks_for_log", Value: historyRPCMaxLogBlocks},
 		},
 	}
@@ -81,13 +83,17 @@ func TestNightlyValidatorHistory(t *testing.T) {
 	// Take a reference from the receipt follower before sei-load spends
 	// from the root account. All validators must still serve that balance
 	// at the same height after the load has finished.
+	setProbePhase, stopProbes := monitorHistoryRPC(ctx, t, ch, s.validators)
+	defer stopProbes()
 	hc := &http.Client{Timeout: 10 * time.Second}
 	receiptRPC := ch.rpcNodes[1].TendermintRPC()
 	preLoadHeight := mustLatestHeight(ctx, t, hc, receiptRPC, "pre-load")
 	height := preLoadHeight - 1
 	ns := ch.network.Namespace()
 	want := historicalBalanceWS(ctx, t, rpcNodeName(id, 1), ns, root.EVMAddress, height)
+	setProbePhase("transaction-load")
 	runSeiload(ctx, t, cs, ch, s)
+	setProbePhase("validator-checks")
 	postLoadHeight := mustLatestHeight(ctx, t, hc, receiptRPC, "post-load")
 	for i := range s.validators {
 		node := validatorName(id, i)
@@ -124,6 +130,7 @@ func TestNightlyValidatorHistory(t *testing.T) {
 			}
 		})
 	}
+	setProbePhase("post-load-rpc")
 	t.Run("post-load-rpc", func(t *testing.T) {
 		runPostLoadRPC(ctx, t, cs, ch, rpcBenchmarkImage, preLoadHeight+1, postLoadHeight)
 	})

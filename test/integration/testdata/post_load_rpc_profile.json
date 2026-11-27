@@ -1,11 +1,8 @@
 {
   "name": "validator-history",
-  "version": 1,
-  "budgetMs": 600000,
-  "pairedHistoryMs": 120000,
-  "limitsMs": 60000,
+  "version": 2,
+  "stepMs": 300000,
   "readMix": {
-    "durationMs": 60000,
     "rps": 10,
     "calls": [
       { "id": "token-balance", "method": "eth_call", "weight": 6, "fixturePrefixes": ["call-balanceOf-"] },

@@ -79,7 +79,7 @@ test('runs every scenario over HTTP and fails on a successful RPC with incorrect
   const reports = new Map();
   t.mock.method(console, 'log', line => {
     const row = JSON.parse(line);
-    reports.set(row.scenario, row);
+    reports.set(row.step ?? row.scenario, row);
   });
   let corrupt;
   const measured = [];
@@ -138,6 +138,10 @@ test('runs every scenario over HTTP and fails on a successful RPC with incorrect
   assert.equal(completed.event, 'completed');
   assert.equal(completed.budgetMs, 1500);
   assert.ok(completed.elapsedMs >= completed.budgetMs - 1);
+  for (const name of ['historical', 'limits', 'read-mix', 'isolated']) {
+    assert.equal(reports.get(name).targetMs, 375);
+    assert.ok(reports.get(name).elapsedMs >= 374);
+  }
   corrupt = 'eth_getFilterChanges';
   await assert.rejects(run(), /first poll differs/);
   assert.equal(filters.size, 0);
@@ -166,7 +170,11 @@ test('pairs first and repeated reads before reference queries and exhausts disti
     events.push([source, method, height]);
     return { value: rpc(method, params), ms: 2, bytes: 100 };
   };
-  await measureDistinctBlocks(client('target'), client('reference'), 10, 515, 30_000);
+  let clock = 0;
+  const now = () => clock;
+  const wait = async ms => { clock += ms; };
+  await measureDistinctBlocks(client('target'), client('reference'), 10, 515, 300_000, now, wait);
+  assert.equal(clock, 300_000);
   const pairs = reports.filter(r => r.event === 'height-pair');
   assert.equal(pairs.length, 6);
   assert.deepEqual(pairs.map(p => p.height).sort((a,b) => a-b), [10,11,12,13,14,15]);
@@ -185,7 +193,7 @@ test('pairs first and repeated reads before reference queries and exhausts disti
     assert.equal(row.poolExhausted, true);
   }
   reports.length = 0;
-  await measureDistinctBlocks(client('target'), client('reference'), 10, 535, 30_000);
+  await measureDistinctBlocks(client('target'), client('reference'), 10, 535, 300_000, now, wait);
   const covered = reports.filter(r => r.event === 'height-pair').flatMap(row =>
     Array.from({length: row.blockSpan ?? 1}, (_, offset) => row.height + offset));
   assert.equal(covered.length, 26);
@@ -221,4 +229,39 @@ test('read mix accounts for all arrivals, verifies the fixtures and skips missed
   for (const r of results) assert.equal(r.requests + r.missed, r.scheduled);
   await assert.rejects(run(async () => ({ value: null })));
   assert.equal(rows.at(-1).event, 'failed');
+});
+
+test('ports log payload, indexed sender, block receipt and transaction position controls', async () => {
+  const owner = hash(1);
+  function tx(h, i) { return { ...transaction(h), hash: hash(1000 + 3 * h + i) }; }
+  function receipts(h) {
+    return [0, 1, 2].map(i => ({ ...receipt(h), transactionHash: tx(h, i).hash,
+      logs: [{ ...log(h), transactionHash: tx(h, i).hash, transactionIndex: quantity(i), logIndex: quantity(i),
+        topics: [topic, i === 0 ? owner : hash(3), hash(2)] }] }));
+  }
+  function read(method, params) {
+    const [id, full] = params;
+    const n = typeof id === 'string' ? Number(id) : 0;
+    if (method === 'eth_getBlockByNumber') return { ...rpc(method, params),
+      transactions: [0, 1, 2].map(i => full ? tx(n, i) : tx(n, i).hash) };
+    if (method === 'eth_getBlockReceipts') return receipts(n);
+    if (method === 'eth_getTransactionByHash') return tx(Math.floor((n - 1000) / 3), (n - 1000) % 3);
+    if (method === 'eth_call') return hash(42);
+    return rpc(method, params);
+  }
+  const { scenarios } = await prepareScenarios(read, 1, 16);
+  const get = name => scenarios.find(s => s.name === name);
+  assert.equal(get('logs-8-blocks').expectedLogs, 24);
+  assert.equal(get('logs-16-blocks').expectedLogs, 48);
+  const selective = get('logs-transfer-sender');
+  const all = Array.from({ length: 16 }, (_, i) => receipts(i + 1)[0].logs[0]);
+  selective.verify(all);
+  assert.throws(() => selective.verify([receipts(1)[1].logs[0], ...all.slice(1)]));
+  assert.throws(() => get('block-receipts-0x1').verify(receipts(1).reverse()));
+  for (const i of [0,1,2]) {
+    const sample = get('trace-position-' + i);
+    assert.equal(sample.params[0], tx(1, i).hash);
+    assert.equal(sample.metadata.transactionIndex, i);
+    sample.verify(frame);
+  }
 });

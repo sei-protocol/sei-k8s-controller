@@ -37,6 +37,9 @@ type NodeSizing struct {
 // Config are the two override escape hatches so the typed surface need not chase
 // every preset knob.
 type NetworkSpec struct {
+	// ConfigValues supplies typed TOML settings to every validator in this network.
+	ConfigValues []ConfigValue
+
 	Name       string // metadata.name; also spec.genesis.chainId and the peer-selector value
 	Namespace  string // "" => client default (kubeconfig context / SA namespace)
 	Image      string // -> spec.image

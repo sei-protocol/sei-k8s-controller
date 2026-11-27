@@ -54,7 +54,7 @@ function verifyFrame(frame, tx) {
   assert.ok(BigInt(frame.gasUsed) > 0n);
 }
 
-export async function prepareScenarios(read, first, last) {
+export async function prepareScenarios(read, first, last, reference = read) {
   assert.ok(Number.isSafeInteger(first) && first > 0 && Number.isSafeInteger(last) && last >= first, 'invalid load window');
   const blocks = [];
   const maxTransactions = 100_000;
@@ -112,7 +112,7 @@ export async function prepareScenarios(read, first, last) {
   const end = blocks.at(-1).header.number;
   const logs = blocks.flatMap(block => block.logs);
   const range = { fromBlock: blocks[0].header.number, toBlock: end };
-  for (const width of new Set([1, 10, 100, blocks.length].filter(n => n <= blocks.length))) {
+  for (const width of new Set([1, 8, 10, 16, 100, blocks.length].filter(n => n <= blocks.length))) {
     const suffix = blocks.slice(-width);
     seal('logs-' + width + '-blocks', 'eth_getLogs', [{ fromBlock: suffix[0].header.number, toBlock: end }], suffix.flatMap(block => block.logs));
   }
@@ -130,10 +130,17 @@ export async function prepareScenarios(read, first, last) {
 
   const populated = blocks.filter(b => b.header.transactions.length);
   const addresses = new Set();
+  let prefixBlock;
   for (const { header, sampleReceipt } of new Set([populated[0], populated[Math.floor((populated.length - 1) / 2)], populated.at(-1)])) {
     const full = await read('eth_getBlockByNumber', [header.number, true]);
     assert.equal(full?.hash, header.hash);
     assert.deepEqual(full.transactions.map(tx => tx.hash), header.transactions);
+    if (!prefixBlock || full.transactions.length > prefixBlock.transactions.length) prefixBlock = full;
+    const blockReceipts = await reference('eth_getBlockReceipts', [header.number]);
+    assert.deepEqual(blockReceipts.map(r => r.transactionHash), header.transactions, 'reference receipt order');
+    assert.ok(blockReceipts.every(r => r.blockHash === header.hash), 'reference receipt block hash');
+    seal('block-receipts-' + header.number, 'eth_getBlockReceipts', [header.number], blockReceipts,
+      { height: header.number, transactions: blockReceipts.length, logs: blockReceipts.reduce((n, r) => n + r.logs.length, 0) });
     const projection = { height: header.number, transactions: full.transactions.length };
     seal('full-block-' + header.number, 'eth_getBlockByNumber', [header.number, true], full, { ...projection, fullTx: true });
     seal('hashes-only-' + header.number, 'eth_getBlockByNumber', [header.number, false], header, { ...projection, fullTx: false });
@@ -147,6 +154,15 @@ export async function prepareScenarios(read, first, last) {
       if (/^0x[\da-f]{40}$/i.test(address)) addresses.add(address.toLowerCase());
     }
   }
+  // Keep the block fixed when comparing how much preceding work a tracer replays.
+  const transactions = prefixBlock.transactions;
+  for (const index of new Set([0, Math.floor(transactions.length / 2), transactions.length - 1])) {
+    const tx = transactions[index];
+    if (!tx.to) continue; // verifyFrame covers CALL transactions.
+    scenarios.push(traceScenario('trace-position-' + index, 'debug_traceTransaction', [tx.hash],
+      { height: prefixBlock.number, blockHash: prefixBlock.hash, txHash: tx.hash, transactionIndex: index,
+        transactions: transactions.length }, frame => verifyFrame(frame, tx)));
+  }
   for (const address of [...addresses].slice(0, 4)) {
     for (const method of ['eth_getBalance', 'eth_getCode']) {
       const params = [address, end];
@@ -158,6 +174,10 @@ export async function prepareScenarios(read, first, last) {
   // Use a token and holder that actually participated in this workload.
   const transfer = logs.find(l => l.topics.length === 3 && l.topics[0].toLowerCase() === transferTopic);
   assert.ok(transfer, 'steady-state corpus has no ERC-20 Transfer');
+  const ownerTopics = transfer.topics.slice(0, 2);
+  const ownerLogs = logs.filter(log => log.address.toLowerCase() === transfer.address.toLowerCase()
+    && ownerTopics.every((topic, i) => topic.toLowerCase() === log.topics[i]?.toLowerCase()));
+  seal('logs-transfer-sender', 'eth_getLogs', [{ ...range, address: transfer.address, topics: ownerTopics }], ownerLogs);
   const call = { to: transfer.address, data: '0x70a08231' + transfer.topics[2].slice(2) };
   for (const height of new Set([range.fromBlock, end])) {
     const value = await read('eth_call', [call, height]);
@@ -388,7 +408,7 @@ export async function runLimitChecks(endpoint, end, maxBlocks, control, duration
 
 // Shuffle relative heights reproducibly so neither the target nor reference is
 // traversed sequentially. Reserve the pinned suite's 500-height setup window.
-export async function measureDistinctBlocks(request, reference, first, last, budgetMs) {
+export async function measureDistinctBlocks(request, reference, first, last, budgetMs, now = () => performance.now(), wait = sleep) {
   const end = last - first >= 500 ? last - 500 : last;
   const cases = [
     { name: 'logs-1-block', method: 'eth_getLogs', width: 1 },
@@ -416,7 +436,7 @@ export async function measureDistinctBlocks(request, reference, first, last, bud
     for (const c of cases) if (c.targets[i]) targets.push({ c, height: c.targets[i].height });
   }
   const startedAt = new Date().toISOString();
-  const start = performance.now();
+  const start = now();
   let count = 0;
   for (const { c, height } of targets) {
     const { method } = c;
@@ -459,7 +479,11 @@ export async function measureDistinctBlocks(request, reference, first, last, bud
     console.log(JSON.stringify({ suite: 'post-load-rpc', event: 'height-pair', method, workload: c.name, height, depthFromLoadEnd: last - height,
       firstReadMs: initial.ms, immediateRepeatMs: repeat.ms, firstResponseBytes: initial.bytes, repeatResponseBytes: repeat.bytes, ...details }));
     count++;
-    if (count >= cases.length && performance.now() - start >= budgetMs) break;
+    // Spread a finite pool over the step without recycling any heights.
+    const nextDue = start + budgetMs * count / targets.length;
+    const waitMs = nextDue - now();
+    if (waitMs > 0) await wait(Math.ceil(waitMs));
+    if (count >= cases.length && now() - start >= budgetMs) break;
   }
   const endedAt = new Date().toISOString();
   for (const c of cases) {
@@ -529,13 +553,18 @@ export async function runReadMix(request, scenarios, mix, durationMs, now = () =
 export async function runPostLoad(endpoint, first, last, budgetMs, maxBlocks = 2000, metricsURL = followerMetricsURL(endpoint), referenceEndpoint = endpoint, profile) {
   const suiteStart = performance.now();
   profile ??= JSON.parse(await readFile(new URL('./post_load_rpc_profile.json', import.meta.url), 'utf8'));
-  const reserved = [profile.pairedHistoryMs, profile.limitsMs, profile.readMix.durationMs];
-  assert.ok(reserved.every(ms => Number.isFinite(ms) && ms > 0));
-  assert.ok(reserved.reduce((sum, ms) => sum + ms, 0) < profile.budgetMs, 'profile leaves no time for individual methods');
-  budgetMs ??= profile.budgetMs;
-  const scale = budgetMs / profile.budgetMs;
-  console.log(JSON.stringify({ suite: 'post-load-rpc', event: 'profile', profile, budgetMs, first, last, endpoint, referenceEndpoint }));
-  const deadline = suiteStart + budgetMs;
+  const steps = ['historical', 'limits', 'read-mix', 'isolated'];
+  assert.ok(Number.isSafeInteger(profile.stepMs) && profile.stepMs > 0);
+  budgetMs ??= profile.stepMs * steps.length;
+  const stepMs = budgetMs / steps.length;
+  console.log(JSON.stringify({ suite: 'post-load-rpc', event: 'profile', profile, steps, stepMs, budgetMs, first, last, endpoint, referenceEndpoint }));
+  async function runStep(step, measure) {
+    const start = performance.now();
+    const startedAt = new Date().toISOString();
+    await measure();
+    console.log(JSON.stringify({ suite: 'post-load-rpc', event: 'step-completed', step, startedAt,
+      endedAt: new Date().toISOString(), targetMs: stepMs, elapsedMs: performance.now() - start }));
+  }
   const request = rpcClient(endpoint);
   // Tendermint can report the end height before the EVM receipt watermark
   // catches up. Poll for this exact height before sealing the corpus.
@@ -544,42 +573,44 @@ export async function runPostLoad(endpoint, first, last, budgetMs, maxBlocks = 2
     assert.ok(performance.now() < readyBy, 'receipt follower did not reach load height ' + last);
     await sleep(1000);
   }
-  await measureDistinctBlocks(request, rpcClient(referenceEndpoint), first, last, scale * profile.pairedHistoryMs);
-  const { scenarios, filter, corpus } = await prepareScenarios(async (method, params) => (await request(method, params)).value, first, last);
+  const reference = rpcClient(referenceEndpoint);
+  await runStep('historical', () => measureDistinctBlocks(request, reference, first, last, stepMs));
+  const { scenarios, filter, corpus } = await prepareScenarios(async (method, params) => (await request(method, params)).value, first, last,
+    async (method, params) => (await reference(method, params)).value);
   console.log(JSON.stringify({ phase: 'post-load-rpc', endpoint, corpus, fingerprint: digest(scenarios.map(s => [s.name, s.params, s.expectedHash])), readScenarios: scenarios.length + 2, limitStages: ['baseline', 'exercise', 'recovery'] }));
   const control = scenarios.find(s => s.name === 'logs-1-blocks');
-  await runLimitChecks(endpoint, Number(corpus.last), maxBlocks, control, scale * profile.limitsMs, metricsURL);
-  function remainingBudget() {
-    const remaining = deadline - performance.now();
-    if (budgetMs > 0) assert.ok(remaining > 0, 'shared RPC budget expired before all scenarios completed');
-    return Math.max(0, remaining);
-  }
-  await runReadMix(request, scenarios, profile.readMix, Math.min(scale * profile.readMix.durationMs, remainingBudget()));
-  await measureFilter(request, filter, 2 * remainingBudget() / (scenarios.length + 2));
-  const groups = ['logs', 'blocks-transactions-receipts', 'state', 'traces'];
-  const ordered = groups.flatMap(group => scenarios.filter(s => suiteGroup(s.method) === group));
-  assert.equal(ordered.length, scenarios.length);
-  for (const [index, scenario] of ordered.entries()) {
-    const scenarioEnd = performance.now() + remainingBudget() / (ordered.length - index);
-    let observedLogs;
-    async function sample(measured) {
-      const { value, ms, bytes } = await request(scenario.method, scenario.params);
-      scenario.verify(value);
-      if (measured && scenario.method === 'eth_getLogs') {
-        observedLogs ??= logSummary(scenario.params[0], scenario.expectedLogs, value);
+  await runStep('limits', () => runLimitChecks(endpoint, Number(corpus.last), maxBlocks, control, stepMs, metricsURL));
+  await runStep('read-mix', () => runReadMix(request, scenarios, profile.readMix, stepMs));
+  await runStep('isolated', async () => {
+    const deadline = performance.now() + stepMs;
+    await measureFilter(request, filter, 2 * stepMs / (scenarios.length + 2));
+    const groups = ['traces', 'logs', 'blocks-transactions-receipts', 'state'];
+    const ordered = groups.flatMap(group => scenarios.filter(s => suiteGroup(s.method) === group));
+    assert.equal(ordered.length, scenarios.length);
+    for (const [index, scenario] of ordered.entries()) {
+      const remaining = deadline - performance.now();
+      if (stepMs > 0) assert.ok(remaining > 0, 'isolated read step expired before ' + scenario.name);
+      const scenarioEnd = performance.now() + Math.max(0, remaining) / (ordered.length - index);
+      let observedLogs;
+      async function sample(measured) {
+        const { value, ms, bytes } = await request(scenario.method, scenario.params);
+        scenario.verify(value);
+        if (measured && scenario.method === 'eth_getLogs') {
+          observedLogs ??= logSummary(scenario.params[0], scenario.expectedLogs, value);
+        }
+        return { ms, bytes };
       }
-      return { ms, bytes };
+      const first = await sample(false);
+      const startedAt = new Date().toISOString();
+      const samples = [];
+      const start = performance.now();
+      do { samples.push(await sample(true)); } while (performance.now() < scenarioEnd);
+      const elapsed = performance.now() - start;
+      const trace = scenario.method.startsWith('debug_trace');
+      report(scenario.name, scenario.method, samples, { startedAt, endedAt: new Date().toISOString(), ...scenario.metadata, ...observedLogs,
+        ...(trace ? { tracer: callTracer.tracer, firstObservedMs: first.ms } : {}),
+        rps: samples.length * 1000 / elapsed });
     }
-    const first = await sample(false);
-    const startedAt = new Date().toISOString();
-    const samples = [];
-    const start = performance.now();
-    do { samples.push(await sample(true)); } while (performance.now() < scenarioEnd);
-    const elapsed = performance.now() - start;
-    const trace = scenario.method.startsWith('debug_trace');
-    report(scenario.name, scenario.method, samples, { startedAt, endedAt: new Date().toISOString(), ...scenario.metadata, ...observedLogs,
-      ...(trace ? { tracer: callTracer.tracer, firstObservedMs: first.ms } : {}),
-      rps: samples.length * 1000 / elapsed });
-  }
+  });
   console.log(JSON.stringify({ suite: 'post-load-rpc', event: 'completed', budgetMs, elapsedMs: performance.now() - suiteStart }));
 }

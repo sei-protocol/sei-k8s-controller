@@ -265,6 +265,10 @@ func TestRenderNode_ConfigValuesKeepTheirJSONType(t *testing.T) {
 		{FileName: appToml, Key: "evm.rate_limiting_enabled", Value: apiextensionsv1.JSON{Raw: []byte("false")}},
 		{FileName: appToml, Key: "giga.execution.parse_workers", Value: apiextensionsv1.JSON{Raw: []byte("16")}},
 	}
+	net := renderNetwork(sei.NetworkSpec{Name: testNet, ConfigValues: spec.ConfigValues}, testNS)
+	if !reflect.DeepEqual(net.Spec.ConfigValues, want) {
+		t.Errorf("network configValues = %+v, want %+v", net.Spec.ConfigValues, want)
+	}
 	if !reflect.DeepEqual(node.Spec.ConfigValues, want) {
 		t.Errorf("node configValues = %+v, want %+v", node.Spec.ConfigValues, want)
 	}
