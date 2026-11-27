@@ -69,6 +69,7 @@ func renderNetwork(spec sei.NetworkSpec, namespace string) *seiv1alpha1.SeiNetwo
 		Spec: seiv1alpha1.SeiNetworkSpec{
 			Image:          spec.Image,
 			Replicas:       int32(spec.Validators),
+			ConfigValues:   renderConfigValues(spec.ConfigValues),
 			DeletionPolicy: deletionPolicy,
 			Genesis: seiv1alpha1.GenesisCeremonyConfig{
 				ChainID: spec.Name, // chain ID defaults to the network name
@@ -158,15 +159,7 @@ func renderNode(spec sei.NodeSpec, namespace, networkNS string) *seiv1alpha1.Sei
 	if len(spec.Config) > 0 {
 		node.Spec.Overrides = maps.Clone(spec.Config)
 	}
-	for _, v := range spec.ConfigValues {
-		// validateNodeSpec has already refused a value with no JSON form.
-		raw, _ := json.Marshal(v.Value)
-		node.Spec.ConfigValues = append(node.Spec.ConfigValues, seiv1alpha1.ConfigValue{
-			FileName: v.FileName,
-			Key:      v.Key,
-			Value:    apiextensionsv1.JSON{Raw: raw},
-		})
-	}
+	node.Spec.ConfigValues = renderConfigValues(spec.ConfigValues)
 	node.Spec.DataVolume, node.Spec.Resources = renderSizing(spec.Sizing)
 	if spec.NodePool != "" {
 		node.Spec.Scheduling = &seiv1alpha1.SchedulingConfig{NodePool: spec.NodePool}
@@ -309,4 +302,18 @@ func renderConfigMigration(m *sei.ConfigMigration) *seiv1alpha1.ConfigMigration 
 		out.GigaStore = &seiv1alpha1.GigaStoreMigration{Backend: g.Backend}
 	}
 	return out
+}
+
+func renderConfigValues(values []sei.ConfigValue) []seiv1alpha1.ConfigValue {
+	var rendered []seiv1alpha1.ConfigValue
+	for _, v := range values {
+		// SDK validation has already refused a value with no JSON form.
+		raw, _ := json.Marshal(v.Value)
+		rendered = append(rendered, seiv1alpha1.ConfigValue{
+			FileName: v.FileName,
+			Key:      v.Key,
+			Value:    apiextensionsv1.JSON{Raw: raw},
+		})
+	}
+	return rendered
 }
