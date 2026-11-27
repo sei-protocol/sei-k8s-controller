@@ -44,6 +44,7 @@
 # (both COPY . .) but are inert there — neither build compiles ./test/integration
 # nor passes the integration tag.
 !test/integration/**/*_test.go
+!test/integration/testdata/post_load_rpc.mjs
 
 # The importable fault catalog and seiload Job renderer (test/manifests/faults,
 # test/manifests/bench) //go:embed their *.yaml.tmpl manifests; the integration

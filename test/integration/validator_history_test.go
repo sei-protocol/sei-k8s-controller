@@ -22,6 +22,7 @@ import (
 // transaction indexing and both EVM listeners enabled on the signing nodes.
 func TestNightlyValidatorHistory(t *testing.T) {
 	requireCluster(t)
+	rpcBenchmarkImage := mustEnv(t, "RELEASE_TEST_IMAGE")
 	id := runChainID(mustEnv(t, "SEI_CHAIN_ID")) + "-history"
 	if len(rpcNodeName(id, 1)+"-0") > 63 {
 		t.Fatalf("chain ID %q is too long for the RPC pod label", id)
@@ -78,10 +79,13 @@ func TestNightlyValidatorHistory(t *testing.T) {
 	// from the root account. All validators must still serve that balance
 	// at the same height after the load has finished.
 	hc := &http.Client{Timeout: 10 * time.Second}
-	height := mustLatestHeight(ctx, t, hc, ch.rpcNodes[1].TendermintRPC(), "pre-load") - 1
+	receiptRPC := ch.rpcNodes[1].TendermintRPC()
+	preLoadHeight := mustLatestHeight(ctx, t, hc, receiptRPC, "pre-load")
+	height := preLoadHeight - 1
 	ns := ch.network.Namespace()
 	want := historicalBalanceWS(ctx, t, rpcNodeName(id, 1), ns, root.EVMAddress, height)
 	runSeiload(ctx, t, cs, ch, s)
+	postLoadHeight := mustLatestHeight(ctx, t, hc, receiptRPC, "post-load")
 	for i := range s.validators {
 		node := validatorName(id, i)
 		t.Run(node, func(t *testing.T) {
@@ -117,6 +121,9 @@ func TestNightlyValidatorHistory(t *testing.T) {
 			}
 		})
 	}
+	t.Run("post-load-rpc", func(t *testing.T) {
+		runPostLoadRPC(ctx, t, cs, ch, rpcBenchmarkImage, preLoadHeight+1, postLoadHeight)
+	})
 }
 
 func historicalBalanceWS(ctx context.Context, t *testing.T, node, ns, address string, height int64) string {
