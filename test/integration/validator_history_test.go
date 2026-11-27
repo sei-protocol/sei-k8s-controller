@@ -18,6 +18,8 @@ import (
 	"github.com/sei-protocol/sei-k8s-controller/sdk/sei"
 )
 
+const historyRPCMaxLogBlocks = 2000
+
 // TestNightlyValidatorHistory repeats the steady-state workload with history,
 // transaction indexing and both EVM listeners enabled on the signing nodes.
 func TestNightlyValidatorHistory(t *testing.T) {
@@ -61,6 +63,7 @@ func TestNightlyValidatorHistory(t *testing.T) {
 		},
 		rpcConfigValues: []sei.ConfigValue{
 			{FileName: "app.toml", Key: "evm.rate_limiting_enabled", Value: false},
+			{FileName: "app.toml", Key: "evm.max_blocks_for_log", Value: historyRPCMaxLogBlocks},
 		},
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Duration(s.durationMin+80)*time.Minute)

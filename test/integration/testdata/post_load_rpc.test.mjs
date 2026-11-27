@@ -81,16 +81,40 @@ test('runs every scenario over HTTP and fails on a successful RPC with incorrect
   let corrupt;
   const measured = [];
   const server = createServer(async (req, resp) => {
+    if (req.url === '/metrics') {
+      resp.end('process_cpu_seconds_total{chain_id="fixture"} 2\nprocess_resident_memory_bytes 1024\nprocess_start_time_seconds 10\n');
+      return;
+    }
     let body = '';
     for await (const chunk of req) body += chunk;
     const { id, method, params } = JSON.parse(body);
     measured.push(method);
-    resp.end(JSON.stringify({ jsonrpc: '2.0', id, result: corrupt === method ? [] : rpc(method, params) }));
+    let result, error;
+    const [arg, , rewards] = params;
+    if (method === 'eth_feeHistory') {
+      if (rewards.length > 100) error = 'rewardPercentiles length must be less than or equal to 100';
+      else if (rewards.at(-1) > 100) error = 'invalid reward percentiles: must be ascending and between 0 and 100';
+      else result = { reward: [rewards.map(() => '0x0')] };
+    } else if (method === 'eth_getLogs' && Number(arg.toBlock) - Number(arg.fromBlock) >= 4) {
+      if (corrupt === 'accepted') result = [];
+      else error = corrupt === 'wrong-error' ? 'server overloaded' : 'block range too large (5), maximum allowed is 4 blocks';
+    } else {
+      result = corrupt === method ? [] : rpc(method, params);
+    }
+    resp.end(JSON.stringify({ jsonrpc: '2.0', id, ...(error ? { error: { code: -32000, message: error } } : {result}) }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const url = 'http://127.0.0.1:' + server.address().port;
-  await runPostLoad(url, 10, 15, 0);
+  const run = () => runPostLoad(url, 10, 15, 0, 4, url + '/metrics');
+  await run();
+  const rejected = reports.get('logs-range-plus-one');
+  assert.equal(rejected.expectedRejections, 1);
+  assert.equal(rejected.requested, 5);
+  assert.equal(rejected.stage, 'exercise');
+  assert.equal(rejected.followerPeakRssBytes, 1024);
+  assert.equal(reports.get('fee-percentile-count-plus-one').observedError.code, -32000);
+  assert.equal(reports.get('valid-one-block').stage, 'recovery');
   for (const [name, span, count] of [['logs-3-blocks', 3, 3], ['logs-address', 3, 3], ['logs-topic', 3, 3],
     ['logs-no-match', 3, 0], ['filter-populated', 1, 1], ['filter-drained', 1, 0]]) {
     const row = reports.get(name);
@@ -107,10 +131,11 @@ test('runs every scenario over HTTP and fails on a successful RPC with incorrect
   assert.equal(measured.filter(m => m === 'eth_getFilterChanges').length, 4);
   assert.equal(filters.size, 0);
   corrupt = 'eth_getFilterChanges';
-  await assert.rejects(runPostLoad(url, 10, 15, 0), /first poll differs/);
+  await assert.rejects(run(), /first poll differs/);
   assert.equal(filters.size, 0);
+  for (corrupt of ['accepted', 'wrong-error']) await assert.rejects(run(), /expected limit error|block range too large/);
   corrupt = 'eth_getLogs';
-  await assert.rejects(runPostLoad(url, 10, 15, 0), /unexpected log count/);
+  await assert.rejects(run(), /unexpected log count/);
 });
 
 test('narrows the contiguous suffix before a wide query would exceed the follower log limit', async () => {

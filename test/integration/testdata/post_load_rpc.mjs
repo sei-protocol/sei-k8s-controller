@@ -214,10 +214,18 @@ async function checkedTransaction(read, tx, header) {
   return result;
 }
 
+function suiteGroup(method) {
+  if (method === 'eth_getFilterChanges') return 'filters';
+  if (method === 'eth_getLogs') return 'logs';
+  if (method.startsWith('debug_')) return 'traces';
+  if (['eth_call', 'eth_getBalance', 'eth_getCode'].includes(method)) return 'state';
+  return 'blocks-transactions-receipts';
+}
+
 function report(scenario, method, samples, fields) {
   const times = samples.map(sample => sample.ms).sort((a, b) => a - b);
   const percentile = q => times[Math.ceil(times.length * q) - 1];
-  console.log(JSON.stringify({ scenario, method, ...fields, requests: times.length,
+  console.log(JSON.stringify({ suite: 'post-load-rpc', group: suiteGroup(method), scenario, method, ...fields, requests: times.length,
     responseBytes: samples.reduce((total, sample) => total + sample.bytes, 0),
     p50Ms: percentile(.5), p95Ms: times.length >= 20 ? percentile(.95) : null,
     p99Ms: times.length >= 100 ? percentile(.99) : null }));
@@ -245,15 +253,17 @@ async function measureFilter(request, filter, budgetMs) {
     }
   }
   await cycle(false);
+  const startedAt = new Date().toISOString();
   const start = performance.now();
   do { await cycle(true); } while (performance.now() - start < budgetMs);
-  report('filter-populated', 'eth_getFilterChanges', populated, { ...firstSummary, logs: firstSummary.returnedLogsPerRequest });
-  report('filter-drained', 'eth_getFilterChanges', drained, { ...drainedSummary, logs: drainedSummary.returnedLogsPerRequest });
+  const endedAt = new Date().toISOString();
+  report('filter-populated', 'eth_getFilterChanges', populated, { startedAt, endedAt, ...firstSummary, logs: firstSummary.returnedLogsPerRequest });
+  report('filter-drained', 'eth_getFilterChanges', drained, { startedAt, endedAt, ...drainedSummary, logs: drainedSummary.returnedLogsPerRequest });
 }
 
-export async function runPostLoad(endpoint, first, last, budgetMs = 600_000) {
+function rpcClient(endpoint) {
   let id = 0;
-  async function request(method, params) {
+  return async function request(method, params, expectedError) {
     const body = JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params });
     const start = performance.now();
     const response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -263,10 +273,118 @@ export async function runPostLoad(endpoint, first, last, budgetMs = 600_000) {
     const ms = performance.now() - start;
     const envelope = JSON.parse(new TextDecoder().decode(bytes));
     assert.equal(envelope.id, id, 'mismatched JSON-RPC response');
+    if (expectedError) {
+      assert.equal(envelope.error?.code, -32000, method + ': expected limit error, got ' + JSON.stringify(envelope.error));
+      assert.match(envelope.error.message, expectedError);
+      assert.ok(!Object.hasOwn(envelope, 'result'));
+      return { error: envelope.error, ms, bytes: bytes.byteLength };
+    }
     assert.ok(!envelope.error, method + ': ' + JSON.stringify(envelope.error));
     assert.ok(Object.hasOwn(envelope, 'result'), method + ': missing result');
     return { value: envelope.result, bytes: bytes.byteLength, ms };
+  };
+}
+
+function followerMetricsURL(endpoint) {
+  const url = new URL('/metrics', endpoint);
+  url.port = '26660';
+  return url;
+}
+
+async function processSnapshot(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+  assert.ok(response.ok, 'metrics endpoint HTTP ' + response.status);
+  const body = await response.text();
+  const gauges = {};
+  const names = new Set(['process_cpu_seconds_total', 'process_resident_memory_bytes', 'process_start_time_seconds']);
+  for (const line of body.split('\n')) {
+    if (!line.startsWith('process_')) continue;
+    const sample = /^(\w+)(?:\{.*\})?\s+(\S+)/.exec(line);
+    if (sample && names.has(sample[1])) {
+      assert.ok(!Object.hasOwn(gauges, sample[1]), 'ambiguous follower metric ' + sample[1]);
+      gauges[sample[1]] = Number(sample[2]);
+    }
   }
+  for (const name of names) assert.ok(Number.isFinite(gauges[name]), 'missing follower metric ' + name);
+  return { timestamp: new Date().toISOString(), ...gauges };
+}
+
+// All heights exist. A rare topic keeps the at-limit positive control small.
+export async function runLimitChecks(endpoint, end, maxBlocks, control, durationMs, metricsURL = followerMetricsURL(endpoint)) {
+  assert.ok(Number.isSafeInteger(maxBlocks) && maxBlocks > 0 && end > maxBlocks, 'insufficient sealed history for range boundary');
+  const request = rpcClient(endpoint);
+  const toBlock = quantity(end);
+  const range = width => [{ fromBlock: quantity(end - width + 1), toBlock, topics: ['0x' + 'ff'.repeat(32)] }];
+  const percentages = Array.from({ length: 101 }, (_, i) => i);
+  const fee = percentiles => ['0x1', toBlock, percentiles];
+  const allowedLogs = await request('eth_getLogs', range(maxBlocks));
+  assert.ok(Array.isArray(allowedLogs.value));
+  const allowedFees = await request('eth_feeHistory', fee(percentages.slice(1)));
+  assert.equal(allowedFees.value.reward?.[0]?.length, 100, 'at-limit reward count');
+  console.log(JSON.stringify({ suite: 'post-load-rpc', group: 'limits', event: 'boundary-controls',
+    timestamp: new Date().toISOString(), endpoint, toBlock, allowedBlockSpan: maxBlocks,
+    logsReturned: allowedLogs.value.length, returnedRewardPercentiles: allowedFees.value.reward[0].length }));
+  const cases = [
+    { name: 'logs-range-plus-one', method: 'eth_getLogs', params: range(maxBlocks + 1),
+      error: new RegExp('block range too large.*maximum allowed is ' + maxBlocks + ' blocks'), limit: maxBlocks, requested: maxBlocks + 1 },
+    { name: 'fee-percentile-plus-one', method: 'eth_feeHistory', params: fee([101]),
+      error: /invalid reward percentiles.*between 0 and 100/i, limit: 100, requested: 101 },
+    { name: 'fee-percentile-count-plus-one', method: 'eth_feeHistory', params: fee(percentages),
+      error: /rewardPercentiles length must be less than or equal to 100/i, limit: 100, requested: 101 },
+  ];
+  const valid = { name: 'valid-one-block', method: 'eth_getLogs', params: control.params };
+  for (const [stage, share] of [['baseline', 1/6], ['exercise', 2/3], ['recovery', 1/6]]) {
+    const active = stage === 'exercise' ? [...cases, valid] : [valid];
+    const samples = new Map(active.map(c => [c.name, []]));
+    const startedAt = new Date().toISOString();
+    const metrics = [];
+    async function snapshot() {
+      const reading = await processSnapshot(metricsURL);
+      metrics.push(reading);
+      console.log(JSON.stringify({ suite: 'post-load-rpc', group: 'limits', stage, event: 'follower-metrics', ...reading }));
+    }
+    await snapshot();
+    let lastScrape = performance.now();
+    const deadline = lastScrape + durationMs * share;
+    do {
+      const tick = performance.now();
+      for (const c of active) {
+        try {
+          const r = await request(c.method, c.params, c.error);
+          if (!c.error) control.verify(r.value);
+          samples.get(c.name).push({ ms: r.ms, bytes: r.bytes, error: r.error });
+        } catch (err) {
+          console.log(JSON.stringify({ suite: 'post-load-rpc', group: 'limits', stage, scenario: c.name,
+            event: 'unexpected-response', timestamp: new Date().toISOString(), verifiedBeforeFailure: samples.get(c.name).length, error: err.message }));
+          throw err;
+        }
+      }
+      if (performance.now() - lastScrape >= 5000) {
+        await snapshot();
+        lastScrape = performance.now();
+      }
+      // One round per second at most and one in-flight request. Never catch up missed rounds.
+      const wait = Math.min(deadline, tick + 1000) - performance.now();
+      if (wait > 0) await sleep(wait);
+    } while (performance.now() < deadline);
+    await snapshot();
+    const first = metrics[0], last = metrics.at(-1);
+    assert.equal(last.process_start_time_seconds, first.process_start_time_seconds, 'receipt follower restarted');
+    const seconds = (Date.parse(last.timestamp) - Date.parse(first.timestamp)) / 1000;
+    const cpu = last.process_cpu_seconds_total - first.process_cpu_seconds_total;
+    for (const c of active) {
+      const rows = samples.get(c.name);
+      report(c.name, c.method, rows, { group: 'limits', stage, startedAt, endedAt: last.timestamp,
+        limit: c.limit, requested: c.requested, params: c.params, expectedRejections: c.error ? rows.length : 0,
+        successfulReads: c.error ? 0 : rows.length, rps: seconds > 0 ? rows.length / seconds : null, observedError: rows[0].error,
+        followerMeanCpuCores: seconds > 0 ? cpu / seconds : null,
+        followerPeakRssBytes: Math.max(...metrics.map(m => m.process_resident_memory_bytes)), followerSamples: metrics.length });
+    }
+  }
+}
+
+export async function runPostLoad(endpoint, first, last, budgetMs = 600_000, maxBlocks = 2000, metricsURL = followerMetricsURL(endpoint)) {
+  const request = rpcClient(endpoint);
   // Tendermint can report the end height before the EVM receipt watermark
   // catches up. Poll for this exact height before sealing the corpus.
   const readyBy = performance.now() + 120_000;
@@ -275,10 +393,17 @@ export async function runPostLoad(endpoint, first, last, budgetMs = 600_000) {
     await sleep(1000);
   }
   const { scenarios, filter, corpus } = await prepareScenarios(async (method, params) => (await request(method, params)).value, first, last);
-  console.log(JSON.stringify({ phase: 'post-load-rpc', endpoint, corpus, fingerprint: digest(scenarios.map(s => [s.name, s.params, s.expectedHash])), scenarios: scenarios.length + 2 }));
-  const timePerScenario = budgetMs / (scenarios.length + 2);
+  console.log(JSON.stringify({ phase: 'post-load-rpc', endpoint, corpus, fingerprint: digest(scenarios.map(s => [s.name, s.params, s.expectedHash])), readScenarios: scenarios.length + 2, limitStages: ['baseline', 'exercise', 'recovery'] }));
+  // Reserve one minute of the ten-minute measurement window for boundary behavior.
+  const limitMs = budgetMs / 10;
+  const control = scenarios.find(s => s.name === 'logs-1-blocks');
+  await runLimitChecks(endpoint, Number(corpus.last), maxBlocks, control, limitMs, metricsURL);
+  const timePerScenario = (budgetMs - limitMs) / (scenarios.length + 2);
   await measureFilter(request, filter, 2 * timePerScenario);
-  for (const scenario of scenarios) {
+  const groups = ['logs', 'blocks-transactions-receipts', 'state', 'traces'];
+  const ordered = groups.flatMap(group => scenarios.filter(s => suiteGroup(s.method) === group));
+  assert.equal(ordered.length, scenarios.length);
+  for (const scenario of ordered) {
     let observedLogs;
     async function sample(measured) {
       const { value, ms, bytes } = await request(scenario.method, scenario.params);
@@ -289,12 +414,13 @@ export async function runPostLoad(endpoint, first, last, budgetMs = 600_000) {
       return { ms, bytes };
     }
     const first = await sample(false);
+    const startedAt = new Date().toISOString();
     const samples = [];
     const start = performance.now();
     do { samples.push(await sample(true)); } while (performance.now() - start < timePerScenario);
     const elapsed = performance.now() - start;
     const trace = scenario.method.startsWith('debug_trace');
-    report(scenario.name, scenario.method, samples, { ...scenario.metadata, ...observedLogs,
+    report(scenario.name, scenario.method, samples, { startedAt, endedAt: new Date().toISOString(), ...scenario.metadata, ...observedLogs,
       ...(trace ? { tracer: callTracer.tracer, firstObservedMs: first.ms } : {}),
       rps: samples.length * 1000 / elapsed });
   }

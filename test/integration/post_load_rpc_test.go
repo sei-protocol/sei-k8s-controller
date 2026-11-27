@@ -45,8 +45,8 @@ func runPostLoadRPC(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 						Name: "rpc-benchmark", Image: image,
 						Command: []string{"node", "--input-type=module", "--eval"},
 						Args: []string{
-							postLoadRPCScript + "\nawait runPostLoad(process.argv[1], Number(process.argv[2]), Number(process.argv[3]));",
-							"--", ch.rpcNodes[1].EVMRPC(), strconv.FormatInt(first, 10), strconv.FormatInt(last, 10),
+							postLoadRPCScript + "\nawait runPostLoad(process.argv[1], Number(process.argv[2]), Number(process.argv[3]), undefined, Number(process.argv[4]));",
+							"--", ch.rpcNodes[1].EVMRPC(), strconv.FormatInt(first, 10), strconv.FormatInt(last, 10), strconv.Itoa(historyRPCMaxLogBlocks),
 						},
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
