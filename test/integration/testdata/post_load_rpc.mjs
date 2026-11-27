@@ -2,6 +2,7 @@
 // integration harness. All reads use the same receipt follower and sealed heights.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -133,7 +134,9 @@ export async function prepareScenarios(read, first, last) {
     const full = await read('eth_getBlockByNumber', [header.number, true]);
     assert.equal(full?.hash, header.hash);
     assert.deepEqual(full.transactions.map(tx => tx.hash), header.transactions);
-    seal('full-block-' + header.number, 'eth_getBlockByNumber', [header.number, true], full);
+    const projection = { height: header.number, transactions: full.transactions.length };
+    seal('full-block-' + header.number, 'eth_getBlockByNumber', [header.number, true], full, { ...projection, fullTx: true });
+    seal('hashes-only-' + header.number, 'eth_getBlockByNumber', [header.number, false], header, { ...projection, fullTx: false });
     seal('block-hashes-' + header.number, 'eth_getBlockByHash', [header.hash, false], header);
     const idx = Math.floor(header.transactions.length / 2);
     const tx = full.transactions[idx];
@@ -227,7 +230,7 @@ function report(scenario, method, samples, fields) {
   const percentile = q => times[Math.ceil(times.length * q) - 1];
   console.log(JSON.stringify({ suite: 'post-load-rpc', group: suiteGroup(method), scenario, method, ...fields, requests: times.length,
     responseBytes: samples.reduce((total, sample) => total + sample.bytes, 0),
-    p50Ms: percentile(.5), p95Ms: times.length >= 20 ? percentile(.95) : null,
+    p50Ms: times.length ? percentile(.5) : null, p95Ms: times.length >= 20 ? percentile(.95) : null,
     p99Ms: times.length >= 100 ? percentile(.99) : null }));
 }
 
@@ -469,8 +472,69 @@ export async function measureDistinctBlocks(request, reference, first, last, bud
   }
 }
 
-export async function runPostLoad(endpoint, first, last, budgetMs = 600_000, maxBlocks = 2000, metricsURL = followerMetricsURL(endpoint), referenceEndpoint = endpoint) {
+// Assign one arrival per slot. Expired slots count against the offered load.
+export async function runReadMix(request, scenarios, mix, durationMs, now = () => performance.now(), wait = sleep) {
+  assert.ok(Number.isFinite(mix.rps) && mix.rps > 0);
+  const calls = mix.calls.map(call => {
+    assert.ok(Number.isSafeInteger(call.weight) && call.weight > 0);
+    const fixtures = scenarios.filter(s => s.method === call.method && call.fixturePrefixes.some(prefix => s.name.startsWith(prefix)));
+    assert.ok(fixtures.length, 'missing fixtures for ' + call.id);
+    return { ...call, fixtures, samples: [], observations: new Map(), scheduled: 0, missed: 0 };
+  });
+  assert.ok(calls.length);
+  const cycle = calls.flatMap(c => Array.from({ length: c.weight }, (_, i) => ({ c, order: digest([c.id, i]) })))
+    .sort((a, b) => a.order.localeCompare(b.order)).map(item => item.c);
+  console.log(JSON.stringify({ suite: 'post-load-rpc', group: 'read-mix', event: 'fixtures',
+    calls: calls.map(c => ({ id: c.id, method: c.method, weight: c.weight,
+      fixtures: c.fixtures.map(f => ({ name: f.name, params: f.params, expectedHash: f.expectedHash, expectedLogs: f.expectedLogs })) })) }));
+  const startedAt = new Date().toISOString();
+  const start = now();
+  const interval = 1000 / mix.rps;
+  const slots = Math.floor(durationMs / interval);
+  for (let slot = 0; slot < slots; slot++) {
+    const c = cycle[slot % cycle.length];
+    c.scheduled++;
+    const due = start + slot * interval;
+    while (now() < due) await wait(due - now());
+    if (now() >= due + interval) {
+      c.missed++;
+      continue;
+    }
+    const fixture = c.fixtures[c.samples.length % c.fixtures.length];
+    try {
+      const { value, bytes, ms } = await request(c.method, fixture.params);
+      fixture.verify(value);
+      c.samples.push({ ms, bytes });
+      const observed = c.observations.get(fixture.name) ?? { name: fixture.name, verified: 0 };
+      observed.verified++;
+      if (c.method === 'eth_getLogs') observed.returnedLogsPerRequest = value.length;
+      c.observations.set(fixture.name, observed);
+    } catch (error) {
+      console.log(JSON.stringify({ suite: 'post-load-rpc', group: 'read-mix', event: 'failed',
+        scenario: c.id, fixture: fixture.name, slot, error: error.message }));
+      throw error;
+    }
+  }
+  const until = start + durationMs;
+  while (now() < until) await wait(until - now());
+  const elapsed = now() - start;
+  const endedAt = new Date().toISOString();
+  for (const c of calls) {
+    report('mix-' + c.id, c.method, c.samples, { group: 'read-mix', startedAt, endedAt,
+      targetRps: mix.rps * c.weight / cycle.length, scheduled: c.scheduled, missed: c.missed, fixtures: [...c.observations.values()],
+      rps: elapsed > 0 ? c.samples.length * 1000 / elapsed : 0 });
+  }
+}
+
+export async function runPostLoad(endpoint, first, last, budgetMs, maxBlocks = 2000, metricsURL = followerMetricsURL(endpoint), referenceEndpoint = endpoint, profile) {
   const suiteStart = performance.now();
+  profile ??= JSON.parse(await readFile(new URL('./post_load_rpc_profile.json', import.meta.url), 'utf8'));
+  const reserved = [profile.pairedHistoryMs, profile.limitsMs, profile.readMix.durationMs];
+  assert.ok(reserved.every(ms => Number.isFinite(ms) && ms > 0));
+  assert.ok(reserved.reduce((sum, ms) => sum + ms, 0) < profile.budgetMs, 'profile leaves no time for individual methods');
+  budgetMs ??= profile.budgetMs;
+  const scale = budgetMs / profile.budgetMs;
+  console.log(JSON.stringify({ suite: 'post-load-rpc', event: 'profile', profile, budgetMs, first, last, endpoint, referenceEndpoint }));
   const deadline = suiteStart + budgetMs;
   const request = rpcClient(endpoint);
   // Tendermint can report the end height before the EVM receipt watermark
@@ -480,16 +544,17 @@ export async function runPostLoad(endpoint, first, last, budgetMs = 600_000, max
     assert.ok(performance.now() < readyBy, 'receipt follower did not reach load height ' + last);
     await sleep(1000);
   }
-  await measureDistinctBlocks(request, rpcClient(referenceEndpoint), first, last, budgetMs / 5);
+  await measureDistinctBlocks(request, rpcClient(referenceEndpoint), first, last, scale * profile.pairedHistoryMs);
   const { scenarios, filter, corpus } = await prepareScenarios(async (method, params) => (await request(method, params)).value, first, last);
   console.log(JSON.stringify({ phase: 'post-load-rpc', endpoint, corpus, fingerprint: digest(scenarios.map(s => [s.name, s.params, s.expectedHash])), readScenarios: scenarios.length + 2, limitStages: ['baseline', 'exercise', 'recovery'] }));
   const control = scenarios.find(s => s.name === 'logs-1-blocks');
-  await runLimitChecks(endpoint, Number(corpus.last), maxBlocks, control, budgetMs / 10, metricsURL);
+  await runLimitChecks(endpoint, Number(corpus.last), maxBlocks, control, scale * profile.limitsMs, metricsURL);
   function remainingBudget() {
     const remaining = deadline - performance.now();
     if (budgetMs > 0) assert.ok(remaining > 0, 'shared RPC budget expired before all scenarios completed');
     return Math.max(0, remaining);
   }
+  await runReadMix(request, scenarios, profile.readMix, Math.min(scale * profile.readMix.durationMs, remainingBudget()));
   await measureFilter(request, filter, 2 * remainingBudget() / (scenarios.length + 2));
   const groups = ['logs', 'blocks-transactions-receipts', 'state', 'traces'];
   const ordered = groups.flatMap(group => scenarios.filter(s => suiteGroup(s.method) === group));

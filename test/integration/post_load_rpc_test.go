@@ -19,6 +19,9 @@ import (
 //go:embed testdata/post_load_rpc.mjs
 var postLoadRPCScript string
 
+//go:embed testdata/post_load_rpc_profile.json
+var postLoadRPCProfile string
+
 // Use Node from the existing release-test image. The harness carries the
 // benchmark itself, so its implementation and the chain test roll together.
 func runPostLoadRPC(ctx context.Context, t *testing.T, cs *kubernetes.Clientset, ch *chain, image string, first, last int64) {
@@ -45,8 +48,8 @@ func runPostLoadRPC(ctx context.Context, t *testing.T, cs *kubernetes.Clientset,
 						Name: "rpc-benchmark", Image: image,
 						Command: []string{"node", "--input-type=module", "--eval"},
 						Args: []string{
-							postLoadRPCScript + "\nawait runPostLoad(process.argv[1], Number(process.argv[2]), Number(process.argv[3]), undefined, Number(process.argv[4]), undefined, process.argv[5]);",
-							"--", ch.rpcNodes[1].EVMRPC(), strconv.FormatInt(first, 10), strconv.FormatInt(last, 10), strconv.Itoa(historyRPCMaxLogBlocks), ch.rpcNodes[0].EVMRPC(),
+							postLoadRPCScript + "\nawait runPostLoad(process.argv[1], Number(process.argv[2]), Number(process.argv[3]), undefined, Number(process.argv[4]), undefined, process.argv[5], JSON.parse(process.argv[6]));",
+							"--", ch.rpcNodes[1].EVMRPC(), strconv.FormatInt(first, 10), strconv.FormatInt(last, 10), strconv.Itoa(historyRPCMaxLogBlocks), ch.rpcNodes[0].EVMRPC(), postLoadRPCProfile,
 						},
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { measureDistinctBlocks, prepareScenarios, runPostLoad } from './post_load_rpc.mjs';
+import { measureDistinctBlocks, prepareScenarios, runPostLoad, runReadMix } from './post_load_rpc.mjs';
 
 const address = '0x' + '11'.repeat(20);
 const topic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -59,6 +59,9 @@ test('seals the actual load suffix and checks log order, multiplicity and receip
   const { scenarios, corpus } = await prepareScenarios(rpc, 10, 15);
   assert.deepEqual(corpus, { first: '0xa', last: '0xc', headersRead: 6, blocks: 3, transactions: 3, logs: 3 });
   for (const s of scenarios) s.verify(rpc(s.method, s.params));
+  const hashes = scenarios.find(s => s.name === 'hashes-only-0xa');
+  assert.deepEqual(hashes.params, ['0xa', false]);
+  assert.throws(() => hashes.verify(rpc('eth_getBlockByNumber', ['0xa', true])));
   const byHash = scenarios.find(s => s.method === 'debug_traceBlockByHash');
   const [entry] = rpc(byHash.method, byHash.params);
   assert.throws(() => byHash.verify([{ ...entry, txHash: hash(0) }]));
@@ -189,4 +192,33 @@ test('pairs first and repeated reads before reference queries and exhausts disti
   assert.equal(new Set(covered).size, 26);
   assert.equal(reports.find(r => r.scenario === 'historical-logs-10-blocks-firstRead').distinctHeights, 20);
   await assert.rejects(measureDistinctBlocks(client('target'), async () => ({value: []}), 10, 10, 0), /rotated logs differ/);
+});
+
+test('read mix accounts for all arrivals, verifies the fixtures and skips missed slots', async t => {
+  let clock = 0, latency = 2;
+  const rows = [];
+  t.mock.method(console, 'log', line => rows.push(JSON.parse(line)));
+  const { scenarios } = await prepareScenarios(rpc, 10, 15);
+  const mix = { rps: 10, calls: [
+    { id: 'calls', method: 'eth_call', weight: 6, fixturePrefixes: ['call-balanceOf-'] },
+    { id: 'logs', method: 'eth_getLogs', weight: 3, fixturePrefixes: ['logs-address'] },
+    { id: 'blocks', method: 'eth_getBlockByNumber', weight: 1, fixturePrefixes: ['full-block-'] },
+  ] };
+  const request = async (method, params) => {
+    clock += latency;
+    return { value: rpc(method, params), bytes: 100, ms: latency };
+  };
+  const run = (client = request) => runReadMix(client, scenarios, mix, 1000, () => clock, async ms => { clock += ms; });
+  await run();
+  assert.deepEqual(rows.filter(r => r.scenario).map(r => [r.scheduled, r.requests, r.missed]), [[6,6,0],[3,3,0],[1,1,0]]);
+  assert.deepEqual(rows.find(r => r.scenario === 'mix-logs').fixtures,
+    [{ name: 'logs-address', verified: 3, returnedLogsPerRequest: 3 }]);
+  rows.length = 0;
+  latency = 315;
+  await run();
+  const results = rows.filter(r => r.scenario);
+  assert.ok(results.some(r => r.missed));
+  for (const r of results) assert.equal(r.requests + r.missed, r.scheduled);
+  await assert.rejects(run(async () => ({ value: null })));
+  assert.equal(rows.at(-1).event, 'failed');
 });

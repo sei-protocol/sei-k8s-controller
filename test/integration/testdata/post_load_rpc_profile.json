@@ -1,0 +1,16 @@
+{
+  "name": "validator-history",
+  "version": 1,
+  "budgetMs": 600000,
+  "pairedHistoryMs": 120000,
+  "limitsMs": 60000,
+  "readMix": {
+    "durationMs": 60000,
+    "rps": 10,
+    "calls": [
+      { "id": "token-balance", "method": "eth_call", "weight": 6, "fixturePrefixes": ["call-balanceOf-"] },
+      { "id": "filtered-logs", "method": "eth_getLogs", "weight": 3, "fixturePrefixes": ["logs-address", "logs-topic"] },
+      { "id": "full-block", "method": "eth_getBlockByNumber", "weight": 1, "fixturePrefixes": ["full-block-"] }
+    ]
+  }
+}
