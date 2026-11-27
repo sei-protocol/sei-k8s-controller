@@ -57,7 +57,7 @@ function rpc(method, [arg, full]) {
 
 test('seals the actual load suffix and checks log order, multiplicity and receipt identity', async () => {
   const { scenarios, corpus } = await prepareScenarios(rpc, 10, 15);
-  assert.deepEqual(corpus, { first: '0xa', last: '0xc', blocks: 3, transactions: 3, logs: 3 });
+  assert.deepEqual(corpus, { first: '0xa', last: '0xc', headersRead: 6, blocks: 3, transactions: 3, logs: 3 });
   for (const s of scenarios) s.verify(rpc(s.method, s.params));
   const byHash = scenarios.find(s => s.method === 'debug_traceBlockByHash');
   const [entry] = rpc(byHash.method, byHash.params);
@@ -73,6 +73,11 @@ test('seals the actual load suffix and checks log order, multiplicity and receip
 });
 
 test('runs every scenario over HTTP and fails on a successful RPC with incorrect data', async t => {
+  const reports = new Map();
+  t.mock.method(console, 'log', line => {
+    const row = JSON.parse(line);
+    reports.set(row.scenario, row);
+  });
   let corrupt;
   const measured = [];
   const server = createServer(async (req, resp) => {
@@ -86,6 +91,17 @@ test('runs every scenario over HTTP and fails on a successful RPC with incorrect
   t.after(() => new Promise(resolve => server.close(resolve)));
   const url = 'http://127.0.0.1:' + server.address().port;
   await runPostLoad(url, 10, 15, 0);
+  for (const [name, span, count] of [['logs-3-blocks', 3, 3], ['logs-address', 3, 3], ['logs-topic', 3, 3],
+    ['logs-no-match', 3, 0], ['filter-populated', 1, 1], ['filter-drained', 1, 0]]) {
+    const row = reports.get(name);
+    assert.equal(row.blockSpan, span);
+    assert.equal(row.expectedLogsPerRequest, count);
+    assert.equal(row.returnedLogsPerRequest, count);
+    assert.equal(row.blocksWithMatches, count);
+    assert.deepEqual(row.exampleLog, count ? log(10) : null);
+  }
+  assert.equal(reports.get('logs-address').address, address);
+  assert.deepEqual(reports.get('logs-topic').topics, [topic]);
   assert.ok(measured.includes('eth_getTransactionReceipt'));
   assert.ok(measured.includes('debug_traceBlockByHash'));
   assert.equal(measured.filter(m => m === 'eth_getFilterChanges').length, 4);
@@ -94,7 +110,7 @@ test('runs every scenario over HTTP and fails on a successful RPC with incorrect
   await assert.rejects(runPostLoad(url, 10, 15, 0), /first poll differs/);
   assert.equal(filters.size, 0);
   corrupt = 'eth_getLogs';
-  await assert.rejects(runPostLoad(url, 10, 15, 0), /sealed reference/);
+  await assert.rejects(runPostLoad(url, 10, 15, 0), /unexpected log count/);
 });
 
 test('narrows the contiguous suffix before a wide query would exceed the follower log limit', async () => {
@@ -106,5 +122,5 @@ test('narrows the contiguous suffix before a wide query would exceed the followe
     return [sample];
   };
   const { corpus } = await prepareScenarios(read, 10, 12);
-  assert.deepEqual(corpus, { first: '0xc', last: '0xc', blocks: 1, transactions: 1, logs: 5001 });
+  assert.deepEqual(corpus, { first: '0xc', last: '0xc', headersRead: 2, blocks: 1, transactions: 1, logs: 5001 });
 });

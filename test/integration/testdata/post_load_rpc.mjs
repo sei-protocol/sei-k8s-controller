@@ -28,6 +28,15 @@ function logIdentity(log) {
   return logFields.map(key => log[key]);
 }
 
+// Pinned requests are checked on every repeat. Keep one observed summary
+// per scenario so logging does not grow with either RPS or response size.
+function logSummary(criteria, expectedCount, logs) {
+  return { ...criteria, blockSpan: Number(BigInt(criteria.toBlock) - BigInt(criteria.fromBlock) + 1n),
+    expectedLogsPerRequest: expectedCount, returnedLogsPerRequest: logs.length,
+    blocksWithMatches: new Set(logs.map(log => log.blockNumber)).size,
+    exampleLog: logs[0] ?? null };
+}
+
 const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const callTracer = { tracer: 'callTracer', timeout: '25s' };
 
@@ -50,10 +59,12 @@ export async function prepareScenarios(read, first, last) {
   const maxTransactions = 100_000;
   // The receipt follower caps eth_getLogs results at 10,000 even for a bounded range.
   const maxLogs = 10_000;
+  let headersRead = 0;
   let txCount = 0;
   let logCount = 0;
   for (let h = last; h >= Math.max(first, last - 499); h--) {
     const block = await read('eth_getBlockByNumber', [quantity(h), false]);
+    headersRead++;
     assert.equal(block?.number, quantity(h), 'missing load block ' + h);
     assert.ok(Array.isArray(block.transactions));
     const count = block.transactions.length;
@@ -88,7 +99,12 @@ export async function prepareScenarios(read, first, last) {
       return digest(value.map(logIdentity)); // preserve order and duplicates
     };
     const expectedHash = fingerprint(expected);
-    scenarios.push({ name, method, params, expectedHash, metadata, verify(value) {
+    const expectedLogs = method === 'eth_getLogs' ? expected.length : undefined;
+    scenarios.push({ name, method, params, expectedHash, expectedLogs, metadata, verify(value) {
+      if (method === 'eth_getLogs') {
+        assert.ok(Array.isArray(value));
+        assert.equal(value.length, expectedLogs, name + ' returned an unexpected log count');
+      }
       assert.equal(fingerprint(value), expectedHash, name + ' differs from its sealed reference');
     } });
   };
@@ -188,7 +204,7 @@ export async function prepareScenarios(read, first, last) {
   const filterBlock = blocks.find(block => block.logs.length);
   const filter = { criteria: { fromBlock: filterBlock.header.number, toBlock: filterBlock.header.number },
     expected: filterBlock.logs.map(logIdentity) };
-  return { scenarios, filter, corpus: { first: range.fromBlock, last: end, blocks: blocks.length, transactions: txCount, logs: logCount } };
+  return { scenarios, filter, corpus: { first: range.fromBlock, last: end, headersRead, blocks: blocks.length, transactions: txCount, logs: logCount } };
 }
 
 async function checkedTransaction(read, tx, header) {
@@ -209,6 +225,7 @@ function report(scenario, method, samples, fields) {
 
 async function measureFilter(request, filter, budgetMs) {
   const populated = [], drained = [];
+  let firstSummary, drainedSummary;
   async function cycle(measure) {
     const { value: id } = await request('eth_newFilter', [filter.criteria]);
     assert.match(id, /^0x[0-9a-f]+$/i);
@@ -218,6 +235,8 @@ async function measureFilter(request, filter, budgetMs) {
       const next = await request('eth_getFilterChanges', [id]);
       assert.deepEqual(next.value, [], 'drained filter replayed logs');
       if (measure) {
+        firstSummary ??= logSummary(filter.criteria, filter.expected.length, first.value);
+        drainedSummary ??= logSummary(filter.criteria, 0, next.value);
         populated.push({ ms: first.ms, bytes: first.bytes });
         drained.push({ ms: next.ms, bytes: next.bytes });
       }
@@ -228,9 +247,8 @@ async function measureFilter(request, filter, budgetMs) {
   await cycle(false);
   const start = performance.now();
   do { await cycle(true); } while (performance.now() - start < budgetMs);
-  for (const [scenario, samples, logs] of [['populated', populated, filter.expected.length], ['drained', drained, 0]]) {
-    report('filter-' + scenario, 'eth_getFilterChanges', samples, { ...filter.criteria, logs });
-  }
+  report('filter-populated', 'eth_getFilterChanges', populated, { ...firstSummary, logs: firstSummary.returnedLogsPerRequest });
+  report('filter-drained', 'eth_getFilterChanges', drained, { ...drainedSummary, logs: drainedSummary.returnedLogsPerRequest });
 }
 
 export async function runPostLoad(endpoint, first, last, budgetMs = 600_000) {
@@ -261,18 +279,22 @@ export async function runPostLoad(endpoint, first, last, budgetMs = 600_000) {
   const timePerScenario = budgetMs / (scenarios.length + 2);
   await measureFilter(request, filter, 2 * timePerScenario);
   for (const scenario of scenarios) {
-    async function sample() {
+    let observedLogs;
+    async function sample(measured) {
       const { value, ms, bytes } = await request(scenario.method, scenario.params);
       scenario.verify(value);
+      if (measured && scenario.method === 'eth_getLogs') {
+        observedLogs ??= logSummary(scenario.params[0], scenario.expectedLogs, value);
+      }
       return { ms, bytes };
     }
-    const first = await sample();
+    const first = await sample(false);
     const samples = [];
     const start = performance.now();
-    do { samples.push(await sample()); } while (performance.now() - start < timePerScenario);
+    do { samples.push(await sample(true)); } while (performance.now() - start < timePerScenario);
     const elapsed = performance.now() - start;
     const trace = scenario.method.startsWith('debug_trace');
-    report(scenario.name, scenario.method, samples, { ...scenario.metadata,
+    report(scenario.name, scenario.method, samples, { ...scenario.metadata, ...observedLogs,
       ...(trace ? { tracer: callTracer.tracer, firstObservedMs: first.ms } : {}),
       rps: samples.length * 1000 / elapsed });
   }
