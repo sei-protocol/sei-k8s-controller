@@ -80,3 +80,12 @@ func DefaultDownloaderFactory(ctx context.Context, region string) (Downloader, e
 	}
 	return s3.NewFromConfig(cfg), nil
 }
+
+// DefaultLatestMarkerFactory creates a marker publisher backed by S3.
+func DefaultLatestMarkerFactory(ctx context.Context, region string) (LatestMarker, error) {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+	return NewLatestMarker(s3.NewFromConfig(cfg)), nil
+}
